@@ -1,3 +1,5 @@
+"use node";
+
 import { api } from "../_generated/api";
 import { action } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
