@@ -76,130 +76,138 @@ export default function SitesPage() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-8 px-6 py-10">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-semibold text-slate-900">Sites</h1>
-        <p className="text-slate-600">
-          Add your primary domain, tone, and cadence. Then run onboarding to
-          crawl and summarize your site, and generate the content plan.
-        </p>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
-            Domain
-            <input
-              className="rounded-md border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
-              placeholder="example.com"
-              value={form.domain}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, domain: e.target.value }))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
-            Niche / notes
-            <input
-              className="rounded-md border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
-              placeholder="SaaS for dev tools"
-              value={form.niche}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, niche: e.target.value }))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
-            Tone
-            <input
-              className="rounded-md border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
-              placeholder="practical, concise"
-              value={form.tone}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, tone: e.target.value }))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
-            Language
-            <input
-              className="rounded-md border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
-              placeholder="en"
-              value={form.language}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, language: e.target.value }))
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
-            Cadence (posts/week)
-            <input
-              type="number"
-              className="rounded-md border border-slate-200 px-3 py-2 text-slate-900 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
-              value={form.cadencePerWeek}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  cadencePerWeek: Number(e.target.value),
-                }))
-              }
-            />
-          </label>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            onClick={handleSave}
-            disabled={busy}
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
-          >
-            Save site
-          </button>
-          <button
-            onClick={handleOnboard}
-            disabled={!current || busy}
-            className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-emerald-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Run onboarding crawl
-          </button>
-          <button
-            onClick={handlePlan}
-            disabled={!current || busy}
-            className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-emerald-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Generate content plan
-          </button>
-        </div>
-        {message && (
-          <p className="mt-3 text-sm text-slate-600">
-            Status: <span className="font-semibold">{message}</span>
+    <main className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-black text-white">
+      <div className="pointer-events-none absolute inset-0 opacity-25 [background:radial-gradient(circle_at_15%_20%,rgba(74,222,128,0.18),transparent_30%),radial-gradient(circle_at_85%_10%,rgba(59,130,246,0.15),transparent_28%),radial-gradient(circle_at_60%_80%,rgba(16,185,129,0.16),transparent_28%)]" />
+      <div className="relative mx-auto flex min-h-screen max-w-5xl flex-col gap-8 px-6 py-16">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm uppercase tracking-[0.25em] text-emerald-300/90">
+            Sites
           </p>
+          <h1 className="text-3xl font-semibold sm:text-4xl text-white">Your site profile</h1>
+          <p className="max-w-3xl text-base text-slate-300">
+            Add your primary domain, tone, and cadence. Run onboarding to crawl and
+            summarize your site, then generate a content plan.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800/70 bg-slate-900/70 p-6 shadow-2xl shadow-black/30 backdrop-blur">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm font-medium text-slate-200">
+              Domain
+              <input
+                className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-white outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/50"
+                placeholder="example.com"
+                value={form.domain}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, domain: e.target.value }))
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-medium text-slate-200">
+              Niche / notes
+              <input
+                className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-white outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/50"
+                placeholder="SaaS for dev tools"
+                value={form.niche}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, niche: e.target.value }))
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-medium text-slate-200">
+              Tone
+              <input
+                className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-white outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/50"
+                placeholder="practical, concise"
+                value={form.tone}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, tone: e.target.value }))
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-medium text-slate-200">
+              Language
+              <input
+                className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-white outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/50"
+                placeholder="en"
+                value={form.language}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, language: e.target.value }))
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-medium text-slate-200">
+              Cadence (posts/week)
+              <input
+                type="number"
+                className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-white outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/50"
+                value={form.cadencePerWeek}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    cadencePerWeek: Number(e.target.value),
+                  }))
+                }
+              />
+            </label>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button
+              onClick={handleSave}
+              disabled={busy}
+              className="rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-300"
+            >
+              Save site
+            </button>
+            <button
+              onClick={handleOnboard}
+              disabled={!current || busy}
+              className="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-emerald-400 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Run onboarding crawl
+            </button>
+            <button
+              onClick={handlePlan}
+              disabled={!current || busy}
+              className="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-emerald-400 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Generate content plan
+            </button>
+          </div>
+          {message && (
+            <p className="mt-3 text-sm text-emerald-200/90">
+              Status: <span className="font-semibold">{message}</span>
+            </p>
+          )}
+        </div>
+
+        {current && (
+          <div className="rounded-2xl border border-slate-800/70 bg-slate-900/70 p-6 shadow-2xl shadow-black/30 backdrop-blur">
+            <h2 className="text-lg font-semibold text-white">Current site</h2>
+            <dl className="mt-3 grid gap-3 text-sm text-slate-200 sm:grid-cols-2">
+              <div>
+                <dt className="font-medium text-slate-300">Domain</dt>
+                <dd className="text-slate-100">{current.domain}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-300">Cadence</dt>
+                <dd className="text-slate-100">
+                  {current.cadencePerWeek ?? 4} posts/week
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-300">Niche</dt>
+                <dd className="text-slate-100">{current.niche ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-300">Tone</dt>
+                <dd className="text-slate-100">{current.tone ?? "—"}</dd>
+              </div>
+            </dl>
+          </div>
         )}
       </div>
-
-      {current && (
-        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Current site</h2>
-          <dl className="mt-3 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
-            <div>
-              <dt className="font-medium text-slate-800">Domain</dt>
-              <dd>{current.domain}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-slate-800">Cadence</dt>
-              <dd>{current.cadencePerWeek ?? 4} posts/week</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-slate-800">Niche</dt>
-              <dd>{current.niche ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-slate-800">Tone</dt>
-              <dd>{current.tone ?? "—"}</dd>
-            </div>
-          </dl>
-        </div>
-      )}
     </main>
   );
 }
