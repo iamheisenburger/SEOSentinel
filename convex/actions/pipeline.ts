@@ -6,7 +6,7 @@ import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 import OpenAI from "openai";
 import { z } from "zod";
-import type { Id } from "convex/values";
+import type { Id } from "convex/server";
 
 const defaultModel = "gpt-4.1-mini";
 
