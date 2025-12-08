@@ -4,7 +4,7 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import type { Id } from "convex/values";
+import type { Id } from "../../../convex/_generated/dataModel";
 
 export default function ArticlesPage() {
   const sites = useQuery(api.sites.list);

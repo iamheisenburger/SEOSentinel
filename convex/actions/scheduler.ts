@@ -2,11 +2,15 @@
 
 import { api } from "../_generated/api";
 import { action } from "../_generated/server";
+import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 
 export const scheduleCadence = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  handler: async (
+    ctx: ActionCtx,
+    { siteId },
+  ): Promise<{ scheduled: number }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 

@@ -6,7 +6,7 @@ import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 import OpenAI from "openai";
 import { z } from "zod";
-import type { Id } from "convex/server";
+import type { Id } from "../_generated/dataModel";
 
 const defaultModel = "gpt-4.1-mini";
 
@@ -64,8 +64,13 @@ const buildSlug = (title: string) =>
     .replace(/\s+/g, "-")
     .slice(0, 90);
 
-const openaiClient = (apiKey?: string) => {
+const getOpenAIKey = () => {
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+  return apiKey;
+};
+
+const openaiClient = (apiKey: string) => {
   return new OpenAI({ apiKey });
 };
 
@@ -76,11 +81,18 @@ async function fetchHtml(domain: string) {
   return { url, html };
 }
 
-async function handleOnboarding(ctx: ActionCtx, siteId: Id<"sites">) {
+async function handleOnboarding(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<{
+  siteId: Id<"sites">;
+  pages: { slug: string; title: string; summary: string; keywords?: string[] }[];
+  siteSummary: string;
+}> {
   const site = await ctx.runQuery(api.sites.get, { siteId });
   if (!site) throw new Error("Site not found");
   const { html } = await fetchHtml(site.domain);
-  const client = openaiClient(ctx.env.get("OPENAI_API_KEY"));
+  const client = openaiClient(getOpenAIKey());
 
   const completion = await client.responses.create({
     model: defaultModel,
@@ -133,10 +145,13 @@ async function handleOnboarding(ctx: ActionCtx, siteId: Id<"sites">) {
   };
 }
 
-async function handlePlan(ctx: ActionCtx, siteId: Id<"sites">) {
+async function handlePlan(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<{ count: number }> {
   const site = await ctx.runQuery(api.sites.get, { siteId });
   if (!site) throw new Error("Site not found");
-  const client = openaiClient(ctx.env.get("OPENAI_API_KEY"));
+  const client = openaiClient(getOpenAIKey());
 
   const completion = await client.responses.create({
     model: defaultModel,
@@ -162,7 +177,7 @@ async function handleArticle(
   ctx: ActionCtx,
   siteId: Id<"sites">,
   topicId?: Id<"topic_clusters">,
-) {
+): Promise<{ articleId: Id<"articles"> }> {
   const site = await ctx.runQuery(api.sites.get, { siteId });
   const topic = topicId
     ? await ctx.runQuery(api.topics.get, { topicId })
@@ -170,7 +185,7 @@ async function handleArticle(
   if (!site) throw new Error("Site not found");
   if (topicId && !topic) throw new Error("Topic not found");
 
-  const client = openaiClient(ctx.env.get("OPENAI_API_KEY"));
+  const client = openaiClient(getOpenAIKey());
   const completion = await client.responses.create({
     model: defaultModel,
     input: [
@@ -222,12 +237,12 @@ async function handleLinks(
   ctx: ActionCtx,
   siteId: Id<"sites">,
   articleId: Id<"articles">,
-) {
+): Promise<{ count: number }> {
   const site = await ctx.runQuery(api.sites.get, { siteId });
   const article = await ctx.runQuery(api.articles.get, { articleId });
   if (!site || !article) throw new Error("Missing site or article");
   const pages = await ctx.runQuery(api.pages.listBySite, { siteId });
-  const client = openaiClient(ctx.env.get("OPENAI_API_KEY"));
+  const client = openaiClient(getOpenAIKey());
 
   const completion = await client.responses.create({
     model: defaultModel,
@@ -240,7 +255,7 @@ async function handleLinks(
       {
         role: "user",
         content: `Use this article and site pages to propose 5-10 internal links. Article title: ${article.title}. Slug: ${article.slug}. Pages: ${pages
-          .map((p) => `${p.slug}:${p.title ?? ""}`)
+          .map((p: { slug: string; title?: string }) => `${p.slug}:${p.title ?? ""}`)
           .join("; ")}`,
       },
     ],
@@ -275,7 +290,9 @@ export const suggestInternalLinks = action({
 
 export const processNextJob = action({
   args: {},
-  handler: async (ctx) => {
+  handler: async (
+    ctx: ActionCtx,
+  ): Promise<{ processed: boolean; jobId?: Id<"jobs">; error?: string }> => {
     const pending = await ctx.runQuery(api.jobs.listPending, {});
     const job = pending[0];
     if (!job) return { processed: false };
