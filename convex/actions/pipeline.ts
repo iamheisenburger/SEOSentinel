@@ -8,7 +8,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
 
-const defaultModel = "gpt-4.1-mini";
+const defaultModel = "gpt-5-mini-2025-08-07";
 
 const TopicSchema = z.object({
   label: z.string(),
