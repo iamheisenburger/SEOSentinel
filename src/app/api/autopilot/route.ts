@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { api } from "../../../../convex/_generated/api";
-import { convex } from "@/lib/convexClient";
+import { convexHttp } from "@/lib/convexHttpClient";
 
 export const runtime = "edge";
 
 export async function GET() {
   try {
     // For now, pick the first site. In the future we can accept a siteId query param.
-    const sites = await convex.query(api.sites.list, {});
+    const sites = await convexHttp.query(api.sites.list, {});
     const site = sites?.[0];
     if (!site?._id) {
       return NextResponse.json(
@@ -16,7 +16,7 @@ export async function GET() {
       );
     }
 
-    const res = await convex.action(api.actions.pipeline.autopilotTick, {
+    const res = await convexHttp.action(api.actions.pipeline.autopilotTick, {
       siteId: site._id,
     });
 

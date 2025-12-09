@@ -1,5 +1,6 @@
 import { action } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 
