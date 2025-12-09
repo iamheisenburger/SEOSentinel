@@ -433,7 +433,14 @@ export const generateProgrammaticTemplate = action({
     attributes: v.array(v.string()), // e.g., ["city","service","price"]
     exampleRows: v.optional(v.array(v.record(v.string(), v.string()))),
   },
-  handler: async (ctx, { siteId, entityType, attributes, exampleRows }) => {
+  handler: async (
+    ctx,
+    { siteId, entityType, attributes, exampleRows },
+  ): Promise<{
+    template: string;
+    fields: string[];
+    samplePage: string;
+  }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
     const client = openaiClient(getApiKey());
@@ -455,9 +462,11 @@ export const generateProgrammaticTemplate = action({
         },
       ],
     });
-    return parseJson<
-      { template: string; fields: string[]; samplePage: string }
-    >(
+    return parseJson<{
+      template: string;
+      fields: string[];
+      samplePage: string;
+    }>(
       z.object({
         template: z.string(),
         fields: z.array(z.string()),
@@ -475,7 +484,15 @@ export const generateNewsArticle = action({
     topic: v.string(),
     region: v.optional(v.string()),
   },
-  handler: async (ctx, { siteId, topic, region }) => {
+  handler: async (
+    ctx,
+    { siteId, topic, region },
+  ): Promise<{
+    title: string;
+    slug: string;
+    markdown: string;
+    sources?: { url: string; title?: string }[];
+  }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
     const client = openaiClient(getApiKey());
