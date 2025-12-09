@@ -1,4 +1,5 @@
 import { action } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 
@@ -163,7 +164,17 @@ export const publishArticle = action({
     baseBranch: v.optional(v.string()),
     contentDir: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx: ActionCtx,
+    args: {
+      siteId: Id<"sites">;
+      articleId: Id<"articles">;
+      repoOwner?: string;
+      repoName?: string;
+      baseBranch?: string;
+      contentDir?: string;
+    },
+  ): Promise<{ prUrl: string; filePath: string }> => {
     const token = process.env.GITHUB_TOKEN;
     if (!token) throw new Error("GITHUB_TOKEN not set");
 
