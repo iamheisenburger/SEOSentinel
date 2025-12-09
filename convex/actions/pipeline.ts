@@ -408,6 +408,23 @@ export const suggestInternalLinks = action({
     handleLinks(ctx, siteId, articleId),
 });
 
+// Cron driver to run autopilot across all sites
+export const autopilotCron = action({
+  args: {},
+  handler: async (ctx) => {
+    const sites = await ctx.runQuery(api.sites.list, {});
+    if (!sites?.length) return { processed: 0 };
+    let processed = 0;
+    for (const site of sites) {
+      const res = await ctx.runAction(api.actions.pipeline.autopilotTick, {
+        siteId: site._id,
+      });
+      processed += res?.processed ? 1 : 0;
+    }
+    return { processed };
+  },
+});
+
 // Programmatic SEO template generator
 export const generateProgrammaticTemplate = action({
   args: {
