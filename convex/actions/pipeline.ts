@@ -398,8 +398,25 @@ export const generateArticle = action({
       }),
     ),
   },
-  handler: async (ctx, { siteId, topicId, options }) =>
-    handleArticle(ctx, siteId, topicId, options ?? undefined),
+  handler: async (ctx, { siteId, topicId, options }) => {
+    const res = await handleArticle(ctx, siteId, topicId, options ?? undefined);
+
+    // Auto-publish via GitHub PR (best-effort; don't fail generation if publish fails)
+    try {
+      await ctx.runAction(api.publisher.publishArticle, {
+        siteId,
+        articleId: res.articleId,
+        repoOwner: "iamheisenburger",
+        repoName: "subscription-tracker",
+        baseBranch: "main",
+        contentDir: "content/posts",
+      });
+    } catch (err) {
+      // ignore publish errors to keep generation flowing
+    }
+
+    return res;
+  },
 });
 
 export const suggestInternalLinks = action({
@@ -529,7 +546,12 @@ export const generateNewsArticle = action({
 // Backlink suggestions
 export const suggestBacklinks = action({
   args: { siteId: v.id("sites"), niche: v.optional(v.string()) },
-  handler: async (ctx, { siteId, niche }) => {
+  handler: async (
+    ctx,
+    { siteId, niche },
+  ): Promise<
+    { site: string; reason: string; anchor: string; targetUrl: string }[]
+  > => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
     const client = openaiClient(getApiKey());

@@ -17,7 +17,7 @@ export const scheduleCadence = action({
     const cadence = site.cadencePerWeek ?? 4;
     const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
     const available = topics
-      .filter((t) => t.status !== "used")
+      .filter((t: { status?: string }) => t.status !== "used")
       .slice(0, cadence);
 
     for (const topic of available) {
