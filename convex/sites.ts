@@ -24,9 +24,13 @@ export const upsert = mutation({
     tone: v.optional(v.string()),
     language: v.optional(v.string()),
     cadencePerWeek: v.optional(v.number()),
+    autopilotEnabled: v.optional(v.boolean()),
+    inferToneNiche: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const domain = args.domain.trim().toLowerCase();
+    const autopilotEnabled = args.autopilotEnabled ?? true;
+    const inferToneNiche = args.inferToneNiche ?? true;
     if (args.id) {
       await ctx.db.patch(args.id, {
         domain,
@@ -34,6 +38,8 @@ export const upsert = mutation({
         tone: args.tone,
         language: args.language,
         cadencePerWeek: args.cadencePerWeek,
+        autopilotEnabled,
+        inferToneNiche,
         updatedAt: now(),
       });
       return args.id;
@@ -49,6 +55,10 @@ export const upsert = mutation({
         tone: args.tone ?? existing.tone,
         language: args.language ?? existing.language,
         cadencePerWeek: args.cadencePerWeek ?? existing.cadencePerWeek,
+        autopilotEnabled:
+          args.autopilotEnabled ?? existing.autopilotEnabled ?? true,
+        inferToneNiche:
+          args.inferToneNiche ?? existing.inferToneNiche ?? true,
         updatedAt: now(),
       });
       return existing._id;
@@ -60,10 +70,13 @@ export const upsert = mutation({
       tone: args.tone,
       language: args.language ?? "en",
       cadencePerWeek: args.cadencePerWeek ?? 4,
+      autopilotEnabled,
+      inferToneNiche,
       createdAt: now(),
       updatedAt: now(),
     });
   },
 });
+
 
 

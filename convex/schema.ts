@@ -8,6 +8,8 @@ export default defineSchema({
     tone: v.optional(v.string()),
     language: v.optional(v.string()),
     cadencePerWeek: v.optional(v.number()),
+    autopilotEnabled: v.optional(v.boolean()),
+    inferToneNiche: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_domain", ["domain"]),
