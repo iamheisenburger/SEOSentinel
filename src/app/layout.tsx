@@ -33,9 +33,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <Providers>
           <div className="fixed inset-x-0 top-0 z-50 border-b border-slate-800/70 bg-slate-950/70 backdrop-blur">
             <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 text-sm text-slate-100">
@@ -61,3 +59,5 @@ export default function RootLayout({
     </html>
   );
 }
+
+

@@ -31,6 +31,7 @@ export const upsert = mutation({
     const domain = args.domain.trim().toLowerCase();
     const autopilotEnabled = args.autopilotEnabled ?? true;
     const inferToneNiche = args.inferToneNiche ?? true;
+
     if (args.id) {
       await ctx.db.patch(args.id, {
         domain,
@@ -55,10 +56,8 @@ export const upsert = mutation({
         tone: args.tone ?? existing.tone,
         language: args.language ?? existing.language,
         cadencePerWeek: args.cadencePerWeek ?? existing.cadencePerWeek,
-        autopilotEnabled:
-          args.autopilotEnabled ?? existing.autopilotEnabled ?? true,
-        inferToneNiche:
-          args.inferToneNiche ?? existing.inferToneNiche ?? true,
+        autopilotEnabled: args.autopilotEnabled ?? existing.autopilotEnabled ?? true,
+        inferToneNiche: args.inferToneNiche ?? existing.inferToneNiche ?? true,
         updatedAt: now(),
       });
       return existing._id;
@@ -77,6 +76,5 @@ export const upsert = mutation({
     });
   },
 });
-
 
 
