@@ -2,7 +2,7 @@
 
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function SitesPage() {
   const sites = useQuery(api.sites.list);
@@ -20,6 +20,19 @@ export default function SitesPage() {
   });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Keep form in sync with the latest site once loaded.
+  // Prevents overwriting existing data with blanks if the page renders before data arrives.
+  useEffect(() => {
+    if (!current) return;
+    setForm({
+      domain: current.domain ?? "",
+      niche: current.niche ?? "",
+      tone: current.tone ?? "",
+      language: current.language ?? "en",
+      cadencePerWeek: current.cadencePerWeek ?? 4,
+    });
+  }, [current?._id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async () => {
     setBusy(true);

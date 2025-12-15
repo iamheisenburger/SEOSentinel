@@ -58,7 +58,7 @@ async function createPR({
     },
   );
   if (!createRefRes.ok) {
-    throw new Error(`Failed to create branch: ${createRefRes.statusText}`);
+    throw new Error(`Failed to create branch: ${baseRefRes.statusText}`);
   }
 
   // Get blob SHAs
@@ -187,6 +187,7 @@ export const publishArticle = action({
     });
     if (!article) throw new Error("Article not found");
 
+    // Hardcoded defaults for fully hands-off operation.
     const repoOwner = args.repoOwner ?? "iamheisenburger";
     const repoName = args.repoName ?? "subscription-tracker";
     const baseBranch = args.baseBranch ?? "main";
