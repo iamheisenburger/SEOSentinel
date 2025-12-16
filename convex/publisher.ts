@@ -1,3 +1,5 @@
+"use node";
+
 import { action } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
