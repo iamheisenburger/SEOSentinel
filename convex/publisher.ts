@@ -11,59 +11,42 @@ type FileContent = {
   content: string;
 };
 
-async function createPR({
+/**
+ * Commit files directly to main branch (no PR, fully autonomous).
+ */
+async function commitToMain({
   token,
   owner,
   repo,
-  base,
-  title,
-  body,
+  branch,
+  message,
   files,
 }: {
   token: string;
   owner: string;
   repo: string;
-  base: string;
-  title: string;
-  body: string;
+  branch: string;
+  message: string;
   files: FileContent[];
-}) {
-  const slug = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const branch = `seo-auto/${slug}`;
+}): Promise<{ commitUrl: string; sha: string }> {
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
     "Content-Type": "application/json",
   };
 
-  // Get base SHA
-  const baseRefRes = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${base}`,
+  // Get current branch SHA
+  const branchRes = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`,
     { headers },
   );
-  if (!baseRefRes.ok) {
-    throw new Error(`Failed to get base ref: ${baseRefRes.statusText}`);
+  if (!branchRes.ok) {
+    throw new Error(`Failed to get branch ref: ${branchRes.statusText}`);
   }
-  const baseRef = await baseRefRes.json();
-  const baseSha = baseRef.object.sha;
+  const branchData = await branchRes.json();
+  const baseSha = branchData.object.sha;
 
-  // Create branch
-  const createRefRes = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/git/refs`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        ref: `refs/heads/${branch}`,
-        sha: baseSha,
-      }),
-    },
-  );
-  if (!createRefRes.ok) {
-    throw new Error(`Failed to create branch: ${baseRefRes.statusText}`);
-  }
-
-  // Get blob SHAs
+  // Create blobs for each file
   const blobs = [];
   for (const file of files) {
     const blobRes = await fetch(
@@ -113,7 +96,7 @@ async function createPR({
       method: "POST",
       headers,
       body: JSON.stringify({
-        message: title,
+        message,
         tree: tree.sha,
         parents: [baseSha],
       }),
@@ -124,7 +107,7 @@ async function createPR({
   }
   const commit = await commitRes.json();
 
-  // Update branch ref
+  // Update branch ref to point to new commit (direct push to main)
   const updateRefRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
     {
@@ -137,25 +120,10 @@ async function createPR({
     throw new Error(`Failed to update branch: ${updateRefRes.statusText}`);
   }
 
-  // Open PR
-  const prRes = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/pulls`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        title,
-        head: branch,
-        base,
-        body,
-      }),
-    },
-  );
-  if (!prRes.ok) {
-    throw new Error(`Failed to open PR: ${prRes.statusText}`);
-  }
-  const pr = await prRes.json();
-  return pr.html_url as string;
+  return {
+    commitUrl: `https://github.com/${owner}/${repo}/commit/${commit.sha}`,
+    sha: commit.sha,
+  };
 }
 
 export const publishArticle = action({
@@ -177,7 +145,7 @@ export const publishArticle = action({
       baseBranch?: string;
       contentDir?: string;
     },
-  ): Promise<{ prUrl: string; filePath: string }> => {
+  ): Promise<{ commitUrl: string; filePath: string }> => {
     const token = process.env.GITHUB_TOKEN;
     if (!token) throw new Error("GITHUB_TOKEN not set");
 
@@ -226,13 +194,13 @@ export const publishArticle = action({
 
     const mdx = `${frontmatter}\n\n${article.markdown}`;
 
-    const prUrl = await createPR({
+    // Commit directly to main (no PR needed)
+    const { commitUrl } = await commitToMain({
       token,
       owner: repoOwner,
       repo: repoName,
-      base: baseBranch,
-      title: `Add article: ${article.title}`,
-      body: `Auto-generated article for ${site.domain}`,
+      branch: baseBranch,
+      message: `Add article: ${article.title}`,
       files: [{ path: filePath, content: mdx }],
     });
 
@@ -242,7 +210,6 @@ export const publishArticle = action({
       status: "published",
     });
 
-    return { prUrl, filePath };
+    return { commitUrl, filePath };
   },
 });
-

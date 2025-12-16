@@ -1,6 +1,6 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -19,7 +19,6 @@ export default function ArticlesPage() {
   );
   const generateArticle = useAction(api.actions.pipeline.generateArticle);
   const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
-  const updateStatus = useMutation(api.articles.updateStatus);
 
   const [status, setStatus] = useState<string | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<
@@ -63,16 +62,6 @@ export default function ArticlesPage() {
     }
   };
 
-  const handlePublish = async (articleId: Id<"articles">) => {
-    try {
-      await updateStatus({ articleId, status: "published" });
-      setStatus("Marked as published.");
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Failed to update status";
-      setStatus(message);
-    }
-  };
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-slate-900 to-black text-white">
@@ -149,20 +138,12 @@ export default function ArticlesPage() {
                     <td className="px-4 py-3 text-emerald-200">{article.status}</td>
                     <td className="px-4 py-3 text-slate-200">{article.slug}</td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-2 text-sm">
-                        <button
-                          onClick={() => handleLinks(article._id)}
-                          className="rounded-full border border-slate-700 px-3 py-1 font-semibold text-white transition hover:border-emerald-400 hover:text-emerald-200"
-                        >
-                          Links
-                        </button>
-                        <button
-                          onClick={() => handlePublish(article._id)}
-                          className="rounded-full border border-slate-700 px-3 py-1 font-semibold text-white transition hover:border-emerald-400 hover:text-emerald-200"
-                        >
-                          Mark published
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => handleLinks(article._id)}
+                        className="rounded-full border border-slate-700 px-3 py-1 text-sm font-semibold text-white transition hover:border-emerald-400 hover:text-emerald-200"
+                      >
+                        Links
+                      </button>
                     </td>
                   </tr>
                 ))}

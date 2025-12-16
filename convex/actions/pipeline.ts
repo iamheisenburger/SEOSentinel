@@ -298,7 +298,7 @@ async function handleArticle(
       {
         role: "system",
         content:
-          "You are an SEO content agent. Produce a concise, well-structured Markdown article with headings, bullets, tables if useful, and a brief FAQ. Include citations list. Output JSON only.",
+          "You are an expert SEO content writer. Produce comprehensive, in-depth, professionally-written Markdown articles (3500-4000+ words) with proper H2/H3 headings, detailed explanations, practical examples, comparison tables, bullet lists, and a thorough FAQ section. Write like a subject matter expert. Include citations list. Output JSON only.",
       },
       {
         role: "user",
@@ -306,7 +306,7 @@ async function handleArticle(
           topic?.label ?? "General SEO article"
         }\nPrimary keyword: ${topic?.primaryKeyword ?? ""}\nSecondary keywords: ${
           topic?.secondaryKeywords?.join(", ") ?? ""
-        }\nRich media options: includeTables=${options?.includeTables ?? true}, includeLists=${options?.includeLists ?? true}, includeImages=${options?.includeImages ?? true} (use prompts/alt text only), includeYouTube=${options?.includeYouTube ?? false} (add placeholder embed markdown), targetWords=${options?.targetWords ?? 1400}.\nReturn JSON like {"title": "...","slug":"...","markdown":"...","metaTitle":"...","metaDescription":"...","sources":[{"url":"...","title":"..."}]}.`,
+        }\nRich media options: includeTables=${options?.includeTables ?? true}, includeLists=${options?.includeLists ?? true}, includeImages=${options?.includeImages ?? true} (use prompts/alt text only), includeYouTube=${options?.includeYouTube ?? false} (add placeholder embed markdown), targetWords=${options?.targetWords ?? 3500}.\n\nIMPORTANT: Write a comprehensive, in-depth article of AT LEAST 3500-4000 words. Include:\n- Detailed introduction with hook and context\n- Multiple H2 sections with thorough explanations\n- Practical examples, step-by-step guides, and actionable tips\n- Data, statistics, and expert insights where relevant\n- Comparison tables and bullet-point lists for scannability\n- A comprehensive FAQ section (5-8 questions)\n- Strong conclusion with call-to-action\n\nReturn JSON like {"title": "...","slug":"...","markdown":"...","metaTitle":"...","metaDescription":"...","sources":[{"url":"...","title":"..."}]}.`,
       },
     ],
   });
