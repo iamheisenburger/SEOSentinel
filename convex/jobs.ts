@@ -29,25 +29,52 @@ export const listByStatus = query({
 });
 
 // Reset jobs that have been "running" for more than 10 minutes (likely timed out)
+// Also retry failed jobs (up to 3 attempts)
 export const resetStuckJobs = mutation({
   handler: async (ctx) => {
     const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+    let reset = 0;
+
+    // Reset stuck "running" jobs
     const runningJobs = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "running"))
       .collect();
     
-    let reset = 0;
     for (const job of runningJobs) {
       if (job.updatedAt < tenMinutesAgo) {
+        const retries = (job.retries ?? 0) + 1;
+        if (retries <= 3) {
+          await ctx.db.patch(job._id, { 
+            status: "pending", 
+            updatedAt: Date.now(),
+            retries,
+            error: `Reset from stuck running state (attempt ${retries})`
+          });
+          reset++;
+        }
+      }
+    }
+
+    // Retry failed jobs (up to 3 attempts)
+    const failedJobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", "failed"))
+      .collect();
+    
+    for (const job of failedJobs) {
+      const retries = (job.retries ?? 0) + 1;
+      if (retries <= 3) {
         await ctx.db.patch(job._id, { 
           status: "pending", 
           updatedAt: Date.now(),
-          error: "Reset from stuck running state"
+          retries,
+          error: `Retrying after failure (attempt ${retries})`
         });
         reset++;
       }
     }
+
     return { reset };
   },
 });

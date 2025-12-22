@@ -76,6 +76,7 @@ export default defineSchema({
     payload: v.optional(v.any()),
     result: v.optional(v.any()),
     error: v.optional(v.string()),
+    retries: v.optional(v.number()), // number of retry attempts
     createdAt: v.number(),
     updatedAt: v.number(),
   })
