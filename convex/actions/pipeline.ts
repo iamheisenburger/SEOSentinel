@@ -8,7 +8,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
 
-const defaultModel = "gpt-4o-mini";
+const defaultModel = "gpt-5-mini-2025-08-07";
 
 type RichMediaOptions = {
   targetWords?: number;
@@ -590,6 +590,9 @@ export const autopilotTick = action({
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 
+    // Reset any stuck "running" jobs first
+    await ctx.runMutation(api.jobs.resetStuckJobs, {});
+
     // If no pages, run onboarding
     const pages = await ctx.runQuery(api.pages.listBySite, { siteId });
     if (!pages.length) {
@@ -605,15 +608,10 @@ export const autopilotTick = action({
     // Schedule articles for the week
     await ctx.runAction(api.actions.scheduler.scheduleCadence, { siteId });
 
-    // Process a few pending jobs
-    let processed = 0;
-    while (processed < 3) {
-      const res = await ctx.runAction(api.actions.pipeline.processNextJob, {});
-      if (!res?.processed) break;
-      processed += 1;
-    }
+    // Process ONE job at a time to avoid timeout issues
+    const res = await ctx.runAction(api.actions.pipeline.processNextJob, {});
 
-    return { processed };
+    return { processed: res?.processed ? 1 : 0 };
   },
 });
 
