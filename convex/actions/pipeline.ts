@@ -8,7 +8,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
 
-const defaultModel = "gpt-5-mini-2025-08-07";
+const defaultModel = "gpt-4o-mini";
 
 type RichMediaOptions = {
   targetWords?: number;
@@ -641,7 +641,20 @@ export const processNextJob = action({
         await handlePlan(ctx, job.siteId);
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
-        await handleArticle(ctx, job.siteId, payload?.topicId);
+        const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId);
+        // Auto-publish the article to GitHub
+        try {
+          await ctx.runAction(api.publisher.publishArticle, {
+            siteId: job.siteId,
+            articleId: articleResult.articleId,
+            repoOwner: "iamheisenburger",
+            repoName: "subscription-tracker",
+            baseBranch: "main",
+            contentDir: "content/posts",
+          });
+        } catch {
+          // ignore publish errors to keep pipeline flowing
+        }
       } else if (job.type === "links") {
         if (!job.siteId) throw new Error("Missing siteId on links job");
         if (!payload?.articleId)
