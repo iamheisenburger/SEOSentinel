@@ -16,12 +16,13 @@ export const scheduleCadence = action({
 
     const cadence = site.cadencePerWeek ?? 4;
     
-    // Check how many articles are already in progress or scheduled this week
-    const existingJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "pending" });
-    const existingArticles = existingJobs.filter(j => j.siteId === siteId && j.type === "article");
+    // Check how many articles are already in progress or scheduled
+    const pendingJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "pending" });
+    const runningJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "running" });
+    const existingArticles = [...pendingJobs, ...runningJobs].filter(j => j.siteId === siteId && j.type === "article");
     
     if (existingArticles.length >= cadence) {
-      console.log(`Cadence reached: ${existingArticles.length} articles already pending.`);
+      console.log(`Cadence reached: ${existingArticles.length} articles already in progress/pending.`);
       return { scheduled: 0 };
     }
 
