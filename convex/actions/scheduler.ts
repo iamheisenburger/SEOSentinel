@@ -15,12 +15,22 @@ export const scheduleCadence = action({
     if (!site) throw new Error("Site not found");
 
     const cadence = site.cadencePerWeek ?? 4;
+    
+    // Check how many articles are already in progress or scheduled this week
+    const existingJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "pending" });
+    const existingArticles = existingJobs.filter(j => j.siteId === siteId && j.type === "article");
+    
+    if (existingArticles.length >= cadence) {
+      console.log(`Cadence reached: ${existingArticles.length} articles already pending.`);
+      return { scheduled: 0 };
+    }
+
     const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
     const available = topics
       .filter(
         (t: { status?: string }) => t.status !== "used" && t.status !== "queued",
       )
-      .slice(0, cadence);
+      .slice(0, cadence - existingArticles.length);
 
     for (const topic of available) {
       await ctx.runMutation(api.jobs.create, {

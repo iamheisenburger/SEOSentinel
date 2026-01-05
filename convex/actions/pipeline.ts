@@ -53,15 +53,36 @@ const LinkSchema = z.array(
 );
 
 const parseJson = <T>(schema: z.ZodTypeAny, text: string): T => {
-  const startCandidates = [text.indexOf("{"), text.indexOf("[")].filter(
-    (v) => v >= 0,
-  );
-  const start =
-    startCandidates.length > 0
-      ? Math.min(...startCandidates)
-      : 0;
-  const raw = text.slice(start).trim();
-  return schema.parse(JSON.parse(raw)) as T;
+  // Find the first { and last } to isolate the JSON object
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) {
+    // Try array if object not found
+    const aStart = text.indexOf("[");
+    const aEnd = text.lastIndexOf("]");
+    if (aStart === -1 || aEnd === -1) throw new Error("No JSON found in response");
+    const raw = text.slice(aStart, aEnd + 1);
+    return schema.parse(JSON.parse(raw)) as T;
+  }
+  
+  let raw = text.slice(start, end + 1);
+  
+  // Clean up common JSON issues from LLMs
+  // 1. Remove control characters that break JSON.parse
+  // but keep actual newlines if they are escaped (\n)
+  raw = raw.replace(/[\u0000-\u001F]+/g, (match) => {
+    if (match === "\n") return "\\n";
+    if (match === "\r") return "\\r";
+    if (match === "\t") return "\\t";
+    return "";
+  });
+
+  try {
+    return schema.parse(JSON.parse(raw)) as T;
+  } catch (err) {
+    console.error("JSON parse failed. Raw text snippet:", raw.slice(0, 200));
+    throw err;
+  }
 };
 
 const buildSlug = (title: string) =>
@@ -292,21 +313,27 @@ async function handleArticle(
   if (topicId && !topic) throw new Error("Topic not found");
 
   const client = openaiClient(getApiKey());
+  
+  console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
+  
   const completion = await client.responses.create({
     model: defaultModel,
     input: [
       {
         role: "system",
         content:
-          "You are an expert SEO content writer. Produce comprehensive, in-depth, professionally-written Markdown articles (3500-4000+ words) with proper H2/H3 headings, detailed explanations, practical examples, comparison tables, bullet lists, and a thorough FAQ section. Write like a subject matter expert. Include citations list. Output JSON only.",
+          "You are a professional SEO content writer. Your task is to write a high-quality, extremely detailed, long-form article in Markdown. \n\n" +
+          "RULES:\n" +
+          "1. WORD COUNT: The article MUST be between 3500 and 4000 words. This is non-negotiable.\n" +
+          "2. FORMAT: Use H2 and H3 headings, bullet points, numbered lists, and bold text for emphasis.\n" +
+          "3. STRUCTURE: Include a compelling intro, 8+ detailed sections, a comparison table, a 'Pro Tips' section, and a 10-question FAQ at the end.\n" +
+          "4. STYLE: Use a " + (site.tone ?? "professional") + " tone.\n" +
+          "5. NO META-TALK: Do not include any explanations, reasoning, or fact-check summaries. Output the article content only within the JSON structure.\n" +
+          "6. JSON ONLY: Output a single JSON object. Do not include markdown code blocks around the JSON.",
       },
       {
         role: "user",
-        content: `Site: ${site.domain}\nNiche: ${site.niche ?? ""}\nTone: ${site.tone ?? "neutral"}\nLanguage: ${site.language ?? "en"}\nTopic: ${
-          topic?.label ?? "General SEO article"
-        }\nPrimary keyword: ${topic?.primaryKeyword ?? ""}\nSecondary keywords: ${
-          topic?.secondaryKeywords?.join(", ") ?? ""
-        }\nRich media options: includeTables=${options?.includeTables ?? true}, includeLists=${options?.includeLists ?? true}, includeImages=${options?.includeImages ?? true} (use prompts/alt text only), includeYouTube=${options?.includeYouTube ?? false} (add placeholder embed markdown), targetWords=${options?.targetWords ?? 3500}.\n\nIMPORTANT: Write a comprehensive, in-depth article of AT LEAST 3500-4000 words. Include:\n- Detailed introduction with hook and context\n- Multiple H2 sections with thorough explanations\n- Practical examples, step-by-step guides, and actionable tips\n- Data, statistics, and expert insights where relevant\n- Comparison tables and bullet-point lists for scannability\n- A comprehensive FAQ section (5-8 questions)\n- Strong conclusion with call-to-action\n\nReturn JSON like {"title": "...","slug":"...","markdown":"...","metaTitle":"...","metaDescription":"...","sources":[{"url":"...","title":"..."}]}.`,
+        content: `Topic: ${topic?.label ?? "General"}\nPrimary Keyword: ${topic?.primaryKeyword ?? ""}\nSecondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\nSite: ${site.domain}\nNiche: ${site.niche ?? ""}\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the 3500-4000 word article)", "metaTitle": "string", "metaDescription": "string", "sources": [{"url": "string", "title": "string"}]}`,
       },
     ],
   });
@@ -317,17 +344,17 @@ async function handleArticle(
   );
 
   const slug = article.slug || buildSlug(article.title);
-  const reviewed = await factCheckArticle(article.markdown, article.sources);
-
+  
+  // Create the draft immediately
   const articleId = await ctx.runMutation(api.articles.createDraft, {
     siteId,
     topicId: topicId ?? undefined,
     title: article.title,
     slug: slug.startsWith("/") ? slug : `/${slug}`,
-    markdown: reviewed.markdown ?? article.markdown,
+    markdown: article.markdown,
     metaTitle: article.metaTitle,
     metaDescription: article.metaDescription,
-    sources: reviewed.citations ?? article.sources,
+    sources: article.sources,
     language: site.language,
   });
 
@@ -433,7 +460,7 @@ export const autopilotCron = action({
     if (!sites?.length) return { processed: 0 };
     let processed = 0;
     for (const site of sites) {
-      const res = await ctx.runAction(api.actions.pipeline.autopilotTick, {
+      const res = await ctx.runAction(api.actions.pipeline.autopilotTick as any, {
         siteId: site._id,
       });
       processed += res?.processed ? 1 : 0;
@@ -590,28 +617,39 @@ export const autopilotTick = action({
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 
-    // Reset any stuck "running" jobs first
+    // 1. Reset any stuck "running" jobs first
     await ctx.runMutation(api.jobs.resetStuckJobs, {});
 
-    // If no pages, run onboarding
+    // 2. If no pages, run onboarding
     const pages = await ctx.runQuery(api.pages.listBySite, { siteId });
     if (!pages.length) {
       await handleOnboarding(ctx, siteId);
     }
 
-    // If no topics, generate plan
+    // 3. If topics are low, replenish the plan (hands-off replenishment)
     const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
-    if (!topics.length) {
+    const availableTopics = topics.filter(
+      (t: { status?: string }) => t.status !== "used" && t.status !== "queued",
+    );
+    if (availableTopics.length < 5) {
+      console.log(`Topics low (${availableTopics.length}), replenishing...`);
       await handlePlan(ctx, siteId);
     }
 
-    // Schedule articles for the week
+    // 4. Schedule articles for the week
     await ctx.runAction(api.actions.scheduler.scheduleCadence, { siteId });
 
-    // Process ONE job at a time to avoid timeout issues
-    const res = await ctx.runAction(api.actions.pipeline.processNextJob, {});
+    // 5. Process ONLY ONE job per tick. 
+    // This ensures we never exceed the 10-minute action timeout.
+    // With crons running 4x daily, this still processes 28 jobs/week.
+    const pending = await ctx.runQuery(api.jobs.listPending, {});
+    if (pending.length > 0) {
+      console.log(`Processing next job: ${pending[0].type} (${pending[0]._id})`);
+      await ctx.runAction(api.actions.pipeline.processNextJob as any, {});
+      return { processed: 1 };
+    }
 
-    return { processed: res?.processed ? 1 : 0 };
+    return { processed: 0 };
   },
 });
 
@@ -642,6 +680,7 @@ export const processNextJob = action({
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId);
         // Auto-publish the article to GitHub
         try {
+          console.log(`Publishing article ${articleResult.articleId} to GitHub...`);
           await ctx.runAction(api.publisher.publishArticle, {
             siteId: job.siteId,
             articleId: articleResult.articleId,
@@ -650,8 +689,16 @@ export const processNextJob = action({
             baseBranch: "main",
             contentDir: "content/posts",
           });
-        } catch {
-          // ignore publish errors to keep pipeline flowing
+          console.log(`Article ${articleResult.articleId} published successfully.`);
+        } catch (err: unknown) {
+          const pubError = err instanceof Error ? err.message : "unknown publish error";
+          console.error(`Publish failed for article ${articleResult.articleId}: ${pubError}`);
+          // We don't throw here to keep the pipeline flowing, but we record the error on the job
+          await ctx.runMutation(api.jobs.markFailed, {
+            jobId: job._id,
+            error: `Article generated but publish failed: ${pubError}`,
+          });
+          return { processed: true, jobId: job._id, error: pubError };
         }
       } else if (job.type === "links") {
         if (!job.siteId) throw new Error("Missing siteId on links job");
