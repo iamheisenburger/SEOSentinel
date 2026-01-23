@@ -64,18 +64,8 @@ const parseJson = <T>(schema: z.ZodTypeAny, text: string): T => {
     const raw = text.slice(aStart, aEnd + 1);
     return schema.parse(JSON.parse(raw)) as T;
   }
-  
-  let raw = text.slice(start, end + 1);
-  
-  // Clean up common JSON issues from LLMs
-  // 1. Remove control characters that break JSON.parse
-  // but keep actual newlines if they are escaped (\n)
-  raw = raw.replace(/[\u0000-\u001F]+/g, (match) => {
-    if (match === "\n") return "\\n";
-    if (match === "\r") return "\\r";
-    if (match === "\t") return "\\t";
-    return "";
-  });
+
+  const raw = text.slice(start, end + 1);
 
   try {
     return schema.parse(JSON.parse(raw)) as T;
