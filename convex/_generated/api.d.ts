@@ -11,7 +11,7 @@
 import type * as actions_pipeline from "../actions/pipeline.js";
 import type * as actions_scheduler from "../actions/scheduler.js";
 import type * as articles from "../articles.js";
-import type * as cron from "../cron.js";
+import type * as crons from "../crons.js";
 import type * as jobs from "../jobs.js";
 import type * as pages from "../pages.js";
 import type * as publisher from "../publisher.js";
@@ -28,7 +28,7 @@ declare const fullApi: ApiFromModules<{
   "actions/pipeline": typeof actions_pipeline;
   "actions/scheduler": typeof actions_scheduler;
   articles: typeof articles;
-  cron: typeof cron;
+  crons: typeof crons;
   jobs: typeof jobs;
   pages: typeof pages;
   publisher: typeof publisher;
