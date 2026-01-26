@@ -190,6 +190,61 @@ async function factCheckArticle(
   return reviewed;
 }
 
+async function webResearch(
+  topic: {
+    label: string;
+    primaryKeyword: string;
+    secondaryKeywords?: string[];
+    intent?: string;
+  },
+  siteNiche?: string,
+): Promise<{ researchSummary: string; sources: { url: string; title?: string }[] }> {
+  const client = openaiClient(getApiKey());
+  const searchQuery = `${topic.primaryKeyword} ${topic.label} ${siteNiche ?? ""}`.trim();
+
+  console.log(`Web research: searching for "${searchQuery}"...`);
+
+  const completion = await client.responses.create({
+    model: defaultModel,
+    tools: [{ type: "web_search_preview" as any }],
+    input: [
+      {
+        role: "system",
+        content:
+          "You are a research assistant. Search the web for current, factual information on the given topic. " +
+          "Compile a detailed research brief with key facts, statistics, trends, and expert opinions. " +
+          "Include all source URLs you find. Output JSON only.",
+      },
+      {
+        role: "user",
+        content:
+          `Research this topic thoroughly for an SEO article:\n` +
+          `Topic: ${topic.label}\n` +
+          `Primary Keyword: ${topic.primaryKeyword}\n` +
+          `Secondary Keywords: ${topic.secondaryKeywords?.join(", ") ?? "none"}\n` +
+          `Search Intent: ${topic.intent ?? "informational"}\n\n` +
+          `Return JSON: {"researchSummary": "detailed findings with facts, stats, and quotes...", "sources": [{"url": "...", "title": "..."}]}`,
+      },
+    ],
+  });
+
+  const result = parseJson<{
+    researchSummary: string;
+    sources: { url: string; title?: string }[];
+  }>(
+    z.object({
+      researchSummary: z.string(),
+      sources: z
+        .array(z.object({ url: z.string(), title: z.string().optional() }))
+        .default([]),
+    }),
+    completion.output_text,
+  );
+
+  console.log(`Web research complete: ${result.sources.length} sources found.`);
+  return result;
+}
+
 async function handleOnboarding(
   ctx: ActionCtx,
   siteId: Id<"sites">,
@@ -303,9 +358,38 @@ async function handleArticle(
   if (topicId && !topic) throw new Error("Topic not found");
 
   const client = openaiClient(getApiKey());
-  
+
+  // ── Step 1: Web Research (graceful degradation) ──
+  let researchContext = "";
+  let researchSources: { url: string; title?: string }[] = [];
+
+  if (topic) {
+    try {
+      const research = await webResearch(
+        {
+          label: topic.label,
+          primaryKeyword: topic.primaryKeyword,
+          secondaryKeywords: topic.secondaryKeywords,
+          intent: topic.intent ?? undefined,
+        },
+        site.niche ?? undefined,
+      );
+      researchContext = research.researchSummary;
+      researchSources = research.sources;
+      console.log(`Research gathered: ${researchContext.length} chars, ${researchSources.length} sources`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`Web research failed (continuing without): ${msg}`);
+    }
+  }
+
+  // ── Step 2: Generate Article (with research context injected) ──
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
-  
+
+  const researchBlock = researchContext
+    ? `\n\nRESEARCH BRIEF (use these facts, statistics, and information in your article):\n${researchContext}`
+    : "";
+
   const completion = await client.responses.create({
     model: defaultModel,
     input: [
@@ -319,11 +403,12 @@ async function handleArticle(
           "3. STRUCTURE: Include a compelling intro, 8+ detailed sections, a comparison table, a 'Pro Tips' section, and a 10-question FAQ at the end.\n" +
           "4. STYLE: Use a " + (site.tone ?? "professional") + " tone.\n" +
           "5. NO META-TALK: Do not include any explanations, reasoning, or fact-check summaries. Output the article content only within the JSON structure.\n" +
-          "6. JSON ONLY: Output a single JSON object. Do not include markdown code blocks around the JSON.",
+          "6. JSON ONLY: Output a single JSON object. Do not include markdown code blocks around the JSON.\n" +
+          "7. SOURCES: Include real, verifiable source URLs in the sources array. Prefer sources from the research brief if provided.",
       },
       {
         role: "user",
-        content: `Topic: ${topic?.label ?? "General"}\nPrimary Keyword: ${topic?.primaryKeyword ?? ""}\nSecondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\nSite: ${site.domain}\nNiche: ${site.niche ?? ""}\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the 3500-4000 word article)", "metaTitle": "string", "metaDescription": "string", "sources": [{"url": "string", "title": "string"}]}`,
+        content: `Topic: ${topic?.label ?? "General"}\nPrimary Keyword: ${topic?.primaryKeyword ?? ""}\nSecondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\nSite: ${site.domain}\nNiche: ${site.niche ?? ""}${researchBlock}\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the 3500-4000 word article)", "metaTitle": "string", "metaDescription": "string", "sources": [{"url": "string", "title": "string"}]}`,
       },
     ],
   });
@@ -333,18 +418,50 @@ async function handleArticle(
     completion.output_text,
   );
 
+  // Merge research sources with article-generated sources (deduplicate by URL)
+  const allSources = [...(article.sources ?? []), ...researchSources];
+  const seenUrls = new Set<string>();
+  const dedupedSources = allSources.filter((s) => {
+    if (seenUrls.has(s.url)) return false;
+    seenUrls.add(s.url);
+    return true;
+  });
+
+  // ── Step 3: Fact Check (graceful degradation) ──
+  let finalMarkdown = article.markdown;
+  let finalSources = dedupedSources;
+
+  try {
+    console.log("Running fact check...");
+    const reviewed = await factCheckArticle(finalMarkdown, dedupedSources);
+    finalMarkdown = reviewed.markdown;
+    if (reviewed.citations?.length) {
+      const additionalSources = reviewed.citations.filter(
+        (c) => !seenUrls.has(c.url),
+      );
+      finalSources = [...dedupedSources, ...additionalSources];
+    }
+    if (reviewed.notes) {
+      console.log(`Fact-check notes: ${reviewed.notes}`);
+    }
+    console.log("Fact check complete.");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`Fact check failed (using original article): ${msg}`);
+  }
+
+  // ── Step 4: Create Draft ──
   const slug = article.slug || buildSlug(article.title);
-  
-  // Create the draft immediately
+
   const articleId = await ctx.runMutation(api.articles.createDraft, {
     siteId,
     topicId: topicId ?? undefined,
     title: article.title,
     slug: slug.startsWith("/") ? slug : `/${slug}`,
-    markdown: article.markdown,
+    markdown: finalMarkdown,
     metaTitle: article.metaTitle,
     metaDescription: article.metaDescription,
-    sources: article.sources,
+    sources: finalSources.length > 0 ? finalSources : undefined,
     language: site.language,
   });
 
@@ -418,7 +535,17 @@ export const generateArticle = action({
   handler: async (ctx, { siteId, topicId, options }) => {
     const res = await handleArticle(ctx, siteId, topicId, options ?? undefined);
 
-    // Auto-publish via GitHub PR (best-effort; don't fail generation if publish fails)
+    // Add internal links before publishing (graceful degradation)
+    try {
+      console.log(`Adding internal links to article ${res.articleId}...`);
+      const linkResult = await handleLinks(ctx, siteId, res.articleId);
+      console.log(`Added ${linkResult.count} internal links.`);
+    } catch (err) {
+      const linkError = err instanceof Error ? err.message : "unknown link error";
+      console.error(`Internal linking failed (publishing without links): ${linkError}`);
+    }
+
+    // Auto-publish via GitHub (best-effort; don't fail generation if publish fails)
     try {
       await ctx.runAction(api.publisher.publishArticle, {
         siteId,
@@ -429,7 +556,8 @@ export const generateArticle = action({
         contentDir: "content/posts",
       });
     } catch (err) {
-      // ignore publish errors to keep generation flowing
+      const pubError = err instanceof Error ? err.message : "unknown publish error";
+      console.error(`Publish failed for article ${res.articleId}: ${pubError}`);
     }
 
     return res;
@@ -668,7 +796,18 @@ export const processNextJob = action({
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId);
-        // Auto-publish the article to GitHub
+
+        // Add internal links BEFORE publishing (graceful degradation)
+        try {
+          console.log(`Adding internal links to article ${articleResult.articleId}...`);
+          const linkResult = await handleLinks(ctx, job.siteId, articleResult.articleId);
+          console.log(`Added ${linkResult.count} internal links.`);
+        } catch (err: unknown) {
+          const linkError = err instanceof Error ? err.message : "unknown link error";
+          console.error(`Internal linking failed (publishing without links): ${linkError}`);
+        }
+
+        // Publish to GitHub (article now has links populated in DB)
         try {
           console.log(`Publishing article ${articleResult.articleId} to GitHub...`);
           await ctx.runAction(api.publisher.publishArticle, {
@@ -683,7 +822,6 @@ export const processNextJob = action({
         } catch (err: unknown) {
           const pubError = err instanceof Error ? err.message : "unknown publish error";
           console.error(`Publish failed for article ${articleResult.articleId}: ${pubError}`);
-          // We don't throw here to keep the pipeline flowing, but we record the error on the job
           await ctx.runMutation(api.jobs.markFailed, {
             jobId: job._id,
             error: `Article generated but publish failed: ${pubError}`,
