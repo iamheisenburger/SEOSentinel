@@ -53,19 +53,27 @@ const LinkSchema = z.array(
 );
 
 const parseJson = <T>(schema: z.ZodTypeAny, text: string): T => {
-  // Find the first { and last } to isolate the JSON object
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1) {
-    // Try array if object not found
-    const aStart = text.indexOf("[");
-    const aEnd = text.lastIndexOf("]");
-    if (aStart === -1 || aEnd === -1) throw new Error("No JSON found in response");
-    const raw = text.slice(aStart, aEnd + 1);
-    return schema.parse(JSON.parse(raw)) as T;
+  const objStart = text.indexOf("{");
+  const arrStart = text.indexOf("[");
+
+  // If [ appears before { (or no { exists), treat as array response
+  if (arrStart !== -1 && (objStart === -1 || arrStart < objStart)) {
+    const arrEnd = text.lastIndexOf("]");
+    if (arrEnd === -1) throw new Error("No closing ] found in response");
+    const raw = text.slice(arrStart, arrEnd + 1);
+    try {
+      return schema.parse(JSON.parse(raw)) as T;
+    } catch (err) {
+      console.error("JSON parse failed. Raw text snippet:", raw.slice(0, 200));
+      throw err;
+    }
   }
 
-  const raw = text.slice(start, end + 1);
+  // Otherwise treat as object response
+  if (objStart === -1) throw new Error("No JSON found in response");
+  const objEnd = text.lastIndexOf("}");
+  if (objEnd === -1) throw new Error("No closing } found in response");
+  const raw = text.slice(objStart, objEnd + 1);
 
   try {
     return schema.parse(JSON.parse(raw)) as T;
