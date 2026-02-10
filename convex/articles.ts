@@ -39,12 +39,29 @@ export const createDraft = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    // Deduplicate slug — prevent multiple articles with the same URL path
+    let slug = args.slug;
+    const existing = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
+      .collect();
+    const existingSlugs = new Set(existing.map((a) => a.slug));
+
+    if (existingSlugs.has(slug)) {
+      let suffix = 2;
+      while (existingSlugs.has(`${slug}-${suffix}`)) {
+        suffix++;
+      }
+      slug = `${slug}-${suffix}`;
+      console.log(`Duplicate slug detected, using: ${slug}`);
+    }
+
     return await ctx.db.insert("articles", {
       siteId: args.siteId,
       topicId: args.topicId,
       status: "draft",
       title: args.title,
-      slug: args.slug,
+      slug,
       markdown: args.markdown,
       metaTitle: args.metaTitle,
       metaDescription: args.metaDescription,

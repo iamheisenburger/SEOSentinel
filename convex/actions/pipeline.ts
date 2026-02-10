@@ -332,23 +332,52 @@ async function handlePlan(
   if (!site) throw new Error("Site not found");
   const client = openaiClient(getApiKey());
 
+  // Fetch ALL existing topics so the AI knows what's already covered
+  const existingTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
+  const existingKeywords = existingTopics.map(
+    (t: { primaryKeyword: string }) => t.primaryKeyword,
+  );
+  const existingLabels = existingTopics.map(
+    (t: { label: string }) => t.label,
+  );
+
+  console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
+
   const completion = await client.responses.create({
     model: defaultModel,
     input: [
       {
         role: "system",
         content:
-          "You are an SEO strategist. Propose clustered topics with keywords. Output JSON only.",
+          "You are an expert SEO strategist specializing in topical authority and content diversification. " +
+          "Your goal is to propose NEW topic clusters that expand the site's search footprint into adjacent, " +
+          "high-value territory — NOT repeat what already exists. Output JSON only.",
       },
       {
         role: "user",
-        content: `Domain: ${site.domain}\nNiche: ${site.niche ?? ""}\nTone: ${site.tone ?? "neutral"}\nLanguage: ${site.language ?? "en"}\nReturn JSON array of topics like [{"label": "...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason"}].`,
+        content:
+          `Domain: ${site.domain}\n` +
+          `Niche: ${site.niche ?? ""}\n` +
+          `Tone: ${site.tone ?? "neutral"}\n` +
+          `Language: ${site.language ?? "en"}\n\n` +
+          `EXISTING TOPICS ALREADY COVERED (DO NOT DUPLICATE OR OVERLAP WITH THESE):\n` +
+          existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") +
+          `\n\n` +
+          `RULES:\n` +
+          `1. Do NOT generate topics with primaryKeywords that overlap, duplicate, or are synonyms of the existing topics listed above.\n` +
+          `2. EXPAND into adjacent search territory that still relates to the site's niche. Examples: personal finance tips, budgeting strategies, money-saving hacks, SaaS industry trends, fintech app reviews, digital spending habits, financial literacy, cost comparison guides, productivity tools.\n` +
+          `3. Include a MIX of search intents: ~40% informational, ~30% commercial, ~30% transactional.\n` +
+          `4. Prefer long-tail keywords (3-5 words) with lower competition over broad head terms.\n` +
+          `5. Each topic should target a UNIQUE search query — no two topics should compete for the same SERP.\n` +
+          `6. Generate 10-15 new topics.\n\n` +
+          `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic is valuable"}]`,
       },
     ],
   });
 
   const plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, completion.output_text);
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
+  console.log(`Generated ${plan.length} new diverse topics.`);
   return { count: plan.length };
 }
 

@@ -41,28 +41,60 @@ export const scheduleCadence = action({
       return { scheduled: 0 };
     }
 
-    // Schedule exactly 1 article at a time
+    // Schedule exactly 1 article at a time, using strategic topic selection
     const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
-    const available = topics
-      .filter(
-        (t: { status?: string }) => t.status !== "used" && t.status !== "queued",
-      )
-      .slice(0, 1); // Only schedule 1 at a time
+    const available = topics.filter(
+      (t: { status?: string }) => t.status !== "used" && t.status !== "queued",
+    );
 
-    for (const topic of available) {
-      await ctx.runMutation(api.jobs.create, {
-        siteId,
-        type: "article",
-        payload: { topicId: topic._id },
-      });
-      await ctx.runMutation(api.topics.updateStatus, {
-        topicId: topic._id,
-        status: "queued",
-      });
+    if (available.length === 0) {
+      console.log("No available topics to schedule.");
+      return { scheduled: 0 };
     }
 
-    console.log(`Scheduled ${available.length} article(s). Next will schedule in ${hoursPerArticle}h.`);
-    return { scheduled: available.length };
+    // Sort by priority (highest first)
+    available.sort(
+      (a: { priority?: number }, b: { priority?: number }) =>
+        (b.priority ?? 1) - (a.priority ?? 1),
+    );
+
+    // Get last 5 published articles to avoid keyword overlap (reuse allArticles from above)
+    const recentSlugs = allArticles.slice(0, 5);
+    const recentKeywords = new Set<string>();
+    for (const art of recentSlugs) {
+      // Extract keywords from slug (e.g. "/subscription-budget-tracker" → ["subscription", "budget", "tracker"])
+      const words = art.slug.replace(/^\//, "").split("-");
+      for (const w of words) {
+        if (w.length > 3) recentKeywords.add(w.toLowerCase());
+      }
+    }
+
+    // Pick the highest-priority topic that doesn't overlap with recent articles
+    let selectedTopic = available[0]; // fallback to highest priority
+    for (const topic of available) {
+      const kwWords = topic.primaryKeyword.toLowerCase().split(/\s+/);
+      const overlapCount = kwWords.filter((w: string) => w.length > 3 && recentKeywords.has(w)).length;
+      const overlapRatio = kwWords.length > 0 ? overlapCount / kwWords.length : 0;
+
+      // Accept if less than 50% of keyword words overlap with recent articles
+      if (overlapRatio < 0.5) {
+        selectedTopic = topic;
+        break;
+      }
+    }
+
+    await ctx.runMutation(api.jobs.create, {
+      siteId,
+      type: "article",
+      payload: { topicId: selectedTopic._id },
+    });
+    await ctx.runMutation(api.topics.updateStatus, {
+      topicId: selectedTopic._id,
+      status: "queued",
+    });
+
+    console.log(`Scheduled topic: "${selectedTopic.primaryKeyword}" (priority ${selectedTopic.priority ?? "?"}). Next in ${hoursPerArticle}h.`);
+    return { scheduled: 1 };
   },
 });
 
