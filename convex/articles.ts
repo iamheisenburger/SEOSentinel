@@ -81,6 +81,13 @@ export const updateStatus = mutation({
   },
 });
 
+export const updateMarkdown = mutation({
+  args: { articleId: v.id("articles"), markdown: v.string() },
+  handler: async (ctx, { articleId, markdown }) => {
+    await ctx.db.patch(articleId, { markdown, updatedAt: now() });
+  },
+});
+
 export const updateLinks = mutation({
   args: {
     articleId: v.id("articles"),

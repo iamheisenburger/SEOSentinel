@@ -126,6 +126,125 @@ async function commitToMain({
   };
 }
 
+/**
+ * Generate JSON-LD schema markup for rich snippets.
+ * Detects FAQ sections and HowTo patterns in the article.
+ */
+function generateSchemaMarkup(
+  article: {
+    title: string;
+    markdown: string;
+    metaDescription?: string;
+    createdAt: number;
+  },
+  domain: string,
+  slug: string,
+): string {
+  const schemas: object[] = [];
+  const url = `https://${domain}/${slug}`;
+
+  // Article schema (always)
+  schemas.push({
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: article.title,
+    description: article.metaDescription ?? "",
+    url,
+    datePublished: new Date(article.createdAt).toISOString(),
+    publisher: {
+      "@type": "Organization",
+      name: domain,
+      url: `https://${domain}`,
+    },
+  });
+
+  // FAQ schema — detect Q&A patterns (## heading ending with ?)
+  const faqRegex = /#{2,3}\s+(.+\?)\s*\n+([\s\S]*?)(?=\n#{2,3}\s|\n*$)/g;
+  const faqs: { question: string; answer: string }[] = [];
+  let match;
+  while ((match = faqRegex.exec(article.markdown)) !== null) {
+    const question = match[1].trim();
+    const answer = match[2].trim().slice(0, 500); // Truncate long answers
+    if (question && answer) {
+      faqs.push({ question, answer });
+    }
+  }
+
+  if (faqs.length >= 3) {
+    schemas.push({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: faqs.map((faq) => ({
+        "@type": "Question",
+        name: faq.question,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: faq.answer,
+        },
+      })),
+    });
+  }
+
+  // HowTo schema — detect "how to" in title with numbered steps
+  if (/how\s+to/i.test(article.title)) {
+    const stepRegex = /#{2,3}\s+(?:Step\s+\d+[:.]\s*)?(.+)\n+([\s\S]*?)(?=\n#{2,3}\s|\n*$)/g;
+    const steps: { name: string; text: string }[] = [];
+    let stepMatch;
+    while ((stepMatch = stepRegex.exec(article.markdown)) !== null) {
+      const name = stepMatch[1].trim();
+      const text = stepMatch[2].trim().slice(0, 300);
+      if (name && text && !/FAQ|Frequently/i.test(name)) {
+        steps.push({ name, text });
+      }
+    }
+    if (steps.length >= 3) {
+      schemas.push({
+        "@context": "https://schema.org",
+        "@type": "HowTo",
+        name: article.title,
+        step: steps.map((s, i) => ({
+          "@type": "HowToStep",
+          position: i + 1,
+          name: s.name,
+          text: s.text,
+        })),
+      });
+    }
+  }
+
+  if (schemas.length === 0) return "";
+
+  return schemas
+    .map(
+      (s) =>
+        `<script type="application/ld+json">\n${JSON.stringify(s, null, 2)}\n</script>`,
+    )
+    .join("\n\n");
+}
+
+/**
+ * Generate a sitemap.xml for all published articles.
+ */
+function generateSitemap(
+  domain: string,
+  articles: { slug: string; lastmod: string }[],
+): string {
+  const urls = articles.map((a) => {
+    const loc = `https://${domain}${a.slug.startsWith("/") ? a.slug : `/${a.slug}`}`;
+    return `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${a.lastmod.split("T")[0]}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.7</priority>\n  </url>`;
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://${domain}</loc>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+${urls.join("\n")}
+</urlset>`;
+}
+
 export const publishArticle = action({
   args: {
     siteId: v.id("sites"),
@@ -166,6 +285,9 @@ export const publishArticle = action({
     const slug = article.slug.replace(/^\//, "");
     const filePath = `${contentDir}/${slug}.mdx`;
 
+    // Generate schema markup (JSON-LD) for rich snippets
+    const schemaMarkup = generateSchemaMarkup(article, site.domain, slug);
+
     const frontmatter = [
       "---",
       `title: "${article.title.replace(/"/g, '\\"')}"`,
@@ -192,7 +314,33 @@ export const publishArticle = action({
       .filter(Boolean)
       .join("\n");
 
-    const mdx = `${frontmatter}\n\n${article.markdown}`;
+    const mdx = `${frontmatter}\n\n${article.markdown}${schemaMarkup ? `\n\n${schemaMarkup}` : ""}`;
+
+    // Build files to commit: the article + updated sitemap
+    const filesToCommit: FileContent[] = [
+      { path: filePath, content: mdx },
+    ];
+
+    // Generate updated sitemap.xml with all published articles
+    try {
+      const allArticles = await ctx.runQuery(api.articles.listBySite, {
+        siteId: args.siteId,
+      });
+      const publishedArticles = allArticles.filter(
+        (a: { status?: string }) =>
+          a.status === "published" || a._id === args.articleId,
+      );
+      const sitemapXml = generateSitemap(
+        site.domain,
+        publishedArticles.map((a: { slug: string; updatedAt?: number; createdAt: number }) => ({
+          slug: a.slug,
+          lastmod: new Date(a.updatedAt ?? a.createdAt).toISOString(),
+        })),
+      );
+      filesToCommit.push({ path: "public/sitemap.xml", content: sitemapXml });
+    } catch (err) {
+      console.error("Sitemap generation failed (publishing without sitemap update).");
+    }
 
     // Commit directly to main (no PR needed)
     const { commitUrl } = await commitToMain({
@@ -201,7 +349,7 @@ export const publishArticle = action({
       repo: repoName,
       branch: baseBranch,
       message: `Add article: ${article.title}`,
-      files: [{ path: filePath, content: mdx }],
+      files: filesToCommit,
     });
 
     // Mark published

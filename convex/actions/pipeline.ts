@@ -165,13 +165,19 @@ async function factCheckArticle(
       {
         role: "system",
         content:
-          "You are a fact-checking pass. Validate claims against provided sources and reduce hallucinations. Output JSON only.",
+          "You are a fact-checking editor. Your job is to review the article markdown and correct any inaccurate claims. " +
+          "CRITICAL RULES:\n" +
+          "1. The 'markdown' field in your JSON response MUST contain the FULL article content — the same article, with only factual corrections applied.\n" +
+          "2. Do NOT add fact-check summaries, verification notes, reviewer comments, or any editorial commentary into the markdown.\n" +
+          "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
+          "4. Put any reviewer notes in the separate 'notes' field, NOT in the markdown.\n" +
+          "5. Output JSON only.",
       },
       {
         role: "user",
-        content: `Return JSON like {"markdown":"...","notes":"...","citations":[{"url":"...","title":"..."}]} using these sources: ${JSON.stringify(
+        content: `Return JSON: {"markdown":"<the full corrected article>","notes":"<your reviewer notes>","citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
           sources ?? [],
-        )}\nArticle:\n${markdown}`,
+        )}\n\nArticle to review:\n${markdown}`,
       },
     ],
   });
@@ -542,6 +548,32 @@ async function handleLinks(
 
   const links = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, completion.output_text);
   await ctx.runMutation(api.articles.updateLinks, { articleId, internalLinks: links });
+
+  // Inject links into the article markdown body for actual SEO value
+  if (links.length > 0 && article.markdown) {
+    let updatedMarkdown = article.markdown;
+    for (const link of links) {
+      // Skip if this link target is the article's own slug
+      if (link.href === article.slug) continue;
+      // Only replace the first occurrence, and only if not already a markdown link
+      const anchor = link.anchor;
+      const escapedAnchor = anchor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // Match anchor text that is NOT already inside a markdown link [...](...)
+      const regex = new RegExp(`(?<!\\[)${escapedAnchor}(?!\\]\\()`, "i");
+      const replacement = `[${anchor}](${link.href})`;
+      if (regex.test(updatedMarkdown)) {
+        updatedMarkdown = updatedMarkdown.replace(regex, replacement);
+      }
+    }
+    // Save the updated markdown with embedded links
+    if (updatedMarkdown !== article.markdown) {
+      await ctx.runMutation(api.articles.updateMarkdown, {
+        articleId,
+        markdown: updatedMarkdown,
+      });
+    }
+  }
+
   return { count: links.length };
 }
 
