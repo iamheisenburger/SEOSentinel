@@ -327,7 +327,7 @@ export const publishArticle = action({
         siteId: args.siteId,
       });
       const publishedArticles = allArticles.filter(
-        (a: { status?: string }) =>
+        (a) =>
           a.status === "published" || a._id === args.articleId,
       );
       const sitemapXml = generateSitemap(
