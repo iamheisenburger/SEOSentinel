@@ -1,130 +1,41 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  Globe,
-  RotateCw,
-  Map,
-  Save,
-  GitBranch,
-  Sparkles,
-  ShieldCheck,
-  Gauge,
-  Bot,
-  FileSearch,
+  User,
+  CreditCard,
+  Bell,
+  Trash2,
+  AlertTriangle,
   CheckCircle2,
-  AlertCircle,
-  Loader2,
+  Shield,
+  Mail,
+  ExternalLink,
 } from "lucide-react";
+import { useState } from "react";
 
-export default function SitesPage() {
+export default function SettingsPage() {
   const sites = useQuery(api.sites.list);
-  const upsert = useMutation(api.sites.upsert);
-  const onboard = useAction(api.actions.pipeline.onboardSite);
-  const generatePlan = useAction(api.actions.pipeline.generatePlan);
+  const resetAll = useMutation(api.sites.resetAll);
+  const site = sites?.[0];
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
 
-  const current = sites?.[0];
-  const [form, setForm] = useState({
-    domain: "",
-    niche: "",
-    tone: "",
-    language: "en",
-    cadencePerWeek: 4,
-    autopilotEnabled: true,
-    inferToneNiche: true,
-    approvalRequired: false,
-    repoOwner: "",
-    repoName: "",
-  });
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{
-    text: string;
-    type: "success" | "error" | "info";
-  } | null>(null);
-
-  useEffect(() => {
-    if (!current) return;
-    setForm({
-      domain: current.domain ?? "",
-      niche: current.niche ?? "",
-      tone: current.tone ?? "",
-      language: current.language ?? "en",
-      cadencePerWeek: current.cadencePerWeek ?? 4,
-      autopilotEnabled: current.autopilotEnabled !== false,
-      inferToneNiche: current.inferToneNiche !== false,
-      approvalRequired: current.approvalRequired ?? false,
-      repoOwner: current.repoOwner ?? "",
-      repoName: current.repoName ?? "",
-    });
-  }, [current?._id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleSave = async () => {
-    setBusy(true);
-    setMessage(null);
+  const handleDeleteAll = async () => {
+    setDeleting(true);
     try {
-      await upsert({
-        id: current?._id,
-        domain: form.domain,
-        niche: form.niche || undefined,
-        tone: form.tone || undefined,
-        language: form.language || "en",
-        cadencePerWeek: Number(form.cadencePerWeek),
-        autopilotEnabled: form.autopilotEnabled,
-        inferToneNiche: form.inferToneNiche,
-        approvalRequired: form.approvalRequired,
-        repoOwner: form.repoOwner || undefined,
-        repoName: form.repoName || undefined,
-      });
-      setMessage({ text: "Settings saved", type: "success" });
-    } catch (err: unknown) {
-      setMessage({
-        text: err instanceof Error ? err.message : "Error saving",
-        type: "error",
-      });
+      await resetAll();
+      setDeleteMessage("All data has been deleted. Redirecting...");
+      setTimeout(() => window.location.assign("/dashboard"), 1500);
+    } catch {
+      setDeleteMessage("Failed to delete data.");
     } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleOnboard = async () => {
-    if (!current?._id) return;
-    setBusy(true);
-    setMessage({ text: "Running onboarding crawl...", type: "info" });
-    try {
-      await onboard({ siteId: current._id });
-      setMessage({
-        text: "Onboarding complete. Pages indexed.",
-        type: "success",
-      });
-    } catch (err: unknown) {
-      setMessage({
-        text: err instanceof Error ? err.message : "Onboarding failed",
-        type: "error",
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handlePlan = async () => {
-    if (!current?._id) return;
-    setBusy(true);
-    setMessage({ text: "Generating content plan...", type: "info" });
-    try {
-      await generatePlan({ siteId: current._id });
-      setMessage({ text: "Content plan generated.", type: "success" });
-    } catch (err: unknown) {
-      setMessage({
-        text: err instanceof Error ? err.message : "Plan generation failed",
-        type: "error",
-      });
-    } finally {
-      setBusy(false);
+      setDeleting(false);
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -141,10 +52,7 @@ export default function SitesPage() {
             className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5"
           >
             <div className="h-4 w-32 animate-pulse rounded bg-white/[0.04]" />
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <div className="h-10 animate-pulse rounded-lg bg-white/[0.03]" />
-              <div className="h-10 animate-pulse rounded-lg bg-white/[0.03]" />
-            </div>
+            <div className="mt-4 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
           </div>
         ))}
       </div>
@@ -155,210 +63,174 @@ export default function SitesPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Settings"
-        subtitle={
-          current
-            ? `Managing ${current.domain}`
-            : "Configure your site to get started"
-        }
-        actions={
-          <Button
-            size="sm"
-            onClick={handleSave}
-            loading={busy}
-            icon={<Save className="h-3.5 w-3.5" />}
-          >
-            Save changes
-          </Button>
-        }
+        subtitle="Manage your account, billing, and preferences"
       />
 
-      {/* Status message */}
-      {message && (
-        <div
-          className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-[13px] ${
-            message.type === "success"
-              ? "bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.1] text-[#4ADE80]"
-              : message.type === "error"
-                ? "bg-[#EF4444]/[0.06] border border-[#EF4444]/[0.1] text-[#F87171]"
-                : "bg-[#0EA5E9]/[0.06] border border-[#0EA5E9]/[0.1] text-[#38BDF8]"
-          }`}
-        >
-          {message.type === "success" && (
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-          )}
-          {message.type === "error" && (
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          )}
-          {message.type === "info" && (
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-          )}
-          {message.text}
+      {deleteMessage && (
+        <div className="flex items-center gap-2 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.1] px-4 py-2.5 text-[13px] text-[#4ADE80]">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+          {deleteMessage}
         </div>
       )}
 
-      {/* ── Section 1: Domain ── */}
+      {/* ── Account ── */}
       <SettingsSection
-        icon={<Globe className="h-3.5 w-3.5 text-[#0EA5E9]" />}
-        title="Domain"
-        description="The website SEOSentinel monitors and writes content for."
+        icon={<User className="h-3.5 w-3.5 text-[#0EA5E9]" />}
+        title="Account"
+        description="Your account details and preferences"
       >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input
-            label="Domain"
-            placeholder="example.com"
-            value={form.domain}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, domain: e.target.value }))
-            }
-          />
-          <Input
-            label="Language"
-            placeholder="en"
-            value={form.language}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, language: e.target.value }))
-            }
-          />
-        </div>
-      </SettingsSection>
-
-      {/* ── Section 2: Content ── */}
-      <SettingsSection
-        icon={<Sparkles className="h-3.5 w-3.5 text-[#F59E0B]" />}
-        title="Content"
-        description="How articles are written — niche focus, voice, and style."
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input
-            label="Niche / Industry"
-            placeholder="AI SaaS, developer tools, etc."
-            value={form.niche}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, niche: e.target.value }))
-            }
-          />
-          <Input
-            label="Tone"
-            placeholder="professional, practical, authoritative"
-            value={form.tone}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, tone: e.target.value }))
-            }
-          />
-        </div>
-        <Toggle
-          checked={form.inferToneNiche}
-          onChange={() =>
-            setForm((f) => ({ ...f, inferToneNiche: !f.inferToneNiche }))
-          }
-          label="Auto-detect niche and tone"
-          description="Let AI infer your niche and writing style from your site content"
-        />
-      </SettingsSection>
-
-      {/* ── Section 3: Pipeline ── */}
-      <SettingsSection
-        icon={<Gauge className="h-3.5 w-3.5 text-[#22C55E]" />}
-        title="Pipeline"
-        description="Publishing cadence and automation preferences."
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input
-            label="Articles per week"
-            type="number"
-            value={form.cadencePerWeek}
-            onChange={(e) =>
-              setForm((f) => ({
-                ...f,
-                cadencePerWeek: Number(e.target.value),
-              }))
-            }
-          />
-          <div /> {/* Spacer for grid alignment */}
-        </div>
         <div className="flex flex-col gap-3">
-          <Toggle
-            checked={form.autopilotEnabled}
-            onChange={() =>
-              setForm((f) => ({
-                ...f,
-                autopilotEnabled: !f.autopilotEnabled,
-              }))
-            }
-            label="Autopilot"
-            description="Automatically generate and publish articles on schedule"
-            icon={<Bot className="h-3.5 w-3.5" />}
-          />
-          <Toggle
-            checked={form.approvalRequired}
-            onChange={() =>
-              setForm((f) => ({
-                ...f,
-                approvalRequired: !f.approvalRequired,
-              }))
-            }
-            label="Require approval"
-            description="Hold articles at review status until you manually approve"
-            icon={<ShieldCheck className="h-3.5 w-3.5" />}
-          />
+          <div className="flex items-center justify-between rounded-lg bg-white/[0.02] px-4 py-3 border border-white/[0.04]">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#0EA5E9]/[0.1]">
+                <User className="h-4 w-4 text-[#0EA5E9]" />
+              </div>
+              <div>
+                <p className="text-[13px] font-medium text-[#EDEEF1]">
+                  {site ? site.siteName ?? site.domain : "No site configured"}
+                </p>
+                <p className="text-[11px] text-[#565A6E]">
+                  {site ? `${site.siteType ?? "Website"} · ${site.niche ?? "General"}` : "Set up your site from the dashboard"}
+                </p>
+              </div>
+            </div>
+            {site && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#22C55E]/[0.08] px-2.5 py-1 text-[11px] font-medium text-[#4ADE80]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
+                Active
+              </span>
+            )}
+          </div>
         </div>
       </SettingsSection>
 
-      {/* ── Section 4: Publishing ── */}
+      {/* ── Billing ── */}
       <SettingsSection
-        icon={<GitBranch className="h-3.5 w-3.5 text-[#A78BFA]" />}
-        title="Publishing"
-        description="GitHub repository where articles are committed."
+        icon={<CreditCard className="h-3.5 w-3.5 text-[#F59E0B]" />}
+        title="Billing"
+        description="Manage your subscription and payment method"
       >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input
-            label="Repository owner"
-            placeholder="your-github-username"
-            value={form.repoOwner}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, repoOwner: e.target.value }))
-            }
-          />
-          <Input
-            label="Repository name"
-            placeholder="my-blog"
-            value={form.repoName}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, repoName: e.target.value }))
-            }
-          />
-        </div>
-      </SettingsSection>
-
-      {/* ── Section 5: Actions ── */}
-      {current && (
-        <SettingsSection
-          icon={<FileSearch className="h-3.5 w-3.5 text-[#0EA5E9]" />}
-          title="Actions"
-          description="Manually trigger pipeline steps."
-        >
-          <div className="flex flex-wrap gap-2">
+        <div className="rounded-lg bg-white/[0.02] px-4 py-4 border border-white/[0.04]">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] font-medium text-[#EDEEF1]">Free Plan</p>
+              <p className="text-[11px] text-[#565A6E]">
+                You&apos;re currently on the free tier
+              </p>
+            </div>
             <Button
               variant="secondary"
               size="sm"
-              onClick={handleOnboard}
-              disabled={busy}
-              icon={<RotateCw className="h-3.5 w-3.5" />}
+              disabled
+              icon={<ExternalLink className="h-3 w-3" />}
             >
-              Re-crawl site
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handlePlan}
-              disabled={busy}
-              icon={<Map className="h-3.5 w-3.5" />}
-            >
-              Generate topics
+              Upgrade
             </Button>
           </div>
-        </SettingsSection>
-      )}
+
+          <div className="mt-4 grid grid-cols-3 gap-3">
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
+              <p className="text-lg font-bold text-[#EDEEF1]">
+                {site?.cadencePerWeek ?? 4}
+              </p>
+              <p className="text-[10px] text-[#565A6E]">Articles/week</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
+              <p className="text-lg font-bold text-[#EDEEF1]">1</p>
+              <p className="text-[10px] text-[#565A6E]">Site</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
+              <p className="text-lg font-bold text-[#EDEEF1]">
+                {site?.approvalRequired ? "On" : "Off"}
+              </p>
+              <p className="text-[10px] text-[#565A6E]">Approval</p>
+            </div>
+          </div>
+
+          <p className="mt-3 text-[11px] text-[#565A6E]">
+            Billing and subscriptions coming soon. Upgrade to unlock multiple sites,
+            higher article cadence, and priority generation.
+          </p>
+        </div>
+      </SettingsSection>
+
+      {/* ── Notifications ── */}
+      <SettingsSection
+        icon={<Bell className="h-3.5 w-3.5 text-[#22C55E]" />}
+        title="Notifications"
+        description="Configure how you get notified about pipeline activity"
+      >
+        <div className="flex flex-col gap-0">
+          <NotifToggle
+            label="Article published"
+            description="Get notified when an article is published to GitHub"
+            enabled={false}
+          />
+          <NotifToggle
+            label="Article pending review"
+            description="Get notified when an article needs your approval"
+            enabled={false}
+          />
+          <NotifToggle
+            label="Pipeline failures"
+            description="Get notified when a pipeline step fails"
+            enabled={false}
+          />
+        </div>
+        <p className="text-[11px] text-[#565A6E] px-3">
+          Email notifications coming soon.
+        </p>
+      </SettingsSection>
+
+      {/* ── Danger Zone ── */}
+      <SettingsSection
+        icon={<AlertTriangle className="h-3.5 w-3.5 text-[#EF4444]" />}
+        title="Danger Zone"
+        description="Irreversible actions — proceed with caution"
+        danger
+      >
+        <div className="rounded-lg border border-[#EF4444]/[0.15] bg-[#EF4444]/[0.03] px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] font-medium text-[#EDEEF1]">
+                Delete all data
+              </p>
+              <p className="text-[11px] text-[#565A6E]">
+                Remove your site, all articles, topics, pages, and jobs. This cannot be undone.
+              </p>
+            </div>
+            {showDeleteConfirm ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowDeleteConfirm(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={handleDeleteAll}
+                  loading={deleting}
+                  icon={<Trash2 className="h-3 w-3" />}
+                >
+                  Confirm Delete
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setShowDeleteConfirm(true)}
+                icon={<Trash2 className="h-3 w-3" />}
+              >
+                Delete Everything
+              </Button>
+            )}
+          </div>
+        </div>
+      </SettingsSection>
     </div>
   );
 }
@@ -370,16 +242,26 @@ function SettingsSection({
   title,
   description,
   children,
+  danger,
 }: {
   icon: React.ReactNode;
   title: string;
   description: string;
   children: React.ReactNode;
+  danger?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+    <div
+      className={`rounded-xl border bg-[#0F1117] ${
+        danger ? "border-[#EF4444]/[0.1]" : "border-white/[0.06]"
+      }`}
+    >
       <div className="flex items-center gap-3 border-b border-white/[0.04] px-5 py-3.5">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.04]">
+        <div
+          className={`flex h-7 w-7 items-center justify-center rounded-lg ${
+            danger ? "bg-[#EF4444]/[0.08]" : "bg-white/[0.04]"
+          }`}
+        >
           {icon}
         </div>
         <div>
@@ -392,46 +274,34 @@ function SettingsSection({
   );
 }
 
-function Toggle({
-  checked,
-  onChange,
+function NotifToggle({
   label,
   description,
-  icon,
+  enabled,
 }: {
-  checked: boolean;
-  onChange: () => void;
   label: string;
   description: string;
-  icon?: React.ReactNode;
+  enabled: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={onChange}
-        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ${
-          checked ? "bg-[#0EA5E9]" : "bg-white/[0.08]"
+    <div className="flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-white/[0.02] transition-colors">
+      <div className="flex items-center gap-3">
+        <Mail className="h-3.5 w-3.5 text-[#565A6E]" />
+        <div>
+          <p className="text-[13px] text-[#EDEEF1]">{label}</p>
+          <p className="text-[11px] text-[#565A6E]">{description}</p>
+        </div>
+      </div>
+      <div
+        className={`relative h-5 w-9 rounded-full cursor-not-allowed ${
+          enabled ? "bg-[#0EA5E9]" : "bg-white/[0.08]"
         }`}
       >
         <span
-          className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 mt-0.5 ml-0.5 ${
-            checked ? "translate-x-4" : "translate-x-0"
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white/60 ${
+            enabled ? "left-[18px]" : "left-0.5"
           }`}
         />
-      </button>
-      <div className="flex items-center gap-2 min-w-0">
-        {icon && (
-          <span className={checked ? "text-[#0EA5E9]" : "text-[#565A6E]"}>
-            {icon}
-          </span>
-        )}
-        <div>
-          <p className="text-[13px] font-medium text-[#EDEEF1]">{label}</p>
-          <p className="text-[11px] text-[#565A6E]">{description}</p>
-        </div>
       </div>
     </div>
   );
