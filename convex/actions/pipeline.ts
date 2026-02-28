@@ -143,6 +143,145 @@ async function generateHeroImage(
   return imageUrl;
 }
 
+/** Capture a real screenshot of a website. Stores in Convex file storage. */
+async function captureScreenshot(
+  ctx: ActionCtx,
+  url: string,
+  options?: { width?: number; cropHeight?: number },
+): Promise<string> {
+  const width = options?.width ?? 1280;
+  const cropHeight = options?.cropHeight ?? 800;
+  const targetUrl = url.startsWith("http") ? url : `https://${url}`;
+
+  // thum.io — free screenshot API, no API key required
+  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/noanimate/${targetUrl}`;
+
+  console.log(`Capturing screenshot of ${targetUrl}...`);
+
+  const response = await fetch(screenshotApiUrl);
+  if (!response.ok) {
+    throw new Error(`Screenshot API returned ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const storageId = await ctx.storage.store(blob);
+  const imageUrl = await ctx.storage.getUrl(storageId);
+  if (!imageUrl) throw new Error("Failed to get storage URL for screenshot");
+
+  console.log(`Screenshot captured and stored: ${storageId}`);
+  return imageUrl;
+}
+
+/** Search for relevant infographics and data visualizations from the web. */
+async function searchWebImages(
+  topic: string,
+  niche: string,
+): Promise<{ url: string; alt: string; source: string }[]> {
+  const client = openaiClient();
+
+  const completion = await client.responses.create({
+    model: "gpt-4.1-mini",
+    tools: [{ type: "web_search_preview" as any }],
+    input: [
+      {
+        role: "system",
+        content:
+          "Search the web for high-quality infographics, charts, statistics images, and data visualizations. " +
+          "Return ONLY URLs that point to actual, publicly accessible image files (.png, .jpg, .webp). " +
+          "Prefer images from reputable sources (Statista, HubSpot, McKinsey, Gartner, industry blogs). " +
+          "Output JSON only — no explanation.",
+      },
+      {
+        role: "user",
+        content:
+          `Find 2-4 relevant infographics, charts, or data visualizations about: "${topic}" in the ${niche || "general"} space.\n` +
+          `Return JSON: {"images": [{"url": "direct_image_url", "alt": "descriptive alt text for SEO", "source": "source website name"}]}`,
+      },
+    ],
+  });
+
+  const result = parseJson<{
+    images: { url: string; alt: string; source: string }[];
+  }>(
+    z.object({
+      images: z
+        .array(
+          z.object({
+            url: z.string(),
+            alt: z.string(),
+            source: z.string(),
+          }),
+        )
+        .default([]),
+    }),
+    completion.output_text,
+  );
+
+  // Validate URLs
+  const validImages = result.images.filter((img) => {
+    try {
+      new URL(img.url);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  console.log(`Found ${validImages.length} web images for "${topic}".`);
+  return validImages;
+}
+
+/** Crawl a page and extract text content (strips HTML). */
+async function crawlPageContent(url: string): Promise<string> {
+  try {
+    const targetUrl = url.startsWith("http") ? url : `https://${url}`;
+    const response = await fetch(targetUrl, {
+      headers: { "User-Agent": "SEOSentinel/1.0 (content research)" },
+    });
+    if (!response.ok) return "";
+    const html = await response.text();
+
+    // Strip scripts, styles, then HTML tags
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+      .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return text.slice(0, 5000);
+  } catch {
+    return "";
+  }
+}
+
+/** Crawl site's key pages (pricing, features) for fresh, accurate data. */
+async function crawlSiteData(
+  domain: string,
+): Promise<{ pricing: string; features: string; homepage: string }> {
+  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  const cleanBase = baseUrl.replace(/\/$/, "");
+
+  console.log(`Crawling site data from ${cleanBase}...`);
+
+  // Crawl key pages sequentially (respect user preference)
+  const homepage = await crawlPageContent(cleanBase);
+  const pricing = await crawlPageContent(`${cleanBase}/pricing`);
+  const features = await crawlPageContent(`${cleanBase}/features`);
+
+  console.log(
+    `Crawled site data: homepage=${homepage.length}chars, pricing=${pricing.length}chars, features=${features.length}chars`,
+  );
+
+  return { pricing, features, homepage };
+}
+
 /** Search for relevant YouTube videos using OpenAI web search. */
 async function searchYouTubeVideos(
   topic: string,
@@ -546,7 +685,40 @@ async function handleArticle(
     }
   }
 
-  // ── Step 2: Generate Article (with full site context) ──
+  // ── Step 1c: Screenshot Capture (graceful degradation) ──
+  let screenshotUrl: string | undefined;
+
+  try {
+    screenshotUrl = await captureScreenshot(ctx, site.domain);
+    console.log(`Site screenshot captured: ${screenshotUrl}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`Screenshot capture failed (continuing without): ${msg}`);
+  }
+
+  // ── Step 1d: Web Image Search (graceful degradation) ──
+  let webImages: { url: string; alt: string; source: string }[] = [];
+
+  if (topic) {
+    try {
+      webImages = await searchWebImages(topic.label, site.niche ?? "");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`Web image search failed (continuing without): ${msg}`);
+    }
+  }
+
+  // ── Step 1e: Live Site Data Crawl (graceful degradation) ──
+  let siteData = { pricing: "", features: "", homepage: "" };
+
+  try {
+    siteData = await crawlSiteData(site.domain);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`Site data crawl failed (continuing without): ${msg}`);
+  }
+
+  // ── Step 2: Generate Article (with full site context + real media) ──
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
   const researchBlock = researchContext
@@ -583,6 +755,37 @@ async function handleArticle(
     ? `\nANCHOR KEYWORDS: Naturally incorporate these keywords where relevant: ${site.anchorKeywords.join(", ")}.`
     : "";
 
+  // Build screenshot embed block
+  const screenshotBlock = screenshotUrl
+    ? `\nSITE SCREENSHOT: A real screenshot of ${site.domain} has been captured and is available at this URL: ${screenshotUrl}\n` +
+      `Embed it naturally in the article (introduction or product overview) using: ![${site.siteName ?? site.domain} website](${screenshotUrl})\n` +
+      `This is a REAL screenshot — use it to show readers what the product/site actually looks like.`
+    : "";
+
+  // Build web images block
+  const webImagesBlock = webImages.length > 0
+    ? `\nWEB IMAGES (real infographics/charts found on the web — NOT AI-generated): Embed these at relevant points in the article with attribution:\n` +
+      webImages
+        .map(
+          (img) =>
+            `- Image: ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`,
+        )
+        .join("\n")
+    : "";
+
+  // Build live crawl data block
+  const liveDataBlock =
+    siteData.pricing || siteData.features
+      ? `\nLIVE CRAWLED DATA FROM ${site.domain.toUpperCase()} — use this for ACCURATE tables and product information:\n` +
+        (siteData.pricing
+          ? `\n--- PRICING PAGE DATA ---\n${siteData.pricing.slice(0, 3000)}\n`
+          : "") +
+        (siteData.features
+          ? `\n--- FEATURES PAGE DATA ---\n${siteData.features.slice(0, 3000)}\n`
+          : "") +
+        `\nIMPORTANT: When building comparison tables or mentioning pricing/features, use the REAL data above. Do NOT make up numbers.`
+      : "";
+
   // Citation and linking settings
   const citationRule = site.sourceCitations !== false
     ? "9. INLINE CITATIONS: Use numbered citations [1], [2], [3] throughout the article when referencing statistics, quotes, or factual claims. Add a '## Sources' section at the very end listing each source as: [1] Title — URL"
@@ -613,9 +816,11 @@ async function handleArticle(
     "12. NO FLUFF: Every paragraph must contain specific information, data, examples, or actionable advice. Cut generic filler.\n" +
     "13. KEY TAKEAWAYS: Include a '## Key Takeaways' section near the end with 5-7 bullet points summarizing the main insights.\n" +
     "14. YOUTUBE EMBEDS: If YouTube video HTML is provided below, embed them at relevant points in the article (after related sections). Copy the HTML exactly as provided.\n" +
-    "15. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
-    "16. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
-    "17. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
+    "15. REAL IMAGES: If a site screenshot URL or web infographic URLs are provided below, embed them in the article using standard markdown image syntax: ![alt text](url). Place the site screenshot in the intro/overview section. Place infographics near relevant data sections. Add italic captions below images.\n" +
+    "16. REAL DATA: If live crawled data from the site is provided below (pricing, features), use the ACTUAL numbers and details to build comparison tables and product descriptions. NEVER fabricate pricing tiers or feature lists — use only what was crawled.\n" +
+    "17. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
+    "18. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
+    "19. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
     `SITE CONTEXT:\n` +
     `Domain: ${site.domain}\n` +
     `Site: ${site.siteName ?? site.domain}\n` +
@@ -627,6 +832,9 @@ async function handleArticle(
     ctaBlock +
     anchorBlock +
     youtubeBlock +
+    screenshotBlock +
+    webImagesBlock +
+    liveDataBlock +
     `\n\nARTICLE TARGET:\n` +
     `Topic: ${topic?.label ?? "General"}\n` +
     `Primary Keyword: ${topic?.primaryKeyword ?? ""}\n` +
@@ -683,20 +891,25 @@ async function handleArticle(
     console.error(`Fact check failed (using original article): ${msg}`);
   }
 
-  // ── Step 4: Generate Hero Image (graceful degradation) ──
-  let featuredImage: string | undefined;
+  // ── Step 4: Featured Image (screenshot first, AI fallback) ──
+  let featuredImage: string | undefined = screenshotUrl;
 
-  try {
-    featuredImage = await generateHeroImage(
-      ctx,
-      article.title,
-      site.niche ?? "",
-      site.imageBrandingPrompt ?? undefined,
-    );
-    console.log(`Hero image generated: ${featuredImage}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`Image generation failed (continuing without): ${msg}`);
+  if (featuredImage) {
+    console.log(`Using site screenshot as featured image: ${featuredImage}`);
+  } else {
+    // Fallback to AI-generated hero image
+    try {
+      featuredImage = await generateHeroImage(
+        ctx,
+        article.title,
+        site.niche ?? "",
+        site.imageBrandingPrompt ?? undefined,
+      );
+      console.log(`AI hero image generated as fallback: ${featuredImage}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`Image generation failed (continuing without): ${msg}`);
+    }
   }
 
   // ── Step 5: Calculate Article Stats ──
