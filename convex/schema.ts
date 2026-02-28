@@ -13,6 +13,35 @@ export default defineSchema({
     approvalRequired: v.optional(v.boolean()),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
+
+    // ── AI-analyzed site profile (populated after crawl) ──
+    siteName: v.optional(v.string()),
+    siteType: v.optional(v.string()), // SaaS, E-commerce, Blog, Agency, etc.
+    siteSummary: v.optional(v.string()),
+    blogTheme: v.optional(v.string()), // what the blog should focus on
+    keyFeatures: v.optional(v.array(v.string())),
+    pricingInfo: v.optional(v.string()), // pricing summary
+    founders: v.optional(v.string()),
+
+    // ── Target audience ──
+    targetCountry: v.optional(v.string()),
+    targetAudienceSummary: v.optional(v.string()),
+    painPoints: v.optional(v.array(v.string())),
+    productUsage: v.optional(v.string()), // how audience uses the product
+
+    // ── Competitors ──
+    competitors: v.optional(v.array(v.string())), // domains to never mention
+
+    // ── Content settings ──
+    ctaText: v.optional(v.string()),
+    ctaUrl: v.optional(v.string()),
+    imageBrandingPrompt: v.optional(v.string()),
+    anchorKeywords: v.optional(v.array(v.string())), // priority backlink keywords
+    externalLinking: v.optional(v.boolean()),
+    sourceCitations: v.optional(v.boolean()),
+    youtubeEmbeds: v.optional(v.boolean()),
+    urlStructure: v.optional(v.string()), // e.g. /blog/[slug]
+
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_domain", ["domain"]),

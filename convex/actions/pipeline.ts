@@ -559,9 +559,144 @@ async function handleLinks(
   return { count: links.length };
 }
 
+/** Deep AI analysis of a crawled site — extracts profile, audience, strategy. */
+async function handleAnalyzeSite(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+  html: string,
+  pages: { slug: string; title: string; summary: string; keywords?: string[] }[],
+): Promise<{
+  siteName: string;
+  siteType: string;
+  siteSummary: string;
+  blogTheme: string;
+  keyFeatures: string[];
+  pricingInfo: string;
+  founders: string;
+  niche: string;
+  tone: string;
+  targetCountry: string;
+  targetAudienceSummary: string;
+  painPoints: string[];
+  productUsage: string;
+  suggestedCompetitors: string[];
+  suggestedAnchorKeywords: string[];
+}> {
+  const site = await ctx.runQuery(api.sites.get, { siteId });
+  if (!site) throw new Error("Site not found");
+
+  // Feed homepage HTML + all page summaries to Claude for deep analysis
+  const pageContext = pages
+    .map((p) => `[${p.title}] (${p.slug})\n${p.summary}\nKeywords: ${p.keywords?.join(", ") ?? "none"}`)
+    .join("\n\n");
+
+  const AnalysisSchema = z.object({
+    siteName: z.string(),
+    siteType: z.string(),
+    siteSummary: z.string(),
+    blogTheme: z.string(),
+    keyFeatures: z.array(z.string()),
+    pricingInfo: z.string(),
+    founders: z.string(),
+    niche: z.string(),
+    tone: z.string(),
+    targetCountry: z.string(),
+    targetAudienceSummary: z.string(),
+    painPoints: z.array(z.string()),
+    productUsage: z.string(),
+    suggestedCompetitors: z.array(z.string()),
+    suggestedAnchorKeywords: z.array(z.string()),
+  });
+
+  const text = await callClaude(
+    "You are an expert SEO strategist and business analyst. You have been given REAL content crawled from a website. " +
+    "Analyze it thoroughly and extract a complete site profile. Be specific and data-driven — use actual information from the crawled content, never guess.\n\n" +
+    "RULES:\n" +
+    "1. Only state facts you can confirm from the crawled content.\n" +
+    "2. If information is not available, say 'Not found on website' — never fabricate.\n" +
+    "3. For target audience, infer from the product/service who would benefit most.\n" +
+    "4. For competitors, suggest 3-5 real companies in the same space.\n" +
+    "5. For anchor keywords, suggest 5-10 primary keywords the site should rank for.\n" +
+    "6. Blog theme should describe what topics the blog should cover to drive organic traffic.\n" +
+    "7. Pain points should be specific problems the target audience faces that this product solves.\n" +
+    "8. Tone should be one of: professional, friendly, casual, authoritative, technical.\n" +
+    "9. Output JSON only.",
+    `Domain: ${site.domain}\n\n` +
+    `HOMEPAGE HTML (first 10000 chars):\n${html.slice(0, 10000)}\n\n` +
+    `CRAWLED PAGES (${pages.length} pages):\n${pageContext}\n\n` +
+    `Return JSON:\n` +
+    `{\n` +
+    `  "siteName": "company/product name",\n` +
+    `  "siteType": "SaaS Product | E-commerce | Blog | Agency | Marketplace | Media | Non-profit | Other",\n` +
+    `  "siteSummary": "3-5 sentence description of what this company/product does",\n` +
+    `  "blogTheme": "what the blog should focus on to drive SEO traffic",\n` +
+    `  "keyFeatures": ["feature 1", "feature 2", ...],\n` +
+    `  "pricingInfo": "pricing tiers/model if found, otherwise 'Not found on website'",\n` +
+    `  "founders": "founder names if found, otherwise 'Not found on website'",\n` +
+    `  "niche": "specific industry/market niche",\n` +
+    `  "tone": "professional|friendly|casual|authoritative|technical",\n` +
+    `  "targetCountry": "primary target country/region",\n` +
+    `  "targetAudienceSummary": "detailed description of who the ideal customer is",\n` +
+    `  "painPoints": ["pain point 1", "pain point 2", ...],\n` +
+    `  "productUsage": "how the target audience would use this product/service",\n` +
+    `  "suggestedCompetitors": ["competitor1.com", "competitor2.com", ...],\n` +
+    `  "suggestedAnchorKeywords": ["keyword 1", "keyword 2", ...]\n` +
+    `}`,
+    8192,
+  );
+
+  const analysis = parseJson<z.infer<typeof AnalysisSchema>>(AnalysisSchema, text);
+
+  // Save analysis to the site record
+  await ctx.runMutation(api.sites.upsert, {
+    id: siteId,
+    domain: site.domain,
+    siteName: analysis.siteName,
+    siteType: analysis.siteType,
+    siteSummary: analysis.siteSummary,
+    blogTheme: analysis.blogTheme,
+    keyFeatures: analysis.keyFeatures,
+    pricingInfo: analysis.pricingInfo,
+    founders: analysis.founders,
+    niche: analysis.niche,
+    tone: analysis.tone,
+    targetCountry: analysis.targetCountry,
+    targetAudienceSummary: analysis.targetAudienceSummary,
+    painPoints: analysis.painPoints,
+    productUsage: analysis.productUsage,
+    competitors: analysis.suggestedCompetitors,
+    anchorKeywords: analysis.suggestedAnchorKeywords,
+  });
+
+  console.log(`Site analysis complete for ${site.domain}: ${analysis.siteName} (${analysis.siteType})`);
+  return analysis;
+}
+
 export const onboardSite = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => handleOnboarding(ctx, siteId),
+});
+
+/** Crawl + deep AI analysis in one step. Returns everything the wizard needs. */
+export const crawlAndAnalyze = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    // Step 1: Crawl (reuse existing handleOnboarding)
+    const crawlResult = await handleOnboarding(ctx, siteId);
+
+    // Step 2: Fetch homepage HTML again for deep analysis
+    const site = await ctx.runQuery(api.sites.get, { siteId });
+    if (!site) throw new Error("Site not found");
+    const { html } = await fetchHtml(site.domain);
+
+    // Step 3: Deep AI analysis
+    const analysis = await handleAnalyzeSite(ctx, siteId, html, crawlResult.pages);
+
+    return {
+      pages: crawlResult.pages,
+      analysis,
+    };
+  },
 });
 
 export const generatePlan = action({
