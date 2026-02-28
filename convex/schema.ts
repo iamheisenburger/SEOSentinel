@@ -66,6 +66,8 @@ export default defineSchema({
         }),
       ),
     ),
+    factCheckScore: v.optional(v.number()), // 0-100 overall confidence
+    factCheckNotes: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

@@ -37,6 +37,8 @@ export const createDraft = mutation({
         }),
       ),
     ),
+    factCheckScore: v.optional(v.number()),
+    factCheckNotes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Deduplicate slug — prevent multiple articles with the same URL path
@@ -67,6 +69,8 @@ export const createDraft = mutation({
       metaDescription: args.metaDescription,
       language: args.language,
       sources: args.sources,
+      factCheckScore: args.factCheckScore,
+      factCheckNotes: args.factCheckNotes,
       internalLinks: [],
       createdAt: now(),
       updatedAt: now(),

@@ -169,14 +169,20 @@ async function factCheckArticle(
   sources: z.infer<typeof ArticleSchema>["sources"],
 ) {
   const text = await callClaude(
-    "You are a fact-checking editor. Your job is to review the article markdown and correct any inaccurate claims. " +
+    "You are a fact-checking editor. Review the article against provided sources and score factual accuracy.\n\n" +
     "CRITICAL RULES:\n" +
-    "1. The 'markdown' field in your JSON response MUST contain the FULL article content — the same article, with only factual corrections applied.\n" +
-    "2. Do NOT add fact-check summaries, verification notes, reviewer comments, or any editorial commentary into the markdown.\n" +
+    "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
+    "2. Do NOT add fact-check summaries or editorial commentary into the markdown.\n" +
     "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
-    "4. Put any reviewer notes in the separate 'notes' field, NOT in the markdown.\n" +
-    "5. Output JSON only.",
-    `Return JSON: {"markdown":"<the full corrected article>","notes":"<your reviewer notes>","citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
+    "4. For each factual claim you can identify, assess whether it is supported by the provided sources.\n" +
+    "5. 'confidenceScore' = overall percentage (0-100) of how well-supported the article's claims are.\n" +
+    "   - 90-100: All major claims verified against sources\n" +
+    "   - 70-89: Most claims verified, minor gaps\n" +
+    "   - 50-69: Several unverifiable claims\n" +
+    "   - Below 50: Major factual concerns\n" +
+    "6. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by sources.\n" +
+    "7. Output JSON only.",
+    `Return JSON: {"markdown":"<full corrected article>","notes":"<reviewer summary>","confidenceScore":<0-100>,"claimCount":<number>,"verifiedCount":<number>,"citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nArticle to review:\n${markdown}`,
     16384,
@@ -185,11 +191,17 @@ async function factCheckArticle(
   const reviewed = parseJson<{
     markdown: string;
     notes?: string;
+    confidenceScore?: number;
+    claimCount?: number;
+    verifiedCount?: number;
     citations?: { url: string; title?: string }[];
   }>(
     z.object({
       markdown: z.string(),
       notes: z.string().optional(),
+      confidenceScore: z.number().optional(),
+      claimCount: z.number().optional(),
+      verifiedCount: z.number().optional(),
       citations: z
         .array(
           z.object({
@@ -442,6 +454,8 @@ async function handleArticle(
   // ── Step 3: Fact Check (graceful degradation) ──
   let finalMarkdown = article.markdown;
   let finalSources = dedupedSources;
+  let factCheckScore: number | undefined;
+  let factCheckNotes: string | undefined;
 
   try {
     console.log("Running fact check...");
@@ -453,8 +467,15 @@ async function handleArticle(
       );
       finalSources = [...dedupedSources, ...additionalSources];
     }
+    factCheckScore = reviewed.confidenceScore;
     if (reviewed.notes) {
+      factCheckNotes = reviewed.notes;
       console.log(`Fact-check notes: ${reviewed.notes}`);
+    }
+    if (reviewed.confidenceScore != null) {
+      const verified = reviewed.verifiedCount ?? "?";
+      const total = reviewed.claimCount ?? "?";
+      console.log(`Fact-check score: ${reviewed.confidenceScore}% (${verified}/${total} claims verified)`);
     }
     console.log("Fact check complete.");
   } catch (err) {
@@ -475,6 +496,8 @@ async function handleArticle(
     metaDescription: article.metaDescription,
     sources: finalSources.length > 0 ? finalSources : undefined,
     language: site.language,
+    factCheckScore,
+    factCheckNotes,
   });
 
   if (topicId) {

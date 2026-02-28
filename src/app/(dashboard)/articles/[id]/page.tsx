@@ -13,6 +13,7 @@ import {
   ExternalLink,
   CheckCircle2,
   XCircle,
+  ShieldCheck,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -285,7 +286,47 @@ export default function ArticleDetailPage() {
         <span className="text-[11px] text-[#565A6E] font-mono">
           /{article.slug}
         </span>
+        {article.factCheckScore != null && (
+          <>
+            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className={`text-[11px] font-medium ${
+              article.factCheckScore >= 90
+                ? "text-[#22C55E]"
+                : article.factCheckScore >= 70
+                  ? "text-[#F59E0B]"
+                  : "text-[#EF4444]"
+            }`}>
+              {article.factCheckScore}% fact-check
+            </span>
+          </>
+        )}
       </div>
+
+      {/* Fact-check notes */}
+      {article.factCheckNotes && (
+        <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-4 py-3">
+          <div className="flex items-center gap-2 mb-1.5">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#0EA5E9]" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
+              Fact-Check Notes
+            </span>
+            {article.factCheckScore != null && (
+              <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                article.factCheckScore >= 90
+                  ? "bg-[#22C55E]/[0.08] text-[#22C55E]"
+                  : article.factCheckScore >= 70
+                    ? "bg-[#F59E0B]/[0.08] text-[#F59E0B]"
+                    : "bg-[#EF4444]/[0.08] text-[#EF4444]"
+              }`}>
+                {article.factCheckScore}% confidence
+              </span>
+            )}
+          </div>
+          <p className="text-[13px] text-[#8B8FA3] leading-relaxed">
+            {article.factCheckNotes}
+          </p>
+        </div>
+      )}
 
       {/* Article Content */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6 sm:p-8">
