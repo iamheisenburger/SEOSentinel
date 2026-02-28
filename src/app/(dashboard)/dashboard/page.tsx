@@ -84,7 +84,7 @@ export default function DashboardPage() {
   // No site OR site exists but hasn't been analyzed yet — show onboarding wizard
   const needsOnboarding = !site || !site.siteSummary;
   if (needsOnboarding) {
-    return <SetupWizard existingSiteId={site?._id} existingDomain={site?.domain} />;
+    return <SetupWizard />;
   }
 
   return (

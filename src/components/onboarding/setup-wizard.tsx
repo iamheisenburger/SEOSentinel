@@ -226,20 +226,14 @@ function SectionHeader({
 
 // ── Main Wizard ─────────────────────────────────────────
 
-export function SetupWizard({
-  existingSiteId,
-  existingDomain,
-}: {
-  existingSiteId?: Id<"sites">;
-  existingDomain?: string;
-} = {}) {
+export function SetupWizard() {
   const [step, setStep] = useState<Step>("domain");
-  const [siteId, setSiteId] = useState<Id<"sites"> | null>(existingSiteId ?? null);
+  const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   // Domain form
-  const [domain, setDomain] = useState(existingDomain ?? "");
+  const [domain, setDomain] = useState("");
   const [repoOwner, setRepoOwner] = useState("");
   const [repoName, setRepoName] = useState("");
 
