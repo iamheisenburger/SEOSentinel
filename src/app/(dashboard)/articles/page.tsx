@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { FileText, PenTool, ExternalLink } from "lucide-react";
+import { FileText, PenTool, ArrowRight } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 
@@ -67,18 +67,17 @@ export default function ArticlesPage() {
 
   if (sites === undefined) {
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-5">
         <div>
-          <div className="mb-1.5 h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
-          <div className="h-4 w-56 animate-pulse rounded bg-white/[0.03]" />
+          <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
+          <div className="mt-1.5 h-4 w-56 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-              <div className="mb-3 h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />
-              <div className="mb-2 h-4 w-full animate-pulse rounded bg-white/[0.04]" />
-              <div className="mb-1.5 h-4 w-2/3 animate-pulse rounded bg-white/[0.04]" />
-              <div className="h-3 w-20 animate-pulse rounded bg-white/[0.04]" />
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+          {[...Array(8)].map((_, i) => (
+            <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
+              <div className="h-4 w-16 animate-pulse rounded-full bg-white/[0.04]" />
+              <div className="h-4 w-60 animate-pulse rounded bg-white/[0.04]" />
+              <div className="ml-auto h-3 w-20 animate-pulse rounded bg-white/[0.04]" />
             </div>
           ))}
         </div>
@@ -100,10 +99,10 @@ export default function ArticlesPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <PageHeader
         title="Articles"
-        subtitle="Browse, generate, and manage your content"
+        subtitle={`${articles?.length ?? 0} articles total`}
         actions={
           <div className="flex items-center gap-2">
             <select
@@ -144,46 +143,54 @@ export default function ArticlesPage() {
 
       <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
-      {/* Article Cards */}
+      {/* Article List */}
       {filtered.length > 0 ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((article) => (
-            <Link
-              key={article._id}
-              href={`/articles/${article._id}`}
-              className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all duration-150 hover:border-white/[0.1] hover:bg-[#111319]"
-            >
-              <div className="flex items-start justify-between gap-2">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+          {/* Table header */}
+          <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_100px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
+            <span>Title</span>
+            <span>Status</span>
+            <span>Words</span>
+            <span className="text-right">Created</span>
+          </div>
+
+          {filtered.map((article) => {
+            const wordCount = Math.round(article.markdown.split(/\s+/).length);
+            return (
+              <Link
+                key={article._id}
+                href={`/articles/${article._id}`}
+                className="group flex flex-col sm:grid sm:grid-cols-[1fr_100px_80px_100px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
+              >
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug truncate group-hover:text-white transition">
+                    {article.title}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-[#565A6E] font-mono truncate sm:hidden">
+                    /{article.slug}
+                  </p>
+                </div>
                 <StatusBadge status={article.status} />
-                <ExternalLink className="h-3 w-3 text-[#565A6E] opacity-0 transition group-hover:opacity-100" />
-              </div>
-              <h3 className="mt-2.5 text-[13px] font-semibold leading-snug text-[#EDEEF1] line-clamp-2">
-                {article.title}
-              </h3>
-              <p className="mt-1 text-[11px] text-[#565A6E] font-mono">
-                /{article.slug}
-              </p>
-              <div className="mt-2.5 flex items-center gap-2 text-[11px] text-[#565A6E]">
-                <span>
-                  {Math.round(article.markdown.split(/\s+/).length)} words
+                <span className="text-[12px] text-[#8B8FA3] tabular-nums hidden sm:block">
+                  {wordCount.toLocaleString()}
                 </span>
-                <span className="text-white/[0.1]">·</span>
-                <span>
-                  {formatDistanceToNow(article.createdAt, {
-                    addSuffix: true,
-                  })}
+                <span className="text-[11px] text-[#565A6E] sm:text-right flex items-center gap-1 sm:justify-end">
+                  {formatDistanceToNow(article.createdAt, { addSuffix: true })}
+                  <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition" />
                 </span>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            );
+          })}
         </div>
       ) : (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-10 text-center">
-          <FileText className="mx-auto h-8 w-8 text-[#565A6E]/40" />
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
+          <FileText className="mx-auto h-10 w-10 text-[#565A6E]/30" />
           <p className="mt-3 text-[13px] text-[#565A6E]">
             {articles === undefined
-              ? "Loading articles..."
-              : "No articles yet. Generate one from a topic to get started."}
+              ? "Loading..."
+              : activeTab !== "all"
+                ? "No articles match this filter."
+                : "No articles yet. Generate one to get started."}
           </p>
         </div>
       )}
