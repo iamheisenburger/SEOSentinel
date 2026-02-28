@@ -4,6 +4,7 @@ import { useAction, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
+import { SetupWizard } from "@/components/onboarding/setup-wizard";
 import {
   FileText,
   Activity,
@@ -80,27 +81,9 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  // No site configured — show onboarding
+  // No site configured — show guided onboarding wizard
   if (!site) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24 text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#0EA5E9]/[0.08] mb-6">
-          <Globe className="h-8 w-8 text-[#0EA5E9]" />
-        </div>
-        <h1 className="text-xl font-semibold text-[#EDEEF1]">
-          Welcome to SEOSentinel
-        </h1>
-        <p className="mt-2 max-w-md text-[14px] text-[#8B8FA3]">
-          Add your domain to start generating research-backed, fact-checked
-          articles on autopilot.
-        </p>
-        <Link href="/sites">
-          <Button className="mt-6" icon={<ArrowRight className="h-3.5 w-3.5" />}>
-            Configure your site
-          </Button>
-        </Link>
-      </div>
-    );
+    return <SetupWizard />;
   }
 
   return (

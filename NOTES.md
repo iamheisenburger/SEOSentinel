@@ -79,3 +79,81 @@ would be a massive upgrade — easier install, better trust, app store distribut
 ## Research Model
 - Using `o4-mini-deep-research-2025-06-26` for web research (OpenAI)
 - Using `claude-haiku-4-5-20251001` for article generation and fact-checking (Anthropic)
+
+## SEOBot Reverse Engineering — Article Pipeline
+
+Analyzed SEOBot's first published article for leadpilot.chat: "How to Qualify Leads Automatically on Your Website"
+
+### What SEOBot generates per article
+
+**SEO Metadata:**
+- Title (H1 matches meta title)
+- Keyword-optimized slug (`automated-lead-qualification-website`)
+- Meta description (action-oriented, 160 chars, includes target keyword)
+- Meta keywords (8 target keywords: "automatic lead qualification, AI lead scoring, ...")
+- Single category ("Marketing Automation")
+- 3 tags ("Lead Generation", "Marketing Automation", "Sales Enablement")
+- Featured image (AI-generated, served from their CDN with quality/resize params)
+- Reading time (calculated, shown as "10 min")
+
+**Article Structure:**
+1. Hook — opens with a compelling stat ("400% more likely to qualify within 5 minutes")
+2. TL;DR bullet summary — 5 key takeaways before the deep content
+3. Table of Contents — auto-generated `<ul>` with anchor links
+4. Step-by-step body — organized as Step 1/2/3/4 with H2+H3 hierarchy
+5. Comparison table — product plan comparison (pricing, features)
+6. Conclusion — recap with key stats
+7. FAQs — 3 structured Q&As (`::: faq` syntax for rich snippet schema)
+
+**Content Features:**
+- Internal links: 2 links back to leadpilot.chat (organic, not forced)
+- External links: 61 links to authoritative domains (WordPress, Shopify, Salesforce, HubSpot, etc.)
+- Citation references: `[\[1\]]` numbered inline citations throughout (27+ sources)
+- Bold key statistics throughout ("80% reduction", "25-35% boost")
+- AI-generated images: featured image + in-article illustration
+- Embedded YouTube video (relevant tutorial)
+- Data tables (plan comparison)
+- Blockquote with attribution
+
+**SEO Techniques:**
+- Long-tail keyword in slug
+- Natural keyword density (not stuffed)
+- Proper H2/H3 heading hierarchy with keyword-rich headings
+- FAQ schema markup for Google rich snippets
+- Image alt texts
+- Stats/data for E-E-A-T credibility signals
+- Competitor/authority links for topical relevance
+
+### What SEOSentinel is MISSING vs SEOBot
+
+| Feature | SEOBot | SEOSentinel (current) | Priority |
+|---|---|---|---|
+| Featured image | AI-generated per article | None | HIGH |
+| Meta keywords | 8 per article | None | MEDIUM |
+| Category + tags | Auto-assigned | None | MEDIUM |
+| Table of contents | Auto-generated | None | MEDIUM |
+| FAQ section | 3 structured FAQs | None | HIGH (rich snippets) |
+| Inline citations | `[\[1\]]` style, 27+ sources | Sources listed but NOT inline | HIGH |
+| YouTube embeds | Finds relevant videos | None | LOW |
+| Comparison tables | Product/pricing tables | None | MEDIUM |
+| Stats-driven hook | Opens with compelling stat | Generic intro | HIGH |
+| Image in body | Multiple AI images | None | MEDIUM |
+| Reading time | Calculated | Not exposed in schema | LOW |
+| Outline/TOC field | Stored as HTML `<ul>` | None | LOW |
+
+### Pipeline improvements needed
+
+1. **Research phase** — instruct the research model to find: relevant statistics, authoritative source URLs, related YouTube videos, FAQ-worthy questions
+2. **Article generation** — update prompt to produce:
+   - Stats-driven hook (compelling number in first sentence)
+   - TL;DR bullet summary
+   - Step-by-step or section-by-section structure
+   - Inline citation references `[source]` linked to URLs
+   - FAQ section (3 questions) at the end
+   - Comparison table where relevant
+3. **Post-processing** — add:
+   - Table of contents generation from H2/H3 headings
+   - Meta keywords extraction from content
+   - Category + tag assignment from topic cluster
+   - Featured image generation (or stock image via Unsplash/Pexels API)
+4. **Schema updates** — add fields: `metaKeywords`, `category`, `tags`, `featuredImage`, `tableOfContents`, `faqs`
