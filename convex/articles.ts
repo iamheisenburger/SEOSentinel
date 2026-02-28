@@ -37,6 +37,9 @@ export const createDraft = mutation({
         }),
       ),
     ),
+    featuredImage: v.optional(v.string()),
+    readingTime: v.optional(v.number()),
+    wordCount: v.optional(v.number()),
     factCheckScore: v.optional(v.number()),
     factCheckNotes: v.optional(v.string()),
   },
@@ -69,6 +72,9 @@ export const createDraft = mutation({
       metaDescription: args.metaDescription,
       language: args.language,
       sources: args.sources,
+      featuredImage: args.featuredImage,
+      readingTime: args.readingTime,
+      wordCount: args.wordCount,
       factCheckScore: args.factCheckScore,
       factCheckNotes: args.factCheckNotes,
       internalLinks: [],
@@ -104,6 +110,13 @@ export const updateLinks = mutation({
   },
   handler: async (ctx, { articleId, internalLinks }) => {
     await ctx.db.patch(articleId, { internalLinks, updatedAt: now() });
+  },
+});
+
+export const updateFeaturedImage = mutation({
+  args: { articleId: v.id("articles"), featuredImage: v.string() },
+  handler: async (ctx, { articleId, featuredImage }) => {
+    await ctx.db.patch(articleId, { featuredImage, updatedAt: now() });
   },
 });
 

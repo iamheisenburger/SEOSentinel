@@ -155,24 +155,33 @@ export default function ArticlesPage() {
           </div>
 
           {filtered.map((article) => {
-            const wordCount = Math.round(article.markdown.split(/\s+/).length);
+            const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
             return (
               <Link
                 key={article._id}
                 href={`/articles/${article._id}`}
                 className="group flex flex-col sm:grid sm:grid-cols-[1fr_100px_80px_100px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
               >
-                <div className="min-w-0">
-                  <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug truncate group-hover:text-white transition">
-                    {article.title}
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-[#565A6E] font-mono truncate sm:hidden">
-                    /{article.slug}
-                  </p>
+                <div className="flex items-center gap-3 min-w-0">
+                  {article.featuredImage && (
+                    <img
+                      src={article.featuredImage}
+                      alt=""
+                      className="hidden sm:block h-9 w-14 rounded object-cover shrink-0 border border-white/[0.06]"
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug truncate group-hover:text-white transition">
+                      {article.title}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-[#565A6E] font-mono truncate sm:hidden">
+                      /{article.slug}
+                    </p>
+                  </div>
                 </div>
                 <StatusBadge status={article.status} />
                 <span className="text-[12px] text-[#8B8FA3] tabular-nums hidden sm:block">
-                  {wordCount.toLocaleString()}
+                  {wc.toLocaleString()}
                 </span>
                 <span className="text-[11px] text-[#565A6E] sm:text-right flex items-center gap-1 sm:justify-end">
                   {formatDistanceToNow(article.createdAt, { addSuffix: true })}

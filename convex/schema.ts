@@ -103,6 +103,9 @@ export default defineSchema({
         }),
       ),
     ),
+    featuredImage: v.optional(v.string()), // URL of AI-generated hero image
+    readingTime: v.optional(v.number()), // estimated minutes to read
+    wordCount: v.optional(v.number()), // total word count
     factCheckScore: v.optional(v.number()), // 0-100 overall confidence
     factCheckNotes: v.optional(v.string()),
     createdAt: v.number(),

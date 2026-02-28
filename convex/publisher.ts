@@ -19,6 +19,9 @@ type ArticleRecord = {
   markdown: string;
   metaDescription?: string;
   language?: string;
+  featuredImage?: string;
+  readingTime?: number;
+  wordCount?: number;
   createdAt: number;
   sources?: { url: string; title?: string }[];
   internalLinks?: { anchor: string; href: string }[];
@@ -52,6 +55,9 @@ function buildMdx(article: ArticleRecord, domain: string): string {
     article.metaDescription
       ? `description: "${article.metaDescription.replace(/"/g, '\\"')}"`
       : undefined,
+    article.featuredImage ? `featuredImage: "${article.featuredImage}"` : undefined,
+    article.readingTime ? `readingTime: ${article.readingTime}` : undefined,
+    article.wordCount ? `wordCount: ${article.wordCount}` : undefined,
     article.language ? `language: "${article.language}"` : undefined,
     `date: "${new Date(article.createdAt ?? Date.now()).toISOString()}"`,
     article.sources && article.sources.length
@@ -154,6 +160,7 @@ function generateSchemaMarkup(
     title: string;
     markdown: string;
     metaDescription?: string;
+    featuredImage?: string;
     createdAt: number;
   },
   domain: string,
@@ -162,7 +169,7 @@ function generateSchemaMarkup(
   const schemas: object[] = [];
   const url = `https://${domain}/blog/${slug}`;
 
-  schemas.push({
+  const articleSchema: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "Article",
     headline: article.title,
@@ -174,7 +181,11 @@ function generateSchemaMarkup(
       name: domain,
       url: `https://${domain}`,
     },
-  });
+  };
+  if (article.featuredImage) {
+    articleSchema.image = article.featuredImage;
+  }
+  schemas.push(articleSchema);
 
   // FAQ schema
   const faqRegex = /#{2,3}\s+(.+\?)\s*\n+([\s\S]*?)(?=\n#{2,3}\s|\n*$)/g;

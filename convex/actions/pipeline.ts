@@ -105,6 +105,112 @@ const openaiClient = () => {
   return new OpenAI({ apiKey });
 };
 
+/** Generate an AI hero image for an article. Returns a Convex storage URL. */
+async function generateHeroImage(
+  ctx: ActionCtx,
+  title: string,
+  niche: string,
+  brandingPrompt?: string,
+): Promise<string> {
+  const client = openaiClient();
+  const prompt = brandingPrompt
+    ? `${brandingPrompt}. Topic: ${title}`
+    : `Professional, modern blog hero image for an article titled "${title}" in the ${niche || "technology"} industry. ` +
+      `Clean editorial style with subtle gradients and abstract shapes. NO text, NO words, NO letters, NO watermarks. ` +
+      `Photorealistic quality, 16:9 aspect ratio, suitable for a premium blog.`;
+
+  console.log(`Generating hero image for: "${title}"...`);
+
+  const response = await client.images.generate({
+    model: "gpt-image-1",
+    prompt,
+    n: 1,
+    size: "1536x1024",
+    quality: "medium",
+  });
+
+  const b64 = response.data?.[0]?.b64_json;
+  if (!b64) throw new Error("No image data returned from OpenAI");
+
+  // Store in Convex file storage
+  const imageBytes = Buffer.from(b64, "base64");
+  const blob = new Blob([imageBytes], { type: "image/png" });
+  const storageId = await ctx.storage.store(blob);
+  const imageUrl = await ctx.storage.getUrl(storageId);
+  if (!imageUrl) throw new Error("Failed to get storage URL for image");
+
+  console.log(`Hero image generated and stored: ${storageId}`);
+  return imageUrl;
+}
+
+/** Search for relevant YouTube videos using OpenAI web search. */
+async function searchYouTubeVideos(
+  topic: string,
+  niche: string,
+): Promise<{ videoId: string; title: string }[]> {
+  const client = openaiClient();
+
+  const completion = await client.responses.create({
+    model: "gpt-4.1-mini",
+    tools: [{ type: "web_search_preview" as any }],
+    input: [
+      {
+        role: "system",
+        content:
+          "Search YouTube for the most relevant and popular videos on the given topic. " +
+          "Return ONLY real YouTube video URLs that actually exist. " +
+          "Output JSON only — no explanation.",
+      },
+      {
+        role: "user",
+        content:
+          `Find 2-3 highly relevant YouTube videos about: "${topic}" in the ${niche || "general"} space.\n` +
+          `Return JSON: {"videos": [{"videoId": "the_youtube_video_id", "title": "video title"}]}`,
+      },
+    ],
+  });
+
+  const result = parseJson<{ videos: { videoId: string; title: string }[] }>(
+    z.object({
+      videos: z
+        .array(z.object({ videoId: z.string(), title: z.string() }))
+        .default([]),
+    }),
+    completion.output_text,
+  );
+
+  // Validate video IDs (must be 11 chars, alphanumeric + dash/underscore)
+  const validVideos = result.videos.filter(
+    (v) => /^[a-zA-Z0-9_-]{11}$/.test(v.videoId),
+  );
+
+  console.log(`Found ${validVideos.length} YouTube videos for "${topic}".`);
+  return validVideos;
+}
+
+/** Calculate reading time and word count from markdown. */
+function calculateArticleStats(markdown: string): {
+  readingTime: number;
+  wordCount: number;
+} {
+  // Strip markdown syntax for accurate word count
+  const plainText = markdown
+    .replace(/```[\s\S]*?```/g, "") // code blocks
+    .replace(/`[^`]+`/g, "") // inline code
+    .replace(/!\[.*?\]\(.*?\)/g, "") // images
+    .replace(/\[([^\]]+)\]\(.*?\)/g, "$1") // links → text
+    .replace(/#{1,6}\s/g, "") // headings
+    .replace(/[*_~`]/g, "") // formatting
+    .replace(/<[^>]+>/g, "") // HTML tags
+    .trim();
+
+  const words = plainText.split(/\s+/).filter((w) => w.length > 0);
+  const wordCount = words.length;
+  const readingTime = Math.max(1, Math.ceil(wordCount / 238)); // avg reading speed
+
+  return { readingTime, wordCount };
+}
+
 /** Call Claude and return the text response. */
 async function callClaude(
   system: string,
@@ -424,11 +530,35 @@ async function handleArticle(
     }
   }
 
+  // ── Step 1b: YouTube Video Search (graceful degradation) ──
+  let youtubeVideos: { videoId: string; title: string }[] = [];
+  const enableYouTube = site.youtubeEmbeds !== false;
+
+  if (enableYouTube && topic) {
+    try {
+      youtubeVideos = await searchYouTubeVideos(
+        topic.label,
+        site.niche ?? "",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`YouTube search failed (continuing without): ${msg}`);
+    }
+  }
+
   // ── Step 2: Generate Article (with full site context) ──
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
   const researchBlock = researchContext
     ? `\n\nRESEARCH BRIEF (use these facts, statistics, and information — cite them with inline [1], [2] etc.):\n${researchContext}`
+    : "";
+
+  // Build YouTube embed block
+  const youtubeBlock = youtubeVideos.length > 0
+    ? `\nYOUTUBE VIDEOS TO EMBED: Embed these relevant videos at appropriate points in the article (after a relevant section, not all at once). Use this exact HTML for each:\n` +
+      youtubeVideos.map((v) =>
+        `- "${v.title}": <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`
+      ).join("\n")
     : "";
 
   // Build competitor exclusion block
@@ -455,12 +585,12 @@ async function handleArticle(
 
   // Citation and linking settings
   const citationRule = site.sourceCitations !== false
-    ? "8. INLINE CITATIONS: Use numbered citations [1], [2], [3] throughout the article when referencing statistics, quotes, or factual claims. Add a '## Sources' section at the very end listing each source as: [1] Title — URL"
-    : "8. Do NOT add inline citations or a sources section.";
+    ? "9. INLINE CITATIONS: Use numbered citations [1], [2], [3] throughout the article when referencing statistics, quotes, or factual claims. Add a '## Sources' section at the very end listing each source as: [1] Title — URL"
+    : "9. Do NOT add inline citations or a sources section.";
 
   const externalLinkRule = site.externalLinking !== false
-    ? "9. EXTERNAL LINKS: Include 5-10 outbound links to authoritative sources naturally within the text (not just in the sources section)."
-    : "9. Do NOT include external links in the article body.";
+    ? "10. EXTERNAL LINKS: Include 5-10 outbound links to authoritative sources naturally within the text (not just in the sources section)."
+    : "10. Do NOT include external links in the article body.";
 
   const articleText = await callClaude(
     "You are an elite SEO content writer producing articles that rank on page 1 of Google. " +
@@ -468,21 +598,24 @@ async function handleArticle(
     "MANDATORY ARTICLE STRUCTURE:\n" +
     "1. HOOK: Open with a compelling statistic, surprising fact, or data point from the research. Example: 'According to a 2024 Gartner report, 73% of...' — NEVER start with a generic statement.\n" +
     "2. TL;DR BOX: After the hook paragraph, include a '> **TL;DR:** ...' blockquote summarizing the key takeaway in 2-3 sentences.\n" +
-    "3. WORD COUNT: 3500-4000 words. Non-negotiable.\n" +
-    "4. SECTIONS: 8-12 H2 sections with H3 subsections. Each section must provide specific, actionable information.\n" +
-    "5. COMPARISON TABLE: Include at least one markdown comparison table with real data.\n" +
-    "6. PRACTICAL ELEMENTS: Include a 'Pro Tips' or 'Best Practices' section with numbered actionable items.\n" +
-    "7. FAQ: End with a '## Frequently Asked Questions' section with 8-10 questions in this exact format:\n" +
+    "3. TABLE OF CONTENTS: After the TL;DR, add '## Table of Contents' with a bullet list linking to each H2 section using markdown anchors: `- [Section Title](#section-title)`. This improves UX and helps Google generate sitelinks.\n" +
+    "4. WORD COUNT: 3500-4500 words. Non-negotiable.\n" +
+    "5. SECTIONS: 8-12 H2 sections with H3 subsections. Each section must provide specific, actionable information.\n" +
+    "6. COMPARISON TABLE: Include at least one markdown comparison table with real data.\n" +
+    "7. PRACTICAL ELEMENTS: Include a 'Pro Tips' or 'Best Practices' section with numbered actionable items.\n" +
+    "8. FAQ: End with a '## Frequently Asked Questions' section with 8-10 questions in this exact format:\n" +
     "   ### Question here?\n" +
     "   Answer paragraph here.\n" +
     "   (This triggers Google's FAQ rich snippets.)\n" +
     citationRule + "\n" +
     externalLinkRule + "\n" +
-    "10. TONE: Write in a " + (site.tone ?? "professional") + " tone throughout.\n" +
-    "11. NO FLUFF: Every paragraph must contain specific information, data, examples, or actionable advice. Cut generic filler.\n" +
-    "12. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
-    "13. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
-    "14. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
+    "11. TONE: Write in a " + (site.tone ?? "professional") + " tone throughout.\n" +
+    "12. NO FLUFF: Every paragraph must contain specific information, data, examples, or actionable advice. Cut generic filler.\n" +
+    "13. KEY TAKEAWAYS: Include a '## Key Takeaways' section near the end with 5-7 bullet points summarizing the main insights.\n" +
+    "14. YOUTUBE EMBEDS: If YouTube video HTML is provided below, embed them at relevant points in the article (after related sections). Copy the HTML exactly as provided.\n" +
+    "15. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
+    "16. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
+    "17. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
     `SITE CONTEXT:\n` +
     `Domain: ${site.domain}\n` +
     `Site: ${site.siteName ?? site.domain}\n` +
@@ -493,13 +626,14 @@ async function handleArticle(
     competitorBlock +
     ctaBlock +
     anchorBlock +
+    youtubeBlock +
     `\n\nARTICLE TARGET:\n` +
     `Topic: ${topic?.label ?? "General"}\n` +
     `Primary Keyword: ${topic?.primaryKeyword ?? ""}\n` +
     `Secondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\n` +
     `Search Intent: ${topic?.intent ?? "informational"}` +
     researchBlock +
-    `\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the full 3500-4000 word article)", "metaTitle": "string (max 60 chars, include primary keyword)", "metaDescription": "string (max 155 chars, compelling + keyword)", "sources": [{"url": "string", "title": "string"}]}`,
+    `\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the full 3500-4500 word article with ToC, YouTube embeds, key takeaways)", "metaTitle": "string (max 60 chars, include primary keyword)", "metaDescription": "string (max 155 chars, compelling + keyword)", "sources": [{"url": "string", "title": "string"}]}`,
     16384,
   );
 
@@ -549,7 +683,27 @@ async function handleArticle(
     console.error(`Fact check failed (using original article): ${msg}`);
   }
 
-  // ── Step 4: Create Draft ──
+  // ── Step 4: Generate Hero Image (graceful degradation) ──
+  let featuredImage: string | undefined;
+
+  try {
+    featuredImage = await generateHeroImage(
+      ctx,
+      article.title,
+      site.niche ?? "",
+      site.imageBrandingPrompt ?? undefined,
+    );
+    console.log(`Hero image generated: ${featuredImage}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`Image generation failed (continuing without): ${msg}`);
+  }
+
+  // ── Step 5: Calculate Article Stats ──
+  const { readingTime, wordCount } = calculateArticleStats(finalMarkdown);
+  console.log(`Article stats: ${wordCount} words, ${readingTime} min read`);
+
+  // ── Step 6: Create Draft ──
   const slug = article.slug || buildSlug(article.title);
 
   const articleId = await ctx.runMutation(api.articles.createDraft, {
@@ -562,6 +716,9 @@ async function handleArticle(
     metaDescription: article.metaDescription,
     sources: finalSources.length > 0 ? finalSources : undefined,
     language: site.language,
+    featuredImage,
+    readingTime,
+    wordCount,
     factCheckScore,
     factCheckNotes,
   });

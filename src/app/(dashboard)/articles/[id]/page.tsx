@@ -17,11 +17,15 @@ import {
   Copy,
   Code2,
   Download,
+  Clock,
+  FileText,
+  Image as ImageIcon,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
+import rehypeRaw from "rehype-raw";
 import type { Components } from "react-markdown";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { useState } from "react";
@@ -182,7 +186,8 @@ export default function ArticleDetailPage() {
     );
   }
 
-  const wordCount = article.markdown.split(/\s+/).length;
+  const wc = article.wordCount ?? article.markdown.split(/\s+/).length;
+  const rt = article.readingTime ?? Math.max(1, Math.ceil(wc / 238));
 
   const handleLinks = async () => {
     if (!site?._id) return;
@@ -255,6 +260,9 @@ export default function ArticleDetailPage() {
       "---",
       `title: "${article.title.replace(/"/g, '\\"')}"`,
       article.metaDescription ? `description: "${article.metaDescription.replace(/"/g, '\\"')}"` : null,
+      article.featuredImage ? `featuredImage: "${article.featuredImage}"` : null,
+      `readingTime: ${rt}`,
+      `wordCount: ${wc}`,
       `date: "${new Date(article.createdAt).toISOString()}"`,
       `slug: "${article.slug}"`,
       "---",
@@ -361,10 +369,29 @@ export default function ArticleDetailPage() {
         </div>
       )}
 
+      {/* Featured Image */}
+      {article.featuredImage && (
+        <div className="overflow-hidden rounded-xl border border-white/[0.06]">
+          <img
+            src={article.featuredImage}
+            alt={article.title}
+            className="w-full h-auto max-h-[400px] object-cover"
+          />
+        </div>
+      )}
+
       {/* Meta bar */}
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={article.status} />
-        <span className="text-[11px] text-[#565A6E]">{wordCount} words</span>
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#565A6E]">
+          <FileText className="h-3 w-3" />
+          {wc.toLocaleString()} words
+        </span>
+        <span className="text-[11px] text-white/[0.1]">·</span>
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#565A6E]">
+          <Clock className="h-3 w-3" />
+          {rt} min read
+        </span>
         <span className="text-[11px] text-white/[0.1]">·</span>
         <span className="text-[11px] text-[#565A6E]">
           {formatDistanceToNow(article.createdAt, { addSuffix: true })}
@@ -373,6 +400,15 @@ export default function ArticleDetailPage() {
         <span className="text-[11px] text-[#565A6E] font-mono">
           /{article.slug}
         </span>
+        {article.featuredImage && (
+          <>
+            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-[#22C55E]">
+              <ImageIcon className="h-3 w-3" />
+              Hero image
+            </span>
+          </>
+        )}
         {article.factCheckScore != null && (
           <>
             <span className="text-[11px] text-white/[0.1]">·</span>
@@ -419,7 +455,7 @@ export default function ArticleDetailPage() {
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6 sm:p-8">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeSlug]}
+          rehypePlugins={[rehypeSlug, rehypeRaw]}
           components={markdownComponents}
         >
           {article.markdown}
