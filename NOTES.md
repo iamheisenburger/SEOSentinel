@@ -44,12 +44,37 @@ When users connect a publishing integration, they must accept:
 
 ## Cross-Project Correlation: LeadPilot Agent Deployment
 
-The same multi-platform integration pattern applies to LeadPilot's agent deployment:
-- Instead of "publish article to WordPress", it's "deploy chat widget to WordPress"
-- WordPress plugin, Shopify app, Webflow embed, etc.
-- Same API key / token storage pattern
-- Same terms & conditions pattern for third-party access
-- Could share infrastructure: a `publishers/` or `deployers/` abstraction
+The EXACT same platforms and integration pattern applies to LeadPilot's chat widget deployment.
+Currently LeadPilot deploys via a raw `<script>` tag embed. Native platform integrations
+would be a massive upgrade — easier install, better trust, app store distribution.
+
+### Platform-by-platform mapping
+
+| Platform | SEOSentinel (publish article) | LeadPilot (deploy agent) |
+|---|---|---|
+| WordPress.org | REST API → create post | WordPress plugin → inject widget script in footer |
+| WordPress.com | REST API → create post | WordPress.com embed block or custom HTML widget |
+| Shopify | Storefront Blog API | Shopify App → ScriptTag API injects widget sitewide |
+| Webflow | CMS Collection API | Custom code in site settings (Project Settings → Custom Code) |
+| Ghost | Admin API → create post | Code injection (Ghost Admin → Settings → Code injection) |
+| Framer | CMS API | Custom code component or embed |
+| Wix | Blog API | Velo custom element or Wix App Market |
+| Squarespace | Blog API | Code injection (Settings → Advanced → Code Injection) |
+| HubSpot | Blog API | HubSpot App Marketplace or tracking code injection |
+| Next.js | GitHub commit to content/posts/ | npm package (`@leadpilot/widget`) or script tag |
+| Generic | REST API / Webhook | Script tag (current approach) |
+
+### Shared infrastructure
+- **OAuth / API key storage** — same pattern for both projects (per-user, encrypted, stored in Convex)
+- **Platform adapters** — abstract interface: `publish(content, config)` / `deploy(widgetConfig, config)`
+- **T&Cs / consent flow** — same legal framework for third-party access
+- **Connection UI** — same "Connect to [Platform]" modal pattern with platform logos
+
+### Build order
+1. Build the adapter pattern for SEOSentinel publishing first (simpler — just POST content)
+2. Port the pattern to LeadPilot for widget deployment (needs platform-specific injection)
+3. WordPress plugin and Shopify app are highest ROI — largest user base
+4. The rest can use generic script tag / code injection instructions
 
 ## Research Model
 - Using `o4-mini-deep-research-2025-06-26` for web research (OpenAI)
