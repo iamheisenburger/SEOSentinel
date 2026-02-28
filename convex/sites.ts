@@ -124,3 +124,16 @@ export const upsert = mutation({
     });
   },
 });
+
+// Wipe all data — for dev/reset only
+export const resetAll = mutation({
+  handler: async (ctx) => {
+    const tables = ["sites", "pages", "topic_clusters", "articles", "jobs"] as const;
+    for (const table of tables) {
+      const rows = await ctx.db.query(table).collect();
+      for (const row of rows) {
+        await ctx.db.delete(row._id);
+      }
+    }
+  },
+});

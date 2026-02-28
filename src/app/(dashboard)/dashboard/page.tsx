@@ -81,9 +81,10 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  // No site configured — show guided onboarding wizard
-  if (!site) {
-    return <SetupWizard />;
+  // No site OR site exists but hasn't been analyzed yet — show onboarding wizard
+  const needsOnboarding = !site || !site.siteSummary;
+  if (needsOnboarding) {
+    return <SetupWizard existingSiteId={site?._id} existingDomain={site?.domain} />;
   }
 
   return (

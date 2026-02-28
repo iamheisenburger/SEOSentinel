@@ -356,9 +356,17 @@ async function handlePlan(
     "Your goal is to propose NEW topic clusters that expand the site's search footprint into adjacent, " +
     "high-value territory — NOT repeat what already exists. Output JSON only.",
     `Domain: ${site.domain}\n` +
+    `Site: ${site.siteName ?? site.domain}\n` +
     `Niche: ${site.niche ?? ""}\n` +
+    `Blog Theme: ${site.blogTheme ?? ""}\n` +
+    `Target Audience: ${site.targetAudienceSummary ?? ""}\n` +
+    `Pain Points: ${site.painPoints?.join("; ") ?? ""}\n` +
+    `Key Features: ${site.keyFeatures?.join("; ") ?? ""}\n` +
     `Tone: ${site.tone ?? "neutral"}\n` +
-    `Language: ${site.language ?? "en"}\n\n` +
+    `Language: ${site.language ?? "en"}\n` +
+    (site.competitors?.length ? `Competitors (avoid these): ${site.competitors.join(", ")}\n` : "") +
+    (site.anchorKeywords?.length ? `Priority Keywords: ${site.anchorKeywords.join(", ")}\n` : "") +
+    `\n` +
     `EXISTING TOPICS ALREADY COVERED (DO NOT DUPLICATE OR OVERLAP WITH THESE):\n` +
     existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") +
     `\n\n` +
@@ -416,24 +424,82 @@ async function handleArticle(
     }
   }
 
-  // ── Step 2: Generate Article (with research context injected) ──
+  // ── Step 2: Generate Article (with full site context) ──
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
   const researchBlock = researchContext
-    ? `\n\nRESEARCH BRIEF (use these facts, statistics, and information in your article):\n${researchContext}`
+    ? `\n\nRESEARCH BRIEF (use these facts, statistics, and information — cite them with inline [1], [2] etc.):\n${researchContext}`
     : "";
 
+  // Build competitor exclusion block
+  const competitorBlock = site.competitors?.length
+    ? `\nCOMPETITOR EXCLUSIONS: NEVER mention or link to these companies: ${site.competitors.join(", ")}.`
+    : "";
+
+  // Build CTA block
+  const ctaBlock = site.ctaText && site.ctaUrl
+    ? `\nCALL TO ACTION: Naturally weave in a CTA at least once in the article body and once at the end. CTA text: "${site.ctaText}" linking to ${site.ctaUrl}. Make it feel organic, not salesy.`
+    : "";
+
+  // Build audience context
+  const audienceBlock = site.targetAudienceSummary
+    ? `\nTARGET AUDIENCE: ${site.targetAudienceSummary}` +
+      (site.painPoints?.length ? `\nPAIN POINTS to address: ${site.painPoints.join("; ")}` : "") +
+      (site.productUsage ? `\nHOW THEY USE THE PRODUCT: ${site.productUsage}` : "")
+    : "";
+
+  // Build anchor keyword priorities
+  const anchorBlock = site.anchorKeywords?.length
+    ? `\nANCHOR KEYWORDS: Naturally incorporate these keywords where relevant: ${site.anchorKeywords.join(", ")}.`
+    : "";
+
+  // Citation and linking settings
+  const citationRule = site.sourceCitations !== false
+    ? "8. INLINE CITATIONS: Use numbered citations [1], [2], [3] throughout the article when referencing statistics, quotes, or factual claims. Add a '## Sources' section at the very end listing each source as: [1] Title — URL"
+    : "8. Do NOT add inline citations or a sources section.";
+
+  const externalLinkRule = site.externalLinking !== false
+    ? "9. EXTERNAL LINKS: Include 5-10 outbound links to authoritative sources naturally within the text (not just in the sources section)."
+    : "9. Do NOT include external links in the article body.";
+
   const articleText = await callClaude(
-    "You are a professional SEO content writer. Your task is to write a high-quality, extremely detailed, long-form article in Markdown. \n\n" +
-    "RULES:\n" +
-    "1. WORD COUNT: The article MUST be between 3500 and 4000 words. This is non-negotiable.\n" +
-    "2. FORMAT: Use H2 and H3 headings, bullet points, numbered lists, and bold text for emphasis.\n" +
-    "3. STRUCTURE: Include a compelling intro, 8+ detailed sections, a comparison table, a 'Pro Tips' section, and a 10-question FAQ at the end.\n" +
-    "4. STYLE: Use a " + (site.tone ?? "professional") + " tone.\n" +
-    "5. NO META-TALK: Do not include any explanations, reasoning, or fact-check summaries. Output the article content only within the JSON structure.\n" +
-    "6. JSON ONLY: Output a single JSON object. Do not include markdown code blocks around the JSON.\n" +
-    "7. SOURCES: Include real, verifiable source URLs in the sources array. Prefer sources from the research brief if provided.",
-    `Topic: ${topic?.label ?? "General"}\nPrimary Keyword: ${topic?.primaryKeyword ?? ""}\nSecondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\nSite: ${site.domain}\nNiche: ${site.niche ?? ""}${researchBlock}\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the 3500-4000 word article)", "metaTitle": "string", "metaDescription": "string", "sources": [{"url": "string", "title": "string"}]}`,
+    "You are an elite SEO content writer producing articles that rank on page 1 of Google. " +
+    "Your articles are data-driven, authoritative, and genuinely useful — not generic filler.\n\n" +
+    "MANDATORY ARTICLE STRUCTURE:\n" +
+    "1. HOOK: Open with a compelling statistic, surprising fact, or data point from the research. Example: 'According to a 2024 Gartner report, 73% of...' — NEVER start with a generic statement.\n" +
+    "2. TL;DR BOX: After the hook paragraph, include a '> **TL;DR:** ...' blockquote summarizing the key takeaway in 2-3 sentences.\n" +
+    "3. WORD COUNT: 3500-4000 words. Non-negotiable.\n" +
+    "4. SECTIONS: 8-12 H2 sections with H3 subsections. Each section must provide specific, actionable information.\n" +
+    "5. COMPARISON TABLE: Include at least one markdown comparison table with real data.\n" +
+    "6. PRACTICAL ELEMENTS: Include a 'Pro Tips' or 'Best Practices' section with numbered actionable items.\n" +
+    "7. FAQ: End with a '## Frequently Asked Questions' section with 8-10 questions in this exact format:\n" +
+    "   ### Question here?\n" +
+    "   Answer paragraph here.\n" +
+    "   (This triggers Google's FAQ rich snippets.)\n" +
+    citationRule + "\n" +
+    externalLinkRule + "\n" +
+    "10. TONE: Write in a " + (site.tone ?? "professional") + " tone throughout.\n" +
+    "11. NO FLUFF: Every paragraph must contain specific information, data, examples, or actionable advice. Cut generic filler.\n" +
+    "12. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
+    "13. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
+    "14. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
+    `SITE CONTEXT:\n` +
+    `Domain: ${site.domain}\n` +
+    `Site: ${site.siteName ?? site.domain}\n` +
+    `Summary: ${site.siteSummary ?? ""}\n` +
+    `Niche: ${site.niche ?? ""}\n` +
+    `Blog Theme: ${site.blogTheme ?? ""}` +
+    audienceBlock +
+    competitorBlock +
+    ctaBlock +
+    anchorBlock +
+    `\n\nARTICLE TARGET:\n` +
+    `Topic: ${topic?.label ?? "General"}\n` +
+    `Primary Keyword: ${topic?.primaryKeyword ?? ""}\n` +
+    `Secondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\n` +
+    `Search Intent: ${topic?.intent ?? "informational"}` +
+    researchBlock +
+    `\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the full 3500-4000 word article)", "metaTitle": "string (max 60 chars, include primary keyword)", "metaDescription": "string (max 155 chars, compelling + keyword)", "sources": [{"url": "string", "title": "string"}]}`,
     16384,
   );
 
