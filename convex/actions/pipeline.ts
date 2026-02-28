@@ -9,7 +9,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
 
-const defaultModel = "claude-sonnet-4-20250514";
+const defaultModel = "claude-haiku-4-5-20251001";
 
 type RichMediaOptions = {
   targetWords?: number;
@@ -220,7 +220,7 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: "gpt-4o-mini",
+    model: "gpt-4.1",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {

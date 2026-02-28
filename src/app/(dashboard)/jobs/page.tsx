@@ -50,18 +50,18 @@ export default function JobsPage() {
     return (
       <div className="flex flex-col gap-6">
         <div>
-          <div className="mb-2 h-8 w-32 animate-pulse rounded-lg bg-[#1E293B]" />
-          <div className="h-4 w-48 animate-pulse rounded-lg bg-[#1E293B]" />
+          <div className="mb-1.5 h-6 w-24 animate-pulse rounded bg-white/[0.04]" />
+          <div className="h-4 w-48 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="rounded-2xl border border-[#1E293B] bg-[#111827] divide-y divide-[#1E293B]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] divide-y divide-white/[0.04]">
           {[...Array(8)].map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-5 py-3.5">
-              <div className="h-9 w-9 animate-pulse rounded-lg bg-[#1E293B]" />
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <div className="h-7 w-7 animate-pulse rounded-lg bg-white/[0.04]" />
               <div className="flex-1">
-                <div className="mb-1.5 h-4 w-40 animate-pulse rounded bg-[#1E293B]" />
+                <div className="h-3.5 w-32 animate-pulse rounded bg-white/[0.04]" />
               </div>
-              <div className="h-5 w-16 animate-pulse rounded-full bg-[#1E293B]" />
-              <div className="h-3 w-20 animate-pulse rounded bg-[#1E293B]" />
+              <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />
+              <div className="h-3 w-16 animate-pulse rounded bg-white/[0.04]" />
             </div>
           ))}
         </div>
@@ -79,7 +79,7 @@ export default function JobsPage() {
       <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
       {filtered.length > 0 ? (
-        <div className="rounded-2xl border border-[#1E293B] bg-[#111827] divide-y divide-[#1E293B]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] divide-y divide-white/[0.04]">
           {filtered.map((job) => {
             const duration =
               job.status === "done" || job.status === "failed"
@@ -89,17 +89,17 @@ export default function JobsPage() {
             return (
               <div
                 key={job._id}
-                className="flex items-start gap-4 px-5 py-4"
+                className="flex items-start gap-3 px-4 py-3.5"
               >
                 {/* Icon */}
-                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#1E293B] text-[#64748B]">
+                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] text-[#565A6E]">
                   <JobIcon type={job.type} />
                 </div>
 
                 {/* Content */}
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm font-medium text-[#F1F5F9]">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[13px] font-medium text-[#EDEEF1]">
                       {jobLabel(job.type)}
                     </p>
                     <StatusBadge status={job.status} />
@@ -107,28 +107,28 @@ export default function JobsPage() {
 
                   {/* Error */}
                   {job.error && (
-                    <div className="mt-2 flex items-start gap-2 rounded-lg bg-[#EF4444]/5 px-3 py-2">
-                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#EF4444]" />
-                      <p className="text-xs text-[#F87171] break-all">
+                    <div className="mt-2 flex items-start gap-2 rounded-lg bg-[#EF4444]/[0.04] px-3 py-2">
+                      <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-[#EF4444]" />
+                      <p className="text-[11px] text-[#F87171] break-all">
                         {job.error}
                       </p>
                     </div>
                   )}
 
                   {/* Meta */}
-                  <div className="mt-2 flex items-center gap-3 text-[11px] text-[#475569]">
+                  <div className="mt-1.5 flex items-center gap-2 text-[11px] text-[#565A6E]">
                     <span>
                       {formatDistanceToNow(job.createdAt, { addSuffix: true })}
                     </span>
                     {duration && (
                       <>
-                        <span>·</span>
+                        <span className="text-white/[0.1]">·</span>
                         <span>{duration}</span>
                       </>
                     )}
                     {job.retries != null && job.retries > 0 && (
                       <>
-                        <span>·</span>
+                        <span className="text-white/[0.1]">·</span>
                         <span className="text-[#F59E0B]">
                           Attempt {job.retries + 1}
                         </span>
@@ -141,9 +141,9 @@ export default function JobsPage() {
           })}
         </div>
       ) : (
-        <div className="rounded-2xl border border-[#1E293B] bg-[#111827] p-10 text-center">
-          <Activity className="mx-auto h-10 w-10 text-[#1E293B]" />
-          <p className="mt-4 text-sm text-[#64748B]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-10 text-center">
+          <Activity className="mx-auto h-8 w-8 text-[#565A6E]/40" />
+          <p className="mt-3 text-[13px] text-[#565A6E]">
             {jobs === undefined
               ? "Loading jobs..."
               : "No jobs yet. They appear here when the pipeline runs."}
@@ -157,15 +157,15 @@ export default function JobsPage() {
 function JobIcon({ type }: { type: string }) {
   switch (type) {
     case "onboarding":
-      return <Globe className="h-4 w-4" />;
+      return <Globe className="h-3.5 w-3.5" />;
     case "plan":
-      return <Map className="h-4 w-4" />;
+      return <Map className="h-3.5 w-3.5" />;
     case "article":
-      return <FileText className="h-4 w-4" />;
+      return <FileText className="h-3.5 w-3.5" />;
     case "links":
-      return <Link2 className="h-4 w-4" />;
+      return <Link2 className="h-3.5 w-3.5" />;
     default:
-      return <Clock className="h-4 w-4" />;
+      return <Clock className="h-3.5 w-3.5" />;
   }
 }
 

@@ -30,7 +30,7 @@ export function Sidebar() {
     pathname === href || pathname.startsWith(href + "/");
 
   const nav = (
-    <nav className="flex flex-col gap-1 px-3">
+    <nav className="flex flex-col gap-0.5 px-3">
       {navItems.map((item) => {
         const active = isActive(item.href);
         const Icon = item.icon;
@@ -40,19 +40,15 @@ export function Sidebar() {
             href={item.href}
             onClick={() => setMobileOpen(false)}
             className={`
-              group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150
+              group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-all
               ${
                 active
-                  ? "bg-[#0EA5E9]/10 text-[#38BDF8]"
-                  : "text-[#94A3B8] hover:bg-[#1E293B]/50 hover:text-[#F1F5F9]"
+                  ? "bg-white/[0.06] text-white"
+                  : "text-[#8B8FA3] hover:bg-white/[0.03] hover:text-white"
               }
             `}
           >
-            {/* Active indicator bar */}
-            {active && (
-              <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[#0EA5E9]" />
-            )}
-            <Icon className="h-[18px] w-[18px] shrink-0" />
+            <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[#0EA5E9]" : ""}`} />
             <span>{item.label}</span>
           </Link>
         );
@@ -65,9 +61,9 @@ export function Sidebar() {
       {/* Mobile toggle */}
       <button
         onClick={() => setMobileOpen(!mobileOpen)}
-        className="fixed left-4 top-4 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-[#1E293B] bg-[#111827] text-[#94A3B8] transition hover:text-[#F1F5F9] lg:hidden"
+        className="fixed left-4 top-4 z-50 flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.06] bg-[#0F1117] text-[#8B8FA3] transition hover:text-white lg:hidden"
       >
-        {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
       </button>
 
       {/* Mobile overlay */}
@@ -81,28 +77,26 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-[#1E293B] bg-[#111827]/80 backdrop-blur-xl
+          fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-white/[0.04] bg-[#0A0B10]
           transition-transform duration-200 ease-out
           lg:translate-x-0
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
         `}
       >
         {/* Logo */}
-        <div className="flex h-16 items-center gap-2.5 border-b border-[#1E293B] px-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/15">
-            <Radar className="h-4.5 w-4.5 text-[#0EA5E9]" />
-          </div>
-          <span className="text-base font-bold tracking-tight text-[#F1F5F9]">
+        <div className="flex h-14 items-center gap-2 border-b border-white/[0.04] px-5">
+          <Radar className="h-4 w-4 text-[#0EA5E9]" />
+          <span className="text-[14px] font-semibold tracking-tight">
             SEOSentinel
           </span>
         </div>
 
         {/* Navigation */}
-        <div className="flex-1 overflow-y-auto py-4">{nav}</div>
+        <div className="flex-1 overflow-y-auto py-3">{nav}</div>
 
         {/* Bottom */}
-        <div className="border-t border-[#1E293B] px-5 py-4">
-          <p className="text-xs text-[#475569]">v0.2.0</p>
+        <div className="border-t border-white/[0.04] px-5 py-3">
+          <p className="text-[11px] text-[#565A6E]">v0.2.0</p>
         </div>
       </aside>
     </>

@@ -25,14 +25,14 @@ import Link from "next/link";
 
 const markdownComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="mt-10 mb-4 text-2xl font-bold tracking-tight text-[#F1F5F9]">
+    <h1 className="mt-10 mb-4 text-2xl font-bold tracking-tight text-[#EDEEF1]">
       {children}
     </h1>
   ),
   h2: ({ children, id }) => (
     <h2
       id={id}
-      className="mt-8 mb-3 text-xl font-bold tracking-tight text-[#F1F5F9]"
+      className="mt-8 mb-3 text-xl font-bold tracking-tight text-[#EDEEF1]"
     >
       {children}
     </h2>
@@ -40,13 +40,13 @@ const markdownComponents: Components = {
   h3: ({ children, id }) => (
     <h3
       id={id}
-      className="mt-6 mb-2 text-lg font-semibold text-[#F1F5F9]"
+      className="mt-6 mb-2 text-lg font-semibold text-[#EDEEF1]"
     >
       {children}
     </h3>
   ),
   p: ({ children }) => (
-    <p className="mb-4 text-[#94A3B8] leading-relaxed">{children}</p>
+    <p className="mb-4 text-[#8B8FA3] leading-relaxed text-[14px]">{children}</p>
   ),
   a: ({ href, children }) => (
     <a
@@ -59,41 +59,41 @@ const markdownComponents: Components = {
     </a>
   ),
   ul: ({ children }) => (
-    <ul className="mb-4 list-disc space-y-1.5 pl-6 text-[#94A3B8]">
+    <ul className="mb-4 list-disc space-y-1.5 pl-6 text-[14px] text-[#8B8FA3]">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mb-4 list-decimal space-y-1.5 pl-6 text-[#94A3B8]">
+    <ol className="mb-4 list-decimal space-y-1.5 pl-6 text-[14px] text-[#8B8FA3]">
       {children}
     </ol>
   ),
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
   blockquote: ({ children }) => (
-    <blockquote className="my-5 border-l-4 border-[#0EA5E9] bg-[#0EA5E9]/5 py-3 pl-5 pr-4 text-[#94A3B8] italic">
+    <blockquote className="my-5 border-l-2 border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.04] py-3 pl-4 pr-4 text-[14px] text-[#8B8FA3] italic">
       {children}
     </blockquote>
   ),
   strong: ({ children }) => (
-    <strong className="font-semibold text-[#F1F5F9]">{children}</strong>
+    <strong className="font-semibold text-[#EDEEF1]">{children}</strong>
   ),
   table: ({ children }) => (
-    <div className="my-5 overflow-x-auto rounded-xl border border-[#1E293B]">
-      <table className="w-full text-sm">{children}</table>
+    <div className="my-5 overflow-x-auto rounded-lg border border-white/[0.06]">
+      <table className="w-full text-[13px]">{children}</table>
     </div>
   ),
   thead: ({ children }) => (
-    <thead className="border-b border-[#1E293B] bg-[#111827]">
+    <thead className="border-b border-white/[0.06] bg-white/[0.02]">
       {children}
     </thead>
   ),
   th: ({ children }) => (
-    <th className="px-4 py-2.5 text-left font-semibold text-[#F1F5F9]">
+    <th className="px-4 py-2 text-left font-semibold text-[#EDEEF1]">
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td className="border-t border-[#1E293B] px-4 py-2.5 text-[#94A3B8]">
+    <td className="border-t border-white/[0.04] px-4 py-2 text-[#8B8FA3]">
       {children}
     </td>
   ),
@@ -101,19 +101,19 @@ const markdownComponents: Components = {
     const isBlock = className?.includes("language-");
     if (isBlock) {
       return (
-        <code className="block overflow-x-auto rounded-xl bg-[#0B1120] px-5 py-4 text-sm text-[#94A3B8] font-mono border border-[#1E293B]">
+        <code className="block overflow-x-auto rounded-lg bg-[#08090E] px-4 py-3 text-[13px] text-[#8B8FA3] font-mono border border-white/[0.06]">
           {children}
         </code>
       );
     }
     return (
-      <code className="rounded bg-[#1E293B] px-1.5 py-0.5 text-sm font-mono text-[#F1F5F9]">
+      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[13px] font-mono text-[#EDEEF1]">
         {children}
       </code>
     );
   },
   pre: ({ children }) => <pre className="my-5">{children}</pre>,
-  hr: () => <hr className="my-8 border-[#1E293B]" />,
+  hr: () => <hr className="my-8 border-white/[0.06]" />,
 };
 
 export default function ArticleDetailPage() {
@@ -133,7 +133,7 @@ export default function ArticleDetailPage() {
   if (article === undefined) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#0EA5E9] border-t-transparent" />
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#0EA5E9] border-t-transparent" />
       </div>
     );
   }
@@ -141,9 +141,10 @@ export default function ArticleDetailPage() {
   if (article === null) {
     return (
       <div className="py-20 text-center">
-        <p className="text-[#64748B]">Article not found.</p>
+        <p className="text-[#565A6E] text-[13px]">Article not found.</p>
         <Button
           variant="secondary"
+          size="sm"
           onClick={() => router.push("/articles")}
           className="mt-4"
         >
@@ -207,20 +208,20 @@ export default function ArticleDetailPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       {/* Back + Header */}
       <div>
         <Link
           href="/articles"
-          className="mb-4 inline-flex items-center gap-1.5 text-sm text-[#64748B] transition hover:text-[#F1F5F9]"
+          className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-[#565A6E] transition hover:text-[#EDEEF1]"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft className="h-3 w-3" />
           Back to Articles
         </Link>
         <PageHeader
           title={article.title}
           actions={
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2">
               {article.status === "review" && (
                 <>
                   <Button
@@ -267,27 +268,27 @@ export default function ArticleDetailPage() {
       </div>
 
       {linkStatus && (
-        <div className="rounded-lg bg-[#0EA5E9]/10 px-4 py-2.5 text-sm text-[#38BDF8]">
+        <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
           {linkStatus}
         </div>
       )}
 
       {/* Meta bar */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={article.status} />
-        <span className="text-xs text-[#475569]">{wordCount} words</span>
-        <span className="text-xs text-[#475569]">·</span>
-        <span className="text-xs text-[#475569]">
+        <span className="text-[11px] text-[#565A6E]">{wordCount} words</span>
+        <span className="text-[11px] text-white/[0.1]">·</span>
+        <span className="text-[11px] text-[#565A6E]">
           {formatDistanceToNow(article.createdAt, { addSuffix: true })}
         </span>
-        <span className="text-xs text-[#475569]">·</span>
-        <span className="text-xs text-[#64748B] font-mono">
+        <span className="text-[11px] text-white/[0.1]">·</span>
+        <span className="text-[11px] text-[#565A6E] font-mono">
           /{article.slug}
         </span>
       </div>
 
       {/* Article Content */}
-      <div className="rounded-2xl border border-[#1E293B] bg-[#111827] p-6 sm:p-8">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6 sm:p-8">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSlug]}
@@ -299,18 +300,18 @@ export default function ArticleDetailPage() {
 
       {/* Sources */}
       {article.sources && article.sources.length > 0 && (
-        <div className="rounded-2xl border border-[#1E293B] bg-[#111827] p-6">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#475569]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
             Sources
           </h3>
-          <ul className="space-y-2">
+          <ul className="space-y-1.5">
             {article.sources.map((source, i) => (
               <li key={i}>
                 <a
                   href={source.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm text-[#0EA5E9] underline decoration-[#0EA5E9]/30 underline-offset-2 hover:text-[#38BDF8]"
+                  className="inline-flex items-center gap-1.5 text-[13px] text-[#0EA5E9] underline decoration-[#0EA5E9]/30 underline-offset-2 hover:text-[#38BDF8]"
                 >
                   <ExternalLink className="h-3 w-3" />
                   {source.title || source.url}
@@ -323,16 +324,16 @@ export default function ArticleDetailPage() {
 
       {/* Internal Links */}
       {article.internalLinks && article.internalLinks.length > 0 && (
-        <div className="rounded-2xl border border-[#1E293B] bg-[#111827] p-6">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#475569]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
             Internal Links
           </h3>
-          <ul className="space-y-2">
+          <ul className="space-y-1.5">
             {article.internalLinks.map((link, i) => (
-              <li key={i} className="flex items-center gap-2 text-sm">
-                <Link2 className="h-3 w-3 text-[#475569]" />
-                <span className="text-[#F1F5F9]">{link.anchor}</span>
-                <span className="text-[#475569]">→</span>
+              <li key={i} className="flex items-center gap-2 text-[13px]">
+                <Link2 className="h-3 w-3 text-[#565A6E]" />
+                <span className="text-[#EDEEF1]">{link.anchor}</span>
+                <span className="text-[#565A6E]">→</span>
                 <span className="font-mono text-[#0EA5E9]">{link.href}</span>
               </li>
             ))}

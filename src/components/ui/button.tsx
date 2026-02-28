@@ -14,19 +14,19 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantStyles: Record<Variant, string> = {
   primary:
-    "bg-[#0EA5E9] text-white shadow-lg shadow-[#0EA5E9]/20 hover:bg-[#38BDF8] hover:shadow-[#0EA5E9]/30 active:bg-[#0284C7]",
+    "bg-[#0EA5E9] text-white hover:bg-[#38BDF8] active:bg-[#0284C7] shadow-[0_0_20px_rgba(14,165,233,0.15)] hover:shadow-[0_0_24px_rgba(14,165,233,0.25)]",
   secondary:
-    "bg-transparent border border-[#1E293B] text-[#F1F5F9] hover:border-[#0EA5E9]/50 hover:text-[#38BDF8] active:bg-[#1E293B]/50",
+    "bg-white/[0.03] border border-white/[0.06] text-[#EDEEF1] hover:border-white/[0.1] hover:bg-white/[0.05] active:bg-white/[0.07]",
   danger:
-    "bg-[#EF4444]/10 border border-[#EF4444]/20 text-[#EF4444] hover:bg-[#EF4444]/20 hover:border-[#EF4444]/40 active:bg-[#EF4444]/30",
+    "bg-[#EF4444]/[0.08] border border-[#EF4444]/[0.15] text-[#F87171] hover:bg-[#EF4444]/[0.12] hover:border-[#EF4444]/[0.25] active:bg-[#EF4444]/[0.18]",
   ghost:
-    "bg-transparent text-[#94A3B8] hover:text-[#F1F5F9] hover:bg-[#1E293B]/50 active:bg-[#1E293B]",
+    "bg-transparent text-[#8B8FA3] hover:text-[#EDEEF1] hover:bg-white/[0.04] active:bg-white/[0.06]",
 };
 
 const sizeStyles: Record<Size, string> = {
-  sm: "px-3 py-1.5 text-xs gap-1.5",
-  md: "px-4 py-2 text-sm gap-2",
-  lg: "px-6 py-2.5 text-base gap-2.5",
+  sm: "px-3 py-1.5 text-[12px] gap-1.5 rounded-lg",
+  md: "px-4 py-2 text-[13px] gap-2 rounded-lg",
+  lg: "px-5 py-2.5 text-[14px] gap-2 rounded-lg",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -48,9 +48,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || loading}
         className={`
-          inline-flex items-center justify-center rounded-lg font-medium
+          inline-flex items-center justify-center font-medium
           transition-all duration-150 focus-ring
-          disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none
+          disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
           ${variantStyles[variant]}
           ${sizeStyles[size]}
           ${className}
@@ -59,7 +59,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       >
         {loading ? (
           <svg
-            className="h-4 w-4 animate-spin"
+            className="h-3.5 w-3.5 animate-spin"
             viewBox="0 0 24 24"
             fill="none"
           >
