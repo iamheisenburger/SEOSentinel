@@ -808,7 +808,17 @@ export const generateArticle = action({
       return res;
     }
 
-    // Auto-publish via GitHub (best-effort; don't fail generation if publish fails)
+    // For manual mode, hold at "ready" — user copies from UI
+    if (site?.publishMethod === "manual") {
+      await ctx.runMutation(api.articles.updateStatus, {
+        articleId: res.articleId,
+        status: "ready",
+      });
+      console.log(`Manual publish mode — article ${res.articleId} held at "ready" for user to copy.`);
+      return res;
+    }
+
+    // Auto-publish (best-effort; don't fail generation if publish fails)
     try {
       await ctx.runAction(api.publisher.publishArticle, {
         siteId,
@@ -892,7 +902,17 @@ export const generateNow = action({
       return res;
     }
 
-    // Otherwise auto-publish
+    // For manual mode, hold at "ready" — user copies from UI
+    if (site.publishMethod === "manual") {
+      await ctx.runMutation(api.articles.updateStatus, {
+        articleId: res.articleId,
+        status: "ready",
+      });
+      console.log(`Manual publish mode — article held at "ready" for user to copy.`);
+      return res;
+    }
+
+    // Auto-publish
     try {
       await ctx.runAction(api.publisher.publishArticle, {
         siteId,
@@ -1127,10 +1147,17 @@ export const processNextJob = action({
             status: "review",
           });
           console.log(`Approval required — article ${articleResult.articleId} held at "review" status.`);
+        } else if (site?.publishMethod === "manual") {
+          // Manual mode — hold at "ready" for user to copy
+          await ctx.runMutation(api.articles.updateStatus, {
+            articleId: articleResult.articleId,
+            status: "ready",
+          });
+          console.log(`Manual publish — article ${articleResult.articleId} held at "ready".`);
         } else {
-          // Publish to GitHub (article now has links populated in DB)
+          // Auto-publish (GitHub, WordPress, Webhook)
           try {
-            console.log(`Publishing article ${articleResult.articleId} to GitHub...`);
+            console.log(`Publishing article ${articleResult.articleId}...`);
             await ctx.runAction(api.publisher.publishArticle, {
               siteId: job.siteId,
               articleId: articleResult.articleId,

@@ -14,6 +14,9 @@ import {
   CheckCircle2,
   XCircle,
   ShieldCheck,
+  Copy,
+  Code2,
+  Download,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -23,6 +26,30 @@ import type { Components } from "react-markdown";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { useState } from "react";
 import Link from "next/link";
+
+function simpleMarkdownToHtml(md: string): string {
+  let html = md;
+  html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
+  html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
+  html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
+  html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  html = html.replace(/^>\s+(.+)$/gm, "<blockquote>$1</blockquote>");
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/^---$/gm, "<hr>");
+  html = html.split("\n\n").map((block) => {
+    const t = block.trim();
+    if (!t) return "";
+    if (/^<[a-z]/.test(t)) return t;
+    return `<p>${t.replace(/\n/g, "<br>")}</p>`;
+  }).join("\n\n");
+  return html;
+}
 
 const markdownComponents: Components = {
   h1: ({ children }) => (
@@ -194,10 +221,12 @@ export default function ArticleDetailPage() {
     }
   };
 
+  const isManualPublish = site?.publishMethod === "manual";
+
   const handlePublish = async () => {
     if (!site?._id) return;
     setActionBusy(true);
-    setLinkStatus("Publishing to GitHub...");
+    setLinkStatus(isManualPublish ? "Marking as published..." : "Publishing...");
     try {
       await publishApproved({ siteId: site._id, articleId });
       setLinkStatus("Article published successfully.");
@@ -206,6 +235,40 @@ export default function ArticleDetailPage() {
     } finally {
       setActionBusy(false);
     }
+  };
+
+  const handleCopyMarkdown = async () => {
+    await navigator.clipboard.writeText(article.markdown);
+    setLinkStatus("Markdown copied to clipboard.");
+    setTimeout(() => setLinkStatus(null), 2000);
+  };
+
+  const handleCopyHtml = async () => {
+    const html = simpleMarkdownToHtml(article.markdown);
+    await navigator.clipboard.writeText(html);
+    setLinkStatus("HTML copied to clipboard.");
+    setTimeout(() => setLinkStatus(null), 2000);
+  };
+
+  const handleDownload = () => {
+    const frontmatter = [
+      "---",
+      `title: "${article.title.replace(/"/g, '\\"')}"`,
+      article.metaDescription ? `description: "${article.metaDescription.replace(/"/g, '\\"')}"` : null,
+      `date: "${new Date(article.createdAt).toISOString()}"`,
+      `slug: "${article.slug}"`,
+      "---",
+    ].filter(Boolean).join("\n");
+    const content = `${frontmatter}\n\n${article.markdown}`;
+    const blob = new Blob([content], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${article.slug.replace(/^\//, "")}.mdx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setLinkStatus("Article downloaded.");
+    setTimeout(() => setLinkStatus(null), 2000);
   };
 
   return (
@@ -251,9 +314,33 @@ export default function ArticleDetailPage() {
                   loading={actionBusy}
                   icon={<Upload className="h-3.5 w-3.5" />}
                 >
-                  Publish Now
+                  {isManualPublish ? "Mark as Published" : "Publish Now"}
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleCopyMarkdown}
+                icon={<Copy className="h-3.5 w-3.5" />}
+              >
+                Copy MD
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleCopyHtml}
+                icon={<Code2 className="h-3.5 w-3.5" />}
+              >
+                Copy HTML
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleDownload}
+                icon={<Download className="h-3.5 w-3.5" />}
+              >
+                Download
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"

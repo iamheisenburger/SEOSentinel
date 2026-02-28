@@ -14,6 +14,14 @@ export default defineSchema({
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
 
+    // ── Publishing platform ──
+    publishMethod: v.optional(v.string()), // "github" | "wordpress" | "webhook" | "manual"
+    wpUrl: v.optional(v.string()),
+    wpUsername: v.optional(v.string()),
+    wpAppPassword: v.optional(v.string()),
+    webhookUrl: v.optional(v.string()),
+    webhookSecret: v.optional(v.string()),
+
     // ── AI-analyzed site profile (populated after crawl) ──
     siteName: v.optional(v.string()),
     siteType: v.optional(v.string()), // SaaS, E-commerce, Blog, Agency, etc.

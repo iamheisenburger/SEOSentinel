@@ -25,6 +25,10 @@ import {
   Plus,
   X,
   Pencil,
+  GitBranch,
+  Webhook,
+  Copy,
+  KeyRound,
 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -234,8 +238,14 @@ export function SetupWizard() {
 
   // Domain form
   const [domain, setDomain] = useState("");
+  const [publishMethod, setPublishMethod] = useState<string>("github");
   const [repoOwner, setRepoOwner] = useState("");
   const [repoName, setRepoName] = useState("");
+  const [wpUrl, setWpUrl] = useState("");
+  const [wpUsername, setWpUsername] = useState("");
+  const [wpAppPassword, setWpAppPassword] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
 
   // AI-analyzed profile (editable by user)
   const [siteName, setSiteName] = useState("");
@@ -300,8 +310,14 @@ export function SetupWizard() {
       // Create site
       const id = await upsert({
         domain: domain.trim(),
+        publishMethod,
         repoOwner: repoOwner.trim() || undefined,
         repoName: repoName.trim() || undefined,
+        wpUrl: wpUrl.trim() || undefined,
+        wpUsername: wpUsername.trim() || undefined,
+        wpAppPassword: wpAppPassword.trim() || undefined,
+        webhookUrl: webhookUrl.trim() || undefined,
+        webhookSecret: webhookSecret.trim() || undefined,
         cadencePerWeek: 4,
         approvalRequired: true,
         autopilotEnabled: true,
@@ -517,25 +533,131 @@ export function SetupWizard() {
                 onKeyDown={(e) => e.key === "Enter" && !analyzing && handleStartAnalysis()}
               />
 
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  label="GitHub Owner"
-                  placeholder="username"
-                  value={repoOwner}
-                  onChange={(e) => setRepoOwner(e.target.value)}
-                />
-                <Input
-                  label="GitHub Repo"
-                  placeholder="my-blog"
-                  value={repoName}
-                  onChange={(e) => setRepoName(e.target.value)}
-                />
+              {/* ── Platform Picker ── */}
+              <div>
+                <label className="text-[11px] font-medium text-[#8B8FA3] mb-2 block">
+                  How do you publish content?
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { key: "github", label: "GitHub", icon: GitBranch, desc: "Next.js, Astro, Hugo" },
+                    { key: "wordpress", label: "WordPress", icon: Globe, desc: "WP REST API" },
+                    { key: "webhook", label: "Webhook", icon: Webhook, desc: "Custom endpoint" },
+                    { key: "manual", label: "Copy & Paste", icon: Copy, desc: "Any platform" },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setPublishMethod(opt.key)}
+                      className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-all ${
+                        publishMethod === opt.key
+                          ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06] shadow-[0_0_12px_rgba(14,165,233,0.1)]"
+                          : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.1]"
+                      }`}
+                    >
+                      <opt.icon className={`h-4 w-4 shrink-0 ${
+                        publishMethod === opt.key ? "text-[#0EA5E9]" : "text-[#565A6E]"
+                      }`} />
+                      <div>
+                        <p className={`text-[12px] font-medium ${
+                          publishMethod === opt.key ? "text-[#EDEEF1]" : "text-[#8B8FA3]"
+                        }`}>{opt.label}</p>
+                        <p className="text-[10px] text-[#565A6E]">{opt.desc}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <p className="text-[11px] text-[#565A6E] -mt-2">
-                Optional — for auto-publishing articles via GitHub commits
-              </p>
 
-              <div className="mt-2 rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+              {/* ── Platform-specific fields ── */}
+              {publishMethod === "github" && (
+                <div className="flex flex-col gap-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input
+                      label="GitHub Owner"
+                      placeholder="username"
+                      value={repoOwner}
+                      onChange={(e) => setRepoOwner(e.target.value)}
+                    />
+                    <Input
+                      label="GitHub Repo"
+                      placeholder="my-blog"
+                      value={repoName}
+                      onChange={(e) => setRepoName(e.target.value)}
+                    />
+                  </div>
+                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                    <p className="text-[11px] text-[#8B8FA3]">
+                      <GitBranch className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
+                      Articles are committed as MDX files to your repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {publishMethod === "wordpress" && (
+                <div className="flex flex-col gap-3">
+                  <Input
+                    label="WordPress URL"
+                    placeholder="https://yoursite.com"
+                    value={wpUrl}
+                    onChange={(e) => setWpUrl(e.target.value)}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input
+                      label="Username"
+                      placeholder="admin"
+                      value={wpUsername}
+                      onChange={(e) => setWpUsername(e.target.value)}
+                    />
+                    <Input
+                      label="Application Password"
+                      placeholder="xxxx xxxx xxxx"
+                      value={wpAppPassword}
+                      onChange={(e) => setWpAppPassword(e.target.value)}
+                    />
+                  </div>
+                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                    <p className="text-[11px] text-[#8B8FA3]">
+                      <KeyRound className="inline h-3 w-3 mr-1 text-[#F59E0B]" />
+                      Generate an Application Password in WordPress: <span className="text-[#EDEEF1]">Users → Profile → Application Passwords</span>. This is NOT your login password.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {publishMethod === "webhook" && (
+                <div className="flex flex-col gap-3">
+                  <Input
+                    label="Webhook URL"
+                    placeholder="https://api.yoursite.com/articles"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                  />
+                  <Input
+                    label="Secret (optional)"
+                    placeholder="For HMAC signature verification"
+                    value={webhookSecret}
+                    onChange={(e) => setWebhookSecret(e.target.value)}
+                  />
+                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                    <p className="text-[11px] text-[#8B8FA3]">
+                      <Webhook className="inline h-3 w-3 mr-1 text-[#22C55E]" />
+                      We&apos;ll POST a JSON payload with <span className="font-mono text-[#EDEEF1]">title</span>, <span className="font-mono text-[#EDEEF1]">markdown</span>, <span className="font-mono text-[#EDEEF1]">html</span>, and metadata to your endpoint.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {publishMethod === "manual" && (
+                <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
+                  <p className="text-[12px] text-[#8B8FA3]">
+                    <Copy className="inline h-3.5 w-3.5 mr-1 text-[#0EA5E9]" />
+                    Articles will be generated and ready for you to copy. Use the <span className="text-[#EDEEF1]">Copy Markdown</span> or <span className="text-[#EDEEF1]">Copy HTML</span> buttons on each article to paste into any CMS — Wix, Squarespace, Shopify, Webflow, or anywhere else.
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-1 rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                 <p className="text-[12px] text-[#8B8FA3]">
                   <Sparkles className="inline h-3.5 w-3.5 mr-1 text-[#0EA5E9]" />
                   After clicking Continue, we&apos;ll crawl your site and use AI to auto-fill your site profile,
