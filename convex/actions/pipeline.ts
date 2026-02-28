@@ -4,11 +4,12 @@ import { api } from "../_generated/api";
 import { action } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
+import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
 
-const defaultModel = "gpt-5-mini-2025-08-07";
+const defaultModel = "claude-sonnet-4-20250514";
 
 type RichMediaOptions = {
   targetWords?: number;
@@ -91,15 +92,36 @@ const buildSlug = (title: string) =>
     .replace(/\s+/g, "-")
     .slice(0, 90);
 
-const openaiClient = (apiKey: string) => {
+const anthropicClient = () => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  return new Anthropic({ apiKey });
+};
+
+// Keep OpenAI client for web search (Claude doesn't have built-in web search)
+const openaiClient = () => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set (needed for web research)");
   return new OpenAI({ apiKey });
 };
 
-const getApiKey = () => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
-  return apiKey;
-};
+/** Call Claude and return the text response. */
+async function callClaude(
+  system: string,
+  userMessage: string,
+  maxTokens = 8192,
+): Promise<string> {
+  const client = anthropicClient();
+  const response = await client.messages.create({
+    model: defaultModel,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: "user", content: userMessage }],
+  });
+  const block = response.content[0];
+  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
+  return block.text;
+}
 
 async function fetchHtml(domain: string) {
   const url = domain.startsWith("http") ? domain : `https://${domain}`;
@@ -120,29 +142,17 @@ async function inferSiteProfile(
   },
 ) {
   if (site.tone && site.niche && site.inferToneNiche !== true) return;
-  const client = openaiClient(getApiKey());
-  const completion = await client.responses.create({
-    model: defaultModel,
-    input: [
-      {
-        role: "system",
-        content:
-          "Infer the site's niche and tone of voice concisely. Return JSON only.",
-      },
-      {
-        role: "user",
-        content:
-          'Return JSON like {"niche":"...","tone":"..."} based on this HTML snapshot:\n' +
-          html.slice(0, 6000),
-      },
-    ],
-  });
+  const text = await callClaude(
+    "Infer the site's niche and tone of voice concisely. Return JSON only.",
+    'Return JSON like {"niche":"...","tone":"..."} based on this HTML snapshot:\n' + html.slice(0, 6000),
+    1024,
+  );
   const inferred = parseJson<{ niche?: string; tone?: string }>(
     z.object({
       niche: z.string().optional(),
       tone: z.string().optional(),
     }),
-    completion.output_text,
+    text,
   );
   if (inferred.niche || inferred.tone) {
     await ctx.runMutation(api.sites.upsert, {
@@ -158,29 +168,19 @@ async function factCheckArticle(
   markdown: string,
   sources: z.infer<typeof ArticleSchema>["sources"],
 ) {
-  const client = openaiClient(getApiKey());
-  const completion = await client.responses.create({
-    model: defaultModel,
-    input: [
-      {
-        role: "system",
-        content:
-          "You are a fact-checking editor. Your job is to review the article markdown and correct any inaccurate claims. " +
-          "CRITICAL RULES:\n" +
-          "1. The 'markdown' field in your JSON response MUST contain the FULL article content — the same article, with only factual corrections applied.\n" +
-          "2. Do NOT add fact-check summaries, verification notes, reviewer comments, or any editorial commentary into the markdown.\n" +
-          "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
-          "4. Put any reviewer notes in the separate 'notes' field, NOT in the markdown.\n" +
-          "5. Output JSON only.",
-      },
-      {
-        role: "user",
-        content: `Return JSON: {"markdown":"<the full corrected article>","notes":"<your reviewer notes>","citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
-          sources ?? [],
-        )}\n\nArticle to review:\n${markdown}`,
-      },
-    ],
-  });
+  const text = await callClaude(
+    "You are a fact-checking editor. Your job is to review the article markdown and correct any inaccurate claims. " +
+    "CRITICAL RULES:\n" +
+    "1. The 'markdown' field in your JSON response MUST contain the FULL article content — the same article, with only factual corrections applied.\n" +
+    "2. Do NOT add fact-check summaries, verification notes, reviewer comments, or any editorial commentary into the markdown.\n" +
+    "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
+    "4. Put any reviewer notes in the separate 'notes' field, NOT in the markdown.\n" +
+    "5. Output JSON only.",
+    `Return JSON: {"markdown":"<the full corrected article>","notes":"<your reviewer notes>","citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
+      sources ?? [],
+    )}\n\nArticle to review:\n${markdown}`,
+    16384,
+  );
 
   const reviewed = parseJson<{
     markdown: string;
@@ -199,7 +199,7 @@ async function factCheckArticle(
         )
         .optional(),
     }),
-    completion.output_text,
+    text,
   );
   return reviewed;
 }
@@ -213,13 +213,14 @@ async function webResearch(
   },
   siteNiche?: string,
 ): Promise<{ researchSummary: string; sources: { url: string; title?: string }[] }> {
-  const client = openaiClient(getApiKey());
+  // Web research uses OpenAI's web_search_preview tool (Claude doesn't have built-in web search)
+  const client = openaiClient();
   const searchQuery = `${topic.primaryKeyword} ${topic.label} ${siteNiche ?? ""}`.trim();
 
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: defaultModel,
+    model: "gpt-4o-mini",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -270,22 +271,12 @@ async function handleOnboarding(
   const site = await ctx.runQuery(api.sites.get, { siteId });
   if (!site) throw new Error("Site not found");
   const { html } = await fetchHtml(site.domain);
-  const client = openaiClient(getApiKey());
 
-  const completion = await client.responses.create({
-    model: defaultModel,
-    input: [
-      {
-        role: "system",
-        content:
-          "You are an SEO onboarding agent. Extract up to 8 important pages for internal linking.",
-      },
-      {
-        role: "user",
-        content: `Return JSON only in shape {"siteSummary": string, "pages":[{"slug":string,"title":string,"summary":string,"keywords":string[]}]} based on this HTML:\n${html.slice(0, 8000)}`,
-      },
-    ],
-  });
+  const text = await callClaude(
+    "You are an SEO onboarding agent. Extract up to 8 important pages for internal linking.",
+    `Return JSON only in shape {"siteSummary": string, "pages":[{"slug":string,"title":string,"summary":string,"keywords":string[]}]} based on this HTML:\n${html.slice(0, 8000)}`,
+    4096,
+  );
 
   const data = parseJson<{
     siteSummary?: string;
@@ -300,7 +291,7 @@ async function handleOnboarding(
         keywords: z.array(z.string()).optional(),
       }),
     ),
-  }), completion.output_text);
+  }), text);
 
   const pages = data.pages ?? [];
   if (pages.length) {
@@ -336,7 +327,6 @@ async function handlePlan(
 ): Promise<{ count: number }> {
   const site = await ctx.runQuery(api.sites.get, { siteId });
   if (!site) throw new Error("Site not found");
-  const client = openaiClient(getApiKey());
 
   // Fetch ALL existing topics so the AI knows what's already covered
   const existingTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
@@ -349,39 +339,29 @@ async function handlePlan(
 
   console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
 
-  const completion = await client.responses.create({
-    model: defaultModel,
-    input: [
-      {
-        role: "system",
-        content:
-          "You are an expert SEO strategist specializing in topical authority and content diversification. " +
-          "Your goal is to propose NEW topic clusters that expand the site's search footprint into adjacent, " +
-          "high-value territory — NOT repeat what already exists. Output JSON only.",
-      },
-      {
-        role: "user",
-        content:
-          `Domain: ${site.domain}\n` +
-          `Niche: ${site.niche ?? ""}\n` +
-          `Tone: ${site.tone ?? "neutral"}\n` +
-          `Language: ${site.language ?? "en"}\n\n` +
-          `EXISTING TOPICS ALREADY COVERED (DO NOT DUPLICATE OR OVERLAP WITH THESE):\n` +
-          existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") +
-          `\n\n` +
-          `RULES:\n` +
-          `1. Do NOT generate topics with primaryKeywords that overlap, duplicate, or are synonyms of the existing topics listed above.\n` +
-          `2. EXPAND into adjacent search territory that still relates to the site's niche. Examples: personal finance tips, budgeting strategies, money-saving hacks, SaaS industry trends, fintech app reviews, digital spending habits, financial literacy, cost comparison guides, productivity tools.\n` +
-          `3. Include a MIX of search intents: ~40% informational, ~30% commercial, ~30% transactional.\n` +
-          `4. Prefer long-tail keywords (3-5 words) with lower competition over broad head terms.\n` +
-          `5. Each topic should target a UNIQUE search query — no two topics should compete for the same SERP.\n` +
-          `6. Generate 10-15 new topics.\n\n` +
-          `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic is valuable"}]`,
-      },
-    ],
-  });
+  const text = await callClaude(
+    "You are an expert SEO strategist specializing in topical authority and content diversification. " +
+    "Your goal is to propose NEW topic clusters that expand the site's search footprint into adjacent, " +
+    "high-value territory — NOT repeat what already exists. Output JSON only.",
+    `Domain: ${site.domain}\n` +
+    `Niche: ${site.niche ?? ""}\n` +
+    `Tone: ${site.tone ?? "neutral"}\n` +
+    `Language: ${site.language ?? "en"}\n\n` +
+    `EXISTING TOPICS ALREADY COVERED (DO NOT DUPLICATE OR OVERLAP WITH THESE):\n` +
+    existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") +
+    `\n\n` +
+    `RULES:\n` +
+    `1. Do NOT generate topics with primaryKeywords that overlap, duplicate, or are synonyms of the existing topics listed above.\n` +
+    `2. EXPAND into adjacent search territory that still relates to the site's niche. Examples: personal finance tips, budgeting strategies, money-saving hacks, SaaS industry trends, fintech app reviews, digital spending habits, financial literacy, cost comparison guides, productivity tools.\n` +
+    `3. Include a MIX of search intents: ~40% informational, ~30% commercial, ~30% transactional.\n` +
+    `4. Prefer long-tail keywords (3-5 words) with lower competition over broad head terms.\n` +
+    `5. Each topic should target a UNIQUE search query — no two topics should compete for the same SERP.\n` +
+    `6. Generate 10-15 new topics.\n\n` +
+    `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic is valuable"}]`,
+    8192,
+  );
 
-  const plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, completion.output_text);
+  const plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text);
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
   return { count: plan.length };
@@ -399,8 +379,6 @@ async function handleArticle(
     : null;
   if (!site) throw new Error("Site not found");
   if (topicId && !topic) throw new Error("Topic not found");
-
-  const client = openaiClient(getApiKey());
 
   // ── Step 1: Web Research (graceful degradation) ──
   let researchContext = "";
@@ -433,32 +411,23 @@ async function handleArticle(
     ? `\n\nRESEARCH BRIEF (use these facts, statistics, and information in your article):\n${researchContext}`
     : "";
 
-  const completion = await client.responses.create({
-    model: defaultModel,
-    input: [
-      {
-        role: "system",
-        content:
-          "You are a professional SEO content writer. Your task is to write a high-quality, extremely detailed, long-form article in Markdown. \n\n" +
-          "RULES:\n" +
-          "1. WORD COUNT: The article MUST be between 3500 and 4000 words. This is non-negotiable.\n" +
-          "2. FORMAT: Use H2 and H3 headings, bullet points, numbered lists, and bold text for emphasis.\n" +
-          "3. STRUCTURE: Include a compelling intro, 8+ detailed sections, a comparison table, a 'Pro Tips' section, and a 10-question FAQ at the end.\n" +
-          "4. STYLE: Use a " + (site.tone ?? "professional") + " tone.\n" +
-          "5. NO META-TALK: Do not include any explanations, reasoning, or fact-check summaries. Output the article content only within the JSON structure.\n" +
-          "6. JSON ONLY: Output a single JSON object. Do not include markdown code blocks around the JSON.\n" +
-          "7. SOURCES: Include real, verifiable source URLs in the sources array. Prefer sources from the research brief if provided.",
-      },
-      {
-        role: "user",
-        content: `Topic: ${topic?.label ?? "General"}\nPrimary Keyword: ${topic?.primaryKeyword ?? ""}\nSecondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\nSite: ${site.domain}\nNiche: ${site.niche ?? ""}${researchBlock}\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the 3500-4000 word article)", "metaTitle": "string", "metaDescription": "string", "sources": [{"url": "string", "title": "string"}]}`,
-      },
-    ],
-  });
+  const articleText = await callClaude(
+    "You are a professional SEO content writer. Your task is to write a high-quality, extremely detailed, long-form article in Markdown. \n\n" +
+    "RULES:\n" +
+    "1. WORD COUNT: The article MUST be between 3500 and 4000 words. This is non-negotiable.\n" +
+    "2. FORMAT: Use H2 and H3 headings, bullet points, numbered lists, and bold text for emphasis.\n" +
+    "3. STRUCTURE: Include a compelling intro, 8+ detailed sections, a comparison table, a 'Pro Tips' section, and a 10-question FAQ at the end.\n" +
+    "4. STYLE: Use a " + (site.tone ?? "professional") + " tone.\n" +
+    "5. NO META-TALK: Do not include any explanations, reasoning, or fact-check summaries. Output the article content only within the JSON structure.\n" +
+    "6. JSON ONLY: Output a single JSON object. Do not include markdown code blocks around the JSON.\n" +
+    "7. SOURCES: Include real, verifiable source URLs in the sources array. Prefer sources from the research brief if provided.",
+    `Topic: ${topic?.label ?? "General"}\nPrimary Keyword: ${topic?.primaryKeyword ?? ""}\nSecondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\nSite: ${site.domain}\nNiche: ${site.niche ?? ""}${researchBlock}\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the 3500-4000 word article)", "metaTitle": "string", "metaDescription": "string", "sources": [{"url": "string", "title": "string"}]}`,
+    16384,
+  );
 
   const article = parseJson<z.infer<typeof ArticleSchema>>(
     ArticleSchema,
-    completion.output_text,
+    articleText,
   );
 
   // Merge research sources with article-generated sources (deduplicate by URL)
@@ -527,26 +496,16 @@ async function handleLinks(
   const article = await ctx.runQuery(api.articles.get, { articleId });
   if (!site || !article) throw new Error("Missing site or article");
   const pages = await ctx.runQuery(api.pages.listBySite, { siteId });
-  const client = openaiClient(getApiKey());
 
-  const completion = await client.responses.create({
-    model: defaultModel,
-    input: [
-      {
-        role: "system",
-        content:
-          "Suggest concise internal links. Output JSON array only: [{\"anchor\":\"...\",\"href\":\"/path\"}].",
-      },
-      {
-        role: "user",
-        content: `Use this article and site pages to propose 5-10 internal links. Article title: ${article.title}. Slug: ${article.slug}. Pages: ${pages
-          .map((p: { slug: string; title?: string }) => `${p.slug}:${p.title ?? ""}`)
-          .join("; ")}`,
-      },
-    ],
-  });
+  const linkText = await callClaude(
+    "Suggest concise internal links. Output JSON array only: [{\"anchor\":\"...\",\"href\":\"/path\"}].",
+    `Use this article and site pages to propose 5-10 internal links. Article title: ${article.title}. Slug: ${article.slug}. Pages: ${pages
+      .map((p: { slug: string; title?: string }) => `${p.slug}:${p.title ?? ""}`)
+      .join("; ")}`,
+    2048,
+  );
 
-  const links = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, completion.output_text);
+  const links = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, linkText);
   await ctx.runMutation(api.articles.updateLinks, { articleId, internalLinks: links });
 
   // Inject links into the article markdown body for actual SEO value
@@ -602,6 +561,7 @@ export const generateArticle = action({
     ),
   },
   handler: async (ctx, { siteId, topicId, options }) => {
+    const site = await ctx.runQuery(api.sites.get, { siteId });
     const res = await handleArticle(ctx, siteId, topicId, options ?? undefined);
 
     // Add internal links before publishing (graceful degradation)
@@ -614,19 +574,108 @@ export const generateArticle = action({
       console.error(`Internal linking failed (publishing without links): ${linkError}`);
     }
 
+    // If approval is required, hold at "review" status — don't auto-publish
+    if (site?.approvalRequired) {
+      await ctx.runMutation(api.articles.updateStatus, {
+        articleId: res.articleId,
+        status: "review",
+      });
+      console.log(`Approval required — article ${res.articleId} held at "review" status.`);
+      return res;
+    }
+
     // Auto-publish via GitHub (best-effort; don't fail generation if publish fails)
     try {
       await ctx.runAction(api.publisher.publishArticle, {
         siteId,
         articleId: res.articleId,
-        repoOwner: "iamheisenburger",
-        repoName: "subscription-tracker",
-        baseBranch: "main",
-        contentDir: "content/posts",
       });
     } catch (err) {
       const pubError = err instanceof Error ? err.message : "unknown publish error";
       console.error(`Publish failed for article ${res.articleId}: ${pubError}`);
+    }
+
+    return res;
+  },
+});
+
+// Publish an approved article (called from the UI after user approves)
+export const publishApproved = action({
+  args: {
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+  },
+  handler: async (ctx, { siteId, articleId }) => {
+    const article = await ctx.runQuery(api.articles.get, { articleId });
+    if (!article) throw new Error("Article not found");
+    if (article.status !== "ready") {
+      throw new Error(`Article must be in "ready" status to publish, got "${article.status}"`);
+    }
+
+    await ctx.runAction(api.publisher.publishArticle, {
+      siteId,
+      articleId,
+    });
+
+    return { published: true, articleId };
+  },
+});
+
+// Generate an article immediately (bypass cron), picking the next available topic
+export const generateNow = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.runQuery(api.sites.get, { siteId });
+    if (!site) throw new Error("Site not found");
+
+    const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
+    const available = topics.filter(
+      (t: { status?: string }) =>
+        t.status === "planned" || t.status === "pending",
+    );
+
+    if (available.length === 0) {
+      throw new Error("No available topics. Generate a content plan first.");
+    }
+
+    // Pick the highest priority available topic
+    const sorted = [...available].sort(
+      (a: { priority?: number }, b: { priority?: number }) =>
+        (b.priority ?? 0) - (a.priority ?? 0),
+    );
+    const topic = sorted[0];
+
+    console.log(`Run Now: generating article for topic "${topic.primaryKeyword}"`);
+
+    // Run the pipeline directly (no self-reference through api)
+    const res = await handleArticle(ctx, siteId, topic._id);
+
+    // Add internal links (graceful degradation)
+    try {
+      const linkResult = await handleLinks(ctx, siteId, res.articleId);
+      console.log(`Added ${linkResult.count} internal links.`);
+    } catch (err) {
+      console.error(`Internal linking failed: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+
+    // If approval is required, hold at "review"
+    if (site.approvalRequired) {
+      await ctx.runMutation(api.articles.updateStatus, {
+        articleId: res.articleId,
+        status: "review",
+      });
+      console.log(`Approval required — article held at "review".`);
+      return res;
+    }
+
+    // Otherwise auto-publish
+    try {
+      await ctx.runAction(api.publisher.publishArticle, {
+        siteId,
+        articleId: res.articleId,
+      });
+    } catch (err) {
+      console.error(`Publish failed: ${err instanceof Error ? err.message : "unknown"}`);
     }
 
     return res;
@@ -674,25 +723,15 @@ export const generateProgrammaticTemplate = action({
   }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
-    const client = openaiClient(getApiKey());
-    const completion = await client.responses.create({
-      model: defaultModel,
-      input: [
-        {
-          role: "system",
-          content:
-            "You generate programmatic SEO templates (MDX/Markdown) with slots and examples.",
-        },
-        {
-          role: "user",
-          content: `Domain: ${site.domain}\nEntity: ${entityType}\nAttributes: ${attributes.join(
-            ", ",
-          )}\nExamples: ${JSON.stringify(
-            exampleRows ?? [],
-          )}\nReturn JSON like {"template":"...","fields":["..."],"samplePage":"..."} with placeholders for the attributes.`,
-        },
-      ],
-    });
+    const text = await callClaude(
+      "You generate programmatic SEO templates (MDX/Markdown) with slots and examples.",
+      `Domain: ${site.domain}\nEntity: ${entityType}\nAttributes: ${attributes.join(
+        ", ",
+      )}\nExamples: ${JSON.stringify(
+        exampleRows ?? [],
+      )}\nReturn JSON like {"template":"...","fields":["..."],"samplePage":"..."} with placeholders for the attributes.`,
+      8192,
+    );
     return parseJson<{
       template: string;
       fields: string[];
@@ -703,7 +742,7 @@ export const generateProgrammaticTemplate = action({
         fields: z.array(z.string()),
         samplePage: z.string(),
       }),
-      completion.output_text,
+      text,
     );
   },
 });
@@ -726,23 +765,13 @@ export const generateNewsArticle = action({
   }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
-    const client = openaiClient(getApiKey());
-    const completion = await client.responses.create({
-      model: defaultModel,
-      input: [
-        {
-          role: "system",
-          content:
-            "You are a news-focused SEO writer. Produce a concise news article with sources and a quick facts box. Output JSON only.",
-        },
-        {
-          role: "user",
-          content: `Site: ${site.domain}\nTopic: ${topic}\nRegion: ${
-            region ?? "global"
-          }\nReturn JSON like {"title":"...","slug":"...","markdown":"...","sources":[{"url":"..."}]}.`,
-        },
-      ],
-    });
+    const newsText = await callClaude(
+      "You are a news-focused SEO writer. Produce a concise news article with sources and a quick facts box. Output JSON only.",
+      `Site: ${site.domain}\nTopic: ${topic}\nRegion: ${
+        region ?? "global"
+      }\nReturn JSON like {"title":"...","slug":"...","markdown":"...","sources":[{"url":"..."}]}.`,
+      8192,
+    );
     return parseJson(
       z.object({
         title: z.string(),
@@ -752,7 +781,7 @@ export const generateNewsArticle = action({
           .array(z.object({ url: z.string(), title: z.string().optional() }))
           .optional(),
       }),
-      completion.output_text,
+      newsText,
     );
   },
 });
@@ -768,21 +797,11 @@ export const suggestBacklinks = action({
   > => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
-    const client = openaiClient(getApiKey());
-    const completion = await client.responses.create({
-      model: defaultModel,
-      input: [
-        {
-          role: "system",
-          content:
-            "List high-quality backlink prospects with anchor suggestions. Output JSON only.",
-        },
-        {
-          role: "user",
-          content: `Domain: ${site.domain}\nNiche: ${niche ?? site.niche ?? ""}\nReturn JSON like [{"site":"...","reason":"...","anchor":"...","targetUrl":"..."}]`,
-        },
-      ],
-    });
+    const backlinkText = await callClaude(
+      "List high-quality backlink prospects with anchor suggestions. Output JSON only.",
+      `Domain: ${site.domain}\nNiche: ${niche ?? site.niche ?? ""}\nReturn JSON like [{"site":"...","reason":"...","anchor":"...","targetUrl":"..."}]`,
+      4096,
+    );
     return parseJson(
       z.array(
         z.object({
@@ -792,7 +811,7 @@ export const suggestBacklinks = action({
           targetUrl: z.string(),
         }),
       ),
-      completion.output_text,
+      backlinkText,
     );
   },
 });
@@ -864,6 +883,7 @@ export const processNextJob = action({
         await handlePlan(ctx, job.siteId);
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
+        const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId);
 
         // Add internal links BEFORE publishing (graceful degradation)
@@ -876,26 +896,31 @@ export const processNextJob = action({
           console.error(`Internal linking failed (publishing without links): ${linkError}`);
         }
 
-        // Publish to GitHub (article now has links populated in DB)
-        try {
-          console.log(`Publishing article ${articleResult.articleId} to GitHub...`);
-          await ctx.runAction(api.publisher.publishArticle, {
-            siteId: job.siteId,
+        // If approval is required, hold at "review" status — don't auto-publish
+        if (site?.approvalRequired) {
+          await ctx.runMutation(api.articles.updateStatus, {
             articleId: articleResult.articleId,
-            repoOwner: "iamheisenburger",
-            repoName: "subscription-tracker",
-            baseBranch: "main",
-            contentDir: "content/posts",
+            status: "review",
           });
-          console.log(`Article ${articleResult.articleId} published successfully.`);
-        } catch (err: unknown) {
-          const pubError = err instanceof Error ? err.message : "unknown publish error";
-          console.error(`Publish failed for article ${articleResult.articleId}: ${pubError}`);
-          await ctx.runMutation(api.jobs.markFailed, {
-            jobId: job._id,
-            error: `Article generated but publish failed: ${pubError}`,
-          });
-          return { processed: true, jobId: job._id, error: pubError };
+          console.log(`Approval required — article ${articleResult.articleId} held at "review" status.`);
+        } else {
+          // Publish to GitHub (article now has links populated in DB)
+          try {
+            console.log(`Publishing article ${articleResult.articleId} to GitHub...`);
+            await ctx.runAction(api.publisher.publishArticle, {
+              siteId: job.siteId,
+              articleId: articleResult.articleId,
+            });
+            console.log(`Article ${articleResult.articleId} published successfully.`);
+          } catch (err: unknown) {
+            const pubError = err instanceof Error ? err.message : "unknown publish error";
+            console.error(`Publish failed for article ${articleResult.articleId}: ${pubError}`);
+            await ctx.runMutation(api.jobs.markFailed, {
+              jobId: job._id,
+              error: `Article generated but publish failed: ${pubError}`,
+            });
+            return { processed: true, jobId: job._id, error: pubError };
+          }
         }
       } else if (job.type === "links") {
         if (!job.siteId) throw new Error("Missing siteId on links job");

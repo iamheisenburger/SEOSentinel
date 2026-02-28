@@ -141,7 +141,7 @@ function generateSchemaMarkup(
   slug: string,
 ): string {
   const schemas: object[] = [];
-  const url = `https://${domain}/${slug}`;
+  const url = `https://${domain}/blog/${slug}`;
 
   // Article schema (always)
   schemas.push({
@@ -222,29 +222,6 @@ function generateSchemaMarkup(
     .join("\n\n");
 }
 
-/**
- * Generate a sitemap.xml for all published articles.
- */
-function generateSitemap(
-  domain: string,
-  articles: { slug: string; lastmod: string }[],
-): string {
-  const urls = articles.map((a) => {
-    const loc = `https://${domain}${a.slug.startsWith("/") ? a.slug : `/${a.slug}`}`;
-    return `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${a.lastmod.split("T")[0]}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.7</priority>\n  </url>`;
-  });
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://${domain}</loc>
-    <changefreq>daily</changefreq>
-    <priority>1.0</priority>
-  </url>
-${urls.join("\n")}
-</urlset>`;
-}
-
 export const publishArticle = action({
   args: {
     siteId: v.id("sites"),
@@ -276,9 +253,9 @@ export const publishArticle = action({
     });
     if (!article) throw new Error("Article not found");
 
-    // Hardcoded defaults for fully hands-off operation.
-    const repoOwner = args.repoOwner ?? "iamheisenburger";
-    const repoName = args.repoName ?? "subscription-tracker";
+    // Use site config, then args, then fallback defaults.
+    const repoOwner = args.repoOwner ?? site.repoOwner ?? "iamheisenburger";
+    const repoName = args.repoName ?? site.repoName ?? "App2";
     const baseBranch = args.baseBranch ?? "main";
     const contentDir = args.contentDir ?? "content/posts";
 
@@ -316,31 +293,10 @@ export const publishArticle = action({
 
     const mdx = `${frontmatter}\n\n${article.markdown}${schemaMarkup ? `\n\n${schemaMarkup}` : ""}`;
 
-    // Build files to commit: the article + updated sitemap
+    // Build files to commit: just the article (target site manages its own sitemap)
     const filesToCommit: FileContent[] = [
       { path: filePath, content: mdx },
     ];
-
-    // Generate updated sitemap.xml with all published articles
-    try {
-      const allArticles = await ctx.runQuery(api.articles.listBySite, {
-        siteId: args.siteId,
-      });
-      const publishedArticles = allArticles.filter(
-        (a) =>
-          a.status === "published" || a._id === args.articleId,
-      );
-      const sitemapXml = generateSitemap(
-        site.domain,
-        publishedArticles.map((a: { slug: string; updatedAt?: number; createdAt: number }) => ({
-          slug: a.slug,
-          lastmod: new Date(a.updatedAt ?? a.createdAt).toISOString(),
-        })),
-      );
-      filesToCommit.push({ path: "public/sitemap.xml", content: sitemapXml });
-    } catch (err) {
-      console.error("Sitemap generation failed (publishing without sitemap update).");
-    }
 
     // Commit directly to main (no PR needed)
     const { commitUrl } = await commitToMain({

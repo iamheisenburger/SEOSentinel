@@ -103,3 +103,27 @@ export const updateLinks = mutation({
   },
 });
 
+export const approve = mutation({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    if (article.status !== "review") {
+      throw new Error(`Cannot approve article with status "${article.status}"`);
+    }
+    await ctx.db.patch(articleId, { status: "ready", updatedAt: now() });
+  },
+});
+
+export const reject = mutation({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    if (article.status !== "review") {
+      throw new Error(`Cannot reject article with status "${article.status}"`);
+    }
+    await ctx.db.patch(articleId, { status: "draft", updatedAt: now() });
+  },
+});
+

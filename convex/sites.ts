@@ -26,11 +26,15 @@ export const upsert = mutation({
     cadencePerWeek: v.optional(v.number()),
     autopilotEnabled: v.optional(v.boolean()),
     inferToneNiche: v.optional(v.boolean()),
+    approvalRequired: v.optional(v.boolean()),
+    repoOwner: v.optional(v.string()),
+    repoName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const domain = args.domain.trim().toLowerCase();
     const autopilotEnabled = args.autopilotEnabled ?? true;
     const inferToneNiche = args.inferToneNiche ?? true;
+    const approvalRequired = args.approvalRequired ?? false;
 
     if (args.id) {
       await ctx.db.patch(args.id, {
@@ -41,6 +45,9 @@ export const upsert = mutation({
         cadencePerWeek: args.cadencePerWeek,
         autopilotEnabled,
         inferToneNiche,
+        approvalRequired,
+        repoOwner: args.repoOwner,
+        repoName: args.repoName,
         updatedAt: now(),
       });
       return args.id;
@@ -58,6 +65,9 @@ export const upsert = mutation({
         cadencePerWeek: args.cadencePerWeek ?? existing.cadencePerWeek,
         autopilotEnabled: args.autopilotEnabled ?? existing.autopilotEnabled ?? true,
         inferToneNiche: args.inferToneNiche ?? existing.inferToneNiche ?? true,
+        approvalRequired: args.approvalRequired ?? existing.approvalRequired ?? false,
+        repoOwner: args.repoOwner ?? existing.repoOwner,
+        repoName: args.repoName ?? existing.repoName,
         updatedAt: now(),
       });
       return existing._id;
@@ -71,6 +81,9 @@ export const upsert = mutation({
       cadencePerWeek: args.cadencePerWeek ?? 4,
       autopilotEnabled,
       inferToneNiche,
+      approvalRequired,
+      repoOwner: args.repoOwner,
+      repoName: args.repoName,
       createdAt: now(),
       updatedAt: now(),
     });
