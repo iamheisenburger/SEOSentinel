@@ -232,7 +232,7 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: "gpt-4.1",
+    model: "o4-mini-deep-research-2025-06-26",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
