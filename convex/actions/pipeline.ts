@@ -180,7 +180,7 @@ async function searchWebImages(
   const client = openaiClient();
 
   const completion = await client.responses.create({
-    model: "gpt-4.1-mini",
+    model: "gpt-5-mini-2025-08-07",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -290,7 +290,7 @@ async function searchYouTubeVideos(
   const client = openaiClient();
 
   const completion = await client.responses.create({
-    model: "gpt-4.1-mini",
+    model: "gpt-5-mini-2025-08-07",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
