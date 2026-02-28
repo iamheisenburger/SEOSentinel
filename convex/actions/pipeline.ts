@@ -122,7 +122,7 @@ async function generateHeroImage(
   console.log(`Generating hero image for: "${title}"...`);
 
   const response = await client.images.generate({
-    model: "gpt-image-1",
+    model: "gpt-image-1.5-2025-12-16",
     prompt,
     n: 1,
     size: "1536x1024",
