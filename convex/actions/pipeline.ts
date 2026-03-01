@@ -834,32 +834,44 @@ async function handlePlan(
   console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
 
   const text = await callClaude(
-    "You are an expert SEO strategist specializing in topical authority and content diversification. " +
-    "Your goal is to propose NEW topic clusters that expand the site's search footprint into adjacent, " +
-    "high-value territory — NOT repeat what already exists. Output JSON only.",
-    `Domain: ${site.domain}\n` +
-    `Site: ${site.siteName ?? site.domain}\n` +
-    `Niche: ${site.niche ?? ""}\n` +
-    `Blog Theme: ${site.blogTheme ?? ""}\n` +
-    `Target Audience: ${site.targetAudienceSummary ?? ""}\n` +
-    `Pain Points: ${site.painPoints?.join("; ") ?? ""}\n` +
-    `Key Features: ${site.keyFeatures?.join("; ") ?? ""}\n` +
-    `Tone: ${site.tone ?? "neutral"}\n` +
-    `Language: ${site.language ?? "en"}\n` +
-    (site.competitors?.length ? `Competitors (avoid these): ${site.competitors.join(", ")}\n` : "") +
-    (site.anchorKeywords?.length ? `Priority Keywords: ${site.anchorKeywords.join(", ")}\n` : "") +
+    "You are an expert SEO content strategist. Your job is to generate blog topics that drive organic traffic to a SPECIFIC product/company. " +
+    "Every topic MUST be directly relevant to what this product does, who uses it, and the problems it solves. " +
+    "Think like a content marketer AT this company — what would their ideal customer search for before buying? Output JSON only.",
+    `PRODUCT: ${site.siteName ?? site.domain}\n` +
+    `DOMAIN: ${site.domain}\n` +
+    `TYPE: ${site.siteType ?? "Website"}\n` +
+    `WHAT IT DOES: ${site.siteSummary ?? ""}\n` +
+    `NICHE: ${site.niche ?? ""}\n` +
+    `BLOG THEME: ${site.blogTheme ?? ""}\n` +
+    `KEY FEATURES: ${site.keyFeatures?.join("; ") ?? ""}\n` +
+    `TARGET AUDIENCE: ${site.targetAudienceSummary ?? ""}\n` +
+    `PAIN POINTS PRODUCT SOLVES: ${site.painPoints?.join("; ") ?? ""}\n` +
+    `HOW USERS USE THE PRODUCT: ${site.productUsage ?? ""}\n` +
+    `TONE: ${site.tone ?? "neutral"}\n` +
+    `LANGUAGE: ${site.language ?? "en"}\n` +
+    (site.competitors?.length ? `COMPETITORS (never mention these): ${site.competitors.join(", ")}\n` : "") +
+    (site.anchorKeywords?.length ? `PRIORITY KEYWORDS TO RANK FOR: ${site.anchorKeywords.join(", ")}\n` : "") +
     `\n` +
-    `EXISTING TOPICS ALREADY COVERED (DO NOT DUPLICATE OR OVERLAP WITH THESE):\n` +
-    existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") +
-    `\n\n` +
-    `RULES:\n` +
-    `1. Do NOT generate topics with primaryKeywords that overlap, duplicate, or are synonyms of the existing topics listed above.\n` +
-    `2. EXPAND into adjacent search territory that still relates to the site's niche. Examples: personal finance tips, budgeting strategies, money-saving hacks, SaaS industry trends, fintech app reviews, digital spending habits, financial literacy, cost comparison guides, productivity tools.\n` +
-    `3. Include a MIX of search intents: ~40% informational, ~30% commercial, ~30% transactional.\n` +
-    `4. Prefer long-tail keywords (3-5 words) with lower competition over broad head terms.\n` +
-    `5. Each topic should target a UNIQUE search query — no two topics should compete for the same SERP.\n` +
-    `6. Generate exactly 10 new topics.\n\n` +
-    `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic is valuable"}]`,
+    (existingKeywords.length > 0
+      ? `EXISTING TOPICS (DO NOT DUPLICATE):\n` +
+        existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") + `\n\n`
+      : "") +
+    `TOPIC GENERATION RULES:\n` +
+    `1. Every topic MUST be directly related to what ${site.siteName ?? "the product"} does or the specific problems it solves. ` +
+    `Generic industry topics that any company could write are BANNED. The reader should learn something that makes them want to try ${site.siteName ?? "the product"}.\n` +
+    `2. Use these proven formats:\n` +
+    `   - "How to [do X] with/using [product category]" (e.g., "How to Capture Leads 24/7 with AI Chat Widgets")\n` +
+    `   - "[Product Category] vs [Alternative]: [Outcome]" (e.g., "AI Chatbots vs Live Chat: Which Converts More Leads?")\n` +
+    `   - "[N] Best [Product Category] for [Use Case]" (e.g., "5 Best AI Lead Generation Tools for SaaS")\n` +
+    `   - "What Is [Core Concept]? [Benefit]" (e.g., "What Is Automated Lead Qualification? A Complete Guide")\n` +
+    `   - "[N] Ways [Product Feature] [Solves Pain Point]" (e.g., "7 Ways AI Chat Widgets Increase Website Conversions")\n` +
+    `   - "[Specific Problem] [Solution Guide]" (e.g., "Website Visitors Not Converting? 8 Fixes That Work")\n` +
+    `3. Mix of intents: ~40% informational (guides, what-is), ~30% commercial (comparisons, best-of), ~30% transactional (how-to, setup guides).\n` +
+    `4. Target LONG-TAIL keywords (3-6 words) — specific queries real people search for.\n` +
+    `5. Each topic must target a UNIQUE search query. No two topics should compete for the same SERP.\n` +
+    `6. Generate exactly 10 new topics.\n` +
+    `7. Topics should form a funnel: some for awareness (what-is), some for consideration (comparisons), some for decision (how-to/setup).\n\n` +
+    `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic drives traffic to ${site.siteName ?? "the product"}"}]`,
     8192,
   );
 
@@ -1055,9 +1067,19 @@ async function handleArticle(
     ? "10. EXTERNAL LINKS: Include 5-10 outbound links to authoritative sources naturally within the text (not just in the sources section)."
     : "10. Do NOT include external links in the article body.";
 
+  const productName = site.siteName ?? site.domain;
+
   const articleText = await callClaude(
-    "You are an elite SEO content writer producing articles that rank on page 1 of Google. " +
-    "Your articles are data-driven, authoritative, and genuinely useful — not generic filler.\n\n" +
+    "You are a senior content marketer writing for " + productName + "'s blog. " +
+    "You write like you WORK at this company — you know the product inside out, you understand the audience's pain points, " +
+    "and you naturally weave the product into the narrative as THE solution. Your articles rank on page 1 of Google " +
+    "because they're genuinely useful, data-driven, and authoritative — not generic SEO filler.\n\n" +
+    "PRODUCT INTEGRATION (CRITICAL):\n" +
+    "- Mention " + productName + " by name 3-5 times throughout the article, naturally.\n" +
+    "- Include a dedicated section (H2 or H3) showing how " + productName + " specifically solves the problem discussed.\n" +
+    "- Reference real product features, pricing, or capabilities where relevant — use the SITE CONTEXT and LIVE CRAWLED DATA provided.\n" +
+    "- The article should feel like it was written by the company's content team, not by a generic freelancer.\n" +
+    "- DO NOT be overly salesy. Provide genuine value first, then naturally position the product as a solution.\n\n" +
     "MANDATORY ARTICLE STRUCTURE:\n" +
     "1. HOOK: Open with a compelling statistic, surprising fact, or data point from the research. Example: 'According to a 2024 Gartner report, 73% of...' — NEVER start with a generic statement.\n" +
     "2. TL;DR BOX: After the hook paragraph, include a '> **TL;DR:** ...' blockquote summarizing the key takeaway in 2-3 sentences.\n" +
@@ -1075,11 +1097,11 @@ async function handleArticle(
     "11. TONE: Write in a " + (site.tone ?? "professional") + " tone throughout.\n" +
     "12. NO FLUFF: Every paragraph must contain specific information, data, examples, or actionable advice. Cut generic filler.\n" +
     "13. KEY TAKEAWAYS: Include a '## Key Takeaways' section near the end with 5-7 bullet points summarizing the main insights.\n" +
-    "14. YOUTUBE EMBEDS: If YouTube video HTML is provided below, embed them at relevant points in the article (after related sections). Copy the HTML exactly as provided.\n" +
-    "15. REAL IMAGES: If a site screenshot URL or web infographic URLs are provided below, embed them in the article using standard markdown image syntax: ![alt text](url). Place the site screenshot in the intro/overview section. Place infographics near relevant data sections. Add italic captions below images.\n" +
+    "14. YOUTUBE EMBEDS: If YouTube video HTML is provided below, you MUST embed ALL of them at relevant points in the article (after related sections). Copy the HTML exactly as provided. This is non-negotiable.\n" +
+    "15. REAL IMAGES: If a site screenshot URL or web infographic URLs are provided below, you MUST embed ALL of them in the article using standard markdown image syntax: ![alt text](url). Place the site screenshot in the intro/overview section. Place infographics near relevant data sections. Add italic captions below images.\n" +
     "16. REAL DATA: If live crawled data from the site is provided below (pricing, features), use the ACTUAL numbers and details to build comparison tables and product descriptions. NEVER fabricate pricing tiers or feature lists — use only what was crawled.\n" +
     "17. EXPERT QUOTES: Include 2-3 blockquotes from real industry experts, executives, or researchers. Use the format: > *\"Quote text.\"* — **Name**, Title, Company [citation]. Pull these from the research brief — NEVER fabricate quotes.\n" +
-    "18. REAL COMPANY CASE STUDIES: Include 3-5 real company examples (e.g. LEGO, HubSpot, Shopify) with specific metrics and outcomes. Example: 'Domino's chatbot managed millions of orders monthly, leading to a 25% increase in customer satisfaction.' Pull from research — NEVER fabricate case studies.\n" +
+    "18. REAL COMPANY CASE STUDIES: Include 3-5 real company examples (e.g. LEGO, HubSpot, Shopify) with specific metrics and outcomes. Pull from research — NEVER fabricate case studies.\n" +
     "19. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
     "20. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
     "21. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief." +
