@@ -451,13 +451,15 @@ export function SetupWizard() {
     setGenerating(true);
 
     try {
-      // Persist any brand color overrides
-      if (brandPrimaryColor) {
+      // Persist brand overrides
+      if (brandPrimaryColor || brandAccentColor || brandFontFamily) {
         await upsert({
           id: siteId,
           domain,
-          brandPrimaryColor,
+          brandPrimaryColor: brandPrimaryColor ?? undefined,
           brandAccentColor: brandAccentColor ?? undefined,
+          brandFontFamily: brandFontFamily ?? undefined,
+          brandLogoUrl: brandLogoUrl ?? undefined,
         });
       }
 
@@ -937,34 +939,36 @@ export function SetupWizard() {
 
             {/* CTA */}
             <div className="mb-4 border-t border-white/[0.04] pt-4">
-              <div className="flex items-center gap-2 mb-2 px-3">
+              <div className="flex items-center gap-2 mb-1 px-3">
                 <Target className="h-4 w-4 text-[#22C55E]" />
-                <h3 className="text-[13px] font-medium text-[#EDEEF1]">Call to Action</h3>
+                <h3 className="text-[13px] font-medium text-[#EDEEF1]">Call to Action <span className="text-[11px] font-normal text-[#565A6E]">(optional)</span></h3>
               </div>
+              <p className="text-[11px] text-[#565A6E] px-3 mb-2">Add a button at the end of each article to drive readers to your site</p>
               <div className="grid grid-cols-2 gap-3 px-3">
                 <Input
-                  label="CTA Text"
-                  placeholder="Try it free"
+                  label="Button text"
+                  placeholder="e.g. Try it free"
                   value={ctaText}
                   onChange={(e) => setCtaText(e.target.value)}
                 />
                 <Input
-                  label="CTA URL"
-                  placeholder="https://..."
+                  label="Button link"
+                  placeholder="https://yoursite.com/signup"
                   value={ctaUrl}
                   onChange={(e) => setCtaUrl(e.target.value)}
                 />
               </div>
             </div>
 
-            {/* Backlinks */}
+            {/* SEO Keywords */}
             <div className="mb-4 border-t border-white/[0.04] pt-4">
-              <div className="flex items-center gap-2 mb-2 px-3">
+              <div className="flex items-center gap-2 mb-1 px-3">
                 <Link2 className="h-4 w-4 text-[#0EA5E9]" />
-                <h3 className="text-[13px] font-medium text-[#EDEEF1]">Backlinks</h3>
+                <h3 className="text-[13px] font-medium text-[#EDEEF1]">SEO Keywords</h3>
               </div>
+              <p className="text-[11px] text-[#565A6E] px-3 mb-2">Keywords your articles should rank for — used in headings, links, and meta tags</p>
               <EditableList
-                label="Priority anchor keywords for internal/external linking"
+                label=""
                 items={anchorKeywords}
                 onChange={setAnchorKeywords}
                 placeholder="Add keyword"
@@ -1001,35 +1005,36 @@ export function SetupWizard() {
 
               <div className="px-3 mb-3">
                 <Input
-                  label="URL Structure"
+                  label="Article URL path"
                   value={urlStructure}
                   onChange={(e) => setUrlStructure(e.target.value)}
                   placeholder="/blog/[slug]"
                 />
+                <p className="text-[10px] text-[#565A6E] mt-1">[slug] is replaced by the article title, e.g. /blog/how-to-grow-your-business</p>
               </div>
 
               <div className="flex flex-col gap-0">
                 <ToggleSetting
-                  label="External linking"
-                  description="Include outbound links to authoritative sources"
+                  label="Link to sources"
+                  description="Articles include links to trusted external resources"
                   value={externalLinking}
                   onChange={setExternalLinking}
                 />
                 <ToggleSetting
-                  label="Source citations"
-                  description="Add numbered source references at the end"
+                  label="Reference list"
+                  description="Add a numbered list of sources at the end of each article"
                   value={sourceCitations}
                   onChange={setSourceCitations}
                 />
                 <ToggleSetting
-                  label="YouTube embeds"
-                  description="Embed relevant YouTube videos in articles"
+                  label="YouTube videos"
+                  description="Find and include relevant YouTube videos in articles"
                   value={youtubeEmbeds}
                   onChange={setYoutubeEmbeds}
                 />
                 <ToggleSetting
-                  label="Approval required"
-                  description="Review articles before they're published"
+                  label="Review before publishing"
+                  description="You approve each article before it goes live"
                   value={approvalRequired}
                   onChange={setApprovalRequired}
                 />
@@ -1122,12 +1127,12 @@ export function SetupWizard() {
                   shows that companies with clearly defined buyer personas see 73% higher conversion rates.
                 </p>
 
-                {/* Expert blockquote with brand accent */}
+                {/* Expert blockquote with accent color */}
                 <blockquote
                   className="my-4 py-3 pl-4 pr-4 text-[14px] text-gray-500 italic rounded-r-lg"
                   style={{
-                    borderLeft: `3px solid ${brandPrimaryColor || "#0EA5E9"}`,
-                    backgroundColor: `${brandPrimaryColor || "#0EA5E9"}08`,
+                    borderLeft: `3px solid ${brandAccentColor || brandPrimaryColor || "#0EA5E9"}`,
+                    backgroundColor: `${brandAccentColor || brandPrimaryColor || "#0EA5E9"}08`,
                   }}
                 >
                   &ldquo;The most successful companies don&apos;t just find customers — they understand them deeply.&rdquo;
@@ -1138,7 +1143,7 @@ export function SetupWizard() {
                 <div className="my-4 overflow-hidden rounded-lg border border-gray-200">
                   <table className="w-full text-[12px]">
                     <thead>
-                      <tr style={{ backgroundColor: `${brandPrimaryColor || "#0EA5E9"}0D` }}>
+                      <tr style={{ backgroundColor: `${brandAccentColor || brandPrimaryColor || "#0EA5E9"}0D` }}>
                         <th className="px-3 py-2 text-left font-semibold text-gray-700">Strategy</th>
                         <th className="px-3 py-2 text-left font-semibold text-gray-700">Impact</th>
                         <th className="px-3 py-2 text-left font-semibold text-gray-700">Difficulty</th>
@@ -1179,40 +1184,99 @@ export function SetupWizard() {
               </div>
             </div>
 
-            {/* Brand info + override */}
-            <div className="mt-4 rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
-              <p className="text-[11px] text-[#8B8FA3]">
-                <Sparkles className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
-                {brandPrimaryColor
-                  ? `Using your detected brand color (${brandPrimaryColor}) for headings, links, and accents.`
-                  : "No brand color detected — articles will use a default blue accent. You can customize below."}
-                {brandFontFamily ? ` Font: ${brandFontFamily}.` : ""}
-              </p>
-            </div>
-
-            {/* Manual color override */}
-            <div className="mt-3 px-3">
-              <label className="text-[11px] font-medium text-[#8B8FA3] mb-1 block">
-                Override brand color (optional)
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={brandPrimaryColor || "#0EA5E9"}
-                  onChange={(e) => setBrandPrimaryColor(e.target.value.toUpperCase())}
-                  className="h-8 w-8 rounded border border-white/[0.1] bg-transparent cursor-pointer"
-                />
-                <input
-                  type="text"
-                  value={brandPrimaryColor || ""}
-                  onChange={(e) => {
-                    const v = e.target.value.trim();
-                    if (/^#[0-9A-Fa-f]{6}$/.test(v)) setBrandPrimaryColor(v.toUpperCase());
-                  }}
-                  placeholder="#0EA5E9"
-                  className="w-24 rounded-lg border border-white/[0.06] bg-[#0F1117] px-2 py-1.5 text-[12px] text-[#EDEEF1] font-mono outline-none focus:border-[#0EA5E9]/50"
-                />
+            {/* ── Customize Your Style ── */}
+            <div className="mt-5 border-t border-white/[0.04] pt-4">
+              <div className="flex items-center gap-2 mb-3 px-1">
+                <Palette className="h-4 w-4 text-[#0EA5E9]" />
+                <h3 className="text-[13px] font-medium text-[#EDEEF1]">Customize Your Style</h3>
+                <span className="text-[10px] text-[#565A6E] ml-auto">Changes update the preview above</span>
               </div>
+
+              <div className="space-y-3">
+                {/* Primary color */}
+                <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
+                  <input
+                    type="color"
+                    value={brandPrimaryColor || "#0EA5E9"}
+                    onChange={(e) => setBrandPrimaryColor(e.target.value.toUpperCase())}
+                    className="h-8 w-8 rounded-lg border border-white/[0.1] bg-transparent cursor-pointer shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] text-[#EDEEF1]">Primary color</p>
+                    <p className="text-[10px] text-[#565A6E]">Used for headings, links, and the CTA button</p>
+                  </div>
+                  <input
+                    type="text"
+                    value={brandPrimaryColor || ""}
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      if (/^#[0-9A-Fa-f]{6}$/.test(v)) setBrandPrimaryColor(v.toUpperCase());
+                    }}
+                    placeholder="#0EA5E9"
+                    className="w-[90px] rounded-lg border border-white/[0.06] bg-[#0F1117] px-2 py-1.5 text-[12px] text-[#EDEEF1] font-mono outline-none focus:border-[#0EA5E9]/50"
+                  />
+                </div>
+
+                {/* Accent color */}
+                <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
+                  <input
+                    type="color"
+                    value={brandAccentColor || brandPrimaryColor || "#0EA5E9"}
+                    onChange={(e) => setBrandAccentColor(e.target.value.toUpperCase())}
+                    className="h-8 w-8 rounded-lg border border-white/[0.1] bg-transparent cursor-pointer shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] text-[#EDEEF1]">Accent color</p>
+                    <p className="text-[10px] text-[#565A6E]">Used for blockquote borders, table headers, and highlights</p>
+                  </div>
+                  <input
+                    type="text"
+                    value={brandAccentColor || ""}
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      if (/^#[0-9A-Fa-f]{6}$/.test(v)) setBrandAccentColor(v.toUpperCase());
+                    }}
+                    placeholder={brandPrimaryColor || "#0EA5E9"}
+                    className="w-[90px] rounded-lg border border-white/[0.06] bg-[#0F1117] px-2 py-1.5 text-[12px] text-[#EDEEF1] font-mono outline-none focus:border-[#0EA5E9]/50"
+                  />
+                </div>
+
+                {/* Font family */}
+                <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
+                  <div className="h-8 w-8 rounded-lg border border-white/[0.1] bg-white/[0.03] flex items-center justify-center shrink-0">
+                    <span className="text-[14px] font-bold text-[#8B8FA3]">Aa</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] text-[#EDEEF1]">Font</p>
+                    <p className="text-[10px] text-[#565A6E]">Applied to headings and body text</p>
+                  </div>
+                  <input
+                    type="text"
+                    value={brandFontFamily || ""}
+                    onChange={(e) => setBrandFontFamily(e.target.value || null)}
+                    placeholder="System default"
+                    className="w-[120px] rounded-lg border border-white/[0.06] bg-[#0F1117] px-2 py-1.5 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+                  />
+                </div>
+
+                {/* Logo */}
+                {brandLogoUrl && (
+                  <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
+                    <img src={brandLogoUrl} alt="Logo" className="h-8 w-8 rounded-lg border border-white/[0.1] object-contain bg-white p-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] text-[#EDEEF1]">Logo</p>
+                      <p className="text-[10px] text-[#565A6E] truncate">{brandLogoUrl}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {brandPrimaryColor && (
+                <p className="text-[10px] text-[#565A6E] mt-2 px-1">
+                  <Sparkles className="inline h-3 w-3 mr-0.5 text-[#0EA5E9]" />
+                  Detected from your website — adjust anything that doesn&apos;t look right
+                </p>
+              )}
             </div>
 
             {/* Navigation */}
@@ -1231,7 +1295,7 @@ export function SetupWizard() {
                 icon={<Zap className="h-3.5 w-3.5" />}
                 className="flex-[2]"
               >
-                {generating ? "Generating..." : "Looks Good — Generate First Article"}
+                {generating ? "Generating..." : "Generate First Article"}
               </Button>
             </div>
 
