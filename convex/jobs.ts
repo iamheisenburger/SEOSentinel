@@ -126,3 +126,31 @@ export const markFailed = mutation({
   },
 });
 
+export const updateProgress = mutation({
+  args: {
+    jobId: v.id("jobs"),
+    current: v.number(),
+    total: v.number(),
+    stepLabel: v.string(),
+  },
+  handler: async (ctx, { jobId, current, total, stepLabel }) => {
+    await ctx.db.patch(jobId, {
+      stepProgress: { current, total, stepLabel },
+      updatedAt: now(),
+    });
+  },
+});
+
+export const getRunningBySite = query({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    return (
+      jobs.find((j) => j.status === "running" && j.type === "article") ?? null
+    );
+  },
+});
+

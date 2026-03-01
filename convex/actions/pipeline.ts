@@ -862,7 +862,23 @@ async function handleArticle(
   siteId: Id<"sites">,
   topicId?: Id<"topic_clusters">,
   options?: RichMediaOptions,
+  jobId?: Id<"jobs">,
 ): Promise<{ articleId: Id<"articles"> }> {
+  const TOTAL_STEPS = 9;
+  const reportProgress = async (step: number, label: string) => {
+    if (!jobId) return;
+    try {
+      await ctx.runMutation(api.jobs.updateProgress, {
+        jobId,
+        current: step,
+        total: TOTAL_STEPS,
+        stepLabel: label,
+      });
+    } catch {
+      // Never break pipeline for progress reporting
+    }
+  };
+
   const site = await ctx.runQuery(api.sites.get, { siteId });
   const topic = topicId
     ? await ctx.runQuery(api.topics.get, { topicId })
@@ -871,6 +887,7 @@ async function handleArticle(
   if (topicId && !topic) throw new Error("Topic not found");
 
   // ── Step 1: Web Research (graceful degradation) ──
+  await reportProgress(1, "Researching the web...");
   let researchContext = "";
   let researchSources: { url: string; title?: string }[] = [];
 
@@ -895,6 +912,7 @@ async function handleArticle(
   }
 
   // ── Step 1b: YouTube Video Search (graceful degradation) ──
+  await reportProgress(2, "Searching YouTube videos...");
   let youtubeVideos: { videoId: string; title: string }[] = [];
   const enableYouTube = site.youtubeEmbeds !== false;
 
@@ -911,6 +929,7 @@ async function handleArticle(
   }
 
   // ── Step 1c: Screenshot Capture (graceful degradation) ──
+  await reportProgress(3, "Capturing site screenshot...");
   let screenshotUrl: string | undefined;
 
   try {
@@ -922,6 +941,7 @@ async function handleArticle(
   }
 
   // ── Step 1d: Web Image Search (graceful degradation) ──
+  await reportProgress(4, "Searching for images...");
   let webImages: { url: string; alt: string; source: string }[] = [];
 
   if (topic) {
@@ -934,6 +954,7 @@ async function handleArticle(
   }
 
   // ── Step 1e: Live Site Data Crawl (graceful degradation) ──
+  await reportProgress(5, "Crawling site data...");
   let siteData = { pricing: "", features: "", homepage: "" };
 
   try {
@@ -944,6 +965,7 @@ async function handleArticle(
   }
 
   // ── Step 2: Generate Article (with full site context + real media) ──
+  await reportProgress(6, "Writing article content...");
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
   const researchBlock = researchContext
@@ -1087,6 +1109,7 @@ async function handleArticle(
   });
 
   // ── Step 3: Fact Check (graceful degradation) ──
+  await reportProgress(7, "Fact-checking claims...");
   let finalMarkdown = article.markdown;
   let finalSources = dedupedSources;
   let factCheckScore: number | undefined;
@@ -1119,6 +1142,7 @@ async function handleArticle(
   }
 
   // ── Step 4: Featured Image (screenshot first, AI fallback) ──
+  await reportProgress(8, "Generating featured image...");
   let featuredImage: string | undefined = screenshotUrl;
 
   if (featuredImage) {
@@ -1450,10 +1474,33 @@ export const generateArticle = action({
   },
   handler: async (ctx, { siteId, topicId, options }) => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
-    const res = await handleArticle(ctx, siteId, topicId, options ?? undefined);
+
+    // Create a tracking job for progress visibility
+    const jobId = await ctx.runMutation(api.jobs.create, {
+      siteId,
+      type: "article",
+    });
+    await ctx.runMutation(api.jobs.markRunning, { jobId });
+
+    let res: { articleId: Id<"articles"> };
+    try {
+      res = await handleArticle(ctx, siteId, topicId, options ?? undefined, jobId);
+    } catch (err) {
+      await ctx.runMutation(api.jobs.markFailed, {
+        jobId,
+        error: err instanceof Error ? err.message : "unknown",
+      });
+      throw err;
+    }
 
     // Add internal links before publishing (graceful degradation)
     try {
+      await ctx.runMutation(api.jobs.updateProgress, {
+        jobId,
+        current: 9,
+        total: 9,
+        stepLabel: "Adding internal links...",
+      });
       console.log(`Adding internal links to article ${res.articleId}...`);
       const linkResult = await handleLinks(ctx, siteId, res.articleId);
       console.log(`Added ${linkResult.count} internal links.`);
@@ -1461,6 +1508,8 @@ export const generateArticle = action({
       const linkError = err instanceof Error ? err.message : "unknown link error";
       console.error(`Internal linking failed (publishing without links): ${linkError}`);
     }
+
+    await ctx.runMutation(api.jobs.markDone, { jobId, result: { articleId: res.articleId } });
 
     // If approval is required, hold at "review" status — don't auto-publish
     if (site?.approvalRequired) {
@@ -1545,16 +1594,39 @@ export const generateNow = action({
 
     console.log(`Run Now: generating article for topic "${topic.primaryKeyword}"`);
 
-    // Run the pipeline directly (no self-reference through api)
-    const res = await handleArticle(ctx, siteId, topic._id);
+    // Create a tracking job for progress visibility
+    const jobId = await ctx.runMutation(api.jobs.create, {
+      siteId,
+      type: "article",
+    });
+    await ctx.runMutation(api.jobs.markRunning, { jobId });
+
+    let res: { articleId: Id<"articles"> };
+    try {
+      res = await handleArticle(ctx, siteId, topic._id, undefined, jobId);
+    } catch (err) {
+      await ctx.runMutation(api.jobs.markFailed, {
+        jobId,
+        error: err instanceof Error ? err.message : "unknown",
+      });
+      throw err;
+    }
 
     // Add internal links (graceful degradation)
     try {
+      await ctx.runMutation(api.jobs.updateProgress, {
+        jobId,
+        current: 9,
+        total: 9,
+        stepLabel: "Adding internal links...",
+      });
       const linkResult = await handleLinks(ctx, siteId, res.articleId);
       console.log(`Added ${linkResult.count} internal links.`);
     } catch (err) {
       console.error(`Internal linking failed: ${err instanceof Error ? err.message : "unknown"}`);
     }
+
+    await ctx.runMutation(api.jobs.markDone, { jobId, result: { articleId: res.articleId } });
 
     // If approval is required, hold at "review"
     if (site.approvalRequired) {
@@ -1792,10 +1864,16 @@ export const processNextJob = action({
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
         const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
-        const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId);
+        const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId, undefined, job._id);
 
         // Add internal links BEFORE publishing (graceful degradation)
         try {
+          await ctx.runMutation(api.jobs.updateProgress, {
+            jobId: job._id,
+            current: 9,
+            total: 9,
+            stepLabel: "Adding internal links...",
+          });
           console.log(`Adding internal links to article ${articleResult.articleId}...`);
           const linkResult = await handleLinks(ctx, job.siteId, articleResult.articleId);
           console.log(`Added ${linkResult.count} internal links.`);

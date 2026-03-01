@@ -23,6 +23,7 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { ArticleProgress } from "@/components/ui/article-progress";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
@@ -140,6 +141,9 @@ export default function DashboardPage() {
           {genMessage}
         </div>
       )}
+
+      {/* ─── Article Progress (live) ────────────── */}
+      {site && <ArticleProgress siteId={site._id} />}
 
       {/* ─── Stats Row ────────────────────────────── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">

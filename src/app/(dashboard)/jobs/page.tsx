@@ -164,6 +164,28 @@ export default function JobsPage() {
                       )}
                     </div>
 
+                    {/* Step progress (live) */}
+                    {job.status === "running" && job.stepProgress && (
+                      <div className="mt-1.5">
+                        <div className="flex items-center gap-2">
+                          <div className="h-1 flex-1 rounded-full bg-white/[0.04]">
+                            <div
+                              className="h-1 rounded-full bg-[#0EA5E9] transition-all duration-700 ease-out"
+                              style={{
+                                width: `${(job.stepProgress.current / job.stepProgress.total) * 100}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-[#0EA5E9] tabular-nums shrink-0">
+                            {job.stepProgress.current}/{job.stepProgress.total}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-[#38BDF8]">
+                          {job.stepProgress.stepLabel}
+                        </p>
+                      </div>
+                    )}
+
                     {/* Error */}
                     {job.error && (
                       <div className="mt-1.5 flex items-start gap-1.5 rounded bg-[#EF4444]/[0.04] px-2.5 py-1.5">

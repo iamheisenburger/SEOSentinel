@@ -128,6 +128,13 @@ export default defineSchema({
     result: v.optional(v.any()),
     error: v.optional(v.string()),
     retries: v.optional(v.number()), // number of retry attempts
+    stepProgress: v.optional(
+      v.object({
+        current: v.number(),
+        total: v.number(),
+        stepLabel: v.string(),
+      }),
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { FileText, PenTool, ArrowRight } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { ArticleProgress } from "@/components/ui/article-progress";
 
 export default function ArticlesPage() {
   const sites = useQuery(api.sites.list);
@@ -140,6 +141,8 @@ export default function ArticlesPage() {
           {status}
         </div>
       )}
+
+      {site && <ArticleProgress siteId={site._id} />}
 
       <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 

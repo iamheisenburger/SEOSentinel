@@ -28,6 +28,7 @@ import {
   Save,
 } from "lucide-react";
 import Link from "next/link";
+import { ArticleProgress } from "@/components/ui/article-progress";
 import { formatDistanceToNow } from "date-fns";
 
 type Tab = "overview" | "articles" | "settings";
@@ -278,6 +279,7 @@ export default function SiteDetailPage() {
       {/* Tab content */}
       {activeTab === "overview" && (
         <OverviewTab
+          siteId={siteId}
           site={site}
           articleCount={articleCount}
           topicCount={topicCount}
@@ -330,6 +332,7 @@ export default function SiteDetailPage() {
 /* ── Overview Tab ── */
 
 function OverviewTab({
+  siteId,
   site,
   articleCount,
   topicCount,
@@ -339,6 +342,7 @@ function OverviewTab({
   brandColor,
   onTabChange,
 }: {
+  siteId: Id<"sites">;
   site: {
     domain: string;
     siteName?: string;
@@ -387,6 +391,9 @@ function OverviewTab({
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Article progress (live) */}
+      <ArticleProgress siteId={siteId} />
+
       {/* Quick links */}
       <div className="grid gap-3 sm:grid-cols-3">
         {quickLinks.map((item) => {
