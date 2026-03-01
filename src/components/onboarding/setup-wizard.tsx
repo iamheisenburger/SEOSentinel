@@ -42,7 +42,7 @@ const STEPS: { key: Step; label: string; icon: typeof Globe }[] = [
   { key: "audience", label: "Audience", icon: Users },
   { key: "strategy", label: "Strategy", icon: Settings },
   { key: "preview", label: "Preview", icon: Eye },
-  { key: "generate", label: "Launch", icon: Zap },
+  { key: "generate", label: "Content Plan", icon: Target },
 ];
 
 // ── Editable Field Components ──────────────────────────
@@ -463,14 +463,14 @@ export function SetupWizard() {
         });
       }
 
-      setStatusMsg("Generating SEO topic plan based on your site analysis...");
+      setStatusMsg("Generating your content plan — about 30 seconds...");
       await generatePlan({ siteId });
 
-      setStatusMsg("Writing your first article — research, writing, fact-checking...");
-      await generateNow({ siteId });
-
       setStatusMsg(null);
-      setStep("done");
+      setStep("generate");
+
+      // Fire-and-forget: first article generates in the background
+      generateNow({ siteId }).catch(console.error);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed");
       setStatusMsg(null);
@@ -1295,68 +1295,104 @@ export function SetupWizard() {
                 icon={<Zap className="h-3.5 w-3.5" />}
                 className="flex-[2]"
               >
-                {generating ? "Generating..." : "Generate First Article"}
+                {generating ? "Generating..." : "Generate Content Plan"}
               </Button>
             </div>
 
             {generating && (
               <p className="mt-3 text-center text-[11px] text-[#565A6E]">
-                This may take 2-3 minutes — topic planning, research, writing, and fact-checking
+                Generating your content plan — this takes about 30 seconds
               </p>
             )}
           </div>
         )}
 
         {/* ════════════════════════════════════════════
-            Step 6: Generate (show progress)
+            Step 6: Content Plan (topic roadmap)
             ════════════════════════════════════════════ */}
         {step === "generate" && (
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">
             <SectionHeader
-              icon={FileText}
-              title="Your first article"
-              subtitle="Generating topic plan and first article"
+              icon={Target}
+              title="Your Content Roadmap"
+              subtitle="These are the topics we'll write articles about"
             />
 
+            {/* Topic count summary */}
             {topics && topics.length > 0 && (
-              <div className="mb-4 rounded-lg bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.1] p-3">
-                <p className="text-[12px] text-[#4ADE80] mb-2">
-                  <Check className="inline h-3.5 w-3.5 mr-1" />
-                  {topics.length} topics generated
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  {topics.slice(0, 3).map((t) => (
-                    <div
-                      key={t._id}
-                      className="flex items-center gap-2 text-[11px] text-[#8B8FA3]"
-                    >
-                      <Sparkles className="h-3 w-3 text-[#0EA5E9] shrink-0" />
-                      <span className="truncate">{t.primaryKeyword}</span>
-                    </div>
-                  ))}
+              <div className="mb-4 rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[13px] font-medium text-[#38BDF8]">
+                    {topics.length} topics planned
+                  </p>
+                  <p className="text-[11px] text-[#565A6E]">
+                    {cadencePerWeek} articles/week
+                  </p>
                 </div>
               </div>
             )}
 
-            {articles && articles.length > 0 && (
-              <div className="mb-4 rounded-lg bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.1] p-3">
-                <p className="text-[12px] text-[#4ADE80] mb-1">
-                  <Check className="inline h-3.5 w-3.5 mr-1" />
-                  Article created!
-                </p>
-                <p className="text-[12px] text-[#8B8FA3] line-clamp-1">
-                  {articles[0].title}
-                </p>
+            {/* Topic list */}
+            {topics && topics.length > 0 && (
+              <div className="mb-4 flex flex-col divide-y divide-white/[0.04]">
+                {topics.map((t, i) => (
+                  <div
+                    key={t._id}
+                    className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
+                  >
+                    <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white/[0.04] text-[10px] font-bold text-[#565A6E] shrink-0">
+                      {i + 1}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] font-medium text-[#EDEEF1] truncate">
+                        {t.label}
+                      </p>
+                      <p className="text-[10px] text-[#565A6E] truncate">
+                        {t.primaryKeyword}
+                      </p>
+                    </div>
+                    {t.intent && (
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-medium ${
+                        t.intent === "commercial"
+                          ? "bg-[#F59E0B]/[0.08] text-[#FBBF24]"
+                          : t.intent === "transactional"
+                            ? "bg-[#22C55E]/[0.08] text-[#4ADE80]"
+                            : "bg-[#0EA5E9]/[0.08] text-[#38BDF8]"
+                      }`}>
+                        {t.intent}
+                      </span>
+                    )}
+                    {t.priority && (
+                      <span className="shrink-0 text-[10px] text-[#565A6E]">
+                        {"★".repeat(Math.min(t.priority, 5))}
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
 
+            {/* Background generation notice */}
+            <div className="mb-4 rounded-lg bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.1] px-4 py-3">
+              <div className="flex items-start gap-2">
+                <Zap className="h-3.5 w-3.5 text-[#4ADE80] mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-[12px] font-medium text-[#4ADE80]">
+                    Your first article is being written right now
+                  </p>
+                  <p className="text-[11px] text-[#565A6E] mt-0.5">
+                    It&apos;ll be ready on your dashboard in a few minutes. Future articles generate automatically.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <Button
               onClick={() => setStep("done")}
-              disabled={!articles || articles.length === 0}
               icon={<ArrowRight className="h-3.5 w-3.5" />}
               className="w-full"
             >
-              Continue
+              Go to Dashboard
             </Button>
           </div>
         )}
@@ -1370,37 +1406,46 @@ export function SetupWizard() {
               <Check className="h-7 w-7 text-[#22C55E]" />
             </div>
             <h2 className="mt-4 text-[17px] font-semibold text-[#EDEEF1]">
-              Your SEO engine is live!
+              Your content engine is running!
             </h2>
             <p className="mt-2 text-[13px] text-[#8B8FA3] max-w-sm mx-auto">
-              Your pipeline is fully configured with AI-analyzed site context.
-              Articles will generate on schedule, or hit &ldquo;Generate Now&rdquo; anytime.
+              {topics && topics.length > 0
+                ? `${topics.length} topics planned`
+                : "Topics planned"}{" "}
+              &middot; Your first article is being written right now.
+              New articles will publish automatically at {cadencePerWeek} per week.
             </p>
 
             <div className="mt-5 rounded-lg bg-white/[0.02] border border-white/[0.04] p-4 text-left max-w-xs mx-auto">
-              <p className="text-[11px] text-[#565A6E] mb-2 font-medium">Configuration</p>
+              <p className="text-[11px] text-[#565A6E] mb-2 font-medium">Your Setup</p>
               <div className="flex flex-col gap-1.5 text-[12px]">
                 <div className="flex justify-between">
                   <span className="text-[#8B8FA3]">Site</span>
                   <span className="text-[#EDEEF1]">{siteName || domain}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#8B8FA3]">Type</span>
-                  <span className="text-[#EDEEF1]">{siteType}</span>
+                  <span className="text-[#8B8FA3]">Topics</span>
+                  <span className="text-[#EDEEF1]">{topics?.length ?? "—"} planned</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#8B8FA3]">Cadence</span>
                   <span className="text-[#EDEEF1]">{cadencePerWeek} articles/week</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#8B8FA3]">Approval</span>
-                  <span className="text-[#EDEEF1]">{approvalRequired ? "Required" : "Auto-publish"}</span>
+                  <span className="text-[#8B8FA3]">Mode</span>
+                  <span className="text-[#EDEEF1]">Autopilot</span>
                 </div>
               </div>
             </div>
 
+            <div className="mt-4 rounded-lg bg-[#0EA5E9]/[0.06] border border-[#0EA5E9]/[0.12] px-4 py-3 max-w-xs mx-auto">
+              <p className="text-[11px] text-[#0EA5E9]">
+                Your first article should appear on the dashboard within a few minutes.
+              </p>
+            </div>
+
             <Button
-              onClick={() => window.location.reload()}
+              onClick={() => window.location.assign("/sites")}
               icon={<ArrowRight className="h-3.5 w-3.5" />}
               className="mt-6"
             >
