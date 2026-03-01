@@ -36,6 +36,7 @@ const ArticleSchema = z.object({
   markdown: z.string(),
   metaTitle: z.string().optional(),
   metaDescription: z.string().optional(),
+  metaKeywords: z.array(z.string()).optional(),
   sources: z
     .array(
       z.object({
@@ -818,9 +819,11 @@ async function handleArticle(
     "14. YOUTUBE EMBEDS: If YouTube video HTML is provided below, embed them at relevant points in the article (after related sections). Copy the HTML exactly as provided.\n" +
     "15. REAL IMAGES: If a site screenshot URL or web infographic URLs are provided below, embed them in the article using standard markdown image syntax: ![alt text](url). Place the site screenshot in the intro/overview section. Place infographics near relevant data sections. Add italic captions below images.\n" +
     "16. REAL DATA: If live crawled data from the site is provided below (pricing, features), use the ACTUAL numbers and details to build comparison tables and product descriptions. NEVER fabricate pricing tiers or feature lists — use only what was crawled.\n" +
-    "17. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
-    "18. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
-    "19. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
+    "17. EXPERT QUOTES: Include 2-3 blockquotes from real industry experts, executives, or researchers. Use the format: > *\"Quote text.\"* — **Name**, Title, Company [citation]. Pull these from the research brief — NEVER fabricate quotes.\n" +
+    "18. REAL COMPANY CASE STUDIES: Include 3-5 real company examples (e.g. LEGO, HubSpot, Shopify) with specific metrics and outcomes. Example: 'Domino's chatbot managed millions of orders monthly, leading to a 25% increase in customer satisfaction.' Pull from research — NEVER fabricate case studies.\n" +
+    "19. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
+    "20. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
+    "21. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
     `SITE CONTEXT:\n` +
     `Domain: ${site.domain}\n` +
     `Site: ${site.siteName ?? site.domain}\n` +
@@ -841,7 +844,7 @@ async function handleArticle(
     `Secondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\n` +
     `Search Intent: ${topic?.intent ?? "informational"}` +
     researchBlock +
-    `\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the full 3500-4500 word article with ToC, YouTube embeds, key takeaways)", "metaTitle": "string (max 60 chars, include primary keyword)", "metaDescription": "string (max 155 chars, compelling + keyword)", "sources": [{"url": "string", "title": "string"}]}`,
+    `\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the full 3500-4500 word article with ToC, YouTube embeds, key takeaways)", "metaTitle": "string (max 60 chars, include primary keyword)", "metaDescription": "string (max 155 chars, compelling + keyword)", "metaKeywords": ["keyword1", "keyword2", ...] (8-12 SEO-relevant keywords/phrases), "sources": [{"url": "string", "title": "string"}]}`,
     16384,
   );
 
@@ -927,6 +930,7 @@ async function handleArticle(
     markdown: finalMarkdown,
     metaTitle: article.metaTitle,
     metaDescription: article.metaDescription,
+    metaKeywords: article.metaKeywords,
     sources: finalSources.length > 0 ? finalSources : undefined,
     language: site.language,
     featuredImage,

@@ -86,6 +86,7 @@ export default defineSchema({
     markdown: v.string(),
     metaTitle: v.optional(v.string()),
     metaDescription: v.optional(v.string()),
+    metaKeywords: v.optional(v.array(v.string())),
     language: v.optional(v.string()),
     sources: v.optional(
       v.array(
