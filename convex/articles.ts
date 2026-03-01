@@ -28,6 +28,7 @@ export const createDraft = mutation({
     markdown: v.string(),
     metaTitle: v.optional(v.string()),
     metaDescription: v.optional(v.string()),
+    metaKeywords: v.optional(v.array(v.string())),
     language: v.optional(v.string()),
     sources: v.optional(
       v.array(
@@ -70,6 +71,7 @@ export const createDraft = mutation({
       markdown: args.markdown,
       metaTitle: args.metaTitle,
       metaDescription: args.metaDescription,
+      metaKeywords: args.metaKeywords,
       language: args.language,
       sources: args.sources,
       featuredImage: args.featuredImage,
