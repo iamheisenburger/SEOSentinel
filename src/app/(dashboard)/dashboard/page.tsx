@@ -78,11 +78,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Determine current pipeline state from running jobs
-  const activeJobType = jobs?.find(
-    (j) => j.status === "running",
-  )?.type;
-
   if (loading) {
     return <DashboardSkeleton />;
   }
@@ -240,85 +235,27 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ─── Pipeline + Articles Row ──────────────── */}
-      <div className="grid gap-3 lg:grid-cols-5">
-        {/* Pipeline Status — visual flow */}
-        <div className="lg:col-span-2 rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-[13px] font-semibold text-[#EDEEF1]">
-              Pipeline
-            </h2>
-            <Link
-              href="/jobs"
-              className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3] transition"
-            >
-              View all
-            </Link>
-          </div>
+      {/* ─── Quick Nav ────────────────────────────── */}
+      <div className="grid gap-3 grid-cols-3">
+        <Link href="/plan" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <Target className="h-4 w-4 text-[#0EA5E9] mb-2" />
+          <p className="text-[13px] font-medium text-[#EDEEF1]">Topics</p>
+          <p className="text-[11px] text-[#565A6E]">{availableTopics} available · {totalTopics - availableTopics} used</p>
+        </Link>
+        <Link href="/articles" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <FileText className="h-4 w-4 text-[#22C55E] mb-2" />
+          <p className="text-[13px] font-medium text-[#EDEEF1]">Articles</p>
+          <p className="text-[11px] text-[#565A6E]">{publishedCount} published · {totalArticles - publishedCount} drafts</p>
+        </Link>
+        <Link href="/jobs" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <Activity className="h-4 w-4 text-[#F59E0B] mb-2" />
+          <p className="text-[13px] font-medium text-[#EDEEF1]">Activity</p>
+          <p className="text-[11px] text-[#565A6E]">{runningJobs > 0 ? `${runningJobs} running` : "All clear"}</p>
+        </Link>
+      </div>
 
-          <div className="flex flex-col gap-0">
-            {([
-              { key: "onboarding", label: "Crawl", icon: Globe, desc: "Site analysis" },
-              { key: "plan", label: "Plan", icon: Map, desc: "Topic generation" },
-              { key: "article", label: "Generate", icon: FileText, desc: "Article writing" },
-              { key: "links", label: "Enrich", icon: Search, desc: "Links & fact-check" },
-              { key: "publish", label: "Publish", icon: GitBranch, desc: "Deploy to GitHub" },
-            ] as const).map((step, i, arr) => {
-              const isActive = activeJobType === step.key;
-              const isDone = !activeJobType && publishedCount > 0;
-              return (
-                <div key={step.key} className="flex items-start gap-3">
-                  {/* Vertical line + dot */}
-                  <div className="flex flex-col items-center">
-                    <div
-                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all ${
-                        isActive
-                          ? "bg-[#0EA5E9]/[0.15] ring-1 ring-[#0EA5E9]/30"
-                          : isDone
-                            ? "bg-[#22C55E]/[0.08]"
-                            : "bg-white/[0.04]"
-                      }`}
-                    >
-                      <step.icon
-                        className={`h-3.5 w-3.5 ${
-                          isActive
-                            ? "text-[#0EA5E9]"
-                            : isDone
-                              ? "text-[#22C55E]"
-                              : "text-[#565A6E]"
-                        }`}
-                      />
-                    </div>
-                    {i < arr.length - 1 && (
-                      <div className={`w-px h-4 ${
-                        isActive ? "bg-[#0EA5E9]/30" : "bg-white/[0.06]"
-                      }`} />
-                    )}
-                  </div>
-
-                  {/* Label */}
-                  <div className="pt-1 pb-4">
-                    <p className={`text-[12px] font-medium ${
-                      isActive ? "text-[#0EA5E9]" : isDone ? "text-[#EDEEF1]" : "text-[#8B8FA3]"
-                    }`}>
-                      {step.label}
-                      {isActive && (
-                        <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-[#0EA5E9]">
-                          <span className="h-1 w-1 rounded-full bg-[#0EA5E9] animate-pulse" />
-                          running
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-[11px] text-[#565A6E]">{step.desc}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Recent Articles — actual content */}
-        <div className="lg:col-span-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+      {/* ─── Recent Articles ─────────────────────── */}
+      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-[13px] font-semibold text-[#EDEEF1]">
               Latest Articles
@@ -365,7 +302,6 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-      </div>
 
       {/* ─── Activity Timeline ────────────────────── */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
@@ -458,23 +394,22 @@ function DashboardSkeleton() {
           </div>
         ))}
       </div>
-      <div className="grid gap-3 lg:grid-cols-5">
-        <div className="lg:col-span-2 rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="flex items-center gap-3 py-2.5">
-              <div className="h-7 w-7 animate-pulse rounded-lg bg-white/[0.04]" />
-              <div className="h-3.5 w-24 animate-pulse rounded bg-white/[0.04]" />
-            </div>
-          ))}
-        </div>
-        <div className="lg:col-span-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="flex items-center gap-3 py-3 border-b border-white/[0.03] last:border-0">
-              <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />
-              <div className="h-3.5 w-40 animate-pulse rounded bg-white/[0.04]" />
-            </div>
-          ))}
-        </div>
+      <div className="grid gap-3 grid-cols-3">
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+            <div className="h-4 w-4 animate-pulse rounded bg-white/[0.04] mb-2" />
+            <div className="h-3.5 w-20 animate-pulse rounded bg-white/[0.04]" />
+            <div className="mt-1 h-3 w-28 animate-pulse rounded bg-white/[0.03]" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="flex items-center gap-3 py-3 border-b border-white/[0.03] last:border-0">
+            <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />
+            <div className="h-3.5 w-40 animate-pulse rounded bg-white/[0.04]" />
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -1445,7 +1445,7 @@ export function SetupWizard() {
             </div>
 
             <Button
-              onClick={() => window.location.assign("/sites")}
+              onClick={() => window.location.assign("/dashboard")}
               icon={<ArrowRight className="h-3.5 w-3.5" />}
               className="mt-6"
             >

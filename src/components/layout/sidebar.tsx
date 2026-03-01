@@ -21,20 +21,20 @@ const navSections = [
   {
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/sites", label: "Websites", icon: Globe },
     ],
   },
   {
     label: "Content",
     items: [
-      { href: "/articles", label: "Articles", icon: FileText },
       { href: "/plan", label: "Topics", icon: Target },
+      { href: "/articles", label: "Articles", icon: FileText },
     ],
   },
   {
-    label: "System",
+    label: "Manage",
     items: [
-      { href: "/jobs", label: "Pipeline", icon: Zap },
+      { href: "/sites", label: "Websites", icon: Globe },
+      { href: "/jobs", label: "Activity", icon: Zap },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
