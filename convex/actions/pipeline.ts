@@ -706,10 +706,16 @@ async function webResearch(
     intent?: string;
   },
   siteNiche?: string,
+  competitorDomains?: string[],
 ): Promise<{ researchSummary: string; sources: { url: string; title?: string }[] }> {
   // Web research uses OpenAI's web_search_preview tool (Claude doesn't have built-in web search)
   const client = openaiClient();
   const searchQuery = `${topic.primaryKeyword} ${topic.label} ${siteNiche ?? ""}`.trim();
+
+  const competitorExclusion = competitorDomains?.length
+    ? `\n\nCRITICAL: Do NOT include any information about, mentions of, or sources from these competitor companies/domains: ${competitorDomains.join(", ")}. ` +
+      `Do NOT research their products, features, pricing, or quote their executives. Focus ONLY on general industry data, statistics, and trends.`
+    : "";
 
   console.log(`Web research: searching for "${searchQuery}"...`);
 
@@ -722,7 +728,8 @@ async function webResearch(
         content:
           "You are a research assistant. Search the web for current, factual information on the given topic. " +
           "Compile a detailed research brief with key facts, statistics, trends, and expert opinions. " +
-          "Include all source URLs you find. Output JSON only.",
+          "Include all source URLs you find. Output JSON only." +
+          competitorExclusion,
       },
       {
         role: "user",
@@ -833,45 +840,93 @@ async function handlePlan(
 
   console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
 
+  const productName = site.siteName ?? site.domain;
+  const competitorNames = (site.competitors ?? []).map((c: string) =>
+    c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
+  );
+
+  const topicSystemPrompt = [
+    `<role>`,
+    `You are the SEO content strategist at ${productName}. You plan blog topics that drive organic traffic specifically to ${productName}.`,
+    `Every topic you suggest must be one that ${productName}'s content team would actually write — relevant to the product, its users, and their problems.`,
+    `</role>`,
+    ``,
+    `<product>`,
+    `Name: ${productName}`,
+    `Domain: ${site.domain}`,
+    `Type: ${site.siteType ?? "Website"}`,
+    `What it does: ${site.siteSummary ?? ""}`,
+    `Niche: ${site.niche ?? ""}`,
+    `Blog Theme: ${site.blogTheme ?? ""}`,
+    site.keyFeatures?.length ? `Key Features:\n${site.keyFeatures.map((f: string) => `- ${f}`).join("\n")}` : "",
+    site.pricingInfo ? `Pricing: ${site.pricingInfo}` : "",
+    `</product>`,
+    ``,
+    `<audience>`,
+    site.targetAudienceSummary ? `Who they are: ${site.targetAudienceSummary}` : "",
+    site.painPoints?.length ? `Pain points:\n${site.painPoints.map((p: string) => `- ${p}`).join("\n")}` : "",
+    site.productUsage ? `How they use the product: ${site.productUsage}` : "",
+    site.targetCountry ? `Target market: ${site.targetCountry}` : "",
+    `</audience>`,
+    ``,
+    `<banned_content>`,
+    `NEVER generate topics that would require listing or naming competitor products.`,
+    site.competitors?.length ? `These are banned competitors — topics must never reference them:\n${site.competitors.map((c: string) => `- ${c}`).join("\n")}` : "",
+    competitorNames.length > 0 ? `Also banned by name: ${competitorNames.join(", ")}` : "",
+    `BANNED topic formats:`,
+    `- "N Best [tools/software/platforms]" — these force competitor listing`,
+    `- "[Product] vs [Competitor]" — these name competitors`,
+    `- "[Product] Alternatives" — these list competitors`,
+    `Instead use formats that position ${productName} as THE solution without needing to list others.`,
+    `</banned_content>`,
+    ``,
+    `<topic_rules>`,
+    `1. Every topic MUST be directly related to what ${productName} does or the specific problems it solves.`,
+    `   Generic industry topics that any company could write are BANNED.`,
+    `2. Allowed formats:`,
+    `   - "How to [do X] with/using [product category]" (positions product as solution)`,
+    `   - "What Is [Core Concept]? [Complete Guide]" (educates, then introduces product)`,
+    `   - "[N] Ways [Product Feature] [Solves Pain Point]" (showcases features)`,
+    `   - "[Specific Problem]? [Solution Guide]" (addresses audience pain point)`,
+    `   - "[Outcome/Result] with [Product Category]: [Guide]" (outcome-focused)`,
+    `   - "Why [Target Audience] [Need Product Category]" (audience-specific)`,
+    `   - "[Product Category] for [Industry/Use Case]: [Guide]" (niche targeting)`,
+    `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
+    `4. Target LONG-TAIL keywords (3-6 words) — specific queries real people search for.`,
+    `5. Each topic must target a UNIQUE search query. No two topics should compete for the same SERP.`,
+    `6. Generate exactly 10 new topics.`,
+    `7. Topics should form a funnel: awareness → consideration → decision.`,
+    site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
+    site.language && site.language !== "en" ? `9. All topic labels and keywords must be in ${site.language}.` : "",
+    `</topic_rules>`,
+    ``,
+    `<priority_scoring>`,
+    `Score each topic 1-5 based on these criteria:`,
+    `5 = High search volume keyword + directly showcases ${productName}'s core feature + addresses top audience pain point`,
+    `4 = Good search volume + relevant to product + addresses a pain point`,
+    `3 = Moderate search potential + tangentially related to product`,
+    `2 = Niche keyword + loosely related`,
+    `1 = Very niche + awareness-only content`,
+    `Be honest with scores. Not every topic is a 5.`,
+    `</priority_scoring>`,
+    ``,
+    `<output_format>`,
+    `Output JSON only. No explanation outside the JSON.`,
+    `Return a JSON array:`,
+    `[{"label":"topic title","primaryKeyword":"main search keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":1-5,"notes":"why this topic drives traffic to ${productName}"}]`,
+    `</output_format>`,
+  ].filter(Boolean).join("\n");
+
+  const topicUserMessage = [
+    existingKeywords.length > 0
+      ? `<existing_topics>\nThese topics already exist. Do NOT duplicate or overlap:\n${existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n")}\n</existing_topics>\n`
+      : "",
+    `Generate 10 new topics for ${productName}'s blog. Follow all rules in the system prompt.`,
+  ].filter(Boolean).join("\n");
+
   const text = await callClaude(
-    "You are an expert SEO content strategist. Your job is to generate blog topics that drive organic traffic to a SPECIFIC product/company. " +
-    "Every topic MUST be directly relevant to what this product does, who uses it, and the problems it solves. " +
-    "Think like a content marketer AT this company — what would their ideal customer search for before buying? Output JSON only.",
-    `PRODUCT: ${site.siteName ?? site.domain}\n` +
-    `DOMAIN: ${site.domain}\n` +
-    `TYPE: ${site.siteType ?? "Website"}\n` +
-    `WHAT IT DOES: ${site.siteSummary ?? ""}\n` +
-    `NICHE: ${site.niche ?? ""}\n` +
-    `BLOG THEME: ${site.blogTheme ?? ""}\n` +
-    `KEY FEATURES: ${site.keyFeatures?.join("; ") ?? ""}\n` +
-    `TARGET AUDIENCE: ${site.targetAudienceSummary ?? ""}\n` +
-    `PAIN POINTS PRODUCT SOLVES: ${site.painPoints?.join("; ") ?? ""}\n` +
-    `HOW USERS USE THE PRODUCT: ${site.productUsage ?? ""}\n` +
-    `TONE: ${site.tone ?? "neutral"}\n` +
-    `LANGUAGE: ${site.language ?? "en"}\n` +
-    (site.competitors?.length ? `COMPETITORS (never mention these): ${site.competitors.join(", ")}\n` : "") +
-    (site.anchorKeywords?.length ? `PRIORITY KEYWORDS TO RANK FOR: ${site.anchorKeywords.join(", ")}\n` : "") +
-    `\n` +
-    (existingKeywords.length > 0
-      ? `EXISTING TOPICS (DO NOT DUPLICATE):\n` +
-        existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n") + `\n\n`
-      : "") +
-    `TOPIC GENERATION RULES:\n` +
-    `1. Every topic MUST be directly related to what ${site.siteName ?? "the product"} does or the specific problems it solves. ` +
-    `Generic industry topics that any company could write are BANNED. The reader should learn something that makes them want to try ${site.siteName ?? "the product"}.\n` +
-    `2. Use these proven formats:\n` +
-    `   - "How to [do X] with/using [product category]" (e.g., "How to Capture Leads 24/7 with AI Chat Widgets")\n` +
-    `   - "[Product Category] vs [Alternative]: [Outcome]" (e.g., "AI Chatbots vs Live Chat: Which Converts More Leads?")\n` +
-    `   - "[N] Best [Product Category] for [Use Case]" (e.g., "5 Best AI Lead Generation Tools for SaaS")\n` +
-    `   - "What Is [Core Concept]? [Benefit]" (e.g., "What Is Automated Lead Qualification? A Complete Guide")\n` +
-    `   - "[N] Ways [Product Feature] [Solves Pain Point]" (e.g., "7 Ways AI Chat Widgets Increase Website Conversions")\n` +
-    `   - "[Specific Problem] [Solution Guide]" (e.g., "Website Visitors Not Converting? 8 Fixes That Work")\n` +
-    `3. Mix of intents: ~40% informational (guides, what-is), ~30% commercial (comparisons, best-of), ~30% transactional (how-to, setup guides).\n` +
-    `4. Target LONG-TAIL keywords (3-6 words) — specific queries real people search for.\n` +
-    `5. Each topic must target a UNIQUE search query. No two topics should compete for the same SERP.\n` +
-    `6. Generate exactly 10 new topics.\n` +
-    `7. Topics should form a funnel: some for awareness (what-is), some for consideration (comparisons), some for decision (how-to/setup).\n\n` +
-    `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic drives traffic to ${site.siteName ?? "the product"}"}]`,
+    topicSystemPrompt,
+    topicUserMessage,
     8192,
   );
 
@@ -926,9 +981,33 @@ async function handleArticle(
           intent: topic.intent ?? undefined,
         },
         site.niche ?? undefined,
+        site.competitors ?? undefined,
       );
       researchContext = research.researchSummary;
       researchSources = research.sources;
+
+      // Post-process: filter out competitor sources and scrub competitor mentions
+      if (site.competitors?.length) {
+        const compDomains = site.competitors.map((c) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
+        const compNames = compDomains.map((d) => d.replace(/\.com$|\.io$|\.co$/, ""));
+
+        // Filter out sources from competitor domains
+        const beforeCount = researchSources.length;
+        researchSources = researchSources.filter((s) => {
+          const urlLower = s.url.toLowerCase();
+          return !compDomains.some((d) => urlLower.includes(d));
+        });
+        if (researchSources.length < beforeCount) {
+          console.log(`Filtered ${beforeCount - researchSources.length} competitor sources from research.`);
+        }
+
+        // Scrub competitor company names from research summary
+        for (const name of compNames) {
+          const regex = new RegExp(`\\b${name}\\b`, "gi");
+          researchContext = researchContext.replace(regex, "[competitor]");
+        }
+      }
+
       console.log(`Research gathered: ${researchContext.length} chars, ${researchSources.length} sources`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
@@ -993,146 +1072,153 @@ async function handleArticle(
   await reportProgress(6, "Writing article content...");
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
-  const researchBlock = researchContext
-    ? `\n\nRESEARCH BRIEF (use these facts, statistics, and information — cite them with inline [1], [2] etc.):\n${researchContext}`
-    : "";
-
-  // Build YouTube embed block
-  const youtubeBlock = youtubeVideos.length > 0
-    ? `\nYOUTUBE VIDEOS TO EMBED: Embed these relevant videos at appropriate points in the article (after a relevant section, not all at once). Use this exact HTML for each:\n` +
-      youtubeVideos.map((v) =>
-        `- "${v.title}": <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`
-      ).join("\n")
-    : "";
-
-  // Build competitor exclusion block
-  const competitorBlock = site.competitors?.length
-    ? `\nCOMPETITOR EXCLUSIONS: NEVER mention or link to these companies: ${site.competitors.join(", ")}.`
-    : "";
-
-  // Build CTA block
-  const ctaBlock = site.ctaText && site.ctaUrl
-    ? `\nCALL TO ACTION: Naturally weave in a CTA at least once in the article body and once at the end. CTA text: "${site.ctaText}" linking to ${site.ctaUrl}. Make it feel organic, not salesy.`
-    : "";
-
-  // Build audience context
-  const audienceBlock = site.targetAudienceSummary
-    ? `\nTARGET AUDIENCE: ${site.targetAudienceSummary}` +
-      (site.painPoints?.length ? `\nPAIN POINTS to address: ${site.painPoints.join("; ")}` : "") +
-      (site.productUsage ? `\nHOW THEY USE THE PRODUCT: ${site.productUsage}` : "")
-    : "";
-
-  // Build anchor keyword priorities
-  const anchorBlock = site.anchorKeywords?.length
-    ? `\nANCHOR KEYWORDS: Naturally incorporate these keywords where relevant: ${site.anchorKeywords.join(", ")}.`
-    : "";
-
-  // Build screenshot embed block
-  const screenshotBlock = screenshotUrl
-    ? `\nSITE SCREENSHOT: A real screenshot of ${site.domain} has been captured and is available at this URL: ${screenshotUrl}\n` +
-      `Embed it naturally in the article (introduction or product overview) using: ![${site.siteName ?? site.domain} website](${screenshotUrl})\n` +
-      `This is a REAL screenshot — use it to show readers what the product/site actually looks like.`
-    : "";
-
-  // Build web images block
-  const webImagesBlock = webImages.length > 0
-    ? `\nWEB IMAGES (real infographics/charts found on the web — NOT AI-generated): Embed these at relevant points in the article with attribution:\n` +
-      webImages
-        .map(
-          (img) =>
-            `- Image: ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`,
-        )
-        .join("\n")
-    : "";
-
-  // Build live crawl data block
-  const liveDataBlock =
-    siteData.pricing || siteData.features
-      ? `\nLIVE CRAWLED DATA FROM ${site.domain.toUpperCase()} — use this for ACCURATE tables and product information:\n` +
-        (siteData.pricing
-          ? `\n--- PRICING PAGE DATA ---\n${siteData.pricing.slice(0, 3000)}\n`
-          : "") +
-        (siteData.features
-          ? `\n--- FEATURES PAGE DATA ---\n${siteData.features.slice(0, 3000)}\n`
-          : "") +
-        `\nIMPORTANT: When building comparison tables or mentioning pricing/features, use the REAL data above. Do NOT make up numbers.`
-      : "";
-
-  // Citation and linking settings
-  const citationRule = site.sourceCitations !== false
-    ? "9. INLINE CITATIONS: Use numbered citations [1], [2], [3] throughout the article when referencing statistics, quotes, or factual claims. Add a '## Sources' section at the very end listing each source as: [1] Title — URL"
-    : "9. Do NOT add inline citations or a sources section.";
-
-  const externalLinkRule = site.externalLinking !== false
-    ? "10. EXTERNAL LINKS: Include 5-10 outbound links to authoritative sources naturally within the text (not just in the sources section)."
-    : "10. Do NOT include external links in the article body.";
+  // Old block-building code removed — all context is now in the structured XML system prompt above
 
   const productName = site.siteName ?? site.domain;
 
+  // ── Build structured system prompt with XML tags ──
+  // Every section is a binding contract. The AI must follow ALL of it.
+
+  const competitorNames = (site.competitors ?? []).map((c: string) =>
+    c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
+  );
+
+  const systemPrompt = [
+    `<role>`,
+    `You are the in-house content marketer at ${productName}. You write for ${productName}'s blog.`,
+    `You know this product inside out. You write like an employee, not a freelancer.`,
+    `Every article you write positions ${productName} as THE solution to the reader's problem.`,
+    `</role>`,
+    ``,
+    `<banned_content>`,
+    `The following companies are direct competitors. You must NEVER mention them by name, reference their products, link to their websites, compare them, or include them in any table, list, or example:`,
+    ...(site.competitors ?? []).map((c: string) => `- ${c}`),
+    ...(competitorNames.length > 0 ? [`- Also banned by name: ${competitorNames.join(", ")}`] : []),
+    `If you need to reference a competitor category, say "other tools" or "traditional solutions" — NEVER name them.`,
+    `Do NOT write "N best tools" articles that list competitors. The article must position ${productName} as the primary solution.`,
+    `</banned_content>`,
+    ``,
+    `<product_identity>`,
+    `Name: ${productName}`,
+    `Domain: ${site.domain}`,
+    `Type: ${site.siteType ?? "Website"}`,
+    `Summary: ${site.siteSummary ?? ""}`,
+    `Blog Theme: ${site.blogTheme ?? ""}`,
+    site.keyFeatures?.length ? `Key Features:\n${site.keyFeatures.map((f: string) => `- ${f}`).join("\n")}` : "",
+    site.pricingInfo ? `Pricing:\n${site.pricingInfo}` : "",
+    site.founders ? `Founders: ${site.founders}` : "",
+    `Niche: ${site.niche ?? ""}`,
+    ``,
+    `When mentioning ${productName}'s features, pricing, or capabilities, use ONLY the information above.`,
+    `NEVER fabricate features, integrations, or pricing tiers that are not listed here.`,
+    `If live crawled data is provided in the user message, prefer that for pricing/features as it may be more current.`,
+    `</product_identity>`,
+    ``,
+    `<target_audience>`,
+    site.targetAudienceSummary ? `Who they are: ${site.targetAudienceSummary}` : "",
+    site.painPoints?.length ? `Pain points this product solves:\n${site.painPoints.map((p: string) => `- ${p}`).join("\n")}` : "",
+    site.productUsage ? `How they use the product: ${site.productUsage}` : "",
+    site.targetCountry ? `Target market: ${site.targetCountry} — tailor examples, stats, and references to this market.` : "",
+    `Write every article FOR this audience. Address their specific problems. Use their language.`,
+    `</target_audience>`,
+    ``,
+    `<content_settings>`,
+    `Tone: ${site.tone ?? "professional"} — maintain this tone throughout the entire article.`,
+    site.language && site.language !== "en" ? `Language: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ, key takeaways, and meta fields must be in ${site.language}.` : `Language: English`,
+    site.ctaText && site.ctaUrl ? `CTA: Naturally weave in "${site.ctaText}" linking to ${site.ctaUrl} at least once in the body and once at the end. Make it organic, not salesy.` : "",
+    site.anchorKeywords?.length ? `Anchor Keywords: Naturally incorporate these throughout: ${site.anchorKeywords.join(", ")}` : "",
+    site.sourceCitations !== false
+      ? `Citations: Use numbered inline citations [1], [2], [3] for statistics, quotes, and factual claims. Add a "## Sources" section at the end listing each as: [1] Title — URL`
+      : `Citations: Do NOT add inline citations or a sources section.`,
+    site.externalLinking !== false
+      ? `External Links: Include 5-10 outbound links to authoritative sources naturally within the text.`
+      : `External Links: Do NOT include external links in the article body.`,
+    `</content_settings>`,
+    ``,
+    `<youtube_embeds>`,
+    enableYouTube && youtubeVideos.length > 0
+      ? [
+          `YouTube embedding is ENABLED. You have been given ${youtubeVideos.length} real YouTube video(s) below.`,
+          `You MUST embed ALL of them in the article at relevant points (after a related section, spaced out).`,
+          `Use this exact HTML for each embed:`,
+          ...youtubeVideos.map((v) =>
+            `Video "${v.title}":\n<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`
+          ),
+          `Copy the HTML exactly. Do not modify it. Do not skip any video.`,
+        ].join("\n")
+      : enableYouTube
+        ? `YouTube embedding is ENABLED but no videos were found for this topic. Skip YouTube embeds.`
+        : `YouTube embedding is DISABLED. Do NOT include any YouTube embeds.`,
+    `</youtube_embeds>`,
+    ``,
+    `<images>`,
+    screenshotUrl
+      ? `Site Screenshot (REAL — captured from ${site.domain}): ${screenshotUrl}\nEmbed this in the introduction or product overview section using: ![${productName} website](${screenshotUrl})`
+      : `No site screenshot available.`,
+    webImages.length > 0
+      ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nEmbed ALL of these at relevant points with italic captions.`
+      : `No web images available.`,
+    `</images>`,
+    ``,
+    `<article_structure>`,
+    `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement.`,
+    `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
+    `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
+    `4. WORD COUNT: 3500-4500 words.`,
+    `5. SECTIONS: 8-12 H2 sections with H3 subsections. Every section must have specific, actionable information.`,
+    `6. PRODUCT SECTION: Include a dedicated H2 or H3 showing how ${productName} specifically solves the problem discussed. Mention ${productName} by name 3-5 times naturally throughout.`,
+    `7. COMPARISON TABLE: At least one markdown table with real data. If comparing, compare feature categories (NOT named competitors).`,
+    `8. PRO TIPS: Include a "Best Practices" or "Pro Tips" section with numbered actionable items.`,
+    `9. FAQ: End with "## Frequently Asked Questions" with 8-10 questions in format:\n   ### Question here?\n   Answer paragraph here.`,
+    `10. KEY TAKEAWAYS: "## Key Takeaways" near the end with 5-7 bullet points.`,
+    `11. EXPERT QUOTES: 2-3 blockquotes from real experts found in the research. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
+    `12. NO FLUFF: Every paragraph must contain specific data, examples, or actionable advice.`,
+    `13. NO META-TALK: Output article content only within the JSON. No explanations outside.`,
+    `</article_structure>`,
+    ``,
+    `<output_format>`,
+    `Output a single JSON object (no markdown code blocks around it):`,
+    `{`,
+    `  "title": "string",`,
+    `  "slug": "string",`,
+    `  "markdown": "string (the full 3500-4500 word article)",`,
+    `  "metaTitle": "string (max 60 chars, include primary keyword)",`,
+    `  "metaDescription": "string (max 155 chars, compelling + keyword)",`,
+    `  "metaKeywords": ["keyword1", ...] (8-12 SEO keywords),`,
+    `  "sources": [{"url": "string", "title": "string"}]`,
+    `}`,
+    `</output_format>`,
+  ].filter(Boolean).join("\n");
+
+  // ── Build structured user message ──
+  const userMessage = [
+    `<topic>`,
+    `Title: ${topic?.label ?? "General"}`,
+    `Primary Keyword: ${topic?.primaryKeyword ?? ""}`,
+    `Secondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? "none"}`,
+    `Search Intent: ${topic?.intent ?? "informational"}`,
+    `</topic>`,
+    ``,
+    researchContext ? [
+      `<research>`,
+      researchContext,
+      `</research>`,
+    ].join("\n") : "",
+    ``,
+    siteData.pricing || siteData.features ? [
+      `<live_crawled_data>`,
+      `This data was crawled directly from ${site.domain} moments ago. Use it for accurate pricing and feature information.`,
+      siteData.pricing ? `\n--- PRICING PAGE ---\n${siteData.pricing.slice(0, 3000)}` : "",
+      siteData.features ? `\n--- FEATURES PAGE ---\n${siteData.features.slice(0, 3000)}` : "",
+      `</live_crawled_data>`,
+    ].join("\n") : "",
+    ``,
+    `Write the article now. Follow every instruction in the system prompt exactly.`,
+  ].filter(Boolean).join("\n");
+
   const articleText = await callClaude(
-    "You are a senior content marketer writing for " + productName + "'s blog. " +
-    "You write like you WORK at this company — you know the product inside out, you understand the audience's pain points, " +
-    "and you naturally weave the product into the narrative as THE solution. Your articles rank on page 1 of Google " +
-    "because they're genuinely useful, data-driven, and authoritative — not generic SEO filler.\n\n" +
-    "PRODUCT INTEGRATION (CRITICAL):\n" +
-    "- Mention " + productName + " by name 3-5 times throughout the article, naturally.\n" +
-    "- Include a dedicated section (H2 or H3) showing how " + productName + " specifically solves the problem discussed.\n" +
-    "- Reference real product features, pricing, or capabilities where relevant — use the SITE CONTEXT and LIVE CRAWLED DATA provided.\n" +
-    "- The article should feel like it was written by the company's content team, not by a generic freelancer.\n" +
-    "- DO NOT be overly salesy. Provide genuine value first, then naturally position the product as a solution.\n\n" +
-    "MANDATORY ARTICLE STRUCTURE:\n" +
-    "1. HOOK: Open with a compelling statistic, surprising fact, or data point from the research. Example: 'According to a 2024 Gartner report, 73% of...' — NEVER start with a generic statement.\n" +
-    "2. TL;DR BOX: After the hook paragraph, include a '> **TL;DR:** ...' blockquote summarizing the key takeaway in 2-3 sentences.\n" +
-    "3. TABLE OF CONTENTS: After the TL;DR, add '## Table of Contents' with a bullet list linking to each H2 section using markdown anchors: `- [Section Title](#section-title)`. This improves UX and helps Google generate sitelinks.\n" +
-    "4. WORD COUNT: 3500-4500 words. Non-negotiable.\n" +
-    "5. SECTIONS: 8-12 H2 sections with H3 subsections. Each section must provide specific, actionable information.\n" +
-    "6. COMPARISON TABLE: Include at least one markdown comparison table with real data.\n" +
-    "7. PRACTICAL ELEMENTS: Include a 'Pro Tips' or 'Best Practices' section with numbered actionable items.\n" +
-    "8. FAQ: End with a '## Frequently Asked Questions' section with 8-10 questions in this exact format:\n" +
-    "   ### Question here?\n" +
-    "   Answer paragraph here.\n" +
-    "   (This triggers Google's FAQ rich snippets.)\n" +
-    citationRule + "\n" +
-    externalLinkRule + "\n" +
-    "11. TONE: Write in a " + (site.tone ?? "professional") + " tone throughout.\n" +
-    "12. NO FLUFF: Every paragraph must contain specific information, data, examples, or actionable advice. Cut generic filler.\n" +
-    "13. KEY TAKEAWAYS: Include a '## Key Takeaways' section near the end with 5-7 bullet points summarizing the main insights.\n" +
-    "14. YOUTUBE EMBEDS: If YouTube video HTML is provided below, you MUST embed ALL of them at relevant points in the article (after related sections). Copy the HTML exactly as provided. This is non-negotiable.\n" +
-    "15. REAL IMAGES: If a site screenshot URL or web infographic URLs are provided below, you MUST embed ALL of them in the article using standard markdown image syntax: ![alt text](url). Place the site screenshot in the intro/overview section. Place infographics near relevant data sections. Add italic captions below images.\n" +
-    "16. REAL DATA: If live crawled data from the site is provided below (pricing, features), use the ACTUAL numbers and details to build comparison tables and product descriptions. NEVER fabricate pricing tiers or feature lists — use only what was crawled.\n" +
-    "17. EXPERT QUOTES: Include 2-3 blockquotes from real industry experts, executives, or researchers. Use the format: > *\"Quote text.\"* — **Name**, Title, Company [citation]. Pull these from the research brief — NEVER fabricate quotes.\n" +
-    "18. REAL COMPANY CASE STUDIES: Include 3-5 real company examples (e.g. LEGO, HubSpot, Shopify) with specific metrics and outcomes. Pull from research — NEVER fabricate case studies.\n" +
-    "19. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
-    "20. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
-    "21. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief." +
-    (site.language && site.language !== "en"
-      ? `\n22. LANGUAGE: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ questions, key takeaways, and meta fields MUST be in ${site.language}.`
-      : ""),
-    `SITE CONTEXT:\n` +
-    `Domain: ${site.domain}\n` +
-    `Site: ${site.siteName ?? site.domain}\n` +
-    `Type: ${site.siteType ?? "Website"}\n` +
-    `Summary: ${site.siteSummary ?? ""}\n` +
-    `Niche: ${site.niche ?? ""}\n` +
-    `Blog Theme: ${site.blogTheme ?? ""}` +
-    (site.keyFeatures?.length ? `\nKEY FEATURES: ${site.keyFeatures.join("; ")}` : "") +
-    (site.founders ? `\nFOUNDERS: ${site.founders}` : "") +
-    (site.targetCountry ? `\nTARGET COUNTRY/REGION: ${site.targetCountry} — tailor examples, stats, and references to this market.` : "") +
-    audienceBlock +
-    competitorBlock +
-    ctaBlock +
-    anchorBlock +
-    youtubeBlock +
-    screenshotBlock +
-    webImagesBlock +
-    liveDataBlock +
-    `\n\nARTICLE TARGET:\n` +
-    `Topic: ${topic?.label ?? "General"}\n` +
-    `Primary Keyword: ${topic?.primaryKeyword ?? ""}\n` +
-    `Secondary Keywords: ${topic?.secondaryKeywords?.join(", ") ?? ""}\n` +
-    `Search Intent: ${topic?.intent ?? "informational"}` +
-    researchBlock +
-    `\n\nReturn JSON: {"title": "string", "slug": "string", "markdown": "string (the full 3500-4500 word article with ToC, YouTube embeds, key takeaways)", "metaTitle": "string (max 60 chars, include primary keyword)", "metaDescription": "string (max 155 chars, compelling + keyword)", "metaKeywords": ["keyword1", "keyword2", ...] (8-12 SEO-relevant keywords/phrases), "sources": [{"url": "string", "title": "string"}]}`,
+    systemPrompt,
+    userMessage,
     16384,
   );
 
@@ -1141,12 +1227,53 @@ async function handleArticle(
     articleText,
   );
 
+  // ── Programmatic competitor scrub (safety net) ──
+  // Even with prompt instructions, LLMs sometimes mention competitors.
+  // This is a hard programmatic filter — no competitor name survives this.
+  if (site.competitors?.length) {
+    const compDomains = site.competitors.map((c: string) =>
+      c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
+    );
+    const compNames = compDomains.map((d: string) =>
+      d.replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
+    );
+
+    // Scrub competitor names from article markdown
+    let scrubbed = article.markdown;
+    for (const name of compNames) {
+      if (name.length < 3) continue; // skip very short names to avoid false positives
+      const regex = new RegExp(`\\b${name}\\b`, "gi");
+      scrubbed = scrubbed.replace(regex, productName);
+    }
+    if (scrubbed !== article.markdown) {
+      console.log(`Competitor scrub: replaced competitor mentions with ${productName} in article markdown.`);
+      article.markdown = scrubbed;
+    }
+
+    // Scrub from title too
+    let scrubbedTitle = article.title;
+    for (const name of compNames) {
+      if (name.length < 3) continue;
+      const regex = new RegExp(`\\b${name}\\b`, "gi");
+      scrubbedTitle = scrubbedTitle.replace(regex, productName);
+    }
+    article.title = scrubbedTitle;
+  }
+
   // Merge research sources with article-generated sources (deduplicate by URL)
   const allSources = [...(article.sources ?? []), ...researchSources];
   const seenUrls = new Set<string>();
+  const compDomainsForFilter = (site.competitors ?? []).map((c: string) =>
+    c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
+  );
   const dedupedSources = allSources.filter((s) => {
     if (seenUrls.has(s.url)) return false;
     seenUrls.add(s.url);
+    // Filter out any sources from competitor domains
+    if (compDomainsForFilter.length > 0) {
+      const urlLower = s.url.toLowerCase();
+      if (compDomainsForFilter.some((d: string) => urlLower.includes(d))) return false;
+    }
     return true;
   });
 
@@ -1721,7 +1848,7 @@ export const suggestInternalLinks = action({
     handleLinks(ctx, siteId, articleId),
 });
 
-// Cron driver to run autopilot across all sites
+// Cron driver to run autopilot across all sites with autopilot enabled
 export const autopilotCron = action({
   args: {},
   handler: async (ctx) => {
@@ -1729,6 +1856,10 @@ export const autopilotCron = action({
     if (!sites?.length) return { processed: 0 };
     let processed = 0;
     for (const site of sites) {
+      // Only run autopilot for sites that have it enabled
+      if (!site.autopilotEnabled) {
+        continue;
+      }
       const res = await ctx.runAction(api.actions.pipeline.autopilotTick as any, {
         siteId: site._id,
       });
