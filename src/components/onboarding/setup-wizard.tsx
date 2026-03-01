@@ -339,23 +339,25 @@ export function SetupWizard() {
       setStatusMsg("Crawling your website and running AI analysis — this takes 30-60 seconds...");
       const result = await crawlAndAnalyze({ siteId: id });
 
-      // Populate all fields from analysis
+      // Populate all fields from analysis (may be null if analysis failed)
       const a = result.analysis;
-      setSiteName(a.siteName);
-      setSiteType(a.siteType);
-      setSiteSummary(a.siteSummary);
-      setBlogTheme(a.blogTheme);
-      setKeyFeatures(a.keyFeatures);
-      setPricingInfo(a.pricingInfo);
-      setFounders(a.founders);
-      setNiche(a.niche);
-      setTone(a.tone);
-      setTargetCountry(a.targetCountry);
-      setTargetAudienceSummary(a.targetAudienceSummary);
-      setPainPoints(a.painPoints);
-      setProductUsage(a.productUsage);
-      setCompetitors(a.suggestedCompetitors);
-      setAnchorKeywords(a.suggestedAnchorKeywords);
+      if (a) {
+        setSiteName(a.siteName);
+        setSiteType(a.siteType);
+        setSiteSummary(a.siteSummary);
+        setBlogTheme(a.blogTheme);
+        setKeyFeatures(a.keyFeatures);
+        setPricingInfo(a.pricingInfo);
+        setFounders(a.founders);
+        setNiche(a.niche);
+        setTone(a.tone);
+        setTargetCountry(a.targetCountry);
+        setTargetAudienceSummary(a.targetAudienceSummary);
+        setPainPoints(a.painPoints);
+        setProductUsage(a.productUsage);
+        setCompetitors(a.suggestedCompetitors);
+        setAnchorKeywords(a.suggestedAnchorKeywords);
+      }
 
       // Populate brand fields
       if (result.brand) {

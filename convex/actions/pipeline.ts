@@ -55,33 +55,45 @@ const LinkSchema = z.array(
 );
 
 const parseJson = <T>(schema: z.ZodTypeAny, text: string): T => {
-  const objStart = text.indexOf("{");
-  const arrStart = text.indexOf("[");
+  // Strip markdown code blocks
+  const clean = text.replace(/```(?:json)?\s*\n?/g, "").replace(/```\s*$/g, "").trim();
 
-  // If [ appears before { (or no { exists), treat as array response
+  const objStart = clean.indexOf("{");
+  const arrStart = clean.indexOf("[");
+
+  let raw: string;
   if (arrStart !== -1 && (objStart === -1 || arrStart < objStart)) {
-    const arrEnd = text.lastIndexOf("]");
+    const arrEnd = clean.lastIndexOf("]");
     if (arrEnd === -1) throw new Error("No closing ] found in response");
-    const raw = text.slice(arrStart, arrEnd + 1);
-    try {
-      return schema.parse(JSON.parse(raw)) as T;
-    } catch (err) {
-      console.error("JSON parse failed. Raw text snippet:", raw.slice(0, 200));
-      throw err;
-    }
+    raw = clean.slice(arrStart, arrEnd + 1);
+  } else {
+    if (objStart === -1) throw new Error("No JSON found in response");
+    const objEnd = clean.lastIndexOf("}");
+    if (objEnd === -1) throw new Error("No closing } found in response");
+    raw = clean.slice(objStart, objEnd + 1);
   }
 
-  // Otherwise treat as object response
-  if (objStart === -1) throw new Error("No JSON found in response");
-  const objEnd = text.lastIndexOf("}");
-  if (objEnd === -1) throw new Error("No closing } found in response");
-  const raw = text.slice(objStart, objEnd + 1);
-
+  // Attempt 1: direct parse
   try {
     return schema.parse(JSON.parse(raw)) as T;
+  } catch {}
+
+  // Attempt 2: fix trailing commas (very common LLM mistake)
+  try {
+    const fixed = raw.replace(/,\s*([\]}])/g, "$1");
+    return schema.parse(JSON.parse(fixed)) as T;
+  } catch {}
+
+  // Attempt 3: fix unescaped control characters inside JSON strings
+  try {
+    let fixed = raw.replace(/,\s*([\]}])/g, "$1");
+    // Replace literal tabs/newlines that aren't already escaped
+    fixed = fixed.replace(/(?<!\\)\t/g, "\\t");
+    return schema.parse(JSON.parse(fixed)) as T;
   } catch (err) {
-    console.error("JSON parse failed. Raw text snippet:", raw.slice(0, 200));
-    throw err;
+    console.error("All JSON parse attempts failed. First 500 chars:", raw.slice(0, 500));
+    console.error("Last 300 chars:", raw.slice(-300));
+    throw new Error(`JSON parse failed: ${err instanceof Error ? err.message : "unknown"}`);
   }
 };
 
@@ -1445,8 +1457,19 @@ export const crawlAndAnalyze = action({
       console.error(`Brand detection failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
     }
 
-    // Step 3: Deep AI analysis
-    const analysis = await handleAnalyzeSite(ctx, siteId, html, crawlResult.pages);
+    // Step 3: Deep AI analysis (non-fatal — site can still function without full profile)
+    let analysis = null;
+    try {
+      analysis = await handleAnalyzeSite(ctx, siteId, html, crawlResult.pages);
+    } catch (err) {
+      console.error(`Site analysis failed (non-fatal): ${err instanceof Error ? err.message : "unknown"}`);
+      // Save a basic siteSummary so the overview page works
+      await ctx.runMutation(api.sites.upsert, {
+        id: siteId,
+        domain: site.domain,
+        siteSummary: `Website at ${site.domain}`,
+      });
+    }
 
     return {
       pages: crawlResult.pages,

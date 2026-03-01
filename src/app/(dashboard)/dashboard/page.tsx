@@ -19,6 +19,8 @@ import {
   ShieldCheck,
   CheckCircle2,
   ExternalLink,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useRef, useState } from "react";
@@ -43,8 +45,10 @@ export default function DashboardPage() {
   );
   const jobs = useQuery(api.jobs.listAll);
   const generateNow = useAction(api.actions.pipeline.generateNow);
+  const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const [genBusy, setGenBusy] = useState(false);
   const [genMessage, setGenMessage] = useState<string | null>(null);
+  const [analyzeBusy, setAnalyzeBusy] = useState(false);
 
   const publishedCount =
     articles?.filter((a) => a.status === "published").length ?? 0;
@@ -78,12 +82,25 @@ export default function DashboardPage() {
     }
   };
 
+  const profileIncomplete = site && !site.siteSummary;
+
+  const handleReanalyze = async () => {
+    if (!site?._id) return;
+    setAnalyzeBusy(true);
+    try {
+      await crawlAndAnalyze({ siteId: site._id });
+      window.location.reload();
+    } catch {
+      setAnalyzeBusy(false);
+    }
+  };
+
   if (loading) {
     return <DashboardSkeleton />;
   }
 
-  // Show wizard if: no site, not analyzed, or explicit ?setup=new
-  if (!site || !site.siteSummary || forceSetup) {
+  // Show wizard only when: no site exists at all, or user explicitly clicked "Add Website"
+  if (!site || forceSetup) {
     wizardLatch.current = true;
   }
   // Once latched, stay on wizard until page reload (wizard "done" step calls reload)
@@ -131,6 +148,23 @@ export default function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      {profileIncomplete && (
+        <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-[#F59E0B]" />
+          <p className="flex-1 text-[13px] text-[#FBBF24]">
+            Site profile incomplete — article quality may be affected.
+          </p>
+          <Button
+            variant="secondary"
+            onClick={handleReanalyze}
+            loading={analyzeBusy}
+            icon={<RefreshCw className="h-3 w-3" />}
+          >
+            Re-analyze
+          </Button>
+        </div>
+      )}
 
       {genMessage && (
         <div

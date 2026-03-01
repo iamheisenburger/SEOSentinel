@@ -2,11 +2,22 @@
 
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
 import { useMemo, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
-import { Target, RefreshCw, Star, ArrowUpRight } from "lucide-react";
+import { ArticleProgress } from "@/components/ui/article-progress";
+import {
+  Target,
+  RefreshCw,
+  Star,
+  Zap,
+  Loader2,
+  CheckCircle2,
+  Clock,
+  Play,
+} from "lucide-react";
 import Link from "next/link";
 
 export default function PlanPage() {
@@ -16,9 +27,18 @@ export default function PlanPage() {
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
   );
+  const runningJob = useQuery(
+    api.jobs.getRunningBySite,
+    site?._id ? { siteId: site._id } : "skip",
+  );
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
+  const generateArticle = useAction(api.actions.pipeline.generateArticle);
   const [status, setStatus] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
+  const [generatingTopicId, setGeneratingTopicId] = useState<string | null>(null);
+
+  // Which topic is currently being generated (from the running job)
+  const activeTopicLabel = runningJob?.stepProgress?.topicLabel ?? null;
 
   const sorted = useMemo(() => {
     if (!topics) return [];
@@ -30,18 +50,24 @@ export default function PlanPage() {
     return sorted.filter((t) => {
       if (activeTab === "available")
         return t.status !== "used" && t.status !== "queued";
+      if (activeTab === "generating")
+        return t.label === activeTopicLabel || t.status === "queued";
       return t.status === activeTab;
     });
-  }, [sorted, activeTab]);
+  }, [sorted, activeTab, activeTopicLabel]);
 
   const availableCount = sorted.filter(
     (t) => t.status !== "used" && t.status !== "queued",
   ).length;
   const usedCount = sorted.filter((t) => t.status === "used").length;
+  const generatingCount = activeTopicLabel ? 1 : 0;
 
   const tabs = [
     { id: "all", label: "All", count: sorted.length },
     { id: "available", label: "Available", count: availableCount },
+    ...(generatingCount > 0
+      ? [{ id: "generating", label: "In Progress", count: generatingCount }]
+      : []),
     { id: "used", label: "Used", count: usedCount },
   ];
 
@@ -50,11 +76,23 @@ export default function PlanPage() {
     setStatus("Generating...");
     try {
       await generatePlan({ siteId: site._id });
-      setStatus("New plan generated.");
+      setStatus("New topics generated.");
     } catch (err: unknown) {
       setStatus(
         err instanceof Error ? err.message : "Failed to generate plan",
       );
+    }
+  };
+
+  const handleGenerateArticle = async (topicId: Id<"topic_clusters">) => {
+    if (!site?._id) return;
+    setGeneratingTopicId(topicId);
+    try {
+      await generateArticle({ siteId: site._id, topicId });
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setGeneratingTopicId(null);
     }
   };
 
@@ -110,6 +148,9 @@ export default function PlanPage() {
         </div>
       )}
 
+      {/* Live article generation progress */}
+      {site && <ArticleProgress siteId={site._id} />}
+
       {/* Topic health bar */}
       {sorted.length > 0 && (
         <div className="flex items-center gap-3">
@@ -129,6 +170,16 @@ export default function PlanPage() {
         </div>
       )}
 
+      {/* Cadence info */}
+      {site?.cadencePerWeek && sorted.length > 0 && (
+        <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
+          <Clock className="h-3 w-3" />
+          <span>
+            {site.cadencePerWeek} articles/week · ~{Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining
+          </span>
+        </div>
+      )}
+
       <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
       {/* Topic List */}
@@ -136,11 +187,19 @@ export default function PlanPage() {
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
           {filtered.map((topic) => {
             const isUsed = topic.status === "used";
+            const isGenerating = activeTopicLabel === topic.label;
+            const isQueued = topic.status === "queued";
+            const isManuallyGenerating = generatingTopicId === topic._id;
+
             return (
               <div
                 key={topic._id}
-                className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0 ${
-                  isUsed ? "opacity-50" : ""
+                className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition-colors ${
+                  isGenerating
+                    ? "bg-[#0EA5E9]/[0.04] border-l-2 border-l-[#0EA5E9]"
+                    : isUsed
+                      ? "opacity-50"
+                      : ""
                 }`}
               >
                 {/* Priority */}
@@ -194,12 +253,41 @@ export default function PlanPage() {
                   </span>
                 )}
 
-                {/* Status */}
-                <span className={`shrink-0 text-[11px] font-medium ${
-                  isUsed ? "text-[#565A6E]" : "text-[#8B8FA3]"
-                }`}>
-                  {isUsed ? "Used" : "Available"}
-                </span>
+                {/* Status + Action */}
+                <div className="flex items-center gap-2 shrink-0">
+                  {isGenerating ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#0EA5E9]/[0.1] px-2.5 py-1 text-[11px] font-medium text-[#38BDF8]">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Generating
+                    </span>
+                  ) : isQueued ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F59E0B]/[0.1] px-2.5 py-1 text-[11px] font-medium text-[#FBBF24]">
+                      <Clock className="h-3 w-3" />
+                      Queued
+                    </span>
+                  ) : isUsed ? (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] text-[#565A6E]">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Used
+                    </span>
+                  ) : (
+                    <>
+                      <span className="text-[11px] text-[#8B8FA3]">Available</span>
+                      <button
+                        onClick={() => handleGenerateArticle(topic._id)}
+                        disabled={!!runningJob || isManuallyGenerating}
+                        className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-[#8B8FA3] hover:bg-white/[0.08] hover:text-[#EDEEF1] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        {isManuallyGenerating ? (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        ) : (
+                          <Play className="h-2.5 w-2.5" />
+                        )}
+                        Generate
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}
