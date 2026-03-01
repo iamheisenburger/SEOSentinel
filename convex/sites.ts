@@ -147,6 +147,41 @@ export const upsert = mutation({
   },
 });
 
+// Partial update — edit individual site settings post-onboarding
+export const updateSite = mutation({
+  args: {
+    siteId: v.id("sites"),
+    siteName: v.optional(v.string()),
+    niche: v.optional(v.string()),
+    tone: v.optional(v.string()),
+    language: v.optional(v.string()),
+    cadencePerWeek: v.optional(v.number()),
+    autopilotEnabled: v.optional(v.boolean()),
+    approvalRequired: v.optional(v.boolean()),
+    ctaText: v.optional(v.string()),
+    ctaUrl: v.optional(v.string()),
+    anchorKeywords: v.optional(v.array(v.string())),
+    externalLinking: v.optional(v.boolean()),
+    sourceCitations: v.optional(v.boolean()),
+    youtubeEmbeds: v.optional(v.boolean()),
+    urlStructure: v.optional(v.string()),
+    brandPrimaryColor: v.optional(v.string()),
+    brandAccentColor: v.optional(v.string()),
+    brandFontFamily: v.optional(v.string()),
+    targetCountry: v.optional(v.string()),
+    targetAudienceSummary: v.optional(v.string()),
+    painPoints: v.optional(v.array(v.string())),
+    competitors: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, { siteId, ...fields }) => {
+    const patch: Record<string, unknown> = { updatedAt: now() };
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== undefined) patch[key] = value;
+    }
+    await ctx.db.patch(siteId, patch);
+  },
+});
+
 // Delete a single site and all its related data
 export const deleteSite = mutation({
   args: { siteId: v.id("sites") },

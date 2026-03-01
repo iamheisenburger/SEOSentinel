@@ -4,18 +4,13 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
 import {
   Globe,
-  FileText,
-  Target,
   Trash2,
-  ChevronDown,
-  ChevronRight,
   Clock,
   ArrowRight,
-  Zap,
   Plus,
+  Settings,
 } from "lucide-react";
 import { useState } from "react";
 import Link from "next/link";
@@ -33,15 +28,18 @@ export default function WebsitesPage() {
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-48 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        {[...Array(2)].map((_, i) => (
-          <div
-            key={i}
-            className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5"
-          >
-            <div className="h-5 w-40 animate-pulse rounded bg-white/[0.04]" />
-            <div className="mt-3 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
-          </div>
-        ))}
+        <div className="grid gap-4 sm:grid-cols-2">
+          {[...Array(2)].map((_, i) => (
+            <div
+              key={i}
+              className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5"
+            >
+              <div className="h-5 w-40 animate-pulse rounded bg-white/[0.04]" />
+              <div className="mt-3 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
+              <div className="mt-3 h-4 w-32 animate-pulse rounded bg-white/[0.03]" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -77,7 +75,7 @@ export default function WebsitesPage() {
           </Button>
         </div>
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           {sites.map((site) => (
             <SiteCard key={site._id} site={site} />
           ))}
@@ -89,22 +87,35 @@ export default function WebsitesPage() {
 
 /* ── Site Card ── */
 
-function SiteCard({ site }: { site: { _id: Id<"sites">; domain: string; siteName?: string; siteType?: string; niche?: string; cadencePerWeek?: number; approvalRequired?: boolean; autopilotEnabled?: boolean; createdAt: number; updatedAt: number } }) {
-  const [expanded, setExpanded] = useState(true);
+function SiteCard({
+  site,
+}: {
+  site: {
+    _id: Id<"sites">;
+    domain: string;
+    siteName?: string;
+    siteType?: string;
+    niche?: string;
+    cadencePerWeek?: number;
+    autopilotEnabled?: boolean;
+    brandPrimaryColor?: string;
+    createdAt: number;
+    updatedAt: number;
+  };
+}) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
   const deleteSite = useMutation(api.sites.deleteSite);
-  const deleteArticle = useMutation(api.articles.deleteArticle);
 
   const articles = useQuery(api.articles.listBySite, { siteId: site._id });
   const topics = useQuery(api.topics.listBySite, { siteId: site._id });
 
   const articleCount = articles?.length ?? 0;
   const topicCount = topics?.length ?? 0;
-  const publishedCount = articles?.filter((a) => a.status === "published").length ?? 0;
+  const publishedCount =
+    articles?.filter((a) => a.status === "published").length ?? 0;
 
-  const handleDeleteSite = async () => {
+  const handleDelete = async () => {
     setDeleting(true);
     try {
       await deleteSite({ siteId: site._id });
@@ -116,211 +127,115 @@ function SiteCard({ site }: { site: { _id: Id<"sites">; domain: string; siteName
     }
   };
 
+  const brandColor = site.brandPrimaryColor || "#0EA5E9";
+
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
-      {/* Header */}
-      <div
-        className="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.08]">
-          <Globe className="h-4 w-4 text-[#0EA5E9]" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="text-[14px] font-semibold text-[#EDEEF1] truncate">
-              {site.siteName || site.domain}
-            </p>
-            <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
-              Active
-            </span>
+    <div className="group relative rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden transition-all hover:-translate-y-0.5 hover:border-white/[0.1] hover:shadow-lg hover:shadow-black/20">
+      {/* Color accent bar */}
+      <div className="h-1" style={{ backgroundColor: brandColor }} />
+
+      {/* Card body */}
+      <Link href={`/sites/${site._id}`} className="block px-5 pt-4 pb-3">
+        <div className="flex items-start gap-3">
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-lg shrink-0"
+            style={{ backgroundColor: `${brandColor}15` }}
+          >
+            <Globe className="h-4.5 w-4.5" style={{ color: brandColor }} />
           </div>
-          <p className="text-[11px] text-[#565A6E]">
-            {site.domain}
-            {site.siteType ? ` · ${site.siteType}` : ""}
-            {site.niche ? ` · ${site.niche}` : ""}
-          </p>
-        </div>
-
-        {/* Quick stats */}
-        <div className="hidden sm:flex items-center gap-4 text-[11px] text-[#8B8FA3]">
-          <span className="flex items-center gap-1">
-            <FileText className="h-3 w-3 text-[#565A6E]" />
-            {articleCount} articles
-          </span>
-          <span className="flex items-center gap-1">
-            <Target className="h-3 w-3 text-[#565A6E]" />
-            {topicCount} topics
-          </span>
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3 text-[#565A6E]" />
-            {site.cadencePerWeek ?? 4}/wk
-          </span>
-        </div>
-
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 text-[#565A6E] shrink-0" />
-        ) : (
-          <ChevronRight className="h-4 w-4 text-[#565A6E] shrink-0" />
-        )}
-      </div>
-
-      {/* Expanded content */}
-      {expanded && (
-        <div className="border-t border-white/[0.04]">
-          {/* Stats row */}
-          <div className="grid grid-cols-3 gap-3 px-5 py-4">
-            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
-              <p className="text-lg font-bold text-[#EDEEF1]">{publishedCount}</p>
-              <p className="text-[10px] text-[#565A6E]">Published</p>
-            </div>
-            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
-              <p className="text-lg font-bold text-[#EDEEF1]">{articleCount - publishedCount}</p>
-              <p className="text-[10px] text-[#565A6E]">Drafts</p>
-            </div>
-            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
-              <p className="text-lg font-bold text-[#EDEEF1]">{topicCount}</p>
-              <p className="text-[10px] text-[#565A6E]">Topics</p>
-            </div>
-          </div>
-
-          {/* Articles list */}
-          {articles && articles.length > 0 && (
-            <div className="border-t border-white/[0.04]">
-              <div className="px-5 py-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
-                Articles
-              </div>
-              {articles.map((article) => (
-                <ArticleRow
-                  key={article._id}
-                  article={article}
-                  onDelete={() => deleteArticle({ articleId: article._id })}
-                />
-              ))}
-            </div>
-          )}
-
-          {articles && articles.length === 0 && (
-            <div className="border-t border-white/[0.04] px-5 py-6 text-center">
-              <p className="text-[12px] text-[#565A6E]">
-                No articles yet. Go to the dashboard to generate one.
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="text-[14px] font-semibold text-[#EDEEF1] truncate">
+                {site.siteName || site.domain}
               </p>
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80] shrink-0">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
+                Active
+              </span>
             </div>
-          )}
+            <p className="text-[11px] text-[#565A6E] mt-0.5 truncate">
+              {site.domain}
+              {site.siteType ? ` · ${site.siteType}` : ""}
+              {site.niche ? ` · ${site.niche}` : ""}
+            </p>
+          </div>
+          <ArrowRight className="h-4 w-4 text-[#565A6E] opacity-0 group-hover:opacity-100 transition shrink-0 mt-1" />
+        </div>
 
-          {/* Actions */}
-          <div className="flex items-center justify-between border-t border-white/[0.04] px-5 py-3">
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center gap-1.5 text-[12px] text-[#0EA5E9] hover:text-[#38BDF8] transition"
-            >
-              <Zap className="h-3 w-3" />
-              Generate Article
-            </Link>
-
-            {showDeleteConfirm ? (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="text-[11px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
-                >
-                  Cancel
-                </button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  onClick={handleDeleteSite}
-                  loading={deleting}
-                  icon={<Trash2 className="h-3 w-3" />}
-                >
-                  Delete Website
-                </Button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowDeleteConfirm(true)}
-                className="inline-flex items-center gap-1 text-[11px] text-[#565A6E] hover:text-[#EF4444] transition"
-              >
-                <Trash2 className="h-3 w-3" />
-                Delete
-              </button>
-            )}
+        {/* Stats */}
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
+            <p className="text-[15px] font-bold text-[#EDEEF1]">
+              {publishedCount}
+            </p>
+            <p className="text-[10px] text-[#565A6E]">Published</p>
+          </div>
+          <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
+            <p className="text-[15px] font-bold text-[#EDEEF1]">
+              {articleCount - publishedCount}
+            </p>
+            <p className="text-[10px] text-[#565A6E]">Drafts</p>
+          </div>
+          <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
+            <p className="text-[15px] font-bold text-[#EDEEF1]">
+              {topicCount}
+            </p>
+            <p className="text-[10px] text-[#565A6E]">Topics</p>
           </div>
         </div>
-      )}
-    </div>
-  );
-}
 
-/* ── Article Row ── */
-
-function ArticleRow({
-  article,
-  onDelete,
-}: {
-  article: {
-    _id: Id<"articles">;
-    title: string;
-    status: string;
-    slug: string;
-    markdown: string;
-    wordCount?: number;
-    createdAt: number;
-  };
-  onDelete: () => void;
-}) {
-  const [showDelete, setShowDelete] = useState(false);
-  const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
-
-  return (
-    <div className="group flex items-center gap-3 px-5 py-2.5 border-b border-white/[0.03] last:border-0 hover:bg-white/[0.02] transition">
-      <StatusBadge status={article.status} />
-      <Link
-        href={`/articles/${article._id}`}
-        className="flex-1 min-w-0"
-      >
-        <p className="text-[12px] font-medium text-[#EDEEF1] truncate group-hover:text-white transition">
-          {article.title}
-        </p>
-        <div className="flex items-center gap-2 text-[10px] text-[#565A6E] mt-0.5">
-          <span>{wc.toLocaleString()} words</span>
+        {/* Footer info */}
+        <div className="mt-3 flex items-center gap-3 text-[10px] text-[#565A6E]">
+          <span className="flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            {site.cadencePerWeek ?? 4} articles/week
+          </span>
           <span>·</span>
-          <span>{formatDistanceToNow(article.createdAt, { addSuffix: true })}</span>
+          <span>
+            {site.autopilotEnabled !== false ? "Autopilot" : "Manual"}
+          </span>
+          <span>·</span>
+          <span>
+            Added {formatDistanceToNow(site.createdAt, { addSuffix: true })}
+          </span>
         </div>
       </Link>
 
-      <div className="flex items-center gap-1.5 shrink-0">
+      {/* Action bar */}
+      <div className="flex items-center justify-between border-t border-white/[0.04] px-5 py-2.5">
         <Link
-          href={`/articles/${article._id}`}
-          className="text-[#565A6E] hover:text-[#0EA5E9] transition opacity-0 group-hover:opacity-100"
+          href={`/sites/${site._id}`}
+          className="inline-flex items-center gap-1.5 text-[11px] text-[#8B8FA3] hover:text-[#0EA5E9] transition"
         >
-          <ArrowRight className="h-3.5 w-3.5" />
+          <Settings className="h-3 w-3" />
+          Manage
         </Link>
-        {showDelete ? (
-          <div className="flex items-center gap-1">
+
+        {showDeleteConfirm ? (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowDelete(false)}
-              className="text-[10px] text-[#8B8FA3] hover:text-[#EDEEF1] transition px-1"
+              onClick={() => setShowDeleteConfirm(false)}
+              className="text-[11px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
             >
               Cancel
             </button>
-            <button
-              onClick={() => {
-                onDelete();
-                setShowDelete(false);
-              }}
-              className="text-[10px] text-[#EF4444] hover:text-[#F87171] transition px-1 font-medium"
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleDelete}
+              loading={deleting}
+              icon={<Trash2 className="h-3 w-3" />}
             >
               Delete
-            </button>
+            </Button>
           </div>
         ) : (
           <button
-            onClick={() => setShowDelete(true)}
-            className="text-[#565A6E] hover:text-[#EF4444] transition opacity-0 group-hover:opacity-100"
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center gap-1 text-[11px] text-[#565A6E] hover:text-[#EF4444] transition"
           >
             <Trash2 className="h-3 w-3" />
+            Delete
           </button>
         )}
       </div>
