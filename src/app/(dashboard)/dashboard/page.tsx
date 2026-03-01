@@ -25,6 +25,7 @@ import { useState } from "react";
 import Link from "next/link";
 
 export default function DashboardPage() {
+  const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
   const sites = useQuery(api.sites.list);
   const site = sites?.[0];
   const topics = useQuery(
@@ -81,8 +82,8 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  // No site OR site exists but hasn't been analyzed yet — show onboarding wizard
-  const needsOnboarding = !site || !site.siteSummary;
+  // No site OR site exists but hasn't been analyzed yet OR explicitly adding new site
+  const needsOnboarding = !site || !site.siteSummary || forceSetup;
   if (needsOnboarding) {
     return <SetupWizard />;
   }

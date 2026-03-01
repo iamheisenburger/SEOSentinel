@@ -52,7 +52,7 @@ export default function WebsitesPage() {
         actions={
           <Button
             size="sm"
-            onClick={() => window.location.assign("/dashboard")}
+            onClick={() => window.location.assign("/dashboard?setup=new")}
             icon={<Plus className="h-3.5 w-3.5" />}
           >
             Add Website
@@ -68,7 +68,7 @@ export default function WebsitesPage() {
           </p>
           <Button
             className="mt-4"
-            onClick={() => window.location.assign("/dashboard")}
+            onClick={() => window.location.assign("/dashboard?setup=new")}
             icon={<Plus className="h-3.5 w-3.5" />}
           >
             Add Your First Website
