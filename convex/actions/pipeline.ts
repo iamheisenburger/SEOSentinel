@@ -1154,13 +1154,13 @@ async function handleArticle(
     `<youtube_embeds>`,
     enableYouTube && youtubeVideos.length > 0
       ? [
-          `YouTube embedding is ENABLED. You have been given ${youtubeVideos.length} real YouTube video(s) below.`,
-          `You MUST embed ALL of them in the article at relevant points (after a related section, spaced out).`,
-          `Use this exact HTML for each embed:`,
+          `YouTube embedding is ENABLED. You have ${youtubeVideos.length} real YouTube video(s) available.`,
+          `Embed only videos that are directly relevant to a section's content. Place them AFTER the related section, not before. If a video doesn't fit naturally, skip it — don't force embeds.`,
+          `Use this exact HTML for each embed you include:`,
           ...youtubeVideos.map((v) =>
             `Video "${v.title}":\n<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`
           ),
-          `Copy the HTML exactly. Do not modify it. Do not skip any video.`,
+          `Copy the HTML exactly for any video you embed. Do not modify the iframe code.`,
         ].join("\n")
       : enableYouTube
         ? `YouTube embedding is ENABLED but no videos were found for this topic. Skip YouTube embeds.`
@@ -1169,10 +1169,10 @@ async function handleArticle(
     ``,
     `<images>`,
     screenshotUrl
-      ? `Site Screenshot (REAL — captured from ${site.domain}): ${screenshotUrl}\nEmbed this in the introduction or product overview section using: ![${productName} website](${screenshotUrl})`
+      ? `Site Screenshot (REAL — captured from ${site.domain}): ${screenshotUrl}\nEmbed this when discussing ${productName}'s features or in the product section using: ![${productName} website](${screenshotUrl}). Only include if the article specifically discusses or showcases the product.`
       : `No site screenshot available.`,
     webImages.length > 0
-      ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nEmbed ALL of these at relevant points with italic captions.`
+      ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nEmbed these where they add value to a section. Use italic captions below each. Skip any that don't clearly relate to the surrounding content.`
       : `No web images available.`,
     `</images>`,
     ``,
