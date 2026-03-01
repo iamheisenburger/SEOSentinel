@@ -20,6 +20,7 @@ import {
   Clock,
   FileText,
   Image as ImageIcon,
+  Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -159,6 +160,7 @@ export default function ArticleDetailPage() {
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);
+  const deleteArticle = useMutation(api.articles.deleteArticle);
   const [linkStatus, setLinkStatus] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
 
@@ -218,10 +220,22 @@ export default function ArticleDetailPage() {
     setActionBusy(true);
     try {
       await rejectArticle({ articleId });
-      setLinkStatus("Article rejected. Moved back to draft.");
+      setLinkStatus("Article rejected.");
     } catch (err: unknown) {
       setLinkStatus(err instanceof Error ? err.message : "Reject failed");
     } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("Delete this article permanently?")) return;
+    setActionBusy(true);
+    try {
+      await deleteArticle({ articleId });
+      router.push("/articles");
+    } catch (err: unknown) {
+      setLinkStatus(err instanceof Error ? err.message : "Delete failed");
       setActionBusy(false);
     }
   };
@@ -294,7 +308,7 @@ export default function ArticleDetailPage() {
           title={article.title}
           actions={
             <div className="flex flex-wrap gap-2">
-              {article.status === "review" && (
+              {(article.status === "draft" || article.status === "review") && (
                 <>
                   <Button
                     size="sm"
@@ -358,6 +372,17 @@ export default function ArticleDetailPage() {
               >
                 Internal Links
               </Button>
+              {article.status !== "published" && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={handleDelete}
+                  loading={actionBusy}
+                  icon={<Trash2 className="h-3.5 w-3.5" />}
+                >
+                  Delete
+                </Button>
+              )}
             </div>
           }
         />

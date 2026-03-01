@@ -1,6 +1,6 @@
 "use client";
 
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { FileText, PenTool, ArrowRight } from "lucide-react";
+import { FileText, PenTool, ArrowRight, CheckCircle2, XCircle, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -25,6 +25,9 @@ export default function ArticlesPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
   const generateArticle = useAction(api.actions.pipeline.generateArticle);
+  const approveArticle = useMutation(api.articles.approve);
+  const rejectArticle = useMutation(api.articles.reject);
+  const deleteArticle = useMutation(api.articles.deleteArticle);
 
   const [status, setStatus] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
@@ -49,21 +52,18 @@ export default function ArticlesPage() {
   const reviewCount =
     articles?.filter((a) => a.status === "review").length ?? 0;
 
+  const draftCount = articles?.filter((a) => a.status === "draft").length ?? 0;
+  const readyCount = articles?.filter((a) => a.status === "ready").length ?? 0;
+  const publishedCount = articles?.filter((a) => a.status === "published").length ?? 0;
+  const rejectedCount = articles?.filter((a) => a.status === "rejected").length ?? 0;
+
   const tabs = [
     { id: "all", label: "All", count: articles?.length ?? 0 },
-    {
-      id: "published",
-      label: "Published",
-      count: articles?.filter((a) => a.status === "published").length ?? 0,
-    },
-    ...(reviewCount > 0
-      ? [{ id: "review", label: "Review", count: reviewCount }]
-      : []),
-    {
-      id: "draft",
-      label: "Drafts",
-      count: articles?.filter((a) => a.status === "draft").length ?? 0,
-    },
+    { id: "published", label: "Published", count: publishedCount },
+    ...(readyCount > 0 ? [{ id: "ready", label: "Approved", count: readyCount }] : []),
+    ...(reviewCount > 0 ? [{ id: "review", label: "Review", count: reviewCount }] : []),
+    { id: "draft", label: "Drafts", count: draftCount },
+    ...(rejectedCount > 0 ? [{ id: "rejected", label: "Rejected", count: rejectedCount }] : []),
   ];
 
   if (sites === undefined) {
@@ -150,22 +150,24 @@ export default function ArticlesPage() {
       {filtered.length > 0 ? (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
           {/* Table header */}
-          <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_100px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
+          <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_140px_100px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
             <span>Title</span>
             <span>Status</span>
             <span>Words</span>
+            <span>Actions</span>
             <span className="text-right">Created</span>
           </div>
 
           {filtered.map((article) => {
             const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
+            const canApprove = article.status === "draft" || article.status === "review";
+            const canDelete = article.status !== "published";
             return (
-              <Link
+              <div
                 key={article._id}
-                href={`/articles/${article._id}`}
-                className="group flex flex-col sm:grid sm:grid-cols-[1fr_100px_80px_100px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
+                className="group flex flex-col sm:grid sm:grid-cols-[1fr_100px_80px_140px_100px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
               >
-                <div className="flex items-center gap-3 min-w-0">
+                <Link href={`/articles/${article._id}`} className="flex items-center gap-3 min-w-0">
                   {article.featuredImage && (
                     <img
                       src={article.featuredImage}
@@ -181,16 +183,51 @@ export default function ArticlesPage() {
                       /{article.slug}
                     </p>
                   </div>
-                </div>
+                </Link>
                 <StatusBadge status={article.status} />
                 <span className="text-[12px] text-[#8B8FA3] tabular-nums hidden sm:block">
                   {wc.toLocaleString()}
                 </span>
-                <span className="text-[11px] text-[#565A6E] sm:text-right flex items-center gap-1 sm:justify-end">
+                <div className="flex items-center gap-1.5">
+                  {canApprove && (
+                    <>
+                      <button
+                        onClick={() => approveArticle({ articleId: article._id })}
+                        className="inline-flex items-center gap-1 rounded-md bg-[#22C55E]/[0.08] px-2 py-1 text-[10px] font-medium text-[#4ADE80] hover:bg-[#22C55E]/[0.15] transition"
+                        title="Approve"
+                      >
+                        <CheckCircle2 className="h-3 w-3" />
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => rejectArticle({ articleId: article._id })}
+                        className="inline-flex items-center gap-1 rounded-md bg-[#EF4444]/[0.08] px-2 py-1 text-[10px] font-medium text-[#F87171] hover:bg-[#EF4444]/[0.15] transition"
+                        title="Reject"
+                      >
+                        <XCircle className="h-3 w-3" />
+                        Reject
+                      </button>
+                    </>
+                  )}
+                  {canDelete && (
+                    <button
+                      onClick={() => {
+                        if (confirm("Delete this article permanently?")) {
+                          deleteArticle({ articleId: article._id });
+                        }
+                      }}
+                      className="inline-flex items-center rounded-md p-1 text-[#565A6E] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+                <Link href={`/articles/${article._id}`} className="text-[11px] text-[#565A6E] sm:text-right flex items-center gap-1 sm:justify-end">
                   {formatDistanceToNow(article.createdAt, { addSuffix: true })}
                   <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition" />
-                </span>
-              </Link>
+                </Link>
+              </div>
             );
           })}
         </div>

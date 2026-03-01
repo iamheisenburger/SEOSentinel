@@ -12,7 +12,8 @@ type Status =
   | "queued"
   | "used"
   | "ready"
-  | "review";
+  | "review"
+  | "rejected";
 
 interface StatusBadgeProps {
   status: string;
@@ -36,10 +37,16 @@ const config: Record<
     text: "text-[#4ADE80]",
   },
   ready: {
-    label: "Ready",
+    label: "Approved",
     dot: "bg-[#22C55E]",
     bg: "bg-[#22C55E]/[0.08]",
     text: "text-[#4ADE80]",
+  },
+  rejected: {
+    label: "Rejected",
+    dot: "bg-[#EF4444]",
+    bg: "bg-[#EF4444]/[0.08]",
+    text: "text-[#F87171]",
   },
   draft: {
     label: "Draft",

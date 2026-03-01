@@ -1,6 +1,6 @@
 "use client";
 
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useMemo, useState } from "react";
@@ -12,11 +12,11 @@ import {
   Target,
   RefreshCw,
   Star,
-  Zap,
   Loader2,
   CheckCircle2,
   Clock,
   Play,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -33,6 +33,8 @@ export default function PlanPage() {
   );
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
   const generateArticle = useAction(api.actions.pipeline.generateArticle);
+  const removeTopic = useMutation(api.topics.remove);
+  const removeUnused = useMutation(api.topics.removeUnused);
   const [status, setStatus] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
   const [generatingTopicId, setGeneratingTopicId] = useState<string | null>(null);
@@ -121,14 +123,31 @@ export default function PlanPage() {
         title="Topics"
         subtitle={`${availableCount} available · ${usedCount} used`}
         actions={
-          <Button
-            size="sm"
-            onClick={handleGenerate}
-            disabled={!site}
-            icon={<RefreshCw className="h-3.5 w-3.5" />}
-          >
-            Generate Topics
-          </Button>
+          <div className="flex items-center gap-2">
+            {availableCount > 0 && (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={async () => {
+                  if (!site?._id) return;
+                  if (!confirm(`Delete all ${availableCount} unused topics? Used topics will be kept.`)) return;
+                  await removeUnused({ siteId: site._id });
+                  setStatus("Unused topics cleared.");
+                }}
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+              >
+                Clear Unused
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={handleGenerate}
+              disabled={!site}
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+            >
+              Generate Topics
+            </Button>
+          </div>
         }
       />
 
@@ -272,11 +291,10 @@ export default function PlanPage() {
                     </span>
                   ) : (
                     <>
-                      <span className="text-[11px] text-[#8B8FA3]">Available</span>
                       <button
                         onClick={() => handleGenerateArticle(topic._id)}
                         disabled={!!runningJob || isManuallyGenerating}
-                        className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-[#8B8FA3] hover:bg-white/[0.08] hover:text-[#EDEEF1] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="inline-flex items-center gap-1 rounded-md bg-[#0EA5E9]/[0.08] px-2 py-1 text-[10px] font-medium text-[#38BDF8] hover:bg-[#0EA5E9]/[0.15] transition disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         {isManuallyGenerating ? (
                           <Loader2 className="h-2.5 w-2.5 animate-spin" />
@@ -286,6 +304,15 @@ export default function PlanPage() {
                         Generate
                       </button>
                     </>
+                  )}
+                  {!isGenerating && !isQueued && (
+                    <button
+                      onClick={() => removeTopic({ topicId: topic._id })}
+                      className="inline-flex items-center rounded-md p-1 text-[#565A6E] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
+                      title="Delete topic"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
                   )}
                 </div>
               </div>
