@@ -702,7 +702,7 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: "gpt-4o-mini",
+    model: "gpt-5-mini-2025-08-07",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -1070,13 +1070,20 @@ async function handleArticle(
     "18. REAL COMPANY CASE STUDIES: Include 3-5 real company examples (e.g. LEGO, HubSpot, Shopify) with specific metrics and outcomes. Example: 'Domino's chatbot managed millions of orders monthly, leading to a 25% increase in customer satisfaction.' Pull from research — NEVER fabricate case studies.\n" +
     "19. NO META-TALK: Output the article content only within the JSON structure. No explanations outside.\n" +
     "20. JSON ONLY: Output a single JSON object. No markdown code blocks around it.\n" +
-    "21. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief.",
+    "21. SOURCES: Include real, verifiable source URLs. Prefer sources from the research brief." +
+    (site.language && site.language !== "en"
+      ? `\n22. LANGUAGE: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ questions, key takeaways, and meta fields MUST be in ${site.language}.`
+      : ""),
     `SITE CONTEXT:\n` +
     `Domain: ${site.domain}\n` +
     `Site: ${site.siteName ?? site.domain}\n` +
+    `Type: ${site.siteType ?? "Website"}\n` +
     `Summary: ${site.siteSummary ?? ""}\n` +
     `Niche: ${site.niche ?? ""}\n` +
     `Blog Theme: ${site.blogTheme ?? ""}` +
+    (site.keyFeatures?.length ? `\nKEY FEATURES: ${site.keyFeatures.join("; ")}` : "") +
+    (site.founders ? `\nFOUNDERS: ${site.founders}` : "") +
+    (site.targetCountry ? `\nTARGET COUNTRY/REGION: ${site.targetCountry} — tailor examples, stats, and references to this market.` : "") +
     audienceBlock +
     competitorBlock +
     ctaBlock +
