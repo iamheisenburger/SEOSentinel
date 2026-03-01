@@ -29,16 +29,19 @@ import {
   Webhook,
   Copy,
   KeyRound,
+  Palette,
+  Eye,
 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-type Step = "domain" | "profile" | "audience" | "strategy" | "generate" | "done";
+type Step = "domain" | "profile" | "audience" | "strategy" | "preview" | "generate" | "done";
 
 const STEPS: { key: Step; label: string; icon: typeof Globe }[] = [
   { key: "domain", label: "Website", icon: Globe },
   { key: "profile", label: "Profile", icon: Building2 },
   { key: "audience", label: "Audience", icon: Users },
   { key: "strategy", label: "Strategy", icon: Settings },
+  { key: "preview", label: "Preview", icon: Eye },
   { key: "generate", label: "Launch", icon: Zap },
 ];
 
@@ -277,6 +280,12 @@ export function SetupWizard() {
   const [approvalRequired, setApprovalRequired] = useState(true);
   const [urlStructure, setUrlStructure] = useState("/blog/[slug]");
 
+  // Brand detection (from crawl)
+  const [brandPrimaryColor, setBrandPrimaryColor] = useState<string | null>(null);
+  const [brandAccentColor, setBrandAccentColor] = useState<string | null>(null);
+  const [brandFontFamily, setBrandFontFamily] = useState<string | null>(null);
+  const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(null);
+
   // Loading states
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -348,6 +357,14 @@ export function SetupWizard() {
       setCompetitors(a.suggestedCompetitors);
       setAnchorKeywords(a.suggestedAnchorKeywords);
 
+      // Populate brand fields
+      if (result.brand) {
+        setBrandPrimaryColor(result.brand.primaryColor);
+        setBrandAccentColor(result.brand.accentColor);
+        setBrandFontFamily(result.brand.fontFamily);
+        setBrandLogoUrl(result.brand.logoUrl);
+      }
+
       setStatusMsg(null);
       setStep("profile");
     } catch (e) {
@@ -402,15 +419,11 @@ export function SetupWizard() {
     }
   };
 
-  // ─── Save strategy + generate ───────────────────────
-  const handleSaveStrategyAndGenerate = async () => {
+  // ─── Save strategy + move to preview ────────────────
+  const handleSaveStrategy = async () => {
     if (!siteId) return;
     setError(null);
-    setGenerating(true);
-
     try {
-      // Save strategy settings
-      setStatusMsg("Saving content strategy...");
       await upsert({
         id: siteId,
         domain,
@@ -425,12 +438,32 @@ export function SetupWizard() {
         approvalRequired,
         urlStructure,
       });
+      setStep("preview");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save strategy");
+    }
+  };
 
-      // Generate topic plan
+  // ─── Generate from preview step ───────────────────
+  const handleGenerateFromPreview = async () => {
+    if (!siteId) return;
+    setError(null);
+    setGenerating(true);
+
+    try {
+      // Persist any brand color overrides
+      if (brandPrimaryColor) {
+        await upsert({
+          id: siteId,
+          domain,
+          brandPrimaryColor,
+          brandAccentColor: brandAccentColor ?? undefined,
+        });
+      }
+
       setStatusMsg("Generating SEO topic plan based on your site analysis...");
       await generatePlan({ siteId });
 
-      // Generate first article
       setStatusMsg("Writing your first article — research, writing, fact-checking...");
       await generateNow({ siteId });
 
@@ -739,6 +772,61 @@ export function SetupWizard() {
               <EditableField label="Founders" value={founders} onChange={setFounders} />
             </div>
 
+            {/* ── Detected Branding ── */}
+            {(brandPrimaryColor || brandFontFamily || brandLogoUrl) && (
+              <div className="mt-4 border-t border-white/[0.04] pt-4">
+                <div className="flex items-center gap-2 mb-3 px-3">
+                  <Palette className="h-4 w-4 text-[#0EA5E9]" />
+                  <h3 className="text-[13px] font-medium text-[#EDEEF1]">Detected Branding</h3>
+                </div>
+
+                {brandPrimaryColor && (
+                  <div className="flex items-center gap-3 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="h-8 w-8 rounded-lg border border-white/[0.1]"
+                        style={{ backgroundColor: brandPrimaryColor }}
+                      />
+                      <div>
+                        <p className="text-[11px] text-[#8B8FA3]">Primary</p>
+                        <p className="text-[12px] text-[#EDEEF1] font-mono">{brandPrimaryColor}</p>
+                      </div>
+                    </div>
+                    {brandAccentColor && (
+                      <div className="flex items-center gap-2 ml-4">
+                        <div
+                          className="h-8 w-8 rounded-lg border border-white/[0.1]"
+                          style={{ backgroundColor: brandAccentColor }}
+                        />
+                        <div>
+                          <p className="text-[11px] text-[#8B8FA3]">Accent</p>
+                          <p className="text-[12px] text-[#EDEEF1] font-mono">{brandAccentColor}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {brandFontFamily && (
+                  <div className="px-3 py-2">
+                    <p className="text-[11px] text-[#8B8FA3]">Font Family</p>
+                    <p className="text-[13px] text-[#EDEEF1]">{brandFontFamily}</p>
+                  </div>
+                )}
+
+                {brandLogoUrl && (
+                  <div className="px-3 py-2">
+                    <p className="text-[11px] text-[#8B8FA3] mb-1">Logo</p>
+                    <img src={brandLogoUrl} alt="Detected logo" className="h-8 max-w-[160px] object-contain" />
+                  </div>
+                )}
+
+                <p className="px-3 text-[10px] text-[#565A6E] mt-1">
+                  Detected programmatically from your website. Used to style your article previews.
+                </p>
+              </div>
+            )}
+
             <div className="flex gap-3 mt-6">
               <Button
                 variant="secondary"
@@ -958,12 +1046,192 @@ export function SetupWizard() {
                 Back
               </Button>
               <Button
-                onClick={handleSaveStrategyAndGenerate}
+                onClick={handleSaveStrategy}
+                icon={<ArrowRight className="h-3.5 w-3.5" />}
+                className="flex-[2]"
+              >
+                Continue to Preview
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════
+            Step 5: Article Preview
+            ════════════════════════════════════════════ */}
+        {step === "preview" && (
+          <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">
+            <SectionHeader
+              icon={Eye}
+              title="Article Preview"
+              subtitle="This is how your articles will look with your brand styling"
+            />
+
+            {/* ── Mock Article (light background, simulating user's blog) ── */}
+            <div
+              className="rounded-xl border border-white/[0.1] overflow-hidden"
+              style={{ fontFamily: brandFontFamily ? `"${brandFontFamily}", system-ui, sans-serif` : "system-ui, sans-serif" }}
+            >
+              {/* Hero area */}
+              <div className="h-36 bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
+                <div className="text-center">
+                  {brandLogoUrl ? (
+                    <img src={brandLogoUrl} alt="Logo" className="h-8 mx-auto mb-2 object-contain" />
+                  ) : (
+                    <div className="h-8 w-8 mx-auto mb-2 rounded-lg bg-gray-300" />
+                  )}
+                  <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                    {siteName || "Your Blog"} Preview
+                  </p>
+                </div>
+              </div>
+
+              {/* Article content */}
+              <div className="bg-white p-6">
+                <h1 className="text-[22px] font-bold leading-tight mb-2" style={{ color: "#1a1a1a" }}>
+                  10 Proven Strategies to Boost Your {niche ? niche.split(" ")[0] : "Business"} Growth in 2026
+                </h1>
+
+                <div className="flex items-center gap-3 mb-4 text-[11px] text-gray-400">
+                  <span>8 min read</span>
+                  <span>&middot;</span>
+                  <span>3,800 words</span>
+                  <span>&middot;</span>
+                  <span>March 1, 2026</span>
+                </div>
+
+                <p className="text-[14px] text-gray-600 leading-relaxed mb-4">
+                  In today&apos;s competitive landscape, {siteName || "businesses"} need
+                  data-driven strategies to stand out. This comprehensive guide covers
+                  the latest approaches backed by industry research and real case studies...
+                </p>
+
+                {/* H2 with brand color */}
+                <h2
+                  className="text-[18px] font-bold mb-2"
+                  style={{ color: brandPrimaryColor || "#1a1a1a" }}
+                >
+                  1. Understanding Your Target Audience
+                </h2>
+
+                <p className="text-[14px] text-gray-600 leading-relaxed mb-3">
+                  Before implementing any strategy, it&apos;s essential to understand who you&apos;re serving.{" "}
+                  <a href="#" className="underline underline-offset-2" style={{ color: brandPrimaryColor || "#0EA5E9" }}>
+                    Recent research [1]
+                  </a>{" "}
+                  shows that companies with clearly defined buyer personas see 73% higher conversion rates.
+                </p>
+
+                {/* Expert blockquote with brand accent */}
+                <blockquote
+                  className="my-4 py-3 pl-4 pr-4 text-[14px] text-gray-500 italic rounded-r-lg"
+                  style={{
+                    borderLeft: `3px solid ${brandPrimaryColor || "#0EA5E9"}`,
+                    backgroundColor: `${brandPrimaryColor || "#0EA5E9"}08`,
+                  }}
+                >
+                  &ldquo;The most successful companies don&apos;t just find customers — they understand them deeply.&rdquo;
+                  <span className="block mt-1 text-[12px] text-gray-400 not-italic">&mdash; Industry Expert</span>
+                </blockquote>
+
+                {/* Mini comparison table */}
+                <div className="my-4 overflow-hidden rounded-lg border border-gray-200">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr style={{ backgroundColor: `${brandPrimaryColor || "#0EA5E9"}0D` }}>
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700">Strategy</th>
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700">Impact</th>
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700">Difficulty</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-t border-gray-100">
+                        <td className="px-3 py-2 text-gray-600">Content Marketing</td>
+                        <td className="px-3 py-2 text-gray-600">High</td>
+                        <td className="px-3 py-2 text-gray-600">Medium</td>
+                      </tr>
+                      <tr className="border-t border-gray-100">
+                        <td className="px-3 py-2 text-gray-600">SEO Optimization</td>
+                        <td className="px-3 py-2 text-gray-600">Very High</td>
+                        <td className="px-3 py-2 text-gray-600">Medium</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* CTA preview */}
+                {ctaText && (
+                  <div className="mt-4 mb-3">
+                    <a
+                      href="#"
+                      className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-medium text-white"
+                      style={{ backgroundColor: brandPrimaryColor || "#0EA5E9" }}
+                    >
+                      {ctaText}
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </a>
+                  </div>
+                )}
+
+                {/* Fade-out */}
+                <div className="h-12 bg-gradient-to-b from-transparent to-white" />
+                <p className="text-center text-[11px] text-gray-400 -mt-2">Article continues...</p>
+              </div>
+            </div>
+
+            {/* Brand info + override */}
+            <div className="mt-4 rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
+              <p className="text-[11px] text-[#8B8FA3]">
+                <Sparkles className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
+                {brandPrimaryColor
+                  ? `Using your detected brand color (${brandPrimaryColor}) for headings, links, and accents.`
+                  : "No brand color detected — articles will use a default blue accent. You can customize below."}
+                {brandFontFamily ? ` Font: ${brandFontFamily}.` : ""}
+              </p>
+            </div>
+
+            {/* Manual color override */}
+            <div className="mt-3 px-3">
+              <label className="text-[11px] font-medium text-[#8B8FA3] mb-1 block">
+                Override brand color (optional)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={brandPrimaryColor || "#0EA5E9"}
+                  onChange={(e) => setBrandPrimaryColor(e.target.value.toUpperCase())}
+                  className="h-8 w-8 rounded border border-white/[0.1] bg-transparent cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={brandPrimaryColor || ""}
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    if (/^#[0-9A-Fa-f]{6}$/.test(v)) setBrandPrimaryColor(v.toUpperCase());
+                  }}
+                  placeholder="#0EA5E9"
+                  className="w-24 rounded-lg border border-white/[0.06] bg-[#0F1117] px-2 py-1.5 text-[12px] text-[#EDEEF1] font-mono outline-none focus:border-[#0EA5E9]/50"
+                />
+              </div>
+            </div>
+
+            {/* Navigation */}
+            <div className="flex gap-3 mt-6">
+              <Button
+                variant="secondary"
+                onClick={() => setStep("strategy")}
+                icon={<ArrowLeft className="h-3.5 w-3.5" />}
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button
+                onClick={handleGenerateFromPreview}
                 loading={generating}
                 icon={<Zap className="h-3.5 w-3.5" />}
                 className="flex-[2]"
               >
-                {generating ? "Generating..." : "Save & Generate First Article"}
+                {generating ? "Generating..." : "Looks Good — Generate First Article"}
               </Button>
             </div>
 
@@ -976,7 +1244,7 @@ export function SetupWizard() {
         )}
 
         {/* ════════════════════════════════════════════
-            Step 5: Generate (show progress)
+            Step 6: Generate (show progress)
             ════════════════════════════════════════════ */}
         {step === "generate" && (
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">

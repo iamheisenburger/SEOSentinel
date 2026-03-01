@@ -376,6 +376,230 @@ async function fetchHtml(domain: string) {
   return { url, html };
 }
 
+// ── Brand Detection (ported from LeadPilot — fully programmatic) ──
+
+interface BrandDetection {
+  primaryColor: string | null;
+  accentColor: string | null;
+  fontFamily: string | null;
+  logoUrl: string | null;
+}
+
+interface ColorSignal { source: string; color: string }
+
+const MIN_CONFIDENCE_SCORE = 60;
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return "#" + [r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    return Math.round(255 * (l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1)));
+  };
+  return rgbToHex(f(0), f(8), f(4));
+}
+
+function oklchToHex(L: number, C: number, H: number): string {
+  const l = L > 1 ? L / 100 : L;
+  const hRad = (H * Math.PI) / 180;
+  const a = C * Math.cos(hRad);
+  const b = C * Math.sin(hRad);
+  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+  const lr = l_ * l_ * l_;
+  const mr = m_ * m_ * m_;
+  const sr = s_ * s_ * s_;
+  const r = +4.0767416621 * lr - 3.3077115913 * mr + 0.2309699292 * sr;
+  const g = -1.2684380046 * lr + 2.6097574011 * mr - 0.3413193965 * sr;
+  const bv = -0.0041960863 * lr - 0.7034186147 * mr + 1.7076147010 * sr;
+  const toSrgb = (x: number) => {
+    const c = Math.max(0, Math.min(1, x));
+    return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+  };
+  return rgbToHex(Math.round(toSrgb(r) * 255), Math.round(toSrgb(g) * 255), Math.round(toSrgb(bv) * 255));
+}
+
+function normalizeHex(hex: string): string {
+  hex = hex.trim();
+  if (hex.length === 4) return "#" + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+  return hex.toUpperCase().slice(0, 7);
+}
+
+function isNeutral(hex: string): boolean {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  if (brightness < 30 || brightness > 230) return true;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  if (max - min < 25) return true;
+  return false;
+}
+
+function colorDistance(hex1: string, hex2: string): number {
+  const r1 = parseInt(hex1.slice(1, 3), 16), g1 = parseInt(hex1.slice(3, 5), 16), b1 = parseInt(hex1.slice(5, 7), 16);
+  const r2 = parseInt(hex2.slice(1, 3), 16), g2 = parseInt(hex2.slice(3, 5), 16), b2 = parseInt(hex2.slice(5, 7), 16);
+  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+}
+
+function parseAnyColor(value: string): string | null {
+  value = value.trim();
+  if (value.startsWith("#")) return normalizeHex(value);
+  const rgbMatch = value.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (rgbMatch) return rgbToHex(parseInt(rgbMatch[1]), parseInt(rgbMatch[2]), parseInt(rgbMatch[3]));
+  const hslMatch = value.match(/hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/i);
+  if (hslMatch) return hslToHex(parseFloat(hslMatch[1]), parseFloat(hslMatch[2]), parseFloat(hslMatch[3]));
+  const bareHsl = value.match(/^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%$/);
+  if (bareHsl) return hslToHex(parseFloat(bareHsl[1]), parseFloat(bareHsl[2]), parseFloat(bareHsl[3]));
+  const oklchMatch = value.match(/oklch\(\s*([\d.]+)%?\s+([\d.]+)\s+([\d.]+)\s*\)/i);
+  if (oklchMatch) return oklchToHex(parseFloat(oklchMatch[1]), parseFloat(oklchMatch[2]), parseFloat(oklchMatch[3]));
+  return null;
+}
+
+async function gatherColorSignals(html: string, siteUrl: string): Promise<ColorSignal[]> {
+  if (!html) return [];
+  const signals: ColorSignal[] = [];
+
+  // 1. Meta theme-color
+  const themeColor = html.match(/<meta[^>]*name=["']theme-color["'][^>]*content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']theme-color["']/i);
+  if (themeColor) { const c = parseAnyColor(themeColor[1]); if (c) signals.push({ source: "meta theme-color", color: c }); }
+
+  // 2. msapplication-TileColor
+  const tileColor = html.match(/<meta[^>]*name=["']msapplication-TileColor["'][^>]*content=["']([^"']+)["']/i);
+  if (tileColor) { const c = parseAnyColor(tileColor[1]); if (c) signals.push({ source: "msapplication-TileColor", color: c }); }
+
+  // 3. Manifest
+  let origin = "";
+  try { origin = new URL(siteUrl).origin; } catch { /* ignore */ }
+  if (origin) {
+    const manifestLink = html.match(/<link[^>]*rel=["']manifest["'][^>]*href=["']([^"']+)["']/i);
+    const manifestPaths = [...(manifestLink ? [manifestLink[1]] : []), "/manifest.json", "/site.webmanifest"];
+    for (const path of manifestPaths) {
+      try {
+        const manifestUrl = path.startsWith("http") ? path : origin + path;
+        const res = await fetch(manifestUrl, { signal: AbortSignal.timeout(3000), headers: { "User-Agent": "Mozilla/5.0 (compatible; SEOSentinel/1.0)" } });
+        if (res.ok) {
+          const manifest = await res.json();
+          if (manifest.theme_color) { const c = parseAnyColor(manifest.theme_color); if (c) signals.push({ source: "manifest theme_color", color: c }); }
+          break;
+        }
+      } catch { /* continue */ }
+    }
+  }
+
+  // 4. CSS variables (brand-identity only)
+  const cssVarRegex = /--(?:primary|brand|accent|main|theme|color-primary|color-accent|cta)(?:-color)?(?:-\d{1,3})?:\s*([^;}\n]+)/gi;
+  for (const m of html.matchAll(cssVarRegex)) {
+    const c = parseAnyColor(m[1].trim());
+    if (c && !isNeutral(c)) signals.push({ source: "CSS variable", color: c });
+  }
+
+  // 5. External CSS files (critical for Tailwind sites)
+  if (origin) {
+    const cssUrls: string[] = [];
+    for (const m of html.matchAll(/<link[^>]*href=["']([^"']+\.css[^"']*)["'][^>]*>/gi)) cssUrls.push(m[1]);
+    for (const m of html.matchAll(/<link[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/gi)) {
+      if (!cssUrls.includes(m[1])) cssUrls.push(m[1]);
+    }
+    for (const cssPath of cssUrls.slice(0, 3)) {
+      try {
+        const cssUrl = cssPath.startsWith("http") ? cssPath : origin + (cssPath.startsWith("/") ? "" : "/") + cssPath;
+        const cssRes = await fetch(cssUrl, { signal: AbortSignal.timeout(4000), headers: { "User-Agent": "Mozilla/5.0 (compatible; SEOSentinel/1.0)" } });
+        if (!cssRes.ok) continue;
+        const cssText = await cssRes.text();
+        for (const m of cssText.matchAll(cssVarRegex)) {
+          const c = parseAnyColor(m[1].trim());
+          if (c && !isNeutral(c)) signals.push({ source: "external CSS variable", color: c });
+        }
+      } catch { /* continue */ }
+    }
+  }
+
+  // 6. Button/link inline styles
+  for (const m of html.matchAll(/<(?:button|a)\b[^>]*style=["']([^"']+)["'][^>]*>/gi)) {
+    const bgMatch = m[1].match(/background(?:-color)?:\s*([^;]+)/i);
+    if (bgMatch) { const c = parseAnyColor(bgMatch[1].trim()); if (c && !isNeutral(c)) signals.push({ source: "button/link color", color: c }); }
+  }
+
+  // Deduplicate
+  const seen = new Set<string>();
+  return signals.filter(s => { if (seen.has(s.color)) return false; seen.add(s.color); return true; });
+}
+
+function selectBrandColors(signals: ColorSignal[]): { primary: string | null; accent: string | null } {
+  if (signals.length === 0) return { primary: null, accent: null };
+  const scored: { hex: string; score: number }[] = [];
+  for (const signal of signals) {
+    const hex = signal.color;
+    const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const saturation = max === 0 ? 0 : (max - min) / max;
+    if (brightness > 210 || brightness < 35) continue;
+    if (saturation < 0.12) continue;
+    let score = 0;
+    if (brightness >= 60 && brightness <= 180) score += 25;
+    else if (brightness >= 35 && brightness <= 210) score += 10;
+    score += saturation * 35;
+    if (signal.source === "meta theme-color") score += 55;
+    if (signal.source === "manifest theme_color") score += 50;
+    if (signal.source === "external CSS variable") score += 48;
+    if (signal.source === "msapplication-TileColor") score += 45;
+    if (signal.source === "CSS variable") score += 35;
+    if (signal.source.includes("button/link color")) score += 30;
+    if (signal.source === "manifest background_color") score += 5;
+    if (score > 0) scored.push({ hex, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const confident = scored.filter(c => c.score >= MIN_CONFIDENCE_SCORE);
+  const primary = confident[0]?.hex ?? null;
+  let accent: string | null = null;
+  for (const c of confident.slice(1)) {
+    if (primary && colorDistance(primary, c.hex) >= 60) { accent = c.hex; break; }
+  }
+  return { primary, accent };
+}
+
+async function extractBrandFromHtml(html: string, siteUrl: string): Promise<BrandDetection> {
+  const result: BrandDetection = { primaryColor: null, accentColor: null, fontFamily: null, logoUrl: null };
+
+  // Colors (programmatic scoring)
+  const signals = await gatherColorSignals(html, siteUrl);
+  const colors = selectBrandColors(signals);
+  result.primaryColor = colors.primary;
+  result.accentColor = colors.accent;
+
+  // Font (Google Fonts URL or CSS body font-family)
+  const googleFontMatch = html.match(/fonts\.googleapis\.com\/css2?\?family=([^&"']+)/i);
+  if (googleFontMatch) {
+    result.fontFamily = decodeURIComponent(googleFontMatch[1]).split(":")[0].replace(/\+/g, " ");
+  } else {
+    const fontFamilyMatch = html.match(/(?:body|:root|html)\s*\{[^}]*font-family:\s*["']?([^;,"'}\n]+)/i);
+    if (fontFamilyMatch) {
+      result.fontFamily = fontFamilyMatch[1].trim().split(",")[0].replace(/["']/g, "").trim();
+    }
+  }
+
+  // Logo (img with "logo" in attributes, fallback to og:image)
+  let origin = "";
+  try { origin = new URL(siteUrl).origin; } catch { /* ignore */ }
+  const logoImg = html.match(/<img[^>]*(?:class|id|alt)=["'][^"']*logo[^"']*["'][^>]*src=["']([^"']+)["']/i);
+  const ogImage = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+  const logoSrc = logoImg?.[1] || ogImage?.[1] || null;
+  if (logoSrc) {
+    if (logoSrc.startsWith("http")) result.logoUrl = logoSrc;
+    else if (origin) result.logoUrl = origin + (logoSrc.startsWith("/") ? "" : "/") + logoSrc;
+  }
+
+  return result;
+}
+
 async function inferSiteProfile(
   ctx: ActionCtx,
   html: string,
@@ -1167,10 +1391,27 @@ export const crawlAndAnalyze = action({
     // Step 1: Crawl (reuse existing handleOnboarding)
     const crawlResult = await handleOnboarding(ctx, siteId);
 
-    // Step 2: Fetch homepage HTML again for deep analysis
+    // Step 2: Fetch homepage HTML again for deep analysis + brand detection
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
-    const { html } = await fetchHtml(site.domain);
+    const { html, url } = await fetchHtml(site.domain);
+
+    // Step 2.5: Programmatic brand extraction (colors, fonts, logo)
+    let brand: BrandDetection = { primaryColor: null, accentColor: null, fontFamily: null, logoUrl: null };
+    try {
+      brand = await extractBrandFromHtml(html, url);
+      console.log(`Brand detection: primary=${brand.primaryColor}, accent=${brand.accentColor}, font=${brand.fontFamily}, logo=${brand.logoUrl ? "found" : "none"}`);
+      await ctx.runMutation(api.sites.upsert, {
+        id: siteId,
+        domain: site.domain,
+        brandPrimaryColor: brand.primaryColor ?? undefined,
+        brandAccentColor: brand.accentColor ?? undefined,
+        brandFontFamily: brand.fontFamily ?? undefined,
+        brandLogoUrl: brand.logoUrl ?? undefined,
+      });
+    } catch (err) {
+      console.error(`Brand detection failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
+    }
 
     // Step 3: Deep AI analysis
     const analysis = await handleAnalyzeSite(ctx, siteId, html, crawlResult.pages);
@@ -1178,6 +1419,12 @@ export const crawlAndAnalyze = action({
     return {
       pages: crawlResult.pages,
       analysis,
+      brand: {
+        primaryColor: brand.primaryColor,
+        accentColor: brand.accentColor,
+        fontFamily: brand.fontFamily,
+        logoUrl: brand.logoUrl,
+      },
     };
   },
 });

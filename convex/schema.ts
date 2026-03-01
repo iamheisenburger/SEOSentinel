@@ -44,6 +44,11 @@ export default defineSchema({
     ctaText: v.optional(v.string()),
     ctaUrl: v.optional(v.string()),
     imageBrandingPrompt: v.optional(v.string()),
+    // ── Brand / Visual Identity (populated by programmatic crawl) ──
+    brandPrimaryColor: v.optional(v.string()),   // hex, e.g. "#F97316"
+    brandAccentColor: v.optional(v.string()),    // hex
+    brandFontFamily: v.optional(v.string()),     // e.g. "Inter"
+    brandLogoUrl: v.optional(v.string()),        // absolute URL to logo
     anchorKeywords: v.optional(v.array(v.string())), // priority backlink keywords
     externalLinking: v.optional(v.boolean()),
     sourceCitations: v.optional(v.boolean()),
