@@ -21,11 +21,15 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
+  // Latch: once the wizard is shown, keep it visible until user finishes (page reload).
+  // Without this, Convex reactive updates (upsert saving siteSummary mid-wizard)
+  // would flip needsOnboarding false and yank the wizard away.
+  const wizardLatch = useRef(false);
   const sites = useQuery(api.sites.list);
   const site = sites?.[0];
   const topics = useQuery(
@@ -82,9 +86,12 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  // No site OR site exists but hasn't been analyzed yet OR explicitly adding new site
-  const needsOnboarding = !site || !site.siteSummary || forceSetup;
-  if (needsOnboarding) {
+  // Show wizard if: no site, not analyzed, or explicit ?setup=new
+  if (!site || !site.siteSummary || forceSetup) {
+    wizardLatch.current = true;
+  }
+  // Once latched, stay on wizard until page reload (wizard "done" step calls reload)
+  if (wizardLatch.current || !site) {
     return <SetupWizard />;
   }
 
