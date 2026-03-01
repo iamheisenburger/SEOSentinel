@@ -17,6 +17,7 @@ import {
   Clock,
   Play,
   Trash2,
+  Calendar,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -58,15 +59,61 @@ export default function PlanPage() {
     });
   }, [sorted, activeTab, activeTopicLabel]);
 
-  const availableCount = sorted.filter(
-    (t) => t.status !== "used" && t.status !== "queued",
-  ).length;
+  const available = useMemo(
+    () => sorted.filter((t) => t.status !== "used" && t.status !== "queued"),
+    [sorted],
+  );
+  const availableCount = available.length;
   const usedCount = sorted.filter((t) => t.status === "used").length;
   const generatingCount = activeTopicLabel ? 1 : 0;
+
+  // Schedule: project publish dates and group by week
+  const scheduleWeeks = useMemo(() => {
+    const cadence = site?.cadencePerWeek ?? 4;
+    const msPerArticle = ((7 * 24) / cadence) * 60 * 60 * 1000;
+    const now = Date.now();
+
+    type ScheduledTopic = typeof available[number] & { projectedDate: Date };
+    const scheduled: ScheduledTopic[] = available.map((topic, i) => ({
+      ...topic,
+      projectedDate: new Date(now + msPerArticle * i),
+    }));
+
+    // Group by week (Mon-Sun)
+    const weeks: { label: string; startDate: Date; topics: ScheduledTopic[] }[] = [];
+    for (const topic of scheduled) {
+      const d = topic.projectedDate;
+      // Get Monday of this week
+      const day = d.getDay();
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - ((day + 6) % 7));
+      monday.setHours(0, 0, 0, 0);
+
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+
+      const weekKey = monday.toISOString().slice(0, 10);
+      let week = weeks.find((w) => w.startDate.toISOString().slice(0, 10) === weekKey);
+      if (!week) {
+        const isThisWeek = new Date().getTime() >= monday.getTime() && new Date().getTime() <= sunday.getTime() + 86400000;
+        const isNextWeek = !isThisWeek && monday.getTime() - new Date().getTime() < 14 * 86400000 && monday.getTime() > new Date().getTime();
+        const label = isThisWeek
+          ? "This Week"
+          : isNextWeek
+            ? "Next Week"
+            : `Week of ${monday.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+        week = { label, startDate: monday, topics: [] };
+        weeks.push(week);
+      }
+      week.topics.push(topic);
+    }
+    return weeks;
+  }, [available, site?.cadencePerWeek]);
 
   const tabs = [
     { id: "all", label: "All", count: sorted.length },
     { id: "available", label: "Available", count: availableCount },
+    { id: "schedule", label: "Schedule", count: availableCount },
     ...(generatingCount > 0
       ? [{ id: "generating", label: "In Progress", count: generatingCount }]
       : []),
@@ -201,8 +248,92 @@ export default function PlanPage() {
 
       <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
+      {/* Schedule View */}
+      {activeTab === "schedule" && (
+        <div className="flex flex-col gap-4">
+          {site?.cadencePerWeek && (
+            <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
+              <Calendar className="h-3 w-3 text-[#0EA5E9]" />
+              <span>
+                Publishing ~{site.cadencePerWeek} articles/week · {availableCount} topics queued
+              </span>
+            </div>
+          )}
+          {scheduleWeeks.length > 0 ? (
+            scheduleWeeks.map((week) => (
+              <div key={week.startDate.toISOString()}>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`text-[12px] font-semibold ${
+                    week.label === "This Week" ? "text-[#0EA5E9]" : "text-[#EDEEF1]"
+                  }`}>
+                    {week.label}
+                  </span>
+                  <span className="text-[10px] text-[#565A6E]">
+                    {week.topics.length} article{week.topics.length !== 1 ? "s" : ""}
+                  </span>
+                  <div className="flex-1 h-px bg-white/[0.04]" />
+                </div>
+                <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+                  {week.topics.map((topic) => (
+                    <div
+                      key={topic._id}
+                      className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-5 py-3 border-b border-white/[0.04] last:border-0"
+                    >
+                      {/* Projected date */}
+                      <div className="shrink-0 w-20 text-center">
+                        <p className="text-[11px] font-medium text-[#EDEEF1]">
+                          {topic.projectedDate.toLocaleDateString("en-US", { weekday: "short" })}
+                        </p>
+                        <p className="text-[10px] text-[#565A6E]">
+                          {topic.projectedDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </p>
+                      </div>
+                      {/* Priority */}
+                      <div className="flex items-center gap-0.5 shrink-0 w-14">
+                        {topic.priority != null &&
+                          Array.from({ length: Math.min(topic.priority, 5) }).map((_, i) => (
+                            <Star key={i} className="h-2.5 w-2.5 fill-[#F59E0B] text-[#F59E0B]" />
+                          ))}
+                      </div>
+                      {/* Content */}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug">
+                          {topic.label}
+                        </p>
+                        <span className="text-[11px] text-[#0EA5E9]">
+                          {topic.primaryKeyword}
+                        </span>
+                      </div>
+                      {/* Intent */}
+                      {topic.intent && (
+                        <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
+                          topic.intent === "commercial"
+                            ? "bg-[#F59E0B]/[0.08] text-[#FBBF24]"
+                            : topic.intent === "transactional"
+                              ? "bg-[#22C55E]/[0.08] text-[#4ADE80]"
+                              : "bg-white/[0.04] text-[#8B8FA3]"
+                        }`}>
+                          {topic.intent}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
+              <Calendar className="mx-auto h-10 w-10 text-[#565A6E]/30" />
+              <p className="mt-3 text-[13px] text-[#565A6E]">
+                No available topics to schedule. Generate topics first.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Topic List */}
-      {filtered.length > 0 ? (
+      {activeTab !== "schedule" && filtered.length > 0 ? (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
           {filtered.map((topic) => {
             const isUsed = topic.status === "used";
@@ -319,7 +450,7 @@ export default function PlanPage() {
             );
           })}
         </div>
-      ) : (
+      ) : activeTab !== "schedule" ? (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
           <Target className="mx-auto h-10 w-10 text-[#565A6E]/30" />
           <p className="mt-3 text-[13px] text-[#565A6E]">
@@ -328,7 +459,7 @@ export default function PlanPage() {
               : "No topics yet. Generate a plan to see keyword clusters."}
           </p>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

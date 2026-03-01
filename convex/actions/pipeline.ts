@@ -1132,7 +1132,16 @@ async function handleArticle(
     `<content_settings>`,
     `Tone: ${site.tone ?? "professional"} — maintain this tone throughout the entire article.`,
     site.language && site.language !== "en" ? `Language: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ, key takeaways, and meta fields must be in ${site.language}.` : `Language: English`,
-    site.ctaText && site.ctaUrl ? `CTA: Naturally weave in "${site.ctaText}" linking to ${site.ctaUrl} at least once in the body and once at the end. Make it organic, not salesy.` : "",
+    site.ctaText && site.ctaUrl ? [
+      `CTA: Naturally weave in "${site.ctaText}" linking to ${site.ctaUrl} once in the body (organic, not salesy).`,
+      `STYLED CTA BOX: At the very end of the article (after Sources), include this exact HTML CTA box:`,
+      `<div style="margin:2.5em 0 1em;padding:1.5em 2em;border-radius:12px;background:linear-gradient(135deg,${site.brandPrimaryColor ?? "#0EA5E9"}15,${site.brandPrimaryColor ?? "#0EA5E9"}08);border:1px solid ${site.brandPrimaryColor ?? "#0EA5E9"}30;text-align:center;">`,
+      `<p style="font-size:1.2em;font-weight:700;margin:0 0 0.4em;color:${site.brandPrimaryColor ?? "#0EA5E9"};">${site.ctaText}</p>`,
+      `<p style="margin:0 0 1em;color:#555;font-size:0.95em;">${site.siteSummary ? site.siteSummary.split(".")[0] + "." : `Try ${productName} today.`}</p>`,
+      `<a href="${site.ctaUrl}" style="display:inline-block;padding:0.7em 2em;border-radius:8px;background:${site.brandPrimaryColor ?? "#0EA5E9"};color:#fff;font-weight:600;text-decoration:none;font-size:0.95em;">${site.ctaText} →</a>`,
+      `</div>`,
+      `Copy this HTML exactly at the very end. Do not modify the styles or structure.`,
+    ].join("\n") : "",
     site.anchorKeywords?.length ? `Anchor Keywords: Naturally incorporate these throughout: ${site.anchorKeywords.join(", ")}` : "",
     site.sourceCitations !== false
       ? `Citations: Use numbered inline citations [1], [2], [3] for statistics, quotes, and factual claims. Add a "## Sources" section at the end listing each as: [1] Title — URL`
@@ -1180,7 +1189,8 @@ async function handleArticle(
     `10. KEY TAKEAWAYS: "## Key Takeaways" near the end with 5-7 bullet points.`,
     `11. EXPERT QUOTES: 2-3 blockquotes from real experts found in the research. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
     `12. NO FLUFF: Every paragraph must contain specific data, examples, or actionable advice.`,
-    `13. NO META-TALK: Output article content only within the JSON. No explanations outside.`,
+    `13. STYLED CTA BOX: If a CTA is configured, place the styled HTML CTA box at the very end of the article (after Sources section). This is the last thing in the markdown.`,
+    `14. NO META-TALK: Output article content only within the JSON. No explanations outside.`,
     `</article_structure>`,
     ``,
     `<output_format>`,
