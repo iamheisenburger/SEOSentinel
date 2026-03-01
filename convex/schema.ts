@@ -133,6 +133,7 @@ export default defineSchema({
         current: v.number(),
         total: v.number(),
         stepLabel: v.string(),
+        topicLabel: v.optional(v.string()),
       }),
     ),
     createdAt: v.number(),

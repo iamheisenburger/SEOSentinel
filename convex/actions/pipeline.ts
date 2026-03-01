@@ -702,7 +702,7 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: "o4-mini-deep-research-2025-06-26",
+    model: "gpt-4o-mini",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -846,7 +846,7 @@ async function handlePlan(
     `3. Include a MIX of search intents: ~40% informational, ~30% commercial, ~30% transactional.\n` +
     `4. Prefer long-tail keywords (3-5 words) with lower competition over broad head terms.\n` +
     `5. Each topic should target a UNIQUE search query — no two topics should compete for the same SERP.\n` +
-    `6. Generate 10-15 new topics.\n\n` +
+    `6. Generate exactly 10 new topics.\n\n` +
     `Return JSON array: [{"label":"...","primaryKeyword":"...","secondaryKeywords":["..."],"intent":"informational|commercial|transactional","priority":1-5,"notes":"short reason why this topic is valuable"}]`,
     8192,
   );
@@ -865,6 +865,11 @@ async function handleArticle(
   jobId?: Id<"jobs">,
 ): Promise<{ articleId: Id<"articles"> }> {
   const TOTAL_STEPS = 9;
+  const site = await ctx.runQuery(api.sites.get, { siteId });
+  const topic = topicId
+    ? await ctx.runQuery(api.topics.get, { topicId })
+    : null;
+
   const reportProgress = async (step: number, label: string) => {
     if (!jobId) return;
     try {
@@ -873,16 +878,12 @@ async function handleArticle(
         current: step,
         total: TOTAL_STEPS,
         stepLabel: label,
+        topicLabel: topic?.label,
       });
     } catch {
       // Never break pipeline for progress reporting
     }
   };
-
-  const site = await ctx.runQuery(api.sites.get, { siteId });
-  const topic = topicId
-    ? await ctx.runQuery(api.topics.get, { topicId })
-    : null;
   if (!site) throw new Error("Site not found");
   if (topicId && !topic) throw new Error("Topic not found");
 

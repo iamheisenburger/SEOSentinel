@@ -20,7 +20,7 @@ import {
 const navSections = [
   {
     items: [
-      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
     ],
   },
   {

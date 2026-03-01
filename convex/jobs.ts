@@ -132,10 +132,11 @@ export const updateProgress = mutation({
     current: v.number(),
     total: v.number(),
     stepLabel: v.string(),
+    topicLabel: v.optional(v.string()),
   },
-  handler: async (ctx, { jobId, current, total, stepLabel }) => {
+  handler: async (ctx, { jobId, current, total, stepLabel, topicLabel }) => {
     await ctx.db.patch(jobId, {
-      stepProgress: { current, total, stepLabel },
+      stepProgress: { current, total, stepLabel, topicLabel },
       updatedAt: now(),
     });
   },

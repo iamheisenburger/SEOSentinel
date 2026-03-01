@@ -97,7 +97,7 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-[#EDEEF1]">
-            Dashboard
+            Overview
           </h1>
           <div className="mt-1 flex items-center gap-2">
             <span className="text-[13px] text-[#565A6E]">

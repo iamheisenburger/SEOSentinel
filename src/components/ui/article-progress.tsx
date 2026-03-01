@@ -43,8 +43,10 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#0EA5E9] opacity-75" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-[#0EA5E9]" />
         </span>
-        <p className="text-[13px] font-medium text-[#38BDF8]">
-          Generating article...
+        <p className="text-[13px] font-medium text-[#38BDF8] min-w-0 truncate">
+          {runningJob.stepProgress!.topicLabel
+            ? `Generating: ${runningJob.stepProgress!.topicLabel}`
+            : "Generating article..."}
         </p>
         <span className="ml-auto text-[11px] text-[#565A6E] tabular-nums">
           {current}/{total}
