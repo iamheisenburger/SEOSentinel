@@ -571,10 +571,19 @@ export function SetupWizard() {
               {/* ── Platform-specific fields ── */}
               {publishMethod === "github" && (
                 <div className="flex flex-col gap-3">
+                  <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
+                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      <GitBranch className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
+                      Find these from your GitHub repo URL: <span className="text-[#EDEEF1] font-mono">github.com/<span className="text-[#0EA5E9]">owner</span>/<span className="text-[#0EA5E9]">repo</span></span>
+                    </p>
+                    <p className="text-[10px] text-[#565A6E] mt-1">
+                      Example: for <span className="font-mono text-[#8B8FA3]">github.com/acme/my-blog</span>, owner is <span className="text-[#EDEEF1]">acme</span> and repo is <span className="text-[#EDEEF1]">my-blog</span>
+                    </p>
+                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <Input
                       label="GitHub Owner"
-                      placeholder="username"
+                      placeholder="acme"
                       value={repoOwner}
                       onChange={(e) => setRepoOwner(e.target.value)}
                     />
@@ -587,7 +596,7 @@ export function SetupWizard() {
                   </div>
                   <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                     <p className="text-[11px] text-[#8B8FA3]">
-                      <GitBranch className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
+                      <FileText className="inline h-3 w-3 mr-1 text-[#8B8FA3]" />
                       Articles are committed as MDX files to your repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator.
                     </p>
                   </div>
@@ -596,6 +605,15 @@ export function SetupWizard() {
 
               {publishMethod === "wordpress" && (
                 <div className="flex flex-col gap-3">
+                  <div className="rounded-lg bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.1] p-3">
+                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      <KeyRound className="inline h-3 w-3 mr-1 text-[#F59E0B]" />
+                      You&apos;ll need an <span className="text-[#EDEEF1]">Application Password</span> (not your login password).
+                    </p>
+                    <p className="text-[10px] text-[#565A6E] mt-1">
+                      In your WP admin: <span className="text-[#8B8FA3]">Users → Profile → scroll to &ldquo;Application Passwords&rdquo; → enter a name like &ldquo;SEOSentinel&rdquo; → click &ldquo;Add New&rdquo;</span>. Copy the generated password.
+                    </p>
+                  </div>
                   <Input
                     label="WordPress URL"
                     placeholder="https://yoursite.com"
@@ -611,22 +629,25 @@ export function SetupWizard() {
                     />
                     <Input
                       label="Application Password"
-                      placeholder="xxxx xxxx xxxx"
+                      placeholder="xxxx xxxx xxxx xxxx"
                       value={wpAppPassword}
                       onChange={(e) => setWpAppPassword(e.target.value)}
                     />
-                  </div>
-                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                    <p className="text-[11px] text-[#8B8FA3]">
-                      <KeyRound className="inline h-3 w-3 mr-1 text-[#F59E0B]" />
-                      Generate an Application Password in WordPress: <span className="text-[#EDEEF1]">Users → Profile → Application Passwords</span>. This is NOT your login password.
-                    </p>
                   </div>
                 </div>
               )}
 
               {publishMethod === "webhook" && (
                 <div className="flex flex-col gap-3">
+                  <div className="rounded-lg bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.1] p-3">
+                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      <Webhook className="inline h-3 w-3 mr-1 text-[#22C55E]" />
+                      We&apos;ll <span className="text-[#EDEEF1]">POST</span> a JSON payload with <span className="font-mono text-[#EDEEF1]">title</span>, <span className="font-mono text-[#EDEEF1]">markdown</span>, <span className="font-mono text-[#EDEEF1]">html</span>, and metadata to your endpoint.
+                    </p>
+                    <p className="text-[10px] text-[#565A6E] mt-1">
+                      Add a secret to verify requests are from SEOSentinel. We&apos;ll sign the payload with HMAC-SHA256 and include it in the <span className="font-mono text-[#8B8FA3]">X-Signature</span> header.
+                    </p>
+                  </div>
                   <Input
                     label="Webhook URL"
                     placeholder="https://api.yoursite.com/articles"
@@ -635,16 +656,10 @@ export function SetupWizard() {
                   />
                   <Input
                     label="Secret (optional)"
-                    placeholder="For HMAC signature verification"
+                    placeholder="your-webhook-secret"
                     value={webhookSecret}
                     onChange={(e) => setWebhookSecret(e.target.value)}
                   />
-                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                    <p className="text-[11px] text-[#8B8FA3]">
-                      <Webhook className="inline h-3 w-3 mr-1 text-[#22C55E]" />
-                      We&apos;ll POST a JSON payload with <span className="font-mono text-[#EDEEF1]">title</span>, <span className="font-mono text-[#EDEEF1]">markdown</span>, <span className="font-mono text-[#EDEEF1]">html</span>, and metadata to your endpoint.
-                    </p>
-                  </div>
                 </div>
               )}
 
