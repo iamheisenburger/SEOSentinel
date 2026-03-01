@@ -113,14 +113,23 @@ export default function DashboardPage() {
             </span>
           </div>
         </div>
-        <Button
-          onClick={handleGenerateNow}
-          loading={genBusy}
-          disabled={availableTopics === 0}
-          icon={<Zap className="h-3.5 w-3.5" />}
-        >
-          Generate Now
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => window.location.assign("/dashboard?setup=new")}
+            icon={<Globe className="h-3.5 w-3.5" />}
+          >
+            Add Website
+          </Button>
+          <Button
+            onClick={handleGenerateNow}
+            loading={genBusy}
+            disabled={availableTopics === 0}
+            icon={<Zap className="h-3.5 w-3.5" />}
+          >
+            Generate Now
+          </Button>
+        </div>
       </div>
 
       {genMessage && (
