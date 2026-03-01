@@ -4,55 +4,42 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/status-badge";
 import {
-  User,
-  CreditCard,
-  Bell,
+  Globe,
+  FileText,
+  Target,
   Trash2,
-  AlertTriangle,
-  CheckCircle2,
-  Shield,
-  Mail,
-  ExternalLink,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  ArrowRight,
+  Zap,
+  Plus,
 } from "lucide-react";
 import { useState } from "react";
+import Link from "next/link";
+import { formatDistanceToNow } from "date-fns";
+import type { Id } from "../../../../convex/_generated/dataModel";
 
-export default function SettingsPage() {
+export default function WebsitesPage() {
   const sites = useQuery(api.sites.list);
-  const resetAll = useMutation(api.sites.resetAll);
-  const site = sites?.[0];
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
+  const loading = sites === undefined;
 
-  const handleDeleteAll = async () => {
-    setDeleting(true);
-    try {
-      await resetAll();
-      setDeleteMessage("All data has been deleted. Redirecting...");
-      setTimeout(() => window.location.assign("/dashboard"), 1500);
-    } catch {
-      setDeleteMessage("Failed to delete data.");
-    } finally {
-      setDeleting(false);
-      setShowDeleteConfirm(false);
-    }
-  };
-
-  if (sites === undefined) {
+  if (loading) {
     return (
       <div className="flex flex-col gap-5">
         <div>
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-48 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        {[...Array(3)].map((_, i) => (
+        {[...Array(2)].map((_, i) => (
           <div
             key={i}
             className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5"
           >
-            <div className="h-4 w-32 animate-pulse rounded bg-white/[0.04]" />
-            <div className="mt-4 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
+            <div className="h-5 w-40 animate-pulse rounded bg-white/[0.04]" />
+            <div className="mt-3 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
           </div>
         ))}
       </div>
@@ -62,246 +49,280 @@ export default function SettingsPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Settings"
-        subtitle="Manage your account, billing, and preferences"
+        title="Websites"
+        subtitle={`${sites.length} website${sites.length !== 1 ? "s" : ""} configured`}
+        actions={
+          <Button
+            size="sm"
+            onClick={() => window.location.assign("/dashboard")}
+            icon={<Plus className="h-3.5 w-3.5" />}
+          >
+            Add Website
+          </Button>
+        }
       />
 
-      {deleteMessage && (
-        <div className="flex items-center gap-2 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.1] px-4 py-2.5 text-[13px] text-[#4ADE80]">
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-          {deleteMessage}
+      {sites.length === 0 ? (
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
+          <Globe className="mx-auto h-10 w-10 text-[#565A6E]/30" />
+          <p className="mt-3 text-[13px] text-[#565A6E]">
+            No websites configured yet. Add one to get started.
+          </p>
+          <Button
+            className="mt-4"
+            onClick={() => window.location.assign("/dashboard")}
+            icon={<Plus className="h-3.5 w-3.5" />}
+          >
+            Add Your First Website
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {sites.map((site) => (
+            <SiteCard key={site._id} site={site} />
+          ))}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* ── Account ── */}
-      <SettingsSection
-        icon={<User className="h-3.5 w-3.5 text-[#0EA5E9]" />}
-        title="Account"
-        description="Your account details and preferences"
+/* ── Site Card ── */
+
+function SiteCard({ site }: { site: { _id: Id<"sites">; domain: string; siteName?: string; siteType?: string; niche?: string; cadencePerWeek?: number; approvalRequired?: boolean; autopilotEnabled?: boolean; createdAt: number; updatedAt: number } }) {
+  const [expanded, setExpanded] = useState(true);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const deleteSite = useMutation(api.sites.deleteSite);
+  const deleteArticle = useMutation(api.articles.deleteArticle);
+
+  const articles = useQuery(api.articles.listBySite, { siteId: site._id });
+  const topics = useQuery(api.topics.listBySite, { siteId: site._id });
+
+  const articleCount = articles?.length ?? 0;
+  const topicCount = topics?.length ?? 0;
+  const publishedCount = articles?.filter((a) => a.status === "published").length ?? 0;
+
+  const handleDeleteSite = async () => {
+    setDeleting(true);
+    try {
+      await deleteSite({ siteId: site._id });
+    } catch {
+      // ignore
+    } finally {
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      {/* Header */}
+      <div
+        className="flex items-center gap-3 px-5 py-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
+        onClick={() => setExpanded(!expanded)}
       >
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between rounded-lg bg-white/[0.02] px-4 py-3 border border-white/[0.04]">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#0EA5E9]/[0.1]">
-                <User className="h-4 w-4 text-[#0EA5E9]" />
-              </div>
-              <div>
-                <p className="text-[13px] font-medium text-[#EDEEF1]">
-                  {site ? site.siteName ?? site.domain : "No site configured"}
-                </p>
-                <p className="text-[11px] text-[#565A6E]">
-                  {site ? `${site.siteType ?? "Website"} · ${site.niche ?? "General"}` : "Set up your site from the dashboard"}
-                </p>
-              </div>
-            </div>
-            {site && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#22C55E]/[0.08] px-2.5 py-1 text-[11px] font-medium text-[#4ADE80]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
-                Active
-              </span>
-            )}
-          </div>
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.08]">
+          <Globe className="h-4 w-4 text-[#0EA5E9]" />
         </div>
-      </SettingsSection>
-
-      {/* ── Billing ── */}
-      <SettingsSection
-        icon={<CreditCard className="h-3.5 w-3.5 text-[#F59E0B]" />}
-        title="Billing"
-        description="Manage your subscription and payment method"
-      >
-        <div className="rounded-lg bg-white/[0.02] px-4 py-4 border border-white/[0.04]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[13px] font-medium text-[#EDEEF1]">Free Plan</p>
-              <p className="text-[11px] text-[#565A6E]">
-                You&apos;re currently on the free tier
-              </p>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled
-              icon={<ExternalLink className="h-3 w-3" />}
-            >
-              Upgrade
-            </Button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="text-[14px] font-semibold text-[#EDEEF1] truncate">
+              {site.siteName || site.domain}
+            </p>
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
+              Active
+            </span>
           </div>
-
-          <div className="mt-4 grid grid-cols-3 gap-3">
-            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
-              <p className="text-lg font-bold text-[#EDEEF1]">
-                {site?.cadencePerWeek ?? 4}
-              </p>
-              <p className="text-[10px] text-[#565A6E]">Articles/week</p>
-            </div>
-            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
-              <p className="text-lg font-bold text-[#EDEEF1]">1</p>
-              <p className="text-[10px] text-[#565A6E]">Site</p>
-            </div>
-            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
-              <p className="text-lg font-bold text-[#EDEEF1]">
-                {site?.approvalRequired ? "On" : "Off"}
-              </p>
-              <p className="text-[10px] text-[#565A6E]">Approval</p>
-            </div>
-          </div>
-
-          <p className="mt-3 text-[11px] text-[#565A6E]">
-            Billing and subscriptions coming soon. Upgrade to unlock multiple sites,
-            higher article cadence, and priority generation.
+          <p className="text-[11px] text-[#565A6E]">
+            {site.domain}
+            {site.siteType ? ` · ${site.siteType}` : ""}
+            {site.niche ? ` · ${site.niche}` : ""}
           </p>
         </div>
-      </SettingsSection>
 
-      {/* ── Notifications ── */}
-      <SettingsSection
-        icon={<Bell className="h-3.5 w-3.5 text-[#22C55E]" />}
-        title="Notifications"
-        description="Configure how you get notified about pipeline activity"
-      >
-        <div className="flex flex-col gap-0">
-          <NotifToggle
-            label="Article published"
-            description="Get notified when an article is published to GitHub"
-            enabled={false}
-          />
-          <NotifToggle
-            label="Article pending review"
-            description="Get notified when an article needs your approval"
-            enabled={false}
-          />
-          <NotifToggle
-            label="Pipeline failures"
-            description="Get notified when a pipeline step fails"
-            enabled={false}
-          />
+        {/* Quick stats */}
+        <div className="hidden sm:flex items-center gap-4 text-[11px] text-[#8B8FA3]">
+          <span className="flex items-center gap-1">
+            <FileText className="h-3 w-3 text-[#565A6E]" />
+            {articleCount} articles
+          </span>
+          <span className="flex items-center gap-1">
+            <Target className="h-3 w-3 text-[#565A6E]" />
+            {topicCount} topics
+          </span>
+          <span className="flex items-center gap-1">
+            <Clock className="h-3 w-3 text-[#565A6E]" />
+            {site.cadencePerWeek ?? 4}/wk
+          </span>
         </div>
-        <p className="text-[11px] text-[#565A6E] px-3">
-          Email notifications coming soon.
-        </p>
-      </SettingsSection>
 
-      {/* ── Danger Zone ── */}
-      <SettingsSection
-        icon={<AlertTriangle className="h-3.5 w-3.5 text-[#EF4444]" />}
-        title="Danger Zone"
-        description="Irreversible actions — proceed with caution"
-        danger
-      >
-        <div className="rounded-lg border border-[#EF4444]/[0.15] bg-[#EF4444]/[0.03] px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[13px] font-medium text-[#EDEEF1]">
-                Delete all data
-              </p>
-              <p className="text-[11px] text-[#565A6E]">
-                Remove your site, all articles, topics, pages, and jobs. This cannot be undone.
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 text-[#565A6E] shrink-0" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-[#565A6E] shrink-0" />
+        )}
+      </div>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div className="border-t border-white/[0.04]">
+          {/* Stats row */}
+          <div className="grid grid-cols-3 gap-3 px-5 py-4">
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
+              <p className="text-lg font-bold text-[#EDEEF1]">{publishedCount}</p>
+              <p className="text-[10px] text-[#565A6E]">Published</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
+              <p className="text-lg font-bold text-[#EDEEF1]">{articleCount - publishedCount}</p>
+              <p className="text-[10px] text-[#565A6E]">Drafts</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3 text-center">
+              <p className="text-lg font-bold text-[#EDEEF1]">{topicCount}</p>
+              <p className="text-[10px] text-[#565A6E]">Topics</p>
+            </div>
+          </div>
+
+          {/* Articles list */}
+          {articles && articles.length > 0 && (
+            <div className="border-t border-white/[0.04]">
+              <div className="px-5 py-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
+                Articles
+              </div>
+              {articles.map((article) => (
+                <ArticleRow
+                  key={article._id}
+                  article={article}
+                  onDelete={() => deleteArticle({ articleId: article._id })}
+                />
+              ))}
+            </div>
+          )}
+
+          {articles && articles.length === 0 && (
+            <div className="border-t border-white/[0.04] px-5 py-6 text-center">
+              <p className="text-[12px] text-[#565A6E]">
+                No articles yet. Go to the dashboard to generate one.
               </p>
             </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex items-center justify-between border-t border-white/[0.04] px-5 py-3">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-1.5 text-[12px] text-[#0EA5E9] hover:text-[#38BDF8] transition"
+            >
+              <Zap className="h-3 w-3" />
+              Generate Article
+            </Link>
+
             {showDeleteConfirm ? (
               <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <button
                   onClick={() => setShowDeleteConfirm(false)}
+                  className="text-[11px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
                 >
                   Cancel
-                </Button>
+                </button>
                 <Button
                   variant="danger"
                   size="sm"
-                  onClick={handleDeleteAll}
+                  onClick={handleDeleteSite}
                   loading={deleting}
                   icon={<Trash2 className="h-3 w-3" />}
                 >
-                  Confirm Delete
+                  Delete Website
                 </Button>
               </div>
             ) : (
-              <Button
-                variant="danger"
-                size="sm"
+              <button
                 onClick={() => setShowDeleteConfirm(true)}
-                icon={<Trash2 className="h-3 w-3" />}
+                className="inline-flex items-center gap-1 text-[11px] text-[#565A6E] hover:text-[#EF4444] transition"
               >
-                Delete Everything
-              </Button>
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </button>
             )}
           </div>
         </div>
-      </SettingsSection>
+      )}
     </div>
   );
 }
 
-/* ── Shared components ── */
+/* ── Article Row ── */
 
-function SettingsSection({
-  icon,
-  title,
-  description,
-  children,
-  danger,
+function ArticleRow({
+  article,
+  onDelete,
 }: {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  children: React.ReactNode;
-  danger?: boolean;
+  article: {
+    _id: Id<"articles">;
+    title: string;
+    status: string;
+    slug: string;
+    markdown: string;
+    wordCount?: number;
+    createdAt: number;
+  };
+  onDelete: () => void;
 }) {
-  return (
-    <div
-      className={`rounded-xl border bg-[#0F1117] ${
-        danger ? "border-[#EF4444]/[0.1]" : "border-white/[0.06]"
-      }`}
-    >
-      <div className="flex items-center gap-3 border-b border-white/[0.04] px-5 py-3.5">
-        <div
-          className={`flex h-7 w-7 items-center justify-center rounded-lg ${
-            danger ? "bg-[#EF4444]/[0.08]" : "bg-white/[0.04]"
-          }`}
-        >
-          {icon}
-        </div>
-        <div>
-          <h3 className="text-[13px] font-semibold text-[#EDEEF1]">{title}</h3>
-          <p className="text-[11px] text-[#565A6E]">{description}</p>
-        </div>
-      </div>
-      <div className="flex flex-col gap-4 p-5">{children}</div>
-    </div>
-  );
-}
+  const [showDelete, setShowDelete] = useState(false);
+  const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
 
-function NotifToggle({
-  label,
-  description,
-  enabled,
-}: {
-  label: string;
-  description: string;
-  enabled: boolean;
-}) {
   return (
-    <div className="flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-white/[0.02] transition-colors">
-      <div className="flex items-center gap-3">
-        <Mail className="h-3.5 w-3.5 text-[#565A6E]" />
-        <div>
-          <p className="text-[13px] text-[#EDEEF1]">{label}</p>
-          <p className="text-[11px] text-[#565A6E]">{description}</p>
-        </div>
-      </div>
-      <div
-        className={`relative h-5 w-9 rounded-full cursor-not-allowed ${
-          enabled ? "bg-[#0EA5E9]" : "bg-white/[0.08]"
-        }`}
+    <div className="group flex items-center gap-3 px-5 py-2.5 border-b border-white/[0.03] last:border-0 hover:bg-white/[0.02] transition">
+      <StatusBadge status={article.status} />
+      <Link
+        href={`/articles/${article._id}`}
+        className="flex-1 min-w-0"
       >
-        <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white/60 ${
-            enabled ? "left-[18px]" : "left-0.5"
-          }`}
-        />
+        <p className="text-[12px] font-medium text-[#EDEEF1] truncate group-hover:text-white transition">
+          {article.title}
+        </p>
+        <div className="flex items-center gap-2 text-[10px] text-[#565A6E] mt-0.5">
+          <span>{wc.toLocaleString()} words</span>
+          <span>·</span>
+          <span>{formatDistanceToNow(article.createdAt, { addSuffix: true })}</span>
+        </div>
+      </Link>
+
+      <div className="flex items-center gap-1.5 shrink-0">
+        <Link
+          href={`/articles/${article._id}`}
+          className="text-[#565A6E] hover:text-[#0EA5E9] transition opacity-0 group-hover:opacity-100"
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+        {showDelete ? (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowDelete(false)}
+              className="text-[10px] text-[#8B8FA3] hover:text-[#EDEEF1] transition px-1"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                onDelete();
+                setShowDelete(false);
+              }}
+              className="text-[10px] text-[#EF4444] hover:text-[#F87171] transition px-1 font-medium"
+            >
+              Delete
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowDelete(true)}
+            className="text-[#565A6E] hover:text-[#EF4444] transition opacity-0 group-hover:opacity-100"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
       </div>
     </div>
   );

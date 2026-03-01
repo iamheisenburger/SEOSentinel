@@ -21,6 +21,7 @@ const navSections = [
   {
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/sites", label: "Websites", icon: Globe },
     ],
   },
   {
@@ -34,7 +35,7 @@ const navSections = [
     label: "System",
     items: [
       { href: "/jobs", label: "Pipeline", icon: Zap },
-      { href: "/sites", label: "Settings", icon: Settings },
+      { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
 ];

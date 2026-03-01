@@ -146,4 +146,11 @@ export const reject = mutation({
   },
 });
 
+export const deleteArticle = mutation({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    await ctx.db.delete(articleId);
+  },
+});
+
 

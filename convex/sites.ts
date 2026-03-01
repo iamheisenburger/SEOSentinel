@@ -147,6 +147,43 @@ export const upsert = mutation({
   },
 });
 
+// Delete a single site and all its related data
+export const deleteSite = mutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    // Delete articles
+    const articles = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const a of articles) await ctx.db.delete(a._id);
+
+    // Delete topics
+    const topics = await ctx.db
+      .query("topic_clusters")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const t of topics) await ctx.db.delete(t._id);
+
+    // Delete pages
+    const pages = await ctx.db
+      .query("pages")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const p of pages) await ctx.db.delete(p._id);
+
+    // Delete jobs
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const j of jobs) await ctx.db.delete(j._id);
+
+    // Delete the site itself
+    await ctx.db.delete(siteId);
+  },
+});
+
 // Wipe all data — for dev/reset only
 export const resetAll = mutation({
   handler: async (ctx) => {
