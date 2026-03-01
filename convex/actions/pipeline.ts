@@ -124,13 +124,20 @@ async function generateHeroImage(
   title: string,
   niche: string,
   brandingPrompt?: string,
+  brandColor?: string,
 ): Promise<string> {
   const client = openaiClient();
+  const colorHint = brandColor ? ` Use ${brandColor} as the primary accent color.` : "";
   const prompt = brandingPrompt
     ? `${brandingPrompt}. Topic: ${title}`
-    : `Professional, modern blog hero image for an article titled "${title}" in the ${niche || "technology"} industry. ` +
-      `Clean editorial style with subtle gradients and abstract shapes. NO text, NO words, NO letters, NO watermarks. ` +
-      `Photorealistic quality, 16:9 aspect ratio, suitable for a premium blog.`;
+    : `Create a professional infographic-style blog hero image for: "${title}".` +
+      ` Industry: ${niche || "technology"}.` +
+      ` Style: Clean data visualization with icons, charts, flow diagrams, and statistics.` +
+      ` Think editorial infographic — like something from Harvard Business Review or McKinsey.` +
+      ` Dark background (#0F1117) with vibrant accent colors.${colorHint}` +
+      ` Include abstract representations of the topic: data flows, network nodes, metric dashboards, conversion funnels.` +
+      ` NO text, NO words, NO letters, NO numbers, NO watermarks.` +
+      ` Ultra-clean, modern, premium quality. 16:9 aspect ratio.`;
 
   console.log(`Generating hero image for: "${title}"...`);
 
@@ -1310,26 +1317,26 @@ async function handleArticle(
     console.error(`Fact check failed (using original article): ${msg}`);
   }
 
-  // ── Step 4: Featured Image (screenshot first, AI fallback) ──
+  // ── Step 4: Featured Image (always AI-generated infographic) ──
+  // Screenshot is used as inline content image, NOT the hero.
+  // The hero should always be a custom AI-generated infographic like SEOBot does.
   await reportProgress(8, "Generating featured image...");
-  let featuredImage: string | undefined = screenshotUrl;
+  let featuredImage: string | undefined;
 
-  if (featuredImage) {
-    console.log(`Using site screenshot as featured image: ${featuredImage}`);
-  } else {
-    // Fallback to AI-generated hero image
-    try {
-      featuredImage = await generateHeroImage(
-        ctx,
-        article.title,
-        site.niche ?? "",
-        site.imageBrandingPrompt ?? undefined,
-      );
-      console.log(`AI hero image generated as fallback: ${featuredImage}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      console.error(`Image generation failed (continuing without): ${msg}`);
-    }
+  try {
+    featuredImage = await generateHeroImage(
+      ctx,
+      article.title,
+      site.niche ?? "",
+      site.imageBrandingPrompt ?? undefined,
+      site.brandPrimaryColor ?? undefined,
+    );
+    console.log(`AI infographic hero image generated: ${featuredImage}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`AI image generation failed, falling back to screenshot: ${msg}`);
+    // Fallback to screenshot if AI generation fails
+    featuredImage = screenshotUrl;
   }
 
   // ── Step 5: Calculate Article Stats ──
