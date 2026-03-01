@@ -1087,6 +1087,49 @@ async function handleAnalyzeSite(
 
   const analysis = parseJson<z.infer<typeof AnalysisSchema>>(AnalysisSchema, text);
 
+  // If pricing wasn't found in the HTML (common with client-rendered sites), try web search
+  if (
+    analysis.pricingInfo.toLowerCase().includes("not found") ||
+    analysis.pricingInfo.toLowerCase().includes("not available") ||
+    analysis.pricingInfo.toLowerCase().includes("not provided")
+  ) {
+    try {
+      console.log("Pricing not found in crawl — searching the web...");
+      const client = openaiClient();
+      const completion = await client.responses.create({
+        model: "gpt-5-mini-2025-08-07",
+        tools: [{ type: "web_search_preview" as any }],
+        input: [
+          {
+            role: "user",
+            content: `What are the pricing plans and tiers for ${site.domain}? Include plan names, prices, and key features for each tier. Be specific with numbers.`,
+          },
+        ],
+      });
+      const pricingText = completion.output
+        .filter((b: any) => b.type === "message")
+        .map((b: any) =>
+          b.content
+            .filter((c: any) => c.type === "output_text")
+            .map((c: any) => c.text)
+            .join(""),
+        )
+        .join("");
+      if (pricingText && pricingText.length > 20) {
+        // Summarize with Claude for clean format
+        const summary = await callClaude(
+          "Summarize this pricing information into a concise format. List each plan with name, price, and key features. Be factual — only include what's stated.",
+          pricingText.slice(0, 4000),
+          1024,
+        );
+        analysis.pricingInfo = summary;
+        console.log("Pricing found via web search");
+      }
+    } catch (e) {
+      console.log("Pricing web search failed (non-critical):", e);
+    }
+  }
+
   // Save analysis to the site record
   await ctx.runMutation(api.sites.upsert, {
     id: siteId,
