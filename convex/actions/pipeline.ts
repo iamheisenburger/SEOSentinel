@@ -2032,12 +2032,25 @@ export const autopilotTick = action({
     // 4. Schedule articles for the week
     await ctx.runAction(api.actions.scheduler.scheduleCadence, { siteId });
 
-    // 5. Process ONLY ONE job per tick. 
-    // This ensures we never exceed the 10-minute action timeout.
-    // With crons running 4x daily, this still processes 28 jobs/week.
+    // 5. Process ONLY ONE job per tick, respecting cadence for article jobs.
     const pending = await ctx.runQuery(api.jobs.listPending, {});
     if (pending.length > 0) {
-      console.log(`Processing next job: ${pending[0].type} (${pending[0]._id})`);
+      const nextJob = pending[0];
+      // Cadence gate: only process article jobs when enough time has passed
+      if (nextJob.type === "article") {
+        const cadence = site.cadencePerWeek ?? 4;
+        const hoursPerArticle = Math.floor((7 * 24) / cadence);
+        const allArticles = await ctx.runQuery(api.articles.listBySite, { siteId });
+        const lastArticle = allArticles.length > 0 ? allArticles[0] : null;
+        const hoursSinceLast = lastArticle
+          ? (Date.now() - lastArticle.createdAt) / (1000 * 60 * 60)
+          : 999;
+        if (hoursSinceLast < hoursPerArticle) {
+          console.log(`Cadence gate: last article ${Math.floor(hoursSinceLast)}h ago, need ${hoursPerArticle}h. Holding.`);
+          return { processed: 0 };
+        }
+      }
+      console.log(`Processing next job: ${nextJob.type} (${nextJob._id})`);
       await ctx.runAction(api.actions.pipeline.processNextJob as any, {});
       return { processed: 1 };
     }
