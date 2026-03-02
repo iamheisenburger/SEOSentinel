@@ -33,7 +33,7 @@ export default function PlanPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
-  const generateArticle = useAction(api.actions.pipeline.generateArticle);
+  const queueArticle = useMutation(api.jobs.queueArticleNow);
   const removeTopic = useMutation(api.topics.remove);
   const removeUnused = useMutation(api.topics.removeUnused);
   const [status, setStatus] = useState<string | null>(null);
@@ -137,7 +137,8 @@ export default function PlanPage() {
     if (!site?._id) return;
     setGeneratingTopicId(topicId);
     try {
-      await generateArticle({ siteId: site._id, topicId });
+      // Create job + schedule immediate processing — never awaits the long action directly
+      await queueArticle({ siteId: site._id, topicId });
     } catch (err: unknown) {
       setStatus(err instanceof Error ? err.message : "Generation failed");
     } finally {

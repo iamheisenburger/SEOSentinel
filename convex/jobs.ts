@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { api } from "./_generated/api";
 import { v } from "convex/values";
 
 const now = () => Date.now();
@@ -152,6 +153,40 @@ export const getRunningBySite = query({
     return (
       jobs.find((j) => j.status === "running" && j.type === "article") ?? null
     );
+  },
+});
+
+/**
+ * Create an article job and immediately schedule autopilotTick to process it.
+ * Clients call this instead of invoking generateArticle directly — avoids
+ * WebSocket timeout errors on long-running actions.
+ */
+export const queueArticleNow = mutation({
+  args: {
+    siteId: v.id("sites"),
+    topicId: v.optional(v.id("topic_clusters")),
+  },
+  handler: async (ctx, { siteId, topicId }) => {
+    // Create the pending job
+    const jobId = await ctx.db.insert("jobs", {
+      siteId,
+      type: "article",
+      status: "pending",
+      payload: topicId ? { topicId } : undefined,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+
+    // Mark topic as queued if provided
+    if (topicId) {
+      await ctx.db.patch(topicId, { status: "queued" });
+    }
+
+    // Schedule autopilotTick to run immediately in the background
+    // The action runs server-side regardless of client connection
+    await ctx.scheduler.runAfter(0, api.actions.pipeline.autopilotTick, { siteId });
+
+    return jobId;
   },
 });
 

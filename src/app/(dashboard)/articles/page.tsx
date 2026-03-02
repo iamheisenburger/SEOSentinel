@@ -1,6 +1,6 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -24,7 +24,7 @@ export default function ArticlesPage() {
     api.articles.listBySite,
     site?._id ? { siteId: site._id } : "skip",
   );
-  const generateArticle = useAction(api.actions.pipeline.generateArticle);
+  const queueArticle = useMutation(api.jobs.queueArticleNow);
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);
   const deleteArticle = useMutation(api.articles.deleteArticle);
@@ -88,13 +88,13 @@ export default function ArticlesPage() {
 
   const handleGenerate = async () => {
     if (!site?._id) return;
-    setStatus("Generating article...");
+    setStatus("Queued — generation will start shortly...");
     try {
-      await generateArticle({ siteId: site._id, topicId: selectedTopic });
-      setStatus("Article created.");
+      await queueArticle({ siteId: site._id, topicId: selectedTopic });
+      setStatus("Article queued.");
     } catch (err: unknown) {
       setStatus(
-        err instanceof Error ? err.message : "Failed to generate article",
+        err instanceof Error ? err.message : "Failed to queue article",
       );
     }
   };
