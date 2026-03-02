@@ -163,6 +163,47 @@ async function generateHeroImage(
   return imageUrl;
 }
 
+/** Generate a mid-article process/stats infographic to embed inline. Returns a Convex storage URL. */
+async function generateInfographic(
+  ctx: ActionCtx,
+  title: string,
+  primaryKeyword: string,
+  niche: string,
+  brandColor?: string,
+): Promise<string> {
+  const client = openaiClient();
+  const colorHint = brandColor ? ` Primary accent color: ${brandColor}.` : "";
+  const prompt =
+    `Create a detailed process flow infographic for the topic: "${primaryKeyword || title}". Industry: ${niche || "technology"}.` +
+    ` Style: Step-by-step process diagram or statistical overview — think McKinsey or HubSpot blog infographic.` +
+    ` Light/white background with clean typography and numbered steps or percentage statistics.${colorHint}` +
+    ` Include visual elements: numbered steps, arrows, icons, metric callouts, flowchart nodes.` +
+    ` NO logos, NO watermarks, NO text that says "infographic".` +
+    ` Ultra-clean, modern, professional quality. Tall/portrait format (2:3 ratio).`;
+
+  console.log(`Generating mid-article infographic for: "${primaryKeyword}"...`);
+
+  const response = await client.images.generate({
+    model: "gpt-image-1.5",
+    prompt,
+    n: 1,
+    size: "1024x1536",
+    quality: "medium",
+  });
+
+  const b64 = response.data?.[0]?.b64_json;
+  if (!b64) throw new Error("No image data returned from OpenAI");
+
+  const imageBytes = Buffer.from(b64, "base64");
+  const blob = new Blob([imageBytes], { type: "image/png" });
+  const storageId = await ctx.storage.store(blob);
+  const imageUrl = await ctx.storage.getUrl(storageId);
+  if (!imageUrl) throw new Error("Failed to get storage URL for infographic");
+
+  console.log(`Infographic generated and stored: ${storageId}`);
+  return imageUrl;
+}
+
 /** Capture a real screenshot of a website. Stores in Convex file storage. */
 async function captureScreenshot(
   ctx: ActionCtx,
@@ -668,14 +709,16 @@ async function factCheckArticle(
     "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
     "2. Do NOT add fact-check summaries or editorial commentary into the markdown.\n" +
     "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
-    "4. For each factual claim you can identify, assess whether it is supported by the provided sources.\n" +
-    "5. 'confidenceScore' = overall percentage (0-100) of how well-supported the article's claims are.\n" +
+    "4. NEVER remove product names, brand mentions, CTA links, or product feature descriptions. These are intentional marketing content — they are not factual claims that need verification.\n" +
+    "5. ONLY correct external third-party statistics, quotes attributed to real people, and factual data claims.\n" +
+    "6. For each factual claim you can identify, assess whether it is supported by the provided sources.\n" +
+    "7. 'confidenceScore' = overall percentage (0-100) of how well-supported the article's claims are.\n" +
     "   - 90-100: All major claims verified against sources\n" +
     "   - 70-89: Most claims verified, minor gaps\n" +
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
-    "6. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by sources.\n" +
-    "7. Output JSON only.",
+    "8. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by sources.\n" +
+    "9. Output JSON only.",
     `Return JSON: {"markdown":"<full corrected article>","notes":"<reviewer summary>","confidenceScore":<0-100>,"claimCount":<number>,"verifiedCount":<number>,"citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nArticle to review:\n${markdown}`,
@@ -1189,20 +1232,28 @@ async function handleArticle(
     `</images>`,
     ``,
     `<article_structure>`,
+    `REQUIRED CONTENT ORDER (follow this sequence exactly):`,
     `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement.`,
     `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
     `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
-    `4. WORD COUNT: 3500-4500 words.`,
-    `5. SECTIONS: 8-12 H2 sections with H3 subsections. Every section must have specific, actionable information.`,
-    `6. PRODUCT SECTION: Include a dedicated H2 or H3 showing how ${productName} specifically solves the problem discussed. Mention ${productName} by name 3-5 times naturally throughout.`,
-    `7. COMPARISON TABLE: At least one markdown table with real data. If comparing, compare feature categories (NOT named competitors).`,
-    `8. PRO TIPS: Include a "Best Practices" or "Pro Tips" section with numbered actionable items.`,
-    `9. FAQ: End with "## Frequently Asked Questions" with 8-10 questions in format:\n   ### Question here?\n   Answer paragraph here.`,
-    `10. KEY TAKEAWAYS: "## Key Takeaways" near the end with 5-7 bullet points.`,
-    `11. EXPERT QUOTES: 2-3 blockquotes from real experts found in the research. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
-    `12. NO FLUFF: Every paragraph must contain specific data, examples, or actionable advice.`,
-    `13. STYLED CTA BOX: If a CTA is configured, place the styled HTML CTA box at the very end of the article (after Sources section). This is the last thing in the markdown.`,
-    `14. NO META-TALK: Output article content only within the JSON. No explanations outside.`,
+    `4. SECTIONS 1-2: First two H2 sections covering background/context of the topic.`,
+    `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
+    `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
+    `   YouTube embed goes HERE — place it after the section it relates to most.`,
+    `6. PRODUCT SECTION: A dedicated H2 titled "How ${productName} [solves X]" — show exactly how ${productName} addresses the article topic. Mention ${productName} by name 3-5 times naturally throughout the article. Include the site screenshot (if available) IN THIS SECTION only.`,
+    `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
+    `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
+    `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
+    `10. FAQ: "## Frequently Asked Questions" with 8-10 questions. Format: ### Question?\n Answer paragraph.`,
+    `11. KEY TAKEAWAYS: "## Key Takeaways" with 5-7 bullet points.`,
+    `12. SOURCES: "## Sources" section with numbered citation links.`,
+    `13. STYLED CTA BOX: Place the HTML CTA box last, after Sources.`,
+    ``,
+    `GLOBAL RULES:`,
+    `- WORD COUNT: 3500-4500 words.`,
+    `- NO FLUFF: Every paragraph must contain specific data, examples, or actionable advice.`,
+    `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
+    `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
     `</article_structure>`,
     ``,
     `<output_format>`,
@@ -1339,11 +1390,12 @@ async function handleArticle(
     console.error(`Fact check failed (using original article): ${msg}`);
   }
 
-  // ── Step 4: Featured Image (always AI-generated infographic) ──
-  // Screenshot is used as inline content image, NOT the hero.
-  // The hero should always be a custom AI-generated infographic like SEOBot does.
-  await reportProgress(8, "Generating featured image...");
+  // ── Step 4: Featured Image (hero) + Mid-article Infographic ──
+  // Hero: wide 16:9 abstract data visualization shown at top of article
+  // Infographic: tall 2:3 process/stats diagram injected after the 3rd H2 section
+  await reportProgress(8, "Generating images...");
   let featuredImage: string | undefined;
+  let infographicUrl: string | undefined;
 
   try {
     featuredImage = await generateHeroImage(
@@ -1353,13 +1405,47 @@ async function handleArticle(
       site.imageBrandingPrompt ?? undefined,
       site.brandPrimaryColor ?? undefined,
     );
-    console.log(`AI infographic hero image generated: ${featuredImage}`);
+    console.log(`Hero image generated: ${featuredImage}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`AI image generation failed (no featured image): ${msg}`);
+    console.error(`Hero image generation failed (no featured image): ${msg}`);
     // Do NOT fall back to screenshotUrl — it's already embedded inline in the article body
-    // Using it as featuredImage too would cause it to appear twice
     featuredImage = undefined;
+  }
+
+  try {
+    infographicUrl = await generateInfographic(
+      ctx,
+      article.title,
+      topic?.primaryKeyword ?? article.title,
+      site.niche ?? "",
+      site.brandPrimaryColor ?? undefined,
+    );
+    console.log(`Mid-article infographic generated: ${infographicUrl}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`Infographic generation failed (skipping): ${msg}`);
+    infographicUrl = undefined;
+  }
+
+  // Inject infographic after the 3rd H2 section in the article body
+  if (infographicUrl) {
+    const h2Regex = /^## /gm;
+    let matchCount = 0;
+    let insertIndex = -1;
+    let match: RegExpExecArray | null;
+    while ((match = h2Regex.exec(finalMarkdown)) !== null) {
+      matchCount++;
+      if (matchCount === 3) {
+        insertIndex = match.index;
+        break;
+      }
+    }
+    if (insertIndex !== -1) {
+      const infographicMd = `\n![${article.title} infographic](${infographicUrl})\n*Process overview for ${topic?.primaryKeyword ?? article.title}*\n\n`;
+      finalMarkdown = finalMarkdown.slice(0, insertIndex) + infographicMd + finalMarkdown.slice(insertIndex);
+      console.log("Infographic injected after 3rd H2 section.");
+    }
   }
 
   // ── Step 5: Calculate Article Stats ──
