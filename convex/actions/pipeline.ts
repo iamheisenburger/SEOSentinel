@@ -200,7 +200,7 @@ async function searchWebImages(
   const client = openaiClient();
 
   const completion = await client.responses.create({
-    model: "gpt-5-mini-2025-08-07",
+    model: "gpt-4o-mini",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -310,7 +310,7 @@ async function searchYouTubeVideos(
   const client = openaiClient();
 
   const completion = await client.responses.create({
-    model: "gpt-5-mini-2025-08-07",
+    model: "gpt-4o-mini",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -727,7 +727,7 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: "gpt-5-mini-2025-08-07",
+    model: "gpt-4o-mini",
     tools: [{ type: "web_search_preview" as any }],
     input: [
       {
@@ -1537,7 +1537,7 @@ async function handleAnalyzeSite(
       console.log("Pricing not found in crawl — searching the web...");
       const client = openaiClient();
       const completion = await client.responses.create({
-        model: "gpt-5-mini-2025-08-07",
+        model: "gpt-4o-mini",
         tools: [{ type: "web_search_preview" as any }],
         input: [
           {
