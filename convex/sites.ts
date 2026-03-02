@@ -113,7 +113,13 @@ export const upsert = mutation({
     };
 
     if (args.id) {
-      await ctx.db.patch(args.id, data);
+      // Strip undefined values — Convex patch with undefined CLEARS the field,
+      // so partial step saves (e.g. profile step, audience step) would wipe
+      // fields set by other steps (e.g. ctaUrl set in strategy step).
+      const definedData = Object.fromEntries(
+        Object.entries(data).filter(([, v]) => v !== undefined),
+      ) as typeof data;
+      await ctx.db.patch(args.id, definedData);
       return args.id;
     }
 

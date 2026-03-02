@@ -384,10 +384,17 @@ async function searchYouTubeVideos(
     completion.output_text,
   );
 
-  // Validate video IDs (must be 11 chars, alphanumeric + dash/underscore)
-  const validVideos = result.videos.filter(
-    (v) => /^[a-zA-Z0-9_-]{11}$/.test(v.videoId),
-  );
+  // Extract and validate video IDs — model often returns full URLs instead of just the ID
+  const extractVideoId = (raw: string): string | null => {
+    // Already a clean 11-char ID
+    if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) return raw;
+    // youtube.com/watch?v=XXXXXXXXXXX or youtu.be/XXXXXXXXXXX
+    const match = raw.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
+    return match ? match[1] : null;
+  };
+  const validVideos = result.videos
+    .map((v) => ({ ...v, videoId: extractVideoId(v.videoId) ?? "" }))
+    .filter((v) => v.videoId.length === 11);
 
   console.log(`Found ${validVideos.length} YouTube videos for "${topic}".`);
   return validVideos;
