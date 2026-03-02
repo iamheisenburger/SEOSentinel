@@ -1132,16 +1132,22 @@ async function handleArticle(
     `<content_settings>`,
     `Tone: ${site.tone ?? "professional"} — maintain this tone throughout the entire article.`,
     site.language && site.language !== "en" ? `Language: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ, key takeaways, and meta fields must be in ${site.language}.` : `Language: English`,
-    site.ctaText && site.ctaUrl ? [
-      `CTA: Naturally weave in "${site.ctaText}" linking to ${site.ctaUrl} once in the body (organic, not salesy).`,
-      `STYLED CTA BOX: At the very end of the article (after Sources), include this exact HTML CTA box:`,
-      `<div style="margin:2.5em 0 1em;padding:1.5em 2em;border-radius:12px;background:linear-gradient(135deg,${site.brandPrimaryColor ?? "#0EA5E9"}15,${site.brandPrimaryColor ?? "#0EA5E9"}08);border:1px solid ${site.brandPrimaryColor ?? "#0EA5E9"}30;text-align:center;">`,
-      `<p style="font-size:1.2em;font-weight:700;margin:0 0 0.4em;color:${site.brandPrimaryColor ?? "#0EA5E9"};">${site.ctaText}</p>`,
-      `<p style="margin:0 0 1em;color:#555;font-size:0.95em;">${site.siteSummary ? site.siteSummary.split(".")[0] + "." : `Try ${productName} today.`}</p>`,
-      `<a href="${site.ctaUrl}" style="display:inline-block;padding:0.7em 2em;border-radius:8px;background:${site.brandPrimaryColor ?? "#0EA5E9"};color:#fff;font-weight:600;text-decoration:none;font-size:0.95em;">${site.ctaText} →</a>`,
-      `</div>`,
-      `Copy this HTML exactly at the very end. Do not modify the styles or structure.`,
-    ].join("\n") : "",
+    (() => {
+      const ctaLabel = site.ctaText || `Try ${productName}`;
+      const ctaLink = site.ctaUrl || `https://${site.domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+      const color = site.brandPrimaryColor ?? "#0EA5E9";
+      const tagline = site.siteSummary ? site.siteSummary.split(".")[0] + "." : `Get started with ${productName} today.`;
+      return [
+        `CTA: Naturally weave in "${ctaLabel}" linking to ${ctaLink} once in the body (organic, not salesy).`,
+        `STYLED CTA BOX: At the very end of the article (after Sources), include this exact HTML CTA box:`,
+        `<div style="margin:2.5em 0 1em;padding:1.5em 2em;border-radius:12px;background:linear-gradient(135deg,${color}15,${color}08);border:1px solid ${color}30;text-align:center;">`,
+        `<p style="font-size:1.2em;font-weight:700;margin:0 0 0.4em;color:${color};">${ctaLabel}</p>`,
+        `<p style="margin:0 0 1em;color:#555;font-size:0.95em;">${tagline}</p>`,
+        `<a href="${ctaLink}" style="display:inline-block;padding:0.7em 2em;border-radius:8px;background:${color};color:#fff;font-weight:600;text-decoration:none;font-size:0.95em;">${ctaLabel} →</a>`,
+        `</div>`,
+        `Copy this HTML exactly at the very end. Do not modify the styles or structure.`,
+      ].join("\n");
+    })(),
     site.anchorKeywords?.length ? `Anchor Keywords: Naturally incorporate these throughout: ${site.anchorKeywords.join(", ")}` : "",
     site.sourceCitations !== false
       ? `Citations: Use numbered inline citations [1], [2], [3] for statistics, quotes, and factual claims. Add a "## Sources" section at the end listing each as: [1] Title — URL`
@@ -1155,12 +1161,12 @@ async function handleArticle(
     enableYouTube && youtubeVideos.length > 0
       ? [
           `YouTube embedding is ENABLED. You have ${youtubeVideos.length} real YouTube video(s) available.`,
-          `Embed only videos that are directly relevant to a section's content. Place them AFTER the related section, not before. If a video doesn't fit naturally, skip it — don't force embeds.`,
-          `Use this exact HTML for each embed you include:`,
+          `Include at least 1-2 of these videos in the article. Place each video AFTER the section it relates to most. Choose the most relevant videos for the article's topic.`,
+          `Use this exact HTML for each embed:`,
           ...youtubeVideos.map((v) =>
             `Video "${v.title}":\n<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`
           ),
-          `Copy the HTML exactly for any video you embed. Do not modify the iframe code.`,
+          `Copy the HTML exactly. Do not modify the iframe code. Do NOT skip all videos — include the best 1-2.`,
         ].join("\n")
       : enableYouTube
         ? `YouTube embedding is ENABLED but no videos were found for this topic. Skip YouTube embeds.`
@@ -1169,10 +1175,10 @@ async function handleArticle(
     ``,
     `<images>`,
     screenshotUrl
-      ? `Site Screenshot (REAL — captured from ${site.domain}): ${screenshotUrl}\nEmbed this when discussing ${productName}'s features or in the product section using: ![${productName} website](${screenshotUrl}). Only include if the article specifically discusses or showcases the product.`
+      ? `Site Screenshot (REAL — captured from ${site.domain}): ${screenshotUrl}\nEmbed this in the product section or when discussing ${productName}'s features/interface using: ![${productName} website](${screenshotUrl}). This is a real screenshot — include it to show readers what the product looks like.`
       : `No site screenshot available.`,
     webImages.length > 0
-      ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nEmbed these where they add value to a section. Use italic captions below each. Skip any that don't clearly relate to the surrounding content.`
+      ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nInclude at least 2-3 of these images throughout the article to break up text and add visual context. Place each after the section it relates to. Add italic captions below each image.`
       : `No web images available.`,
     `</images>`,
     ``,
