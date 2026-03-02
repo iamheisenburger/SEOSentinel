@@ -58,29 +58,41 @@ export const scheduleCadence = action({
         (b.priority ?? 1) - (a.priority ?? 1),
     );
 
-    // Get last 5 published articles to avoid keyword overlap (reuse allArticles from above)
-    const recentSlugs = allArticles.slice(0, 5);
-    const recentKeywords = new Set<string>();
-    for (const art of recentSlugs) {
-      // Extract keywords from slug (e.g. "/subscription-budget-tracker" → ["subscription", "budget", "tracker"])
-      const words = art.slug.replace(/^\//, "").split("-");
-      for (const w of words) {
-        if (w.length > 3) recentKeywords.add(w.toLowerCase());
+    // Build a set of all keywords from existing articles to prevent cannibalization
+    // Use metaKeywords if available, fall back to slug words
+    const publishedKeywords = new Set<string>();
+    const stopWords = new Set(["the", "and", "for", "with", "how", "what", "why", "are", "can", "your", "that", "this", "from", "have", "will"]);
+    for (const art of allArticles) {
+      // Prefer metaKeywords (more accurate than slug-derived words)
+      if (art.metaKeywords && art.metaKeywords.length > 0) {
+        for (const kw of art.metaKeywords) {
+          for (const w of kw.toLowerCase().split(/\s+/)) {
+            if (w.length > 3 && !stopWords.has(w)) publishedKeywords.add(w);
+          }
+        }
+      } else {
+        // Fall back to slug words
+        for (const w of art.slug.replace(/^\//, "").split("-")) {
+          if (w.length > 3 && !stopWords.has(w)) publishedKeywords.add(w);
+        }
       }
     }
 
-    // Pick the highest-priority topic that doesn't overlap with recent articles
+    // Pick the highest-priority topic that doesn't cannibalize existing content
     let selectedTopic = available[0]; // fallback to highest priority
     for (const topic of available) {
-      const kwWords = topic.primaryKeyword.toLowerCase().split(/\s+/);
-      const overlapCount = kwWords.filter((w: string) => w.length > 3 && recentKeywords.has(w)).length;
+      const kwWords = topic.primaryKeyword.toLowerCase().split(/\s+/).filter((w: string) => !stopWords.has(w));
+      const overlapCount = kwWords.filter((w: string) => w.length > 3 && publishedKeywords.has(w)).length;
       const overlapRatio = kwWords.length > 0 ? overlapCount / kwWords.length : 0;
 
-      // Accept if less than 50% of keyword words overlap with recent articles
       if (overlapRatio < 0.5) {
         selectedTopic = topic;
+        if (overlapCount > 0) {
+          console.log(`Topic "${topic.primaryKeyword}" has ${overlapCount}/${kwWords.length} overlapping words — acceptable.`);
+        }
         break;
       }
+      console.log(`Skipping "${topic.primaryKeyword}": ${Math.round(overlapRatio * 100)}% overlap with existing articles (cannibalization risk).`);
     }
 
     await ctx.runMutation(api.jobs.create, {

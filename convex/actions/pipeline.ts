@@ -142,7 +142,7 @@ async function generateHeroImage(
   console.log(`Generating hero image for: "${title}"...`);
 
   const response = await client.images.generate({
-    model: "gpt-image-1.5-2025-12-16",
+    model: "gpt-image-1.5",
     prompt,
     n: 1,
     size: "1536x1024",
@@ -305,9 +305,13 @@ async function crawlSiteData(
 /** Search for relevant YouTube videos using OpenAI web search. */
 async function searchYouTubeVideos(
   topic: string,
+  primaryKeyword: string,
   niche: string,
 ): Promise<{ videoId: string; title: string }[]> {
   const client = openaiClient();
+
+  // Use primaryKeyword for specificity; fall back to topic label if not set
+  const searchTerm = primaryKeyword?.trim() || topic;
 
   const completion = await client.responses.create({
     model: "gpt-4o-mini",
@@ -323,7 +327,8 @@ async function searchYouTubeVideos(
       {
         role: "user",
         content:
-          `Find 2-3 highly relevant YouTube videos about: "${topic}" in the ${niche || "general"} space.\n` +
+          `Find 2-3 highly relevant YouTube videos about: "${searchTerm}" in the ${niche || "general"} space.\n` +
+          `The videos must be directly about this exact topic — not just vaguely related.\n` +
           `Return JSON: {"videos": [{"videoId": "the_youtube_video_id", "title": "video title"}]}`,
       },
     ],
@@ -1031,6 +1036,7 @@ async function handleArticle(
     try {
       youtubeVideos = await searchYouTubeVideos(
         topic.label,
+        topic.primaryKeyword ?? "",
         site.niche ?? "",
       );
     } catch (err) {
@@ -1350,9 +1356,10 @@ async function handleArticle(
     console.log(`AI infographic hero image generated: ${featuredImage}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`AI image generation failed, falling back to screenshot: ${msg}`);
-    // Fallback to screenshot if AI generation fails
-    featuredImage = screenshotUrl;
+    console.error(`AI image generation failed (no featured image): ${msg}`);
+    // Do NOT fall back to screenshotUrl — it's already embedded inline in the article body
+    // Using it as featuredImage too would cause it to appear twice
+    featuredImage = undefined;
   }
 
   // ── Step 5: Calculate Article Stats ──
