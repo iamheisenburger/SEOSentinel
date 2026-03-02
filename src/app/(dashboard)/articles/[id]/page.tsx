@@ -303,6 +303,21 @@ export default function ArticleDetailPage() {
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
   const [schemaOpen, setSchemaOpen] = useState(false);
 
+  // ── Hooks MUST be called before any conditional returns ──
+  const primaryColor = site?.brandPrimaryColor ?? "#0EA5E9";
+  const accentColor = site?.brandAccentColor ?? primaryColor;
+  const brandFont = site?.brandFontFamily;
+
+  const schemas = useMemo(
+    () => article ? generateSchemaMarkup(article, site?.domain ?? "example.com") : [],
+    [article, site?.domain],
+  );
+
+  const brandedComponents = useMemo(
+    () => buildBrandedComponents(primaryColor, accentColor),
+    [primaryColor, accentColor],
+  );
+
   if (article === undefined) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -330,22 +345,9 @@ export default function ArticleDetailPage() {
   const wc = article.wordCount ?? article.markdown.split(/\s+/).length;
   const rt = article.readingTime ?? Math.max(1, Math.ceil(wc / 238));
 
-  const primaryColor = site?.brandPrimaryColor ?? "#0EA5E9";
-  const accentColor = site?.brandAccentColor ?? primaryColor;
-  const brandFont = site?.brandFontFamily;
-
-  const schemas = useMemo(
-    () => article ? generateSchemaMarkup(article, site?.domain ?? "example.com") : [],
-    [article, site?.domain],
-  );
   const faqSchema = schemas.find((s) => s["@type"] === "FAQPage");
   const faqCount = faqSchema ? (faqSchema.mainEntity as unknown[] | undefined)?.length ?? 0 : 0;
   const hasHowTo = schemas.some((s) => s["@type"] === "HowTo");
-
-  const brandedComponents = useMemo(
-    () => buildBrandedComponents(primaryColor, accentColor),
-    [primaryColor, accentColor],
-  );
 
   const handleLinks = async () => {
     if (!site?._id) return;
