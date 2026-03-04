@@ -146,6 +146,35 @@ export const reject = mutation({
   },
 });
 
+// Count articles created this calendar month for a given user (across all sites)
+export const countThisMonth = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    // Get all sites for this user
+    const sites = await ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    if (sites.length === 0) return 0;
+
+    // Start of current month (UTC)
+    const now = new Date();
+    const monthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+    ).getTime();
+
+    let count = 0;
+    for (const site of sites) {
+      const articles = await ctx.db
+        .query("articles")
+        .withIndex("by_site", (q) => q.eq("siteId", site._id))
+        .collect();
+      count += articles.filter((a) => a.createdAt >= monthStart).length;
+    }
+    return count;
+  },
+});
+
 export const deleteArticle = mutation({
   args: { articleId: v.id("articles") },
   handler: async (ctx, { articleId }) => {

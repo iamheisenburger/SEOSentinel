@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { api } from "./_generated/api";
 import { v } from "convex/values";
+import { getLimitsFromFeatures } from "./planLimits";
 
 const now = () => Date.now();
 
@@ -167,6 +168,40 @@ export const queueArticleNow = mutation({
     topicId: v.optional(v.id("topic_clusters")),
   },
   handler: async (ctx, { siteId, topicId }) => {
+    // ── Article quota check ──
+    const site = await ctx.db.get(siteId);
+    if (site?.userId) {
+      const features = (site as any).planFeatures ?? [];
+      const limits = getLimitsFromFeatures(features);
+
+      // Count articles this month for this user
+      const userSites = await ctx.db
+        .query("sites")
+        .withIndex("by_user", (q) => q.eq("userId", site.userId!))
+        .collect();
+      const monthStart = new Date();
+      monthStart.setUTCDate(1);
+      monthStart.setUTCHours(0, 0, 0, 0);
+      const monthStartMs = monthStart.getTime();
+
+      let articlesThisMonth = 0;
+      for (const s of userSites) {
+        const articles = await ctx.db
+          .query("articles")
+          .withIndex("by_site", (q) => q.eq("siteId", s._id))
+          .collect();
+        articlesThisMonth += articles.filter(
+          (a) => a.createdAt >= monthStartMs,
+        ).length;
+      }
+
+      if (articlesThisMonth >= limits.maxArticles) {
+        throw new Error(
+          `Article limit reached (${limits.maxArticles}/month). Upgrade your plan for more articles.`,
+        );
+      }
+    }
+
     // Create the pending job
     const jobId = await ctx.db.insert("jobs", {
       siteId,

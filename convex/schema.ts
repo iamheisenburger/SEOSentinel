@@ -56,6 +56,9 @@ export default defineSchema({
     youtubeEmbeds: v.optional(v.boolean()),
     urlStructure: v.optional(v.string()), // e.g. /blog/[slug]
 
+    // ── Plan features (synced from Clerk) ──
+    planFeatures: v.optional(v.array(v.string())), // e.g. ["max_sites_3", "max_articles_25"]
+
     createdAt: v.number(),
     updatedAt: v.number(),
   })

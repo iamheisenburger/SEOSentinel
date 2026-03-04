@@ -14,6 +14,7 @@ import type * as articles from "../articles.js";
 import type * as crons from "../crons.js";
 import type * as jobs from "../jobs.js";
 import type * as pages from "../pages.js";
+import type * as planLimits from "../planLimits.js";
 import type * as publisher from "../publisher.js";
 import type * as sites from "../sites.js";
 import type * as topics from "../topics.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   jobs: typeof jobs;
   pages: typeof pages;
+  planLimits: typeof planLimits;
   publisher: typeof publisher;
   sites: typeof sites;
   topics: typeof topics;

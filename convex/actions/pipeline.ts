@@ -1975,7 +1975,7 @@ export const suggestInternalLinks = action({
 export const autopilotCron = action({
   args: {},
   handler: async (ctx) => {
-    const sites = await ctx.runQuery(api.sites.list, {});
+    const sites = await ctx.runQuery(api.sites.listAllForAutopilot, {});
     if (!sites?.length) return { processed: 0 };
     let processed = 0;
     for (const site of sites) {

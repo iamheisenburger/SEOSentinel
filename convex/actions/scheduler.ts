@@ -4,6 +4,7 @@ import { api } from "../_generated/api";
 import { action } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
+import { getLimitsFromFeatures, ALL_FEATURE_KEYS } from "../planLimits";
 
 export const scheduleCadence = action({
   args: { siteId: v.id("sites") },
@@ -13,6 +14,26 @@ export const scheduleCadence = action({
   ): Promise<{ scheduled: number }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
+
+    // ── Article quota check ──
+    // If the site has an owner, enforce monthly article limit
+    if (site.userId) {
+      // We don't have Clerk session in cron context, so we check plan
+      // limits based on features stored on the user. For now, use the
+      // simple approach: count articles this month vs plan limit.
+      const articlesThisMonth = await ctx.runQuery(api.articles.countThisMonth, {
+        userId: site.userId,
+      });
+      // Determine plan limits from the site's planFeatures (set during onboarding/sync)
+      const features = (site as any).planFeatures ?? [];
+      const limits = getLimitsFromFeatures(features);
+      if (articlesThisMonth >= limits.maxArticles) {
+        console.log(
+          `Article quota reached: ${articlesThisMonth}/${limits.maxArticles} this month. Skipping.`,
+        );
+        return { scheduled: 0 };
+      }
+    }
 
     const cadence = site.cadencePerWeek ?? 4;
     const hoursPerArticle = Math.floor((7 * 24) / cadence); // 42 hours for 4/week, 24 hours for 7/week

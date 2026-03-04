@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getLimitsFromFeatures } from "./planLimits";
 
 const now = () => Date.now();
 
@@ -72,6 +73,28 @@ export const upsert = mutation({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     const userId = identity?.subject;
+
+    // ── Site count limit (only on new site creation, not updates) ──
+    if (!args.id && userId) {
+      const existingSites = await ctx.db
+        .query("sites")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect();
+
+      // Check if any existing site has planFeatures to determine limits
+      const features = (existingSites[0] as any)?.planFeatures ?? [];
+      const limits = getLimitsFromFeatures(features);
+
+      // Check if domain already exists (would be an update, not new)
+      const domainNorm = args.domain.trim().toLowerCase();
+      const domainExists = existingSites.some((s) => s.domain === domainNorm);
+
+      if (!domainExists && existingSites.length >= limits.maxSites) {
+        throw new Error(
+          `Site limit reached (${limits.maxSites}). Upgrade your plan to add more sites.`,
+        );
+      }
+    }
 
     const domain = args.domain.trim().toLowerCase();
     const autopilotEnabled = args.autopilotEnabled ?? true;
@@ -233,6 +256,42 @@ export const deleteSite = mutation({
 
     // Delete the site itself
     await ctx.db.delete(siteId);
+  },
+});
+
+// List ALL sites — used by autopilot cron (no auth context)
+export const listAllForAutopilot = query({
+  handler: async (ctx) => {
+    return ctx.db.query("sites").collect();
+  },
+});
+
+// Sync plan features from Clerk to all user's sites (called from client after auth)
+export const syncPlanFeatures = mutation({
+  args: { planFeatures: v.array(v.string()) },
+  handler: async (ctx, { planFeatures }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return;
+    const userId = identity.subject;
+    const sites = await ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    for (const site of sites) {
+      await ctx.db.patch(site._id, { planFeatures });
+    }
+  },
+});
+
+// Count sites owned by a specific user
+export const countByUser = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const sites = await ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    return sites.length;
   },
 });
 
