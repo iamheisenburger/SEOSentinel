@@ -1,5 +1,26 @@
+"use client";
+
 import { SignUp } from "@clerk/nextjs";
 import { Radar, CheckCircle2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+
+function SignUpForm() {
+  const searchParams = useSearchParams();
+  const plan = searchParams.get("plan");
+
+  // If a paid plan was selected, redirect to billing after sign-up
+  const redirectUrl = plan && plan !== "free"
+    ? "/settings/billing"
+    : "/dashboard";
+
+  return (
+    <SignUp
+      signInUrl="/sign-in"
+      forceRedirectUrl={redirectUrl}
+    />
+  );
+}
 
 export default function SignUpPage() {
   return (
@@ -36,7 +57,9 @@ export default function SignUpPage() {
 
       {/* Right — Clerk sign-up form */}
       <div className="flex w-full lg:w-1/2 items-center justify-center bg-[#08090E] px-6">
-        <SignUp />
+        <Suspense>
+          <SignUpForm />
+        </Suspense>
       </div>
     </div>
   );
