@@ -127,7 +127,7 @@ export function Sidebar() {
             <Radar className="h-3.5 w-3.5 text-[#0EA5E9]" />
           </div>
           <span className="text-[14px] font-semibold tracking-tight">
-            SEOSentinel
+            Pentra
           </span>
         </div>
 

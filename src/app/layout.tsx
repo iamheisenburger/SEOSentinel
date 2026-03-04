@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SEOSentinel — Autonomous SEO Content Engine",
+  title: "Pentra — AI-Powered SEO Content Engine",
   description:
-    "Generate research-backed, SEO-optimized articles on autopilot. Crawl, plan, write, and publish — all from one dashboard.",
+    "Generate research-backed, fact-checked SEO articles on autopilot. Crawl, plan, write, verify, and publish — all from one dashboard.",
 };
 
 export default function RootLayout({

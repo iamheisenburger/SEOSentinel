@@ -32,7 +32,7 @@ const platforms = [
     color: "#0EA5E9",
     steps: [
       "Go to Users → Profile → Application Passwords in your WP admin",
-      "Create a new Application Password (give it a name like \"SEOSentinel\")",
+      "Create a new Application Password (give it a name like \"Pentra\")",
       "Copy the generated password — this is NOT your login password",
       "Enter your site URL, username, and the app password in the wizard",
       "Articles are published directly via the WordPress REST API",
@@ -59,7 +59,7 @@ const platforms = [
     steps: [
       "Select \"Copy & Paste\" as your publish method during onboarding",
       "Go to your Wix dashboard → Blog → Create New Post",
-      "Click \"Copy HTML\" on your article in SEOSentinel",
+      "Click \"Copy HTML\" on your article in Pentra",
       "Paste into the Wix editor (use the HTML embed block for best results)",
       "Add your title, featured image, and publish",
     ],
@@ -85,7 +85,7 @@ const platforms = [
     steps: [
       "Select \"Copy & Paste\" as your publish method during onboarding",
       "Go to Shopify admin → Online Store → Blog Posts → Add blog post",
-      "Click \"Copy HTML\" on your article in SEOSentinel",
+      "Click \"Copy HTML\" on your article in Pentra",
       "Switch the Shopify editor to HTML mode (\"<>\" button)",
       "Paste the HTML content, add your title, and publish",
     ],

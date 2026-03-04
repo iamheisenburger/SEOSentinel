@@ -648,7 +648,7 @@ export function SetupWizard() {
                       You&apos;ll need an <span className="text-[#EDEEF1]">Application Password</span> (not your login password).
                     </p>
                     <p className="text-[10px] text-[#565A6E] mt-1">
-                      In your WP admin: <span className="text-[#8B8FA3]">Users → Profile → scroll to &ldquo;Application Passwords&rdquo; → enter a name like &ldquo;SEOSentinel&rdquo; → click &ldquo;Add New&rdquo;</span>. Copy the generated password.
+                      In your WP admin: <span className="text-[#8B8FA3]">Users → Profile → scroll to &ldquo;Application Passwords&rdquo; → enter a name like &ldquo;Pentra&rdquo; → click &ldquo;Add New&rdquo;</span>. Copy the generated password.
                     </p>
                   </div>
                   <Input
@@ -682,7 +682,7 @@ export function SetupWizard() {
                       We&apos;ll <span className="text-[#EDEEF1]">POST</span> a JSON payload with <span className="font-mono text-[#EDEEF1]">title</span>, <span className="font-mono text-[#EDEEF1]">markdown</span>, <span className="font-mono text-[#EDEEF1]">html</span>, and metadata to your endpoint.
                     </p>
                     <p className="text-[10px] text-[#565A6E] mt-1">
-                      Add a secret to verify requests are from SEOSentinel. We&apos;ll sign the payload with HMAC-SHA256 and include it in the <span className="font-mono text-[#8B8FA3]">X-Signature</span> header.
+                      Add a secret to verify requests are from Pentra. We&apos;ll sign the payload with HMAC-SHA256 and include it in the <span className="font-mono text-[#8B8FA3]">X-Signature</span> header.
                     </p>
                   </div>
                   <Input

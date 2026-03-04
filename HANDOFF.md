@@ -1,4 +1,4 @@
-# SEOSentinel — Overhaul Handoff
+# Pentra — Overhaul Handoff
 
 ## What Was Done
 
@@ -52,7 +52,7 @@
 The pipeline will NOT work until these are set:
 
 ```bash
-cd c:\Users\arshadhakim\OneDrive\Desktop\SEOSentinel
+cd c:\Users\arshadhakim\OneDrive\Desktop\Pentra
 
 # Create a new Anthropic API key at https://console.anthropic.com/settings/keys
 npx convex env set ANTHROPIC_API_KEY sk-ant-api03-xxxxx
@@ -86,7 +86,7 @@ Already set: `GITHUB_TOKEN` (for publishing to the App2 repo)
 ## Architecture
 
 ```
-SEOSentinel/
+Pentra/
 ├── convex/                    # Backend (Convex)
 │   ├── schema.ts              # DB schema (sites, pages, topic_clusters, articles, jobs)
 │   ├── sites.ts               # Site CRUD + config (domain, niche, tone, approval, repo)

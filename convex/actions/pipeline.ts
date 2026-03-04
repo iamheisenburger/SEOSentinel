@@ -297,7 +297,7 @@ async function crawlPageContent(url: string): Promise<string> {
   try {
     const targetUrl = url.startsWith("http") ? url : `https://${url}`;
     const response = await fetch(targetUrl, {
-      headers: { "User-Agent": "SEOSentinel/1.0 (content research)" },
+      headers: { "User-Agent": "Pentra/1.0 (content research)" },
     });
     if (!response.ok) return "";
     const html = await response.text();
@@ -555,7 +555,7 @@ async function gatherColorSignals(html: string, siteUrl: string): Promise<ColorS
     for (const path of manifestPaths) {
       try {
         const manifestUrl = path.startsWith("http") ? path : origin + path;
-        const res = await fetch(manifestUrl, { signal: AbortSignal.timeout(3000), headers: { "User-Agent": "Mozilla/5.0 (compatible; SEOSentinel/1.0)" } });
+        const res = await fetch(manifestUrl, { signal: AbortSignal.timeout(3000), headers: { "User-Agent": "Mozilla/5.0 (compatible; Pentra/1.0)" } });
         if (res.ok) {
           const manifest = await res.json();
           if (manifest.theme_color) { const c = parseAnyColor(manifest.theme_color); if (c) signals.push({ source: "manifest theme_color", color: c }); }
@@ -582,7 +582,7 @@ async function gatherColorSignals(html: string, siteUrl: string): Promise<ColorS
     for (const cssPath of cssUrls.slice(0, 3)) {
       try {
         const cssUrl = cssPath.startsWith("http") ? cssPath : origin + (cssPath.startsWith("/") ? "" : "/") + cssPath;
-        const cssRes = await fetch(cssUrl, { signal: AbortSignal.timeout(4000), headers: { "User-Agent": "Mozilla/5.0 (compatible; SEOSentinel/1.0)" } });
+        const cssRes = await fetch(cssUrl, { signal: AbortSignal.timeout(4000), headers: { "User-Agent": "Mozilla/5.0 (compatible; Pentra/1.0)" } });
         if (!cssRes.ok) continue;
         const cssText = await cssRes.text();
         for (const m of cssText.matchAll(cssVarRegex)) {

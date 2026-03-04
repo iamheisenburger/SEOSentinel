@@ -1,8 +1,8 @@
-# SEOSentinel — Project Notes
+# Pentra — Project Notes
 
 ## Publishing Integrations (TODO)
 
-SEOSentinel currently only publishes via GitHub commit. Need to add multi-platform publishing like SEOBot does:
+Pentra currently only publishes via GitHub commit. Need to add multi-platform publishing like SEOBot does:
 
 ### Target Platforms
 - **Next.js** (current — via GitHub commit to content/posts/)
@@ -32,15 +32,15 @@ Each integration needs:
 - Site schema needs a `publishTarget` field (e.g., "github", "wordpress", "ghost", etc.)
 - Site schema needs platform-specific config (API key, endpoint URL, content path, etc.)
 
-### Terms & Conditions (from SEOBot — adapt for SEOSentinel)
+### Terms & Conditions (from SEOBot — adapt for Pentra)
 When users connect a publishing integration, they must accept:
 - AI-generated content may include inaccuracies — user responsible for review
 - Autopublish means articles post without prior manual review (unless approval gates are on)
 - User is solely responsible for moderating content quality
-- SEOSentinel gets API access to their blog for syncing
+- Pentra gets API access to their blog for syncing
 - User should backup their data before enabling sync
 - User can disconnect at any time; previously published articles remain
-- SEOSentinel not liable for damage, data loss, or issues from sync
+- Pentra not liable for damage, data loss, or issues from sync
 
 ## Cross-Project Correlation: LeadPilot Agent Deployment
 
@@ -50,7 +50,7 @@ would be a massive upgrade — easier install, better trust, app store distribut
 
 ### Platform-by-platform mapping
 
-| Platform | SEOSentinel (publish article) | LeadPilot (deploy agent) |
+| Platform | Pentra (publish article) | LeadPilot (deploy agent) |
 |---|---|---|
 | WordPress.org | REST API → create post | WordPress plugin → inject widget script in footer |
 | WordPress.com | REST API → create post | WordPress.com embed block or custom HTML widget |
@@ -71,7 +71,7 @@ would be a massive upgrade — easier install, better trust, app store distribut
 - **Connection UI** — same "Connect to [Platform]" modal pattern with platform logos
 
 ### Build order
-1. Build the adapter pattern for SEOSentinel publishing first (simpler — just POST content)
+1. Build the adapter pattern for Pentra publishing first (simpler — just POST content)
 2. Port the pattern to LeadPilot for widget deployment (needs platform-specific injection)
 3. WordPress plugin and Shopify app are highest ROI — largest user base
 4. The rest can use generic script tag / code injection instructions
@@ -124,9 +124,9 @@ Analyzed SEOBot's first published article for leadpilot.chat: "How to Qualify Le
 - Stats/data for E-E-A-T credibility signals
 - Competitor/authority links for topical relevance
 
-### What SEOSentinel is MISSING vs SEOBot
+### What Pentra is MISSING vs SEOBot
 
-| Feature | SEOBot | SEOSentinel (current) | Priority |
+| Feature | SEOBot | Pentra (current) | Priority |
 |---|---|---|---|
 | Featured image | AI-generated per article | None | HIGH |
 | Meta keywords | 8 per article | None | MEDIUM |

@@ -26,7 +26,7 @@ function Nav() {
               <Radar className="h-3.5 w-3.5 text-[#0EA5E9]" />
             </div>
             <span className="text-[14px] font-semibold tracking-tight">
-              SEOSentinel
+              Pentra
             </span>
           </Link>
 
@@ -82,7 +82,7 @@ function Hero() {
             </h1>
 
             <p className="mt-5 max-w-md text-[16px] leading-relaxed text-[#8B8FA3]">
-              Point SEOSentinel at your domain. It crawls your niche, plans
+              Point Pentra at your domain. It crawls your niche, plans
               keyword strategy, writes fact-checked articles from real web
               research, and publishes them to your repo. On autopilot.
             </p>
@@ -96,7 +96,7 @@ function Hero() {
                 <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
               </Link>
               <span className="text-[13px] text-[#565A6E]">
-                Free to start · No credit card
+                7-day free trial · No credit card required
               </span>
             </div>
           </div>
@@ -112,7 +112,7 @@ function Hero() {
                   <div className="h-2.5 w-2.5 rounded-full bg-[#22C55E]/40" />
                 </div>
                 <span className="ml-2 text-[11px] text-[#565A6E] font-mono">
-                  seosentinel — pipeline
+                  pentra — pipeline
                 </span>
               </div>
 
@@ -322,7 +322,7 @@ function Differentiators() {
             </h2>
             <p className="mt-4 text-[15px] leading-relaxed text-[#8B8FA3]">
               Most AI writers hallucinate sources and regurgitate training data.
-              SEOSentinel runs live web searches for every article, extracts real
+              Pentra runs live web searches for every article, extracts real
               data from real URLs, and cites them. A separate fact-checking
               pass validates every claim before publishing.
             </p>
@@ -365,7 +365,7 @@ function Differentiators() {
             <div className="rounded-xl border border-[#22C55E]/[0.1] bg-[#22C55E]/[0.02] p-5">
               <div className="flex items-center gap-2 mb-3">
                 <div className="rounded-full bg-[#22C55E]/[0.1] px-2 py-0.5 text-[10px] font-medium text-[#22C55E]">
-                  SEOSentinel
+                  Pentra
                 </div>
               </div>
               <p className="text-[13px] leading-relaxed text-[#EDEEF1]">
@@ -647,36 +647,36 @@ function Pricing() {
             Simple, transparent pricing
           </h2>
           <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            Start free. Scale when you rank.
+            No contracts. Cancel anytime. Scale when you rank.
           </p>
         </div>
 
-        <div className="mx-auto grid max-w-4xl gap-4 md:grid-cols-3">
+        <div className="mx-auto grid max-w-5xl gap-4 md:grid-cols-4">
           <PricingCard
             name="Starter"
-            price="$0"
+            price="$49"
             period="/mo"
-            desc="Get started"
+            desc="For new sites"
             features={[
               "1 site",
-              "4 articles / month",
-              "Basic pipeline",
-              "Topic planning",
-              "GitHub publishing",
+              "10 articles / month",
+              "Full AI pipeline",
+              "Fact-checking",
+              "Manual publishing",
             ]}
-            cta="Start free"
+            cta="Get started"
             featured={false}
           />
           <PricingCard
             name="Pro"
-            price="$49"
+            price="$99"
             period="/mo"
             desc="For growing sites"
             features={[
               "3 sites",
-              "30 articles / month",
-              "Approval gates",
-              "AI fact-checking",
+              "25 articles / month",
+              "All publish methods",
+              "Approval workflow",
               "Internal linking",
               "Priority support",
             ]}
@@ -685,18 +685,34 @@ function Pricing() {
           />
           <PricingCard
             name="Scale"
-            price="$149"
+            price="$199"
             period="/mo"
-            desc="Unlimited growth"
+            desc="For content teams"
             features={[
-              "Unlimited sites",
-              "Unlimited articles",
+              "10 sites",
+              "60 articles / month",
               "Everything in Pro",
               "API access",
-              "Custom templates",
-              "Dedicated support",
+              "Team members",
+              "Priority queue",
             ]}
             cta="Start scale trial"
+            featured={false}
+          />
+          <PricingCard
+            name="Enterprise"
+            price="$499"
+            period="/mo"
+            desc="For agencies"
+            features={[
+              "Unlimited sites",
+              "150 articles / month",
+              "Everything in Scale",
+              "White-label option",
+              "Custom integrations",
+              "Dedicated support",
+            ]}
+            cta="Contact sales"
             featured={false}
           />
         </div>
@@ -818,11 +834,11 @@ function Footer() {
         <div className="flex items-center gap-2">
           <Radar className="h-3.5 w-3.5 text-[#0EA5E9]" />
           <span className="text-[12px] font-medium text-[#565A6E]">
-            SEOSentinel
+            Pentra
           </span>
         </div>
         <p className="text-[11px] text-[#565A6E]">
-          &copy; {new Date().getFullYear()} SEOSentinel
+          &copy; {new Date().getFullYear()} Pentra
         </p>
       </div>
     </footer>
