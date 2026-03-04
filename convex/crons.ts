@@ -10,5 +10,8 @@ crons.daily("autopilot-2", { hourUTC: 9, minuteUTC: 0 }, api.actions.pipeline.au
 crons.daily("autopilot-3", { hourUTC: 15, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
 crons.daily("autopilot-4", { hourUTC: 21, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
 
+// Monthly re-linking: update internal links on all published articles (1st of each month at 6am UTC)
+crons.monthly("relink-articles", { day: 1, hourUTC: 6, minuteUTC: 0 }, api.actions.pipeline.relinkAllArticles);
+
 export default crons;
 

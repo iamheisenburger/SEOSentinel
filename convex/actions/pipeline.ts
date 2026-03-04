@@ -2131,6 +2131,49 @@ export const autopilotCron = action({
   },
 });
 
+// Monthly re-linking: update internal links on all published articles
+// so older articles link to newer content and vice versa.
+export const relinkAllArticles = action({
+  args: {},
+  handler: async (ctx) => {
+    const sites = await ctx.runQuery(api.sites.listAllForAutopilot, {});
+    if (!sites?.length) return { relinked: 0 };
+
+    let relinked = 0;
+    for (const site of sites) {
+      const articles = await ctx.runQuery(api.articles.listBySite, {
+        siteId: site._id,
+      });
+      const published = articles.filter(
+        (a: { status: string }) => a.status === "published",
+      );
+
+      // Only re-link if there are at least 3 published articles
+      if (published.length < 3) continue;
+
+      // Re-link up to 10 oldest articles per site (those most likely to miss new content)
+      const oldest = [...published].sort(
+        (a, b) => a.createdAt - b.createdAt,
+      ).slice(0, 10);
+
+      for (const article of oldest) {
+        try {
+          await handleLinks(ctx, site._id, article._id);
+          relinked++;
+          console.log(`Re-linked article: "${article.title}" (${article.slug})`);
+        } catch (err) {
+          console.error(
+            `Re-link failed for ${article._id}: ${err instanceof Error ? err.message : "unknown"}`,
+          );
+        }
+      }
+    }
+
+    console.log(`Monthly re-linking complete: ${relinked} articles updated.`);
+    return { relinked };
+  },
+});
+
 // Programmatic SEO template generator
 export const generateProgrammaticTemplate = action({
   args: {
