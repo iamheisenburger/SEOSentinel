@@ -21,6 +21,12 @@ export function LandingNav() {
           </Link>
 
           <div className="flex items-center gap-3">
+            <Link
+              href="/pricing"
+              className="text-[13px] text-[#8B8FA3] transition hover:text-white hidden sm:block"
+            >
+              Pricing
+            </Link>
             {isSignedIn ? (
               <>
                 <Link

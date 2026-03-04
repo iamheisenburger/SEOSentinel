@@ -618,11 +618,25 @@ function Pricing() {
             Simple, transparent pricing
           </h2>
           <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            No contracts. Cancel anytime. Scale when you rank.
+            All features included. Just pick your volume.
           </p>
         </div>
 
         <div className="mx-auto grid max-w-5xl gap-4 md:grid-cols-4">
+          <PricingCard
+            name="Free"
+            price="$0"
+            period="/mo"
+            desc="Try it out"
+            features={[
+              "1 site",
+              "3 articles / month",
+              "Full AI pipeline",
+              "Fact-checking",
+            ]}
+            cta="Get started free"
+            featured={false}
+          />
           <PricingCard
             name="Starter"
             price="$49"
@@ -631,11 +645,10 @@ function Pricing() {
             features={[
               "1 site",
               "10 articles / month",
-              "Full AI pipeline",
-              "Fact-checking",
-              "Manual publishing",
+              "All publish methods",
+              "Autopilot mode",
             ]}
-            cta="Get started"
+            cta="Start free trial"
             featured={false}
           />
           <PricingCard
@@ -646,12 +659,10 @@ function Pricing() {
             features={[
               "3 sites",
               "25 articles / month",
-              "All publish methods",
-              "Approval workflow",
-              "Internal linking",
+              "Everything in Starter",
               "Priority support",
             ]}
-            cta="Start pro trial"
+            cta="Start free trial"
             featured
           />
           <PricingCard
@@ -663,29 +674,20 @@ function Pricing() {
               "10 sites",
               "60 articles / month",
               "Everything in Pro",
-              "API access",
-              "Team members",
               "Priority queue",
             ]}
-            cta="Start scale trial"
+            cta="Start free trial"
             featured={false}
           />
-          <PricingCard
-            name="Enterprise"
-            price="$499"
-            period="/mo"
-            desc="For agencies"
-            features={[
-              "Unlimited sites",
-              "150 articles / month",
-              "Everything in Scale",
-              "White-label option",
-              "Custom integrations",
-              "Dedicated support",
-            ]}
-            cta="Contact sales"
-            featured={false}
-          />
+        </div>
+
+        <div className="mt-6 text-center">
+          <Link
+            href="/pricing"
+            className="text-[13px] text-[#0EA5E9] hover:underline"
+          >
+            See all plans including Enterprise →
+          </Link>
         </div>
       </div>
     </section>
