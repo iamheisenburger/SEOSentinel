@@ -648,7 +648,7 @@ function Pricing() {
               "All publish methods",
               "Autopilot mode",
             ]}
-            cta="Start free trial"
+            cta="Get started"
             featured={false}
           />
           <PricingCard
@@ -662,7 +662,7 @@ function Pricing() {
               "Everything in Starter",
               "Priority support",
             ]}
-            cta="Start free trial"
+            cta="Get started"
             featured
           />
           <PricingCard
@@ -676,7 +676,7 @@ function Pricing() {
               "Everything in Pro",
               "Priority queue",
             ]}
-            cta="Start free trial"
+            cta="Get started"
             featured={false}
           />
         </div>
@@ -735,7 +735,7 @@ function PricingCard({
         <p className="mt-1 text-[13px] text-[#8B8FA3]">{desc}</p>
 
         <Link
-          href="/dashboard"
+          href="/sign-up"
           className={`mt-5 block rounded-lg py-2.5 text-center text-[13px] font-medium transition ${
             featured
               ? "bg-[#0EA5E9] text-white hover:bg-[#38BDF8]"
