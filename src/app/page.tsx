@@ -755,35 +755,50 @@ function FinalCTA() {
 
 function Footer() {
   return (
-    <footer className="border-t border-white/[0.06] py-10">
+    <footer className="border-t border-white/[0.06] py-14">
       <div className="mx-auto max-w-6xl px-6">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2.5">
-            <Radar className="h-4 w-4 text-[#0EA5E9]" />
-            <span className="text-[14px] font-semibold text-[#8B8FA3]">
+        <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
+              <Radar className="h-5 w-5 text-[#0EA5E9]" />
+            </div>
+            <span className="text-[18px] font-bold">
               Pentra
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-5">
-            <a href="#features" className="text-[13px] font-medium text-[#565A6E] hover:text-[#8B8FA3] transition">
-              Features
-            </a>
-            <a href="#pricing" className="text-[13px] font-medium text-[#565A6E] hover:text-[#8B8FA3] transition">
-              Pricing
-            </a>
-            <a href="#faq" className="text-[13px] font-medium text-[#565A6E] hover:text-[#8B8FA3] transition">
-              FAQ
-            </a>
-            <Link href="/legal/privacy" className="text-[13px] font-medium text-[#565A6E] hover:text-[#8B8FA3] transition">
-              Privacy
-            </Link>
-            <Link href="/legal/terms" className="text-[13px] font-medium text-[#565A6E] hover:text-[#8B8FA3] transition">
-              Terms
-            </Link>
-            <p className="text-[13px] text-[#565A6E]">
-              &copy; {new Date().getFullYear()} Pentra
-            </p>
+
+          <div className="flex flex-wrap gap-x-8 gap-y-3">
+            <div className="flex flex-col gap-3">
+              <span className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">Product</span>
+              <a href="#features" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
+                Features
+              </a>
+              <a href="#pricing" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
+                Pricing
+              </a>
+              <a href="#faq" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
+                FAQ
+              </a>
+            </div>
+            <div className="flex flex-col gap-3">
+              <span className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">Company</span>
+              <Link href="/contact" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
+                Contact
+              </Link>
+              <Link href="/legal/privacy" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
+                Privacy
+              </Link>
+              <Link href="/legal/terms" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
+                Terms
+              </Link>
+            </div>
           </div>
+        </div>
+
+        <div className="mt-10 border-t border-white/[0.06] pt-6">
+          <p className="text-[14px] font-medium text-[#565A6E]">
+            &copy; {new Date().getFullYear()} Pentra. All rights reserved.
+          </p>
         </div>
       </div>
     </footer>
