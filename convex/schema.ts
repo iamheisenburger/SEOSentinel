@@ -3,6 +3,7 @@ import { v } from "convex/values";
 
 export default defineSchema({
   sites: defineTable({
+    userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),
     niche: v.optional(v.string()),
     tone: v.optional(v.string()),
@@ -57,7 +58,9 @@ export default defineSchema({
 
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_domain", ["domain"]),
+  })
+    .index("by_domain", ["domain"])
+    .index("by_user", ["userId"]),
 
   pages: defineTable({
     siteId: v.id("sites"),

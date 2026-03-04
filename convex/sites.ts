@@ -5,7 +5,14 @@ const now = () => Date.now();
 
 export const list = query({
   handler: async (ctx) => {
-    return ctx.db.query("sites").order("asc").collect();
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const userId = identity.subject;
+    return ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("asc")
+      .collect();
   },
 });
 
@@ -63,6 +70,9 @@ export const upsert = mutation({
     urlStructure: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const userId = identity?.subject;
+
     const domain = args.domain.trim().toLowerCase();
     const autopilotEnabled = args.autopilotEnabled ?? true;
     const inferToneNiche = args.inferToneNiche ?? true;
@@ -141,6 +151,7 @@ export const upsert = mutation({
 
     return await ctx.db.insert("sites", {
       ...data,
+      userId,
       language: args.language ?? "en",
       cadencePerWeek: args.cadencePerWeek ?? 4,
       publishMethod: args.publishMethod ?? "github",

@@ -16,6 +16,7 @@ import {
   Radar,
   Globe,
 } from "lucide-react";
+import { UserButton } from "@clerk/nextjs";
 
 const navSections = [
   {
@@ -151,6 +152,20 @@ export function Sidebar() {
           ) : (
             <p className="text-[11px] text-[#565A6E]">No site configured</p>
           )}
+        </div>
+
+        {/* User profile */}
+        <div className="border-t border-white/[0.04] px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <UserButton
+              appearance={{
+                elements: {
+                  avatarBox: "h-7 w-7",
+                },
+              }}
+            />
+            <span className="text-[12px] text-[#8B8FA3]">Account</span>
+          </div>
         </div>
       </aside>
     </>
