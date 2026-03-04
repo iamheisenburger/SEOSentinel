@@ -83,6 +83,7 @@ export default defineSchema({
     intent: v.optional(v.string()),
     priority: v.optional(v.number()),
     status: v.optional(v.string()), // pending | queued | planned | used
+    articleType: v.optional(v.string()), // standard | listicle | how-to | checklist | comparison | roundup | ultimate-guide
     notes: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -91,6 +92,7 @@ export default defineSchema({
   articles: defineTable({
     siteId: v.id("sites"),
     topicId: v.optional(v.id("topic_clusters")),
+    articleType: v.optional(v.string()), // standard | listicle | how-to | checklist | comparison | roundup | ultimate-guide
     status: v.string(), // draft | review | ready | published
     title: v.string(),
     slug: v.string(),

@@ -23,6 +23,7 @@ export const createDraft = mutation({
   args: {
     siteId: v.id("sites"),
     topicId: v.optional(v.id("topic_clusters")),
+    articleType: v.optional(v.string()),
     title: v.string(),
     slug: v.string(),
     markdown: v.string(),
@@ -65,6 +66,7 @@ export const createDraft = mutation({
     return await ctx.db.insert("articles", {
       siteId: args.siteId,
       topicId: args.topicId,
+      articleType: args.articleType,
       status: "draft",
       title: args.title,
       slug,

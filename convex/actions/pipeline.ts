@@ -25,6 +25,7 @@ const TopicSchema = z.object({
   secondaryKeywords: z.array(z.string()).default([]),
   intent: z.string().optional(),
   priority: z.number().optional(),
+  articleType: z.string().optional(),
   notes: z.string().optional(),
 });
 
@@ -96,6 +97,124 @@ const parseJson = <T>(schema: z.ZodTypeAny, text: string): T => {
     throw new Error(`JSON parse failed: ${err instanceof Error ? err.message : "unknown"}`);
   }
 };
+
+// ── Article Type Templates ──
+// Each type modifies the article_structure prompt section
+type ArticleType = "standard" | "listicle" | "how-to" | "checklist" | "comparison" | "roundup" | "ultimate-guide";
+
+function getArticleTypeStructure(articleType: ArticleType, productName: string): string {
+  switch (articleType) {
+    case "listicle":
+      return [
+        `ARTICLE TYPE: LISTICLE (N Best/Top X format)`,
+        `REQUIRED CONTENT ORDER:`,
+        `1. HOOK: Open with why this list matters — a compelling stat or pain point.`,
+        `2. TL;DR: "> **TL;DR:** ..." blockquote (2-3 sentences summarizing the top picks).`,
+        `3. TABLE OF CONTENTS: "## Table of Contents" linking to each list item.`,
+        `4. QUICK COMPARISON TABLE: A summary table comparing all items at a glance.`,
+        `5. LIST ITEMS: Each as an H2 (e.g., "## 1. [Item Name] — [One-line value prop]").`,
+        `   Each item: 250-400 words covering key features, pros/cons, pricing, and who it's best for.`,
+        `   Include a real screenshot or image for at least 3 items.`,
+        `6. HOW ${productName} FITS IN: A dedicated section showing how ${productName} compares or complements these options.`,
+        `7. HOW TO CHOOSE: Decision criteria or flowchart to help readers pick.`,
+        `8. FAQ: 6-8 questions about the category.`,
+        `9. KEY TAKEAWAYS: 5-7 bullet points.`,
+        `10. SOURCES + STYLED CTA BOX.`,
+      ].join("\n");
+
+    case "how-to":
+      return [
+        `ARTICLE TYPE: HOW-TO GUIDE (Step-by-step tutorial)`,
+        `REQUIRED CONTENT ORDER:`,
+        `1. HOOK: Start with what the reader will achieve by following this guide.`,
+        `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick steps summary.`,
+        `3. TABLE OF CONTENTS: Linking to each major section.`,
+        `4. PREREQUISITES: "## What You'll Need" — tools, knowledge, or setup required.`,
+        `5. STEPS: Each step as an H2 (e.g., "## Step 1: [Action]").`,
+        `   Each step: 300-500 words with detailed instructions, code snippets or examples where relevant.`,
+        `   Include numbered sub-steps where needed.`,
+        `   Add "💡 Pro Tip:" callouts for advanced users.`,
+        `6. COMMON MISTAKES: "## Common Mistakes to Avoid" — 4-6 pitfalls.`,
+        `7. HOW ${productName} HELPS: Show how ${productName} simplifies or automates part of this process.`,
+        `8. FAQ: 6-8 questions about the process.`,
+        `9. KEY TAKEAWAYS: Step summary as bullet points.`,
+        `10. SOURCES + STYLED CTA BOX.`,
+      ].join("\n");
+
+    case "checklist":
+      return [
+        `ARTICLE TYPE: CHECKLIST (Actionable checkbox-style guide)`,
+        `REQUIRED CONTENT ORDER:`,
+        `1. HOOK: Why this checklist matters — what happens if you skip items.`,
+        `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
+        `3. TABLE OF CONTENTS: Linking to each checklist section.`,
+        `4. CHECKLIST SECTIONS: Group items into 4-6 categories, each as an H2.`,
+        `   Format each item as: "### ☐ [Action Item]" followed by 100-200 words explaining why and how.`,
+        `   Include 15-25 total checklist items across all sections.`,
+        `5. PRINTABLE SUMMARY: "## Quick Reference Checklist" — all items in a single bulleted list.`,
+        `6. HOW ${productName} HELPS: Which checklist items ${productName} handles automatically.`,
+        `7. FAQ: 5-7 questions.`,
+        `8. KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+      ].join("\n");
+
+    case "comparison":
+      return [
+        `ARTICLE TYPE: COMPARISON / VS ARTICLE`,
+        `REQUIRED CONTENT ORDER:`,
+        `1. HOOK: Frame the decision the reader is facing.`,
+        `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick verdict.`,
+        `3. TABLE OF CONTENTS.`,
+        `4. OVERVIEW: Brief intro to both/all options being compared.`,
+        `5. DETAILED COMPARISON TABLE: Comprehensive feature-by-feature markdown table.`,
+        `6. CATEGORY BREAKDOWNS: 5-7 H2 sections comparing specific aspects (e.g., "## Pricing", "## Ease of Use", "## Performance").`,
+        `   Each section: 200-400 words with specific data, not opinions.`,
+        `7. WHO SHOULD USE WHAT: "## Which One Is Right for You?" — scenario-based recommendations.`,
+        `8. HOW ${productName} COMPARES: Where ${productName} fits in this landscape.`,
+        `9. FAQ: 6-8 questions about the comparison.`,
+        `10. VERDICT + KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+      ].join("\n");
+
+    case "roundup":
+      return [
+        `ARTICLE TYPE: ROUNDUP (Expert opinions or resource collection)`,
+        `REQUIRED CONTENT ORDER:`,
+        `1. HOOK: Why this topic has multiple expert perspectives worth hearing.`,
+        `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
+        `3. TABLE OF CONTENTS.`,
+        `4. CONTEXT: Background on why this topic matters now.`,
+        `5. EXPERT INSIGHTS / RESOURCES: 7-12 items, each as an H2 or H3.`,
+        `   Each: attributed quote or resource summary (200-300 words), with source link.`,
+        `6. KEY THEMES: "## Common Themes" — patterns across the insights.`,
+        `7. HOW ${productName} APPLIES: Connect the insights to what ${productName} does.`,
+        `8. FAQ: 5-7 questions.`,
+        `9. KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+      ].join("\n");
+
+    case "ultimate-guide":
+      return [
+        `ARTICLE TYPE: ULTIMATE GUIDE (Comprehensive, definitive resource — 5000+ words)`,
+        `REQUIRED CONTENT ORDER:`,
+        `1. HOOK: Establish this as THE definitive resource on the topic.`,
+        `2. TL;DR: "> **TL;DR:** ..." blockquote (what the reader will learn).`,
+        `3. TABLE OF CONTENTS: Comprehensive, linking to all major sections.`,
+        `4. FUNDAMENTALS: "## What Is [Topic]?" — definitions, history, why it matters.`,
+        `5. CORE SECTIONS: 6-8 H2 sections covering every major aspect of the topic.`,
+        `   Each section: 500-800 words with sub-headings (H3), examples, data, and actionable advice.`,
+        `   Include tables, lists, and visuals throughout.`,
+        `6. ADVANCED STRATEGIES: 2-3 sections for experienced readers.`,
+        `7. TOOLS & RESOURCES: Including how ${productName} fits into the toolkit.`,
+        `8. COMMON MISTAKES: 5-7 pitfalls to avoid.`,
+        `9. EXPERT QUOTES: 3-5 real expert quotes with citations.`,
+        `10. FAQ: 8-12 comprehensive questions.`,
+        `11. KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+        ``,
+        `WORD COUNT: 5000-7000 words (this is an ULTIMATE guide — be thorough).`,
+      ].join("\n");
+
+    default: // "standard"
+      return ""; // Use the existing default structure
+  }
+}
 
 const buildSlug = (title: string) =>
   title
@@ -975,7 +1094,17 @@ async function handlePlan(
     `<output_format>`,
     `Output JSON only. No explanation outside the JSON.`,
     `Return a JSON array:`,
-    `[{"label":"topic title","primaryKeyword":"main search keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":1-5,"notes":"why this topic drives traffic to ${productName}"}]`,
+    `[{"label":"topic title","primaryKeyword":"main search keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":1-5,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this topic drives traffic to ${productName}"}]`,
+    ``,
+    `ARTICLE TYPE GUIDE — pick the best format for each topic:`,
+    `- "standard": Default deep-dive article`,
+    `- "listicle": "N Best/Top X" or list-based topics`,
+    `- "how-to": Step-by-step tutorials or guides`,
+    `- "checklist": Actionable checklist-style content`,
+    `- "comparison": X vs Y or feature comparisons`,
+    `- "roundup": Expert opinions or resource collections`,
+    `- "ultimate-guide": Comprehensive 5000+ word definitive resources`,
+    `Mix article types for variety. Not every topic should be "standard".`,
     `</output_format>`,
   ].filter(Boolean).join("\n");
 
@@ -1239,25 +1368,34 @@ async function handleArticle(
     `</images>`,
     ``,
     `<article_structure>`,
-    `REQUIRED CONTENT ORDER (follow this sequence exactly):`,
-    `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement.`,
-    `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
-    `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
-    `4. SECTIONS 1-2: First two H2 sections covering background/context of the topic.`,
-    `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
-    `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
-    `   YouTube embed goes HERE — place it after the section it relates to most.`,
-    `6. PRODUCT SECTION: A dedicated H2 titled "How ${productName} [solves X]" — show exactly how ${productName} addresses the article topic. Mention ${productName} by name 3-5 times naturally throughout the article. Include the site screenshot (if available) IN THIS SECTION only.`,
-    `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
-    `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
-    `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
-    `10. FAQ: "## Frequently Asked Questions" with 8-10 questions. Format: ### Question?\n Answer paragraph.`,
-    `11. KEY TAKEAWAYS: "## Key Takeaways" with 5-7 bullet points.`,
-    `12. SOURCES: "## Sources" section with numbered citation links.`,
-    `13. STYLED CTA BOX: Place the HTML CTA box last, after Sources.`,
+    // Use type-specific structure if the topic has an articleType set
+    (() => {
+      const articleType = ((topic as any)?.articleType ?? "standard") as ArticleType;
+      const typeStructure = getArticleTypeStructure(articleType, productName);
+      if (typeStructure) return typeStructure;
+      // Default standard structure
+      return [
+        `REQUIRED CONTENT ORDER (follow this sequence exactly):`,
+        `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement.`,
+        `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
+        `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
+        `4. SECTIONS 1-2: First two H2 sections covering background/context of the topic.`,
+        `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
+        `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
+        `   YouTube embed goes HERE — place it after the section it relates to most.`,
+        `6. PRODUCT SECTION: A dedicated H2 titled "How ${productName} [solves X]" — show exactly how ${productName} addresses the article topic. Mention ${productName} by name 3-5 times naturally throughout the article. Include the site screenshot (if available) IN THIS SECTION only.`,
+        `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
+        `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
+        `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
+        `10. FAQ: "## Frequently Asked Questions" with 8-10 questions. Format: ### Question?\n Answer paragraph.`,
+        `11. KEY TAKEAWAYS: "## Key Takeaways" with 5-7 bullet points.`,
+        `12. SOURCES: "## Sources" section with numbered citation links.`,
+        `13. STYLED CTA BOX: Place the HTML CTA box last, after Sources.`,
+      ].join("\n");
+    })(),
     ``,
     `GLOBAL RULES:`,
-    `- WORD COUNT: 3500-4500 words.`,
+    `- WORD COUNT: ${((topic as any)?.articleType === "ultimate-guide") ? "5000-7000" : "3500-4500"} words.`,
     `- NO FLUFF: Every paragraph must contain specific data, examples, or actionable advice.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
     `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
@@ -1465,6 +1603,7 @@ async function handleArticle(
   const articleId = await ctx.runMutation(api.articles.createDraft, {
     siteId,
     topicId: topicId ?? undefined,
+    articleType: (topic as any)?.articleType ?? "standard",
     title: article.title,
     slug: slug.startsWith("/") ? slug : `/${slug}`,
     markdown: finalMarkdown,
