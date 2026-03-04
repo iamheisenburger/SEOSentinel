@@ -5,19 +5,25 @@ import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 
+const allFeatures = [
+  "Full AI pipeline",
+  "Web research & fact-checking",
+  "Hero images & infographics",
+  "Internal linking",
+  "Schema markup (JSON-LD)",
+  "Multi-platform publishing",
+  "Autopilot scheduling",
+  "Keyword strategy & topic clusters",
+];
+
 const tiers = [
   {
     name: "Free",
     monthlyPrice: 0,
     annualPrice: 0,
-    desc: "Try it out with 3 articles a month on 1 site.",
-    features: [
-      "1 site",
-      "3 articles / month",
-      "Full AI pipeline",
-      "Fact-checking",
-      "Manual publishing",
-    ],
+    desc: "Try the full pipeline on a single site.",
+    sites: "1 site",
+    articles: "3 articles / month",
     cta: "Get started free",
     plan: "free",
     featured: false,
@@ -26,14 +32,9 @@ const tiers = [
     name: "Starter",
     monthlyPrice: 49,
     annualPrice: 39,
-    desc: "For new sites getting started with content.",
-    features: [
-      "1 site",
-      "10 articles / month",
-      "All publish methods",
-      "Autopilot mode",
-      "Internal linking",
-    ],
+    desc: "For new sites building their content library.",
+    sites: "1 site",
+    articles: "10 articles / month",
     cta: "Get started",
     plan: "starter",
     featured: false,
@@ -43,13 +44,8 @@ const tiers = [
     monthlyPrice: 99,
     annualPrice: 79,
     desc: "For growing sites that need more content.",
-    features: [
-      "3 sites",
-      "25 articles / month",
-      "Everything in Starter",
-      "Approval workflow",
-      "Priority support",
-    ],
+    sites: "3 sites",
+    articles: "25 articles / month",
     cta: "Get started",
     plan: "pro",
     featured: true,
@@ -59,13 +55,8 @@ const tiers = [
     monthlyPrice: 199,
     annualPrice: 159,
     desc: "For content teams and agencies.",
-    features: [
-      "10 sites",
-      "60 articles / month",
-      "Everything in Pro",
-      "API access",
-      "Priority queue",
-    ],
+    sites: "10 sites",
+    articles: "60 articles / month",
     cta: "Get started",
     plan: "scale",
     featured: false,
@@ -75,13 +66,8 @@ const tiers = [
     monthlyPrice: 499,
     annualPrice: 399,
     desc: "Unlimited scale for large operations.",
-    features: [
-      "Unlimited sites",
-      "150 articles / month",
-      "Everything in Scale",
-      "White-label option",
-      "Dedicated support",
-    ],
+    sites: "Unlimited sites",
+    articles: "150 articles / month",
     cta: "Get started",
     plan: "enterprise",
     featured: false,
@@ -184,6 +170,18 @@ export function PricingSection() {
                     {tier.desc}
                   </p>
 
+                  {/* Volume highlights */}
+                  <div className="mt-4 space-y-1.5">
+                    <div className="flex items-center gap-2 text-[13px] font-semibold text-[#EDEEF1]">
+                      <CheckCircle2 className={`h-3.5 w-3.5 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#22C55E]"}`} />
+                      {tier.sites}
+                    </div>
+                    <div className="flex items-center gap-2 text-[13px] font-semibold text-[#EDEEF1]">
+                      <CheckCircle2 className={`h-3.5 w-3.5 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#22C55E]"}`} />
+                      {tier.articles}
+                    </div>
+                  </div>
+
                   <Link
                     href={href}
                     className={`mt-5 block rounded-lg py-2.5 text-center text-[13px] font-medium transition ${
@@ -195,21 +193,24 @@ export function PricingSection() {
                     {tier.cta}
                   </Link>
 
-                  <ul className="mt-5 space-y-2">
-                    {tier.features.map((f) => (
-                      <li
-                        key={f}
-                        className="flex items-center gap-2 text-[13px] text-[#8B8FA3]"
-                      >
-                        <CheckCircle2
-                          className={`h-3 w-3 shrink-0 ${
-                            tier.featured ? "text-[#0EA5E9]" : "text-[#565A6E]"
-                          }`}
-                        />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="mt-4 pt-4 border-t border-white/[0.04]">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#565A6E] mb-2">All features included</p>
+                    <ul className="space-y-1.5">
+                      {allFeatures.map((f) => (
+                        <li
+                          key={f}
+                          className="flex items-center gap-2 text-[12px] text-[#8B8FA3]"
+                        >
+                          <CheckCircle2
+                            className={`h-3 w-3 shrink-0 ${
+                              tier.featured ? "text-[#0EA5E9]" : "text-[#565A6E]"
+                            }`}
+                          />
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
               </div>
             );
