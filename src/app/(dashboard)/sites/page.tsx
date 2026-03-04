@@ -16,10 +16,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 export default function WebsitesPage() {
   const sites = useQuery(api.sites.list);
   const loading = sites === undefined;
+  const { maxSites } = usePlanLimits();
+  const atSiteLimit = (sites?.length ?? 0) >= maxSites;
 
   if (loading) {
     return (
@@ -48,15 +51,25 @@ export default function WebsitesPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Websites"
-        subtitle={`${sites.length} website${sites.length !== 1 ? "s" : ""} configured`}
+        subtitle={`${sites.length} / ${maxSites === 9999 ? "∞" : maxSites} website${sites.length !== 1 ? "s" : ""}`}
         actions={
-          <Button
-            size="sm"
-            onClick={() => window.location.assign("/dashboard?setup=new")}
-            icon={<Plus className="h-3.5 w-3.5" />}
-          >
-            Add Website
-          </Button>
+          atSiteLimit ? (
+            <Link
+              href="/pricing"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#F59E0B]/[0.1] border border-[#F59E0B]/20 px-3 py-1.5 text-[12px] font-medium text-[#FBBF24] hover:bg-[#F59E0B]/[0.15] transition"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Upgrade to add more
+            </Link>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() => window.location.assign("/dashboard?setup=new")}
+              icon={<Plus className="h-3.5 w-3.5" />}
+            >
+              Add Website
+            </Button>
+          )
         }
       />
 

@@ -26,6 +26,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
@@ -49,6 +50,16 @@ export default function DashboardPage() {
   const [genBusy, setGenBusy] = useState(false);
   const [genMessage, setGenMessage] = useState<string | null>(null);
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
+  const { maxSites, maxArticles, isFreePlan } = usePlanLimits();
+
+  // Articles generated this calendar month (across all sites)
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const articlesThisMonth =
+    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  const atArticleLimit = articlesThisMonth >= maxArticles;
+  const atSiteLimit = (sites?.length ?? 0) >= maxSites;
 
   const publishedCount =
     articles?.filter((a) => a.status === "published").length ?? 0;
@@ -133,7 +144,15 @@ export default function DashboardPage() {
         <div className="flex items-center gap-2">
           <Button
             variant="secondary"
-            onClick={() => window.location.assign("/dashboard?setup=new")}
+            onClick={() => {
+              if (atSiteLimit) {
+                setGenMessage(
+                  `Site limit reached (${maxSites}). Upgrade your plan to add more sites.`,
+                );
+                return;
+              }
+              window.location.assign("/dashboard?setup=new");
+            }}
             icon={<Globe className="h-3.5 w-3.5" />}
           >
             Add Website
@@ -141,13 +160,27 @@ export default function DashboardPage() {
           <Button
             onClick={handleGenerateNow}
             loading={genBusy}
-            disabled={availableTopics === 0}
+            disabled={availableTopics === 0 || atArticleLimit}
             icon={<Zap className="h-3.5 w-3.5" />}
           >
-            Generate Now
+            {atArticleLimit ? "Limit Reached" : "Generate Now"}
           </Button>
         </div>
       </div>
+
+      {/* Plan usage banner */}
+      {atArticleLimit && (
+        <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">
+          <Zap className="h-4 w-4 shrink-0 text-[#F59E0B]" />
+          <p className="flex-1 text-[13px] text-[#FBBF24]">
+            You&apos;ve used all {maxArticles} articles this month.{" "}
+            <Link href="/pricing" className="underline font-medium hover:text-white transition">
+              Upgrade your plan
+            </Link>{" "}
+            to generate more.
+          </p>
+        </div>
+      )}
 
       {profileIncomplete && (
         <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">

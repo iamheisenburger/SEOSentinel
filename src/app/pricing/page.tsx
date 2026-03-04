@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Radar, CheckCircle2, ArrowRight } from "lucide-react";
+import { Radar, CheckCircle2 } from "lucide-react";
 import { LandingNav } from "@/components/layout/landing-nav";
+import { PricingTableSection } from "@/components/billing/pricing-table-section";
 
 export const metadata: Metadata = {
   title: "Pricing",
@@ -22,7 +23,6 @@ const tiers = [
       "Fact-checking",
       "Manual publishing",
     ],
-    cta: "Get started free",
     featured: false,
   },
   {
@@ -37,7 +37,6 @@ const tiers = [
       "Autopilot mode",
       "Internal linking",
     ],
-    cta: "Start free trial",
     featured: false,
   },
   {
@@ -52,7 +51,6 @@ const tiers = [
       "Approval workflow",
       "Priority support",
     ],
-    cta: "Start free trial",
     featured: true,
   },
   {
@@ -67,7 +65,6 @@ const tiers = [
       "API access",
       "Priority queue",
     ],
-    cta: "Start free trial",
     featured: false,
   },
   {
@@ -82,7 +79,6 @@ const tiers = [
       "White-label option",
       "Dedicated support",
     ],
-    cta: "Contact us",
     featured: false,
   },
 ];
@@ -107,6 +103,7 @@ export default function PricingPage() {
             </p>
           </div>
 
+          {/* Static tier overview (visible to everyone, SEO-friendly) */}
           <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-5">
             {tiers.map((tier) => (
               <div
@@ -138,17 +135,6 @@ export default function PricingPage() {
                     {tier.desc}
                   </p>
 
-                  <Link
-                    href="/sign-up"
-                    className={`mt-5 block rounded-lg py-2.5 text-center text-[13px] font-medium transition ${
-                      tier.featured
-                        ? "bg-[#0EA5E9] text-white hover:bg-[#38BDF8]"
-                        : "border border-white/[0.08] text-[#8B8FA3] hover:border-white/[0.15] hover:text-white"
-                    }`}
-                  >
-                    {tier.cta}
-                  </Link>
-
                   <ul className="mt-5 space-y-2">
                     {tier.features.map((f) => (
                       <li
@@ -169,6 +155,9 @@ export default function PricingPage() {
             ))}
           </div>
 
+          {/* Clerk PricingTable for checkout (client component) */}
+          <PricingTableSection />
+
           {/* FAQ / Bottom note */}
           <div className="mt-16 text-center">
             <p className="text-[14px] text-[#8B8FA3]">
@@ -179,7 +168,7 @@ export default function PricingPage() {
             <p className="mt-2 text-[13px] text-[#565A6E]">
               Need a custom plan?{" "}
               <a
-                href="mailto:hello@pentra.dev"
+                href="mailto:pentrahelp@gmail.com"
                 className="text-[#0EA5E9] hover:underline"
               >
                 Get in touch
