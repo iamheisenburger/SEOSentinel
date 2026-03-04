@@ -1,14 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { Radar } from "lucide-react";
+import { Radar, Menu, X } from "lucide-react";
 import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
+import { useState } from "react";
+
+const navLinks = [
+  { label: "Features", href: "#features" },
+  { label: "How it works", href: "#pipeline" },
+  { label: "Pricing", href: "#pricing" },
+  { label: "FAQ", href: "#faq" },
+];
 
 export function LandingNav() {
   const { isSignedIn } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 backdrop-blur-md bg-[#08090E]/80">
+    <header className="fixed inset-x-0 top-0 z-50 backdrop-blur-md bg-[#08090E]/80 border-b border-white/[0.04]">
       <div className="mx-auto max-w-6xl px-6">
         <nav className="flex h-16 items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5">
@@ -20,13 +29,20 @@ export function LandingNav() {
             </span>
           </Link>
 
-          <div className="flex items-center gap-4">
-            <Link
-              href="/pricing"
-              className="text-[14px] font-medium text-[#8B8FA3] transition hover:text-white hidden sm:block"
-            >
-              Pricing
-            </Link>
+          {/* Desktop nav */}
+          <div className="hidden md:flex items-center gap-8">
+            {navLinks.map((link) => (
+              <a
+                key={link.label}
+                href={link.href}
+                className="text-[14px] font-medium text-[#8B8FA3] transition hover:text-white"
+              >
+                {link.label}
+              </a>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-3">
             {isSignedIn ? (
               <>
                 <Link
@@ -51,9 +67,33 @@ export function LandingNav() {
                 </SignUpButton>
               </>
             )}
+
+            {/* Mobile menu button */}
+            <button
+              className="md:hidden ml-1 p-1.5 text-[#8B8FA3] hover:text-white transition cursor-pointer"
+              onClick={() => setMobileOpen(!mobileOpen)}
+            >
+              {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
           </div>
         </nav>
       </div>
+
+      {/* Mobile dropdown */}
+      {mobileOpen && (
+        <div className="md:hidden border-t border-white/[0.04] bg-[#08090E]/95 backdrop-blur-md px-6 py-4 space-y-3">
+          {navLinks.map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              className="block text-[14px] font-medium text-[#8B8FA3] transition hover:text-white py-1.5"
+              onClick={() => setMobileOpen(false)}
+            >
+              {link.label}
+            </a>
+          ))}
+        </div>
+      )}
     </header>
   );
 }

@@ -21,7 +21,7 @@ export default function SignUpPage() {
             {[
               "Full AI pipeline — research to publish",
               "Fact-checked, brand-aware content",
-              "3 free articles every month",
+              "Multi-platform publishing",
             ].map((item) => (
               <div key={item} className="flex items-center gap-3">
                 <div className="flex h-6 w-6 items-center justify-center rounded-md bg-[#0EA5E9]/[0.1]">

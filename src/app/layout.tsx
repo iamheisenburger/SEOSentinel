@@ -73,14 +73,49 @@ export default function RootLayout({
             baseTheme: dark,
             variables: {
               colorPrimary: "#0EA5E9",
-              colorBackground: "#0F1117",
-              colorInputBackground: "#1A1D2A",
+              colorBackground: "#111318",
+              colorInputBackground: "#1E2130",
               colorInputText: "#F1F5F9",
               colorText: "#F1F5F9",
               colorTextOnPrimaryBackground: "#FFFFFF",
-              colorTextSecondary: "#E2E8F0",
+              colorTextSecondary: "#CBD5E1",
               colorNeutral: "#E2E8F0",
               borderRadius: "0.5rem",
+            },
+            elements: {
+              card: {
+                backgroundColor: "#111318",
+                border: "1px solid rgba(255,255,255,0.08)",
+                boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)",
+              },
+              headerTitle: {
+                color: "#F1F5F9",
+              },
+              headerSubtitle: {
+                color: "#94A3B8",
+              },
+              formFieldLabel: {
+                color: "#CBD5E1",
+              },
+              formFieldInput: {
+                backgroundColor: "#1E2130",
+                borderColor: "rgba(255,255,255,0.1)",
+                color: "#F1F5F9",
+              },
+              footerActionLink: {
+                color: "#0EA5E9",
+              },
+              dividerLine: {
+                borderColor: "rgba(255,255,255,0.08)",
+              },
+              dividerText: {
+                color: "#64748B",
+              },
+              socialButtonsBlockButton: {
+                backgroundColor: "#1E2130",
+                borderColor: "rgba(255,255,255,0.1)",
+                color: "#F1F5F9",
+              },
             },
           }}
         >
