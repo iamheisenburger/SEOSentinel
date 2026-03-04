@@ -810,9 +810,17 @@ function Footer() {
             Pentra
           </span>
         </div>
-        <p className="text-[11px] text-[#565A6E]">
-          &copy; {new Date().getFullYear()} Pentra
-        </p>
+        <div className="flex items-center gap-4">
+          <Link href="/legal/privacy" className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3]">
+            Privacy
+          </Link>
+          <Link href="/legal/terms" className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3]">
+            Terms
+          </Link>
+          <p className="text-[11px] text-[#565A6E]">
+            &copy; {new Date().getFullYear()} Pentra
+          </p>
+        </div>
       </div>
     </footer>
   );
