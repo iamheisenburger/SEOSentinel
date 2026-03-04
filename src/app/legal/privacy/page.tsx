@@ -12,15 +12,15 @@ export default function PrivacyPolicyPage() {
     <div className="min-h-screen bg-[#08090E] text-[#F1F5F9]">
       {/* Nav */}
       <header className="border-b border-white/[0.06] bg-[#08090E]/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
-              <Radar className="h-3.5 w-3.5 text-[#0EA5E9]" />
+        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
+          <Link href="/" className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
+              <Radar className="h-4 w-4 text-[#0EA5E9]" />
             </div>
-            <span className="text-[14px] font-semibold tracking-tight">Pentra</span>
+            <span className="text-[16px] font-bold tracking-tight">Pentra</span>
           </Link>
-          <Link href="/" className="flex items-center gap-1.5 text-[13px] text-[#8B8FA3] transition-colors hover:text-white">
-            <ArrowLeft className="h-3 w-3" /> Back
+          <Link href="/" className="flex items-center gap-1.5 text-[14px] font-medium text-[#8B8FA3] transition-colors hover:text-white">
+            <ArrowLeft className="h-3.5 w-3.5" /> Back
           </Link>
         </div>
       </header>

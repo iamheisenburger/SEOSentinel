@@ -802,22 +802,22 @@ function FinalCTA() {
 
 function Footer() {
   return (
-    <footer className="border-t border-white/[0.04] py-8">
+    <footer className="border-t border-white/[0.06] py-10">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6">
-        <div className="flex items-center gap-2">
-          <Radar className="h-3.5 w-3.5 text-[#0EA5E9]" />
-          <span className="text-[12px] font-medium text-[#565A6E]">
+        <div className="flex items-center gap-2.5">
+          <Radar className="h-4 w-4 text-[#0EA5E9]" />
+          <span className="text-[14px] font-semibold text-[#8B8FA3]">
             Pentra
           </span>
         </div>
-        <div className="flex items-center gap-4">
-          <Link href="/legal/privacy" className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3]">
+        <div className="flex items-center gap-5">
+          <Link href="/legal/privacy" className="text-[13px] font-medium text-[#8B8FA3] hover:text-white transition">
             Privacy
           </Link>
-          <Link href="/legal/terms" className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3]">
+          <Link href="/legal/terms" className="text-[13px] font-medium text-[#8B8FA3] hover:text-white transition">
             Terms
           </Link>
-          <p className="text-[11px] text-[#565A6E]">
+          <p className="text-[13px] text-[#8B8FA3]">
             &copy; {new Date().getFullYear()} Pentra
           </p>
         </div>
