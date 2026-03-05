@@ -13,10 +13,22 @@ const isPublicRoute = createRouteMatcher([
 
 export default clerkMiddleware(async (auth, request) => {
   const { userId } = await auth();
-  const { pathname } = request.nextUrl;
+  const { pathname, searchParams } = request.nextUrl;
 
-  // Signed-in users hitting landing/auth pages → redirect to dashboard
-  if (userId && (pathname === "/" || pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up"))) {
+  // Signed-in users hitting landing page → dashboard
+  if (userId && pathname === "/") {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+  // Signed-in users on /sign-in → dashboard (no reason to be here)
+  if (userId && pathname.startsWith("/sign-in")) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+  // Signed-in users on /sign-up WITH a paid plan param → let them through
+  // so Clerk's forceRedirectUrl sends them to /settings/billing
+  // Only redirect to dashboard if there's NO plan context
+  if (userId && pathname.startsWith("/sign-up") && !searchParams.get("plan")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

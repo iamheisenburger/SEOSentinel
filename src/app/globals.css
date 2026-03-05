@@ -168,3 +168,252 @@ body {
 .glow-card:hover::after {
   opacity: 1;
 }
+
+/* ─── Clerk component dark-theme overrides ────── */
+/* Force all Clerk surfaces, text, and inputs to match our dark theme */
+
+/* Global Clerk text & background resets */
+.cl-internal-b3fm6y,
+.cl-userButtonPopoverCard,
+.cl-userButtonPopoverMain,
+.cl-userButtonPopoverActions,
+.cl-userButtonPopoverActionButton,
+.cl-userButtonPopoverFooter,
+.cl-profilePage,
+.cl-profileSection,
+.cl-profileSectionContent,
+.cl-navbar,
+.cl-navbarButton,
+.cl-scrollBox,
+.cl-pageScrollBox,
+.cl-page,
+.cl-modalContent,
+.cl-modalBackdrop,
+.cl-card,
+.cl-main,
+.cl-headerTitle,
+.cl-headerSubtitle,
+.cl-formFieldLabel,
+.cl-formFieldInput,
+.cl-menuList,
+.cl-menuItem,
+.cl-selectButton,
+.cl-selectOption,
+.cl-breadcrumbs,
+.cl-breadcrumbsItem,
+.cl-accordionTriggerButton,
+.cl-accordionContent,
+.cl-tableHead,
+.cl-pricingTable,
+[data-clerk-component] {
+  color-scheme: dark !important;
+}
+
+/* ── Backgrounds ── */
+.cl-card,
+.cl-modalContent,
+.cl-userButtonPopoverCard,
+.cl-profilePage,
+.cl-navbar,
+.cl-pageScrollBox,
+.cl-scrollBox,
+.cl-main,
+.cl-page,
+[data-clerk-component] .cl-internal-b3fm6y {
+  background-color: #111318 !important;
+  background: #111318 !important;
+}
+
+.cl-navbarButton,
+.cl-profileSectionContent,
+.cl-profileSection,
+.cl-accordionContent,
+.cl-menuList,
+.cl-selectButton,
+.cl-formFieldInput,
+.cl-formFieldInput:focus {
+  background-color: #1E2130 !important;
+  background: #1E2130 !important;
+}
+
+/* ── Text colors ── */
+.cl-headerTitle,
+.cl-profileSectionTitle,
+.cl-profileSectionTitleText,
+.cl-navbarButtonLabel,
+.cl-breadcrumbsItem__currentPage,
+.cl-menuItem,
+.cl-selectOption,
+.cl-formFieldLabel,
+.cl-formFieldInput,
+.cl-accordionTriggerButton,
+.cl-userPreviewMainIdentifier,
+.cl-userPreviewTextContainer,
+.cl-tableHead th,
+.cl-pricingTable th,
+.cl-badge,
+.cl-tagInputContainer,
+[data-clerk-component] h1,
+[data-clerk-component] h2,
+[data-clerk-component] h3,
+[data-clerk-component] label,
+[data-clerk-component] strong {
+  color: #F1F5F9 !important;
+}
+
+.cl-headerSubtitle,
+.cl-profileSectionSubtitle,
+.cl-breadcrumbsItem,
+.cl-userPreviewSecondaryIdentifier,
+.cl-formFieldHintText,
+.cl-formFieldInfoText,
+.cl-footerActionText,
+.cl-menuItemDescription,
+.cl-selectOptionDescription,
+[data-clerk-component] p,
+[data-clerk-component] span:not(.cl-badge):not([class*="text-"]) {
+  color: #94A3B8 !important;
+}
+
+/* ── Borders ── */
+.cl-card,
+.cl-modalContent,
+.cl-userButtonPopoverCard,
+.cl-profileSection,
+.cl-navbarButton,
+.cl-formFieldInput,
+.cl-selectButton,
+.cl-menuList,
+.cl-accordionTriggerButton,
+.cl-dividerLine {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ── Navbar active state ── */
+.cl-navbarButton[data-active="true"],
+.cl-navbarButton:hover {
+  background-color: rgba(14, 165, 233, 0.1) !important;
+  color: #F1F5F9 !important;
+}
+
+/* ── Action/link buttons ── */
+.cl-userButtonPopoverActionButton,
+.cl-userButtonPopoverActionButtonText,
+.cl-userButtonPopoverActionButtonIcon,
+.cl-footerActionLink,
+.cl-formResendCodeLink {
+  color: #CBD5E1 !important;
+}
+
+.cl-userButtonPopoverActionButton:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  color: #F1F5F9 !important;
+}
+
+/* ── Footer ── */
+.cl-userButtonPopoverFooter,
+.cl-footer {
+  background-color: #0F1117 !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.cl-footerPagesLink,
+.cl-footerPagesLink span {
+  color: #64748B !important;
+}
+
+/* ── UserProfile / Account sections ── */
+.cl-profileSection + .cl-profileSection {
+  border-top-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.cl-profileSectionPrimaryButton,
+.cl-formButtonPrimary {
+  background-color: #0EA5E9 !important;
+  color: #FFFFFF !important;
+}
+
+.cl-profileSectionPrimaryButton:hover,
+.cl-formButtonPrimary:hover {
+  background-color: #38BDF8 !important;
+}
+
+/* ── Secondary/destructive buttons ── */
+.cl-formButtonReset {
+  color: #94A3B8 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* ── Pricing table overrides ── */
+.cl-pricingTable,
+.cl-pricingTable * {
+  color-scheme: dark !important;
+}
+
+.cl-pricingTable td,
+.cl-pricingTable th,
+.cl-pricingTable p,
+.cl-pricingTable span,
+.cl-pricingTable label,
+.cl-pricingTable div {
+  color: #CBD5E1 !important;
+}
+
+.cl-pricingTable [class*="price"],
+.cl-pricingTable [class*="Price"],
+.cl-pricingTable [class*="name"],
+.cl-pricingTable [class*="Name"],
+.cl-pricingTable h3,
+.cl-pricingTable h2 {
+  color: #F1F5F9 !important;
+}
+
+/* ── Social/OAuth buttons ── */
+.cl-socialButtonsBlockButton,
+.cl-socialButtonsIconButton {
+  background-color: #1E2130 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #F1F5F9 !important;
+}
+
+.cl-socialButtonsBlockButton:hover,
+.cl-socialButtonsIconButton:hover {
+  background-color: #252838 !important;
+}
+
+/* ── Input focus ring ── */
+.cl-formFieldInput:focus {
+  border-color: #0EA5E9 !important;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15) !important;
+}
+
+/* ── Alert/banner ── */
+.cl-alert {
+  background-color: #1E2130 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #F1F5F9 !important;
+}
+
+/* ── Select dropdown ── */
+.cl-selectButton__role,
+.cl-selectButton {
+  background-color: #1E2130 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #F1F5F9 !important;
+}
+
+/* ── Ensure Clerk modals/popovers get dark bg ── */
+.cl-rootBox,
+.cl-signIn-root,
+.cl-signUp-root,
+.cl-userProfile-root,
+.cl-organizationProfile-root,
+.cl-userButton-root {
+  color-scheme: dark !important;
+}
+
+/* Catch-all: any Clerk element with white/light backgrounds */
+[class^="cl-"] {
+  --cl-chassis-background: #111318;
+  --cl-chassis-foreground: #F1F5F9;
+}
