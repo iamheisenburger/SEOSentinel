@@ -1469,9 +1469,7 @@ async function handleArticle(
     `</youtube_embeds>`,
     ``,
     `<images>`,
-    screenshotUrl
-      ? `Site Screenshot (REAL — captured from ${site.domain}): ${screenshotUrl}\nEmbed this in the product section or when discussing ${productName}'s features/interface using: ![${productName} website](${screenshotUrl}). This is a real screenshot — include it to show readers what the product looks like.`
-      : `No site screenshot available.`,
+    `Note: A product screenshot will be automatically added to the product section by the system. Do NOT add any screenshot yourself.`,
     webImages.length > 0
       ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nInclude at least 2-3 of these images throughout the article to break up text and add visual context. Place each after the section it relates to. Add italic captions below each image.`
       : `No web images available.`,
@@ -1497,7 +1495,7 @@ async function handleArticle(
         CRITICAL RULES FOR THIS SECTION:
         - The H2 heading MUST contain the exact word "${productName}" — not a generic term, not "your tool", not paraphrased
         - Be 300-500 words explaining how ${productName} specifically solves the problems discussed
-        - If a site screenshot image was provided in <images>, you MUST include it using the exact markdown: ![image](url) — do NOT skip it
+        - A product screenshot will be automatically injected by the system — do NOT add one yourself
         - Mention specific ${productName} features from the product identity
         - Link to ${productName}'s website
         BRAND NAME RULE: Use the EXACT name "${productName}" at least 8-12 times throughout the ENTIRE article. NEVER replace "${productName}" with generic terms like "the tool", "the platform", "your solution", "this software", or similar. Always write "${productName}" by its exact name.`,
@@ -1774,6 +1772,34 @@ async function handleArticle(
       }
     } else {
       console.log("Claude included YouTube embeds — no injection needed.");
+    }
+  }
+
+  // ── Step 4c: Programmatic Screenshot Injection (inside product section) ──
+  if (screenshotUrl) {
+    const pName = site.siteName || "the product";
+    const mdLines = finalMarkdown.split("\n");
+    let productH2Line = -1;
+    for (let li = 0; li < mdLines.length; li++) {
+      if (mdLines[li].startsWith("## ") && mdLines[li].toLowerCase().includes(pName.toLowerCase())) {
+        productH2Line = li;
+        break;
+      }
+    }
+    if (productH2Line !== -1) {
+      let insertLine = productH2Line + 1;
+      while (insertLine < mdLines.length && mdLines[insertLine].trim() === "") insertLine++;
+      while (insertLine < mdLines.length && mdLines[insertLine].trim() !== "") insertLine++;
+      mdLines.splice(insertLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — AI-powered lead qualification platform*`, "");
+      finalMarkdown = mdLines.join("\n");
+      console.log("Screenshot injected inside product section (after intro paragraph).");
+    } else {
+      const faqLine = mdLines.findIndex(l => l.startsWith("## FAQ") || l.startsWith("## Frequently"));
+      if (faqLine !== -1) {
+        mdLines.splice(faqLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — see it in action*`, "");
+        finalMarkdown = mdLines.join("\n");
+        console.log("Screenshot injected (fallback: before FAQ).");
+      }
     }
   }
 
