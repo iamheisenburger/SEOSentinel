@@ -1089,7 +1089,7 @@ async function handlePlan(
     `   - "[Product Category] for [Industry/Use Case]: [Guide]" (niche targeting)`,
     `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
     `4. Target LONG-TAIL keywords (3-6 words) — specific queries real people search for.`,
-    `5. Each topic must target a UNIQUE search query. No two topics should compete for the same SERP.`,
+    `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 keyword. Spread across different sub-topics within the niche — do NOT cluster around a single concept like "chatbot" or "lead capture". Each topic must address a distinctly different problem, audience segment, or use case.`,
     `6. Generate exactly 10 new topics.`,
     `7. Topics should form a funnel: awareness → consideration → decision.`,
     site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
@@ -1136,7 +1136,25 @@ async function handlePlan(
     8192,
   );
 
-  const plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 10);
+  let plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 10);
+
+  // Programmatic dedup: remove topics with >40% keyword overlap with each other
+  const stopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","than","its","you","using","about"]);
+  const getWords = (s: string) => s.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
+  const kept: typeof plan = [];
+  for (const topic of plan) {
+    const words = new Set(getWords(topic.primaryKeyword));
+    const isDupe = kept.some(k => {
+      const kWords = new Set(getWords(k.primaryKeyword));
+      const overlap = [...words].filter(w => kWords.has(w)).length;
+      return overlap / Math.min(words.size, kWords.size) > 0.4;
+    });
+    if (!isDupe) kept.push(topic);
+  }
+  if (kept.length < plan.length) {
+    console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >40%).`);
+    plan = kept;
+  }
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
   return { count: plan.length };

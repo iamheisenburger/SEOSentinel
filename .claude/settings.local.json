@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx convex run --prod topics:listBySite '{\"\"siteId\"\":\"\"jh7etx4035n9nqeqgrt6sg33v182aaqv\"\"}')"
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -290,6 +290,7 @@ export function SetupWizard() {
 
   // Loading states
   const [analyzing, setAnalyzing] = useState(false);
+  const generationStarted = useRef(false);
   const [generating, setGenerating] = useState(false);
 
   // Convex hooks
@@ -480,7 +481,10 @@ export function SetupWizard() {
       setStep("generate");
 
       // Fire-and-forget: first article generates in the background
-      generateNow({ siteId }).catch(console.error);
+      if (!generationStarted.current) {
+        generationStarted.current = true;
+        generateNow({ siteId }).catch(console.error);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed");
       setStatusMsg(null);
@@ -997,7 +1001,7 @@ export function SetupWizard() {
                   Articles per week
                 </label>
                 <div className="flex items-center gap-3">
-                  {[1, 2, 4, 7].map((n) => (
+                  {[1, 2, 4, 7, 14, 21].map((n) => (
                     <button
                       key={n}
                       onClick={() => setCadencePerWeek(n)}
