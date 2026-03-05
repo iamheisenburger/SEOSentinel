@@ -4,9 +4,10 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Trash2, Bell, CreditCard, ArrowUpRight, Zap } from "lucide-react";
+import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User } from "lucide-react";
 import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { UserProfile } from "@clerk/nextjs";
 import Link from "next/link";
 
 const PLAN_NAMES: Record<string, string> = {
@@ -176,7 +177,32 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Notifications */}
+      {/* Account */}
+      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
+          <User className="h-4 w-4 text-[#0EA5E9]" />
+          <p className="text-[13px] font-semibold text-[#EDEEF1]">
+            Account
+          </p>
+        </div>
+        <div className="px-1 py-1">
+          <UserProfile
+            routing="hash"
+            appearance={{
+              elements: {
+                rootBox: "w-full",
+                cardBox: "w-full shadow-none",
+                navbar: "hidden",
+                navbarMobileMenuButton: "hidden",
+                headerTitle: "hidden",
+                headerSubtitle: "hidden",
+              },
+            }}
+          />
+        </div>
+      </div>
+
+            {/* Notifications */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
           <Bell className="h-4 w-4 text-[#0EA5E9]" />
