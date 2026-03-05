@@ -72,7 +72,8 @@ export const upsert = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    const userId = identity?.subject;
+    if (!identity) throw new Error("Not authenticated");
+    const userId = identity.subject;
 
     // ── Site count limit (only on new site creation, not updates) ──
     if (!args.id && userId) {
@@ -163,7 +164,7 @@ export const upsert = mutation({
 
     if (existing?._id) {
       // Merge: only overwrite fields that are explicitly provided
-      const merged: Record<string, unknown> = { updatedAt: now() };
+      const merged: Record<string, unknown> = { updatedAt: now(), userId };
       for (const [key, value] of Object.entries(data)) {
         if (key === "updatedAt") continue;
         merged[key] = value ?? (existing as Record<string, unknown>)[key];
