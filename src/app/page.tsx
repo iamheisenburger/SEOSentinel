@@ -674,6 +674,10 @@ const faqs = [
     a: "Article limits are per calendar month and reset automatically. If you need more articles, you can upgrade your plan at any time and the new limit takes effect immediately. Unused articles don't roll over.",
   },
   {
+    q: "Are article limits per website or shared across all my sites?",
+    a: "Article limits are shared across your entire account, not per website. For example, on the Pro plan with 25 articles/month and 3 sites, you get 25 articles total — you could use all 25 on one site, or split them 12/12/1, or any combination. The cadence you set per site controls how articles are distributed, but the monthly total is always your plan limit across all sites.",
+  },
+  {
     q: "Do all plans get the same features?",
     a: "Yes. Every plan — including Free — gets the full AI pipeline: web research, fact-checking, hero images, internal linking, schema markup, and multi-platform publishing. The only difference between plans is the number of articles per month and sites you can manage.",
   },

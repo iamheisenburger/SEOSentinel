@@ -165,7 +165,7 @@ export default function SettingsPage() {
             )}
             {!isFreePlan && (
               <Link
-                href="/pricing"
+                href="/upgrade"
                 className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
               >
                 Change plan

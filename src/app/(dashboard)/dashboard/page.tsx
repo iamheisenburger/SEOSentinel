@@ -27,6 +27,7 @@ import { useRef, useState } from "react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { useActiveSite } from "@/contexts/site-context";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
@@ -34,8 +35,7 @@ export default function DashboardPage() {
   // Without this, Convex reactive updates (upsert saving siteSummary mid-wizard)
   // would flip needsOnboarding false and yank the wizard away.
   const wizardLatch = useRef(false);
-  const sites = useQuery(api.sites.list);
-  const site = sites?.[0];
+  const { activeSite: site, sites } = useActiveSite();
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
@@ -174,7 +174,7 @@ export default function DashboardPage() {
           <Zap className="h-4 w-4 shrink-0 text-[#F59E0B]" />
           <p className="flex-1 text-[13px] text-[#FBBF24]">
             You&apos;ve used all {maxArticles} articles this month.{" "}
-            <Link href="/pricing" className="underline font-medium hover:text-white transition">
+            <Link href="/upgrade" className="underline font-medium hover:text-white transition">
               Upgrade your plan
             </Link>{" "}
             to generate more.

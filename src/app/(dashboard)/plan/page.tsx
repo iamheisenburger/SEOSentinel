@@ -21,11 +21,11 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
 
 export default function PlanPage() {
-  const sites = useQuery(api.sites.list);
-  const site = sites?.[0];
+  const { activeSite: site, sites } = useActiveSite();
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",

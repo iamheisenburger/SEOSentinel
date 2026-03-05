@@ -55,7 +55,7 @@ export default function WebsitesPage() {
         actions={
           atSiteLimit ? (
             <Link
-              href="/pricing"
+              href="/upgrade"
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#F59E0B]/[0.1] border border-[#F59E0B]/20 px-3 py-1.5 text-[12px] font-medium text-[#FBBF24] hover:bg-[#F59E0B]/[0.15] transition"
             >
               <Plus className="h-3.5 w-3.5" />
