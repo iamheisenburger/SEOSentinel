@@ -180,6 +180,40 @@ export const logGeneration = mutation({
   },
 });
 
+// Atomically check article limit AND reserve a slot (prevents race conditions)
+// Returns { ok: true } if slot claimed, { ok: false, reason: string } if over limit
+export const claimGenerationSlot = mutation({
+  args: { userId: v.string(), siteId: v.id("sites"), maxArticles: v.number() },
+  handler: async (ctx, { userId, siteId, maxArticles }) => {
+    const now = new Date();
+    const monthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+    ).getTime();
+
+    const logs = await ctx.db
+      .query("usage_log")
+      .withIndex("by_user_type", (q) =>
+        q.eq("userId", userId).eq("type", "article_generated"),
+      )
+      .collect();
+    const count = logs.filter((l) => l.createdAt >= monthStart).length;
+
+    if (count >= maxArticles) {
+      return { ok: false as const, reason: `Limit reached (${count}/${maxArticles})` };
+    }
+
+    // Claim the slot by logging immediately (before article generation starts)
+    await ctx.db.insert("usage_log", {
+      userId,
+      siteId,
+      type: "article_generated",
+      createdAt: Date.now(),
+    });
+
+    return { ok: true as const, reason: "" };
+  },
+});
+
 export const deleteArticle = mutation({
   args: { articleId: v.id("articles") },
   handler: async (ctx, { articleId }) => {
@@ -187,4 +221,17 @@ export const deleteArticle = mutation({
   },
 });
 
-
+// Admin: reset usage log for a user (temporary — remove after use)
+export const resetUsageLog = mutation({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const logs = await ctx.db
+      .query("usage_log")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    for (const log of logs) {
+      await ctx.db.delete(log._id);
+    }
+    return { deleted: logs.length };
+  },
+});

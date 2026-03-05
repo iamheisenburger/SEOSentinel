@@ -1493,12 +1493,14 @@ async function handleArticle(
         `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
         `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
         `   YouTube embed goes HERE — place it after the section it relates to most.`,
-        `6. PRODUCT SECTION (MANDATORY — DO NOT SKIP): Create a dedicated H2 section titled "How ${productName} Helps With [Topic]". This section MUST:
-        - Be 300-500 words explaining how ${productName} specifically solves the problems discussed in this article
-        - Include the site screenshot image if one was provided in <images>
-        - Mention specific ${productName} features from the product identity above
-        - Link to ${productName}'s website naturally
-        Additionally, ${productName} MUST be mentioned by name at least 5-8 times THROUGHOUT the entire article — in the hook, in middle sections, and in the product section. Do NOT save all mentions for the end.`,
+        `6. PRODUCT SECTION (MANDATORY — DO NOT SKIP): Create a dedicated H2 section with the EXACT title "How ${productName} Helps With [Topic]".
+        CRITICAL RULES FOR THIS SECTION:
+        - The H2 heading MUST contain the exact word "${productName}" — not a generic term, not "your tool", not paraphrased
+        - Be 300-500 words explaining how ${productName} specifically solves the problems discussed
+        - If a site screenshot image was provided in <images>, you MUST include it using the exact markdown: ![image](url) — do NOT skip it
+        - Mention specific ${productName} features from the product identity
+        - Link to ${productName}'s website
+        BRAND NAME RULE: Use the EXACT name "${productName}" at least 8-12 times throughout the ENTIRE article. NEVER replace "${productName}" with generic terms like "the tool", "the platform", "your solution", "this software", or similar. Always write "${productName}" by its exact name.`,
         `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
         `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
         `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
@@ -2583,22 +2585,26 @@ export const processNextJob = action({
         if (!job.siteId) throw new Error("Missing siteId on article job");
         const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
 
-        // Enforce article limit before generating (belt + suspenders)
+        // Enforce article limit ATOMICALLY — claim a slot before generating
+        // This prevents race conditions where two concurrent jobs both pass the check
         if (site?.userId) {
           const { getLimitsFromFeatures } = await import("../planLimits");
           const features = (site as any).planFeatures ?? [];
           const limits = getLimitsFromFeatures(features);
-          const articlesThisMonth = await ctx.runQuery(api.articles.countThisMonth, {
+          const claim = await ctx.runMutation(api.articles.claimGenerationSlot, {
             userId: site.userId,
+            siteId: job.siteId,
+            maxArticles: limits.maxArticles,
           });
-          if (articlesThisMonth >= limits.maxArticles) {
-            console.log(`Article limit reached (${articlesThisMonth}/${limits.maxArticles}). Skipping job ${job._id}.`);
+          if (!claim.ok) {
+            console.log(`Article limit: ${claim.reason}. Skipping job ${job._id}.`);
             await ctx.runMutation(api.jobs.markFailed, {
               jobId: job._id,
               error: `Article limit reached (${limits.maxArticles}/month). Upgrade plan.`,
             });
             return { processed: true, jobId: job._id };
           }
+          console.log("Generation slot claimed successfully.");
         }
 
         // Pre-check: if job references a topic, verify it still exists
@@ -2616,13 +2622,7 @@ export const processNextJob = action({
 
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId, undefined, job._id);
 
-        // Log this generation permanently (survives article deletion)
-        if (site?.userId) {
-          await ctx.runMutation(api.articles.logGeneration, {
-            userId: site.userId,
-            siteId: job.siteId,
-          });
-        }
+        // Generation already logged atomically via claimGenerationSlot above
 
         // Add internal links BEFORE publishing (graceful degradation)
         try {
