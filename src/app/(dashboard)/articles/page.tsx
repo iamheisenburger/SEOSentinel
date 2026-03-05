@@ -12,6 +12,8 @@ import { FileText, PenTool, ArrowRight, CheckCircle2, XCircle, Trash2 } from "lu
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { Zap } from "lucide-react";
 
 export default function ArticlesPage() {
   const sites = useQuery(api.sites.list);
@@ -34,6 +36,15 @@ export default function ArticlesPage() {
   const [selectedTopic, setSelectedTopic] = useState<
     Id<"topic_clusters"> | undefined
   >(undefined);
+  const { maxArticles } = usePlanLimits();
+
+  // Articles generated this calendar month
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const articlesThisMonth =
+    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  const atArticleLimit = articlesThisMonth >= maxArticles;
 
   const availableTopics = useMemo(
     () =>
@@ -127,10 +138,10 @@ export default function ArticlesPage() {
             <Button
               size="sm"
               onClick={handleGenerate}
-              disabled={!site}
-              icon={<PenTool className="h-3.5 w-3.5" />}
+              disabled={!site || atArticleLimit}
+              icon={atArticleLimit ? <Zap className="h-3.5 w-3.5" /> : <PenTool className="h-3.5 w-3.5" />}
             >
-              Generate
+              {atArticleLimit ? "Limit Reached" : "Generate"}
             </Button>
           </div>
         }
@@ -139,6 +150,19 @@ export default function ArticlesPage() {
       {status && (
         <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
           {status}
+        </div>
+      )}
+
+      {atArticleLimit && (
+        <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">
+          <Zap className="h-4 w-4 shrink-0 text-[#F59E0B]" />
+          <p className="flex-1 text-[13px] text-[#FBBF24]">
+            You&apos;ve used all {maxArticles} articles this month.{" "}
+            <Link href="/pricing" className="underline font-medium hover:text-white transition">
+              Upgrade your plan
+            </Link>{" "}
+            to generate more.
+          </p>
         </div>
       )}
 

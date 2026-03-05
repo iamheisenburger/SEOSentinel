@@ -33,6 +33,16 @@ export const scheduleCadence = action({
         );
         return { scheduled: 0 };
       }
+
+      // ── Site over-limit check (downgrade protection) ──
+      const allUserSites = await ctx.runQuery(api.sites.listAllForAutopilot);
+      const userSiteCount = allUserSites.filter((s) => s.userId === site.userId).length;
+      if (userSiteCount > limits.maxSites) {
+        console.log(
+          `Site limit exceeded: ${userSiteCount}/${limits.maxSites} sites. Skipping.`,
+        );
+        return { scheduled: 0 };
+      }
     }
 
     const cadence = site.cadencePerWeek ?? 4;

@@ -20,6 +20,8 @@ import {
   Calendar,
 } from "lucide-react";
 import Link from "next/link";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { Zap } from "lucide-react";
 
 export default function PlanPage() {
   const sites = useQuery(api.sites.list);
@@ -32,6 +34,20 @@ export default function PlanPage() {
     api.jobs.getRunningBySite,
     site?._id ? { siteId: site._id } : "skip",
   );
+  const articles = useQuery(
+    api.articles.listBySite,
+    site?._id ? { siteId: site._id } : "skip",
+  );
+  const { maxArticles } = usePlanLimits();
+
+  // Articles generated this calendar month
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const articlesThisMonth =
+    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  const atArticleLimit = articlesThisMonth >= maxArticles;
+
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const removeTopic = useMutation(api.topics.remove);
@@ -425,7 +441,7 @@ export default function PlanPage() {
                     <>
                       <button
                         onClick={() => handleGenerateArticle(topic._id)}
-                        disabled={!!runningJob || isManuallyGenerating}
+                        disabled={!!runningJob || isManuallyGenerating || atArticleLimit}
                         className="inline-flex items-center gap-1 rounded-md bg-[#0EA5E9]/[0.08] px-2 py-1 text-[10px] font-medium text-[#38BDF8] hover:bg-[#0EA5E9]/[0.15] transition disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         {isManuallyGenerating ? (

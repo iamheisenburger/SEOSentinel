@@ -200,6 +200,13 @@ export const queueArticleNow = mutation({
           `Article limit reached (${limits.maxArticles}/month). Upgrade your plan for more articles.`,
         );
       }
+
+      // ── Site over-limit check (downgrade protection) ──
+      if (userSites.length > limits.maxSites) {
+        throw new Error(
+          `You have ${userSites.length} sites but your plan allows ${limits.maxSites}. Remove excess sites or upgrade to continue.`,
+        );
+      }
     }
 
     // Create the pending job
