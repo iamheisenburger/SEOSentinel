@@ -196,8 +196,8 @@ body {
 .cl-profileSectionContent,
 .cl-profileSection,
 .cl-accordionContent {
-  background-color: #151821 !important;
-  background: #151821 !important;
+  background-color: transparent !important;
+  background: transparent !important;
 }
 
 .cl-navbarButton {

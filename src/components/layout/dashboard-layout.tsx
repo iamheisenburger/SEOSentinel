@@ -12,7 +12,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen bg-[#08090E]">
       <Sidebar />
-      <main className="lg:pl-56">
+      <main className="lg:pl-60">
         <div className="mx-auto max-w-6xl px-6 py-6 pt-16 lg:pt-6">
           <OverLimitBanner />
           {children}
