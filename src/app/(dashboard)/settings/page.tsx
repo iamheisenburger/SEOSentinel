@@ -4,10 +4,10 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User } from "lucide-react";
+import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
-import { UserProfile } from "@clerk/nextjs";
+import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 
 const PLAN_NAMES: Record<string, string> = {
@@ -40,6 +40,8 @@ export default function SettingsPage() {
   const [showReset, setShowReset] = useState(false);
   const [resetting, setResetting] = useState(false);
   const { maxSites, maxArticles, features, isFreePlan } = usePlanLimits();
+  const { user } = useUser();
+  const clerk = useClerk();
 
   const siteCount = sites?.length ?? 0;
   const planName = getPlanName(features);
@@ -185,20 +187,62 @@ export default function SettingsPage() {
             Account
           </p>
         </div>
-        <div className="px-1 py-1">
-          <UserProfile
-            routing="hash"
-            appearance={{
-              elements: {
-                rootBox: "w-full",
-                cardBox: "w-full shadow-none",
-                navbar: "hidden",
-                navbarMobileMenuButton: "hidden",
-                headerTitle: "hidden",
-                headerSubtitle: "hidden",
-              },
-            }}
-          />
+        <div className="px-5 py-5">
+          {user && (
+            <div className="space-y-4">
+              {/* Profile row */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  {user.imageUrl ? (
+                    <img src={user.imageUrl} alt="" className="h-10 w-10 rounded-full border border-white/[0.06]" />
+                  ) : (
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#0EA5E9]/[0.1]">
+                      <User className="h-4 w-4 text-[#0EA5E9]" />
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-[14px] font-semibold text-[#EDEEF1]">{user.fullName || "User"}</p>
+                    <p className="text-[12px] text-[#565A6E]">{user.primaryEmailAddress?.emailAddress}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => clerk.openUserProfile()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] font-medium text-[#8B8FA3] transition hover:bg-white/[0.05] hover:text-white"
+                >
+                  Edit profile
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </div>
+
+              <div className="h-px bg-white/[0.04]" />
+
+              {/* Info rows */}
+              <div className="grid gap-3">
+                <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] px-4 py-3">
+                  <Mail className="h-4 w-4 text-[#565A6E]" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] text-[#565A6E]">Email</p>
+                    <p className="text-[13px] text-[#EDEEF1] truncate">{user.primaryEmailAddress?.emailAddress}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] px-4 py-3">
+                  <Shield className="h-4 w-4 text-[#565A6E]" />
+                  <div className="flex-1">
+                    <p className="text-[11px] text-[#565A6E]">Security</p>
+                    <p className="text-[13px] text-[#EDEEF1]">
+                      {(user as any).twoFactorEnabled ? "2FA enabled" : "Password authentication"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => clerk.openUserProfile()}
+                    className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
+                  >
+                    Manage
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
