@@ -28,6 +28,7 @@ export const upsert = mutation({
   args: {
     id: v.optional(v.id("sites")),
     domain: v.string(),
+    clerkUserId: v.optional(v.string()),
     niche: v.optional(v.string()),
     tone: v.optional(v.string()),
     language: v.optional(v.string()),
@@ -72,7 +73,7 @@ export const upsert = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    const userId = identity?.subject ?? undefined;
+    const userId = identity?.subject ?? args.clerkUserId ?? undefined;
 
     // ── Site count limit (only on new site creation, not updates) ──
     if (!args.id && userId) {
@@ -172,6 +173,7 @@ export const upsert = mutation({
       return existing._id;
     }
 
+    if (!userId) throw new Error("Unable to determine user identity. Please try again.");
     return await ctx.db.insert("sites", {
       ...data,
       userId,
@@ -305,5 +307,23 @@ export const resetAll = mutation({
         await ctx.db.delete(row._id);
       }
     }
+  },
+});
+
+// One-off: fix orphaned sites that have no userId
+export const fixOrphanSites = mutation({
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error('Not authenticated');
+    const userId = identity.subject;
+    const allSites = await ctx.db.query('sites').collect();
+    let fixed = 0;
+    for (const site of allSites) {
+      if (!site.userId) {
+        await ctx.db.patch(site._id, { userId });
+        fixed++;
+      }
+    }
+    return { fixed, userId };
   },
 });

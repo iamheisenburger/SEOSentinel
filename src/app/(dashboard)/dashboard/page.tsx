@@ -1,6 +1,6 @@
 "use client";
 
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
@@ -36,6 +36,8 @@ export default function DashboardPage() {
   // would flip needsOnboarding false and yank the wizard away.
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
+  const fixOrphan = useMutation(api.sites.fixOrphanSites);
+  useEffect(() => { fixOrphan().catch(() => {}); }, []);
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",

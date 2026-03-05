@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
@@ -291,6 +293,7 @@ export function SetupWizard() {
   const [generating, setGenerating] = useState(false);
 
   // Convex hooks
+  const { userId: clerkUserId } = useAuth();
   const upsert = useMutation(api.sites.upsert);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
@@ -319,6 +322,7 @@ export function SetupWizard() {
       // Create site
       const id = await upsert({
         domain: domain.trim(),
+        clerkUserId: clerkUserId ?? undefined,
         publishMethod,
         repoOwner: repoOwner.trim() || undefined,
         repoName: repoName.trim() || undefined,
