@@ -492,22 +492,18 @@ async function searchYouTubeVideos(
       {
         role: "system",
         content:
-          "You find YouTube videos related to a given topic. " +
-          "Search the web for YouTube videos on the topic. " +
-          "Pick 2-3 videos that are informational, educational, or tutorial content related to the topic. " +
-          "Do NOT pick music videos, comedy sketches, memes, movie clips, or entertainment. " +
-          "Output JSON only.",
+          "You are a research assistant. When asked to find YouTube videos, you MUST use your web search tool to search the internet. " +
+          "Only return video IDs that appear in actual YouTube URLs from your search results. " +
+          "Pick informational or educational videos — never music, comedy, memes, or entertainment. " +
+          "Return results as JSON.",
       },
       {
         role: "user",
         content:
-          `Find 2-3 YouTube videos about: ${searchTerm}\n` +
-          `Niche/industry: ${niche || "general"}\n` +
-          `Language: ${langLabel}\n` +
-          `\n` +
-          `The videos should be related to this topic — tutorials, guides, explanations, reviews, or talks.\n` +
-          `Do NOT return music, comedy, memes, or entertainment.\n` +
-          `Return JSON: {"videos": [{"videoId": "the_11_char_video_id", "title": "video title"}]}`,
+          `Search YouTube for educational videos about "${searchTerm}" in the ${niche || "general"} niche.\n` +
+          `Find 2-3 real videos in ${langLabel}. For each, give me the YouTube video ID (the 11-character code from the URL) and the exact title.\n` +
+          `Only return informational, educational, tutorial, or review videos. No music, comedy, or entertainment.\n` +
+          `Return JSON: {"videos": [{"videoId": "...", "title": "..."}]}`,
       },
     ],
   });

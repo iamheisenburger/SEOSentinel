@@ -58,17 +58,23 @@ export const resetStuckJobs = mutation({
       }
     }
 
-    // Retry failed jobs (up to 3 attempts)
+    // Retry recently failed jobs (up to 3 attempts, only if failed < 30min ago)
+    const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
     const failedJobs = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "failed"))
       .collect();
-    
+
+    // Permanent errors that should NOT be retried
+    const permanentErrors = ["Topic not found", "Site not found", "Article limit reached", "Permanently killed", "Cleaned up"];
+
     for (const job of failedJobs) {
       const retries = (job.retries ?? 0) + 1;
-      if (retries <= 3) {
-        await ctx.db.patch(job._id, { 
-          status: "pending", 
+      const isPermanent = permanentErrors.some(e => (job.error ?? "").includes(e));
+      const isRecent = job.updatedAt > thirtyMinutesAgo;
+      if (retries <= 3 && !isPermanent && isRecent) {
+        await ctx.db.patch(job._id, {
+          status: "pending",
           updatedAt: Date.now(),
           retries,
           error: `Retrying after failure (attempt ${retries})`
