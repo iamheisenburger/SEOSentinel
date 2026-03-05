@@ -2503,6 +2503,19 @@ export const processNextJob = action({
           }
         }
 
+        // Pre-check: if job references a topic, verify it still exists
+        if (payload?.topicId) {
+          const topicCheck = await ctx.runQuery(api.topics.get, { topicId: payload.topicId });
+          if (!topicCheck) {
+            console.log(`Topic ${payload.topicId} no longer exists. Failing job permanently.`);
+            await ctx.runMutation(api.jobs.markFailed, {
+              jobId: job._id,
+              error: "Topic not found (deleted). Job cannot proceed.",
+            });
+            return { processed: true, jobId: job._id };
+          }
+        }
+
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId, undefined, job._id);
 
         // Log this generation permanently (survives article deletion)
