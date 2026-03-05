@@ -153,6 +153,15 @@ const markdownComponents: Components = {
   },
   pre: ({ children }) => <pre className="my-5">{children}</pre>,
   hr: () => <hr className="my-8 border-white/[0.06]" />,
+  img: ({ src, alt }) => (
+    <img
+      src={src}
+      alt={alt || ""}
+      className="my-5 w-full max-w-full rounded-lg border border-white/[0.06]"
+      style={{ maxWidth: "100%", height: "auto" }}
+      loading="lazy"
+    />
+  ),
 };
 
 // ── Client-side schema markup generation (mirrors publisher.ts logic) ──
@@ -285,6 +294,15 @@ function buildBrandedComponents(primaryColor: string, accentColor: string): Comp
     },
     pre: ({ children }) => <pre className="my-5">{children}</pre>,
     hr: () => <hr className="my-8 border-gray-200" />,
+    img: ({ src, alt }) => (
+      <img
+        src={src}
+        alt={alt || ""}
+        className="my-5 w-full max-w-full rounded-lg border border-gray-200"
+        style={{ maxWidth: "100%", height: "auto" }}
+        loading="lazy"
+      />
+    ),
   };
 }
 

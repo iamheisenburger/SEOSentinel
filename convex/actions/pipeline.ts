@@ -1657,20 +1657,31 @@ async function handleArticle(
   let featuredImage: string | undefined;
   let infographicUrl: string | undefined;
 
-  try {
-    featuredImage = await generateHeroImage(
-      ctx,
-      article.title,
-      site.niche ?? "",
-      site.imageBrandingPrompt ?? undefined,
-      site.brandPrimaryColor ?? undefined,
-    );
-    console.log(`Hero image generated: ${featuredImage}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`Hero image generation failed (no featured image): ${msg}`);
-    // Do NOT fall back to screenshotUrl — it's already embedded inline in the article body
-    featuredImage = undefined;
+  // Try hero image up to 2 times — OpenAI image gen can be flaky
+  for (let heroAttempt = 0; heroAttempt < 2; heroAttempt++) {
+    try {
+      featuredImage = await generateHeroImage(
+        ctx,
+        article.title,
+        site.niche ?? "",
+        site.imageBrandingPrompt ?? undefined,
+        site.brandPrimaryColor ?? undefined,
+      );
+      console.log(`Hero image generated: ${featuredImage}`);
+      break; // Success
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`Hero image attempt ${heroAttempt + 1} failed: ${msg}`);
+      if (heroAttempt === 1) {
+        // Final attempt failed — fall back to screenshot if available
+        if (screenshotUrl) {
+          featuredImage = screenshotUrl;
+          console.log("Using site screenshot as hero image fallback.");
+        } else {
+          featuredImage = undefined;
+        }
+      }
+    }
   }
 
   try {
@@ -1705,6 +1716,44 @@ async function handleArticle(
       const infographicMd = `\n![${article.title} infographic](${infographicUrl})\n*Process overview for ${topic?.primaryKeyword ?? article.title}*\n\n`;
       finalMarkdown = finalMarkdown.slice(0, insertIndex) + infographicMd + finalMarkdown.slice(insertIndex);
       console.log("Infographic injected after 3rd H2 section.");
+    }
+  }
+
+  // ── Step 4b: Programmatic YouTube Video Injection ──
+  // Claude often ignores YouTube embed instructions, so we inject them ourselves
+  if (youtubeVideos.length > 0) {
+    const hasYouTube = finalMarkdown.includes("youtube.com/embed/");
+    if (!hasYouTube) {
+      console.log(`Claude skipped YouTube embeds. Injecting ${Math.min(youtubeVideos.length, 2)} video(s) programmatically...`);
+      // Find a good insertion point: after the 4th or 5th H2 (middle of article)
+      const h2Regex = /^## /gm;
+      let h2Count = 0;
+      let youtubeInsertIndex = -1;
+      let h2Match: RegExpExecArray | null;
+      while ((h2Match = h2Regex.exec(finalMarkdown)) !== null) {
+        h2Count++;
+        if (h2Count === 5) {
+          youtubeInsertIndex = h2Match.index;
+          break;
+        }
+      }
+      // Fallback: if fewer than 5 H2s, insert before the last H2
+      if (youtubeInsertIndex === -1 && h2Count >= 2) {
+        const allH2 = [...finalMarkdown.matchAll(/^## /gm)];
+        youtubeInsertIndex = allH2[allH2.length - 2].index!;
+      }
+      if (youtubeInsertIndex !== -1) {
+        const videosToInject = youtubeVideos.slice(0, 2);
+        const youtubeMd = videosToInject.map((v) =>
+          `\n<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen loading="lazy"></iframe></div>\n*${v.title}*\n`
+        ).join("\n");
+        finalMarkdown = finalMarkdown.slice(0, youtubeInsertIndex) + youtubeMd + "\n" + finalMarkdown.slice(youtubeInsertIndex);
+        console.log(`YouTube videos injected: ${videosToInject.map(v => v.videoId).join(", ")}`);
+      } else {
+        console.log("Could not find suitable H2 for YouTube injection.");
+      }
+    } else {
+      console.log("Claude included YouTube embeds — no injection needed.");
     }
   }
 
