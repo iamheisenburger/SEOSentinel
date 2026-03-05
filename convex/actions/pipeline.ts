@@ -1121,7 +1121,7 @@ async function handlePlan(
     8192,
   );
 
-  const plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text);
+  const plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 10);
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
   return { count: plan.length };

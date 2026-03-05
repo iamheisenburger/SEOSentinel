@@ -293,7 +293,7 @@ export function SetupWizard() {
   const [generating, setGenerating] = useState(false);
 
   // Convex hooks
-  const { userId: clerkUserId } = useAuth();
+  const { userId: clerkUserId, isLoaded: authLoaded } = useAuth();
   const upsert = useMutation(api.sites.upsert);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
@@ -314,6 +314,10 @@ export function SetupWizard() {
   // ─── Step 1: Save domain + crawl + AI analysis ──────
   const handleStartAnalysis = async () => {
     if (!domain.trim()) return;
+    if (!clerkUserId) {
+      setError("Authentication not ready. Please wait a moment and try again.");
+      return;
+    }
     setError(null);
     setAnalyzing(true);
     setStatusMsg("Creating site record...");
@@ -322,7 +326,7 @@ export function SetupWizard() {
       // Create site
       const id = await upsert({
         domain: domain.trim(),
-        clerkUserId: clerkUserId ?? undefined,
+        ...(clerkUserId ? { clerkUserId } : {}),
         publishMethod,
         repoOwner: repoOwner.trim() || undefined,
         repoName: repoName.trim() || undefined,

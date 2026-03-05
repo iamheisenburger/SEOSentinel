@@ -312,10 +312,11 @@ export const resetAll = mutation({
 
 // One-off: fix orphaned sites that have no userId
 export const fixOrphanSites = mutation({
-  handler: async (ctx) => {
+  args: { clerkUserId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('Not authenticated');
-    const userId = identity.subject;
+    const userId = identity?.subject ?? args.clerkUserId;
+    if (!userId) return { fixed: 0, userId: null };
     const allSites = await ctx.db.query('sites').collect();
     let fixed = 0;
     for (const site of allSites) {

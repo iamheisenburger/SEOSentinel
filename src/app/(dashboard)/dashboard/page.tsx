@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -36,8 +38,9 @@ export default function DashboardPage() {
   // would flip needsOnboarding false and yank the wizard away.
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
+  const { userId: dashClerkId } = useAuth();
   const fixOrphan = useMutation(api.sites.fixOrphanSites);
-  useEffect(() => { fixOrphan().catch(() => {}); }, []);
+  useEffect(() => { if (dashClerkId) fixOrphan({ clerkUserId: dashClerkId }).catch(() => {}); }, [dashClerkId]);
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
