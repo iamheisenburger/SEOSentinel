@@ -170,44 +170,7 @@ body {
 }
 
 /* ─── Clerk component dark-theme overrides ────── */
-/* Force all Clerk surfaces, text, and inputs to match our dark theme */
-
-/* Global Clerk text & background resets */
-.cl-internal-b3fm6y,
-.cl-userButtonPopoverCard,
-.cl-userButtonPopoverMain,
-.cl-userButtonPopoverActions,
-.cl-userButtonPopoverActionButton,
-.cl-userButtonPopoverFooter,
-.cl-profilePage,
-.cl-profileSection,
-.cl-profileSectionContent,
-.cl-navbar,
-.cl-navbarButton,
-.cl-scrollBox,
-.cl-pageScrollBox,
-.cl-page,
-.cl-modalContent,
-.cl-modalBackdrop,
-.cl-card,
-.cl-main,
-.cl-headerTitle,
-.cl-headerSubtitle,
-.cl-formFieldLabel,
-.cl-formFieldInput,
-.cl-menuList,
-.cl-menuItem,
-.cl-selectButton,
-.cl-selectOption,
-.cl-breadcrumbs,
-.cl-breadcrumbsItem,
-.cl-accordionTriggerButton,
-.cl-accordionContent,
-.cl-tableHead,
-.cl-pricingTable,
-[data-clerk-component] {
-  color-scheme: dark !important;
-}
+/* Scoped to .cl-* classes only — no broad selectors that bleed into the site */
 
 /* ── Backgrounds ── */
 .cl-card,
@@ -218,10 +181,10 @@ body {
 .cl-pageScrollBox,
 .cl-scrollBox,
 .cl-main,
-.cl-page,
-[data-clerk-component] .cl-internal-b3fm6y {
+.cl-page {
   background-color: #111318 !important;
   background: #111318 !important;
+  color-scheme: dark !important;
 }
 
 .cl-navbarButton,
@@ -229,14 +192,12 @@ body {
 .cl-profileSection,
 .cl-accordionContent,
 .cl-menuList,
-.cl-selectButton,
-.cl-formFieldInput,
-.cl-formFieldInput:focus {
+.cl-formFieldInput {
   background-color: #1E2130 !important;
   background: #1E2130 !important;
 }
 
-/* ── Text colors ── */
+/* ── Primary text (bright) ── */
 .cl-headerTitle,
 .cl-profileSectionTitle,
 .cl-profileSectionTitleText,
@@ -249,18 +210,12 @@ body {
 .cl-accordionTriggerButton,
 .cl-userPreviewMainIdentifier,
 .cl-userPreviewTextContainer,
-.cl-tableHead th,
-.cl-pricingTable th,
 .cl-badge,
-.cl-tagInputContainer,
-[data-clerk-component] h1,
-[data-clerk-component] h2,
-[data-clerk-component] h3,
-[data-clerk-component] label,
-[data-clerk-component] strong {
+.cl-tagInputContainer {
   color: #F1F5F9 !important;
 }
 
+/* ── Secondary text (muted) ── */
 .cl-headerSubtitle,
 .cl-profileSectionSubtitle,
 .cl-breadcrumbsItem,
@@ -269,9 +224,7 @@ body {
 .cl-formFieldInfoText,
 .cl-footerActionText,
 .cl-menuItemDescription,
-.cl-selectOptionDescription,
-[data-clerk-component] p,
-[data-clerk-component] span:not(.cl-badge):not([class*="text-"]) {
+.cl-selectOptionDescription {
   color: #94A3B8 !important;
 }
 
@@ -296,7 +249,7 @@ body {
   color: #F1F5F9 !important;
 }
 
-/* ── Action/link buttons ── */
+/* ── Action buttons in UserButton popover ── */
 .cl-userButtonPopoverActionButton,
 .cl-userButtonPopoverActionButtonText,
 .cl-userButtonPopoverActionButtonIcon,
@@ -317,12 +270,11 @@ body {
   border-color: rgba(255, 255, 255, 0.06) !important;
 }
 
-.cl-footerPagesLink,
-.cl-footerPagesLink span {
+.cl-footerPagesLink {
   color: #64748B !important;
 }
 
-/* ── UserProfile / Account sections ── */
+/* ── Profile sections ── */
 .cl-profileSection + .cl-profileSection {
   border-top-color: rgba(255, 255, 255, 0.06) !important;
 }
@@ -338,34 +290,9 @@ body {
   background-color: #38BDF8 !important;
 }
 
-/* ── Secondary/destructive buttons ── */
 .cl-formButtonReset {
   color: #94A3B8 !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-/* ── Pricing table overrides ── */
-.cl-pricingTable,
-.cl-pricingTable * {
-  color-scheme: dark !important;
-}
-
-.cl-pricingTable td,
-.cl-pricingTable th,
-.cl-pricingTable p,
-.cl-pricingTable span,
-.cl-pricingTable label,
-.cl-pricingTable div {
-  color: #CBD5E1 !important;
-}
-
-.cl-pricingTable [class*="price"],
-.cl-pricingTable [class*="Price"],
-.cl-pricingTable [class*="name"],
-.cl-pricingTable [class*="Name"],
-.cl-pricingTable h3,
-.cl-pricingTable h2 {
-  color: #F1F5F9 !important;
 }
 
 /* ── Social/OAuth buttons ── */
@@ -381,17 +308,11 @@ body {
   background-color: #252838 !important;
 }
 
-/* ── Input focus ring ── */
+/* ── Input focus ── */
 .cl-formFieldInput:focus {
+  background-color: #1E2130 !important;
   border-color: #0EA5E9 !important;
   box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15) !important;
-}
-
-/* ── Alert/banner ── */
-.cl-alert {
-  background-color: #1E2130 !important;
-  border-color: rgba(255, 255, 255, 0.08) !important;
-  color: #F1F5F9 !important;
 }
 
 /* ── Select dropdown ── */
@@ -402,7 +323,14 @@ body {
   color: #F1F5F9 !important;
 }
 
-/* ── Ensure Clerk modals/popovers get dark bg ── */
+/* ── Alert ── */
+.cl-alert {
+  background-color: #1E2130 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #F1F5F9 !important;
+}
+
+/* ── Root color scheme ── */
 .cl-rootBox,
 .cl-signIn-root,
 .cl-signUp-root,
@@ -412,8 +340,3 @@ body {
   color-scheme: dark !important;
 }
 
-/* Catch-all: any Clerk element with white/light backgrounds */
-[class^="cl-"] {
-  --cl-chassis-background: #111318;
-  --cl-chassis-foreground: #F1F5F9;
-}

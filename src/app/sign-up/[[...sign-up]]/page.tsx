@@ -17,7 +17,7 @@ function SignUpForm() {
 
   return (
     <SignUp
-      signInUrl="/sign-in"
+      signInUrl={plan ? `/sign-in?plan=${plan}${billing ? `&billing=${billing}` : ""}` : "/sign-in"}
       forceRedirectUrl={redirectUrl}
     />
   );

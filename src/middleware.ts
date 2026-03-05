@@ -20,14 +20,14 @@ export default clerkMiddleware(async (auth, request) => {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
-  // Signed-in users on /sign-in → dashboard (no reason to be here)
-  if (userId && pathname.startsWith("/sign-in")) {
+  // Signed-in users on /sign-in → dashboard
+  // UNLESS they have a ?plan= param (checkout flow)
+  if (userId && pathname.startsWith("/sign-in") && !searchParams.get("plan")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
-  // Signed-in users on /sign-up WITH a paid plan param → let them through
-  // so Clerk's forceRedirectUrl sends them to /settings/billing
-  // Only redirect to dashboard if there's NO plan context
+  // Signed-in users on /sign-up → dashboard
+  // UNLESS they have a ?plan= param (checkout flow)
   if (userId && pathname.startsWith("/sign-up") && !searchParams.get("plan")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
