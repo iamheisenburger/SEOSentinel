@@ -485,37 +485,47 @@ async function searchYouTubeVideos(
   const searchTerm = primaryKeyword?.trim() || topic;
   const langLabel = language === "en" ? "English" : language;
 
-  const completion = await client.responses.create({
-    model: "gpt-4o-mini",
-    tools: [{ type: "web_search_preview" as any }],
-    input: [
-      {
-        role: "system",
-        content:
-          "You are a research assistant. When asked to find YouTube videos, you MUST use your web search tool to search the internet. " +
-          "Only return video IDs that appear in actual YouTube URLs from your search results. " +
-          "Pick informational or educational videos — never music, comedy, memes, or entertainment. " +
-          "Return results as JSON.",
-      },
-      {
-        role: "user",
-        content:
-          `Search YouTube for educational videos about "${searchTerm}" in the ${niche || "general"} niche.\n` +
-          `Find 2-3 real videos in ${langLabel}. For each, give me the YouTube video ID (the 11-character code from the URL) and the exact title.\n` +
-          `Only return informational, educational, tutorial, or review videos. No music, comedy, or entertainment.\n` +
-          `Return JSON: {"videos": [{"videoId": "...", "title": "..."}]}`,
-      },
-    ],
-  });
+  // Try up to 2 attempts — GPT sometimes returns garbage instead of JSON
+  let result: { videos: { videoId: string; title: string }[] } = { videos: [] };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const completion = await client.responses.create({
+        model: "gpt-4o-mini",
+        tools: [{ type: "web_search_preview" as any }],
+        input: [
+          {
+            role: "system",
+            content:
+              "You are a research assistant. When asked to find YouTube videos, you MUST use your web search tool to search the internet. " +
+              "Only return video IDs that appear in actual YouTube URLs from your search results. " +
+              "Pick informational or educational videos — never music, comedy, memes, or entertainment. " +
+              "IMPORTANT: Your response must be ONLY a JSON object. No text before or after the JSON. No markdown code blocks.",
+          },
+          {
+            role: "user",
+            content:
+              `Search YouTube for educational videos about "${searchTerm}" in the ${niche || "general"} niche.\n` +
+              `Find 2-3 real videos in ${langLabel}. For each, give me the YouTube video ID (the 11-character code from the URL) and the exact title.\n` +
+              `Only return informational, educational, tutorial, or review videos. No music, comedy, or entertainment.\n` +
+              `Respond with ONLY this JSON format, nothing else: {"videos": [{"videoId": "...", "title": "..."}]}`,
+          },
+        ],
+      });
 
-  const result = parseJson<{ videos: { videoId: string; title: string }[] }>(
-    z.object({
-      videos: z
-        .array(z.object({ videoId: z.string(), title: z.string() }))
-        .default([]),
-    }),
-    completion.output_text,
-  );
+      result = parseJson<{ videos: { videoId: string; title: string }[] }>(
+        z.object({
+          videos: z
+            .array(z.object({ videoId: z.string(), title: z.string() }))
+            .default([]),
+        }),
+        completion.output_text,
+      );
+      if (result.videos.length > 0) break; // Got results, stop retrying
+      console.log(`YouTube search attempt ${attempt + 1}: got empty results, retrying...`);
+    } catch (parseErr) {
+      console.log(`YouTube search attempt ${attempt + 1} failed to parse JSON, retrying...`);
+    }
+  }
 
   // Extract and validate video IDs — model often returns full URLs instead of just the ID
   const extractVideoId = (raw: string): string | null => {
@@ -1465,7 +1475,12 @@ async function handleArticle(
         `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
         `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
         `   YouTube embed goes HERE — place it after the section it relates to most.`,
-        `6. PRODUCT SECTION: A dedicated H2 titled "How ${productName} [solves X]" — show exactly how ${productName} addresses the article topic. Mention ${productName} by name 5-8 times naturally throughout the article — not just in the product section, but woven into early sections too. Include the site screenshot (if available) IN THIS SECTION only.`,
+        `6. PRODUCT SECTION (MANDATORY — DO NOT SKIP): Create a dedicated H2 section titled "How ${productName} Helps With [Topic]". This section MUST:
+        - Be 300-500 words explaining how ${productName} specifically solves the problems discussed in this article
+        - Include the site screenshot image if one was provided in <images>
+        - Mention specific ${productName} features from the product identity above
+        - Link to ${productName}'s website naturally
+        Additionally, ${productName} MUST be mentioned by name at least 5-8 times THROUGHOUT the entire article — in the hook, in middle sections, and in the product section. Do NOT save all mentions for the end.`,
         `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
         `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
         `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
