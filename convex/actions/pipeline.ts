@@ -483,6 +483,7 @@ async function searchYouTubeVideos(
 
   // Use primaryKeyword for specificity; fall back to topic label if not set
   const searchTerm = primaryKeyword?.trim() || topic;
+  const langLabel = language === "en" ? "English" : language;
 
   const completion = await client.responses.create({
     model: "gpt-4o-mini",
@@ -491,20 +492,27 @@ async function searchYouTubeVideos(
       {
         role: "system",
         content:
-          "You are a YouTube video researcher. Search YouTube thoroughly for videos that are DIRECTLY about the given topic. " +
-          "DO NOT return music videos, memes, or unrelated content. " +
-          "The videos must be educational, tutorial, or informational content about the exact topic. " +
-          "Return ONLY real YouTube video URLs that actually exist and are directly relevant. " +
-          "Videos MUST be in the specified language. " +
+          "You are a precise YouTube video finder. Your ONLY job is to search the web for YouTube videos about a specific topic. " +
+          "You MUST use the web search tool with the EXACT query provided. Do NOT modify the search query. " +
+          "From the search results, extract ONLY YouTube video URLs (youtube.com/watch?v= or youtu.be/ links). " +
+          "REJECT any video whose title does not clearly match the topic. " +
+          "NEVER return music videos, memes, podcasts, or entertainment content. " +
+          "ONLY return educational, tutorial, how-to, or informational videos. " +
           "Output JSON only — no explanation.",
       },
       {
         role: "user",
         content:
-          `Find 2-3 highly relevant YouTube videos about: "${searchTerm}" in the ${niche || "general"} space.\n` +
-          `The videos MUST be in ${language === "en" ? "English" : language}. Do NOT return videos in other languages.\n` +
-          `The videos must be directly about this exact topic — not just vaguely related.\n` +
-          `Return JSON: {"videos": [{"videoId": "the_youtube_video_id", "title": "video title"}]}`,
+          `Search the web using this EXACT query: site:youtube.com "${searchTerm}" ${langLabel}\n` +
+          `\n` +
+          `From the search results:\n` +
+          `1. Pick 2-3 YouTube videos whose titles CLEARLY match "${searchTerm}"\n` +
+          `2. The video title must contain words from "${searchTerm}" — if it does not, SKIP it\n` +
+          `3. Only select educational, tutorial, how-to, or review content\n` +
+          `4. NEVER select music, memes, entertainment, podcasts, or vlogs\n` +
+          `5. Extract the exact video ID from each YouTube URL\n` +
+          `\n` +
+          `Return JSON: {"videos": [{"videoId": "the_11_char_video_id", "title": "exact title from search results"}]}`,
       },
     ],
   });
@@ -550,7 +558,8 @@ async function searchYouTubeVideos(
       // At least 1 topic keyword must appear in the real title
       const titleWords = realTitle.split(/[\s\-_|:,]+/);
       const matchCount = [...topicWords].filter(w => titleWords.some((tw: string) => tw.includes(w) || w.includes(tw))).length;
-      if (matchCount === 0) {
+      const minMatches = topicWords.size <= 2 ? 1 : 2; // Require more matches for multi-word topics
+      if (matchCount < minMatches) {
         console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) is not relevant to "${primaryKeyword || topic}", skipping.`);
         continue;
       }
@@ -2498,6 +2507,14 @@ export const processNextJob = action({
         }
 
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId, undefined, job._id);
+
+        // Log this generation permanently (survives article deletion)
+        if (site?.userId) {
+          await ctx.runMutation(api.articles.logGeneration, {
+            userId: site.userId,
+            siteId: job.siteId,
+          });
+        }
 
         // Add internal links BEFORE publishing (graceful degradation)
         try {

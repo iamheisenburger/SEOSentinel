@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "../../../../convex/_generated/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -36,13 +37,14 @@ export default function ArticlesPage() {
     Id<"topic_clusters"> | undefined
   >(undefined);
   const { maxArticles } = usePlanLimits();
+  const { userId } = useAuth();
+  const usageCount = useQuery(
+    api.articles.countThisMonth,
+    userId ? { userId } : "skip",
+  );
 
-  // Articles generated this calendar month
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
-  const articlesThisMonth =
-    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  // Articles generated this calendar month (from immutable usage_log)
+  const articlesThisMonth = usageCount ?? 0;
   const atArticleLimit = articlesThisMonth >= maxArticles;
 
   const availableTopics = useMemo(

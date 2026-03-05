@@ -149,5 +149,15 @@ export default defineSchema({
   })
     .index("by_site", ["siteId"])
     .index("by_status", ["status"]),
+
+  // Immutable usage log — tracks article generations (never deleted)
+  usage_log: defineTable({
+    userId: v.string(),
+    siteId: v.id("sites"),
+    type: v.string(), // "article_generated"
+    createdAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_type", ["userId", "type"]),
 });
 

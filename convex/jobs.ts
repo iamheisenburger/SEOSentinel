@@ -168,32 +168,27 @@ export const queueArticleNow = mutation({
     topicId: v.optional(v.id("topic_clusters")),
   },
   handler: async (ctx, { siteId, topicId }) => {
-    // ── Article quota check ──
+    // ── Article quota check (uses immutable usage_log — survives deletions) ──
     const site = await ctx.db.get(siteId);
     if (site?.userId) {
       const features = (site as any).planFeatures ?? [];
       const limits = getLimitsFromFeatures(features);
 
-      // Count articles this month for this user
-      const userSites = await ctx.db
-        .query("sites")
-        .withIndex("by_user", (q) => q.eq("userId", site.userId!))
-        .collect();
+      // Count from usage_log (immutable — deletions cannot reduce count)
       const monthStart = new Date();
       monthStart.setUTCDate(1);
       monthStart.setUTCHours(0, 0, 0, 0);
       const monthStartMs = monthStart.getTime();
 
-      let articlesThisMonth = 0;
-      for (const s of userSites) {
-        const articles = await ctx.db
-          .query("articles")
-          .withIndex("by_site", (q) => q.eq("siteId", s._id))
-          .collect();
-        articlesThisMonth += articles.filter(
-          (a) => a.createdAt >= monthStartMs,
-        ).length;
-      }
+      const logs = await ctx.db
+        .query("usage_log")
+        .withIndex("by_user_type", (q) =>
+          q.eq("userId", site.userId!).eq("type", "article_generated"),
+        )
+        .collect();
+      const articlesThisMonth = logs.filter(
+        (l) => l.createdAt >= monthStartMs,
+      ).length;
 
       if (articlesThisMonth >= limits.maxArticles) {
         throw new Error(
@@ -202,6 +197,10 @@ export const queueArticleNow = mutation({
       }
 
       // ── Site over-limit check (downgrade protection) ──
+      const userSites = await ctx.db
+        .query("sites")
+        .withIndex("by_user", (q) => q.eq("userId", site.userId!))
+        .collect();
       if (userSites.length > limits.maxSites) {
         throw new Error(
           `You have ${userSites.length} sites but your plan allows ${limits.maxSites}. Remove excess sites or upgrade to continue.`,
