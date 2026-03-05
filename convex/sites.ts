@@ -72,8 +72,7 @@ export const upsert = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const userId = identity.subject;
+    const userId = identity?.subject ?? undefined;
 
     // ── Site count limit (only on new site creation, not updates) ──
     if (!args.id && userId) {
