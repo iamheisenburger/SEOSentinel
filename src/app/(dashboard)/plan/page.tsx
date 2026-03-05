@@ -49,7 +49,7 @@ export default function PlanPage() {
   const atArticleLimit = articlesThisMonth >= maxArticles;
 
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
-  const triggerProcessing = useAction(api.actions.pipeline.autopilotTick);
+  const runQueuedTopic = useMutation(api.jobs.runQueuedTopic);
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const removeTopic = useMutation(api.topics.remove);
   const removeUnused = useMutation(api.topics.removeUnused);
@@ -439,9 +439,9 @@ export default function PlanPage() {
                           onClick={async () => {
                             if (!site?._id) return;
                             try {
-                              await triggerProcessing({ siteId: site._id });
-                            } catch {
-                              // Action may timeout via HTTP but still runs server-side
+                              await runQueuedTopic({ topicId: topic._id });
+                            } catch (err) {
+                              setStatus(err instanceof Error ? err.message : "Failed to start");
                             }
                           }}
                           className="inline-flex items-center gap-1 rounded-md bg-[#22C55E]/[0.08] px-2 py-1 text-[10px] font-medium text-[#4ADE80] hover:bg-[#22C55E]/[0.15] transition"

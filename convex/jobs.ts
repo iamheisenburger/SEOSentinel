@@ -168,6 +168,38 @@ export const getRunningBySite = query({
  * Clients call this instead of invoking generateArticle directly — avoids
  * WebSocket timeout errors on long-running actions.
  */
+// Find the pending job for a specific topic
+export const getPendingByTopic = query({
+  args: { topicId: v.id("topic_clusters") },
+  handler: async (ctx, { topicId }) => {
+    const pending = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+    return pending.find((j) => (j.payload as any)?.topicId === topicId) ?? null;
+  },
+});
+
+// Run a specific queued topic NOW — finds its pending job and schedules processing
+export const runQueuedTopic = mutation({
+  args: { topicId: v.id("topic_clusters") },
+  handler: async (ctx, { topicId }) => {
+    const pending = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+    const job = pending.find((j) => (j.payload as any)?.topicId === topicId);
+    if (!job) {
+      throw new Error("No pending job found for this topic.");
+    }
+    // Schedule processSpecificJob to run immediately with THIS job
+    await ctx.scheduler.runAfter(0, api.actions.pipeline.processSpecificJob, {
+      jobId: job._id,
+    });
+    return job._id;
+  },
+});
+
 export const queueArticleNow = mutation({
   args: {
     siteId: v.id("sites"),

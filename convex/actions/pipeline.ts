@@ -2549,6 +2549,105 @@ export const autopilotTick = action({
   },
 });
 
+// Process a SPECIFIC job by ID — used by "Run Now" button
+// Bypasses autopilotTick entirely (no scheduling, no topic replenishment)
+export const processSpecificJob = action({
+  args: { jobId: v.id("jobs") },
+  handler: async (
+    ctx: ActionCtx,
+    { jobId },
+  ): Promise<{ processed: boolean; error?: string }> => {
+    // Get the specific job
+    const allPending = await ctx.runQuery(api.jobs.listPending, {});
+    const job = allPending.find(j => j._id === jobId);
+    if (!job) {
+      // Maybe it's already running
+      return { processed: false, error: "Job not found or already running" };
+    }
+
+    // Mark it running
+    await ctx.runMutation(api.jobs.markRunning, { jobId: job._id });
+
+    try {
+      if (job.type !== "article" || !job.siteId) {
+        throw new Error("processSpecificJob only handles article jobs");
+      }
+
+      const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
+      const payload = job.payload as { topicId?: string } | undefined;
+
+      // Enforce article limit atomically
+      if (site?.userId) {
+        const { getLimitsFromFeatures } = await import("../planLimits");
+        const features = (site as any).planFeatures ?? [];
+        const limits = getLimitsFromFeatures(features);
+        const claim = await ctx.runMutation(api.articles.claimGenerationSlot, {
+          userId: site.userId,
+          siteId: job.siteId,
+          maxArticles: limits.maxArticles,
+        });
+        if (!claim.ok) {
+          await ctx.runMutation(api.jobs.markFailed, {
+            jobId: job._id,
+            error: `Article limit reached (${limits.maxArticles}/month). Upgrade plan.`,
+          });
+          return { processed: true, error: claim.reason };
+        }
+      }
+
+      // Pre-check topic exists
+      if (payload?.topicId) {
+        const topicCheck = await ctx.runQuery(api.topics.get, { topicId: payload.topicId as any });
+        if (!topicCheck) {
+          await ctx.runMutation(api.jobs.markFailed, {
+            jobId: job._id,
+            error: "Topic not found (deleted).",
+          });
+          return { processed: true, error: "Topic deleted" };
+        }
+      }
+
+      const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId as any, undefined, job._id);
+
+      // Internal links
+      try {
+        await handleLinks(ctx, job.siteId, articleResult.articleId);
+      } catch (err) {
+        console.error("Internal linking failed:", err instanceof Error ? err.message : "unknown");
+      }
+
+      // Publish
+      try {
+        await ctx.runAction(api.publisher.publishArticle, {
+          siteId: job.siteId,
+          articleId: articleResult.articleId,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        console.error(`Publish failed: ${msg}`);
+        await ctx.runMutation(api.jobs.markFailed, {
+          jobId: job._id,
+          error: `Article generated but publish failed: ${msg}`,
+        });
+        return { processed: true };
+      }
+
+      await ctx.runMutation(api.jobs.markDone, {
+        jobId: job._id,
+        result: { articleId: articleResult.articleId },
+      });
+      return { processed: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      await ctx.runMutation(api.jobs.markFailed, {
+        jobId: job._id,
+        error: msg,
+      });
+      return { processed: true, error: msg };
+    }
+  },
+});
+
 export const processNextJob = action({
   args: { siteId: v.optional(v.id("sites")) },
   handler: async (
