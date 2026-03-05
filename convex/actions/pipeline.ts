@@ -492,27 +492,22 @@ async function searchYouTubeVideos(
       {
         role: "system",
         content:
-          "You are a precise YouTube video finder. Your ONLY job is to search the web for YouTube videos about a specific topic. " +
-          "You MUST use the web search tool with the EXACT query provided. Do NOT modify the search query. " +
-          "From the search results, extract ONLY YouTube video URLs (youtube.com/watch?v= or youtu.be/ links). " +
-          "REJECT any video whose title does not clearly match the topic. " +
-          "NEVER return music videos, memes, podcasts, or entertainment content. " +
-          "ONLY return educational, tutorial, how-to, or informational videos. " +
-          "Output JSON only — no explanation.",
+          "You find YouTube videos related to a given topic. " +
+          "Search the web for YouTube videos on the topic. " +
+          "Pick 2-3 videos that are informational, educational, or tutorial content related to the topic. " +
+          "Do NOT pick music videos, comedy sketches, memes, movie clips, or entertainment. " +
+          "Output JSON only.",
       },
       {
         role: "user",
         content:
-          `Search the web using this EXACT query: site:youtube.com "${searchTerm}" ${langLabel}\n` +
+          `Find 2-3 YouTube videos about: ${searchTerm}\n` +
+          `Niche/industry: ${niche || "general"}\n` +
+          `Language: ${langLabel}\n` +
           `\n` +
-          `From the search results:\n` +
-          `1. Pick 2-3 YouTube videos whose titles CLEARLY match "${searchTerm}"\n` +
-          `2. The video title must contain words from "${searchTerm}" — if it does not, SKIP it\n` +
-          `3. Only select educational, tutorial, how-to, or review content\n` +
-          `4. NEVER select music, memes, entertainment, podcasts, or vlogs\n` +
-          `5. Extract the exact video ID from each YouTube URL\n` +
-          `\n` +
-          `Return JSON: {"videos": [{"videoId": "the_11_char_video_id", "title": "exact title from search results"}]}`,
+          `The videos should be related to this topic — tutorials, guides, explanations, reviews, or talks.\n` +
+          `Do NOT return music, comedy, memes, or entertainment.\n` +
+          `Return JSON: {"videos": [{"videoId": "the_11_char_video_id", "title": "video title"}]}`,
       },
     ],
   });
@@ -557,10 +552,16 @@ async function searchYouTubeVideos(
       const realTitle = (data.title || "").toLowerCase();
       // At least 1 topic keyword must appear in the real title
       const titleWords = realTitle.split(/[\s\-_|:,]+/);
-      const matchCount = [...topicWords].filter(w => titleWords.some((tw: string) => tw.includes(w) || w.includes(tw))).length;
-      const minMatches = topicWords.size <= 2 ? 1 : 2; // Require more matches for multi-word topics
-      if (matchCount < minMatches) {
-        console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) is not relevant to "${primaryKeyword || topic}", skipping.`);
+      // Reject obvious garbage: music, memes, comedy, entertainment
+      const garbagePatterns = /\b(official\s*(music\s*)?video|music\s*video|rick\s*astley|never\s*gonna|rickroll|remix|lyric|karaoke|live\s*performance|stand[- ]?up|comedy|prank|meme|tiktok|shorts|trailer|movie\s*clip|full\s*episode|reaction)\b/i;
+      if (garbagePatterns.test(realTitle)) {
+        console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) looks like entertainment/music, skipping.`);
+        continue;
+      }
+      // Light relevance: at least 1 topic word appears somewhere in the title
+      const matchCount = [...topicWords].filter(w => realTitle.includes(w)).length;
+      if (matchCount === 0 && topicWords.size > 0) {
+        console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) has zero topic overlap with "${primaryKeyword || topic}", skipping.`);
         continue;
       }
       // Use real title from YouTube
