@@ -116,7 +116,7 @@ export const scheduleCadence = action({
       const overlapCount = kwWords.filter((w: string) => w.length > 3 && publishedKeywords.has(w)).length;
       const overlapRatio = kwWords.length > 0 ? overlapCount / kwWords.length : 0;
 
-      if (overlapRatio < 0.5) {
+      if (overlapRatio < 0.35) {
         selectedTopic = topic;
         if (overlapCount > 0) {
           console.log(`Topic "${topic.primaryKeyword}" has ${overlapCount}/${kwWords.length} overlapping words — acceptable.`);

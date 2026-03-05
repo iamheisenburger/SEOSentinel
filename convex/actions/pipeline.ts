@@ -1302,7 +1302,16 @@ async function handleArticle(
 
   const productName = site.siteName ?? site.domain;
 
-  // ── Build structured system prompt with XML tags ──
+  // ── Build existing article keywords for anti-cannibalization ──
+  const existingArticles = await ctx.runQuery(api.articles.listBySite, { siteId });
+  const existingArticleKeywords = existingArticles
+    .filter((a: any) => a.metaKeywords?.length)
+    .map((a: any) => ({ title: a.title, keywords: a.metaKeywords }));
+  const existingKwSummary = existingArticleKeywords.length > 0
+    ? existingArticleKeywords.map((a: any) => a.keywords.join(", ")).join("; ")
+    : "";
+
+    // ── Build structured system prompt with XML tags ──
   // Every section is a binding contract. The AI must follow ALL of it.
 
   const competitorNames = (site.competitors ?? []).map((c: string) =>
@@ -1427,6 +1436,8 @@ async function handleArticle(
         `13. STYLED CTA BOX: Place the HTML CTA box last, after Sources.`,
       ].join("\n");
     })(),
+    ``,
+    existingKwSummary ? `<anti_cannibalization>\nThese keywords are already targeted by existing articles on this blog. Your article MUST target DIFFERENT keywords and angles:\n${existingKwSummary}\nDo NOT repeat these keywords in your metaKeywords output. Focus on unique long-tail variations.\n</anti_cannibalization>` : "",
     ``,
     `GLOBAL RULES:`,
     `- WORD COUNT: ${((topic as any)?.articleType === "ultimate-guide") ? "5000-7000" : "3500-4500"} words.`,
@@ -2365,7 +2376,9 @@ export const autopilotTick = action({
     await ctx.runAction(api.actions.scheduler.scheduleCadence, { siteId });
 
     // 5. Process ONLY ONE job per tick, respecting cadence for article jobs.
-    const pending = await ctx.runQuery(api.jobs.listPending, {});
+    const allPending = await ctx.runQuery(api.jobs.listPending, {});
+    // Filter to jobs for THIS site only — each site manages its own queue
+    const pending = allPending.filter(j => j.siteId === siteId);
     if (pending.length > 0) {
       const nextJob = pending[0];
       // Cadence gate: only process article jobs when enough time has passed
