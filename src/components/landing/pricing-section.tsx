@@ -79,10 +79,11 @@ export function PricingSection() {
   const { isSignedIn } = useAuth();
 
   function getHref(plan: string) {
+    const billing = annual ? "annual" : "monthly";
     if (isSignedIn) {
-      return plan === "free" ? "/dashboard" : "/settings/billing";
+      return plan === "free" ? "/dashboard" : `/settings/billing?plan=${plan}&billing=${billing}`;
     }
-    return plan === "free" ? "/sign-up" : `/sign-up?plan=${plan}`;
+    return plan === "free" ? "/sign-up" : `/sign-up?plan=${plan}&billing=${billing}`;
   }
 
   return (
