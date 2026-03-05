@@ -2433,8 +2433,10 @@ export const autopilotTick = action({
     const pending = allPending.filter(j => j.siteId === siteId);
     if (pending.length > 0) {
       const nextJob = pending[0];
-      // Cadence gate: only process article jobs when enough time has passed
-      if (nextJob.type === "article") {
+      // Cadence gate: only process CRON-scheduled article jobs when enough time has passed
+      // Manual jobs (from Generate button) bypass the cadence gate
+      const isManualJob = !!(nextJob.payload as any)?.manual;
+      if (nextJob.type === "article" && !isManualJob) {
         const cadence = site.cadencePerWeek ?? 4;
         const hoursPerArticle = Math.floor((7 * 24) / cadence);
         const allArticles = await ctx.runQuery(api.articles.listBySite, { siteId });

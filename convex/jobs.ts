@@ -219,7 +219,7 @@ export const queueArticleNow = mutation({
       siteId,
       type: "article",
       status: "pending",
-      payload: topicId ? { topicId } : undefined,
+      payload: { topicId: topicId ?? undefined, manual: true },
       createdAt: now(),
       updatedAt: now(),
     });
