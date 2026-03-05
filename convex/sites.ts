@@ -5,10 +5,11 @@ import { getLimitsFromFeatures } from "./planLimits";
 const now = () => Date.now();
 
 export const list = query({
-  handler: async (ctx) => {
+  args: { clerkUserId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const userId = identity.subject;
+    const userId = identity?.subject ?? args.clerkUserId;
+    if (!userId) return [];
     return ctx.db
       .query("sites")
       .withIndex("by_user", (q) => q.eq("userId", userId))

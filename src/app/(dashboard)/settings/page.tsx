@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
@@ -31,7 +33,8 @@ function getPlanName(features: string[]): string {
 }
 
 export default function SettingsPage() {
-  const sites = useQuery(api.sites.list);
+  const { userId: _clerkId } = useAuth();
+  const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
   const articles = useQuery(
     api.articles.listBySite,
     sites?.[0]?._id ? { siteId: sites[0]._id } : "skip",

@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { useParams, useRouter } from "next/navigation";
@@ -291,7 +293,8 @@ export default function ArticleDetailPage() {
   const router = useRouter();
   const articleId = params.id as Id<"articles">;
   const article = useQuery(api.articles.get, { articleId });
-  const sites = useQuery(api.sites.list);
+  const { userId: _clerkId } = useAuth();
+  const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
   const site = sites?.[0];
   const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
   const publishApproved = useAction(api.actions.pipeline.publishApproved);

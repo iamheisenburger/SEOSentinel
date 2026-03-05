@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
@@ -19,7 +21,8 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 export default function WebsitesPage() {
-  const sites = useQuery(api.sites.list);
+  const { userId: _clerkId } = useAuth();
+  const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
   const loading = sites === undefined;
   const { maxSites } = usePlanLimits();
   const atSiteLimit = (sites?.length ?? 0) >= maxSites;

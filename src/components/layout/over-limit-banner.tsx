@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
@@ -12,7 +14,8 @@ import Link from "next/link";
  * generation until they upgrade or remove excess sites.
  */
 export function OverLimitBanner() {
-  const sites = useQuery(api.sites.list);
+  const { userId: _clerkId } = useAuth();
+  const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
   const { maxSites } = usePlanLimits();
 
   const siteCount = sites?.length ?? 0;

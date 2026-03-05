@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+
 import { createContext, useContext, useState, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
@@ -22,7 +24,8 @@ const SiteContext = createContext<SiteContextValue>({
 const STORAGE_KEY = "pentra_active_site";
 
 export function SiteProvider({ children }: { children: React.ReactNode }) {
-  const sites = useQuery(api.sites.list);
+  const { userId: clerkUserId } = useAuth();
+  const sites = useQuery(api.sites.list, clerkUserId ? { clerkUserId } : {});
   const [activeSiteId, setActiveSiteIdState] = useState<Id<"sites"> | undefined>(undefined);
 
   // Initialize from localStorage or first site
