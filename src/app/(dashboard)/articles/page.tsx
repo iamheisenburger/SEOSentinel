@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { FileText, PenTool, ArrowRight, CheckCircle2, XCircle, Trash2 } from "lucide-react";
+import { FileText, PenTool, ArrowRight, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -27,8 +27,7 @@ export default function ArticlesPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
   const queueArticle = useMutation(api.jobs.queueArticleNow);
-  const approveArticle = useMutation(api.articles.approve);
-  const rejectArticle = useMutation(api.articles.reject);
+
   const deleteArticle = useMutation(api.articles.deleteArticle);
 
   const [status, setStatus] = useState<string | null>(null);
@@ -114,7 +113,7 @@ export default function ArticlesPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Articles"
-        subtitle={`${articles?.length ?? 0} articles total`}
+        subtitle={`${articlesThisMonth} / ${maxArticles} articles this month`}
         actions={
           <div className="flex items-center gap-2">
             <select
@@ -166,6 +165,23 @@ export default function ArticlesPage() {
         </div>
       )}
 
+      {/* Article usage bar */}
+      <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-4 py-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[12px] text-[#8B8FA3]">Monthly article usage</span>
+          <span className="text-[12px] font-medium text-[#EDEEF1] tabular-nums">{articlesThisMonth} / {maxArticles}</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: `${Math.min(100, (articlesThisMonth / maxArticles) * 100)}%`,
+              backgroundColor: articlesThisMonth >= maxArticles ? '#EF4444' : articlesThisMonth >= maxArticles * 0.8 ? '#F59E0B' : '#0EA5E9',
+            }}
+          />
+        </div>
+      </div>
+
       {site && <ArticleProgress siteId={site._id} />}
 
       <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
@@ -184,7 +200,6 @@ export default function ArticlesPage() {
 
           {filtered.map((article) => {
             const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
-            const canApprove = article.status === "draft" || article.status === "review";
             const canDelete = article.status !== "published";
             return (
               <div
@@ -213,26 +228,6 @@ export default function ArticlesPage() {
                   {wc.toLocaleString()}
                 </span>
                 <div className="flex items-center gap-1.5">
-                  {canApprove && (
-                    <>
-                      <button
-                        onClick={() => approveArticle({ articleId: article._id })}
-                        className="inline-flex items-center gap-1 rounded-md bg-[#22C55E]/[0.08] px-2 py-1 text-[10px] font-medium text-[#4ADE80] hover:bg-[#22C55E]/[0.15] transition"
-                        title="Approve"
-                      >
-                        <CheckCircle2 className="h-3 w-3" />
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => rejectArticle({ articleId: article._id })}
-                        className="inline-flex items-center gap-1 rounded-md bg-[#EF4444]/[0.08] px-2 py-1 text-[10px] font-medium text-[#F87171] hover:bg-[#EF4444]/[0.15] transition"
-                        title="Reject"
-                      >
-                        <XCircle className="h-3 w-3" />
-                        Reject
-                      </button>
-                    </>
-                  )}
                   {canDelete && (
                     <button
                       onClick={() => {

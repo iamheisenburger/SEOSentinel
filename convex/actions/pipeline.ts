@@ -491,8 +491,10 @@ async function searchYouTubeVideos(
       {
         role: "system",
         content:
-          "Search YouTube for the most relevant and popular videos on the given topic. " +
-          "Return ONLY real YouTube video URLs that actually exist. " +
+          "You are a YouTube video researcher. Search YouTube thoroughly for videos that are DIRECTLY about the given topic. " +
+          "DO NOT return music videos, memes, or unrelated content. " +
+          "The videos must be educational, tutorial, or informational content about the exact topic. " +
+          "Return ONLY real YouTube video URLs that actually exist and are directly relevant. " +
           "Videos MUST be in the specified language. " +
           "Output JSON only — no explanation.",
       },
@@ -528,19 +530,32 @@ async function searchYouTubeVideos(
     .map((v) => ({ ...v, videoId: extractVideoId(v.videoId) ?? "" }))
     .filter((v) => v.videoId.length === 11);
 
-  // Validate each video actually exists via YouTube oEmbed API
+  // Validate each video: exists + title is relevant to topic
+  const topicWords = new Set(
+    (primaryKeyword || topic).toLowerCase().split(/\s+/).filter((w: string) => w.length > 3),
+  );
   const verified: typeof candidateVideos = [];
   for (const v of candidateVideos) {
     try {
       const res = await fetch(
         `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${v.videoId}&format=json`,
-        { method: "HEAD" },
       );
-      if (res.ok) {
-        verified.push(v);
-      } else {
+      if (!res.ok) {
         console.log(`YouTube video ${v.videoId} is unavailable (status ${res.status}), skipping.`);
+        continue;
       }
+      // Check actual video title from YouTube (not what GPT claims)
+      const data = await res.json() as { title?: string };
+      const realTitle = (data.title || "").toLowerCase();
+      // At least 1 topic keyword must appear in the real title
+      const titleWords = realTitle.split(/[\s\-_|:,]+/);
+      const matchCount = [...topicWords].filter(w => titleWords.some((tw: string) => tw.includes(w) || w.includes(tw))).length;
+      if (matchCount === 0) {
+        console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) is not relevant to "${primaryKeyword || topic}", skipping.`);
+        continue;
+      }
+      // Use real title from YouTube
+      verified.push({ ...v, title: data.title || v.title });
     } catch {
       console.log(`YouTube video ${v.videoId} validation failed, skipping.`);
     }
@@ -2395,7 +2410,10 @@ export const autopilotTick = action({
     const availableTopics = topics.filter(
       (t: { status?: string }) => t.status !== "used" && t.status !== "queued",
     );
-    if (availableTopics.length < 5) {
+    if (availableTopics.length === 0) {
+      console.log(`All topics used up, generating fresh batch...`);
+      await handlePlan(ctx, siteId);
+    } else if (availableTopics.length < 3) {
       console.log(`Topics low (${availableTopics.length}), replenishing...`);
       await handlePlan(ctx, siteId);
     }
@@ -2424,7 +2442,7 @@ export const autopilotTick = action({
         }
       }
       console.log(`Processing next job: ${nextJob.type} (${nextJob._id})`);
-      await ctx.runAction(api.actions.pipeline.processNextJob as any, {});
+      await ctx.runAction(api.actions.pipeline.processNextJob as any, { siteId });
       return { processed: 1 };
     }
 
@@ -2433,11 +2451,14 @@ export const autopilotTick = action({
 });
 
 export const processNextJob = action({
-  args: {},
+  args: { siteId: v.optional(v.id("sites")) },
   handler: async (
     ctx: ActionCtx,
+    args: { siteId?: Id<"sites"> },
   ): Promise<{ processed: boolean; jobId?: Id<"jobs">; error?: string }> => {
-    const pending = await ctx.runQuery(api.jobs.listPending, {});
+    const allPending = await ctx.runQuery(api.jobs.listPending, {});
+    // Filter to this site's jobs only (prevent cross-site phantom processing)
+    const pending = args.siteId ? allPending.filter(j => j.siteId === args.siteId) : allPending;
     const job = pending[0];
     if (!job) return { processed: false };
     await ctx.runMutation(api.jobs.markRunning, { jobId: job._id });
@@ -2457,6 +2478,25 @@ export const processNextJob = action({
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
         const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
+
+        // Enforce article limit before generating (belt + suspenders)
+        if (site?.userId) {
+          const { getLimitsFromFeatures } = await import("../planLimits");
+          const features = (site as any).planFeatures ?? [];
+          const limits = getLimitsFromFeatures(features);
+          const articlesThisMonth = await ctx.runQuery(api.articles.countThisMonth, {
+            userId: site.userId,
+          });
+          if (articlesThisMonth >= limits.maxArticles) {
+            console.log(`Article limit reached (${articlesThisMonth}/${limits.maxArticles}). Skipping job ${job._id}.`);
+            await ctx.runMutation(api.jobs.markFailed, {
+              jobId: job._id,
+              error: `Article limit reached (${limits.maxArticles}/month). Upgrade plan.`,
+            });
+            return { processed: true, jobId: job._id };
+          }
+        }
+
         const articleResult = await handleArticle(ctx, job.siteId, payload?.topicId, undefined, job._id);
 
         // Add internal links BEFORE publishing (graceful degradation)

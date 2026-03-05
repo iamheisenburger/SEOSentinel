@@ -126,6 +126,19 @@ export const scheduleCadence = action({
       console.log(`Skipping "${topic.primaryKeyword}": ${Math.round(overlapRatio * 100)}% overlap with existing articles (cannibalization risk).`);
     }
 
+    // Final recheck: enforce article limit before creating job
+    if (site.userId) {
+      const finalCount = await ctx.runQuery(api.articles.countThisMonth, {
+        userId: site.userId,
+      });
+      const finalFeatures = (site as any).planFeatures ?? [];
+      const finalLimits = getLimitsFromFeatures(finalFeatures);
+      if (finalCount >= finalLimits.maxArticles) {
+        console.log(`Article limit reached at scheduling time (${finalCount}/${finalLimits.maxArticles}). Aborting.`);
+        return { scheduled: 0 };
+      }
+    }
+
     await ctx.runMutation(api.jobs.create, {
       siteId,
       type: "article",
