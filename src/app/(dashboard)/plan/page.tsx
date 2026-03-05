@@ -49,6 +49,7 @@ export default function PlanPage() {
   const atArticleLimit = articlesThisMonth >= maxArticles;
 
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
+  const triggerProcessing = useAction(api.actions.pipeline.autopilotTick);
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const removeTopic = useMutation(api.topics.remove);
   const removeUnused = useMutation(api.topics.removeUnused);
@@ -428,10 +429,29 @@ export default function PlanPage() {
                       Generating
                     </span>
                   ) : isQueued ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F59E0B]/[0.1] px-2.5 py-1 text-[11px] font-medium text-[#FBBF24]">
-                      <Clock className="h-3 w-3" />
-                      Queued
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F59E0B]/[0.1] px-2.5 py-1 text-[11px] font-medium text-[#FBBF24]">
+                        <Clock className="h-3 w-3" />
+                        Queued
+                      </span>
+                      {!runningJob && (
+                        <button
+                          onClick={async () => {
+                            if (!site?._id) return;
+                            try {
+                              await triggerProcessing({ siteId: site._id });
+                            } catch {
+                              // Action may timeout via HTTP but still runs server-side
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md bg-[#22C55E]/[0.08] px-2 py-1 text-[10px] font-medium text-[#4ADE80] hover:bg-[#22C55E]/[0.15] transition"
+                          title="Start processing this queued article now"
+                        >
+                          <Play className="h-2.5 w-2.5" />
+                          Run Now
+                        </button>
+                      )}
+                    </div>
                   ) : isUsed ? (
                     <span className="inline-flex items-center gap-1.5 text-[11px] text-[#565A6E]">
                       <CheckCircle2 className="h-3 w-3" />
