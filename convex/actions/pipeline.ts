@@ -2446,6 +2446,13 @@ export const autopilotTick = action({
     const allPending = await ctx.runQuery(api.jobs.listPending, {});
     // Filter to jobs for THIS site only — each site manages its own queue
     const pending = allPending.filter(j => j.siteId === siteId);
+    // Sort: manual jobs first (user clicked Generate), then by creation time (oldest first)
+    pending.sort((a, b) => {
+      const aManual = !!(a.payload as any)?.manual ? 1 : 0;
+      const bManual = !!(b.payload as any)?.manual ? 1 : 0;
+      if (aManual !== bManual) return bManual - aManual; // manual first
+      return a.createdAt - b.createdAt; // then oldest first
+    });
     if (pending.length > 0) {
       const nextJob = pending[0];
       // Cadence gate: only process CRON-scheduled article jobs when enough time has passed
@@ -2482,6 +2489,13 @@ export const processNextJob = action({
     const allPending = await ctx.runQuery(api.jobs.listPending, {});
     // Filter to this site's jobs only (prevent cross-site phantom processing)
     const pending = args.siteId ? allPending.filter(j => j.siteId === args.siteId) : allPending;
+    // Sort: manual jobs first, then oldest first
+    pending.sort((a, b) => {
+      const aManual = !!(a.payload as any)?.manual ? 1 : 0;
+      const bManual = !!(b.payload as any)?.manual ? 1 : 0;
+      if (aManual !== bManual) return bManual - aManual;
+      return a.createdAt - b.createdAt;
+    });
     const job = pending[0];
     if (!job) return { processed: false };
     await ctx.runMutation(api.jobs.markRunning, { jobId: job._id });
