@@ -397,15 +397,25 @@ async function searchWebImages(
     completion.output_text,
   );
 
-  // Validate URLs
-  const validImages = result.images.filter((img) => {
+  // Validate URLs and check they're actual image files (not HTML pages)
+  const validImages: typeof result.images = [];
+  for (const img of result.images) {
     try {
-      new URL(img.url);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+      const u = new URL(img.url);
+      // Must end with image extension or be from known image CDNs
+      const isImageUrl = /\.(png|jpg|jpeg|webp|gif|svg)(\?.*)?$/i.test(u.pathname) ||
+        u.hostname.includes('imgur') || u.hostname.includes('cloudinary') ||
+        u.hostname.includes('unsplash') || u.hostname.includes('pexels');
+      if (!isImageUrl) continue;
+      // HEAD check to verify image is accessible (skip if blocked)
+      try {
+        const headRes = await fetch(img.url, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
+        const ct = headRes.headers.get('content-type') || '';
+        if (!ct.startsWith('image/')) continue;
+      } catch { continue; }
+      validImages.push(img);
+    } catch { continue; }
+  }
 
   console.log(`Found ${validImages.length} web images for "${topic}".`);
   return validImages;
@@ -467,6 +477,7 @@ async function searchYouTubeVideos(
   topic: string,
   primaryKeyword: string,
   niche: string,
+  language: string = "en",
 ): Promise<{ videoId: string; title: string }[]> {
   const client = openaiClient();
 
@@ -482,12 +493,14 @@ async function searchYouTubeVideos(
         content:
           "Search YouTube for the most relevant and popular videos on the given topic. " +
           "Return ONLY real YouTube video URLs that actually exist. " +
+          "Videos MUST be in the specified language. " +
           "Output JSON only — no explanation.",
       },
       {
         role: "user",
         content:
           `Find 2-3 highly relevant YouTube videos about: "${searchTerm}" in the ${niche || "general"} space.\n` +
+          `The videos MUST be in ${language === "en" ? "English" : language}. Do NOT return videos in other languages.\n` +
           `The videos must be directly about this exact topic — not just vaguely related.\n` +
           `Return JSON: {"videos": [{"videoId": "the_youtube_video_id", "title": "video title"}]}`,
       },
@@ -828,6 +841,7 @@ async function inferSiteProfile(
 async function factCheckArticle(
   markdown: string,
   sources: z.infer<typeof ArticleSchema>["sources"],
+  bannedNames: string[] = [],
 ) {
   const text = await callClaude(
     "You are a fact-checking editor. Review the article against provided sources and score factual accuracy.\n\n" +
@@ -837,6 +851,7 @@ async function factCheckArticle(
     "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
     "4. NEVER remove product names, brand mentions, CTA links, or product feature descriptions. These are intentional marketing content — they are not factual claims that need verification.\n" +
     "5. ONLY correct external third-party statistics, quotes attributed to real people, and factual data claims.\n" +
+    (bannedNames.length > 0 ? `6. BANNED NAMES: The following names must be REMOVED from the article and replaced with generic terms ("your CRM", "popular tools", "other platforms"): ${bannedNames.join(", ")}. Replace every occurrence.\n` : "") +
     "6. For each factual claim you can identify, assess whether it is supported by the provided sources.\n" +
     "7. 'confidenceScore' = overall percentage (0-100) of how well-supported the article's claims are.\n" +
     "   - 90-100: All major claims verified against sources\n" +
@@ -1217,6 +1232,7 @@ async function handleArticle(
         topic.label,
         topic.primaryKeyword ?? "",
         site.niche ?? "",
+        site.language ?? "en",
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
@@ -1283,10 +1299,10 @@ async function handleArticle(
     `</role>`,
     ``,
     `<banned_content>`,
-    `The following companies are direct competitors. You must NEVER mention them by name, reference their products, link to their websites, compare them, or include them in any table, list, or example:`,
+    `The following names are ABSOLUTELY BANNED from appearing anywhere in the article — not as competitors, not as CRM examples, not as integration examples, not in any context whatsoever. Use generic terms like "your CRM", "popular CRM platforms", "sales tools" instead:`,
     ...(site.competitors ?? []).map((c: string) => `- ${c}`),
     ...(competitorNames.length > 0 ? [`- Also banned by name: ${competitorNames.join(", ")}`] : []),
-    `If you need to reference a competitor category, say "other tools" or "traditional solutions" — NEVER name them.`,
+    `If you need to reference ANY tool/platform/service, use generic descriptions ("your CRM", "email platform", "popular tools") — NEVER use any of the banned names above in ANY context.`,
     `Do NOT write "N best tools" articles that list competitors. The article must position ${productName} as the primary solution.`,
     `</banned_content>`,
     ``,
@@ -1511,13 +1527,26 @@ async function handleArticle(
 
   try {
     console.log("Running fact check...");
-    const reviewed = await factCheckArticle(finalMarkdown, dedupedSources);
+    const allBannedNames = [
+      ...(site.competitors ?? []),
+      ...(site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, "")),
+    ];
+    const reviewed = await factCheckArticle(finalMarkdown, dedupedSources, allBannedNames);
     finalMarkdown = reviewed.markdown;
     if (reviewed.citations?.length) {
       const additionalSources = reviewed.citations.filter(
         (c) => !seenUrls.has(c.url),
       );
       finalSources = [...dedupedSources, ...additionalSources];
+    }
+    // Programmatic competitor name scrub (belt-and-suspenders)
+    const scrubNames = [...new Set(allBannedNames.filter(n => n.length > 2))];
+    for (const name of scrubNames) {
+      const regex = new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\    factCheckScore = reviewed.confidenceScore;') + '\\b', 'gi');
+      if (regex.test(reviewed.markdown)) {
+        console.log('Scrubbing banned name from article: ' + name);
+        reviewed.markdown = reviewed.markdown.replace(regex, 'popular tools');
+      }
     }
     factCheckScore = reviewed.confidenceScore;
     if (reviewed.notes) {
