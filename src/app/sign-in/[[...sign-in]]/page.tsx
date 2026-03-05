@@ -36,7 +36,7 @@ export default function SignInPage() {
 
       {/* Right — Clerk sign-in form */}
       <div className="flex w-full lg:w-1/2 items-center justify-center bg-[#08090E] px-6">
-        <SignIn signUpUrl="/sign-up" />
+        <SignIn signUpUrl="/sign-up" forceRedirectUrl="/dashboard" />
       </div>
     </div>
   );
