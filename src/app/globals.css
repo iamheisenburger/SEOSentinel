@@ -187,14 +187,22 @@ body {
   color-scheme: dark !important;
 }
 
-.cl-navbarButton,
-.cl-profileSectionContent,
-.cl-profileSection,
-.cl-accordionContent,
 .cl-menuList,
 .cl-formFieldInput {
   background-color: #1E2130 !important;
   background: #1E2130 !important;
+}
+
+.cl-profileSectionContent,
+.cl-profileSection,
+.cl-accordionContent {
+  background-color: #151821 !important;
+  background: #151821 !important;
+}
+
+.cl-navbarButton {
+  background-color: transparent !important;
+  background: transparent !important;
 }
 
 /* ── Primary text (bright) ── */

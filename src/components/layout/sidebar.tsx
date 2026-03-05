@@ -15,8 +15,10 @@ import {
   X,
   Radar,
   Globe,
+  ArrowUpRight,
 } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 const navSections = [
   {
@@ -46,6 +48,7 @@ export function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const sites = useQuery(api.sites.list);
   const site = sites?.[0];
+  const { isFreePlan } = usePlanLimits();
 
   const isActive = (href: string) =>
     pathname === href || pathname.startsWith(href + "/");
@@ -134,6 +137,22 @@ export function Sidebar() {
 
         {/* Navigation */}
         <div className="flex-1 overflow-y-auto py-4">{nav}</div>
+
+        {/* Upgrade CTA (free plan only) */}
+        {isFreePlan && (
+          <div className="px-3 pb-2">
+            <Link
+              href="/upgrade"
+              className="flex items-center justify-between rounded-lg border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.05] px-3 py-2.5 transition hover:bg-[#0EA5E9]/[0.1]"
+            >
+              <div>
+                <p className="text-[12px] font-semibold text-[#0EA5E9]">Upgrade Plan</p>
+                <p className="text-[10px] text-[#565A6E]">Unlock more articles & sites</p>
+              </div>
+              <ArrowUpRight className="h-3.5 w-3.5 text-[#0EA5E9]" />
+            </Link>
+          </div>
+        )}
 
         {/* Site indicator */}
         <div className="border-t border-white/[0.04] px-4 py-3">

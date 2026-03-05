@@ -101,7 +101,7 @@ export default function SettingsPage() {
             </div>
             {isFreePlan && (
               <Link
-                href="/pricing"
+                href="/upgrade"
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white transition hover:bg-[#38BDF8]"
               >
                 <Zap className="h-3.5 w-3.5" />
@@ -156,7 +156,7 @@ export default function SettingsPage() {
           <div className="mt-4 flex items-center gap-3">
             {!isFreePlan && (
               <a
-                href="/settings/billing"
+                href="/upgrade"
                 className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
               >
                 Manage subscription

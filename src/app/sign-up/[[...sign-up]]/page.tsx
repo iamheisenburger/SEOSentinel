@@ -12,7 +12,7 @@ function SignUpForm() {
 
   // If a paid plan was selected, redirect to billing after sign-up
   const redirectUrl = plan && plan !== "free"
-    ? `/settings/billing?plan=${plan}${billing ? `&billing=${billing}` : ""}`
+    ? `/upgrade?plan=${plan}${billing ? `&billing=${billing}` : ""}`
     : "/dashboard";
 
   return (
