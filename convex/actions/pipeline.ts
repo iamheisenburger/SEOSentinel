@@ -1542,12 +1542,15 @@ async function handleArticle(
     // Programmatic competitor name scrub (belt-and-suspenders)
     const scrubNames = [...new Set(allBannedNames.filter(n => n.length > 2))];
     for (const name of scrubNames) {
-      const regex = new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\    factCheckScore = reviewed.confidenceScore;') + '\\b', 'gi');
-      if (regex.test(reviewed.markdown)) {
-        console.log('Scrubbing banned name from article: ' + name);
-        reviewed.markdown = reviewed.markdown.replace(regex, 'popular tools');
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(escaped, "gi");
+      const before = reviewed.markdown;
+      reviewed.markdown = reviewed.markdown.replace(re, "popular tools");
+      if (reviewed.markdown !== before) {
+        console.log("Scrubbed banned name from article: " + name);
       }
     }
+    finalMarkdown = reviewed.markdown;
     factCheckScore = reviewed.confidenceScore;
     if (reviewed.notes) {
       factCheckNotes = reviewed.notes;
