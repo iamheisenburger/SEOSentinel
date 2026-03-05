@@ -479,14 +479,69 @@ async function searchYouTubeVideos(
   niche: string,
   language: string = "en",
 ): Promise<{ videoId: string; title: string }[]> {
-  const client = openaiClient();
-
-  // Use primaryKeyword for specificity; fall back to topic label if not set
   const searchTerm = primaryKeyword?.trim() || topic;
+  console.log(`YouTube search: "${searchTerm}" (niche: ${niche})`);
+
+  // ── Method 1: Direct YouTube HTML scrape (most reliable) ──
+  // Fetch YouTube search results page and extract video IDs + titles from the HTML
+  try {
+    const query = encodeURIComponent(searchTerm + " " + (niche || "") + " tutorial guide");
+    const ytUrl = `https://www.youtube.com/results?search_query=${query}`;
+    const res = await fetch(ytUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": language === "en" ? "en-US,en;q=0.9" : `${language},en;q=0.5`,
+      },
+    });
+    if (res.ok) {
+      const html = await res.text();
+      // YouTube embeds search results in a JSON blob inside the HTML
+      // Extract video IDs and titles from the ytInitialData JSON
+      const videoMatches: { videoId: string; title: string }[] = [];
+
+      // Pattern 1: Extract from ytInitialData videoRenderer blocks (proper titles)
+      const videoRendererRegex = /"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"([^"]+)"\}/g;
+      let match;
+      const seenIds = new Set<string>();
+      while ((match = videoRendererRegex.exec(html)) !== null && videoMatches.length < 6) {
+        const [, videoId, title] = match;
+        if (seenIds.has(videoId)) continue;
+        seenIds.add(videoId);
+        videoMatches.push({ videoId, title });
+      }
+
+      // If pattern 1 didn't work, try a simpler pattern
+      if (videoMatches.length === 0) {
+        const simpleIdRegex = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
+        while ((match = simpleIdRegex.exec(html)) !== null && videoMatches.length < 6) {
+          const videoId = match[1];
+          if (seenIds.has(videoId)) continue;
+          seenIds.add(videoId);
+          videoMatches.push({ videoId, title: searchTerm });
+        }
+      }
+
+      if (videoMatches.length > 0) {
+        // Filter out obvious garbage
+        const garbagePatterns = /\b(official\s*video|music\s*video|rick\s*astley|rickroll|remix|lyric|karaoke|comedy|prank|meme|tiktok|shorts|trailer|movie\s*clip|full\s*episode|reaction|\|\s*ep\s*\d)\b/i;
+        const filtered = videoMatches.filter(v => !garbagePatterns.test(v.title));
+        const final = (filtered.length > 0 ? filtered : videoMatches).slice(0, 3);
+        console.log(`YouTube HTML scrape found ${final.length} videos: ${final.map(v => v.videoId).join(", ")}`);
+        return final;
+      }
+      console.log("YouTube HTML scrape: got HTML but no video IDs found, falling back to GPT search...");
+    } else {
+      console.log(`YouTube HTML scrape failed (status ${res.status}), falling back to GPT search...`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.log(`YouTube HTML scrape error: ${msg}, falling back to GPT search...`);
+  }
+
+  // ── Method 2: GPT-4o-mini web search (fallback) ──
+  const client = openaiClient();
   const langLabel = language === "en" ? "English" : language;
 
-  // Try up to 2 attempts — GPT sometimes returns garbage instead of JSON
-  let result: { videos: { videoId: string; title: string }[] } = { videos: [] };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const completion = await client.responses.create({
@@ -496,89 +551,52 @@ async function searchYouTubeVideos(
           {
             role: "system",
             content:
-              "You are a research assistant. When asked to find YouTube videos, you MUST use your web search tool to search the internet. " +
-              "Only return video IDs that appear in actual YouTube URLs from your search results. " +
-              "Pick informational or educational videos — never music, comedy, memes, or entertainment. " +
-              "IMPORTANT: Your response must be ONLY a JSON object. No text before or after the JSON. No markdown code blocks.",
+              "You are a research assistant. Search the web for YouTube videos on the given topic. " +
+              "Return ONLY real video IDs from actual YouTube URLs you find. " +
+              "Pick educational/informational videos only. " +
+              "Your entire response must be a single JSON object — nothing else.",
           },
           {
             role: "user",
             content:
-              `Search YouTube for educational videos about "${searchTerm}" in the ${niche || "general"} niche.\n` +
-              `Find 2-3 real videos in ${langLabel}. For each, give me the YouTube video ID (the 11-character code from the URL) and the exact title.\n` +
-              `Only return informational, educational, tutorial, or review videos. No music, comedy, or entertainment.\n` +
-              `Respond with ONLY this JSON format, nothing else: {"videos": [{"videoId": "...", "title": "..."}]}`,
+              `Search for YouTube videos about "${searchTerm}" (${niche || "general"}).\n` +
+              `Find 2-3 real videos in ${langLabel}. Return ONLY this JSON:\n` +
+              `{"videos": [{"videoId": "XXXXXXXXXXX", "title": "exact video title"}]}`,
           },
         ],
       });
 
-      result = parseJson<{ videos: { videoId: string; title: string }[] }>(
+      const result = parseJson<{ videos: { videoId: string; title: string }[] }>(
         z.object({
-          videos: z
-            .array(z.object({ videoId: z.string(), title: z.string() }))
-            .default([]),
+          videos: z.array(z.object({ videoId: z.string(), title: z.string() })).default([]),
         }),
         completion.output_text,
       );
-      if (result.videos.length > 0) break; // Got results, stop retrying
-      console.log(`YouTube search attempt ${attempt + 1}: got empty results, retrying...`);
+
+      // Extract clean 11-char video IDs (GPT often returns full URLs)
+      const extractVideoId = (raw: string): string | null => {
+        if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) return raw;
+        const m = raw.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
+        return m ? m[1] : null;
+      };
+
+      const videos = result.videos
+        .map((v) => ({ ...v, videoId: extractVideoId(v.videoId) ?? "" }))
+        .filter((v) => v.videoId.length === 11)
+        .slice(0, 3);
+
+      if (videos.length > 0) {
+        console.log(`YouTube GPT search found ${videos.length} videos: ${videos.map(v => v.videoId).join(", ")}`);
+        return videos;
+      }
+      console.log(`YouTube GPT attempt ${attempt + 1}: no valid videos, retrying...`);
     } catch (parseErr) {
-      console.log(`YouTube search attempt ${attempt + 1} failed to parse JSON, retrying...`);
+      console.log(`YouTube GPT attempt ${attempt + 1}: JSON parse failed, retrying...`);
     }
   }
 
-  // Extract and validate video IDs — model often returns full URLs instead of just the ID
-  const extractVideoId = (raw: string): string | null => {
-    // Already a clean 11-char ID
-    if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) return raw;
-    // youtube.com/watch?v=XXXXXXXXXXX or youtu.be/XXXXXXXXXXX
-    const match = raw.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
-    return match ? match[1] : null;
-  };
-  const candidateVideos = result.videos
-    .map((v) => ({ ...v, videoId: extractVideoId(v.videoId) ?? "" }))
-    .filter((v) => v.videoId.length === 11);
-
-  // Validate each video: exists + title is relevant to topic
-  const topicWords = new Set(
-    (primaryKeyword || topic).toLowerCase().split(/\s+/).filter((w: string) => w.length > 3),
-  );
-  const verified: typeof candidateVideos = [];
-  for (const v of candidateVideos) {
-    try {
-      const res = await fetch(
-        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${v.videoId}&format=json`,
-      );
-      if (!res.ok) {
-        console.log(`YouTube video ${v.videoId} is unavailable (status ${res.status}), skipping.`);
-        continue;
-      }
-      // Check actual video title from YouTube (not what GPT claims)
-      const data = await res.json() as { title?: string };
-      const realTitle = (data.title || "").toLowerCase();
-      // At least 1 topic keyword must appear in the real title
-      const titleWords = realTitle.split(/[\s\-_|:,]+/);
-      // Reject obvious garbage: music, memes, comedy, entertainment
-      const garbagePatterns = /\b(official\s*(music\s*)?video|music\s*video|rick\s*astley|never\s*gonna|rickroll|remix|lyric|karaoke|live\s*performance|stand[- ]?up|comedy|prank|meme|tiktok|shorts|trailer|movie\s*clip|full\s*episode|reaction)\b/i;
-      if (garbagePatterns.test(realTitle)) {
-        console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) looks like entertainment/music, skipping.`);
-        continue;
-      }
-      // Light relevance: at least 1 topic word appears somewhere in the title
-      const matchCount = [...topicWords].filter(w => realTitle.includes(w)).length;
-      if (matchCount === 0 && topicWords.size > 0) {
-        console.log(`YouTube video "${data.title}" (ID: ${v.videoId}) has zero topic overlap with "${primaryKeyword || topic}", skipping.`);
-        continue;
-      }
-      // Use real title from YouTube
-      verified.push({ ...v, title: data.title || v.title });
-    } catch {
-      console.log(`YouTube video ${v.videoId} validation failed, skipping.`);
-    }
-  }
-
-  console.log(`Found ${verified.length} verified YouTube videos for "${topic}" (${candidateVideos.length} candidates).`);
-  return verified;
+  console.log("YouTube search: both methods failed, returning empty.");
+  return [];
 }
 
 /** Calculate reading time and word count from markdown. */
