@@ -108,7 +108,7 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: LISTICLE (N Best/Top X format)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Open with why this list matters — a compelling stat or pain point.`,
+        `1. HOOK: Open with why this list matters — a compelling stat or pain point. Briefly introduce ${productName} as a standout option.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote (2-3 sentences summarizing the top picks).`,
         `3. TABLE OF CONTENTS: "## Table of Contents" linking to each list item.`,
         `4. QUICK COMPARISON TABLE: A summary table comparing all items at a glance.`,
@@ -126,11 +126,11 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: HOW-TO GUIDE (Step-by-step tutorial)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Start with what the reader will achieve by following this guide.`,
+        `1. HOOK: Start with what the reader will achieve by following this guide. Briefly mention ${productName} as a solution that makes this achievable.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick steps summary.`,
         `3. TABLE OF CONTENTS: Linking to each major section.`,
         `4. PREREQUISITES: "## What You'll Need" — tools, knowledge, or setup required.`,
-        `5. STEPS: Each step as an H2 (e.g., "## Step 1: [Action]").`,
+        `5. STEPS: Each step as an H2 (e.g., "## Step 1: [Action]"). In at least one early step, naturally reference how ${productName} handles or simplifies this.`,
         `   Each step: 300-500 words with detailed instructions, code snippets or examples where relevant.`,
         `   Include numbered sub-steps where needed.`,
         `   Add "💡 Pro Tip:" callouts for advanced users.`,
@@ -145,7 +145,7 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: CHECKLIST (Actionable checkbox-style guide)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Why this checklist matters — what happens if you skip items.`,
+        `1. HOOK: Why this checklist matters — what happens if you skip items. Mention ${productName} as a tool that automates key items.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
         `3. TABLE OF CONTENTS: Linking to each checklist section.`,
         `4. CHECKLIST SECTIONS: Group items into 4-6 categories, each as an H2.`,
@@ -161,7 +161,7 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: COMPARISON / VS ARTICLE`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Frame the decision the reader is facing.`,
+        `1. HOOK: Frame the decision the reader is facing. Mention ${productName} as one option worth considering.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick verdict.`,
         `3. TABLE OF CONTENTS.`,
         `4. OVERVIEW: Brief intro to both/all options being compared.`,
@@ -178,7 +178,7 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: ROUNDUP (Expert opinions or resource collection)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Why this topic has multiple expert perspectives worth hearing.`,
+        `1. HOOK: Why this topic has multiple expert perspectives worth hearing. Briefly mention ${productName} as a relevant solution in this space.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
         `3. TABLE OF CONTENTS.`,
         `4. CONTEXT: Background on why this topic matters now.`,
@@ -194,7 +194,7 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: ULTIMATE GUIDE (Comprehensive, definitive resource — 5000+ words)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Establish this as THE definitive resource on the topic.`,
+        `1. HOOK: Establish this as THE definitive resource on the topic. Reference ${productName} as a practical tool readers will learn about.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote (what the reader will learn).`,
         `3. TABLE OF CONTENTS: Comprehensive, linking to all major sections.`,
         `4. FUNDAMENTALS: "## What Is [Topic]?" — definitions, history, why it matters.`,
@@ -524,12 +524,30 @@ async function searchYouTubeVideos(
     const match = raw.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
     return match ? match[1] : null;
   };
-  const validVideos = result.videos
+  const candidateVideos = result.videos
     .map((v) => ({ ...v, videoId: extractVideoId(v.videoId) ?? "" }))
     .filter((v) => v.videoId.length === 11);
 
-  console.log(`Found ${validVideos.length} YouTube videos for "${topic}".`);
-  return validVideos;
+  // Validate each video actually exists via YouTube oEmbed API
+  const verified: typeof candidateVideos = [];
+  for (const v of candidateVideos) {
+    try {
+      const res = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${v.videoId}&format=json`,
+        { method: "HEAD" },
+      );
+      if (res.ok) {
+        verified.push(v);
+      } else {
+        console.log(`YouTube video ${v.videoId} is unavailable (status ${res.status}), skipping.`);
+      }
+    } catch {
+      console.log(`YouTube video ${v.videoId} validation failed, skipping.`);
+    }
+  }
+
+  console.log(`Found ${verified.length} verified YouTube videos for "${topic}" (${candidateVideos.length} candidates).`);
+  return verified;
 }
 
 /** Calculate reading time and word count from markdown. */
@@ -1419,14 +1437,14 @@ async function handleArticle(
       // Default standard structure
       return [
         `REQUIRED CONTENT ORDER (follow this sequence exactly):`,
-        `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement.`,
+        `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement. Briefly introduce ${productName} as a solution worth exploring.`,
         `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
         `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
         `4. SECTIONS 1-2: First two H2 sections covering background/context of the topic.`,
         `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
         `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
         `   YouTube embed goes HERE — place it after the section it relates to most.`,
-        `6. PRODUCT SECTION: A dedicated H2 titled "How ${productName} [solves X]" — show exactly how ${productName} addresses the article topic. Mention ${productName} by name 3-5 times naturally throughout the article. Include the site screenshot (if available) IN THIS SECTION only.`,
+        `6. PRODUCT SECTION: A dedicated H2 titled "How ${productName} [solves X]" — show exactly how ${productName} addresses the article topic. Mention ${productName} by name 5-8 times naturally throughout the article — not just in the product section, but woven into early sections too. Include the site screenshot (if available) IN THIS SECTION only.`,
         `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
         `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
         `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
@@ -1714,6 +1732,11 @@ async function handleLinks(
   // Inject links into the article markdown body for actual SEO value
   if (links.length > 0 && article.markdown) {
     let updatedMarkdown = article.markdown;
+
+    // Find the TOC section boundaries so we never inject links inside it
+    const tocStart = updatedMarkdown.indexOf("## Table of Contents");
+    const tocEnd = tocStart >= 0 ? updatedMarkdown.indexOf("\n## ", tocStart + 1) : -1;
+
     for (const link of links) {
       // Skip if this link target is the article's own slug
       if (link.href === article.slug) continue;
@@ -1723,7 +1746,12 @@ async function handleLinks(
       // Match anchor text that is NOT already inside a markdown link [...](...)
       const regex = new RegExp(`(?<!\\[)${escapedAnchor}(?!\\]\\()`, "i");
       const replacement = `[${anchor}](${link.href})`;
-      if (regex.test(updatedMarkdown)) {
+      const match = regex.exec(updatedMarkdown);
+      if (match) {
+        // Skip if the match falls inside the Table of Contents section
+        if (tocStart >= 0 && tocEnd > tocStart && match.index >= tocStart && match.index < tocEnd) {
+          continue;
+        }
         updatedMarkdown = updatedMarkdown.replace(regex, replacement);
       }
     }
