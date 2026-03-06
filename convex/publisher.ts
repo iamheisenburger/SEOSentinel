@@ -42,6 +42,7 @@ type SiteRecord = {
   brandPrimaryColor?: string;
   brandAccentColor?: string;
   brandFontFamily?: string;
+  urlStructure?: string;
 };
 
 // ── Shared Utilities ────────────────────────────────────
@@ -380,7 +381,11 @@ async function publishToGitHub(
   const repoName = args.repoName ?? site.repoName;
   if (!repoOwner || !repoName) throw new Error("GitHub repository not configured. Go to Settings → Publishing to set your repo owner and name.");
   const baseBranch = args.baseBranch ?? "main";
-  const contentDir = args.contentDir ?? "content/posts";
+  // Derive contentDir from site urlStructure (e.g. "/blog/[slug]" -> "content/blog")
+  const defaultDir = site.urlStructure
+    ? "content/" + site.urlStructure.replace(/^\//, "").replace(/\/\[.*\]$/, "").replace(/\/$/, "")
+    : "content/posts";
+  const contentDir = args.contentDir ?? defaultDir;
 
   const slug = article.slug.replace(/^\//, "");
   const filePath = `${contentDir}/${slug}.mdx`;

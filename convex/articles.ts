@@ -252,3 +252,73 @@ export const resetUsageLog = mutation({
     return { deleted: logs.length };
   },
 });
+
+
+// ── Public Blog Queries (no auth required) ──────────────
+
+export const listPublishedByDomain = query({
+  args: { domain: v.string() },
+  handler: async (ctx, { domain }) => {
+    // Find site by domain
+    const sites = await ctx.db.query("sites").collect();
+    const site = sites.find((s) => s.domain === domain);
+    if (!site) return [];
+
+    const all = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .order("desc")
+      .collect();
+    return all
+      .filter((a) => a.status === "published")
+      .map((a) => ({
+        _id: a._id,
+        title: a.title,
+        slug: a.slug,
+        metaDescription: a.metaDescription,
+        featuredImage: a.featuredImage,
+        readingTime: a.readingTime,
+        createdAt: a.createdAt,
+      }));
+  },
+});
+
+export const getPublishedBySlug = query({
+  args: { domain: v.string(), slug: v.string() },
+  handler: async (ctx, { domain, slug }) => {
+    const sites = await ctx.db.query("sites").collect();
+    const site = sites.find((s) => s.domain === domain);
+    if (!site) return null;
+
+    const all = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .collect();
+    const article = all.find(
+      (a) => a.slug === slug && a.status === "published",
+    );
+    if (!article) return null;
+
+    return {
+      _id: article._id,
+      title: article.title,
+      slug: article.slug,
+      markdown: article.markdown,
+      metaDescription: article.metaDescription,
+      metaKeywords: article.metaKeywords,
+      featuredImage: article.featuredImage,
+      readingTime: article.readingTime,
+      wordCount: article.wordCount,
+      sources: article.sources,
+      internalLinks: article.internalLinks,
+      factCheckScore: article.factCheckScore,
+      createdAt: article.createdAt,
+      updatedAt: article.updatedAt,
+      brandPrimaryColor: site.brandPrimaryColor,
+      brandAccentColor: site.brandAccentColor,
+      brandFontFamily: site.brandFontFamily,
+      siteName: site.siteName,
+      domain: site.domain,
+    };
+  },
+});
