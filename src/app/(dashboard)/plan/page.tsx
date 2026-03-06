@@ -53,6 +53,7 @@ export default function PlanPage() {
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const removeTopic = useMutation(api.topics.remove);
   const removeUnused = useMutation(api.topics.removeUnused);
+  const removeUsed = useMutation(api.topics.removeUsed);
   const [status, setStatus] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
   const [generatingTopicId, setGeneratingTopicId] = useState<string | null>(null);
@@ -202,6 +203,21 @@ export default function PlanPage() {
                 icon={<Trash2 className="h-3.5 w-3.5" />}
               >
                 Clear Unused
+              </Button>
+            )}
+            {usedCount > 0 && (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={async () => {
+                  if (!site?._id) return;
+                  if (!confirm(`Delete all ${usedCount} used topics?`)) return;
+                  await removeUsed({ siteId: site._id });
+                  setStatus("Used topics cleared.");
+                }}
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+              >
+                Clear Used
               </Button>
             )}
             <Button

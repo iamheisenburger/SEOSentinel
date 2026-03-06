@@ -114,6 +114,24 @@ export const updateStatus = mutation({
   },
 });
 
+export const removeUsed = mutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const all = await ctx.db
+      .query("topic_clusters")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    let deleted = 0;
+    for (const topic of all) {
+      if (topic.status === "used") {
+        await ctx.db.delete(topic._id);
+        deleted++;
+      }
+    }
+    return { deleted };
+  },
+});
+
 export const removeUnused = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
