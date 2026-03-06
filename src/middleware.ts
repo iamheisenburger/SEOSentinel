@@ -11,6 +11,8 @@ const isPublicRoute = createRouteMatcher([
   "/api/autopilot(.*)",
   "/sitemap.xml",
   "/robots.txt",
+  "/blog(.*)",
+  // Allow any /<prefix>/<slug> article paths through
 ]);
 
 export default clerkMiddleware(async (auth, request) => {
@@ -32,6 +34,27 @@ export default clerkMiddleware(async (auth, request) => {
   // UNLESS they have a ?plan= param (checkout flow)
   if (userId && pathname.startsWith("/sign-up") && !searchParams.get("plan")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+
+  // Dynamic article path resolution: if path looks like /<prefix>/<slug>
+  // and prefix isn't a known app route, try rewriting to /blog/<slug>
+  // This supports any urlStructure (e.g. /articles/[slug], /posts/[slug])
+  const knownPrefixes = new Set([
+    "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
+    "pricing", "contact", "legal", "sign-in", "sign-up", "api", "_next", "blog",
+  ]);
+  const pathParts = pathname.split("/").filter(Boolean);
+  if (pathParts.length === 2 && !knownPrefixes.has(pathParts[0])) {
+    // Path like /my-custom-prefix/article-slug — rewrite to blog viewer
+    const rewriteUrl = new URL(`/blog/${pathParts[1]}`, request.url);
+    return NextResponse.rewrite(rewriteUrl);
+  }
+  if (pathParts.length === 1 && !knownPrefixes.has(pathParts[0])
+    && pathParts[0] !== "favicon.ico" && !pathParts[0].includes(".")) {
+    // Path like /my-custom-prefix — could be a blog listing for custom prefix
+    const rewriteUrl = new URL("/blog", request.url);
+    return NextResponse.rewrite(rewriteUrl);
   }
 
   if (!isPublicRoute(request)) {
