@@ -249,14 +249,18 @@ async function generateHeroImage(
   const colorHint = brandColor ? ` Use ${brandColor} as the primary accent color.` : "";
   const prompt = brandingPrompt
     ? `${brandingPrompt}. Topic: ${title}`
-    : `Create a professional infographic-style blog hero image for: "${title}".` +
+    : `Create a photorealistic, editorially styled blog hero image that visually represents: "${title}".` +
       ` Industry: ${niche || "technology"}.` +
-      ` Style: Clean data visualization with icons, charts, flow diagrams, and statistics.` +
-      ` Think editorial infographic — like something from Harvard Business Review or McKinsey.` +
-      ` Dark background (#0F1117) with vibrant accent colors.${colorHint}` +
-      ` Include abstract representations of the topic: data flows, network nodes, metric dashboards, conversion funnels.` +
-      ` NO text, NO words, NO letters, NO numbers, NO watermarks.` +
-      ` Ultra-clean, modern, premium quality. 16:9 aspect ratio.`;
+      ` The image should look like a premium stock photo or editorial illustration that directly relates to the specific topic.` +
+      ` Think: what real-world scene, object, or concept does this article title evoke?` +
+      ` For example: if about lead capture, show a laptop with a chat widget and notifications.` +
+      ` If about sales automation, show a modern workspace with AI dashboard screens.` +
+      ` If about chatbots, show a phone or screen with a conversation UI.` +
+      ` If about conversion optimization, show a funnel visualization on a real monitor.` +
+      ` The visual must be UNIQUE to this specific topic — not a generic tech illustration.` +
+      ` Warm, professional lighting. Shallow depth of field. High production value.${colorHint}` +
+      ` NO text, NO words, NO letters, NO numbers, NO watermarks, NO stock photo badges.` +
+      ` Photorealistic or high-end 3D render quality. 16:9 aspect ratio.`;
 
   console.log(`Generating hero image for: "${title}"...`);
 
