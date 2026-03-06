@@ -163,8 +163,8 @@ export default defineSchema({
   // Immutable usage log — tracks article generations (never deleted)
   usage_log: defineTable({
     userId: v.string(),
-    siteId: v.id("sites"),
-    type: v.string(), // "article_generated"
+    siteId: v.optional(v.id("sites")),
+    type: v.string(), // "article_generated" | "site_added"
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])

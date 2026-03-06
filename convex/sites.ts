@@ -91,10 +91,34 @@ export const upsert = mutation({
       const domainNorm = args.domain.trim().toLowerCase();
       const domainExists = existingSites.some((s) => s.domain === domainNorm);
 
-      if (!domainExists && existingSites.length >= limits.maxSites) {
-        throw new Error(
-          `Site limit reached (${limits.maxSites}). Upgrade your plan to add more sites.`,
-        );
+      if (!domainExists) {
+        // Check cumulative site additions this month (prevents delete+re-add abuse)
+        const now = new Date();
+        const monthStart = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+        ).getTime();
+        const siteAddLogs = await ctx.db
+          .query("usage_log")
+          .withIndex("by_user_type", (q) =>
+            q.eq("userId", userId).eq("type", "site_added"),
+          )
+          .collect();
+        const sitesAddedThisMonth = siteAddLogs.filter(
+          (l) => l.createdAt >= monthStart,
+        ).length;
+
+        if (sitesAddedThisMonth >= limits.maxSites) {
+          throw new Error(
+            `Site limit reached (${sitesAddedThisMonth}/${limits.maxSites} this month). You cannot add more sites until your next billing cycle.`,
+          );
+        }
+
+        // Log this site addition
+        await ctx.db.insert("usage_log", {
+          userId,
+          type: "site_added",
+          createdAt: Date.now(),
+        });
       }
     }
 
