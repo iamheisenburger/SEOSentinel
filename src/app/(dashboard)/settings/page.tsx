@@ -325,9 +325,55 @@ export default function SettingsPage() {
                     </div>
                   )}
 
+
+                  {isWp && (() => {
+                    const wpConfigured = !!(pubSite.wpUrl && pubSite.wpUsername && pubSite.wpAppPassword);
+                    return (
+                      <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${wpConfigured ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]"}`}>
+                        {wpConfigured ? (
+                          <>
+                            <Check className="h-4 w-4 text-[#22C55E]" />
+                            <span className="flex-1 text-[12px] text-[#4ADE80]">WordPress configured</span>
+                          </>
+                        ) : (
+                          <>
+                            <KeyRound className="h-4 w-4 text-[#F59E0B]" />
+                            <span className="flex-1 text-[12px] text-[#FBBF24]">WordPress credentials missing</span>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {isWebhook && (() => {
+                    const webhookConfigured = !!pubSite.webhookUrl;
+                    return (
+                      <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${webhookConfigured ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]"}`}>
+                        {webhookConfigured ? (
+                          <>
+                            <Check className="h-4 w-4 text-[#22C55E]" />
+                            <span className="flex-1 text-[12px] text-[#4ADE80]">Webhook configured</span>
+                          </>
+                        ) : (
+                          <>
+                            <KeyRound className="h-4 w-4 text-[#F59E0B]" />
+                            <span className="flex-1 text-[12px] text-[#FBBF24]">Webhook URL not set</span>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {isManual && (
+                    <div className="flex items-center gap-3 rounded-lg px-4 py-3 bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]">
+                      <Check className="h-4 w-4 text-[#22C55E]" />
+                      <span className="flex-1 text-[12px] text-[#4ADE80]">Ready — copy articles from the Articles page</span>
+                    </div>
+                  )}
+
                   {/* Edit publishing config */}
                   <p className="text-[11px] text-[#565A6E] text-left">
-                    Need to change your publish method or credentials? Re-run onboarding from the Websites page.
+                    To change your publishing method or credentials, re-run onboarding from the Websites page.
                   </p>
                 </div>
               );

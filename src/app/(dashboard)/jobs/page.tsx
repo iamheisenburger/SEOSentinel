@@ -83,7 +83,7 @@ export default function JobsPage() {
             ? `${runningCount} job${runningCount > 1 ? "s" : ""} running`
             : failedCount > 0
               ? `${failedCount} failed`
-              : "Auto-refreshes via Convex"
+              : "All activity is up to date"
         }
       />
 
@@ -191,7 +191,7 @@ export default function JobsPage() {
                       <div className="mt-1.5 flex items-start gap-1.5 rounded bg-[#EF4444]/[0.04] px-2.5 py-1.5">
                         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-[#EF4444]" />
                         <p className="text-[11px] text-[#F87171] break-all leading-relaxed">
-                          {job.error}
+                          {friendlyError(job.error ?? "")}
                         </p>
                       </div>
                     )}
@@ -233,6 +233,39 @@ export default function JobsPage() {
       )}
     </div>
   );
+}
+
+
+function friendlyError(raw: string): string {
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  if (lower.includes("unauthorized") || lower.includes("bad credentials"))
+    return "Publishing credentials are invalid or expired. Reconnect in Settings.";
+  if (lower.includes("not found") && lower.includes("branch"))
+    return "Repository branch not found. Check your repo settings.";
+  if (lower.includes("rate limit"))
+    return "API rate limit reached. Will retry automatically.";
+  if (lower.includes("article limit"))
+    return "Monthly article limit reached. Upgrade your plan for more.";
+  if (lower.includes("site not found"))
+    return "Website was removed. This job is no longer needed.";
+  if (lower.includes("topic not found"))
+    return "Topic was deleted before the article could be generated.";
+  if (lower.includes("timeout") || lower.includes("timed out"))
+    return "Operation timed out. Will retry automatically.";
+  if (lower.includes("network") || lower.includes("fetch failed") || lower.includes("econnrefused"))
+    return "Network error. Will retry automatically.";
+  if (lower.includes("permanently killed") || lower.includes("cleaned up"))
+    return "Job was cancelled.";
+  if (lower.includes("reset from stuck"))
+    return "Job stalled and was automatically restarted.";
+  if (lower.includes("retrying after failure"))
+    return "Retrying after a previous failure.";
+  if (lower.includes("remove excess sites"))
+    return "Site limit exceeded. Remove extra sites or upgrade your plan.";
+  const cleaned = raw.replace(/^(Uncaught )?Error: /i, "").replace(/at \w+/g, "").trim();
+  if (cleaned.length > 120) return "An unexpected error occurred. Our team has been notified.";
+  return cleaned;
 }
 
 function JobIcon({ type, className }: { type: string; className?: string }) {
