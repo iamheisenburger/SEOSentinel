@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
@@ -31,6 +31,15 @@ export function usePlanLimits() {
       } catch {
         // has() may throw if billing isn't set up yet — ignore
       }
+    }
+  }
+
+  // Also check public_metadata.features (for owner/admin overrides)
+  const { user } = useUser();
+  const metaFeatures = (user?.publicMetadata as any)?.features as string[] | undefined;
+  if (metaFeatures?.length) {
+    for (const mf of metaFeatures) {
+      if (!features.includes(mf)) features.push(mf);
     }
   }
 
