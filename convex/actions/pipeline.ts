@@ -1515,7 +1515,14 @@ async function handleArticle(
         - A product screenshot will be automatically injected by the system — do NOT add one yourself
         - Mention specific ${productName} features from the product identity
         - Link to ${productName}'s website
-        BRAND NAME RULE: Use the EXACT name "${productName}" at least 8-12 times throughout the ENTIRE article. NEVER replace "${productName}" with generic terms like "the tool", "the platform", "your solution", "this software", or similar. Always write "${productName}" by its exact name.`,
+        BRAND NAME RULE: Use the EXACT name "${productName}" at least 15-20 times throughout the ENTIRE article. NEVER replace "${productName}" with generic terms like "the tool", "the platform", "your solution", "this software", "your CRM", "the product", or similar. The word "${productName}" must appear in:
+        - The article title or first paragraph
+        - At least 3 H2/H3 headings
+        - The product section heading (MANDATORY: "How ${productName} Helps With...")
+        - The TL;DR
+        - The Key Takeaways
+        - The FAQ section (at least 2 questions should mention ${productName} by name)
+        If you catch yourself writing a generic term instead of "${productName}", STOP and replace it with "${productName}".`,
         `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
         `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
         `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
@@ -1792,13 +1799,43 @@ async function handleArticle(
     }
   }
 
+  // ── Step 4b2: Programmatic product name enforcement ──
+  // If the AI genericized the product name in the product section H2, fix it
+  {
+    const pName = site.siteName || "the product";
+    const lines = finalMarkdown.split("\n");
+    let fixed = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith("## ") && /how\s/i.test(line) && /helps?/i.test(line) && !line.toLowerCase().includes(pName.toLowerCase())) {
+        // Replace generic "How Your/The X Helps" with "How {productName} Helps"
+        lines[i] = line.replace(/How\s+(?:Your|The|This|Our|A)\s+\S+\s+Helps/i, `How ${pName} Helps`);
+        console.log(`Fixed product section heading: "${line}" → "${lines[i]}"`);
+        fixed = true;
+        break;
+      }
+    }
+    // Also do a global replace of generic product references
+    if (pName !== "the product") {
+      const genericTerms = ["your CRM", "the CRM", "this CRM", "your platform", "the platform", "this platform", "your tool", "the tool", "this tool", "your software", "the software"];
+      for (const term of genericTerms) {
+        if (finalMarkdown.toLowerCase().includes(term.toLowerCase())) {
+          const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\  // ── Step 4c: Programmatic Screenshot Injection (inside product section) ──'), 'gi');
+          finalMarkdown = finalMarkdown.replace(regex, pName);
+          console.log(`Replaced generic term "${term}" → "${pName}"`);
+        }
+      }
+    }
+    if (fixed) finalMarkdown = lines.join("\n");
+  }
+
   // ── Step 4c: Programmatic Screenshot Injection (inside product section) ──
   if (screenshotUrl) {
     const pName = site.siteName || "the product";
     const mdLines = finalMarkdown.split("\n");
     let productH2Line = -1;
     for (let li = 0; li < mdLines.length; li++) {
-      if (mdLines[li].startsWith("## ") && mdLines[li].toLowerCase().includes(pName.toLowerCase())) {
+      if (mdLines[li].startsWith("## ") && (mdLines[li].toLowerCase().includes(pName.toLowerCase()) || (/how\s/i.test(mdLines[li]) && /helps?/i.test(mdLines[li])))) {
         productH2Line = li;
         break;
       }
@@ -1811,7 +1848,7 @@ async function handleArticle(
       finalMarkdown = mdLines.join("\n");
       console.log("Screenshot injected inside product section (after intro paragraph).");
     } else {
-      const faqLine = mdLines.findIndex(l => l.startsWith("## FAQ") || l.startsWith("## Frequently"));
+      const faqLine = mdLines.findIndex(l => l.startsWith("## FAQ") || l.startsWith("## Frequently") || /##.*(?:faq|frequently)/i.test(l));
       if (faqLine !== -1) {
         mdLines.splice(faqLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — see it in action*`, "");
         finalMarkdown = mdLines.join("\n");
