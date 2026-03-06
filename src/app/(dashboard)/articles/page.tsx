@@ -232,7 +232,7 @@ export default function ArticlesPage() {
                   {wc.toLocaleString()}
                 </span>
                 <div className="flex items-center gap-1.5">
-                  {(article.status === "draft" || article.status === "review" || article.status === "ready") && (
+                  {(article.status !== "rejected") && (
                     <button
                       onClick={async () => {
                         if (!site?._id) return;

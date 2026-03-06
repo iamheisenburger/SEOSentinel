@@ -2270,10 +2270,6 @@ export const publishApproved = action({
   handler: async (ctx, { siteId, articleId }) => {
     const article = await ctx.runQuery(api.articles.get, { articleId });
     if (!article) throw new Error("Article not found");
-    if (article.status !== "ready") {
-      throw new Error(`Article must be in "ready" status to publish, got "${article.status}"`);
-    }
-
     await ctx.runAction(api.publisher.publishArticle, {
       siteId,
       articleId,
