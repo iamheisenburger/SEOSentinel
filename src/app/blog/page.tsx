@@ -7,7 +7,12 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { Clock, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 
-const DOMAIN = "pentra.dev";
+// Read from env (build-time) or detect from window hostname (runtime)
+const DOMAIN =
+  process.env.NEXT_PUBLIC_SITE_DOMAIN ||
+  (typeof window !== "undefined"
+    ? window.location.hostname.replace(/^www\./, "")
+    : "");
 
 export default function BlogIndex() {
   const articles = useQuery(api.articles.listPublishedByDomain, {

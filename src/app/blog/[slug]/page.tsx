@@ -8,7 +8,11 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { Clock, ArrowLeft, Calendar, CheckCircle2 } from "lucide-react";
 import { format } from "date-fns";
 
-const DOMAIN = "pentra.dev";
+const DOMAIN =
+  process.env.NEXT_PUBLIC_SITE_DOMAIN ||
+  (typeof window !== "undefined"
+    ? window.location.hostname.replace(/^www\./, "")
+    : "");
 
 function MarkdownRenderer({ markdown, brand }: { markdown: string; brand: { primary: string; accent: string; font: string } }) {
   // Parse markdown to HTML with brand styling (mirrors server-side markdownToHtml)

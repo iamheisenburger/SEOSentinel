@@ -474,9 +474,17 @@ async function publishToWebhook(
     throw new Error("Webhook URL not configured");
   }
 
+  const rawSlug = article.slug.replace(/^\//, "");
+  // Build full URL path from urlStructure (e.g. "/blog/[slug]" -> "/blog/my-article")
+  const urlPath = site.urlStructure
+    ? site.urlStructure.replace(/\[slug\]/i, rawSlug)
+    : "/blog/" + rawSlug;
+
   const payload = JSON.stringify({
     title: article.title,
-    slug: article.slug.replace(/^\//, ""),
+    slug: rawSlug,
+    urlPath,
+    urlStructure: site.urlStructure ?? "/blog/[slug]",
     markdown: article.markdown,
     html: markdownToHtml(article.markdown, {
       primaryColor: site.brandPrimaryColor,
@@ -484,6 +492,7 @@ async function publishToWebhook(
       fontFamily: site.brandFontFamily,
     }),
     metaDescription: article.metaDescription ?? "",
+    featuredImage: article.featuredImage ?? "",
     language: article.language ?? "en",
     date: new Date(article.createdAt).toISOString(),
     sources: article.sources ?? [],
