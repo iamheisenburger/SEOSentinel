@@ -10,7 +10,6 @@ import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, Extern
 import { useState, useEffect } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
-import { Input } from "@/components/ui/input";
 import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 
@@ -49,17 +48,6 @@ export default function SettingsPage() {
   const clerk = useClerk();
   const { activeSite } = useActiveSite();
   const updateSite = useMutation(api.sites.updateSite);
-  const [publishSaving, setPublishSaving] = useState(false);
-  const [publishSaved, setPublishSaved] = useState(false);
-  const [pubMethod, setPubMethod] = useState(activeSite?.publishMethod ?? "github");
-  const [pubRepoOwner, setPubRepoOwner] = useState(activeSite?.repoOwner ?? "");
-  const [pubRepoName, setPubRepoName] = useState(activeSite?.repoName ?? "");
-  const [pubGithubToken, setPubGithubToken] = useState(activeSite?.githubToken ?? "");
-  const [pubWpUrl, setPubWpUrl] = useState(activeSite?.wpUrl ?? "");
-  const [pubWpUsername, setPubWpUsername] = useState(activeSite?.wpUsername ?? "");
-  const [pubWpAppPassword, setPubWpAppPassword] = useState(activeSite?.wpAppPassword ?? "");
-  const [pubWebhookUrl, setPubWebhookUrl] = useState(activeSite?.webhookUrl ?? "");
-  const [pubWebhookSecret, setPubWebhookSecret] = useState(activeSite?.webhookSecret ?? "");
 
   // Listen for GitHub OAuth reconnection from popup
   useEffect(() => {
@@ -72,28 +60,6 @@ export default function SettingsPage() {
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
   }, [activeSite, updateSite]);
-
-  const handleSavePublishing = async () => {
-    if (!activeSite?._id) return;
-    setPublishSaving(true);
-    try {
-      await updateSite({
-        siteId: activeSite._id,
-        publishMethod: pubMethod,
-        repoOwner: pubRepoOwner.trim() || undefined,
-        repoName: pubRepoName.trim() || undefined,
-        githubToken: pubGithubToken.trim() || undefined,
-        wpUrl: pubWpUrl.trim() || undefined,
-        wpUsername: pubWpUsername.trim() || undefined,
-        wpAppPassword: pubWpAppPassword.trim() || undefined,
-        webhookUrl: pubWebhookUrl.trim() || undefined,
-        webhookSecret: pubWebhookSecret.trim() || undefined,
-      });
-      setPublishSaved(true);
-      setTimeout(() => setPublishSaved(false), 2000);
-    } catch {}
-    finally { setPublishSaving(false); }
-  };
 
   const siteCount = sites?.length ?? 0;
   const planName = getPlanName(features);
@@ -298,7 +264,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-
       {/* Publishing */}
       {activeSite && (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
@@ -373,14 +338,9 @@ export default function SettingsPage() {
                   )}
 
                   {/* Edit publishing config */}
-                  {!publishSaving && !publishSaved && (
-                    <button
-                      onClick={() => setShowReset(false)}
-                      className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition text-left"
-                    >
-                      Need to change your publish method or credentials? Re-run onboarding from the Websites page.
-                    </button>
-                  )}
+                  <p className="text-[11px] text-[#565A6E] text-left">
+                    Need to change your publish method or credentials? Re-run onboarding from the Websites page.
+                  </p>
                 </div>
               );
             })()}

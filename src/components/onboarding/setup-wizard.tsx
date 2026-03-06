@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -304,7 +304,7 @@ export function SetupWizard() {
   const generateNow = useAction(api.actions.pipeline.generateNow);
 
   // Listen for GitHub OAuth callback
-  useState(() => {
+  useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === "github-oauth-success") {
@@ -315,7 +315,7 @@ export function SetupWizard() {
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  });
+  }, []);
 
   // Reactive queries
   const topics = useQuery(
