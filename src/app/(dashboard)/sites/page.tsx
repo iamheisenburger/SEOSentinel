@@ -13,6 +13,8 @@ import {
   ArrowRight,
   Plus,
   Settings,
+  Pause,
+  Play,
 } from "lucide-react";
 import { useState } from "react";
 import Link from "next/link";
@@ -120,8 +122,10 @@ function SiteCard({
   };
 }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const deleteSite = useMutation(api.sites.deleteSite);
+  const updateSite = useMutation(api.sites.updateSite);
 
   const articles = useQuery(api.articles.listBySite, { siteId: site._id });
   const topics = useQuery(api.topics.listBySite, { siteId: site._id });
@@ -140,6 +144,19 @@ function SiteCard({
     } finally {
       setDeleting(false);
       setShowDeleteConfirm(false);
+    }
+  };
+
+  const isPaused = site.autopilotEnabled === false;
+
+  const handleTogglePause = async () => {
+    setToggling(true);
+    try {
+      await updateSite({ siteId: site._id, autopilotEnabled: isPaused });
+    } catch {
+      // ignore
+    } finally {
+      setToggling(false);
     }
   };
 
@@ -164,10 +181,17 @@ function SiteCard({
               <p className="text-[14px] font-semibold text-[#EDEEF1] truncate">
                 {site.siteName || site.domain}
               </p>
-              <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80] shrink-0">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
-                Active
-              </span>
+              {isPaused ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#F59E0B]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#FBBF24] shrink-0">
+                  <Pause className="h-2.5 w-2.5" />
+                  Paused
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80] shrink-0">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
+                  Active
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-[#565A6E] mt-0.5 truncate">
               {site.domain}
@@ -219,13 +243,27 @@ function SiteCard({
 
       {/* Action bar */}
       <div className="flex items-center justify-between border-t border-white/[0.04] px-5 py-2.5">
-        <Link
-          href={`/sites/${site._id}`}
-          className="inline-flex items-center gap-1.5 text-[11px] text-[#8B8FA3] hover:text-[#0EA5E9] transition"
-        >
-          <Settings className="h-3 w-3" />
-          Manage
-        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleTogglePause}
+            disabled={toggling}
+            className={`inline-flex items-center gap-1.5 text-[11px] transition ${
+              isPaused
+                ? "text-[#22C55E] hover:text-[#4ADE80]"
+                : "text-[#F59E0B] hover:text-[#FBBF24]"
+            } ${toggling ? "opacity-50" : ""}`}
+          >
+            {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            {isPaused ? "Resume" : "Pause"}
+          </button>
+          <Link
+            href={`/sites/${site._id}`}
+            className="inline-flex items-center gap-1.5 text-[11px] text-[#8B8FA3] hover:text-[#0EA5E9] transition"
+          >
+            <Settings className="h-3 w-3" />
+            Manage
+          </Link>
+        </div>
 
         {showDeleteConfirm ? (
           <div className="flex items-center gap-2">

@@ -342,7 +342,15 @@ async function captureScreenshot(
 
   console.log(`Capturing screenshot of ${targetUrl}...`);
 
-  const response = await fetch(screenshotApiUrl);
+  // Add timeout — thum.io can hang for protected/slow sites
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  let response: Response;
+  try {
+    response = await fetch(screenshotApiUrl, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new Error(`Screenshot API returned ${response.status}`);
   }
@@ -1161,7 +1169,7 @@ async function handlePlan(
     `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
     `4. Target LONG-TAIL keywords (3-6 words) — specific queries real people search for.`,
     `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 keyword. Spread across different sub-topics within the niche — do NOT cluster around a single concept like "chatbot" or "lead capture". Each topic must address a distinctly different problem, audience segment, or use case.`,
-    `6. Generate exactly 10 new topics.`,
+    `6. Generate exactly 12 new topics. Return a JSON array with exactly 12 items.`,
     `7. Topics should form a funnel: awareness → consideration → decision.`,
     site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
     site.language && site.language !== "en" ? `9. All topic labels and keywords must be in ${site.language}.` : "",
@@ -1198,7 +1206,7 @@ async function handlePlan(
     existingKeywords.length > 0
       ? `<existing_topics>\nThese topics already exist. Do NOT duplicate or overlap:\n${existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n")}\n</existing_topics>\n`
       : "",
-    `Generate 10 new topics for ${productName}'s blog. Follow all rules in the system prompt.`,
+    `Generate EXACTLY 12 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 12 topics — no fewer.`,
   ].filter(Boolean).join("\n");
 
   const text = await callClaude(
@@ -1207,7 +1215,7 @@ async function handlePlan(
     8192,
   );
 
-  let plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 10);
+  let plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 12);
 
   // Programmatic dedup: remove topics with >40% keyword overlap with each other
   const stopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","than","its","you","using","about"]);
@@ -1226,6 +1234,7 @@ async function handlePlan(
     console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >40%).`);
     plan = kept;
   }
+  plan = plan.slice(0, 10);
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
   return { count: plan.length };

@@ -323,6 +323,14 @@ export const countByUser = query({
 });
 
 // Wipe all data — for dev/reset only
+// Admin: set plan features on a site directly
+export const setPlanFeatures = mutation({
+  args: { siteId: v.id("sites"), planFeatures: v.array(v.string()) },
+  handler: async (ctx, { siteId, planFeatures }) => {
+    await ctx.db.patch(siteId, { planFeatures } as any);
+  },
+});
+
 export const resetAll = mutation({
   handler: async (ctx) => {
     const tables = ["sites", "pages", "topic_clusters", "articles", "jobs"] as const;

@@ -1,7 +1,5 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
-
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { useParams, useRouter } from "next/navigation";
@@ -311,9 +309,11 @@ export default function ArticleDetailPage() {
   const router = useRouter();
   const articleId = params.id as Id<"articles">;
   const article = useQuery(api.articles.get, { articleId });
-  const { userId: _clerkId } = useAuth();
-  const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
-  const site = sites?.[0];
+  // Look up the site that owns this article (not just the first site)
+  const site = useQuery(
+    api.sites.get,
+    article?.siteId ? { siteId: article.siteId } : "skip",
+  );
   const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
   const approveArticle = useMutation(api.articles.approve);
