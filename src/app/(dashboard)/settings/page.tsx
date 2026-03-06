@@ -257,6 +257,15 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
           <p className="text-[11px] text-[#565A6E] text-left">
             To change your publishing method, re-run onboarding from the Websites page.
           </p>
+
+          {!isManual && (
+            <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+              <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
+              <p className="text-[10px] text-[#565A6E]">
+                Credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted over <span className="text-[#8B8FA3]">HTTPS</span>.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

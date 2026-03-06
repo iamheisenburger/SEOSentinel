@@ -772,6 +772,15 @@ export function SetupWizard() {
                 </div>
               )}
 
+                            {publishMethod !== "manual" && (
+                <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+                  <Shield className="h-3.5 w-3.5 shrink-0 text-[#22C55E]" />
+                  <p className="text-[10px] text-[#565A6E]">
+                    Your credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted securely over <span className="text-[#8B8FA3]">HTTPS</span>. We never store plain-text passwords.
+                  </p>
+                </div>
+              )}
+
               <div className="mt-1 rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                 <p className="text-[12px] text-[#8B8FA3]">
                   <Sparkles className="inline h-3.5 w-3.5 mr-1 text-[#0EA5E9]" />
