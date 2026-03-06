@@ -48,18 +48,20 @@ export default function SettingsPage() {
   const clerk = useClerk();
   const { activeSite } = useActiveSite();
   const updateSite = useMutation(api.sites.updateSite);
+  const pubSite = activeSite ?? sites?.[0];
 
   // Listen for GitHub OAuth reconnection from popup
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
-      if (e.data?.type === "github-oauth-success" && activeSite?._id) {
-        updateSite({ siteId: activeSite._id, githubToken: e.data.token });
+      const siteId = activeSite?._id ?? sites?.[0]?._id;
+      if (e.data?.type === "github-oauth-success" && siteId) {
+        updateSite({ siteId, githubToken: e.data.token });
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [activeSite, updateSite]);
+  }, [activeSite, sites, updateSite]);
 
   const siteCount = sites?.length ?? 0;
   const planName = getPlanName(features);
@@ -265,16 +267,16 @@ export default function SettingsPage() {
       </div>
 
       {/* Publishing */}
-      {activeSite && (
+      {pubSite && (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
             <Upload className="h-4 w-4 text-[#0EA5E9]" />
             <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
-            <span className="ml-auto text-[11px] text-[#565A6E]">{activeSite.domain}</span>
+            <span className="ml-auto text-[11px] text-[#565A6E]">{pubSite.domain}</span>
           </div>
           <div className="px-5 py-5">
             {(() => {
-              const method = activeSite.publishMethod || "github";
+              const method = pubSite.publishMethod || "github";
               const labels: Record<string, string> = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" };
               const icons: Record<string, typeof GitBranch> = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy };
               const MethodIcon = icons[method] || GitBranch;
@@ -282,7 +284,7 @@ export default function SettingsPage() {
               const isWp = method === "wordpress";
               const isWebhook = method === "webhook";
               const isManual = method === "manual";
-              const hasGithubToken = !!activeSite.githubToken;
+              const hasGithubToken = !!pubSite.githubToken;
 
               return (
                 <div className="flex flex-col gap-4">
@@ -293,14 +295,14 @@ export default function SettingsPage() {
                     </div>
                     <div>
                       <p className="text-[14px] font-medium text-[#EDEEF1]">{labels[method] || method}</p>
-                      {isGithub && activeSite.repoOwner && (
-                        <p className="text-[12px] text-[#565A6E] font-mono">{activeSite.repoOwner}/{activeSite.repoName}</p>
+                      {isGithub && pubSite.repoOwner && (
+                        <p className="text-[12px] text-[#565A6E] font-mono">{pubSite.repoOwner}/{pubSite.repoName}</p>
                       )}
-                      {isWp && activeSite.wpUrl && (
-                        <p className="text-[12px] text-[#565A6E]">{activeSite.wpUrl}</p>
+                      {isWp && pubSite.wpUrl && (
+                        <p className="text-[12px] text-[#565A6E]">{pubSite.wpUrl}</p>
                       )}
-                      {isWebhook && activeSite.webhookUrl && (
-                        <p className="text-[12px] text-[#565A6E] truncate max-w-[300px]">{activeSite.webhookUrl}</p>
+                      {isWebhook && pubSite.webhookUrl && (
+                        <p className="text-[12px] text-[#565A6E] truncate max-w-[300px]">{pubSite.webhookUrl}</p>
                       )}
                       {isManual && (
                         <p className="text-[12px] text-[#565A6E]">Copy markdown or HTML from article pages</p>
