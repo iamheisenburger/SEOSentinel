@@ -61,19 +61,17 @@ export default function SettingsPage() {
   const [pubWebhookUrl, setPubWebhookUrl] = useState(activeSite?.webhookUrl ?? "");
   const [pubWebhookSecret, setPubWebhookSecret] = useState(activeSite?.webhookSecret ?? "");
 
+  // Listen for GitHub OAuth reconnection from popup
   useEffect(() => {
-    if (activeSite) {
-      setPubMethod(activeSite.publishMethod ?? "github");
-      setPubRepoOwner(activeSite.repoOwner ?? "");
-      setPubRepoName(activeSite.repoName ?? "");
-      setPubGithubToken(activeSite.githubToken ?? "");
-      setPubWpUrl(activeSite.wpUrl ?? "");
-      setPubWpUsername(activeSite.wpUsername ?? "");
-      setPubWpAppPassword(activeSite.wpAppPassword ?? "");
-      setPubWebhookUrl(activeSite.webhookUrl ?? "");
-      setPubWebhookSecret(activeSite.webhookSecret ?? "");
-    }
-  }, [activeSite]);
+    const handler = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "github-oauth-success" && activeSite?._id) {
+        updateSite({ siteId: activeSite._id, githubToken: e.data.token });
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [activeSite, updateSite]);
 
   const handleSavePublishing = async () => {
     if (!activeSite?._id) return;
@@ -302,97 +300,93 @@ export default function SettingsPage() {
 
 
       {/* Publishing */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
-          <Upload className="h-4 w-4 text-[#0EA5E9]" />
-          <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
-          {activeSite && (
+      {activeSite && (
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+          <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
+            <Upload className="h-4 w-4 text-[#0EA5E9]" />
+            <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
             <span className="ml-auto text-[11px] text-[#565A6E]">{activeSite.domain}</span>
-          )}
-        </div>
-        <div className="px-5 py-5 flex flex-col gap-4">
-          {/* Method selector */}
-          <div>
-            <p className="text-[11px] text-[#565A6E] mb-2">Publish method</p>
-            <div className="grid grid-cols-4 gap-2">
-              {([
-                { key: "github", label: "GitHub", icon: GitBranch },
-                { key: "wordpress", label: "WordPress", icon: Globe },
-                { key: "webhook", label: "Webhook", icon: Webhook },
-                { key: "manual", label: "Copy & Paste", icon: Copy },
-              ] as const).map((opt) => (
-                <button
-                  key={opt.key}
-                  onClick={() => setPubMethod(opt.key)}
-                  className={`flex flex-col items-center gap-1.5 rounded-lg border px-3 py-3 text-center transition ${
-                    pubMethod === opt.key
-                      ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06]"
-                      : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"
-                  }`}
-                >
-                  <opt.icon className={`h-4 w-4 ${pubMethod === opt.key ? "text-[#0EA5E9]" : "text-[#565A6E]"}`} />
-                  <span className={`text-[11px] font-medium ${pubMethod === opt.key ? "text-[#EDEEF1]" : "text-[#8B8FA3]"}`}>
-                    {opt.label}
-                  </span>
-                </button>
-              ))}
-            </div>
           </div>
+          <div className="px-5 py-5">
+            {(() => {
+              const method = activeSite.publishMethod || "github";
+              const labels: Record<string, string> = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" };
+              const icons: Record<string, typeof GitBranch> = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy };
+              const MethodIcon = icons[method] || GitBranch;
+              const isGithub = method === "github";
+              const isWp = method === "wordpress";
+              const isWebhook = method === "webhook";
+              const isManual = method === "manual";
+              const hasGithubToken = !!activeSite.githubToken;
 
-          {/* GitHub fields */}
-          {pubMethod === "github" && (
-            <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-3">
-                <Input label="GitHub Owner" placeholder="acme" value={pubRepoOwner} onChange={(e) => setPubRepoOwner(e.target.value)} />
-                <Input label="GitHub Repo" placeholder="my-blog" value={pubRepoName} onChange={(e) => setPubRepoName(e.target.value)} />
-              </div>
-              <Input label="Personal Access Token" placeholder="ghp_xxxxxxxxxxxx" value={pubGithubToken} onChange={(e) => setPubGithubToken(e.target.value)} type="password" />
-              <p className="text-[10px] text-[#565A6E]">
-                <KeyRound className="inline h-3 w-3 mr-1" />
-                Create at GitHub &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens. Grant Contents: Read and write.
-              </p>
-            </div>
-          )}
+              return (
+                <div className="flex flex-col gap-4">
+                  {/* Current method badge */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.08]">
+                      <MethodIcon className="h-5 w-5 text-[#0EA5E9]" />
+                    </div>
+                    <div>
+                      <p className="text-[14px] font-medium text-[#EDEEF1]">{labels[method] || method}</p>
+                      {isGithub && activeSite.repoOwner && (
+                        <p className="text-[12px] text-[#565A6E] font-mono">{activeSite.repoOwner}/{activeSite.repoName}</p>
+                      )}
+                      {isWp && activeSite.wpUrl && (
+                        <p className="text-[12px] text-[#565A6E]">{activeSite.wpUrl}</p>
+                      )}
+                      {isWebhook && activeSite.webhookUrl && (
+                        <p className="text-[12px] text-[#565A6E] truncate max-w-[300px]">{activeSite.webhookUrl}</p>
+                      )}
+                      {isManual && (
+                        <p className="text-[12px] text-[#565A6E]">Copy markdown or HTML from article pages</p>
+                      )}
+                    </div>
+                  </div>
 
-          {/* WordPress fields */}
-          {pubMethod === "wordpress" && (
-            <div className="flex flex-col gap-3">
-              <Input label="WordPress URL" placeholder="https://yoursite.com" value={pubWpUrl} onChange={(e) => setPubWpUrl(e.target.value)} />
-              <div className="grid grid-cols-2 gap-3">
-                <Input label="Username" placeholder="admin" value={pubWpUsername} onChange={(e) => setPubWpUsername(e.target.value)} />
-                <Input label="Application Password" placeholder="xxxx xxxx xxxx xxxx" value={pubWpAppPassword} onChange={(e) => setPubWpAppPassword(e.target.value)} type="password" />
-              </div>
-            </div>
-          )}
+                  {/* Connection status */}
+                  {isGithub && (
+                    <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${hasGithubToken ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]"}`}>
+                      {hasGithubToken ? (
+                        <>
+                          <Check className="h-4 w-4 text-[#22C55E]" />
+                          <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
+                          <button
+                            onClick={() => window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes")}
+                            className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
+                          >
+                            Reconnect
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <KeyRound className="h-4 w-4 text-[#F59E0B]" />
+                          <span className="flex-1 text-[12px] text-[#FBBF24]">GitHub not connected</span>
+                          <button
+                            onClick={() => window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes")}
+                            className="text-[11px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition"
+                          >
+                            Connect
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
 
-          {/* Webhook fields */}
-          {pubMethod === "webhook" && (
-            <div className="flex flex-col gap-3">
-              <Input label="Webhook URL" placeholder="https://api.yoursite.com/articles" value={pubWebhookUrl} onChange={(e) => setPubWebhookUrl(e.target.value)} />
-              <Input label="Secret (optional)" placeholder="your-webhook-secret" value={pubWebhookSecret} onChange={(e) => setPubWebhookSecret(e.target.value)} type="password" />
-            </div>
-          )}
-
-          {/* Manual */}
-          {pubMethod === "manual" && (
-            <p className="text-[12px] text-[#8B8FA3]">
-              <Copy className="inline h-3.5 w-3.5 mr-1 text-[#0EA5E9]" />
-              Articles will be ready to copy as Markdown or HTML from the article page.
-            </p>
-          )}
-
-          {/* Save button */}
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              onClick={handleSavePublishing}
-              disabled={publishSaving || !activeSite}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white transition hover:bg-[#38BDF8] disabled:opacity-50"
-            >
-              {publishSaved ? <><Check className="h-3.5 w-3.5" /> Saved</> : publishSaving ? "Saving..." : "Save"}
-            </button>
+                  {/* Edit publishing config */}
+                  {!publishSaving && !publishSaved && (
+                    <button
+                      onClick={() => setShowReset(false)}
+                      className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition text-left"
+                    >
+                      Need to change your publish method or credentials? Re-run onboarding from the Websites page.
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
-      </div>
+      )}
 
             {/* Notifications */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">

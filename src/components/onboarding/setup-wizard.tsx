@@ -247,6 +247,8 @@ export function SetupWizard() {
   const [repoOwner, setRepoOwner] = useState("");
   const [repoName, setRepoName] = useState("");
   const [githubToken, setGithubToken] = useState("");
+  const [githubConnected, setGithubConnected] = useState(false);
+  const [githubUsername, setGithubUsername] = useState("");
   const [wpUrl, setWpUrl] = useState("");
   const [wpUsername, setWpUsername] = useState("");
   const [wpAppPassword, setWpAppPassword] = useState("");
@@ -300,6 +302,20 @@ export function SetupWizard() {
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
   const generateNow = useAction(api.actions.pipeline.generateNow);
+
+  // Listen for GitHub OAuth callback
+  useState(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "github-oauth-success") {
+        setGithubToken(e.data.token);
+        setGithubConnected(true);
+        setGithubUsername(e.data.username || "");
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  });
 
   // Reactive queries
   const topics = useQuery(
@@ -645,19 +661,37 @@ export function SetupWizard() {
                       onChange={(e) => setRepoName(e.target.value)}
                     />
                   </div>
-                  <Input
-                    label="Personal Access Token"
-                    placeholder="ghp_xxxxxxxxxxxx"
-                    value={githubToken}
-                    onChange={(e) => setGithubToken(e.target.value)}
-                    type="password"
-                  />
-                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
-                      <KeyRound className="inline h-3 w-3 mr-1 text-[#8B8FA3]" />
-                      Create a token at <span className="text-[#EDEEF1] font-mono">GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens</span>. Grant <span className="text-[#EDEEF1]">Contents: Read and write</span> access to your repo.
-                    </p>
-                  </div>
+                  {githubConnected ? (
+                    <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
+                        <Check className="h-4 w-4 text-[#22C55E]" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-medium text-[#22C55E]">GitHub connected</p>
+                        {githubUsername && (
+                          <p className="text-[11px] text-[#565A6E]">Signed in as @{githubUsername}</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => {
+                          window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes");
+                        }}
+                        className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
+                      >
+                        Reconnect
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes");
+                      }}
+                      className="flex items-center justify-center gap-2 w-full rounded-lg border border-white/[0.1] bg-white/[0.02] px-4 py-3 text-[13px] font-medium text-[#EDEEF1] transition hover:bg-white/[0.05] hover:border-[#0EA5E9]/30"
+                    >
+                      <GitBranch className="h-4 w-4 text-[#8B8FA3]" />
+                      Connect GitHub
+                    </button>
+                  )}
                   <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                     <p className="text-[11px] text-[#8B8FA3]">
                       <FileText className="inline h-3 w-3 mr-1 text-[#8B8FA3]" />
