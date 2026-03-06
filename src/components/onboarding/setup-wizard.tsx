@@ -727,6 +727,7 @@ export function SetupWizard() {
                     />
                     <Input
                       label="Application Password"
+                      type="password"
                       placeholder="xxxx xxxx xxxx xxxx"
                       value={wpAppPassword}
                       onChange={(e) => setWpAppPassword(e.target.value)}
@@ -754,6 +755,7 @@ export function SetupWizard() {
                   />
                   <Input
                     label="Secret (optional)"
+                    type="password"
                     placeholder="your-webhook-secret"
                     value={webhookSecret}
                     onChange={(e) => setWebhookSecret(e.target.value)}
