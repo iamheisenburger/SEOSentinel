@@ -39,6 +39,7 @@ export const upsert = mutation({
     approvalRequired: v.optional(v.boolean()),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
+    githubToken: v.optional(v.string()),
     // Publishing platform
     publishMethod: v.optional(v.string()),
     wpUrl: v.optional(v.string()),
@@ -239,6 +240,16 @@ export const updateSite = mutation({
     targetAudienceSummary: v.optional(v.string()),
     painPoints: v.optional(v.array(v.string())),
     competitors: v.optional(v.array(v.string())),
+    // Publishing config
+    publishMethod: v.optional(v.string()),
+    repoOwner: v.optional(v.string()),
+    repoName: v.optional(v.string()),
+    githubToken: v.optional(v.string()),
+    wpUrl: v.optional(v.string()),
+    wpUsername: v.optional(v.string()),
+    wpAppPassword: v.optional(v.string()),
+    webhookUrl: v.optional(v.string()),
+    webhookSecret: v.optional(v.string()),
   },
   handler: async (ctx, { siteId, ...fields }) => {
     const patch: Record<string, unknown> = { updatedAt: now() };

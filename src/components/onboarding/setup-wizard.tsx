@@ -246,6 +246,7 @@ export function SetupWizard() {
   const [publishMethod, setPublishMethod] = useState<string>("github");
   const [repoOwner, setRepoOwner] = useState("");
   const [repoName, setRepoName] = useState("");
+  const [githubToken, setGithubToken] = useState("");
   const [wpUrl, setWpUrl] = useState("");
   const [wpUsername, setWpUsername] = useState("");
   const [wpAppPassword, setWpAppPassword] = useState("");
@@ -331,6 +332,7 @@ export function SetupWizard() {
         publishMethod,
         repoOwner: repoOwner.trim() || undefined,
         repoName: repoName.trim() || undefined,
+        githubToken: githubToken.trim() || undefined,
         wpUrl: wpUrl.trim() || undefined,
         wpUsername: wpUsername.trim() || undefined,
         wpAppPassword: wpAppPassword.trim() || undefined,
@@ -642,6 +644,19 @@ export function SetupWizard() {
                       value={repoName}
                       onChange={(e) => setRepoName(e.target.value)}
                     />
+                  </div>
+                  <Input
+                    label="Personal Access Token"
+                    placeholder="ghp_xxxxxxxxxxxx"
+                    value={githubToken}
+                    onChange={(e) => setGithubToken(e.target.value)}
+                    type="password"
+                  />
+                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      <KeyRound className="inline h-3 w-3 mr-1 text-[#8B8FA3]" />
+                      Create a token at <span className="text-[#EDEEF1] font-mono">GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens</span>. Grant <span className="text-[#EDEEF1]">Contents: Read and write</span> access to your repo.
+                    </p>
                   </div>
                   <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                     <p className="text-[11px] text-[#8B8FA3]">

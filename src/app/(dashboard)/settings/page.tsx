@@ -6,9 +6,11 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink } from "lucide-react";
-import { useState } from "react";
+import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
+import { useState, useEffect } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { useActiveSite } from "@/contexts/site-context";
+import { Input } from "@/components/ui/input";
 import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 
@@ -45,6 +47,55 @@ export default function SettingsPage() {
   const { maxSites, maxArticles, features, isFreePlan } = usePlanLimits();
   const { user } = useUser();
   const clerk = useClerk();
+  const { activeSite } = useActiveSite();
+  const updateSite = useMutation(api.sites.updateSite);
+  const [publishSaving, setPublishSaving] = useState(false);
+  const [publishSaved, setPublishSaved] = useState(false);
+  const [pubMethod, setPubMethod] = useState(activeSite?.publishMethod ?? "github");
+  const [pubRepoOwner, setPubRepoOwner] = useState(activeSite?.repoOwner ?? "");
+  const [pubRepoName, setPubRepoName] = useState(activeSite?.repoName ?? "");
+  const [pubGithubToken, setPubGithubToken] = useState(activeSite?.githubToken ?? "");
+  const [pubWpUrl, setPubWpUrl] = useState(activeSite?.wpUrl ?? "");
+  const [pubWpUsername, setPubWpUsername] = useState(activeSite?.wpUsername ?? "");
+  const [pubWpAppPassword, setPubWpAppPassword] = useState(activeSite?.wpAppPassword ?? "");
+  const [pubWebhookUrl, setPubWebhookUrl] = useState(activeSite?.webhookUrl ?? "");
+  const [pubWebhookSecret, setPubWebhookSecret] = useState(activeSite?.webhookSecret ?? "");
+
+  useEffect(() => {
+    if (activeSite) {
+      setPubMethod(activeSite.publishMethod ?? "github");
+      setPubRepoOwner(activeSite.repoOwner ?? "");
+      setPubRepoName(activeSite.repoName ?? "");
+      setPubGithubToken(activeSite.githubToken ?? "");
+      setPubWpUrl(activeSite.wpUrl ?? "");
+      setPubWpUsername(activeSite.wpUsername ?? "");
+      setPubWpAppPassword(activeSite.wpAppPassword ?? "");
+      setPubWebhookUrl(activeSite.webhookUrl ?? "");
+      setPubWebhookSecret(activeSite.webhookSecret ?? "");
+    }
+  }, [activeSite]);
+
+  const handleSavePublishing = async () => {
+    if (!activeSite?._id) return;
+    setPublishSaving(true);
+    try {
+      await updateSite({
+        siteId: activeSite._id,
+        publishMethod: pubMethod,
+        repoOwner: pubRepoOwner.trim() || undefined,
+        repoName: pubRepoName.trim() || undefined,
+        githubToken: pubGithubToken.trim() || undefined,
+        wpUrl: pubWpUrl.trim() || undefined,
+        wpUsername: pubWpUsername.trim() || undefined,
+        wpAppPassword: pubWpAppPassword.trim() || undefined,
+        webhookUrl: pubWebhookUrl.trim() || undefined,
+        webhookSecret: pubWebhookSecret.trim() || undefined,
+      });
+      setPublishSaved(true);
+      setTimeout(() => setPublishSaved(false), 2000);
+    } catch {}
+    finally { setPublishSaving(false); }
+  };
 
   const siteCount = sites?.length ?? 0;
   const planName = getPlanName(features);
@@ -246,6 +297,100 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+
+      {/* Publishing */}
+      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
+          <Upload className="h-4 w-4 text-[#0EA5E9]" />
+          <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
+          {activeSite && (
+            <span className="ml-auto text-[11px] text-[#565A6E]">{activeSite.domain}</span>
+          )}
+        </div>
+        <div className="px-5 py-5 flex flex-col gap-4">
+          {/* Method selector */}
+          <div>
+            <p className="text-[11px] text-[#565A6E] mb-2">Publish method</p>
+            <div className="grid grid-cols-4 gap-2">
+              {([
+                { key: "github", label: "GitHub", icon: GitBranch },
+                { key: "wordpress", label: "WordPress", icon: Globe },
+                { key: "webhook", label: "Webhook", icon: Webhook },
+                { key: "manual", label: "Copy & Paste", icon: Copy },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setPubMethod(opt.key)}
+                  className={`flex flex-col items-center gap-1.5 rounded-lg border px-3 py-3 text-center transition ${
+                    pubMethod === opt.key
+                      ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06]"
+                      : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"
+                  }`}
+                >
+                  <opt.icon className={`h-4 w-4 ${pubMethod === opt.key ? "text-[#0EA5E9]" : "text-[#565A6E]"}`} />
+                  <span className={`text-[11px] font-medium ${pubMethod === opt.key ? "text-[#EDEEF1]" : "text-[#8B8FA3]"}`}>
+                    {opt.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* GitHub fields */}
+          {pubMethod === "github" && (
+            <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="GitHub Owner" placeholder="acme" value={pubRepoOwner} onChange={(e) => setPubRepoOwner(e.target.value)} />
+                <Input label="GitHub Repo" placeholder="my-blog" value={pubRepoName} onChange={(e) => setPubRepoName(e.target.value)} />
+              </div>
+              <Input label="Personal Access Token" placeholder="ghp_xxxxxxxxxxxx" value={pubGithubToken} onChange={(e) => setPubGithubToken(e.target.value)} type="password" />
+              <p className="text-[10px] text-[#565A6E]">
+                <KeyRound className="inline h-3 w-3 mr-1" />
+                Create at GitHub &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens. Grant Contents: Read and write.
+              </p>
+            </div>
+          )}
+
+          {/* WordPress fields */}
+          {pubMethod === "wordpress" && (
+            <div className="flex flex-col gap-3">
+              <Input label="WordPress URL" placeholder="https://yoursite.com" value={pubWpUrl} onChange={(e) => setPubWpUrl(e.target.value)} />
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Username" placeholder="admin" value={pubWpUsername} onChange={(e) => setPubWpUsername(e.target.value)} />
+                <Input label="Application Password" placeholder="xxxx xxxx xxxx xxxx" value={pubWpAppPassword} onChange={(e) => setPubWpAppPassword(e.target.value)} type="password" />
+              </div>
+            </div>
+          )}
+
+          {/* Webhook fields */}
+          {pubMethod === "webhook" && (
+            <div className="flex flex-col gap-3">
+              <Input label="Webhook URL" placeholder="https://api.yoursite.com/articles" value={pubWebhookUrl} onChange={(e) => setPubWebhookUrl(e.target.value)} />
+              <Input label="Secret (optional)" placeholder="your-webhook-secret" value={pubWebhookSecret} onChange={(e) => setPubWebhookSecret(e.target.value)} type="password" />
+            </div>
+          )}
+
+          {/* Manual */}
+          {pubMethod === "manual" && (
+            <p className="text-[12px] text-[#8B8FA3]">
+              <Copy className="inline h-3.5 w-3.5 mr-1 text-[#0EA5E9]" />
+              Articles will be ready to copy as Markdown or HTML from the article page.
+            </p>
+          )}
+
+          {/* Save button */}
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={handleSavePublishing}
+              disabled={publishSaving || !activeSite}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white transition hover:bg-[#38BDF8] disabled:opacity-50"
+            >
+              {publishSaved ? <><Check className="h-3.5 w-3.5" /> Saved</> : publishSaving ? "Saving..." : "Save"}
+            </button>
+          </div>
         </div>
       </div>
 

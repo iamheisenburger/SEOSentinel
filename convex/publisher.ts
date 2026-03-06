@@ -33,6 +33,7 @@ type SiteRecord = {
   publishMethod?: string;
   repoOwner?: string;
   repoName?: string;
+  githubToken?: string;
   wpUrl?: string;
   wpUsername?: string;
   wpAppPassword?: string;
@@ -354,11 +355,12 @@ async function publishToGitHub(
   article: ArticleRecord,
   args: { repoOwner?: string; repoName?: string; baseBranch?: string; contentDir?: string },
 ): Promise<{ method: "github"; commitUrl: string; filePath: string }> {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error("GITHUB_TOKEN not set");
+  const token = site.githubToken;
+  if (!token) throw new Error("GitHub token not configured. Go to Settings → Publishing to add your GitHub personal access token.");
 
-  const repoOwner = args.repoOwner ?? site.repoOwner ?? "iamheisenburger";
-  const repoName = args.repoName ?? site.repoName ?? "App2";
+  const repoOwner = args.repoOwner ?? site.repoOwner;
+  const repoName = args.repoName ?? site.repoName;
+  if (!repoOwner || !repoName) throw new Error("GitHub repository not configured. Go to Settings → Publishing to set your repo owner and name.");
   const baseBranch = args.baseBranch ?? "main";
   const contentDir = args.contentDir ?? "content/posts";
 
