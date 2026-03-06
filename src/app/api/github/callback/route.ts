@@ -70,12 +70,21 @@ function renderPage(message: string, success: boolean, token?: string, username?
   const subMsg = success ? "This window will close automatically..." : "You can close this window.";
   const script = success && token
     ? `<script>
-        if (window.opener) {
-          window.opener.postMessage({
-            type: "github-oauth-success",
+        try {
+          localStorage.setItem("pentra_github_oauth", JSON.stringify({
             token: "${token}",
-            username: "${username || ""}"
-          }, window.location.origin);
+            username: "${username || ""}",
+            ts: Date.now()
+          }));
+        } catch(e) {}
+        if (window.opener) {
+          try {
+            window.opener.postMessage({
+              type: "github-oauth-success",
+              token: "${token}",
+              username: "${username || ""}"
+            }, window.location.origin);
+          } catch(e) {}
         }
         setTimeout(function() { window.close(); }, 1500);
       </script>`

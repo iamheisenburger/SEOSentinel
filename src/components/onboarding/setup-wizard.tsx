@@ -303,18 +303,41 @@ export function SetupWizard() {
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
   const generateNow = useAction(api.actions.pipeline.generateNow);
 
-  // Listen for GitHub OAuth callback
+  // Listen for GitHub OAuth via localStorage (primary) + postMessage (backup)
   useEffect(() => {
+    const applyToken = (token: string, username: string) => {
+      setGithubToken(token);
+      setGithubConnected(true);
+      setGithubUsername(username);
+    };
+
+    const interval = setInterval(() => {
+      const raw = localStorage.getItem("pentra_github_oauth");
+      if (!raw) return;
+      try {
+        const data = JSON.parse(raw);
+        if (data.token && Date.now() - data.ts < 60000) {
+          localStorage.removeItem("pentra_github_oauth");
+          applyToken(data.token, data.username || "");
+        } else {
+          localStorage.removeItem("pentra_github_oauth");
+        }
+      } catch { localStorage.removeItem("pentra_github_oauth"); }
+    }, 500);
+
     const handler = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === "github-oauth-success") {
-        setGithubToken(e.data.token);
-        setGithubConnected(true);
-        setGithubUsername(e.data.username || "");
+        applyToken(e.data.token, e.data.username || "");
+        localStorage.removeItem("pentra_github_oauth");
       }
     };
     window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("message", handler);
+    };
   }, []);
 
   // Reactive queries
