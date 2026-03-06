@@ -338,13 +338,13 @@ async function captureScreenshot(
   const targetUrl = url.startsWith("http") ? url : `https://${url}`;
 
   // thum.io — free screenshot API, no API key required
-  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/noanimate/${targetUrl}`;
+  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/wait/5/${targetUrl}`;
 
   console.log(`Capturing screenshot of ${targetUrl}...`);
 
   // Add timeout — thum.io can hang for protected/slow sites
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 25000);
   let response: Response;
   try {
     response = await fetch(screenshotApiUrl, { signal: controller.signal });
@@ -356,6 +356,10 @@ async function captureScreenshot(
   }
 
   const blob = await response.blob();
+  // Validate: a real screenshot should be >10KB; blank pages are tiny
+  if (blob.size < 10000) {
+    throw new Error(`Screenshot too small (${blob.size} bytes) — likely a blank or error page`);
+  }
   const storageId = await ctx.storage.store(blob);
   const imageUrl = await ctx.storage.getUrl(storageId);
   if (!imageUrl) throw new Error("Failed to get storage URL for screenshot");
