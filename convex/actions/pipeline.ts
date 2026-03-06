@@ -335,36 +335,29 @@ async function captureScreenshot(
 ): Promise<string> {
   const width = options?.width ?? 1280;
   const cropHeight = options?.cropHeight ?? 800;
-  const targetUrl = url.startsWith("http") ? url : `https://${url}`;
+  // Clean URL: strip trailing slashes, ensure https
+  let targetUrl = url.replace(/\/+$/, "").trim();
+  if (!targetUrl.startsWith("http")) targetUrl = `https://${targetUrl}`;
 
-  // thum.io — free screenshot API, no API key required
-  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/wait/5/${targetUrl}`;
+  // thum.io free screenshot API — wait/3 lets JS hydrate
+  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/wait/3/${targetUrl}`;
+  console.log(`Capturing screenshot: ${screenshotApiUrl}`);
 
-  console.log(`Capturing screenshot of ${targetUrl}...`);
-
-  // Add timeout — thum.io can hang for protected/slow sites
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
-  let response: Response;
-  try {
-    response = await fetch(screenshotApiUrl, { signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
+  const response = await fetch(screenshotApiUrl);
   if (!response.ok) {
     throw new Error(`Screenshot API returned ${response.status}`);
   }
 
   const blob = await response.blob();
-  // Validate: a real screenshot should be >10KB; blank pages are tiny
-  if (blob.size < 10000) {
-    throw new Error(`Screenshot too small (${blob.size} bytes) — likely a blank or error page`);
+  console.log(`Screenshot fetched: ${blob.size} bytes`);
+  if (blob.size < 5000) {
+    throw new Error(`Screenshot too small (${blob.size} bytes) — likely blank`);
   }
   const storageId = await ctx.storage.store(blob);
   const imageUrl = await ctx.storage.getUrl(storageId);
   if (!imageUrl) throw new Error("Failed to get storage URL for screenshot");
 
-  console.log(`Screenshot captured and stored: ${storageId}`);
+  console.log(`Screenshot stored: ${imageUrl}`);
   return imageUrl;
 }
 
@@ -1798,6 +1791,12 @@ async function handleArticle(
       console.log("Claude included YouTube embeds — no injection needed.");
     }
   }
+
+  // ── Step 4b1: Fix broken markdown tables ──
+  // AI sometimes generates broken separator rows with double pipes
+  finalMarkdown = finalMarkdown.replace(/\|\|+/g, '|');
+  // Fix separator rows that are missing dashes
+  finalMarkdown = finalMarkdown.replace(/\|\s*\|/g, '| --- |');
 
   // ── Step 4b2: Programmatic product name enforcement ──
   // If the AI genericized the product name in the product section H2, fix it
