@@ -1803,7 +1803,7 @@ async function handleArticle(
       let insertLine = productH2Line + 1;
       while (insertLine < mdLines.length && mdLines[insertLine].trim() === "") insertLine++;
       while (insertLine < mdLines.length && mdLines[insertLine].trim() !== "") insertLine++;
-      mdLines.splice(insertLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — AI-powered lead qualification platform*`, "");
+      mdLines.splice(insertLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — ${site.siteSummary ? site.siteSummary.split(".")[0] : "see it in action"}*`, "");
       finalMarkdown = mdLines.join("\n");
       console.log("Screenshot injected inside product section (after intro paragraph).");
     } else {
