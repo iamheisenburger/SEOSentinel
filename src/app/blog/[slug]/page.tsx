@@ -7,12 +7,15 @@ import Link from "next/link";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { Clock, ArrowLeft, Calendar, CheckCircle2 } from "lucide-react";
 import { format } from "date-fns";
+import { useState, useEffect } from "react";
 
-const DOMAIN =
-  process.env.NEXT_PUBLIC_SITE_DOMAIN ||
-  (typeof window !== "undefined"
-    ? window.location.hostname.replace(/^www\./, "")
-    : "");
+function useDomain() {
+  const [domain, setDomain] = useState("");
+  useEffect(() => {
+    setDomain(window.location.hostname.replace(/^www\./, ""));
+  }, []);
+  return domain;
+}
 
 function MarkdownRenderer({ markdown, brand }: { markdown: string; brand: { primary: string; accent: string; font: string } }) {
   // Parse markdown to HTML with brand styling (mirrors server-side markdownToHtml)
@@ -106,11 +109,12 @@ function MarkdownRenderer({ markdown, brand }: { markdown: string; brand: { prim
 }
 
 export default function BlogPost() {
+  const domain = useDomain();
   const { slug } = useParams<{ slug: string }>();
-  const article = useQuery(api.articles.getPublishedBySlug, {
-    domain: DOMAIN,
+  const article = useQuery(api.articles.getPublishedBySlug, domain ? {
+    domain,
     slug: slug ?? "",
-  });
+  } : "skip");
 
   const brand = {
     primary: article?.brandPrimaryColor || "#0EA5E9",

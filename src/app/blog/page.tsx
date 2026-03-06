@@ -6,18 +6,21 @@ import Link from "next/link";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { Clock, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
+import { useState, useEffect } from "react";
 
-// Read from env (build-time) or detect from window hostname (runtime)
-const DOMAIN =
-  process.env.NEXT_PUBLIC_SITE_DOMAIN ||
-  (typeof window !== "undefined"
-    ? window.location.hostname.replace(/^www\./, "")
-    : "");
+function useDomain() {
+  const [domain, setDomain] = useState("");
+  useEffect(() => {
+    setDomain(window.location.hostname.replace(/^www\./, ""));
+  }, []);
+  return domain;
+}
 
 export default function BlogIndex() {
-  const articles = useQuery(api.articles.listPublishedByDomain, {
-    domain: DOMAIN,
-  });
+  const domain = useDomain();
+  const articles = useQuery(api.articles.listPublishedByDomain, domain ? {
+    domain,
+  } : "skip");
 
   return (
     <div className="min-h-screen bg-[#08090E]">
