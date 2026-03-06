@@ -111,7 +111,7 @@ function MarkdownRenderer({ markdown, brand }: { markdown: string; brand: { prim
 export default function BlogPost() {
   const domain = useDomain();
   const { slug } = useParams<{ slug: string }>();
-  const article = useQuery(api.articles.getPublishedBySlug, domain ? {
+  const article = useQuery(api.blog.getPublishedBySlug, domain ? {
     domain,
     slug: slug ?? "",
   } : "skip");

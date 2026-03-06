@@ -18,7 +18,7 @@ function useDomain() {
 
 export default function BlogIndex() {
   const domain = useDomain();
-  const articles = useQuery(api.articles.listPublishedByDomain, domain ? {
+  const articles = useQuery(api.blog.listPublishedByDomain, domain ? {
     domain,
   } : "skip");
 
