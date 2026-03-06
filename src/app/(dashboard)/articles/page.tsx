@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { FileText, PenTool, ArrowRight, Trash2 } from "lucide-react";
+import { FileText, PenTool, ArrowRight, Trash2, Upload, CheckCircle2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -30,6 +30,7 @@ export default function ArticlesPage() {
   const queueArticle = useMutation(api.jobs.queueArticleNow);
 
   const deleteArticle = useMutation(api.articles.deleteArticle);
+  const updateStatus = useMutation(api.articles.updateStatus);
 
   const [status, setStatus] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
@@ -230,6 +231,36 @@ export default function ArticlesPage() {
                   {wc.toLocaleString()}
                 </span>
                 <div className="flex items-center gap-1.5">
+                  {article.status === "draft" && (
+                    <button
+                      onClick={() => updateStatus({ articleId: article._id, status: "published" })}
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E] hover:bg-[#22C55E]/[0.08] transition"
+                      title="Publish"
+                    >
+                      <Upload className="h-3 w-3" />
+                      Publish
+                    </button>
+                  )}
+                  {article.status === "review" && (
+                    <button
+                      onClick={() => updateStatus({ articleId: article._id, status: "published" })}
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#0EA5E9] hover:bg-[#0EA5E9]/[0.08] transition"
+                      title="Approve & Publish"
+                    >
+                      <CheckCircle2 className="h-3 w-3" />
+                      Approve
+                    </button>
+                  )}
+                  {article.status === "ready" && (
+                    <button
+                      onClick={() => updateStatus({ articleId: article._id, status: "published" })}
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E] hover:bg-[#22C55E]/[0.08] transition"
+                      title="Publish"
+                    >
+                      <Upload className="h-3 w-3" />
+                      Publish
+                    </button>
+                  )}
                   {canDelete && (
                     <button
                       onClick={() => {
