@@ -7,7 +7,7 @@ import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Trash2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { useUser, useClerk } from "@clerk/nextjs";
@@ -47,45 +47,7 @@ export default function SettingsPage() {
   const { user } = useUser();
   const clerk = useClerk();
   const { activeSite } = useActiveSite();
-  const updateSite = useMutation(api.sites.updateSite);
   const pubSite = activeSite ?? sites?.[0];
-
-  // Listen for GitHub OAuth via localStorage (primary) + postMessage (backup)
-  useEffect(() => {
-    const siteId = activeSite?._id ?? sites?.[0]?._id;
-    if (!siteId) return;
-
-    // Poll localStorage for token from OAuth popup
-    const interval = setInterval(() => {
-      const raw = localStorage.getItem("pentra_github_oauth");
-      if (!raw) return;
-      try {
-        const data = JSON.parse(raw);
-        // Only accept tokens written in the last 60 seconds
-        if (data.token && Date.now() - data.ts < 60000) {
-          localStorage.removeItem("pentra_github_oauth");
-          updateSite({ siteId, githubToken: data.token });
-        } else {
-          localStorage.removeItem("pentra_github_oauth");
-        }
-      } catch { localStorage.removeItem("pentra_github_oauth"); }
-    }, 500);
-
-    // Also listen for postMessage as backup
-    const handler = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
-      if (e.data?.type === "github-oauth-success") {
-        updateSite({ siteId, githubToken: e.data.token });
-        localStorage.removeItem("pentra_github_oauth");
-      }
-    };
-    window.addEventListener("message", handler);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("message", handler);
-    };
-  }, [activeSite, sites, updateSite]);
 
   const siteCount = sites?.length ?? 0;
   const planName = getPlanName(features);
@@ -342,7 +304,7 @@ export default function SettingsPage() {
                           <Check className="h-4 w-4 text-[#22C55E]" />
                           <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
                           <button
-                            onClick={() => window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes")}
+                            onClick={() => window.open("/api/github/auth?siteId=" + pubSite._id, "github-oauth", "width=600,height=700,popup=yes")}
                             className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
                           >
                             Reconnect
@@ -353,7 +315,7 @@ export default function SettingsPage() {
                           <KeyRound className="h-4 w-4 text-[#F59E0B]" />
                           <span className="flex-1 text-[12px] text-[#FBBF24]">GitHub not connected</span>
                           <button
-                            onClick={() => window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes")}
+                            onClick={() => window.open("/api/github/auth?siteId=" + pubSite._id, "github-oauth", "width=600,height=700,popup=yes")}
                             className="text-[11px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition"
                           >
                             Connect

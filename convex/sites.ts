@@ -372,3 +372,16 @@ export const fixOrphanSites = mutation({
     return { fixed, userId };
   },
 });
+
+// Set GitHub OAuth token via HTTP API (accepts string siteId)
+export const setGithubToken = mutation({
+  args: {
+    siteId: v.string(),
+    githubToken: v.string(),
+  },
+  handler: async (ctx, { siteId, githubToken }) => {
+    const site = await ctx.db.get(siteId as any);
+    if (!site) throw new Error("Site not found");
+    await ctx.db.patch(site._id, { githubToken, updatedAt: now() });
+  },
+});

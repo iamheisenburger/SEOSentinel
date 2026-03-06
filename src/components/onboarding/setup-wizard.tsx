@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -303,42 +303,19 @@ export function SetupWizard() {
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
   const generateNow = useAction(api.actions.pipeline.generateNow);
 
-  // Listen for GitHub OAuth via localStorage (primary) + postMessage (backup)
-  useEffect(() => {
-    const applyToken = (token: string, username: string) => {
-      setGithubToken(token);
-      setGithubConnected(true);
-      setGithubUsername(username);
-    };
-
-    const interval = setInterval(() => {
-      const raw = localStorage.getItem("pentra_github_oauth");
-      if (!raw) return;
-      try {
-        const data = JSON.parse(raw);
-        if (data.token && Date.now() - data.ts < 60000) {
-          localStorage.removeItem("pentra_github_oauth");
-          applyToken(data.token, data.username || "");
-        } else {
-          localStorage.removeItem("pentra_github_oauth");
-        }
-      } catch { localStorage.removeItem("pentra_github_oauth"); }
-    }, 500);
-
-    const handler = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
-      if (e.data?.type === "github-oauth-success") {
-        applyToken(e.data.token, e.data.username || "");
-        localStorage.removeItem("pentra_github_oauth");
+  // After OAuth popup closes, server has saved token directly to Convex.
+  // We just need to detect when the popup closes to update local UI state.
+  const startOAuthPopup = (popupSiteId: string) => {
+    const popup = window.open("/api/github/auth?siteId=" + popupSiteId, "github-oauth", "width=600,height=700,popup=yes");
+    if (!popup) return;
+    const timer = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(timer);
+        // Popup closed — server saved the token, update local UI
+        setGithubConnected(true);
       }
-    };
-    window.addEventListener("message", handler);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("message", handler);
-    };
-  }, []);
+    }, 500);
+  };
 
   // Reactive queries
   const topics = useQuery(
@@ -697,7 +674,7 @@ export function SetupWizard() {
                       </div>
                       <button
                         onClick={() => {
-                          window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes");
+                          startOAuthPopup(siteId || "");
                         }}
                         className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
                       >
@@ -707,7 +684,7 @@ export function SetupWizard() {
                   ) : (
                     <button
                       onClick={() => {
-                        window.open("/api/github/auth", "github-oauth", "width=600,height=700,popup=yes");
+                        startOAuthPopup(siteId || "");
                       }}
                       className="flex items-center justify-center gap-2 w-full rounded-lg border border-white/[0.1] bg-white/[0.02] px-4 py-3 text-[13px] font-medium text-[#EDEEF1] transition hover:bg-white/[0.05] hover:border-[#0EA5E9]/30"
                     >

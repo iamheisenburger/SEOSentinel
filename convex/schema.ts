@@ -14,6 +14,7 @@ export default defineSchema({
     approvalRequired: v.optional(v.boolean()),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
+    githubToken: v.optional(v.string()),
 
     // ── Publishing platform ──
     publishMethod: v.optional(v.string()), // "github" | "wordpress" | "webhook" | "manual"

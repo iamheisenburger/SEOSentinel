@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../../../../convex/_generated/api";
+
+const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -11,6 +15,9 @@ export async function GET(req: NextRequest) {
       headers: { "Content-Type": "text/html" },
     });
   }
+
+  const colonIdx = state.indexOf(":");
+  const siteId = colonIdx > -1 ? state.substring(colonIdx + 1) : "";
 
   const clientId = process.env.GITHUB_CLIENT_ID;
   const clientSecret = process.env.GITHUB_CLIENT_SECRET;
@@ -56,39 +63,31 @@ export async function GET(req: NextRequest) {
     }
   } catch { /* non-critical */ }
 
-  const response = new NextResponse(renderPage("Connected to GitHub!", true, accessToken, githubUsername), {
+  let saved = false;
+  if (siteId) {
+    try {
+      await convex.mutation(api.sites.setGithubToken, { siteId, githubToken: accessToken });
+      saved = true;
+    } catch (e) {
+      console.error("Failed to save GitHub token to Convex:", e);
+    }
+  }
+
+  const msg = saved ? "Connected to GitHub!" : "Connected to GitHub! Close this window and refresh Settings.";
+
+  const response = new NextResponse(renderPage(msg, true, githubUsername, saved), {
     headers: { "Content-Type": "text/html" },
   });
   response.cookies.delete("github_oauth_state");
   return response;
 }
 
-function renderPage(message: string, success: boolean, token?: string, username?: string): string {
+function renderPage(message: string, success: boolean, username?: string, autoSaved?: boolean): string {
   const icon = success ? "&#10003;" : "&#10007;";
   const color = success ? "#22C55E" : "#EF4444";
   const userLine = username ? `<p class="msg">Signed in as <strong style="color:#EDEEF1">@${username}</strong></p>` : "";
-  const subMsg = success ? "This window will close automatically..." : "You can close this window.";
-  const script = success && token
-    ? `<script>
-        try {
-          localStorage.setItem("pentra_github_oauth", JSON.stringify({
-            token: "${token}",
-            username: "${username || ""}",
-            ts: Date.now()
-          }));
-        } catch(e) {}
-        if (window.opener) {
-          try {
-            window.opener.postMessage({
-              type: "github-oauth-success",
-              token: "${token}",
-              username: "${username || ""}"
-            }, window.location.origin);
-          } catch(e) {}
-        }
-        setTimeout(function() { window.close(); }, 1500);
-      </script>`
-    : "";
+  const subMsg = success && autoSaved ? "This window will close automatically..." : success ? "Close this window and refresh the page." : "You can close this window.";
+  const closeScript = success && autoSaved ? `<script>setTimeout(function() { window.close(); }, 1500);</script>` : "";
 
   return `<!DOCTYPE html>
 <html><head><title>Pentra - GitHub</title>
@@ -104,5 +103,5 @@ h2{font-size:1.1rem;margin:0}
 <h2 style="color:${color}">${message}</h2>
 ${userLine}
 <p class="msg">${subMsg}</p>
-</div>${script}</body></html>`;
+</div>${closeScript}</body></html>`;
 }
