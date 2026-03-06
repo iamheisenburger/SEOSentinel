@@ -2765,6 +2765,24 @@ export const processNextJob = action({
           console.error(`Internal linking failed (publishing without links): ${linkError}`);
         }
 
+        // Suggest backlink opportunities (graceful degradation)
+        try {
+          console.log("Generating backlink suggestions...");
+          const backlinks = await ctx.runAction(api.actions.pipeline.suggestBacklinks, {
+            siteId: job.siteId,
+            niche: site?.niche ?? undefined,
+          });
+          if (backlinks.length > 0) {
+            await ctx.runMutation(api.articles.updateBacklinks, {
+              articleId: articleResult.articleId,
+              backlinkSuggestions: backlinks.slice(0, 10),
+            });
+            console.log(`Added ${backlinks.length} backlink suggestions.`);
+          }
+        } catch (err) {
+          console.error("Backlink suggestions failed (non-critical):", err instanceof Error ? err.message : err);
+        }
+
         // If approval is required, hold at "review" status — don't auto-publish
         if (site?.approvalRequired) {
           await ctx.runMutation(api.articles.updateStatus, {

@@ -261,9 +261,9 @@ export const queueArticleNow = mutation({
       await ctx.db.patch(topicId, { status: "queued" });
     }
 
-    // Schedule autopilotTick to run immediately in the background
-    // The action runs server-side regardless of client connection
-    await ctx.scheduler.runAfter(0, api.actions.pipeline.autopilotTick, { siteId });
+    // Schedule processSpecificJob to run ONLY this job — no autopilotTick
+    // This prevents scheduleCadence from creating extra jobs or auto-generating past limits
+    await ctx.scheduler.runAfter(0, api.actions.pipeline.processSpecificJob, { jobId });
 
     return jobId;
   },

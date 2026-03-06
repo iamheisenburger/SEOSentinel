@@ -199,7 +199,7 @@ export const claimGenerationSlot = mutation({
     const count = logs.filter((l) => l.createdAt >= monthStart).length;
 
     if (count >= maxArticles) {
-      return { ok: false as const, reason: `Limit reached (${count}/${maxArticles})` };
+      return { ok: false, reason: `Limit reached (${count}/${maxArticles})` };
     }
 
     // Claim the slot by logging immediately (before article generation starts)
@@ -210,7 +210,7 @@ export const claimGenerationSlot = mutation({
       createdAt: Date.now(),
     });
 
-    return { ok: true as const, reason: "" };
+    return { ok: true, reason: "" };
   },
 });
 
@@ -218,6 +218,23 @@ export const deleteArticle = mutation({
   args: { articleId: v.id("articles") },
   handler: async (ctx, { articleId }) => {
     await ctx.db.delete(articleId);
+  },
+});
+
+export const updateBacklinks = mutation({
+  args: {
+    articleId: v.id("articles"),
+    backlinkSuggestions: v.array(
+      v.object({
+        site: v.string(),
+        reason: v.string(),
+        anchor: v.string(),
+        targetUrl: v.string(),
+      }),
+    ),
+  },
+  handler: async (ctx, { articleId, backlinkSuggestions }) => {
+    await ctx.db.patch(articleId, { backlinkSuggestions, updatedAt: Date.now() });
   },
 });
 

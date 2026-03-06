@@ -122,6 +122,16 @@ export default defineSchema({
     wordCount: v.optional(v.number()), // total word count
     factCheckScore: v.optional(v.number()), // 0-100 overall confidence
     factCheckNotes: v.optional(v.string()),
+    backlinkSuggestions: v.optional(
+      v.array(
+        v.object({
+          site: v.string(),
+          reason: v.string(),
+          anchor: v.string(),
+          targetUrl: v.string(),
+        }),
+      ),
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
