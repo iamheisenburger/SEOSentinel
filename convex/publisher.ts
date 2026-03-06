@@ -39,6 +39,9 @@ type SiteRecord = {
   wpAppPassword?: string;
   webhookUrl?: string;
   webhookSecret?: string;
+  brandPrimaryColor?: string;
+  brandAccentColor?: string;
+  brandFontFamily?: string;
 };
 
 // ── Shared Utilities ────────────────────────────────────
@@ -82,36 +85,50 @@ function buildMdx(article: ArticleRecord, domain: string): string {
   return `${frontmatter}\n\n${article.markdown}${schemaMarkup ? `\n\n${schemaMarkup}` : ""}`;
 }
 
+type BrandStyle = {
+  primaryColor?: string;
+  accentColor?: string;
+  fontFamily?: string;
+};
+
 /**
- * Convert markdown to basic HTML for platforms that need it (WordPress, etc.).
+ * Convert markdown to styled HTML for WordPress/Webhook.
+ * Injects brand colors as inline styles when available.
  */
-function markdownToHtml(md: string): string {
+function markdownToHtml(md: string, brand?: BrandStyle): string {
   let html = md;
 
+  const primary = brand?.primaryColor || "#0EA5E9";
+  const accent = brand?.accentColor || "#22D3EE";
+  const font = brand?.fontFamily || "system-ui, -apple-system, sans-serif";
+
+  // Images (before headings to avoid conflicts)
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;height:auto;border-radius:8px;margin:1.5em 0">');
+
   // Headings (must come before bold processing)
-  html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
-  html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
-  html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-  html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-  html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
+  html = html.replace(/^######\s+(.+)$/gm, `<h6 style="font-family:${font};color:${primary};margin:1em 0 0.5em">$1</h6>`);
+  html = html.replace(/^#####\s+(.+)$/gm, `<h5 style="font-family:${font};color:${primary};margin:1em 0 0.5em">$1</h5>`);
+  html = html.replace(/^####\s+(.+)$/gm, `<h4 style="font-family:${font};color:${primary};margin:1.2em 0 0.5em">$1</h4>`);
+  html = html.replace(/^###\s+(.+)$/gm, `<h3 style="font-family:${font};font-size:1.15em;margin:1.5em 0 0.5em">$1</h3>`);
+  html = html.replace(/^##\s+(.+)$/gm, `<h2 style="font-family:${font};color:${primary};font-size:1.4em;margin:1.8em 0 0.6em;padding-bottom:0.3em;border-bottom:2px solid ${primary}20">$1</h2>`);
+  html = html.replace(/^#\s+(.+)$/gm, `<h1 style="font-family:${font};color:${primary};font-size:1.8em;margin:0 0 0.8em">$1</h1>`);
 
   // Bold and italic
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
 
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  // Links — styled with brand accent color
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, `<a href="$2" style="color:${accent};text-decoration:underline">$1</a>`);
 
-  // Blockquotes
-  html = html.replace(/^>\s+(.+)$/gm, "<blockquote>$1</blockquote>");
+  // Blockquotes — styled with brand primary border
+  html = html.replace(/^>\s+(.+)$/gm, `<blockquote style="border-left:4px solid ${primary};padding:0.5em 1em;margin:1em 0;color:#555;background:#f9f9f9">$1</blockquote>`);
 
   // Inline code
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/`([^`]+)`/g, '<code style="background:#f3f4f6;padding:0.15em 0.4em;border-radius:4px;font-size:0.9em">$1</code>');
 
   // Horizontal rules
-  html = html.replace(/^---$/gm, "<hr>");
+  html = html.replace(/^---$/gm, `<hr style="border:none;border-top:2px solid ${primary}20;margin:2em 0">`);
 
   // Unordered lists (simple — handles single-level)
   html = html.replace(
@@ -120,9 +137,9 @@ function markdownToHtml(md: string): string {
       const items = block
         .trim()
         .split("\n")
-        .map((line) => `<li>${line.replace(/^[-*]\s+/, "")}</li>`)
+        .map((line) => `<li style="margin:0.3em 0">${line.replace(/^[-*]\s+/, "")}</li>`)
         .join("\n");
-      return `<ul>\n${items}\n</ul>\n`;
+      return `<ul style="padding-left:1.5em;margin:1em 0">\n${items}\n</ul>\n`;
     },
   );
 
@@ -133,9 +150,9 @@ function markdownToHtml(md: string): string {
       const items = block
         .trim()
         .split("\n")
-        .map((line) => `<li>${line.replace(/^\d+\.\s+/, "")}</li>`)
+        .map((line) => `<li style="margin:0.3em 0">${line.replace(/^\d+\.\s+/, "")}</li>`)
         .join("\n");
-      return `<ol>\n${items}\n</ol>\n`;
+      return `<ol style="padding-left:1.5em;margin:1em 0">\n${items}\n</ol>\n`;
     },
   );
 
@@ -146,12 +163,13 @@ function markdownToHtml(md: string): string {
       const trimmed = block.trim();
       if (!trimmed) return "";
       if (/^<[a-z]/.test(trimmed)) return trimmed;
-      return `<p>${trimmed.replace(/\n/g, "<br>")}</p>`;
+      return `<p style="font-family:${font};line-height:1.7;margin:1em 0;color:#1a1a1a">${trimmed.replace(/\n/g, "<br>")}</p>`;
     })
     .join("\n\n");
 
   return html;
 }
+
 
 /**
  * Generate JSON-LD schema markup for rich snippets.
@@ -398,7 +416,12 @@ async function publishToWordPress(
 
   const wpApiUrl = site.wpUrl.replace(/\/+$/, "");
   const credentials = Buffer.from(`${site.wpUsername}:${site.wpAppPassword}`).toString("base64");
-  const htmlContent = markdownToHtml(article.markdown);
+  const brand: BrandStyle = {
+    primaryColor: site.brandPrimaryColor,
+    accentColor: site.brandAccentColor,
+    fontFamily: site.brandFontFamily,
+  };
+  const htmlContent = markdownToHtml(article.markdown, brand);
   const slug = article.slug.replace(/^\//, "").replace(/\//g, "-");
 
   const res = await fetch(`${wpApiUrl}/wp-json/wp/v2/posts`, {
@@ -450,7 +473,11 @@ async function publishToWebhook(
     title: article.title,
     slug: article.slug.replace(/^\//, ""),
     markdown: article.markdown,
-    html: markdownToHtml(article.markdown),
+    html: markdownToHtml(article.markdown, {
+      primaryColor: site.brandPrimaryColor,
+      accentColor: site.brandAccentColor,
+      fontFamily: site.brandFontFamily,
+    }),
     metaDescription: article.metaDescription ?? "",
     language: article.language ?? "en",
     date: new Date(article.createdAt).toISOString(),
