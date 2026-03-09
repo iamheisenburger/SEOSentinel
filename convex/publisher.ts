@@ -266,6 +266,27 @@ function generateSchemaMarkup(
 
 // ── GitHub Adapter ──────────────────────────────────────
 
+/** Detect the default branch of a GitHub repo (handles main, master, or empty repos). */
+async function getDefaultBranch({
+  token,
+  owner,
+  repo,
+}: {
+  token: string;
+  owner: string;
+  repo: string;
+}): Promise<string> {
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+    },
+  });
+  if (!res.ok) throw new Error(`GitHub repo not found: ${owner}/${repo} (${res.statusText})`);
+  const data = await res.json();
+  return data.default_branch ?? "main";
+}
+
 async function commitToMain({
   token,
   owner,
@@ -287,12 +308,18 @@ async function commitToMain({
     "Content-Type": "application/json",
   };
 
+  // Check if the branch exists (non-empty repo)
   const branchRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`,
     { headers },
   );
-  if (!branchRes.ok)
-    throw new Error(`Failed to get branch ref: ${branchRes.statusText}`);
+
+  // Empty repo (409) or branch not found (404) → use Contents API (handles empty repos natively)
+  if (!branchRes.ok) {
+    return commitViaContentsApi({ token, owner, repo, message, files, headers });
+  }
+
+  // Non-empty repo → use Git Data API for atomic multi-file commits
   const branchData = await branchRes.json();
   const baseSha = branchData.object.sha;
 
@@ -368,6 +395,61 @@ async function commitToMain({
   };
 }
 
+/** Fallback for empty repos — Contents API handles first-commit scenarios natively. */
+async function commitViaContentsApi({
+  token,
+  owner,
+  repo,
+  message,
+  files,
+  headers,
+}: {
+  token: string;
+  owner: string;
+  repo: string;
+  message: string;
+  files: FileContent[];
+  headers: Record<string, string>;
+}): Promise<{ commitUrl: string; sha: string }> {
+  let lastCommitSha = "";
+  let lastCommitUrl = "";
+
+  for (const file of files) {
+    // Check if file already exists (need its SHA to update)
+    const existingRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } },
+    );
+    let fileSha: string | undefined;
+    if (existingRes.ok) {
+      const existing = await existingRes.json();
+      fileSha = existing.sha;
+    }
+
+    const putRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          message,
+          content: Buffer.from(file.content).toString("base64"),
+          ...(fileSha ? { sha: fileSha } : {}),
+        }),
+      },
+    );
+    if (!putRes.ok) {
+      const errBody = await putRes.text();
+      throw new Error(`Failed to commit ${file.path}: ${putRes.statusText} — ${errBody}`);
+    }
+    const result = await putRes.json();
+    lastCommitSha = result.commit?.sha ?? "";
+    lastCommitUrl = result.commit?.html_url ?? `https://github.com/${owner}/${repo}`;
+  }
+
+  return { commitUrl: lastCommitUrl, sha: lastCommitSha };
+}
+
 async function publishToGitHub(
   ctx: ActionCtx,
   site: SiteRecord,
@@ -380,7 +462,12 @@ async function publishToGitHub(
   const repoOwner = args.repoOwner ?? site.repoOwner;
   const repoName = args.repoName ?? site.repoName;
   if (!repoOwner || !repoName) throw new Error("GitHub repository not configured. Go to Settings → Publishing to set your repo owner and name.");
-  const baseBranch = args.baseBranch ?? "main";
+
+  // Auto-detect default branch from GitHub instead of hardcoding "main"
+  let baseBranch = args.baseBranch;
+  if (!baseBranch) {
+    baseBranch = await getDefaultBranch({ token, owner: repoOwner, repo: repoName });
+  }
   // Derive contentDir from site urlStructure (e.g. "/blog/[slug]" -> "content/blog")
   const defaultDir = site.urlStructure
     ? "content/" + site.urlStructure.replace(/^\//, "").replace(/\/\[.*\]$/, "").replace(/\/$/, "")
