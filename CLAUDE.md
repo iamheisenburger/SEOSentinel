@@ -46,9 +46,9 @@ User signs up (Clerk) → Adds site domain → Onboarding crawl (AI analyzes sit
 | `articles.ts` | Article CRUD, approve/reject, usage logging, slot claiming (race condition safe) |
 | `topics.ts` | Topic cluster management, dedup on insert, status tracking |
 | `jobs.ts` | Job queue (pending/running/done/failed), retry logic, stuck job reset, progress tracking |
-| `publisher.ts` | Multi-platform publisher router: GitHub, WordPress, Webhook, Manual. Builds MDX with frontmatter + JSON-LD schema markup |
+| `publisher.ts` | Multi-platform publisher router: GitHub (auto-detect branch + empty repo fallback), WordPress, Webhook, Manual. Builds MDX with frontmatter + JSON-LD schema markup |
 | `pages.ts` | Crawled page storage, bulk upsert |
-| `blog.ts` | Public blog queries — `listPublishedByDomain`, `getPublishedBySlug` |
+| `blog.ts` | Public blog queries — `listPublishedByDomain`, `getPublishedBySlug` with domain/slug normalization |
 | `planLimits.ts` | Plan tier limits (sites + articles/month). Maps Clerk feature keys to numbers |
 | `crons.ts` | 8x daily autopilot cron (every 3h) + monthly re-linking cron |
 | `auth.config.ts` | Clerk auth config (domain: `clerk.pentra.dev`) |
@@ -312,9 +312,9 @@ Path alias: `@/*` maps to `./src/*`
 ## Known TODOs / Missing Features
 
 - **Stripe billing** — Keys configured but integration not active
-- **Google Analytics** — ID not set yet
 - **Article editing** — Currently read-only preview; no inline markdown editing
 - **Manual topic creation** — Topics only come from AI generation
 - **More publishing integrations** — See `NOTES.md` for Webflow, Ghost, Shopify, Framer, etc.
 - **Featured image improvements** — See NOTES.md SEOBot comparison for gaps
 - **Inline citations** — Sources listed but not fully inline `[1]` style
+- **Custom source feeding (RAG)** — Let users provide priority URLs (docs, repos, X posts) for AI to reference during research. Requested by early user.
