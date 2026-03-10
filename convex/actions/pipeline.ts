@@ -2190,6 +2190,19 @@ export const generateArticle = action({
   handler: async (ctx, { siteId, topicId, options }) => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
 
+    // Enforce article limit
+    if (site?.userId) {
+      const { getLimitsFromFeatures } = await import("../planLimits");
+      const features = (site as any).planFeatures ?? [];
+      const limits = getLimitsFromFeatures(features);
+      const claim = await ctx.runMutation(api.articles.claimGenerationSlot, {
+        userId: site.userId,
+        siteId,
+        maxArticles: limits.maxArticles,
+      });
+      if (!claim.ok) throw new Error(`Article limit reached (${limits.maxArticles}/month). Upgrade your plan.`);
+    }
+
     // Create a tracking job for progress visibility
     const jobId = await ctx.runMutation(api.jobs.create, {
       siteId,
@@ -2285,6 +2298,19 @@ export const generateNow = action({
   handler: async (ctx, { siteId }) => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
+
+    // Enforce article limit
+    if (site.userId) {
+      const { getLimitsFromFeatures } = await import("../planLimits");
+      const features = (site as any).planFeatures ?? [];
+      const limits = getLimitsFromFeatures(features);
+      const claim = await ctx.runMutation(api.articles.claimGenerationSlot, {
+        userId: site.userId,
+        siteId,
+        maxArticles: limits.maxArticles,
+      });
+      if (!claim.ok) throw new Error(`Article limit reached (${limits.maxArticles}/month). Upgrade your plan for more articles.`);
+    }
 
     const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
     const available = topics.filter(
