@@ -184,19 +184,42 @@ export const getPendingByTopic = query({
 export const runQueuedTopic = mutation({
   args: { topicId: v.id("topic_clusters") },
   handler: async (ctx, { topicId }) => {
+    // Look for an existing pending job for this topic
     const pending = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
       .collect();
     const job = pending.find((j) => (j.payload as any)?.topicId === topicId);
-    if (!job) {
-      throw new Error("No pending job found for this topic.");
+
+    if (job) {
+      // Existing pending job — just kick it off
+      await ctx.scheduler.runAfter(0, api.actions.pipeline.processSpecificJob, {
+        jobId: job._id,
+      });
+      return job._id;
     }
-    // Schedule processSpecificJob to run immediately with THIS job
-    await ctx.scheduler.runAfter(0, api.actions.pipeline.processSpecificJob, {
-      jobId: job._id,
+
+    // No pending job (failed/done/missing) — get the topic's site and create a fresh job
+    const topic = await ctx.db.get(topicId);
+    if (!topic) throw new Error("Topic not found.");
+    const siteId = topic.siteId;
+
+    const jobId = await ctx.db.insert("jobs", {
+      siteId,
+      type: "article",
+      status: "pending",
+      payload: { topicId, manual: true },
+      createdAt: now(),
+      updatedAt: now(),
     });
-    return job._id;
+
+    // Reset topic to queued in case it was stuck
+    await ctx.db.patch(topicId, { status: "queued" });
+
+    await ctx.scheduler.runAfter(0, api.actions.pipeline.processSpecificJob, {
+      jobId,
+    });
+    return jobId;
   },
 });
 
