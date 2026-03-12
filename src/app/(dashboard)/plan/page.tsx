@@ -83,14 +83,14 @@ function getOpportunityLabel(score: number): string {
   return "Niche";
 }
 
-/** Compute opportunity score from topic metrics */
+/** Compute opportunity score from topic metrics (logarithmic volume scaling) */
 function computeOpportunity(topic: any): number {
   const vol = topic.searchVolume ?? 0;
   const kd = topic.keywordDifficulty ?? 50;
   const cpc = topic.cpc ?? 0;
-  const volumeScore = Math.min(vol / 100, 50);
-  const difficultyBonus = Math.max(0, 50 - kd);
-  const cpcSignal = Math.min(cpc * 5, 15);
+  const volumeScore = vol > 0 ? Math.min(Math.log10(vol) * 13, 40) : 0; // log10: 100→26, 500→35, 1K→39
+  const difficultyBonus = Math.max(0, (100 - kd) * 0.4); // KD 0→40, KD 50→20
+  const cpcSignal = Math.min(cpc * 4, 20); // CPC $1→4, $5→20
   return Math.round(volumeScore + difficultyBonus + cpcSignal);
 }
 
@@ -663,15 +663,15 @@ export default function PlanPage() {
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center justify-between">
                             <span className="text-[#8B8FA3]">Volume signal</span>
-                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.min((topic as any).searchVolume / 100, 50))}/50</span>
+                            <span className="text-[#EDEEF1] tabular-nums">{Math.round((topic as any).searchVolume > 0 ? Math.min(Math.log10((topic as any).searchVolume) * 13, 40) : 0)}/40</span>
                           </div>
                           <div className="flex items-center justify-between">
                             <span className="text-[#8B8FA3]">Difficulty bonus</span>
-                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.max(0, 50 - ((topic as any).keywordDifficulty ?? 50)))}/50</span>
+                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.max(0, (100 - ((topic as any).keywordDifficulty ?? 50)) * 0.4))}/40</span>
                           </div>
                           <div className="flex items-center justify-between">
                             <span className="text-[#8B8FA3]">Commercial value</span>
-                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.min(((topic as any).cpc ?? 0) * 5, 15))}/15</span>
+                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.min(((topic as any).cpc ?? 0) * 4, 20))}/20</span>
                           </div>
                           <div className="flex items-center justify-between border-t border-white/[0.04] pt-1 mt-0.5">
                             <span className={`font-medium ${getOpportunityColor(opportunity)}`}>Total Score</span>

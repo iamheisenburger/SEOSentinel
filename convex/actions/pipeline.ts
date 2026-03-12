@@ -1194,23 +1194,28 @@ async function handlePlan(
     `</banned_content>`,
     ``,
     `<topic_rules>`,
-    `1. Every topic MUST be directly related to what ${productName} does or the specific problems it solves.`,
-    `   Generic industry topics that any company could write are BANNED.`,
-    `2. Allowed formats:`,
-    `   - "How to [do X] with/using [product category]" (positions product as solution)`,
-    `   - "What Is [Core Concept]? [Complete Guide]" (educates, then introduces product)`,
-    `   - "[N] Ways [Product Feature] [Solves Pain Point]" (showcases features)`,
-    `   - "[Specific Problem]? [Solution Guide]" (addresses audience pain point)`,
-    `   - "[Outcome/Result] with [Product Category]: [Guide]" (outcome-focused)`,
-    `   - "Why [Target Audience] [Need Product Category]" (audience-specific)`,
-    `   - "[Product Category] for [Industry/Use Case]: [Guide]" (niche targeting)`,
+    `CRITICAL: Your #1 job is to find keywords people actually search for in HIGH VOLUME. Every topic must target a keyword with real search demand — not obscure product-specific phrases.`,
+    ``,
+    `1. KEYWORD-FIRST approach: Think "what are people in this niche Googling?" first, then connect it to ${productName}. NOT the reverse.`,
+    `   - Target keywords with 500+ monthly searches when possible`,
+    `   - Use broader industry/problem keywords, not hyper-specific product terms`,
+    `   - Example for an SEO tool: "content marketing strategy" (12K/mo) > "autonomous SEO content generation" (200/mo)`,
+    `   - The article will naturally mention ${productName} — the keyword itself doesn't need to`,
+    `2. Allowed keyword styles (ordered by traffic potential):`,
+    `   - "[Industry Problem/Question]" — pure search demand (e.g. "how to increase website traffic")`,
+    `   - "What Is [Broad Concept]" — high-volume informational (e.g. "what is content marketing")`,
+    `   - "How to [Achieve Outcome]" — actionable guides (e.g. "how to write blog posts faster")`,
+    `   - "[Broad Topic] for [Audience]" — niche targeting (e.g. "SEO for SaaS companies")`,
+    `   - "[Number] [Adjective] [Category] [Qualifier]" — listicles (e.g. "best AI writing tools 2026")`,
+    `   - "[X] vs [Y]" — comparison searches (high intent)`,
     `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
-    `4. Target LONG-TAIL keywords (3-6 words) — specific queries real people search for.`,
-    `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 keyword. Spread across different sub-topics within the niche — do NOT cluster around a single concept like "chatbot" or "lead capture". Each topic must address a distinctly different problem, audience segment, or use case.`,
+    `4. Target keywords that are 2-5 words long. Shorter = higher volume. Don't make keywords too specific or long.`,
+    `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 keyword. Spread across the full breadth of the niche.`,
     `6. Generate exactly 12 new topics. Return a JSON array with exactly 12 items.`,
-    `7. Topics should form a funnel: awareness → consideration → decision.`,
-    site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
-    site.language && site.language !== "en" ? `9. All topic labels and keywords must be in ${site.language}.` : "",
+    `7. Topics should form a funnel: awareness (broad, high-volume) → consideration → decision (specific, high-intent).`,
+    `8. At least 4 topics should target keywords with estimated 1,000+ monthly search volume.`,
+    site.anchorKeywords?.length ? `9. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
+    site.language && site.language !== "en" ? `10. All topic labels and keywords must be in ${site.language}.` : "",
     `</topic_rules>`,
     ``,
     `<priority_scoring>`,
@@ -1311,17 +1316,31 @@ async function handlePlan(
         continue;
       }
 
+      // Kill topics with very low opportunity (below minimum threshold)
+      const quickVolScore = kwMetric.searchVolume > 0 ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) : 0;
+      const quickDiffBonus = Math.max(0, (100 - kwMetric.difficulty) * 0.4);
+      const quickCpc = Math.min(kwMetric.cpc * 4, 20);
+      const quickOpp = Math.round(quickVolScore + quickDiffBonus + quickCpc);
+      if (quickOpp < 25) {
+        topicsToRemove.push(topic._id);
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (opportunity ${quickOpp}/100 — below threshold)`);
+        continue;
+      }
+
       // ── Compute opportunity score: the autonomous ranking metric ──
-      // High volume + low difficulty = best opportunity. This replaces AI-guessed priority.
-      const volumeScore = Math.min(kwMetric.searchVolume / 100, 50); // cap at 50 points
-      const difficultyBonus = Math.max(0, 50 - kwMetric.difficulty); // easier = more points
-      const cpcSignal = Math.min(kwMetric.cpc * 5, 15); // commercial value signal
+      // Uses logarithmic volume scaling so niche keywords (100-500/mo) still score well.
+      // Formula: volumeScore (0-40) + difficultyBonus (0-40) + cpcSignal (0-20) = max 100
+      const volumeScore = kwMetric.searchVolume > 0
+        ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) // log10: 100→26, 500→35, 1K→39, 10K→40
+        : 0;
+      const difficultyBonus = Math.max(0, (100 - kwMetric.difficulty) * 0.4); // KD 0→40, KD 50→20, KD 100→0
+      const cpcSignal = Math.min(kwMetric.cpc * 4, 20); // CPC $1→4, $3→12, $5→20
       const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
       // Map opportunity score to 1-5 priority (used by scheduler)
-      const autoPriority = opportunityScore >= 60 ? 5
-        : opportunityScore >= 40 ? 4
-        : opportunityScore >= 25 ? 3
-        : opportunityScore >= 10 ? 2
+      const autoPriority = opportunityScore >= 70 ? 5
+        : opportunityScore >= 55 ? 4
+        : opportunityScore >= 40 ? 3
+        : opportunityScore >= 25 ? 2
         : 1;
 
       await ctx.runMutation(api.topics.updateSEOMetrics, {
@@ -3333,9 +3352,9 @@ export const backfillTopicMetrics = action({
     if (!site) throw new Error("Site not found");
 
     const allTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
-    // Only backfill topics that don't already have metrics
+    // Backfill topics without metrics or with invalid markers (-1 = force refresh)
     const unenriched = allTopics.filter(
-      (t: any) => t.searchVolume === undefined && t.status !== "used",
+      (t: any) => (t.searchVolume === undefined || t.searchVolume < 0) && t.status !== "used",
     );
     if (unenriched.length === 0) {
       console.log("All topics already have SEO metrics — nothing to backfill.");
@@ -3368,15 +3387,17 @@ export const backfillTopicMetrics = action({
         continue;
       }
 
-      // Compute opportunity score and data-driven priority
-      const volumeScore = Math.min(kwMetric.searchVolume / 100, 50);
-      const difficultyBonus = Math.max(0, 50 - kwMetric.difficulty);
-      const cpcSignal = Math.min(kwMetric.cpc * 5, 15);
+      // Compute opportunity score (logarithmic volume scaling for niche keywords)
+      const volumeScore = kwMetric.searchVolume > 0
+        ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40)
+        : 0;
+      const difficultyBonus = Math.max(0, (100 - kwMetric.difficulty) * 0.4);
+      const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
       const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
-      const autoPriority = opportunityScore >= 60 ? 5
-        : opportunityScore >= 40 ? 4
-        : opportunityScore >= 25 ? 3
-        : opportunityScore >= 10 ? 2
+      const autoPriority = opportunityScore >= 70 ? 5
+        : opportunityScore >= 55 ? 4
+        : opportunityScore >= 40 ? 3
+        : opportunityScore >= 25 ? 2
         : 1;
 
       // Save metrics + priority
