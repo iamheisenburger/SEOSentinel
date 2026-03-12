@@ -142,6 +142,8 @@ export const updateSEOMetrics = mutation({
     recommendedArticleType: v.optional(v.string()),
     paaQuestions: v.optional(v.array(v.string())),
     volumeTrend: v.optional(v.array(v.number())),
+    priority: v.optional(v.number()),
+    articleType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { topicId, ...metrics } = args;

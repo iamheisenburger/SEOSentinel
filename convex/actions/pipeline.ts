@@ -1261,7 +1261,7 @@ async function handlePlan(
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
 
-  // ── Enrich topics with real keyword metrics (graceful degradation) ──
+  // ── Autonomous SEO Optimization: enrich, filter, and optimize topics ──
   try {
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
     const keywords = plan.map((t) => t.primaryKeyword);
@@ -1277,11 +1277,34 @@ async function handlePlan(
         t.searchVolume === undefined,
     );
 
+    // ── QUALITY GATE: Remove topics with no SEO potential ──
+    // The system decides what's worth writing about. Users shouldn't see bad topics.
+    const topicsToRemove: string[] = [];
     for (const topic of recentTopics) {
       const kwMetric = metrics.find(
         (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
       );
       if (!kwMetric) continue;
+
+      // Kill topics with zero search volume AND high difficulty (unwinnable)
+      if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
+        topicsToRemove.push(topic._id);
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (0 volume, ${kwMetric.difficulty} KD — unwinnable)`);
+        continue;
+      }
+
+      // ── Compute opportunity score: the autonomous ranking metric ──
+      // High volume + low difficulty = best opportunity. This replaces AI-guessed priority.
+      const volumeScore = Math.min(kwMetric.searchVolume / 100, 50); // cap at 50 points
+      const difficultyBonus = Math.max(0, 50 - kwMetric.difficulty); // easier = more points
+      const cpcSignal = Math.min(kwMetric.cpc * 5, 15); // commercial value signal
+      const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
+      // Map opportunity score to 1-5 priority (used by scheduler)
+      const autoPriority = opportunityScore >= 60 ? 5
+        : opportunityScore >= 40 ? 4
+        : opportunityScore >= 25 ? 3
+        : opportunityScore >= 10 ? 2
+        : 1;
 
       await ctx.runMutation(api.topics.updateSEOMetrics, {
         topicId: topic._id,
@@ -1290,30 +1313,43 @@ async function handlePlan(
         cpc: kwMetric.cpc,
         serpIntent: kwMetric.intent,
         volumeTrend: kwMetric.trend.length > 0 ? kwMetric.trend : undefined,
+        priority: autoPriority,
       });
+      console.log(`Scored "${topic.primaryKeyword}": opportunity=${opportunityScore}, priority=${autoPriority}`);
     }
 
-    // Run SERP analysis for top 5 priority topics to get article type recommendations + PAA questions
-    const topTopics = recentTopics
-      .sort((a: any, b: any) => (b.priority ?? 0) - (a.priority ?? 0))
-      .slice(0, 5);
+    // Remove low-potential topics
+    for (const id of topicsToRemove) {
+      try {
+        await ctx.runMutation(api.topics.remove, { topicId: id as any });
+      } catch { /* topic may already be gone */ }
+    }
+    if (topicsToRemove.length > 0) {
+      console.log(`Quality gate: removed ${topicsToRemove.length} low-potential topics.`);
+    }
 
-    for (const topic of topTopics) {
+    // ── SERP Analysis + Auto Article Type for ALL remaining topics ──
+    // Don't just analyze top 5 — every topic gets the right format.
+    const remainingTopics = recentTopics.filter((t: any) => !topicsToRemove.includes(t._id));
+    for (const topic of remainingTopics) {
       try {
         const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
-        await ctx.runMutation(api.topics.updateSEOMetrics, {
+        // Auto-set article type from SERP — the system decides, not the user
+        const updates: any = {
           topicId: topic._id,
           recommendedArticleType: serpAnalysis.recommendedArticleType,
+          articleType: serpAnalysis.recommendedArticleType, // autonomous: override AI guess with SERP data
           paaQuestions: serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined,
-        });
-        console.log(`SERP analysis for "${topic.primaryKeyword}": recommended=${serpAnalysis.recommendedArticleType}, PAA=${serpAnalysis.paaQuestions.length}`);
+        };
+        await ctx.runMutation(api.topics.updateSEOMetrics, updates);
+        console.log(`SERP optimized "${topic.primaryKeyword}": type=${serpAnalysis.recommendedArticleType}, PAA=${serpAnalysis.paaQuestions.length}`);
       } catch (serpErr) {
         console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);
       }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`Keyword enrichment failed (topics saved without metrics): ${msg}`);
+    console.error(`SEO optimization failed (topics saved without metrics): ${msg}`);
   }
 
   return { count: plan.length };
@@ -2024,8 +2060,38 @@ async function handleArticle(
       const score = await scoreContent(finalMarkdown, topic.primaryKeyword, serpData.results);
       contentScoreResult = score;
       console.log(`Content score: overall=${score.overallScore}, entities=${score.entityCoverage}, completeness=${score.topicCompleteness}`);
-      if (score.missingEntities.length > 0) {
-        console.log(`Missing entities: ${score.missingEntities.join(", ")}`);
+
+      // ── AUTO-ENHANCEMENT: If score is below 70, inject missing entities/topics ──
+      if (score.overallScore < 70 && (score.missingEntities.length > 0 || score.missingTopics.length > 0)) {
+        console.log(`Content score ${score.overallScore}/100 — auto-enhancing with ${score.missingEntities.length} missing entities, ${score.missingTopics.length} missing topics...`);
+        try {
+          const enhancePrompt = [
+            `You are an SEO content optimizer. The article below scored ${score.overallScore}/100 against competing SERP content.`,
+            ``,
+            `Missing entities (concepts/terms that top-ranking pages mention but this article doesn't):`,
+            score.missingEntities.map(e => `- ${e}`).join("\n"),
+            ``,
+            score.missingTopics.length > 0 ? `Missing subtopics that need coverage:\n${score.missingTopics.map(t => `- ${t}`).join("\n")}\n` : "",
+            `TASK: Return the FULL article with these entities and subtopics naturally woven in.`,
+            `Rules:`,
+            `- Keep all existing content, structure, headings, and citations intact`,
+            `- Add the missing entities/topics naturally — don't force them awkwardly`,
+            `- Add new H2/H3 sections if a missing subtopic needs its own section`,
+            `- Keep the same tone and style`,
+            `- Return ONLY the enhanced markdown, nothing else`,
+          ].filter(Boolean).join("\n");
+
+          const enhanced = await callClaude(enhancePrompt, finalMarkdown, 16384);
+          if (enhanced && enhanced.length > finalMarkdown.length * 0.8) {
+            finalMarkdown = enhanced;
+            // Re-score after enhancement
+            const rescore = await scoreContent(finalMarkdown, topic.primaryKeyword, serpData.results);
+            contentScoreResult = rescore;
+            console.log(`Post-enhancement score: ${rescore.overallScore}/100 (was ${score.overallScore})`);
+          }
+        } catch (enhErr) {
+          console.error(`Auto-enhancement failed (keeping original): ${enhErr instanceof Error ? enhErr.message : "unknown"}`);
+        }
       }
     } catch (err) {
       console.error(`Content scoring failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
@@ -3213,6 +3279,95 @@ export const detectContentDecay = action({
 
     console.log(`Content decay scan: ${decaying.length}/${published.length} articles flagged for refresh.`);
     return { decayingArticles: decaying.slice(0, 20) };
+  },
+});
+
+// ── Backfill SEO Metrics for Existing Topics ──
+// Enriches topics that were created before the SEO intelligence system was added.
+// Fetches keyword metrics + SERP analysis, applies quality gate, removes bad topics.
+export const backfillTopicMetrics = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<{ enriched: number; removed: number }> => {
+    const site = await ctx.runQuery(api.sites.get, { siteId });
+    if (!site) throw new Error("Site not found");
+
+    const allTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
+    // Only backfill topics that don't already have metrics
+    const unenriched = allTopics.filter(
+      (t: any) => t.searchVolume === undefined && t.status !== "used",
+    );
+    if (unenriched.length === 0) {
+      console.log("All topics already have SEO metrics — nothing to backfill.");
+      return { enriched: 0, removed: 0 };
+    }
+
+    console.log(`Backfilling SEO metrics for ${unenriched.length} topics...`);
+
+    const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
+    const keywords = unenriched.map((t: any) => t.primaryKeyword);
+    const locationCode = mapCountryToLocation(site.targetCountry);
+    const metrics = await getKeywordMetrics(keywords, locationCode, site.language ?? "en");
+
+    let enriched = 0;
+    let removed = 0;
+
+    for (const topic of unenriched) {
+      const kwMetric = metrics.find(
+        (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
+      );
+      if (!kwMetric) continue;
+
+      // Quality gate: remove topics with zero volume AND high difficulty
+      if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
+        console.log(`Backfill quality gate: removing "${topic.primaryKeyword}" (0 vol, ${kwMetric.difficulty} KD)`);
+        try {
+          await ctx.runMutation(api.topics.remove, { topicId: topic._id });
+          removed++;
+        } catch { /* already gone */ }
+        continue;
+      }
+
+      // Compute opportunity score and data-driven priority
+      const volumeScore = Math.min(kwMetric.searchVolume / 100, 50);
+      const difficultyBonus = Math.max(0, 50 - kwMetric.difficulty);
+      const cpcSignal = Math.min(kwMetric.cpc * 5, 15);
+      const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
+      const autoPriority = opportunityScore >= 60 ? 5
+        : opportunityScore >= 40 ? 4
+        : opportunityScore >= 25 ? 3
+        : opportunityScore >= 10 ? 2
+        : 1;
+
+      // Save metrics + priority
+      await ctx.runMutation(api.topics.updateSEOMetrics, {
+        topicId: topic._id,
+        searchVolume: kwMetric.searchVolume,
+        keywordDifficulty: kwMetric.difficulty,
+        cpc: kwMetric.cpc,
+        serpIntent: kwMetric.intent,
+        volumeTrend: kwMetric.trend.length > 0 ? kwMetric.trend : undefined,
+        priority: autoPriority,
+      });
+
+      // SERP analysis: auto-set article type
+      try {
+        const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
+        await ctx.runMutation(api.topics.updateSEOMetrics, {
+          topicId: topic._id,
+          recommendedArticleType: serpAnalysis.recommendedArticleType,
+          articleType: serpAnalysis.recommendedArticleType,
+          paaQuestions: serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined,
+        });
+      } catch (serpErr) {
+        console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);
+      }
+
+      enriched++;
+      console.log(`Backfilled "${topic.primaryKeyword}": vol=${kwMetric.searchVolume}, KD=${kwMetric.difficulty}, priority=${autoPriority}`);
+    }
+
+    console.log(`Backfill complete: ${enriched} enriched, ${removed} removed by quality gate.`);
+    return { enriched, removed };
   },
 });
 
