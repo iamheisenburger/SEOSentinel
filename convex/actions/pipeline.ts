@@ -1123,7 +1123,21 @@ async function handleOnboarding(
 async function handlePlan(
   ctx: ActionCtx,
   siteId: Id<"sites">,
+  jobId?: Id<"jobs">,
 ): Promise<{ count: number }> {
+  const PLAN_STEPS = 6;
+  const reportPlanProgress = async (step: number, label: string) => {
+    if (!jobId) return;
+    try {
+      await ctx.runMutation(api.jobs.updateProgress, {
+        jobId,
+        current: step,
+        total: PLAN_STEPS,
+        stepLabel: label,
+      });
+    } catch { /* never break pipeline for progress */ }
+  };
+
   const site = await ctx.runQuery(api.sites.get, { siteId });
   if (!site) throw new Error("Site not found");
 
@@ -1136,6 +1150,7 @@ async function handlePlan(
     (t: { label: string }) => t.label,
   );
 
+  await reportPlanProgress(1, "Analyzing site and existing content...");
   console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
 
   const productName = site.siteName ?? site.domain;
@@ -1232,6 +1247,7 @@ async function handlePlan(
     `Generate EXACTLY 12 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 12 topics — no fewer.`,
   ].filter(Boolean).join("\n");
 
+  await reportPlanProgress(2, "Generating topic ideas with AI strategist...");
   const text = await callClaude(
     topicSystemPrompt,
     topicUserMessage,
@@ -1258,11 +1274,13 @@ async function handlePlan(
     plan = kept;
   }
   plan = plan.slice(0, 10);
+  await reportPlanProgress(3, "Deduplicating and saving topics...");
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
 
   // ── Autonomous SEO Optimization: enrich, filter, and optimize topics ──
   try {
+    await reportPlanProgress(4, "Fetching keyword metrics (volume, difficulty, CPC)...");
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
     const keywords = plan.map((t) => t.primaryKeyword);
     const locationCode = mapCountryToLocation(site.targetCountry);
@@ -1329,7 +1347,7 @@ async function handlePlan(
     }
 
     // ── SERP Analysis + Auto Article Type for ALL remaining topics ──
-    // Don't just analyze top 5 — every topic gets the right format.
+    await reportPlanProgress(5, "Analyzing Google SERPs for optimal article formats...");
     const remainingTopics = recentTopics.filter((t: any) => !topicsToRemove.includes(t._id));
     for (const topic of remainingTopics) {
       try {
@@ -1352,6 +1370,7 @@ async function handlePlan(
     console.error(`SEO optimization failed (topics saved without metrics): ${msg}`);
   }
 
+  await reportPlanProgress(6, "Content strategy ready!");
   return { count: plan.length };
 }
 
@@ -2430,6 +2449,28 @@ export const generatePlan = action({
   handler: async (ctx, { siteId }) => handlePlan(ctx, siteId),
 });
 
+// Job-based plan generation with real-time progress tracking
+export const processPlanJob = action({
+  args: { jobId: v.id("jobs") },
+  handler: async (ctx, { jobId }) => {
+    const job = await ctx.runQuery(api.jobs.get, { jobId });
+    if (!job || !job.siteId) throw new Error("Job not found or missing siteId");
+
+    // Mark as running
+    await ctx.runMutation(api.jobs.markRunning, { jobId });
+
+    try {
+      const result = await handlePlan(ctx, job.siteId, jobId);
+      await ctx.runMutation(api.jobs.markDone, { jobId, result });
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      await ctx.runMutation(api.jobs.markFailed, { jobId, error: msg });
+      throw err;
+    }
+  },
+});
+
 export const generateArticle = action({
   args: {
     siteId: v.id("sites"),
@@ -3037,7 +3078,7 @@ export const processNextJob = action({
         await handleOnboarding(ctx, job.siteId);
       } else if (job.type === "plan") {
         if (!job.siteId) throw new Error("Missing siteId on plan job");
-        await handlePlan(ctx, job.siteId);
+        await handlePlan(ctx, job.siteId, job._id);
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
         const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
