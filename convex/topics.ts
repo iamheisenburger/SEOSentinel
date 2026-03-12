@@ -132,6 +132,28 @@ export const removeUsed = mutation({
   },
 });
 
+export const updateSEOMetrics = mutation({
+  args: {
+    topicId: v.id("topic_clusters"),
+    searchVolume: v.optional(v.number()),
+    keywordDifficulty: v.optional(v.number()),
+    cpc: v.optional(v.number()),
+    serpIntent: v.optional(v.string()),
+    recommendedArticleType: v.optional(v.string()),
+    paaQuestions: v.optional(v.array(v.string())),
+    volumeTrend: v.optional(v.array(v.number())),
+  },
+  handler: async (ctx, args) => {
+    const { topicId, ...metrics } = args;
+    // Strip undefined values to avoid clearing fields
+    const patch: Record<string, any> = { updatedAt: Date.now() };
+    for (const [k, val] of Object.entries(metrics)) {
+      if (val !== undefined) patch[k] = val;
+    }
+    await ctx.db.patch(topicId, patch);
+  },
+});
+
 export const removeUnused = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {

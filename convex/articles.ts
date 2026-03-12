@@ -221,6 +221,26 @@ export const deleteArticle = mutation({
   },
 });
 
+export const updateContentScore = mutation({
+  args: {
+    articleId: v.id("articles"),
+    contentScore: v.optional(v.number()),
+    entityCoverage: v.optional(v.number()),
+    topicCompleteness: v.optional(v.number()),
+    missingEntities: v.optional(v.array(v.string())),
+    missingTopics: v.optional(v.array(v.string())),
+    serpDifficulty: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { articleId, ...scores } = args;
+    const patch: Record<string, any> = { updatedAt: Date.now() };
+    for (const [k, val] of Object.entries(scores)) {
+      if (val !== undefined) patch[k] = val;
+    }
+    await ctx.db.patch(articleId, patch);
+  },
+});
+
 export const updateBacklinks = mutation({
   args: {
     articleId: v.id("articles"),

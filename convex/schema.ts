@@ -86,6 +86,16 @@ export default defineSchema({
     status: v.optional(v.string()), // pending | queued | planned | used
     articleType: v.optional(v.string()), // standard | listicle | how-to | checklist | comparison | roundup | ultimate-guide
     notes: v.optional(v.string()),
+
+    // ── SEO Metrics (populated by DataForSEO or AI estimation) ──
+    searchVolume: v.optional(v.number()), // monthly search volume
+    keywordDifficulty: v.optional(v.number()), // 0-100 difficulty score
+    cpc: v.optional(v.number()), // cost per click USD
+    serpIntent: v.optional(v.string()), // SERP-analyzed intent
+    recommendedArticleType: v.optional(v.string()), // SERP-based recommendation
+    paaQuestions: v.optional(v.array(v.string())), // People Also Ask questions
+    volumeTrend: v.optional(v.array(v.number())), // last 12 months search volume
+
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_site", ["siteId"]),
@@ -123,6 +133,15 @@ export default defineSchema({
     wordCount: v.optional(v.number()), // total word count
     factCheckScore: v.optional(v.number()), // 0-100 overall confidence
     factCheckNotes: v.optional(v.string()),
+
+    // ── Content SEO Score (computed after generation) ──
+    contentScore: v.optional(v.number()), // 0-100 overall SEO content score
+    entityCoverage: v.optional(v.number()), // 0-100 entity coverage vs SERP
+    topicCompleteness: v.optional(v.number()), // 0-100 topic coverage vs SERP
+    missingEntities: v.optional(v.array(v.string())), // entities to add
+    missingTopics: v.optional(v.array(v.string())), // subtopics to add
+    serpDifficulty: v.optional(v.string()), // easy | medium | hard | very_hard
+
     backlinkSuggestions: v.optional(
       v.array(
         v.object({

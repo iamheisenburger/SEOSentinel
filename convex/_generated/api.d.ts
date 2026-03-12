@@ -10,6 +10,7 @@
 
 import type * as actions_pipeline from "../actions/pipeline.js";
 import type * as actions_scheduler from "../actions/scheduler.js";
+import type * as actions_seoData from "../actions/seoData.js";
 import type * as articles from "../articles.js";
 import type * as blog from "../blog.js";
 import type * as crons from "../crons.js";
@@ -29,6 +30,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   "actions/pipeline": typeof actions_pipeline;
   "actions/scheduler": typeof actions_scheduler;
+  "actions/seoData": typeof actions_seoData;
   articles: typeof articles;
   blog: typeof blog;
   crons: typeof crons;

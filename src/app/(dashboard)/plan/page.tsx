@@ -18,11 +18,36 @@ import {
   Play,
   Trash2,
   Calendar,
+  TrendingUp,
+  BarChart3,
+  Search,
 } from "lucide-react";
 import Link from "next/link";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
+
+/** Format search volume with K/M suffixes */
+function formatVolume(vol: number): string {
+  if (vol >= 1_000_000) return `${(vol / 1_000_000).toFixed(1)}M`;
+  if (vol >= 1_000) return `${(vol / 1_000).toFixed(1)}K`;
+  return `${vol}`;
+}
+
+/** Get difficulty color based on score */
+function getDifficultyColor(diff: number): string {
+  if (diff <= 29) return "text-[#22C55E]"; // easy — green
+  if (diff <= 49) return "text-[#F59E0B]"; // medium — amber
+  if (diff <= 69) return "text-[#F97316]"; // hard — orange
+  return "text-[#EF4444]"; // very hard — red
+}
+
+function getDifficultyBg(diff: number): string {
+  if (diff <= 29) return "bg-[#22C55E]/[0.08]";
+  if (diff <= 49) return "bg-[#F59E0B]/[0.08]";
+  if (diff <= 69) return "bg-[#F97316]/[0.08]";
+  return "bg-[#EF4444]/[0.08]";
+}
 
 export default function PlanPage() {
   const { activeSite: site, sites } = useActiveSite();
@@ -408,6 +433,26 @@ export default function PlanPage() {
                     <span className="text-[11px] font-medium text-[#0EA5E9]">
                       {topic.primaryKeyword}
                     </span>
+
+                    {/* SEO Metrics */}
+                    {(topic as any).searchVolume != null && (topic as any).searchVolume > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8B8FA3]" title="Monthly search volume">
+                        <Search className="h-2.5 w-2.5" />
+                        {formatVolume((topic as any).searchVolume)}/mo
+                      </span>
+                    )}
+                    {(topic as any).keywordDifficulty != null && (
+                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${getDifficultyBg((topic as any).keywordDifficulty)} ${getDifficultyColor((topic as any).keywordDifficulty)}`} title={`Keyword difficulty: ${(topic as any).keywordDifficulty}/100`}>
+                        <BarChart3 className="h-2.5 w-2.5" />
+                        KD {(topic as any).keywordDifficulty}
+                      </span>
+                    )}
+                    {(topic as any).cpc != null && (topic as any).cpc > 0 && (
+                      <span className="rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8B8FA3]" title="Cost per click">
+                        ${(topic as any).cpc.toFixed(2)}
+                      </span>
+                    )}
+
                     {topic.secondaryKeywords.slice(0, 2).map((kw, i) => (
                       <span
                         key={i}
@@ -423,6 +468,13 @@ export default function PlanPage() {
                     )}
                   </div>
                 </div>
+
+                {/* Article Type */}
+                {topic.articleType && topic.articleType !== "standard" && (
+                  <span className="shrink-0 rounded px-2 py-0.5 text-[10px] font-medium text-[#22D3EE] bg-[#22D3EE]/[0.08] uppercase tracking-wider">
+                    {topic.articleType}
+                  </span>
+                )}
 
                 {/* Intent */}
                 {topic.intent && (

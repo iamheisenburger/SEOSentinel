@@ -627,6 +627,32 @@ export default function ArticleDetailPage() {
             </span>
           </>
         )}
+        {(article as any).contentScore != null && (
+          <>
+            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className={`text-[11px] font-medium ${
+              (article as any).contentScore >= 80
+                ? "text-[#22C55E]"
+                : (article as any).contentScore >= 60
+                  ? "text-[#F59E0B]"
+                  : "text-[#EF4444]"
+            }`}>
+              {(article as any).contentScore}/100 SEO score
+            </span>
+          </>
+        )}
+        {(article as any).serpDifficulty && (
+          <>
+            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className={`text-[11px] font-medium ${
+              (article as any).serpDifficulty === "easy" ? "text-[#22C55E]"
+                : (article as any).serpDifficulty === "medium" ? "text-[#F59E0B]"
+                : "text-[#EF4444]"
+            }`}>
+              {(article as any).serpDifficulty} competition
+            </span>
+          </>
+        )}
       </div>
 
       {/* Fact-check notes */}

@@ -216,6 +216,32 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
   }
 }
 
+/** Map country name to DataForSEO location code. Defaults to US (2840). */
+function mapCountryToLocation(country?: string): number {
+  if (!country) return 2840;
+  const c = country.toLowerCase().trim();
+  const map: Record<string, number> = {
+    "us": 2840, "usa": 2840, "united states": 2840,
+    "uk": 2826, "united kingdom": 2826, "gb": 2826,
+    "ca": 2124, "canada": 2124,
+    "au": 2036, "australia": 2036,
+    "de": 2276, "germany": 2276,
+    "fr": 2250, "france": 2250,
+    "in": 2356, "india": 2356,
+    "br": 2076, "brazil": 2076,
+    "jp": 2392, "japan": 2392,
+    "es": 2724, "spain": 2724,
+    "it": 2380, "italy": 2380,
+    "nl": 2528, "netherlands": 2528,
+    "se": 2752, "sweden": 2752,
+    "sg": 2702, "singapore": 2702,
+    "ae": 2784, "uae": 2784, "united arab emirates": 2784,
+    "mx": 2484, "mexico": 2484,
+    "global": 2840, "worldwide": 2840,
+  };
+  return map[c] ?? 2840;
+}
+
 const buildSlug = (title: string) =>
   title
     .toLowerCase()
@@ -1234,6 +1260,62 @@ async function handlePlan(
   plan = plan.slice(0, 10);
   await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
   console.log(`Generated ${plan.length} new diverse topics.`);
+
+  // ── Enrich topics with real keyword metrics (graceful degradation) ──
+  try {
+    const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
+    const keywords = plan.map((t) => t.primaryKeyword);
+    const locationCode = mapCountryToLocation(site.targetCountry);
+    const metrics = await getKeywordMetrics(keywords, locationCode, site.language ?? "en");
+    console.log(`Keyword metrics fetched for ${metrics.length} keywords.`);
+
+    // Get all topics we just inserted to update them
+    const allTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
+    const recentTopics = allTopics.filter(
+      (t: { primaryKeyword: string; searchVolume?: number }) =>
+        keywords.some((kw) => kw.toLowerCase() === t.primaryKeyword.toLowerCase()) &&
+        t.searchVolume === undefined,
+    );
+
+    for (const topic of recentTopics) {
+      const kwMetric = metrics.find(
+        (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
+      );
+      if (!kwMetric) continue;
+
+      await ctx.runMutation(api.topics.updateSEOMetrics, {
+        topicId: topic._id,
+        searchVolume: kwMetric.searchVolume,
+        keywordDifficulty: kwMetric.difficulty,
+        cpc: kwMetric.cpc,
+        serpIntent: kwMetric.intent,
+        volumeTrend: kwMetric.trend.length > 0 ? kwMetric.trend : undefined,
+      });
+    }
+
+    // Run SERP analysis for top 5 priority topics to get article type recommendations + PAA questions
+    const topTopics = recentTopics
+      .sort((a: any, b: any) => (b.priority ?? 0) - (a.priority ?? 0))
+      .slice(0, 5);
+
+    for (const topic of topTopics) {
+      try {
+        const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
+        await ctx.runMutation(api.topics.updateSEOMetrics, {
+          topicId: topic._id,
+          recommendedArticleType: serpAnalysis.recommendedArticleType,
+          paaQuestions: serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined,
+        });
+        console.log(`SERP analysis for "${topic.primaryKeyword}": recommended=${serpAnalysis.recommendedArticleType}, PAA=${serpAnalysis.paaQuestions.length}`);
+      } catch (serpErr) {
+        console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.error(`Keyword enrichment failed (topics saved without metrics): ${msg}`);
+  }
+
   return { count: plan.length };
 }
 
@@ -1244,7 +1326,7 @@ async function handleArticle(
   options?: RichMediaOptions,
   jobId?: Id<"jobs">,
 ): Promise<{ articleId: Id<"articles"> }> {
-  const TOTAL_STEPS = 9;
+  const TOTAL_STEPS = 11;
   const site = await ctx.runQuery(api.sites.get, { siteId });
   const topic = topicId
     ? await ctx.runQuery(api.topics.get, { topicId })
@@ -1267,8 +1349,53 @@ async function handleArticle(
   if (!site) throw new Error("Site not found");
   if (topicId && !topic) throw new Error("Topic not found");
 
+  // ── Step 0: SERP Analysis + Article Type Selection (graceful degradation) ──
+  let serpPaaQuestions: string[] = [];
+  let serpDifficulty: string | undefined;
+  let serpRecommendedType: string | undefined;
+
+  if (topic) {
+    await reportProgress(1, "Analyzing search results...");
+    try {
+      // Use cached PAA questions from topic if available, otherwise run fresh analysis
+      if ((topic as any).paaQuestions?.length > 0) {
+        serpPaaQuestions = (topic as any).paaQuestions;
+        serpRecommendedType = (topic as any).recommendedArticleType;
+        console.log(`Using cached SERP data: type=${serpRecommendedType}, PAA=${serpPaaQuestions.length}`);
+      } else {
+        const { analyzeSERP } = await import("./seoData");
+        const locationCode = mapCountryToLocation(site.targetCountry);
+        const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
+        serpPaaQuestions = serpAnalysis.paaQuestions;
+        serpDifficulty = serpAnalysis.difficulty;
+        serpRecommendedType = serpAnalysis.recommendedArticleType;
+        console.log(`SERP analysis: format=${serpAnalysis.dominantFormat}, type=${serpRecommendedType}, PAA=${serpPaaQuestions.length}, difficulty=${serpDifficulty}`);
+
+        // Save SERP data back to topic for future reference
+        if (topicId) {
+          try {
+            await ctx.runMutation(api.topics.updateSEOMetrics, {
+              topicId,
+              recommendedArticleType: serpRecommendedType,
+              paaQuestions: serpPaaQuestions.length > 0 ? serpPaaQuestions : undefined,
+            });
+          } catch { /* non-critical */ }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`SERP analysis failed (continuing with default type): ${msg}`);
+    }
+  }
+
+  // Override article type if SERP analysis found a better format
+  // Only override if the topic doesn't already have a manually-set type
+  const effectiveArticleType = serpRecommendedType && (!topic?.articleType || topic.articleType === "standard")
+    ? serpRecommendedType
+    : (topic?.articleType ?? "standard");
+
   // ── Step 1: Web Research (graceful degradation) ──
-  await reportProgress(1, "Researching the web...");
+  await reportProgress(2, "Researching the web...");
   let researchContext = "";
   let researchSources: { url: string; title?: string }[] = [];
 
@@ -1317,7 +1444,7 @@ async function handleArticle(
   }
 
   // ── Step 1b: YouTube Video Search (graceful degradation) ──
-  await reportProgress(2, "Searching YouTube videos...");
+  await reportProgress(3, "Searching YouTube videos...");
   let youtubeVideos: { videoId: string; title: string }[] = [];
   const enableYouTube = site.youtubeEmbeds !== false;
 
@@ -1336,7 +1463,7 @@ async function handleArticle(
   }
 
   // ── Step 1c: Screenshot Capture (graceful degradation) ──
-  await reportProgress(3, "Capturing site screenshot...");
+  await reportProgress(4, "Capturing site screenshot...");
   let screenshotUrl: string | undefined;
 
   try {
@@ -1348,7 +1475,7 @@ async function handleArticle(
   }
 
   // ── Step 1d: Web Image Search (graceful degradation) ──
-  await reportProgress(4, "Searching for images...");
+  await reportProgress(5, "Searching for images...");
   let webImages: { url: string; alt: string; source: string }[] = [];
 
   if (topic) {
@@ -1361,7 +1488,7 @@ async function handleArticle(
   }
 
   // ── Step 1e: Live Site Data Crawl (graceful degradation) ──
-  await reportProgress(5, "Crawling site data...");
+  await reportProgress(6, "Crawling site data...");
   let siteData = { pricing: "", features: "", homepage: "" };
 
   try {
@@ -1372,7 +1499,7 @@ async function handleArticle(
   }
 
   // ── Step 2: Generate Article (with full site context + real media) ──
-  await reportProgress(6, "Writing article content...");
+  await reportProgress(7, "Writing article content...");
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
   // Old block-building code removed — all context is now in the structured XML system prompt above
@@ -1488,7 +1615,7 @@ async function handleArticle(
     `<article_structure>`,
     // Use type-specific structure if the topic has an articleType set
     (() => {
-      const articleType = ((topic as any)?.articleType ?? "standard") as ArticleType;
+      const articleType = (effectiveArticleType ?? "standard") as ArticleType;
       const typeStructure = getArticleTypeStructure(articleType, productName);
       if (typeStructure) return typeStructure;
       // Default standard structure
@@ -1527,6 +1654,34 @@ async function handleArticle(
     })(),
     ``,
     existingKwSummary ? `<anti_cannibalization>\nThese keywords are already targeted by existing articles on this blog. Your article MUST target DIFFERENT keywords and angles:\n${existingKwSummary}\nDo NOT repeat these keywords in your metaKeywords output. Focus on unique long-tail variations.\n</anti_cannibalization>` : "",
+    ``,
+    `<serp_intelligence>`,
+    `FEATURED SNIPPET OPTIMIZATION:`,
+    `- After each H2 heading, include a concise 40-50 word "snippet-ready" paragraph that directly answers the heading's question.`,
+    `- Use an objective, dictionary-style tone for these answer paragraphs (Google extracts these for featured snippets).`,
+    `- For list-based sections, use clean numbered or bulleted lists that Google can extract directly.`,
+    `- For data comparisons, use clean markdown tables with keyword-rich column headers.`,
+    ``,
+    `ENTITY OPTIMIZATION:`,
+    `- Mention the primary keyword and key entities within the first 100 words of the article.`,
+    `- Each H2 heading should contain a relevant entity or keyword variation.`,
+    `- Maintain natural keyword frequency throughout — aim for the primary keyword every 200-300 words.`,
+    `- Include semantically related terms and synonyms, not just exact-match keywords.`,
+    `- Reference real people, companies, tools, and concepts by name (entities Google's Knowledge Graph recognizes).`,
+    ``,
+    serpPaaQuestions.length > 0
+      ? [
+          `PEOPLE ALSO ASK (from real Google SERP):`,
+          `These are REAL questions people are asking on Google for this topic. Include ALL of them in your FAQ section (add more of your own too):`,
+          ...serpPaaQuestions.map((q, i) => `${i + 1}. ${q}`),
+          `Format each as: ### ${serpPaaQuestions[0] ?? "Question?"}\nDirect answer paragraph (40-60 words) followed by more detail.`,
+        ].join("\n")
+      : `Include 8-10 FAQ questions. Start each with an H3 heading and a direct 40-60 word answer.`,
+    ``,
+    serpDifficulty
+      ? `SERP DIFFICULTY: ${serpDifficulty}. ${serpDifficulty === "hard" || serpDifficulty === "very_hard" ? "This is a competitive keyword. Make the content exceptionally comprehensive, data-rich, and authoritative to compete." : "This keyword has reasonable competition. Focus on depth and unique value."}`
+      : "",
+    `</serp_intelligence>`,
     ``,
     `GLOBAL RULES:`,
     `- WORD COUNT: ${((topic as any)?.articleType === "ultimate-guide") ? "5000-7000" : "3500-4500"} words.`,
@@ -1637,7 +1792,7 @@ async function handleArticle(
   });
 
   // ── Step 3: Fact Check (graceful degradation) ──
-  await reportProgress(7, "Fact-checking claims...");
+  await reportProgress(8, "Fact-checking claims...");
   let finalMarkdown = article.markdown;
   let finalSources = dedupedSources;
   let factCheckScore: number | undefined;
@@ -1688,7 +1843,7 @@ async function handleArticle(
   // ── Step 4: Featured Image (hero) + Mid-article Infographic ──
   // Hero: wide 16:9 abstract data visualization shown at top of article
   // Infographic: tall 2:3 process/stats diagram injected after the 3rd H2 section
-  await reportProgress(8, "Generating images...");
+  await reportProgress(9, "Generating images...");
   let featuredImage: string | undefined;
   let infographicUrl: string | undefined;
 
@@ -1856,17 +2011,38 @@ async function handleArticle(
     }
   }
 
-  // ── Step 5: Calculate Article Stats ──
+  // ── Step 5: Content Score (graceful degradation) ──
+  await reportProgress(10, "Scoring content quality...");
+  let contentScoreResult: { overallScore?: number; entityCoverage?: number; topicCompleteness?: number; missingEntities?: string[]; missingTopics?: string[] } = {};
+
+  if (topic) {
+    try {
+      const { scoreContent, analyzeSERP } = await import("./seoData");
+      // Get SERP results for scoring comparison
+      const locationCode = mapCountryToLocation(site.targetCountry);
+      const serpData = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
+      const score = await scoreContent(finalMarkdown, topic.primaryKeyword, serpData.results);
+      contentScoreResult = score;
+      console.log(`Content score: overall=${score.overallScore}, entities=${score.entityCoverage}, completeness=${score.topicCompleteness}`);
+      if (score.missingEntities.length > 0) {
+        console.log(`Missing entities: ${score.missingEntities.join(", ")}`);
+      }
+    } catch (err) {
+      console.error(`Content scoring failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
+    }
+  }
+
+  // ── Step 6: Calculate Article Stats ──
   const { readingTime, wordCount } = calculateArticleStats(finalMarkdown);
   console.log(`Article stats: ${wordCount} words, ${readingTime} min read`);
 
-  // ── Step 6: Create Draft ──
+  // ── Step 7: Create Draft ──
   const slug = article.slug || buildSlug(article.title);
 
   const articleId = await ctx.runMutation(api.articles.createDraft, {
     siteId,
     topicId: topicId ?? undefined,
-    articleType: (topic as any)?.articleType ?? "standard",
+    articleType: effectiveArticleType,
     title: article.title,
     slug: slug.startsWith("/") ? slug : `/${slug}`,
     markdown: finalMarkdown,
@@ -1881,6 +2057,21 @@ async function handleArticle(
     factCheckScore,
     factCheckNotes,
   });
+
+  // Save content score if available
+  if (contentScoreResult.overallScore !== undefined) {
+    try {
+      await ctx.runMutation(api.articles.updateContentScore, {
+        articleId,
+        contentScore: contentScoreResult.overallScore,
+        entityCoverage: contentScoreResult.entityCoverage,
+        topicCompleteness: contentScoreResult.topicCompleteness,
+        missingEntities: contentScoreResult.missingEntities,
+        missingTopics: contentScoreResult.missingTopics,
+        serpDifficulty: serpDifficulty,
+      });
+    } catch { /* non-critical */ }
+  }
 
   if (topicId) {
     await ctx.runMutation(api.topics.updateStatus, {
@@ -2225,8 +2416,8 @@ export const generateArticle = action({
     try {
       await ctx.runMutation(api.jobs.updateProgress, {
         jobId,
-        current: 9,
-        total: 9,
+        current: 11,
+        total: 11,
         stepLabel: "Adding internal links...",
       });
       console.log(`Adding internal links to article ${res.articleId}...`);
@@ -2353,8 +2544,8 @@ export const generateNow = action({
     try {
       await ctx.runMutation(api.jobs.updateProgress, {
         jobId,
-        current: 9,
-        total: 9,
+        current: 11,
+        total: 11,
         stepLabel: "Adding internal links...",
       });
       const linkResult = await handleLinks(ctx, siteId, res.articleId);
@@ -2910,6 +3101,118 @@ export const processNextJob = action({
       });
       return { processed: false, error: message };
     }
+  },
+});
+
+// ── Competitor Keyword Gap Analysis ──
+export const analyzeKeywordGaps = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<{
+    gaps: { keyword: string; searchVolume: number; difficulty: number; competitorUrl: string; opportunity: string }[];
+  }> => {
+    const site = await ctx.runQuery(api.sites.get, { siteId });
+    if (!site) throw new Error("Site not found");
+    if (!site.competitors?.length) {
+      return { gaps: [] };
+    }
+
+    const { findKeywordGaps } = await import("./seoData");
+    const locationCode = mapCountryToLocation(site.targetCountry);
+    const gaps = await findKeywordGaps(
+      site.domain,
+      site.competitors,
+      locationCode,
+      site.language ?? "en",
+    );
+
+    console.log(`Found ${gaps.length} keyword gaps for ${site.domain}`);
+    return { gaps };
+  },
+});
+
+// ── Content Decay Detection ──
+// Identifies articles that may be declining in performance and need refreshing.
+// Currently uses heuristics (age + content score). Will integrate GSC data when available.
+export const detectContentDecay = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<{
+    decayingArticles: {
+      articleId: string;
+      title: string;
+      slug: string;
+      age: number; // days since publication
+      contentScore: number | null;
+      reason: string;
+      recommendation: string;
+    }[];
+  }> => {
+    const articles = await ctx.runQuery(api.articles.listBySite, { siteId });
+    const published = articles.filter((a: any) => a.status === "published" || a.status === "ready");
+
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const decaying: {
+      articleId: string;
+      title: string;
+      slug: string;
+      age: number;
+      contentScore: number | null;
+      reason: string;
+      recommendation: string;
+    }[] = [];
+
+    for (const article of published) {
+      const ageDays = Math.floor((now - article.createdAt) / DAY_MS);
+      const score = (article as any).contentScore ?? null;
+      const reasons: string[] = [];
+      const recommendations: string[] = [];
+
+      // Flag articles older than 90 days
+      if (ageDays > 90) {
+        reasons.push(`Published ${ageDays} days ago — content freshness may have declined`);
+        recommendations.push("Update statistics, add recent data, refresh examples");
+      }
+
+      // Flag articles with low content scores
+      if (score !== null && score < 60) {
+        reasons.push(`Content score is ${score}/100 — below competitive threshold`);
+        recommendations.push("Add missing entities and subtopics identified in content analysis");
+      }
+
+      // Flag articles with low word count (may be thin content)
+      if (article.wordCount && article.wordCount < 1500) {
+        reasons.push(`Only ${article.wordCount} words — may be too thin for competitive keywords`);
+        recommendations.push("Expand with additional sections, examples, and expert insights");
+      }
+
+      // Flag articles with low fact-check scores
+      if (article.factCheckScore !== undefined && article.factCheckScore < 60) {
+        reasons.push(`Fact-check score is ${article.factCheckScore}/100 — claims may need re-verification`);
+        recommendations.push("Re-run fact-check with updated sources");
+      }
+
+      if (reasons.length > 0) {
+        decaying.push({
+          articleId: article._id,
+          title: article.title,
+          slug: article.slug,
+          age: ageDays,
+          contentScore: score,
+          reason: reasons.join("; "),
+          recommendation: recommendations.join("; "),
+        });
+      }
+    }
+
+    // Sort by urgency: older + lower score = more urgent
+    decaying.sort((a, b) => {
+      const urgencyA = a.age + (100 - (a.contentScore ?? 50));
+      const urgencyB = b.age + (100 - (b.contentScore ?? 50));
+      return urgencyB - urgencyA;
+    });
+
+    console.log(`Content decay scan: ${decaying.length}/${published.length} articles flagged for refresh.`);
+    return { decayingArticles: decaying.slice(0, 20) };
   },
 });
 
