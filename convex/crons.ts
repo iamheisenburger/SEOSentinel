@@ -24,5 +24,8 @@ crons.daily("gsc-sync", { hourUTC: 2, minuteUTC: 0 }, api.actions.gscSync.syncAl
 // Daily content decay scan: detect declining articles using GSC data (3am UTC — after GSC sync)
 crons.daily("decay-scan", { hourUTC: 3, minuteUTC: 0 }, api.actions.contentDecay.scanAllSites);
 
+// Daily auto-refresh: refresh the most critical declining article per site (4am UTC — after decay scan)
+crons.daily("auto-refresh", { hourUTC: 4, minuteUTC: 0 }, api.actions.contentDecay.autoRefreshAllSites);
+
 export default crons;
 

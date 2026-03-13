@@ -522,3 +522,29 @@ export const autoRefreshTop = action({
     }
   },
 });
+
+// ── Auto-refresh all sites (cron entry point) ──
+// Runs after decay scan. Refreshes the most critical declining article per site.
+
+export const autoRefreshAllSites = action({
+  handler: async (ctx): Promise<{ refreshed: number }> => {
+    const sites = await ctx.runQuery(api.sites.listAllForAutopilot);
+    let refreshed = 0;
+
+    for (const site of sites) {
+      if (!site.autopilotEnabled) continue;
+      try {
+        const result = await ctx.runAction(api.actions.contentDecay.autoRefreshTop, { siteId: site._id });
+        if (result.refreshed) {
+          refreshed++;
+          console.log(`Auto-refreshed "${result.title}" for ${site.domain}`);
+        }
+      } catch (err) {
+        console.error(`Auto-refresh failed for ${site.domain}:`, err);
+      }
+    }
+
+    console.log(`Auto-refresh complete: ${refreshed} articles refreshed across all sites.`);
+    return { refreshed };
+  },
+});

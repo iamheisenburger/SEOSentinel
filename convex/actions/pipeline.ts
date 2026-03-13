@@ -3140,6 +3140,17 @@ export const autopilotTick = action({
       return { processed: 1 };
     }
 
+    // 6. No pending jobs — use this tick to auto-refresh declining articles
+    try {
+      const refreshResult = await ctx.runAction(api.actions.contentDecay.autoRefreshTop, { siteId });
+      if (refreshResult.refreshed) {
+        console.log(`Auto-refreshed declining article: "${refreshResult.title}"`);
+        return { processed: 1 };
+      }
+    } catch (err) {
+      console.error(`Auto-refresh check failed:`, err);
+    }
+
     return { processed: 0 };
   },
 });
