@@ -1286,7 +1286,11 @@ async function handlePlan(
     const bSet = new Set(tokenize(b));
     if (aSet.size === 0 || bSet.size === 0) return false;
     const overlap = [...aSet].filter(w => bSet.has(w)).length;
-    return overlap / Math.min(aSet.size, bSet.size) > 0.5;
+    // Use MAX (not min) of the two sizes — this is stricter about declaring similarity.
+    // With min, "seo content" (2 tokens) vs "seo content strategy" (3 tokens) = 2/2 = 100% → killed.
+    // With max, same pair = 2/3 = 67% → still killed but "seo strategy" vs "seo content" = 1/2 = 50% → kept.
+    // Threshold 0.75: only kill when keywords are VERY close (75%+ of the larger set overlaps).
+    return overlap / Math.max(aSet.size, bSet.size) >= 0.75;
   };
 
   let candidates: { keyword: string; searchVolume: number; difficulty: number; cpc: number; opportunity: number }[] = [];
@@ -1393,7 +1397,8 @@ async function handlePlan(
 
     const text = await callClaude(prompt, `Select 20-25 strategic keywords and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`, 12000);
     plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 25);
-    console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates`);
+    console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates:`);
+    for (const t of plan) console.log(`  → "${t.primaryKeyword}" (${t.label})`);
 
     // Snap AI-modified keywords back to exact discovered matches
     // Use candidate list (scored keywords) as primary snap target, then discovered as fallback
@@ -1463,17 +1468,23 @@ async function handlePlan(
 
   await reportProgress(4, "Validating keywords with real data...");
 
-  // 5a. Dedup
+  // 5a. Dedup — only kill exact duplicates and near-identical keywords
   const deduped: typeof plan = [];
   for (const topic of plan) {
-    if (deduped.some(k => k.primaryKeyword.toLowerCase() === topic.primaryKeyword.toLowerCase() || isTooSimilar(k.primaryKeyword, topic.primaryKeyword))) {
-      console.log(`Dedup: "${topic.primaryKeyword}"`);
+    const exactDup = deduped.some(k => k.primaryKeyword.toLowerCase() === topic.primaryKeyword.toLowerCase());
+    const similarTo = deduped.find(k => isTooSimilar(k.primaryKeyword, topic.primaryKeyword));
+    if (exactDup) {
+      console.log(`Dedup (exact): "${topic.primaryKeyword}"`);
+      continue;
+    }
+    if (similarTo) {
+      console.log(`Dedup (similar): "${topic.primaryKeyword}" ≈ "${similarTo.primaryKeyword}"`);
       continue;
     }
     deduped.push(topic);
   }
   plan = deduped;
-  console.log(`After dedup: ${plan.length} topics`);
+  console.log(`After dedup: ${plan.length} topics (${plan.length} from AI's ${plan.length + (deduped.length < plan.length ? 0 : 0)})`);
 
   // 5b. Build metrics from candidates (which already have real data) + fetch fresh for any unknowns
   try {
@@ -1597,7 +1608,11 @@ async function handlePlan(
       console.log(`✓ "${topic.primaryKeyword}": opp=${opportunity}, KD=${m.difficulty}, vol=${m.searchVolume}, pri=${priority}`);
     }
 
-    console.log(`Quality gate: ${plan.length} → ${enrichedPlan.length} topics`);
+    console.log(`═══ FUNNEL SUMMARY ═══`);
+    console.log(`Discovered: ${discoveredKeywords.length} → Candidates: ${candidates.length} → AI picked: ${plan.length} → Quality gate: ${enrichedPlan.length}`);
+    if (enrichedPlan.length < 10) {
+      console.log(`⚠ Only ${enrichedPlan.length} topics survived. Need more volume or looser filters.`);
+    }
 
     // 5d. SERP analysis — determine optimal article format for each surviving topic
     await reportProgress(5, "Analyzing SERPs for article format optimization...");
