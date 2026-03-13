@@ -388,7 +388,7 @@ NOTES: [brief assessment]`,
 
         const factText = factRes.content.map((b: any) => b.type === "text" ? b.text : "").join("");
         const scoreMatch = factText.match(/SCORE:\s*(\d+)/);
-        const notesMatch = factText.match(/NOTES:\s*(.+)/s);
+        const notesMatch = factText.match(/NOTES:\s*([\s\S]+)/);
         if (scoreMatch) factCheckScore = parseInt(scoreMatch[1], 10);
         if (notesMatch) factCheckNotes = notesMatch[1].trim().slice(0, 500);
       } catch (err) {
