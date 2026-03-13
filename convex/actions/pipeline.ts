@@ -1158,6 +1158,26 @@ async function handlePlan(
     c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
   );
 
+  // ── Build niche vocabulary from site profile (used for relevance filtering throughout) ──
+  const nicheTerms = new Set<string>();
+  const _nicheStopWords = new Set(["the","and","for","with","how","what","that","this","from","have","will","your","about","more","than","our","are","can","you","its","all","into","also","who","been","very","just","most","many","such","each","other","some","them"]);
+  const _addNicheTerms = (text: string | undefined) => {
+    if (!text) return;
+    for (const word of text.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/)) {
+      const clean = word.replace(/[^a-z0-9]/g, "");
+      if (clean.length >= 3 && !_nicheStopWords.has(clean)) nicheTerms.add(clean);
+    }
+  };
+  _addNicheTerms(site.niche);
+  _addNicheTerms(site.blogTheme);
+  _addNicheTerms(site.siteSummary);
+  _addNicheTerms(site.siteName);
+  if (site.keyFeatures?.length) site.keyFeatures.forEach((f: string) => _addNicheTerms(f));
+  if (site.painPoints?.length) site.painPoints.forEach((p: string) => _addNicheTerms(p));
+  if (site.anchorKeywords?.length) site.anchorKeywords.forEach((k: string) => _addNicheTerms(k));
+  _addNicheTerms(site.domain.replace(/\.\w+$/, ""));
+  console.log(`Niche vocabulary (${nicheTerms.size} terms): ${[...nicheTerms].slice(0, 20).join(", ")}...`);
+
   // ── Domain Authority: determine what difficulty level this site can realistically target ──
   let domainMetrics: { domainRank: number; organicTraffic: number; backlinks: number; referringDomains: number } | null = null;
   let maxKD = 35; // Conservative default
@@ -1373,6 +1393,18 @@ async function handlePlan(
 
   if (discoveredKeywords.length >= 10) {
     // ── DATA-FIRST approach: discovered keywords drive topic selection ──
+    // Pre-filter: remove keywords with zero niche relevance before scoring
+    if (nicheTerms.size >= 5) {
+      const beforeFilter = discoveredKeywords.length;
+      discoveredKeywords = discoveredKeywords.filter(k => {
+        const kwWords = k.keyword.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
+        return kwWords.some(w => nicheTerms.has(w));
+      });
+      if (discoveredKeywords.length < beforeFilter) {
+        console.log(`Niche relevance pre-filter: ${beforeFilter} → ${discoveredKeywords.length} keywords (removed ${beforeFilter - discoveredKeywords.length} off-topic)`);
+      }
+    }
+
     // Score and rank discovered keywords, filter out existing ones, take top candidates
     const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
     const scoredCandidates = discoveredKeywords
@@ -1425,20 +1457,33 @@ async function handlePlan(
       `</product>`,
       ``,
       `<relevance_rules>`,
-      `CRITICAL: Only pick keywords that someone interested in ${productName}'s product/niche would actually search for.`,
-      `A keyword is RELEVANT if:`,
-      `- It relates to the product's core functionality or use cases`,
-      `- It addresses the target audience's pain points or needs`,
-      `- It covers topics in the product's niche that would attract potential users`,
-      `- The article could naturally mention or showcase ${productName}`,
+      `STRICT RELEVANCE FILTER — this is the #1 most important rule:`,
       ``,
-      `A keyword is IRRELEVANT if:`,
-      `- It's about a completely different industry or domain`,
-      `- The target audience would never search for it`,
-      `- You can't connect it to the product in any meaningful way`,
-      `- It names a competing product (e.g. ChatGPT, Jasper, etc.)`,
-      `SKIP irrelevant keywords entirely. It's better to return 12 relevant topics than 18 with filler.`,
+      `For EVERY keyword, ask yourself: "Would a potential user/customer of ${productName} search for this?"`,
+      `If the answer is NO or MAYBE, SKIP IT. No exceptions.`,
+      ``,
+      `A keyword is RELEVANT if:`,
+      `- It directly relates to ${productName}'s core product, features, or use cases`,
+      `- It targets a problem that ${productName} solves`,
+      `- It's in the same industry/vertical as ${productName}`,
+      `- The searcher could plausibly become a ${productName} user after reading the article`,
+      ``,
+      `A keyword is IRRELEVANT — ALWAYS SKIP:`,
+      `- Different industry entirely (e.g., "b2b case study" for an SEO tool, "landing page design" for a CRM)`,
+      `- Generic business/marketing terms not specific to the niche (e.g., "conversion rate optimization" for a content tool)`,
+      `- Keywords naming competitor products (ChatGPT, Jasper, Writesonic, etc.)`,
+      `- Keywords the target audience would never search for`,
+      ``,
+      `BETTER to return 10 highly relevant topics than 18 with filler. Quality over quantity.`,
       `</relevance_rules>`,
+      ``,
+      `<strategic_funnel>`,
+      `Build a content funnel that drives traffic AND conversions:`,
+      `- TOFU (40%): Informational keywords the target audience searches ("how to X", "what is Y")`,
+      `- MOFU (30%): Commercial investigation keywords ("best X tool", "X vs Y approach")`,
+      `- BOFU (30%): High-intent keywords closest to the product ("X software", "X automation", "X for [use case]")`,
+      `Prioritize keywords where ${productName} has a natural competitive advantage.`,
+      `</strategic_funnel>`,
       ``,
       `<keywords>`,
       ...candidates.map(k => `- "${k.keyword}" (${k.searchVolume}/mo, KD:${k.difficulty}, $${k.cpc.toFixed(2)} CPC, opp:${k.opportunity})`),
@@ -1610,6 +1655,18 @@ async function handlePlan(
           brand => kwLower.includes(brand) || labelLower.includes(brand),
         );
         if (mentionsCompetitor) return { pass: false, reason: `competitor brand "${mentionsCompetitor}"`, score: 0 };
+      }
+
+      // ── Niche relevance check: keyword must share at least 1 term with site's niche vocabulary ──
+      // This prevents completely off-topic keywords like "b2b case study" for an SEO tool
+      if (nicheTerms.size >= 5 && !relaxed) { // Only enforce when we have enough niche context
+        const kwWords = topic.primaryKeyword.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
+        const labelWords = topic.label.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
+        const allTopicWords = [...kwWords, ...labelWords];
+        const nicheOverlap = allTopicWords.filter(w => nicheTerms.has(w)).length;
+        if (nicheOverlap === 0) {
+          return { pass: false, reason: `no niche relevance (0 term overlap with site profile)`, score: 5 };
+        }
       }
 
       const kwMetric = metrics.find(
