@@ -106,13 +106,14 @@ If I had to pick the order to build these:
 | SERP Intent Matching | DONE | Auto-selects article type from SERP analysis |
 | Content Scoring vs SERP | DONE | Scores 0-100 against competitors, auto-enhances if <70 |
 | Competitor Keyword Gap | DONE | analyzeKeywordGaps action |
-| Content Decay Detection | DONE (basic) | Heuristic-based. Needs GSC for position-based detection |
+| Content Decay Detection | DONE | GSC-powered position tracking + heuristic fallback. Daily cron at 3am UTC |
 | Featured Snippet Optimization | DONE | 40-50 word snippets, PAA integration |
 | Entity & NLP Optimization | DONE | Entity placement, frequency, semantic terms |
 | Quality Gate | DONE | Auto-removes low-potential topics (0 vol + high KD) |
 | Data-Driven Priority | DONE | Opportunity score replaces AI-guessed priority |
 | Auto Content Enhancement | DONE | Re-writes if content score <70 |
-| GSC API Integration | NOT BUILT | Free rank tracking + decay detection |
+| GSC API Integration | DONE | OAuth flow, daily sync at 2am UTC, rank tracking, decay detection |
+| Content Refresh System | DONE | Auto-refreshes declining articles with fresh research. 1/site/week on autopilot |
 | Backlink Automation | NOT BUILT | Brand mentions, broken links, outreach |
 | Content Syndication | NOT BUILT | Medium/LinkedIn auto-posting |
 | AI Overview Optimization | PARTIAL | Long-tail targeting done, explicit AIO logic missing |
