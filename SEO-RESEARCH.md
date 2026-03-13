@@ -115,5 +115,5 @@ If I had to pick the order to build these:
 | GSC API Integration | DONE | OAuth flow, daily sync at 2am UTC, rank tracking, decay detection |
 | Content Refresh System | DONE | Auto-refreshes declining articles with fresh research. 1/site/week on autopilot |
 | Backlink Automation | DONE | DataForSEO backlink profile + unlinked mentions + broken link building + AI outreach emails |
-| Content Syndication | NOT BUILT | Medium/LinkedIn auto-posting |
-| AI Overview Optimization | PARTIAL | Long-tail targeting done, explicit AIO logic missing |
+| Content Syndication | DONE | Medium API + LinkedIn UGC API with canonical tags. AI-generated LinkedIn posts. Orchestrator runs both in parallel |
+| AI Overview Optimization | DONE | Citation-worthy structure, definitive lead-in answers, year-dated stats, question-pattern headings, inline source citations |

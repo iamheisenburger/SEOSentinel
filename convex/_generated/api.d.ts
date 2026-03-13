@@ -14,6 +14,7 @@ import type * as actions_gscSync from "../actions/gscSync.js";
 import type * as actions_pipeline from "../actions/pipeline.js";
 import type * as actions_scheduler from "../actions/scheduler.js";
 import type * as actions_seoData from "../actions/seoData.js";
+import type * as actions_syndication from "../actions/syndication.js";
 import type * as articles from "../articles.js";
 import type * as blog from "../blog.js";
 import type * as crons from "../crons.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   "actions/pipeline": typeof actions_pipeline;
   "actions/scheduler": typeof actions_scheduler;
   "actions/seoData": typeof actions_seoData;
+  "actions/syndication": typeof actions_syndication;
   articles: typeof articles;
   blog: typeof blog;
   crons: typeof crons;

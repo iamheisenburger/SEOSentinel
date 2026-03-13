@@ -467,6 +467,8 @@ REQUIREMENTS:
 6. Include a FAQ section with 3-5 questions
 7. End with a Sources section listing all references
 8. Minimum 2000 words
+9. AI OVERVIEW OPTIMIZATION: Lead each section with a definitive 1-2 sentence answer. Use "What is", "How does", "Why" patterns in headings. Include year-dated stats and comparison tables. Cite sources inline.
+10. FEATURED SNIPPET: After each H2, include a 40-50 word direct answer paragraph in objective tone.
 9. Use proper markdown formatting (## for H2, ### for H3, etc.)
 10. If the original had a CTA section, keep it
 
