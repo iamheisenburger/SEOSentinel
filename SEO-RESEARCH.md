@@ -103,7 +103,7 @@ If I had to pick the order to build these:
 | Feature | Status | Notes |
 |---------|--------|-------|
 | DataForSEO Integration | DONE (AI fallback) | Works without API key via AI estimation. Real data needs $50 DataForSEO deposit |
-| SERP Intent Matching | DONE | Auto-selects article type from SERP analysis |
+| SERP Intent Matching | DONE | Additive scoring with URL analysis, position weighting, 2+ vote threshold |
 | Content Scoring vs SERP | DONE | Scores 0-100 against competitors, auto-enhances if <70 |
 | Competitor Keyword Gap | DONE | analyzeKeywordGaps action |
 | Content Decay Detection | DONE | GSC-powered position tracking + heuristic fallback. Daily cron at 3am UTC |
@@ -114,6 +114,6 @@ If I had to pick the order to build these:
 | Auto Content Enhancement | DONE | Re-writes if content score <70 |
 | GSC API Integration | DONE | OAuth flow, daily sync at 2am UTC, rank tracking, decay detection |
 | Content Refresh System | DONE | Auto-refreshes declining articles with fresh research. 1/site/week on autopilot |
-| Backlink Automation | NOT BUILT | Brand mentions, broken links, outreach |
+| Backlink Automation | DONE | DataForSEO backlink profile + unlinked mentions + broken link building + AI outreach emails |
 | Content Syndication | NOT BUILT | Medium/LinkedIn auto-posting |
 | AI Overview Optimization | PARTIAL | Long-tail targeting done, explicit AIO logic missing |
