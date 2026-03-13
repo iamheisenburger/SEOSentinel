@@ -1162,29 +1162,45 @@ async function handlePlan(
   let discoveredKeywords: { keyword: string; searchVolume: number; difficulty: number; cpc: number }[] = [];
   try {
     const { discoverKeywords } = await import("./seoData");
-    // Build seed keywords from site profile — use short, broad terms for max discovery
+    // Build seed keywords from FULL site profile — use short, broad terms for max discovery
     const seedKeywords: string[] = [];
-    // Extract short, broad phrases from niche (split on commas)
-    if (site.niche) {
-      for (const part of site.niche.split(/[,;]/)) {
-        const clean = part.trim().toLowerCase();
-        // Only take 2-4 word phrases
-        if (clean.split(/\s+/).length <= 4 && clean.length > 3) seedKeywords.push(clean);
+    const addSeed = (text: string) => {
+      const clean = text.trim().toLowerCase();
+      if (clean.split(/\s+/).length <= 4 && clean.length > 3 && !seedKeywords.includes(clean)) {
+        seedKeywords.push(clean);
       }
+    };
+    // 1. Niche (primary seed — most important)
+    if (site.niche) {
+      for (const part of site.niche.split(/[,;]/)) addSeed(part);
     }
-    // Add anchor keywords (these are explicitly chosen by user)
+    // 2. Anchor keywords (explicitly chosen by user — high priority)
     if (site.anchorKeywords?.length) {
       for (const kw of site.anchorKeywords.slice(0, 5)) {
-        if (kw.split(/\s+/).length <= 5) seedKeywords.push(kw.toLowerCase());
+        if (kw.split(/\s+/).length <= 5) addSeed(kw);
       }
     }
-    // Add broad industry terms from key features
+    // 3. Key features (broad industry terms)
     if (site.keyFeatures?.length) {
-      for (const f of site.keyFeatures.slice(0, 3)) {
-        const short = f.split(/[,.:;]/)[0].trim().toLowerCase();
-        if (short.split(/\s+/).length <= 4 && short.length > 3) seedKeywords.push(short);
+      for (const f of site.keyFeatures.slice(0, 5)) {
+        addSeed(f.split(/[,.:;]/)[0]);
       }
     }
+    // 4. Pain points (what the audience searches for)
+    if (site.painPoints?.length) {
+      for (const p of site.painPoints.slice(0, 5)) {
+        addSeed(p.split(/[,.:;]/)[0]);
+      }
+    }
+    // 5. Blog theme (broader content direction)
+    if (site.blogTheme) {
+      for (const part of site.blogTheme.split(/[,;.]/)) addSeed(part);
+    }
+    // 6. Site summary (extract key phrases — take first 3 comma/period segments)
+    if (site.siteSummary) {
+      for (const part of site.siteSummary.split(/[,;.]/).slice(0, 3)) addSeed(part);
+    }
+    // Fallback: domain name
     if (seedKeywords.length === 0) seedKeywords.push(site.domain.replace(/\.\w+$/, ""));
 
     const locationCode = mapCountryToLocation(site.targetCountry);
