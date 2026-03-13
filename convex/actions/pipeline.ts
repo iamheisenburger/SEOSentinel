@@ -1394,19 +1394,37 @@ async function handlePlan(
     console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates`);
 
     // Snap AI-modified keywords back to exact discovered matches
+    // Use candidate list (scored keywords) as primary snap target, then discovered as fallback
+    const candidateLower = new Map(candidates.map(k => [k.keyword.toLowerCase(), k.keyword]));
     const discoveredLower = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k.keyword]));
     for (const topic of plan) {
-      if (!discoveredLower.has(topic.primaryKeyword.toLowerCase())) {
-        const topicWords = new Set(topic.primaryKeyword.toLowerCase().split(/\s+/));
-        let bestMatch = "", bestOverlap = 0;
+      const kwLower = topic.primaryKeyword.toLowerCase();
+      // Already an exact match in candidates or discovered? Keep it.
+      if (candidateLower.has(kwLower) || discoveredLower.has(kwLower)) continue;
+
+      // Fuzzy snap: find best match by word overlap ratio (must be >= 50%)
+      const topicWords = new Set(kwLower.split(/\s+/));
+      let bestMatch = "", bestScore = 0;
+      for (const [cl, orig] of candidateLower) {
+        const clWords = new Set(cl.split(/\s+/));
+        const overlap = [...topicWords].filter(w => clWords.has(w)).length;
+        const score = overlap / Math.max(topicWords.size, clWords.size);
+        if (score > bestScore) { bestScore = score; bestMatch = orig; }
+      }
+      // Also check full discovered pool
+      if (bestScore < 0.5) {
         for (const [cl, orig] of discoveredLower) {
-          const overlap = [...topicWords].filter(w => new Set(cl.split(/\s+/)).has(w)).length;
-          if (overlap > bestOverlap) { bestOverlap = overlap; bestMatch = orig; }
+          const clWords = new Set(cl.split(/\s+/));
+          const overlap = [...topicWords].filter(w => clWords.has(w)).length;
+          const score = overlap / Math.max(topicWords.size, clWords.size);
+          if (score > bestScore) { bestScore = score; bestMatch = orig; }
         }
-        if (bestMatch && bestOverlap >= 1) {
-          console.log(`Snap: "${topic.primaryKeyword}" → "${bestMatch}"`);
-          topic.primaryKeyword = bestMatch;
-        }
+      }
+      if (bestMatch && bestScore >= 0.5) {
+        console.log(`Snap: "${topic.primaryKeyword}" → "${bestMatch}" (${Math.round(bestScore * 100)}%)`);
+        topic.primaryKeyword = bestMatch;
+      } else {
+        console.log(`No snap match for: "${topic.primaryKeyword}" (best: ${Math.round(bestScore * 100)}%)`);
       }
     }
   } else {
@@ -1455,33 +1473,65 @@ async function handlePlan(
   plan = deduped;
   console.log(`After dedup: ${plan.length} topics`);
 
-  // 5b. Fetch real metrics for all keywords
+  // 5b. Build metrics from candidates (which already have real data) + fetch fresh for any unknowns
   try {
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
+
+    // Build a comprehensive metrics map from ALL discovered keywords (not just candidates)
+    const candidateMap = new Map(candidates.map(k => [k.keyword.toLowerCase(), k]));
     const discoveredMap = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k]));
-    const allKeywords = plan.map(t => t.primaryKeyword);
-    const needFresh = allKeywords.filter(kw => !discoveredMap.has(kw.toLowerCase()));
 
     type Metric = { keyword: string; searchVolume: number; difficulty: number; cpc: number; competition: number; intent: string; trend: number[] };
-    const metrics: Metric[] = [];
+    const metricsMap = new Map<string, Metric>();
 
-    // Reuse discovered metrics
-    for (const kw of allKeywords) {
-      const pre = discoveredMap.get(kw.toLowerCase());
-      if (pre) metrics.push({ keyword: kw, searchVolume: pre.searchVolume, difficulty: pre.difficulty, cpc: pre.cpc, competition: 0, intent: "informational", trend: [] });
+    // Pre-populate from discovered keywords (broadest source)
+    for (const k of discoveredKeywords) {
+      metricsMap.set(k.keyword.toLowerCase(), { keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc, competition: 0, intent: "informational", trend: [] });
     }
-    // Fetch fresh for undiscovered
+
+    // Find keywords that aren't in our discovered pool at all
+    const needFresh = plan
+      .map(t => t.primaryKeyword)
+      .filter(kw => !metricsMap.has(kw.toLowerCase()));
+
     if (needFresh.length > 0) {
-      metrics.push(...await getKeywordMetrics(needFresh, locationCode, site.language ?? "en"));
+      console.log(`Fetching fresh metrics for ${needFresh.length} unknown keywords: ${needFresh.join(", ")}`);
+      try {
+        const fresh = await getKeywordMetrics(needFresh, locationCode, site.language ?? "en");
+        for (const m of fresh) metricsMap.set(m.keyword.toLowerCase(), m);
+      } catch (e) { console.log("Fresh metrics fetch failed:", e); }
     }
+
+    // Fuzzy matcher: if exact match fails, find closest candidate by word overlap
+    const findMetrics = (kw: string): Metric | null => {
+      const exact = metricsMap.get(kw.toLowerCase());
+      if (exact) return exact;
+
+      // Fuzzy: find best overlap match in discovered keywords
+      const words = new Set(kw.toLowerCase().split(/\s+/));
+      let bestMatch: Metric | null = null, bestScore = 0;
+      for (const [key, m] of metricsMap) {
+        const mWords = new Set(key.split(/\s+/));
+        const overlap = [...words].filter(w => mWords.has(w)).length;
+        const score = overlap / Math.max(words.size, mWords.size);
+        if (score > bestScore && score >= 0.5) { // At least 50% word overlap
+          bestScore = score;
+          bestMatch = m;
+        }
+      }
+      if (bestMatch) {
+        console.log(`Fuzzy match: "${kw}" → "${bestMatch.keyword}" (${Math.round(bestScore * 100)}% overlap)`);
+      }
+      return bestMatch;
+    };
 
     // 5c. Quality gate — single pass, clean logic
-    // In data-first mode: topics WITHOUT real metrics are DROPPED (the AI was told to use exact keywords)
     const enrichedPlan: (typeof plan[0] & {
       searchVolume?: number; keywordDifficulty?: number; cpc?: number;
       serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string; paaQuestions?: string[];
     })[] = [];
     let kd0Count = 0;
+    let noDataCount = 0;
 
     for (const topic of plan) {
       const kw = topic.primaryKeyword.toLowerCase();
@@ -1493,10 +1543,16 @@ async function handlePlan(
         continue;
       }
 
-      const m = metrics.find(x => x.keyword.toLowerCase() === kw);
+      const m = findMetrics(topic.primaryKeyword);
       if (!m) {
-        // No metrics = AI invented a keyword not in our discovered pool → drop it
-        console.log(`Blocked: "${topic.primaryKeyword}" (no metrics data — keyword not in discovered pool)`);
+        // No data even after fuzzy match — keep up to 3 (AI thinks they're relevant, just no DataForSEO data)
+        noDataCount++;
+        if (noDataCount > 3) {
+          console.log(`Blocked: "${topic.primaryKeyword}" (no metrics data, cap reached)`);
+          continue;
+        }
+        console.log(`⚠ "${topic.primaryKeyword}": no metrics data, keeping (${noDataCount}/3 no-data slots)`);
+        enrichedPlan.push(topic);
         continue;
       }
 
