@@ -72,6 +72,9 @@ export const upsert = mutation({
     sourceCitations: v.optional(v.boolean()),
     youtubeEmbeds: v.optional(v.boolean()),
     urlStructure: v.optional(v.string()),
+    mediumToken: v.optional(v.string()),
+    linkedinAccessToken: v.optional(v.string()),
+    syndicationEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();

@@ -33,16 +33,19 @@ import {
   KeyRound,
   Palette,
   Eye,
+  BarChart3,
+  Share2,
 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-type Step = "domain" | "profile" | "audience" | "strategy" | "preview" | "generate" | "done";
+type Step = "domain" | "profile" | "audience" | "strategy" | "integrations" | "preview" | "generate" | "done";
 
 const STEPS: { key: Step; label: string; icon: typeof Globe }[] = [
   { key: "domain", label: "Website", icon: Globe },
   { key: "profile", label: "Profile", icon: Building2 },
   { key: "audience", label: "Audience", icon: Users },
   { key: "strategy", label: "Strategy", icon: Settings },
+  { key: "integrations", label: "Connect", icon: BarChart3 },
   { key: "preview", label: "Preview", icon: Eye },
   { key: "generate", label: "Content Plan", icon: Target },
 ];
@@ -291,6 +294,13 @@ export function SetupWizard() {
   const [brandFontFamily, setBrandFontFamily] = useState<string | null>(null);
   const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(null);
 
+  // Integrations
+  const [gscConnected, setGscConnected] = useState(false);
+  const [gscEmail, setGscEmail] = useState("");
+  const [mediumToken, setMediumToken] = useState("");
+  const [linkedinToken, setLinkedinToken] = useState("");
+  const [syndicationEnabled, setSyndicationEnabled] = useState(false);
+
   // Loading states
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -446,7 +456,38 @@ export function SetupWizard() {
     }
   };
 
-  // ─── Save strategy + move to preview ────────────────
+  // ─── GSC OAuth popup ──────────────────────────────
+  const startGscOAuth = () => {
+    if (!siteId) return;
+    const popup = window.open("/api/gsc/auth?siteId=" + siteId, "gsc-oauth", "width=600,height=700,popup=yes");
+    if (!popup) return;
+    const timer = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(timer);
+        setGscConnected(true);
+      }
+    }, 500);
+  };
+
+  // ─── Save integrations + move to preview ────────
+  const handleSaveIntegrations = async () => {
+    if (!siteId) return;
+    setError(null);
+    try {
+      await upsert({
+        id: siteId,
+        domain,
+        mediumToken: mediumToken.trim() || undefined,
+        linkedinAccessToken: linkedinToken.trim() || undefined,
+        syndicationEnabled: syndicationEnabled || undefined,
+      });
+      setStep("preview");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save integrations");
+    }
+  };
+
+  // ─── Save strategy + move to integrations ────────────────
   const handleSaveStrategy = async () => {
     if (!siteId) return;
     setError(null);
@@ -465,7 +506,7 @@ export function SetupWizard() {
         approvalRequired,
         urlStructure,
       });
-      setStep("preview");
+      setStep("integrations");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save strategy");
     }
@@ -1128,7 +1169,140 @@ export function SetupWizard() {
         )}
 
         {/* ════════════════════════════════════════════
-            Step 5: Article Preview
+            Step 5: Integrations (optional)
+            ════════════════════════════════════════════ */}
+        {step === "integrations" && (
+          <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">
+            <SectionHeader
+              icon={BarChart3}
+              title="Connect Your Tools"
+              subtitle="Optional — connect now or later from Settings"
+            />
+
+            <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] px-3 py-2 mb-5">
+              <p className="text-[11px] text-[#38BDF8]">
+                <Sparkles className="inline h-3 w-3 mr-1" />
+                These are optional. Pentra works without them, but connecting them unlocks rank tracking, decay detection, and auto content syndication.
+              </p>
+            </div>
+
+            {/* ── Google Search Console ── */}
+            <div className="mb-5">
+              <div className="flex items-center gap-2 mb-2 px-1">
+                <BarChart3 className="h-4 w-4 text-[#F59E0B]" />
+                <h3 className="text-[13px] font-medium text-[#EDEEF1]">Google Search Console</h3>
+                <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#F59E0B]/[0.08] text-[#FBBF24]">Recommended</span>
+              </div>
+              <p className="text-[11px] text-[#565A6E] px-1 mb-3">
+                Pentra uses GSC to track your keyword rankings, detect when articles lose traffic, and automatically refresh declining content. Without it, we can still write and publish — but we can&apos;t monitor or maintain your rankings.
+              </p>
+
+              {gscConnected ? (
+                <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
+                    <Check className="h-4 w-4 text-[#22C55E]" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-[#22C55E]">Search Console connected</p>
+                    {gscEmail && <p className="text-[11px] text-[#565A6E]">{gscEmail}</p>}
+                  </div>
+                  <button onClick={startGscOAuth} className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition">
+                    Reconnect
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <button
+                    onClick={startGscOAuth}
+                    className="flex items-center justify-center gap-2 w-full rounded-lg bg-[#0EA5E9] px-4 py-3 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
+                  >
+                    <BarChart3 className="h-4 w-4" />
+                    Connect Google Search Console
+                  </button>
+                  <div className="mt-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+                    <p className="text-[10px] text-[#565A6E] leading-relaxed">
+                      <strong className="text-[#8B8FA3]">Which account?</strong> Sign in with the Google account that owns your site&apos;s Search Console property.
+                      This is usually the account you used to verify your site in{" "}
+                      <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
+                      We only request <strong className="text-[#8B8FA3]">read-only</strong> access — we never modify your site.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Content Syndication ── */}
+            <div className="border-t border-white/[0.04] pt-5">
+              <div className="flex items-center gap-2 mb-2 px-1">
+                <Share2 className="h-4 w-4 text-[#A78BFA]" />
+                <h3 className="text-[13px] font-medium text-[#EDEEF1]">Content Syndication</h3>
+                <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-white/[0.04] text-[#565A6E]">Optional</span>
+              </div>
+              <p className="text-[11px] text-[#565A6E] px-1 mb-3">
+                Automatically cross-post your articles to Medium and LinkedIn when they&apos;re published. Each post includes a canonical URL pointing back to your site so you get the SEO credit — no duplicate content penalty.
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <ToggleSetting
+                  label="Auto-Syndicate"
+                  description="Automatically distribute articles to connected platforms when published"
+                  value={syndicationEnabled}
+                  onChange={setSyndicationEnabled}
+                />
+
+                {syndicationEnabled && (
+                  <div className="flex flex-col gap-3 pl-1">
+                    <div>
+                      <Input
+                        label="Medium Integration Token"
+                        type="password"
+                        placeholder="Get it from medium.com/me/settings/security"
+                        value={mediumToken}
+                        onChange={(e) => setMediumToken(e.target.value)}
+                      />
+                      <p className="text-[10px] text-[#565A6E] mt-1 px-1">
+                        In Medium: Settings → Security → Integration tokens → generate one. Articles are posted as drafts with a canonical URL to your site.
+                      </p>
+                    </div>
+                    <div>
+                      <Input
+                        label="LinkedIn Access Token"
+                        type="password"
+                        placeholder="OAuth access token for LinkedIn"
+                        value={linkedinToken}
+                        onChange={(e) => setLinkedinToken(e.target.value)}
+                      />
+                      <p className="text-[10px] text-[#565A6E] mt-1 px-1">
+                        Each article gets an AI-written LinkedIn post linking back to the original.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <Button
+                variant="secondary"
+                onClick={() => setStep("strategy")}
+                icon={<ArrowLeft className="h-3.5 w-3.5" />}
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button
+                onClick={handleSaveIntegrations}
+                icon={<ArrowRight className="h-3.5 w-3.5" />}
+                className="flex-[2]"
+              >
+                {gscConnected || syndicationEnabled ? "Continue" : "Skip for Now"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════
+            Step 6: Article Preview
             ════════════════════════════════════════════ */}
         {step === "preview" && (
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">
@@ -1349,7 +1523,7 @@ export function SetupWizard() {
             <div className="flex gap-3 mt-6">
               <Button
                 variant="secondary"
-                onClick={() => setStep("strategy")}
+                onClick={() => setStep("integrations")}
                 icon={<ArrowLeft className="h-3.5 w-3.5" />}
                 className="flex-1"
               >
@@ -1438,16 +1612,16 @@ export function SetupWizard() {
               </div>
             )}
 
-            {/* Background generation notice */}
+            {/* Autopilot notice */}
             <div className="mb-4 rounded-lg bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.1] px-4 py-3">
               <div className="flex items-start gap-2">
                 <Zap className="h-3.5 w-3.5 text-[#4ADE80] mt-0.5 shrink-0" />
                 <div>
                   <p className="text-[12px] font-medium text-[#4ADE80]">
-                    Your first article is being written right now
+                    Autopilot is ready
                   </p>
                   <p className="text-[11px] text-[#565A6E] mt-0.5">
-                    It&apos;ll be ready on your dashboard in a few minutes. Future articles generate automatically.
+                    Hit &ldquo;Generate Now&rdquo; from the dashboard to write your first article, or let autopilot pick it up on its next run.
                   </p>
                 </div>
               </div>
@@ -1478,8 +1652,8 @@ export function SetupWizard() {
               {topics && topics.length > 0
                 ? `${topics.length} topics planned`
                 : "Topics planned"}{" "}
-              &middot; Your first article is being written right now.
-              New articles will publish automatically at {cadencePerWeek} per week.
+              &middot; Autopilot will generate {cadencePerWeek} articles per week.
+              Hit &ldquo;Generate Now&rdquo; from the dashboard to start your first one.
             </p>
 
             <div className="mt-5 rounded-lg bg-white/[0.02] border border-white/[0.04] p-4 text-left max-w-xs mx-auto">
@@ -1506,7 +1680,7 @@ export function SetupWizard() {
 
             <div className="mt-4 rounded-lg bg-[#0EA5E9]/[0.06] border border-[#0EA5E9]/[0.12] px-4 py-3 max-w-xs mx-auto">
               <p className="text-[11px] text-[#0EA5E9]">
-                Your first article should appear on the dashboard within a few minutes.
+                Click &ldquo;Generate Now&rdquo; on the dashboard to create your first article, or autopilot will handle it.
               </p>
             </div>
 

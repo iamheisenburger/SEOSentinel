@@ -12,7 +12,6 @@ import {
   Search,
   ArrowUpRight,
   ExternalLink,
-  Settings,
   TrendingDown,
   ArrowRight,
 } from "lucide-react";
@@ -68,16 +67,31 @@ export default function AnalyticsPage() {
             <BarChart3 className="h-7 w-7 text-[#0EA5E9]" />
           </div>
           <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Connect Google Search Console</h2>
-          <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-5">
-            See which keywords bring traffic to your site, track rankings over time, and discover opportunities to grow.
+          <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-3">
+            See which keywords bring traffic to your site, track rankings over time, and automatically refresh declining content.
           </p>
-          <Link
-            href={site?._id ? `/sites/${site._id}` : "/sites"}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-4 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
+          <button
+            onClick={() => {
+              if (!site?._id) return;
+              const popup = window.open("/api/gsc/auth?siteId=" + site._id, "gsc-oauth", "width=600,height=700,popup=yes");
+              if (!popup) return;
+              const timer = setInterval(() => {
+                if (popup.closed) {
+                  clearInterval(timer);
+                  window.location.reload();
+                }
+              }, 500);
+            }}
+            className="inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-5 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
           >
-            <Settings className="h-3.5 w-3.5" />
-            Go to Site Settings
-          </Link>
+            <BarChart3 className="h-3.5 w-3.5" />
+            Connect Google Search Console
+          </button>
+          <p className="mt-3 text-[11px] text-[#565A6E] max-w-sm text-center">
+            Sign in with the Google account that owns your site in{" "}
+            <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
+            We only request read-only access.
+          </p>
         </div>
       ) : (
         <>
