@@ -25,6 +25,8 @@ import {
   Code,
   ChevronDown,
   ChevronRight,
+  TrendingDown,
+  RefreshCw,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -316,11 +318,13 @@ export default function ArticleDetailPage() {
   );
   const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
+  const refreshArticleAction = useAction(api.actions.contentDecay.refreshArticle);
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);
   const deleteArticle = useMutation(api.articles.deleteArticle);
   const [linkStatus, setLinkStatus] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
   const [schemaOpen, setSchemaOpen] = useState(false);
 
@@ -653,7 +657,81 @@ export default function ArticleDetailPage() {
             </span>
           </>
         )}
+        {(article as any).lastRefreshedAt && (
+          <>
+            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-[#22D3EE]">
+              <RefreshCw className="h-3 w-3" />
+              Refreshed {formatDistanceToNow(new Date((article as any).lastRefreshedAt), { addSuffix: true })}
+              {(article as any).refreshCount > 1 ? ` (${(article as any).refreshCount}x)` : ""}
+            </span>
+          </>
+        )}
       </div>
+
+      {/* Content Decay Alert */}
+      {((article as any).decayStatus === "declining" || (article as any).decayStatus === "warning") && (
+        <div className={`rounded-xl border px-5 py-4 ${
+          (article as any).decayStatus === "declining"
+            ? "border-[#EF4444]/[0.2] bg-[#EF4444]/[0.04]"
+            : "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.04]"
+        }`}>
+          <div className="flex items-start gap-3">
+            <TrendingDown className={`h-5 w-5 mt-0.5 shrink-0 ${
+              (article as any).decayStatus === "declining" ? "text-[#EF4444]" : "text-[#F59E0B]"
+            }`} />
+            <div className="flex-1 min-w-0">
+              <p className={`text-[13px] font-semibold ${
+                (article as any).decayStatus === "declining" ? "text-[#F87171]" : "text-[#FBBF24]"
+              }`}>
+                {(article as any).decayStatus === "declining" ? "Rankings Declining" : "Rankings Warning"}
+              </p>
+              {(article as any).decayReason && (
+                <p className="text-[12px] text-[#8B8FA3] mt-1">{(article as any).decayReason}</p>
+              )}
+              {(article as any).positionHistory && (article as any).positionHistory.length >= 2 && (
+                <div className="flex items-center gap-3 mt-2 text-[11px] text-[#565A6E]">
+                  <span>Position: {(article as any).positionHistory[0].position} → {(article as any).positionHistory[(article as any).positionHistory.length - 1].position}</span>
+                  <span>·</span>
+                  <span>Clicks: {(article as any).positionHistory[0].clicks} → {(article as any).positionHistory[(article as any).positionHistory.length - 1].clicks}</span>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={async () => {
+                setRefreshing(true);
+                setLinkStatus("Refreshing article with latest research...");
+                try {
+                  await refreshArticleAction({ articleId });
+                  setLinkStatus("Article refreshed successfully with updated content.");
+                } catch (err: unknown) {
+                  setLinkStatus(err instanceof Error ? err.message : "Refresh failed");
+                } finally {
+                  setRefreshing(false);
+                }
+              }}
+              disabled={refreshing || (article as any).decayStatus === "refreshing"}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-3 py-2 text-[12px] font-medium text-white transition hover:bg-[#38BDF8] disabled:opacity-50 shrink-0"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              {refreshing ? "Refreshing..." : "Refresh Article"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Refreshing status */}
+      {(article as any).decayStatus === "refreshing" && (
+        <div className="rounded-xl border border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.04] px-5 py-4">
+          <div className="flex items-center gap-3">
+            <RefreshCw className="h-5 w-5 text-[#0EA5E9] animate-spin" />
+            <div>
+              <p className="text-[13px] font-semibold text-[#38BDF8]">Refreshing Article</p>
+              <p className="text-[12px] text-[#8B8FA3] mt-0.5">Re-researching and rewriting with latest data. This may take a few minutes.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Fact-check notes */}
       {article.factCheckNotes && (

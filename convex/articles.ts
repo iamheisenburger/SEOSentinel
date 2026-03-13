@@ -258,6 +258,86 @@ export const updateBacklinks = mutation({
   },
 });
 
+// ── Content Decay Tracking ──
+
+export const updateDecayStatus = mutation({
+  args: {
+    articleId: v.id("articles"),
+    decayStatus: v.string(),
+    decayReason: v.optional(v.string()),
+    decayDetectedAt: v.optional(v.number()),
+    positionHistory: v.optional(v.array(v.object({
+      date: v.string(),
+      position: v.number(),
+      clicks: v.number(),
+      impressions: v.number(),
+    }))),
+  },
+  handler: async (ctx, { articleId, decayStatus, decayReason, decayDetectedAt, positionHistory }) => {
+    const patch: Record<string, any> = { decayStatus, updatedAt: Date.now() };
+    if (decayReason !== undefined) patch.decayReason = decayReason;
+    if (decayDetectedAt !== undefined) patch.decayDetectedAt = decayDetectedAt;
+    if (positionHistory !== undefined) patch.positionHistory = positionHistory;
+    await ctx.db.patch(articleId, patch);
+  },
+});
+
+export const markRefreshing = mutation({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    await ctx.db.patch(articleId, {
+      decayStatus: "refreshing",
+      previousVersion: article.markdown,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const completeRefresh = mutation({
+  args: {
+    articleId: v.id("articles"),
+    markdown: v.string(),
+    wordCount: v.optional(v.number()),
+    readingTime: v.optional(v.number()),
+    sources: v.optional(v.array(v.object({ url: v.string(), title: v.optional(v.string()) }))),
+    factCheckScore: v.optional(v.number()),
+    factCheckNotes: v.optional(v.string()),
+  },
+  handler: async (ctx, { articleId, markdown, wordCount, readingTime, sources, factCheckScore, factCheckNotes }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    const patch: Record<string, any> = {
+      markdown,
+      decayStatus: "refreshed",
+      lastRefreshedAt: Date.now(),
+      refreshCount: (article.refreshCount ?? 0) + 1,
+      updatedAt: Date.now(),
+    };
+    if (wordCount !== undefined) patch.wordCount = wordCount;
+    if (readingTime !== undefined) patch.readingTime = readingTime;
+    if (sources !== undefined) patch.sources = sources;
+    if (factCheckScore !== undefined) patch.factCheckScore = factCheckScore;
+    if (factCheckNotes !== undefined) patch.factCheckNotes = factCheckNotes;
+    await ctx.db.patch(articleId, patch);
+  },
+});
+
+// Get articles flagged for decay (for dashboard display)
+export const listDecaying = query({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const articles = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    return articles.filter((a) =>
+      a.decayStatus === "warning" || a.decayStatus === "declining"
+    );
+  },
+});
+
 // Admin: reset usage log for a user (temporary — remove after use)
 export const resetUsageLog = mutation({
   args: { userId: v.string() },

@@ -21,5 +21,8 @@ crons.monthly("relink-articles", { day: 1, hourUTC: 6, minuteUTC: 0 }, api.actio
 // Daily GSC sync: pull search performance data for all connected sites (2am UTC — after GSC data updates)
 crons.daily("gsc-sync", { hourUTC: 2, minuteUTC: 0 }, api.actions.gscSync.syncAllSites);
 
+// Daily content decay scan: detect declining articles using GSC data (3am UTC — after GSC sync)
+crons.daily("decay-scan", { hourUTC: 3, minuteUTC: 0 }, api.actions.contentDecay.scanAllSites);
+
 export default crons;
 

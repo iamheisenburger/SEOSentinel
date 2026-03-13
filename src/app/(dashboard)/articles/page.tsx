@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { FileText, PenTool, ArrowRight, Trash2, Upload, CheckCircle2 } from "lucide-react";
+import { FileText, PenTool, ArrowRight, Trash2, Upload, CheckCircle2, TrendingDown } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -227,7 +227,21 @@ export default function ArticlesPage() {
                     </p>
                   </div>
                 </Link>
-                <StatusBadge status={article.status} />
+                <div className="flex items-center gap-1.5">
+                  <StatusBadge status={article.status} />
+                  {(article as any).decayStatus === "declining" && (
+                    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-[#EF4444]/[0.08] text-[#F87171]" title={(article as any).decayReason || "Rankings declining"}>
+                      <TrendingDown className="h-2.5 w-2.5" />
+                      Declining
+                    </span>
+                  )}
+                  {(article as any).decayStatus === "warning" && (
+                    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-[#F59E0B]/[0.08] text-[#FBBF24]" title={(article as any).decayReason || "Rankings may be declining"}>
+                      <TrendingDown className="h-2.5 w-2.5" />
+                      Warning
+                    </span>
+                  )}
+                </div>
                 <span className="text-[12px] text-[#8B8FA3] tabular-nums hidden sm:block">
                   {wc.toLocaleString()}
                 </span>

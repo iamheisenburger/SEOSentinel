@@ -159,6 +159,21 @@ export default defineSchema({
         }),
       ),
     ),
+
+    // ── Content Decay Tracking ──
+    decayStatus: v.optional(v.string()), // "healthy" | "warning" | "declining" | "refreshing" | "refreshed"
+    decayDetectedAt: v.optional(v.number()),
+    decayReason: v.optional(v.string()),
+    positionHistory: v.optional(v.array(v.object({
+      date: v.string(),
+      position: v.number(),
+      clicks: v.number(),
+      impressions: v.number(),
+    }))),
+    lastRefreshedAt: v.optional(v.number()),
+    refreshCount: v.optional(v.number()),
+    previousVersion: v.optional(v.string()), // stores markdown before refresh
+
     createdAt: v.number(),
     updatedAt: v.number(),
   })
