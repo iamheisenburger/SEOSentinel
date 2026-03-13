@@ -354,14 +354,6 @@ export function SetupWizard() {
         domain: domain.trim(),
         ...(clerkUserId ? { clerkUserId } : {}),
         publishMethod,
-        repoOwner: repoOwner.trim() || undefined,
-        repoName: repoName.trim() || undefined,
-        githubToken: githubToken.trim() || undefined,
-        wpUrl: wpUrl.trim() || undefined,
-        wpUsername: wpUsername.trim() || undefined,
-        wpAppPassword: wpAppPassword.trim() || undefined,
-        webhookUrl: webhookUrl.trim() || undefined,
-        webhookSecret: webhookSecret.trim() || undefined,
         cadencePerWeek: 4,
         approvalRequired: true,
         autopilotEnabled: true,
@@ -477,6 +469,15 @@ export function SetupWizard() {
       await upsert({
         id: siteId,
         domain,
+        // Platform credentials collected in this step
+        repoOwner: repoOwner.trim() || undefined,
+        repoName: repoName.trim() || undefined,
+        wpUrl: wpUrl.trim() || undefined,
+        wpUsername: wpUsername.trim() || undefined,
+        wpAppPassword: wpAppPassword.trim() || undefined,
+        webhookUrl: webhookUrl.trim() || undefined,
+        webhookSecret: webhookSecret.trim() || undefined,
+        // Syndication
         mediumToken: mediumToken.trim() || undefined,
         linkedinAccessToken: linkedinToken.trim() || undefined,
         syndicationEnabled: syndicationEnabled || undefined,
@@ -668,124 +669,35 @@ export function SetupWizard() {
                 </div>
               </div>
 
-              {/* ── Platform-specific fields ── */}
-              {publishMethod === "github" && (
-                <div className="flex flex-col gap-3">
-                  <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
-                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+              {/* ── Brief description of chosen method ── */}
+              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                <p className="text-[11px] text-[#8B8FA3]">
+                  {publishMethod === "github" && (
+                    <>
                       <GitBranch className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
-                      Find these from your GitHub repo URL: <span className="text-[#EDEEF1] font-mono">github.com/<span className="text-[#0EA5E9]">owner</span>/<span className="text-[#0EA5E9]">repo</span></span>
-                    </p>
-                    <p className="text-[10px] text-[#565A6E] mt-1">
-                      Example: for <span className="font-mono text-[#8B8FA3]">github.com/acme/my-blog</span>, owner is <span className="text-[#EDEEF1]">acme</span> and repo is <span className="text-[#EDEEF1]">my-blog</span>
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Input
-                      label="GitHub Owner"
-                      placeholder="acme"
-                      value={repoOwner}
-                      onChange={(e) => setRepoOwner(e.target.value)}
-                    />
-                    <Input
-                      label="GitHub Repo"
-                      placeholder="my-blog"
-                      value={repoName}
-                      onChange={(e) => setRepoName(e.target.value)}
-                    />
-                  </div>
-                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                    <p className="text-[11px] text-[#8B8FA3]">
-                      <FileText className="inline h-3 w-3 mr-1 text-[#8B8FA3]" />
-                      Articles are committed as MDX files to your repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator.
-                    </p>
-                    <p className="text-[10px] text-[#565A6E] mt-1">
-                      <GitBranch className="inline h-3 w-3 mr-1" />
-                      You&apos;ll connect your GitHub account in the next steps.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {publishMethod === "wordpress" && (
-                <div className="flex flex-col gap-3">
-                  <div className="rounded-lg bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.1] p-3">
-                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
-                      <KeyRound className="inline h-3 w-3 mr-1 text-[#F59E0B]" />
-                      You&apos;ll need an <span className="text-[#EDEEF1]">Application Password</span> (not your login password).
-                    </p>
-                    <p className="text-[10px] text-[#565A6E] mt-1">
-                      In your WP admin: <span className="text-[#8B8FA3]">Users → Profile → scroll to &ldquo;Application Passwords&rdquo; → enter a name like &ldquo;Pentra&rdquo; → click &ldquo;Add New&rdquo;</span>. Copy the generated password.
-                    </p>
-                  </div>
-                  <Input
-                    label="WordPress URL"
-                    placeholder="https://yoursite.com"
-                    value={wpUrl}
-                    onChange={(e) => setWpUrl(e.target.value)}
-                  />
-                  <div className="grid grid-cols-2 gap-3">
-                    <Input
-                      label="Username"
-                      placeholder="admin"
-                      value={wpUsername}
-                      onChange={(e) => setWpUsername(e.target.value)}
-                    />
-                    <Input
-                      label="Application Password"
-                      type="password"
-                      placeholder="xxxx xxxx xxxx xxxx"
-                      value={wpAppPassword}
-                      onChange={(e) => setWpAppPassword(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {publishMethod === "webhook" && (
-                <div className="flex flex-col gap-3">
-                  <div className="rounded-lg bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.1] p-3">
-                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      Articles are committed as MDX files to your GitHub repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator. You&apos;ll connect your repo in the <span className="text-[#EDEEF1]">Connect</span> step.
+                    </>
+                  )}
+                  {publishMethod === "wordpress" && (
+                    <>
+                      <Globe className="inline h-3 w-3 mr-1 text-[#F59E0B]" />
+                      Articles are published directly to your WordPress site via the REST API. You&apos;ll enter your credentials in the <span className="text-[#EDEEF1]">Connect</span> step.
+                    </>
+                  )}
+                  {publishMethod === "webhook" && (
+                    <>
                       <Webhook className="inline h-3 w-3 mr-1 text-[#22C55E]" />
-                      We&apos;ll <span className="text-[#EDEEF1]">POST</span> a JSON payload with <span className="font-mono text-[#EDEEF1]">title</span>, <span className="font-mono text-[#EDEEF1]">markdown</span>, <span className="font-mono text-[#EDEEF1]">html</span>, and metadata to your endpoint.
-                    </p>
-                    <p className="text-[10px] text-[#565A6E] mt-1">
-                      Add a secret to verify requests are from Pentra. We&apos;ll sign the payload with HMAC-SHA256 and include it in the <span className="font-mono text-[#8B8FA3]">X-Signature</span> header.
-                    </p>
-                  </div>
-                  <Input
-                    label="Webhook URL"
-                    placeholder="https://api.yoursite.com/articles"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                  />
-                  <Input
-                    label="Secret (optional)"
-                    type="password"
-                    placeholder="your-webhook-secret"
-                    value={webhookSecret}
-                    onChange={(e) => setWebhookSecret(e.target.value)}
-                  />
-                </div>
-              )}
-
-              {publishMethod === "manual" && (
-                <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
-                  <p className="text-[12px] text-[#8B8FA3]">
-                    <Copy className="inline h-3.5 w-3.5 mr-1 text-[#0EA5E9]" />
-                    Articles will be generated and ready for you to copy. Use the <span className="text-[#EDEEF1]">Copy Markdown</span> or <span className="text-[#EDEEF1]">Copy HTML</span> buttons on each article to paste into any CMS — Wix, Squarespace, Shopify, Webflow, or anywhere else.
-                  </p>
-                </div>
-              )}
-
-                            {publishMethod !== "manual" && (
-                <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
-                  <Shield className="h-3.5 w-3.5 shrink-0 text-[#22C55E]" />
-                  <p className="text-[10px] text-[#565A6E]">
-                    Your credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted securely over <span className="text-[#8B8FA3]">HTTPS</span>. We never store plain-text passwords.
-                  </p>
-                </div>
-              )}
+                      We&apos;ll POST article data (title, markdown, HTML, metadata) to your endpoint. You&apos;ll configure the URL in the <span className="text-[#EDEEF1]">Connect</span> step.
+                    </>
+                  )}
+                  {publishMethod === "manual" && (
+                    <>
+                      <Copy className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
+                      Articles will be generated and ready for you to copy. Use the Copy Markdown or Copy HTML buttons to paste into any CMS — Wix, Squarespace, Shopify, Webflow, or anywhere else.
+                    </>
+                  )}
+                </p>
+              </div>
 
               <div className="mt-1 rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                 <p className="text-[12px] text-[#8B8FA3]">
@@ -1149,18 +1061,179 @@ export function SetupWizard() {
             <SectionHeader
               icon={BarChart3}
               title="Connect Your Tools"
-              subtitle="Optional — connect now or later from Settings"
+              subtitle="Set up publishing and connect optional integrations"
             />
 
-            <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] px-3 py-2 mb-5">
-              <p className="text-[11px] text-[#38BDF8]">
-                <Sparkles className="inline h-3 w-3 mr-1" />
-                These are optional. Pentra works without them, but connecting them unlocks rank tracking, decay detection, and auto content syndication.
-              </p>
-            </div>
+            {/* ── Publishing Platform Config ── */}
+            {publishMethod === "github" && (
+              <div className="mb-5">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <GitBranch className="h-4 w-4 text-[#0EA5E9]" />
+                  <h3 className="text-[13px] font-medium text-[#EDEEF1]">GitHub Publishing</h3>
+                  <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#0EA5E9]/[0.08] text-[#38BDF8]">Required</span>
+                </div>
+                <p className="text-[11px] text-[#565A6E] px-1 mb-3">
+                  Enter your repo details and connect your GitHub account so Pentra can commit articles as MDX files.
+                </p>
+
+                <div className="flex flex-col gap-3">
+                  <div className="rounded-lg bg-[#0EA5E9]/[0.04] border border-[#0EA5E9]/[0.1] p-3">
+                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      <GitBranch className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
+                      Find these from your GitHub repo URL: <span className="text-[#EDEEF1] font-mono">github.com/<span className="text-[#0EA5E9]">owner</span>/<span className="text-[#0EA5E9]">repo</span></span>
+                    </p>
+                    <p className="text-[10px] text-[#565A6E] mt-1">
+                      Example: for <span className="font-mono text-[#8B8FA3]">github.com/acme/my-blog</span>, owner is <span className="text-[#EDEEF1]">acme</span> and repo is <span className="text-[#EDEEF1]">my-blog</span>
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input
+                      label="GitHub Owner"
+                      placeholder="acme"
+                      value={repoOwner}
+                      onChange={(e) => setRepoOwner(e.target.value)}
+                    />
+                    <Input
+                      label="GitHub Repo"
+                      placeholder="my-blog"
+                      value={repoName}
+                      onChange={(e) => setRepoName(e.target.value)}
+                    />
+                  </div>
+
+                  {githubConnected ? (
+                    <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
+                        <Check className="h-4 w-4 text-[#22C55E]" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-medium text-[#22C55E]">GitHub connected</p>
+                        {githubUsername && (
+                          <p className="text-[11px] text-[#565A6E]">Signed in as @{githubUsername}</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => startOAuthPopup(siteId || "")}
+                        className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
+                      >
+                        Reconnect
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startOAuthPopup(siteId || "")}
+                      className="flex items-center justify-center gap-2 w-full rounded-lg bg-[#0EA5E9] px-4 py-3 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
+                    >
+                      <GitBranch className="h-4 w-4" />
+                      Connect GitHub Account
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {publishMethod === "wordpress" && (
+              <div className="mb-5">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <Globe className="h-4 w-4 text-[#F59E0B]" />
+                  <h3 className="text-[13px] font-medium text-[#EDEEF1]">WordPress Publishing</h3>
+                  <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#F59E0B]/[0.08] text-[#FBBF24]">Required</span>
+                </div>
+                <p className="text-[11px] text-[#565A6E] px-1 mb-3">
+                  Enter your WordPress credentials so Pentra can publish articles directly to your site via the REST API.
+                </p>
+
+                <div className="flex flex-col gap-3">
+                  <div className="rounded-lg bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.1] p-3">
+                    <p className="text-[11px] text-[#8B8FA3] leading-relaxed">
+                      <KeyRound className="inline h-3 w-3 mr-1 text-[#F59E0B]" />
+                      You&apos;ll need an <span className="text-[#EDEEF1]">Application Password</span> (not your login password).
+                    </p>
+                    <p className="text-[10px] text-[#565A6E] mt-1">
+                      In your WP admin: <span className="text-[#8B8FA3]">Users → Profile → scroll to &ldquo;Application Passwords&rdquo; → enter a name like &ldquo;Pentra&rdquo; → click &ldquo;Add New&rdquo;</span>. Copy the generated password.
+                    </p>
+                  </div>
+                  <Input
+                    label="WordPress URL"
+                    placeholder="https://yoursite.com"
+                    value={wpUrl}
+                    onChange={(e) => setWpUrl(e.target.value)}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input
+                      label="Username"
+                      placeholder="admin"
+                      value={wpUsername}
+                      onChange={(e) => setWpUsername(e.target.value)}
+                    />
+                    <Input
+                      label="Application Password"
+                      type="password"
+                      placeholder="xxxx xxxx xxxx xxxx"
+                      value={wpAppPassword}
+                      onChange={(e) => setWpAppPassword(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+                    <Shield className="h-3.5 w-3.5 shrink-0 text-[#22C55E]" />
+                    <p className="text-[10px] text-[#565A6E]">
+                      Your credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted securely over <span className="text-[#8B8FA3]">HTTPS</span>. We never store plain-text passwords.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {publishMethod === "webhook" && (
+              <div className="mb-5">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <Webhook className="h-4 w-4 text-[#22C55E]" />
+                  <h3 className="text-[13px] font-medium text-[#EDEEF1]">Webhook Publishing</h3>
+                  <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#22C55E]/[0.08] text-[#4ADE80]">Required</span>
+                </div>
+                <p className="text-[11px] text-[#565A6E] px-1 mb-3">
+                  We&apos;ll POST a JSON payload with the article title, markdown, HTML, and metadata to your endpoint whenever an article is published.
+                </p>
+
+                <div className="flex flex-col gap-3">
+                  <Input
+                    label="Webhook URL"
+                    placeholder="https://api.yoursite.com/articles"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                  />
+                  <Input
+                    label="Secret (optional)"
+                    type="password"
+                    placeholder="your-webhook-secret"
+                    value={webhookSecret}
+                    onChange={(e) => setWebhookSecret(e.target.value)}
+                  />
+                  <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                    <p className="text-[10px] text-[#565A6E]">
+                      If you add a secret, we&apos;ll sign the payload with HMAC-SHA256 and include it in the <span className="font-mono text-[#8B8FA3]">X-Signature</span> header so you can verify requests are from Pentra.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {publishMethod === "manual" && (
+              <div className="mb-5">
+                <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
+                    <Check className="h-4 w-4 text-[#22C55E]" />
+                  </div>
+                  <div>
+                    <p className="text-[13px] font-medium text-[#22C55E]">No setup needed</p>
+                    <p className="text-[11px] text-[#565A6E]">Articles will be ready for you to copy and paste into any CMS.</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* ── Google Search Console ── */}
-            <div className="mb-5">
+            <div className="border-t border-white/[0.04] pt-5 mb-5">
               <div className="flex items-center gap-2 mb-2 px-1">
                 <BarChart3 className="h-4 w-4 text-[#F59E0B]" />
                 <h3 className="text-[13px] font-medium text-[#EDEEF1]">Google Search Console</h3>
@@ -1187,9 +1260,9 @@ export function SetupWizard() {
                 <div>
                   <button
                     onClick={startGscOAuth}
-                    className="flex items-center justify-center gap-2 w-full rounded-lg bg-[#0EA5E9] px-4 py-3 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
+                    className="flex items-center justify-center gap-2 w-full rounded-lg border border-white/[0.1] bg-white/[0.02] px-4 py-3 text-[13px] font-medium text-[#EDEEF1] transition hover:bg-white/[0.05] hover:border-[#F59E0B]/30"
                   >
-                    <BarChart3 className="h-4 w-4" />
+                    <BarChart3 className="h-4 w-4 text-[#F59E0B]" />
                     Connect Google Search Console
                   </button>
                   <div className="mt-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
@@ -1203,48 +1276,6 @@ export function SetupWizard() {
                 </div>
               )}
             </div>
-
-            {/* ── GitHub Connect (only for GitHub publish method) ── */}
-            {publishMethod === "github" && (
-              <div className="border-t border-white/[0.04] pt-5 mb-5">
-                <div className="flex items-center gap-2 mb-2 px-1">
-                  <GitBranch className="h-4 w-4 text-[#8B8FA3]" />
-                  <h3 className="text-[13px] font-medium text-[#EDEEF1]">GitHub</h3>
-                  <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#0EA5E9]/[0.08] text-[#38BDF8]">Required for publishing</span>
-                </div>
-                <p className="text-[11px] text-[#565A6E] px-1 mb-3">
-                  Connect your GitHub account so Pentra can commit articles directly to your repo (<span className="text-[#8B8FA3]">{repoOwner}/{repoName}</span>).
-                </p>
-
-                {githubConnected ? (
-                  <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
-                      <Check className="h-4 w-4 text-[#22C55E]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-medium text-[#22C55E]">GitHub connected</p>
-                      {githubUsername && (
-                        <p className="text-[11px] text-[#565A6E]">Signed in as @{githubUsername}</p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => startOAuthPopup(siteId || "")}
-                      className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
-                    >
-                      Reconnect
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => startOAuthPopup(siteId || "")}
-                    className="flex items-center justify-center gap-2 w-full rounded-lg bg-[#0EA5E9] px-4 py-3 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
-                  >
-                    <GitBranch className="h-4 w-4" />
-                    Connect GitHub
-                  </button>
-                )}
-              </div>
-            )}
 
             {/* ── Content Syndication ── */}
             <div className="border-t border-white/[0.04] pt-5">
