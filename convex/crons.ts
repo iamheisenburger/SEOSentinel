@@ -18,5 +18,8 @@ crons.daily("autopilot-8", { hourUTC: 21, minuteUTC: 0 }, api.actions.pipeline.a
 // Monthly re-linking: update internal links on all published articles (1st of each month at 6am UTC)
 crons.monthly("relink-articles", { day: 1, hourUTC: 6, minuteUTC: 0 }, api.actions.pipeline.relinkAllArticles);
 
+// Daily GSC sync: pull search performance data for all connected sites (2am UTC — after GSC data updates)
+crons.daily("gsc-sync", { hourUTC: 2, minuteUTC: 0 }, api.actions.gscSync.syncAllSites);
+
 export default crons;
 

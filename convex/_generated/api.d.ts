@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as actions_gscSync from "../actions/gscSync.js";
 import type * as actions_pipeline from "../actions/pipeline.js";
 import type * as actions_scheduler from "../actions/scheduler.js";
 import type * as actions_seoData from "../actions/seoData.js";
@@ -19,6 +20,7 @@ import type * as pages from "../pages.js";
 import type * as planJobs from "../planJobs.js";
 import type * as planLimits from "../planLimits.js";
 import type * as publisher from "../publisher.js";
+import type * as searchPerformance from "../searchPerformance.js";
 import type * as sites from "../sites.js";
 import type * as topics from "../topics.js";
 
@@ -29,6 +31,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "actions/gscSync": typeof actions_gscSync;
   "actions/pipeline": typeof actions_pipeline;
   "actions/scheduler": typeof actions_scheduler;
   "actions/seoData": typeof actions_seoData;
@@ -40,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   planJobs: typeof planJobs;
   planLimits: typeof planLimits;
   publisher: typeof publisher;
+  searchPerformance: typeof searchPerformance;
   sites: typeof sites;
   topics: typeof topics;
 }>;

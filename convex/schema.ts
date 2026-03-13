@@ -57,6 +57,13 @@ export default defineSchema({
     youtubeEmbeds: v.optional(v.boolean()),
     urlStructure: v.optional(v.string()), // e.g. /blog/[slug]
 
+    // ── Google Search Console ──
+    gscAccessToken: v.optional(v.string()),
+    gscRefreshToken: v.optional(v.string()),
+    gscProperty: v.optional(v.string()), // e.g. "sc-domain:example.com"
+    gscEmail: v.optional(v.string()),
+    gscConnectedAt: v.optional(v.number()),
+
     // ── Plan features (synced from Clerk) ──
     planFeatures: v.optional(v.array(v.string())), // e.g. ["max_sites_3", "max_articles_25"]
 
@@ -179,6 +186,22 @@ export default defineSchema({
   })
     .index("by_site", ["siteId"])
     .index("by_status", ["status"]),
+
+  // Google Search Console performance snapshots (daily)
+  search_performance: defineTable({
+    siteId: v.id("sites"),
+    date: v.string(), // ISO date "2026-03-12"
+    query: v.string(), // search query
+    page: v.optional(v.string()), // URL that appeared
+    clicks: v.number(),
+    impressions: v.number(),
+    ctr: v.number(), // 0-1
+    position: v.number(), // average position
+    createdAt: v.number(),
+  })
+    .index("by_site", ["siteId"])
+    .index("by_site_date", ["siteId", "date"])
+    .index("by_site_query", ["siteId", "query"]),
 
   // Immutable usage log — tracks article generations (never deleted)
   usage_log: defineTable({

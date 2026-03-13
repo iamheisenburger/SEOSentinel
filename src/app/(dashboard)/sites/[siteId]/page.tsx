@@ -32,6 +32,9 @@ import {
   Copy,
   Shield,
   KeyRound,
+  BarChart3,
+  ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -773,6 +776,9 @@ function SettingsTab({
       {/* Connection */}
       <ConnectionSection site={site} />
 
+      {/* Google Search Console */}
+      <GSCSection site={site} />
+
       {/* General */}
       <SettingsSection title="General" icon={Globe}>
         <FieldRow label="Site Name" description="Display name for your website">
@@ -1122,6 +1128,125 @@ function ConnectionSection({ site }: { site: any }) {
               <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
               <p className="text-[10px] text-[#565A6E]">Credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted over <span className="text-[#8B8FA3]">HTTPS</span>.</p>
             </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ── Google Search Console Section ── */
+
+function GSCSection({ site }: { site: any }) {
+  const disconnectGsc = useMutation(api.sites.disconnectGsc);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  const isConnected = !!site.gscAccessToken;
+
+  const handleConnect = () => {
+    window.open(
+      "/api/gsc/auth?siteId=" + site._id,
+      "gsc-oauth",
+      "width=600,height=700,popup=yes"
+    );
+  };
+
+  const handleDisconnect = async () => {
+    if (!confirm("Disconnect Google Search Console? Historical data will be preserved.")) return;
+    setDisconnecting(true);
+    try {
+      await disconnectGsc({ siteId: site._id });
+    } catch (e) {
+      console.error("Failed to disconnect GSC:", e);
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
+        <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
+        <p className="text-[13px] font-semibold text-[#EDEEF1]">Google Search Console</p>
+      </div>
+      <div className="px-5 py-5">
+        <div className="flex flex-col gap-4">
+          {isConnected ? (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#22C55E]/[0.08]">
+                  <BarChart3 className="h-5 w-5 text-[#22C55E]" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-[14px] font-medium text-[#EDEEF1]">Connected</p>
+                  {site.gscEmail && (
+                    <p className="text-[12px] text-[#565A6E]">{site.gscEmail}</p>
+                  )}
+                </div>
+              </div>
+
+              {site.gscProperty && (
+                <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
+                  <ExternalLink className="h-3 w-3 shrink-0 text-[#0EA5E9]" />
+                  <p className="text-[12px] text-[#8B8FA3] font-mono">{site.gscProperty}</p>
+                </div>
+              )}
+
+              {site.gscConnectedAt && (
+                <p className="text-[11px] text-[#565A6E]">
+                  Connected {formatDistanceToNow(new Date(site.gscConnectedAt), { addSuffix: true })}
+                </p>
+              )}
+
+              <div className="flex items-center gap-3 rounded-lg px-4 py-3 bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]">
+                <Check className="h-4 w-4 text-[#22C55E]" />
+                <span className="flex-1 text-[12px] text-[#4ADE80]">Syncing daily at 2am UTC — rank tracking & decay detection active</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleConnect}
+                  className="text-[11px] text-[#8B8FA3] hover:text-[#0EA5E9] transition flex items-center gap-1"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Reconnect
+                </button>
+                <span className="text-[#565A6E]">·</span>
+                <button
+                  onClick={handleDisconnect}
+                  disabled={disconnecting}
+                  className="text-[11px] text-[#8B8FA3] hover:text-[#EF4444] transition disabled:opacity-50"
+                >
+                  {disconnecting ? "Disconnecting..." : "Disconnect"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F59E0B]/[0.08]">
+                  <BarChart3 className="h-5 w-5 text-[#F59E0B]" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-[14px] font-medium text-[#EDEEF1]">Not connected</p>
+                  <p className="text-[12px] text-[#565A6E]">Connect to track rankings, detect content decay, and optimize SEO</p>
+                </div>
+              </div>
+
+              <button
+                onClick={handleConnect}
+                className="flex items-center justify-center gap-2 rounded-lg bg-[#0EA5E9] px-4 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#38BDF8]"
+              >
+                <BarChart3 className="h-4 w-4" />
+                Connect Google Search Console
+              </button>
+
+              <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+                <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
+                <p className="text-[10px] text-[#565A6E]">Read-only access. We only fetch search analytics — no changes are made to your site.</p>
+              </div>
+            </>
           )}
         </div>
       </div>
