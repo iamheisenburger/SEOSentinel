@@ -478,7 +478,7 @@ Output ONLY the markdown content. No explanations or meta-commentary.`;
 
 export const autoRefreshTop = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  handler: async (ctx, { siteId }): Promise<{ refreshed: boolean; reason?: string; articleId?: string; title?: string }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 
