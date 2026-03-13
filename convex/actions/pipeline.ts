@@ -1476,12 +1476,11 @@ async function handlePlan(
     }
 
     // 5c. Quality gate — single pass, clean logic
-    const enrichedPlan: typeof plan = [];
-    const enrichmentData = new Map<string, {
-      searchVolume: number; keywordDifficulty: number; cpc: number;
-      serpIntent: string; volumeTrend: number[]; priority: number;
-      articleType?: string; recommendedArticleType?: string; paaQuestions?: string[];
-    }>();
+    // In data-first mode: topics WITHOUT real metrics are DROPPED (the AI was told to use exact keywords)
+    const enrichedPlan: (typeof plan[0] & {
+      searchVolume?: number; keywordDifficulty?: number; cpc?: number;
+      serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string; paaQuestions?: string[];
+    })[] = [];
     let kd0Count = 0;
 
     for (const topic of plan) {
@@ -1495,7 +1494,11 @@ async function handlePlan(
       }
 
       const m = metrics.find(x => x.keyword.toLowerCase() === kw);
-      if (!m) { enrichedPlan.push(topic); continue; } // No data — keep but don't score
+      if (!m) {
+        // No metrics = AI invented a keyword not in our discovered pool → drop it
+        console.log(`Blocked: "${topic.primaryKeyword}" (no metrics data — keyword not in discovered pool)`);
+        continue;
+      }
 
       // Hard kills
       if (m.searchVolume === 0 && m.difficulty === 0 && m.cpc === 0) {
@@ -1524,10 +1527,14 @@ async function handlePlan(
       const opportunity = scoreKeyword(m);
       const priority = opportunity >= 70 ? 5 : opportunity >= 55 ? 4 : opportunity >= 40 ? 3 : opportunity >= 20 ? 2 : 1;
 
-      enrichedPlan.push(topic);
-      enrichmentData.set(kw, {
-        searchVolume: m.searchVolume, keywordDifficulty: m.difficulty, cpc: m.cpc,
-        serpIntent: m.intent, volumeTrend: m.trend, priority,
+      enrichedPlan.push({
+        ...topic,
+        priority,
+        searchVolume: m.searchVolume,
+        keywordDifficulty: m.difficulty,
+        cpc: m.cpc,
+        serpIntent: m.intent,
+        volumeTrend: m.trend.length > 0 ? m.trend : undefined,
       });
       console.log(`✓ "${topic.primaryKeyword}": opp=${opportunity}, KD=${m.difficulty}, vol=${m.searchVolume}, pri=${priority}`);
     }
@@ -1539,42 +1546,20 @@ async function handlePlan(
     for (const topic of enrichedPlan) {
       try {
         const serp = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
-        const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
-        if (data) {
-          data.articleType = serp.recommendedArticleType;
-          data.recommendedArticleType = serp.recommendedArticleType;
-          data.paaQuestions = serp.paaQuestions.length > 0 ? serp.paaQuestions : undefined;
-        }
+        topic.recommendedArticleType = serp.recommendedArticleType;
         topic.articleType = serp.recommendedArticleType as any;
+        topic.paaQuestions = serp.paaQuestions.length > 0 ? serp.paaQuestions : undefined;
         console.log(`SERP: "${topic.primaryKeyword}" → ${serp.recommendedArticleType} (${serp.paaQuestions.length} PAA)`);
       } catch (e) { console.error(`SERP failed for "${topic.primaryKeyword}":`, e); }
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // STEP 6: Save fully enriched topics to DB
+    // STEP 6: Save fully enriched topics to DB (ONE atomic save — no half-baked topics)
     // ══════════════════════════════════════════════════════════════════════
 
     plan = enrichedPlan.slice(0, 10);
     await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
-    console.log(`Saved ${plan.length} topics`);
-
-    // Apply metrics
-    const savedTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
-    for (const topic of savedTopics) {
-      const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
-      if (!data || topic.searchVolume !== undefined) continue;
-      await ctx.runMutation(api.topics.updateSEOMetrics, {
-        topicId: topic._id,
-        searchVolume: data.searchVolume,
-        keywordDifficulty: data.keywordDifficulty,
-        cpc: data.cpc,
-        serpIntent: data.serpIntent,
-        volumeTrend: data.volumeTrend.length > 0 ? data.volumeTrend : undefined,
-        priority: data.priority,
-        ...(data.recommendedArticleType ? { recommendedArticleType: data.recommendedArticleType, articleType: data.articleType } : {}),
-        ...(data.paaQuestions ? { paaQuestions: data.paaQuestions } : {}),
-      });
-    }
+    console.log(`Saved ${plan.length} fully-enriched topics`);
   } catch (err) {
     console.error(`SEO enrichment failed, saving raw topics:`, err instanceof Error ? err.message : err);
     plan = plan.slice(0, 10);
