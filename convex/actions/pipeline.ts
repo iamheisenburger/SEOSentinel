@@ -1254,17 +1254,12 @@ async function handlePlan(
 
   const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
 
-  // Keyword-level quality filter (before AI sees them)
+  // Keyword-level quality filter — only blocks brands (niche relevance left to the AI)
   const isKeywordBlocked = (kw: string): string | null => {
     const kwLower = kw.toLowerCase();
     // Block third-party brand keywords
     for (const brand of blockedBrands) {
       if (kwLower.includes(brand)) return `brand:${brand}`;
-    }
-    // Block keywords with zero niche relevance (if we have enough niche context)
-    if (nicheTerms.size >= 5) {
-      const words = kwLower.replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
-      if (words.length > 0 && !words.some(w => nicheTerms.has(w))) return "off-topic";
     }
     return null;
   };
@@ -1272,10 +1267,12 @@ async function handlePlan(
   // Score each keyword
   const scoreKeyword = (k: { searchVolume: number; difficulty: number; cpc: number }) => {
     const vol = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
-    const kd = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * kdWeight) : 5; // KD 0 = minimal reward
+    // KD 0 + high volume = genuinely easy, reward it. KD 0 + low volume = uncertain, small penalty.
+    const kd = k.difficulty > 0
+      ? Math.max(0, (100 - k.difficulty) * kdWeight)
+      : (k.searchVolume >= 200 ? 30 : 10); // High-vol KD0 = easy win, low-vol KD0 = uncertain
     const cpc = Math.min(k.cpc * 4, 20);
-    const penalty = k.difficulty === 0 ? -10 : 0; // Unknown difficulty penalty
-    return Math.max(0, Math.round(vol + kd + cpc + penalty));
+    return Math.max(0, Math.round(vol + kd + cpc));
   };
 
   // Dedup helper
@@ -1513,11 +1510,12 @@ async function handlePlan(
         continue;
       }
 
-      // KD 0 cap — max 2 speculative keywords
-      if (m.difficulty === 0) {
+      // KD 0 with low volume = speculative keyword (cap at 3)
+      // KD 0 with high volume = genuinely easy keyword (always allow)
+      if (m.difficulty === 0 && m.searchVolume < 200) {
         kd0Count++;
-        if (kd0Count > 2) {
-          console.log(`Blocked: "${topic.primaryKeyword}" (KD0 cap: ${kd0Count}th unknown-difficulty keyword)`);
+        if (kd0Count > 3) {
+          console.log(`Blocked: "${topic.primaryKeyword}" (KD0+low-vol cap: ${kd0Count}th speculative keyword)`);
           continue;
         }
       }
