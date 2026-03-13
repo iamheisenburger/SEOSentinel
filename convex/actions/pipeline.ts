@@ -1222,9 +1222,22 @@ async function handlePlan(
     // Fallback: domain name
     if (seedKeywords.length === 0) seedKeywords.push(site.domain.replace(/\.\w+$/, ""));
 
+    // 7. Cross-product seeds: combine core terms for long-tail discovery
+    const coreTerms = seedKeywords.slice(0, 3);
+    const modifiers = ["how to", "best", "tool", "software", "guide", "tips", "strategy", "automation"];
+    for (const core of coreTerms) {
+      for (const mod of modifiers) {
+        const combo = `${core} ${mod}`.trim();
+        if (combo.split(/\s+/).length <= 5 && !seedKeywords.includes(combo)) {
+          seedKeywords.push(combo);
+        }
+      }
+      if (seedKeywords.length >= 25) break; // Don't overwhelm the API
+    }
+
     const locationCode = mapCountryToLocation(site.targetCountry);
-    console.log(`Discovering keywords with seeds: ${seedKeywords.join(", ")}`);
-    discoveredKeywords = (await discoverKeywords(seedKeywords, locationCode, site.language ?? "en", 80))
+    console.log(`Discovering keywords with ${seedKeywords.length} seeds: ${seedKeywords.slice(0, 10).join(", ")}${seedKeywords.length > 10 ? "..." : ""}`);
+    discoveredKeywords = (await discoverKeywords(seedKeywords, locationCode, site.language ?? "en", 120))
       .filter(k => k.searchVolume >= 10) // Keywords with any real search volume
       .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
     console.log(`Discovered ${discoveredKeywords.length} real keywords with volume.`);
@@ -1368,9 +1381,11 @@ async function handlePlan(
       .map(k => {
         const volScore = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
         // KD bonus scales with domain authority — weaker domains get more reward for low-KD keywords
-        const kdBonus = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * kdWeight) : 20;
+        // KD 0 = DataForSEO has no data → uncertain keyword, penalize rather than assume easy
+        const kdBonus = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * kdWeight) : 10;
         const cpcSig = Math.min(k.cpc * 4, 20);
-        return { ...k, opportunity: Math.round(volScore + kdBonus + cpcSig) };
+        const kd0Penalty = k.difficulty === 0 ? -10 : 0; // Penalize unknown-difficulty keywords
+        return { ...k, opportunity: Math.max(0, Math.round(volScore + kdBonus + cpcSig + kd0Penalty)) };
       })
       .sort((a, b) => b.opportunity - a.opportunity);
 
@@ -1398,28 +1413,47 @@ async function handlePlan(
 
     const dataFirstPrompt = [
       `You are creating blog topics for ${productName}. Each topic MUST use one of the keywords below as its primaryKeyword (copy EXACTLY).`,
-      `Create a compelling article topic for each keyword. Pick the best article type for each.`,
-      ``,
-      `<keywords>`,
-      ...candidates.map(k => `- "${k.keyword}" (${k.searchVolume}/mo, KD:${k.difficulty}, $${k.cpc.toFixed(2)} CPC, opp:${k.opportunity})`),
-      `</keywords>`,
       ``,
       `<product>`,
       `Name: ${productName} | Domain: ${site.domain}`,
       site.siteSummary ? `About: ${site.siteSummary}` : "",
       site.niche ? `Niche: ${site.niche}` : "",
+      site.blogTheme ? `Blog Theme: ${site.blogTheme}` : "",
+      site.keyFeatures?.length ? `Key Features: ${site.keyFeatures.join(", ")}` : "",
+      site.targetAudienceSummary ? `Target Audience: ${site.targetAudienceSummary}` : "",
+      site.painPoints?.length ? `Audience Pain Points: ${site.painPoints.join(", ")}` : "",
       `</product>`,
+      ``,
+      `<relevance_rules>`,
+      `CRITICAL: Only pick keywords that someone interested in ${productName}'s product/niche would actually search for.`,
+      `A keyword is RELEVANT if:`,
+      `- It relates to the product's core functionality or use cases`,
+      `- It addresses the target audience's pain points or needs`,
+      `- It covers topics in the product's niche that would attract potential users`,
+      `- The article could naturally mention or showcase ${productName}`,
+      ``,
+      `A keyword is IRRELEVANT if:`,
+      `- It's about a completely different industry or domain`,
+      `- The target audience would never search for it`,
+      `- You can't connect it to the product in any meaningful way`,
+      `- It names a competing product (e.g. ChatGPT, Jasper, etc.)`,
+      `SKIP irrelevant keywords entirely. It's better to return 12 relevant topics than 18 with filler.`,
+      `</relevance_rules>`,
+      ``,
+      `<keywords>`,
+      ...candidates.map(k => `- "${k.keyword}" (${k.searchVolume}/mo, KD:${k.difficulty}, $${k.cpc.toFixed(2)} CPC, opp:${k.opportunity})`),
+      `</keywords>`,
       ``,
       existingKeywords.length > 0 ? `<existing_topics>\nSkip these:\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</existing_topics>` : "",
       ``,
-      `Return JSON array of 18 topics. Use the EXACT keyword string as primaryKeyword. Format:`,
-      `[{"label":"compelling blog title","primaryKeyword":"exact keyword from list","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this matters for the audience"}]`,
+      `Return JSON array of up to 18 topics (only include RELEVANT ones). Use the EXACT keyword string as primaryKeyword. Format:`,
+      `[{"label":"compelling blog title","primaryKeyword":"exact keyword from list","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this keyword is relevant to ${productName}'s audience"}]`,
       ``,
-      `Pick diverse keywords that cover different aspects of ${productName}'s niche. Mix article types. Pick ALL 18 — the system will filter by quality, so more is better.`,
+      `Prioritize: highest opportunity score + most relevant to ${productName}. Mix article types.`,
     ].filter(Boolean).join("\n");
 
     await reportPlanProgress(2, "AI creating topics from verified keywords...");
-    const text = await callClaude(dataFirstPrompt, `Create exactly 18 topics from the keyword list. Use exact keywords as primaryKeyword. More is better — the system filters by quality.`, 8192);
+    const text = await callClaude(dataFirstPrompt, `Create up to 18 topics from the keyword list. ONLY include keywords relevant to ${productName}. Use exact keywords as primaryKeyword. Skip irrelevant keywords.`, 8192);
     plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 18);
     console.log(`AI generated ${plan.length} topics. Keywords: ${plan.map(t => `"${t.primaryKeyword}"`).join(", ")}`);
 
@@ -1606,8 +1640,10 @@ async function handlePlan(
 
       // Compute opportunity score
       const volumeScore = kwMetric.searchVolume > 0 ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) : 0;
-      const difficultyBonus = kwMetric.difficulty > 0 ? Math.max(0, (100 - kwMetric.difficulty) * kdWeight) : 20;
+      // KD 0 = no data from DataForSEO → uncertain keyword, don't reward as "easy"
+      const difficultyBonus = kwMetric.difficulty > 0 ? Math.max(0, (100 - kwMetric.difficulty) * kdWeight) : 10;
       const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
+      const kd0Penalty = kwMetric.difficulty === 0 ? -10 : 0;
       let trendBonus = 0;
       if (kwMetric.trend.length >= 6) {
         const recent = kwMetric.trend.slice(0, 3).reduce((a, b) => a + b, 0) / 3;
@@ -1617,7 +1653,7 @@ async function handlePlan(
           trendBonus = Math.max(-5, Math.min(5, Math.round(change * 10)));
         }
       }
-      const opportunityScore = Math.max(0, Math.min(100, Math.round(volumeScore + difficultyBonus + cpcSignal + trendBonus)));
+      const opportunityScore = Math.max(0, Math.min(100, Math.round(volumeScore + difficultyBonus + cpcSignal + trendBonus + kd0Penalty)));
 
       if (opportunityScore < effectiveMinOpp) {
         return { pass: false, reason: `opportunity ${opportunityScore} < ${effectiveMinOpp}`, score: opportunityScore };
@@ -1692,6 +1728,26 @@ async function handlePlan(
         console.log(`Backfill: rescued "${topic.primaryKeyword}" (opportunity=${opportunityScore}${kwMetric ? `, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}` : ""})`);
       }
       if (backfilled > 0) console.log(`Backfill: rescued ${backfilled} topics with relaxed thresholds → ${enrichedPlan.length} total.`);
+    }
+
+    // ── KD 0 cap: max 2 topics with no difficulty data (speculative keywords) ──
+    let kd0Count = 0;
+    const kd0Capped: typeof enrichedPlan = [];
+    for (const topic of enrichedPlan) {
+      const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
+      if (data && data.keywordDifficulty === 0) {
+        kd0Count++;
+        if (kd0Count > 2) {
+          console.log(`KD0 cap: dropping "${topic.primaryKeyword}" (${kd0Count}th no-data keyword, max 2 allowed)`);
+          continue;
+        }
+      }
+      kd0Capped.push(topic);
+    }
+    if (kd0Capped.length < enrichedPlan.length) {
+      console.log(`KD0 cap: ${enrichedPlan.length} → ${kd0Capped.length} (removed ${enrichedPlan.length - kd0Capped.length} speculative keywords)`);
+      enrichedPlan.length = 0;
+      enrichedPlan.push(...kd0Capped);
     }
 
     // ── SERP Analysis for surviving topics (in-memory) ──
