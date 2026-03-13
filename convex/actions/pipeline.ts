@@ -1462,12 +1462,12 @@ async function handlePlan(
     console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >60%).`);
     plan = kept;
   }
-  plan = plan.slice(0, 10);
-  await reportPlanProgress(3, "Deduplicating and saving topics...");
-  await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
-  console.log(`Generated ${plan.length} new diverse topics.`);
+  plan = plan.slice(0, 12); // Keep up to 12 candidates for enrichment (quality gate will trim)
+  await reportPlanProgress(3, "Deduplicating topics...");
+  console.log(`${plan.length} candidate topics after dedup. Starting enrichment before saving...`);
 
-  // ── Autonomous SEO Optimization: enrich, filter, and optimize topics ──
+  // ── Enrich ALL topics in-memory before saving anything to DB ──
+  // This prevents half-baked topics from appearing in the UI.
   try {
     await reportPlanProgress(4, "Fetching keyword metrics (volume, difficulty, CPC)...");
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
@@ -1503,119 +1503,169 @@ async function handlePlan(
     }
     console.log(`Keyword metrics: ${metrics.length} total (${keywords.length - undiscoveredKeywords.length} pre-discovered, ${undiscoveredKeywords.length} fresh)`);
 
-    // Get all topics we just inserted to update them
-    const allTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
-    const recentTopics = allTopics.filter(
-      (t: { primaryKeyword: string; searchVolume?: number }) =>
-        keywords.some((kw) => kw.toLowerCase() === t.primaryKeyword.toLowerCase()) &&
-        t.searchVolume === undefined,
-    );
+    // ── QUALITY GATE: filter out topics with no SEO potential (in-memory) ──
+    const enrichedPlan: typeof plan = [];
+    const enrichmentData = new Map<string, {
+      searchVolume: number; keywordDifficulty: number; cpc: number;
+      serpIntent: string; volumeTrend: number[]; priority: number;
+      articleType?: string; recommendedArticleType?: string; paaQuestions?: string[];
+    }>();
 
-    // ── QUALITY GATE: Remove topics with no SEO potential ──
-    // The system decides what's worth writing about. Users shouldn't see bad topics.
-    const topicsToRemove: string[] = [];
-    for (const topic of recentTopics) {
+    // Build competitor brand blocklist from site.competitors (e.g. "writesonic.com" → "writesonic")
+    const competitorBrands = new Set(
+      (site.competitors ?? []).map((c: string) =>
+        c.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "")
+          .replace(/\.\w+$/, "").toLowerCase(),
+      ).filter((b: string) => b.length > 2),
+    );
+    // Also add the cleaned competitor names
+    for (const name of competitorNames) {
+      if (name.length > 2) competitorBrands.add(name.toLowerCase());
+    }
+
+    for (const topic of plan) {
+      // Kill topics that contain competitor brand names
+      if (competitorBrands.size > 0) {
+        const kwLower = topic.primaryKeyword.toLowerCase();
+        const labelLower = topic.label.toLowerCase();
+        const mentionsCompetitor = [...competitorBrands].find(
+          brand => kwLower.includes(brand) || labelLower.includes(brand),
+        );
+        if (mentionsCompetitor) {
+          console.log(`Quality gate: removing "${topic.primaryKeyword}" (contains competitor brand "${mentionsCompetitor}")`);
+          continue;
+        }
+      }
+
       const kwMetric = metrics.find(
         (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
       );
-      if (!kwMetric) continue;
-
-      // Kill topics where DataForSEO returned no data at all (keyword doesn't exist in search data)
-      if (kwMetric.searchVolume === 0 && kwMetric.difficulty === 0 && kwMetric.cpc === 0) {
-        topicsToRemove.push(topic._id);
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (no search data found — keyword too niche/nonexistent)`);
+      if (!kwMetric) {
+        // No metrics found — keep with default priority but flag
+        enrichedPlan.push(topic);
         continue;
       }
 
-      // Kill topics with zero search volume AND high difficulty (unwinnable)
+      // Kill topics where DataForSEO returned no data at all
+      if (kwMetric.searchVolume === 0 && kwMetric.difficulty === 0 && kwMetric.cpc === 0) {
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (no search data — keyword doesn't exist)`);
+        continue;
+      }
+
+      // Kill topics with zero volume AND high difficulty (unwinnable)
       if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
-        topicsToRemove.push(topic._id);
         console.log(`Quality gate: removing "${topic.primaryKeyword}" (0 volume, ${kwMetric.difficulty} KD — unwinnable)`);
         continue;
       }
 
-      // Kill topics with very low opportunity (below minimum threshold)
-      const quickVolScore = kwMetric.searchVolume > 0 ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) : 0;
-      const quickDiffBonus = kwMetric.difficulty > 0 ? Math.max(0, (100 - kwMetric.difficulty) * 0.4) : 0; // KD=0 means no data, not easy
-      const quickCpc = Math.min(kwMetric.cpc * 4, 20);
-      const quickOpp = Math.round(quickVolScore + quickDiffBonus + quickCpc);
-      if (quickOpp < 25) {
-        topicsToRemove.push(topic._id);
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (opportunity ${quickOpp}/100 — below threshold)`);
+      // Kill topics too hard for realistic ranking (KD > 65 AND volume < 500)
+      // High-KD is only worth it if the volume justifies the effort
+      if (kwMetric.difficulty > 65 && kwMetric.searchVolume < 500) {
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (KD ${kwMetric.difficulty} too hard for ${kwMetric.searchVolume}/mo volume)`);
         continue;
       }
 
-      // ── Compute opportunity score: the autonomous ranking metric ──
-      // Formula: volumeScore (0-40) + difficultyBonus (0-40) + cpcSignal (0-20) + trendBonus (-5 to +5) = ~max 105
+      // Kill very low volume topics (< 30/mo) — not worth the pipeline cost
+      if (kwMetric.searchVolume > 0 && kwMetric.searchVolume < 30) {
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (${kwMetric.searchVolume}/mo — too low volume)`);
+        continue;
+      }
+
+      // Compute opportunity score
       const volumeScore = kwMetric.searchVolume > 0
-        ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) // log10: 100→26, 500→35, 1K→39, 10K→40
+        ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40)
         : 0;
       const difficultyBonus = kwMetric.difficulty > 0
-        ? Math.max(0, (100 - kwMetric.difficulty) * 0.4) // KD 30→28, KD 50→20, KD 100→0
-        : 20; // KD=0 means no data — assume moderate difficulty (neutral 20/40)
-      const cpcSignal = Math.min(kwMetric.cpc * 4, 20); // CPC $1→4, $3→12, $5→20
-      // Trend bonus: compare recent 3 months avg vs older 3 months avg
+        ? Math.max(0, (100 - kwMetric.difficulty) * 0.4)
+        : 20;
+      const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
       let trendBonus = 0;
       if (kwMetric.trend.length >= 6) {
         const recent = kwMetric.trend.slice(0, 3).reduce((a, b) => a + b, 0) / 3;
         const older = kwMetric.trend.slice(3, 6).reduce((a, b) => a + b, 0) / 3;
         if (older > 0) {
-          const change = (recent - older) / older; // e.g. +0.3 = 30% growth
-          trendBonus = Math.max(-5, Math.min(5, Math.round(change * 10))); // cap at ±5
+          const change = (recent - older) / older;
+          trendBonus = Math.max(-5, Math.min(5, Math.round(change * 10)));
         }
       }
       const opportunityScore = Math.max(0, Math.min(100, Math.round(volumeScore + difficultyBonus + cpcSignal + trendBonus)));
-      // Map opportunity score to 1-5 priority (used by scheduler)
+
+      if (opportunityScore < 25) {
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (opportunity ${opportunityScore}/100 — below threshold)`);
+        continue;
+      }
+
       const autoPriority = opportunityScore >= 70 ? 5
         : opportunityScore >= 55 ? 4
         : opportunityScore >= 40 ? 3
         : opportunityScore >= 25 ? 2
         : 1;
 
-      await ctx.runMutation(api.topics.updateSEOMetrics, {
-        topicId: topic._id,
+      enrichedPlan.push(topic);
+      enrichmentData.set(topic.primaryKeyword.toLowerCase(), {
         searchVolume: kwMetric.searchVolume,
         keywordDifficulty: kwMetric.difficulty,
         cpc: kwMetric.cpc,
         serpIntent: kwMetric.intent,
-        volumeTrend: kwMetric.trend.length > 0 ? kwMetric.trend : undefined,
+        volumeTrend: kwMetric.trend,
         priority: autoPriority,
       });
-      console.log(`Scored "${topic.primaryKeyword}": opportunity=${opportunityScore}, priority=${autoPriority}`);
+      console.log(`Scored "${topic.primaryKeyword}": opportunity=${opportunityScore}, priority=${autoPriority}, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}`);
     }
 
-    // Remove low-potential topics
-    for (const id of topicsToRemove) {
-      try {
-        await ctx.runMutation(api.topics.remove, { topicId: id as any });
-      } catch { /* topic may already be gone */ }
-    }
-    if (topicsToRemove.length > 0) {
-      console.log(`Quality gate: removed ${topicsToRemove.length} low-potential topics.`);
-    }
+    console.log(`Quality gate: ${plan.length} → ${enrichedPlan.length} topics survived.`);
 
-    // ── SERP Analysis + Auto Article Type for ALL remaining topics ──
+    // ── SERP Analysis for surviving topics (in-memory) ──
     await reportPlanProgress(5, "Analyzing Google SERPs for optimal article formats...");
-    const remainingTopics = recentTopics.filter((t: any) => !topicsToRemove.includes(t._id));
-    for (const topic of remainingTopics) {
+    for (const topic of enrichedPlan) {
       try {
         const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
-        // Auto-set article type from SERP — the system decides, not the user
-        const updates: any = {
-          topicId: topic._id,
-          recommendedArticleType: serpAnalysis.recommendedArticleType,
-          articleType: serpAnalysis.recommendedArticleType, // autonomous: override AI guess with SERP data
-          paaQuestions: serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined,
-        };
-        await ctx.runMutation(api.topics.updateSEOMetrics, updates);
+        const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
+        if (data) {
+          data.articleType = serpAnalysis.recommendedArticleType;
+          data.recommendedArticleType = serpAnalysis.recommendedArticleType;
+          data.paaQuestions = serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined;
+        }
+        // Override AI article type with SERP-recommended type
+        topic.articleType = serpAnalysis.recommendedArticleType as any;
         console.log(`SERP optimized "${topic.primaryKeyword}": type=${serpAnalysis.recommendedArticleType}, PAA=${serpAnalysis.paaQuestions.length}`);
       } catch (serpErr) {
         console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);
       }
     }
+
+    // ── NOW save everything to DB in one shot — fully enriched ──
+    plan = enrichedPlan.slice(0, 10);
+    await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
+    console.log(`Saved ${plan.length} fully-enriched topics to DB.`);
+
+    // Apply SEO metrics to the saved topics
+    const savedTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
+    for (const topic of savedTopics) {
+      const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
+      if (!data || topic.searchVolume !== undefined) continue; // Already enriched or no data
+      await ctx.runMutation(api.topics.updateSEOMetrics, {
+        topicId: topic._id,
+        searchVolume: data.searchVolume,
+        keywordDifficulty: data.keywordDifficulty,
+        cpc: data.cpc,
+        serpIntent: data.serpIntent,
+        volumeTrend: data.volumeTrend.length > 0 ? data.volumeTrend : undefined,
+        priority: data.priority,
+        ...(data.recommendedArticleType ? {
+          recommendedArticleType: data.recommendedArticleType,
+          articleType: data.articleType,
+        } : {}),
+        ...(data.paaQuestions ? { paaQuestions: data.paaQuestions } : {}),
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`SEO optimization failed (topics saved without metrics): ${msg}`);
+    console.error(`SEO optimization failed, saving topics without metrics: ${msg}`);
+    // Fallback: save un-enriched topics so user doesn't get nothing
+    plan = plan.slice(0, 10);
+    await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
+    console.log(`Fallback: saved ${plan.length} topics without SEO enrichment.`);
   }
 
   await reportPlanProgress(6, "Content strategy ready!");
