@@ -1648,8 +1648,8 @@ async function handlePlan(
       const effectiveMaxKD = relaxed ? relaxedKDCeiling : maxKD;
 
       // Always kill competitor brand mentions (never relax this)
+      const kwLower = topic.primaryKeyword.toLowerCase();
       if (competitorBrands.size > 0) {
-        const kwLower = topic.primaryKeyword.toLowerCase();
         const labelLower = topic.label.toLowerCase();
         const mentionsCompetitor = [...competitorBrands].find(
           brand => kwLower.includes(brand) || labelLower.includes(brand),
@@ -1657,15 +1657,23 @@ async function handlePlan(
         if (mentionsCompetitor) return { pass: false, reason: `competitor brand "${mentionsCompetitor}"`, score: 0 };
       }
 
-      // ── Niche relevance check: keyword must share at least 1 term with site's niche vocabulary ──
-      // This prevents completely off-topic keywords like "b2b case study" for an SEO tool
-      if (nicheTerms.size >= 5 && !relaxed) { // Only enforce when we have enough niche context
+      // Kill keywords containing third-party product names that aren't the site's own product
+      // This is general: any keyword with a recognizable product brand drives traffic to THAT brand, not the user's
+      const ownBrand = (site.siteName ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const thirdPartyBrands = ["chatgpt","openai","jasper","writesonic","copy.ai","copyai","surfer","semrush","ahrefs","moz","grammarly","hubspot","wordpress","shopify","wix","squarespace","notion","canva","mailchimp","salesforce","zapier","hootsuite","buffer"];
+      const mentionsBrand = thirdPartyBrands.find(brand => {
+        if (brand === ownBrand) return false; // Don't filter own brand
+        return kwLower.includes(brand);
+      });
+      if (mentionsBrand) return { pass: false, reason: `third-party brand "${mentionsBrand}" in keyword (drives traffic to them, not us)`, score: 0 };
+
+      // ── Niche relevance check: KEYWORD must share at least 1 term with site's niche vocabulary ──
+      // Only check the keyword itself — NOT the AI-generated label (AI always makes labels sound relevant)
+      if (nicheTerms.size >= 5 && !relaxed) {
         const kwWords = topic.primaryKeyword.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
-        const labelWords = topic.label.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
-        const allTopicWords = [...kwWords, ...labelWords];
-        const nicheOverlap = allTopicWords.filter(w => nicheTerms.has(w)).length;
+        const nicheOverlap = kwWords.filter(w => nicheTerms.has(w)).length;
         if (nicheOverlap === 0) {
-          return { pass: false, reason: `no niche relevance (0 term overlap with site profile)`, score: 5 };
+          return { pass: false, reason: `keyword "${topic.primaryKeyword}" has no niche relevance (0 term overlap)`, score: 5 };
         }
       }
 
