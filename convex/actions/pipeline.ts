@@ -1150,13 +1150,32 @@ async function handlePlan(
     (t: { label: string }) => t.label,
   );
 
-  await reportPlanProgress(1, "Analyzing site and existing content...");
+  await reportPlanProgress(1, "Analyzing site authority and existing content...");
   console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
 
   const productName = site.siteName ?? site.domain;
   const competitorNames = (site.competitors ?? []).map((c: string) =>
     c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
   );
+
+  // ── Domain Authority: determine what difficulty level this site can realistically target ──
+  let domainMetrics: { domainRank: number; organicTraffic: number; backlinks: number; referringDomains: number } | null = null;
+  let maxKD = 35; // Conservative default
+  try {
+    const { getDomainAuthority, computeMaxKD } = await import("./seoData");
+    domainMetrics = await getDomainAuthority(site.domain);
+    maxKD = computeMaxKD(domainMetrics);
+    if (domainMetrics) {
+      console.log(`Domain authority: DR=${domainMetrics.domainRank}, traffic=${domainMetrics.organicTraffic}/mo, backlinks=${domainMetrics.backlinks}, referring_domains=${domainMetrics.referringDomains} → maxKD=${maxKD}`);
+    } else {
+      console.log(`Domain authority: no data (new or unindexed domain) → maxKD=${maxKD}`);
+    }
+  } catch (err) {
+    console.log("Domain authority lookup unavailable:", err);
+  }
+  const domainRank = domainMetrics?.domainRank ?? 0;
+  // KD weight for scoring — low-authority sites get much more reward for targeting easy keywords
+  const kdWeight = domainRank >= 50 ? 0.4 : domainRank >= 20 ? 0.5 : 0.6;
 
   // ── Keyword Discovery: find real keywords from DataForSEO before AI topic generation ──
   let discoveredKeywords: { keyword: string; searchVolume: number; difficulty: number; cpc: number }[] = [];
@@ -1274,32 +1293,40 @@ async function handlePlan(
     `Instead use formats that position ${productName} as THE solution without needing to list others.`,
     `</banned_content>`,
     ``,
+    `<site_authority>`,
+    `Domain: ${site.domain}`,
+    `Domain Rank: ${domainRank}/100 (${domainRank <= 10 ? "low authority" : domainRank <= 30 ? "developing authority" : domainRank <= 50 ? "moderate authority" : "strong authority"})`,
+    `Max keyword difficulty to target: ${maxKD}`,
+    `Strategy: ${domainRank <= 10
+      ? "LOW AUTHORITY — focus on long-tail, low-competition keywords (3-5 words). Target gaps where small sites rank. Avoid head terms dominated by major sites. Best wins: how-to guides, specific niche queries, question-based keywords."
+      : domainRank <= 30
+        ? "DEVELOPING AUTHORITY — mix of long-tail and medium-competition keywords. Can start competing for keywords with KD up to " + maxKD + "."
+        : domainRank <= 50
+          ? "MODERATE AUTHORITY — can target medium-competition keywords. Mix of broad and niche terms."
+          : "STRONG AUTHORITY — can target competitive keywords. Focus on high-volume opportunities."}`,
+    `</site_authority>`,
+    ``,
     `<topic_rules>`,
-    `CRITICAL: Your #1 job is to find keywords people actually search for in HIGH VOLUME. Every topic must target a keyword with real search demand — not obscure product-specific phrases.`,
+    `CRITICAL: Your #1 job is to find keywords that ${productName} can REALISTICALLY RANK for given its domain authority (DR ${domainRank}). Every topic must target a keyword with real search demand AND achievable difficulty.`,
     ``,
     `1. KEYWORD-FIRST approach: Think "what are people in this niche Googling?" first, then connect it to ${productName}. NOT the reverse.`,
-    `   - CRITICAL: Only use keywords that REAL PEOPLE actually type into Google. Think like a searcher, not a marketer.`,
-    `   - Target keywords with 500+ monthly searches. Use common, well-known phrases people actually Google.`,
-    `   - Use 2-4 word keywords. Shorter = more search volume. "content marketing" > "automated content publishing workflow"`,
-    `   - NEVER invent keywords. Use established search terms from the industry. Google Autocomplete-style phrases.`,
-    `   - Examples of GOOD keywords: "content marketing strategy", "SEO tools", "blog post ideas", "how to write a blog post"`,
-    `   - Examples of BAD keywords: "autonomous content generation", "scale content production", "web research content writing"`,
+    `   - Only use keywords that REAL PEOPLE actually type into Google. Think like a searcher, not a marketer.`,
+    `   - Use 2-5 word keywords. NEVER invent keywords — use established search terms.`,
     `   - The article will naturally mention ${productName} — the keyword itself should be a generic search term`,
-    `2. Allowed keyword styles (ordered by traffic potential):`,
-    `   - "[Industry Problem/Question]" — pure search demand (e.g. "how to increase website traffic")`,
-    `   - "What Is [Broad Concept]" — high-volume informational (e.g. "what is content marketing")`,
-    `   - "How to [Achieve Outcome]" — actionable guides (e.g. "how to write blog posts faster")`,
-    `   - "[Broad Topic] for [Audience]" — niche targeting (e.g. "SEO for SaaS companies")`,
-    `   - "[Number] [Adjective] [Category] [Qualifier]" — listicles (e.g. "best AI writing tools 2026")`,
-    `   - "[X] vs [Y]" — comparison searches (high intent)`,
+    `2. Keyword styles (ordered by ranking potential for DR ${domainRank} sites):`,
+    `   - "How to [Achieve Outcome]" — actionable guides, often lower competition`,
+    `   - "[Topic] for [Specific Audience]" — niche targeting reduces competition`,
+    `   - "What Is [Concept]" — informational, can rank with good content`,
+    `   - "[Number] Best/Top [Category]" — listicles`,
+    `   - "[X] vs [Y]" — comparison searches (high commercial intent)`,
+    `   - "[Industry Problem]" — pure search demand`,
     `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
-    `4. Target keywords that are 2-5 words long. Shorter = higher volume. Don't make keywords too specific or long.`,
-    `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 keyword. Spread across the full breadth of the niche.`,
+    `4. DIFFICULTY CEILING: Do NOT suggest keywords you estimate would have difficulty above ${maxKD}. This site cannot rank for those yet.`,
+    `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 meaningful word. Spread across the full breadth of the niche.`,
     `6. Generate exactly 12 new topics. Return a JSON array with exactly 12 items.`,
-    `7. Topics should form a funnel: awareness (broad, high-volume) → consideration → decision (specific, high-intent).`,
-    `8. At least 4 topics should target keywords with estimated 1,000+ monthly search volume.`,
-    site.anchorKeywords?.length ? `9. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
-    site.language && site.language !== "en" ? `10. All topic labels and keywords must be in ${site.language}.` : "",
+    `7. Topics should form a funnel: awareness → consideration → decision.`,
+    site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
+    site.language && site.language !== "en" ? `9. All topic labels and keywords must be in ${site.language}.` : "",
     `</topic_rules>`,
     ``,
     `<priority_scoring>`,
@@ -1337,9 +1364,11 @@ async function handlePlan(
     const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
     const scoredCandidates = discoveredKeywords
       .filter(k => !existingSet.has(k.keyword.toLowerCase()))
+      .filter(k => k.difficulty <= maxKD || k.difficulty === 0) // Respect domain authority KD ceiling
       .map(k => {
         const volScore = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
-        const kdBonus = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * 0.4) : 20;
+        // KD bonus scales with domain authority — weaker domains get more reward for low-KD keywords
+        const kdBonus = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * kdWeight) : 20;
         const cpcSig = Math.min(k.cpc * 4, 20);
         return { ...k, opportunity: Math.round(volScore + kdBonus + cpcSig) };
       })
@@ -1558,10 +1587,9 @@ async function handlePlan(
         continue;
       }
 
-      // Kill topics too hard for realistic ranking (KD > 65 AND volume < 500)
-      // High-KD is only worth it if the volume justifies the effort
-      if (kwMetric.difficulty > 65 && kwMetric.searchVolume < 500) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (KD ${kwMetric.difficulty} too hard for ${kwMetric.searchVolume}/mo volume)`);
+      // Kill topics exceeding domain authority KD ceiling (unless volume is extremely high)
+      if (kwMetric.difficulty > maxKD && kwMetric.searchVolume < 5000) {
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (KD ${kwMetric.difficulty} exceeds domain ceiling ${maxKD} for ${kwMetric.searchVolume}/mo)`);
         continue;
       }
 
@@ -1571,12 +1599,12 @@ async function handlePlan(
         continue;
       }
 
-      // Compute opportunity score
+      // Compute opportunity score — kdWeight adapts to domain authority
       const volumeScore = kwMetric.searchVolume > 0
         ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40)
         : 0;
       const difficultyBonus = kwMetric.difficulty > 0
-        ? Math.max(0, (100 - kwMetric.difficulty) * 0.4)
+        ? Math.max(0, (100 - kwMetric.difficulty) * kdWeight)
         : 20;
       const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
       let trendBonus = 0;

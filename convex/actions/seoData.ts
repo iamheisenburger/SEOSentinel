@@ -102,6 +102,67 @@ async function dataForSEORequest(
   return data;
 }
 
+// ── Domain Authority ──
+
+export interface DomainMetrics {
+  domainRank: number; // 0-100 (DataForSEO rank, comparable to Ahrefs DR)
+  organicTraffic: number; // estimated monthly organic traffic
+  backlinks: number; // total backlinks count
+  referringDomains: number; // unique referring domains
+}
+
+/**
+ * Get domain authority metrics from DataForSEO.
+ * Returns null if API unavailable or domain has no data.
+ */
+export async function getDomainAuthority(domain: string): Promise<DomainMetrics | null> {
+  const creds = getDataForSEOCredentials();
+  if (!creds) return null;
+
+  const cleanDomain = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+
+  try {
+    const data = await dataForSEORequest(
+      "dataforseo_labs/google/domain_rank/live",
+      [{ target: cleanDomain }],
+    );
+
+    const item = data.tasks?.[0]?.result?.[0];
+    if (!item) return null;
+
+    return {
+      domainRank: item.rank ?? 0,
+      organicTraffic: item.organic_etv ?? 0,
+      backlinks: item.backlinks ?? 0,
+      referringDomains: item.referring_domains ?? 0,
+    };
+  } catch (err) {
+    console.log(`Domain authority lookup failed for ${cleanDomain}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Compute a recommended max KD ceiling based on domain metrics.
+ * Low-authority domains should target low-difficulty keywords.
+ * Returns a number 0-100.
+ */
+export function computeMaxKD(metrics: DomainMetrics | null): number {
+  if (!metrics) return 35; // Unknown authority → be conservative
+
+  const dr = metrics.domainRank;
+  // DR 0-10: max KD 30 (very new, target easy keywords)
+  // DR 10-30: max KD 45
+  // DR 30-50: max KD 60
+  // DR 50-70: max KD 75
+  // DR 70+: max KD 90
+  if (dr <= 10) return 30;
+  if (dr <= 30) return 45;
+  if (dr <= 50) return 60;
+  if (dr <= 70) return 75;
+  return 90;
+}
+
 // ── Keyword Metrics ──
 
 /**
