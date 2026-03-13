@@ -3325,20 +3325,14 @@ export const processNextJob = action({
           console.error(`Internal linking failed (publishing without links): ${linkError}`);
         }
 
-        // Suggest backlink opportunities (graceful degradation)
+        // Suggest backlink opportunities (data-driven with DataForSEO fallback to AI)
         try {
           console.log("Generating backlink suggestions...");
-          const backlinks = await ctx.runAction(api.actions.pipeline.suggestBacklinks, {
+          const backlinkResult = await ctx.runAction(api.actions.backlinks.quickBacklinkScan, {
             siteId: job.siteId,
-            niche: site?.niche ?? undefined,
+            articleId: articleResult.articleId,
           });
-          if (backlinks.length > 0) {
-            await ctx.runMutation(api.articles.updateBacklinks, {
-              articleId: articleResult.articleId,
-              backlinkSuggestions: backlinks.slice(0, 10),
-            });
-            console.log(`Added ${backlinks.length} backlink suggestions.`);
-          }
+          console.log(`Added ${backlinkResult.suggestions.length} backlink suggestions.`);
         } catch (err) {
           console.error("Backlink suggestions failed (non-critical):", err instanceof Error ? err.message : err);
         }

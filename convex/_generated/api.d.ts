@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as actions_backlinks from "../actions/backlinks.js";
 import type * as actions_contentDecay from "../actions/contentDecay.js";
 import type * as actions_gscSync from "../actions/gscSync.js";
 import type * as actions_pipeline from "../actions/pipeline.js";
@@ -32,6 +33,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "actions/backlinks": typeof actions_backlinks;
   "actions/contentDecay": typeof actions_contentDecay;
   "actions/gscSync": typeof actions_gscSync;
   "actions/pipeline": typeof actions_pipeline;

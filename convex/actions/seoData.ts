@@ -830,27 +830,52 @@ function classifySERPResults(results: SerpResult[]): {
   for (const result of results.slice(0, 10)) {
     const title = result.title.toLowerCase();
     const desc = result.description.toLowerCase();
-    const combined = `${title} ${desc}`;
+    const url = result.url.toLowerCase();
+    const combined = `${title} ${desc} ${url}`;
+    // Top 3 results get double weight
+    const weight = result.position <= 3 ? 2 : 1;
 
-    if (/\d+\s+(best|top|ways|tips|tools|strategies|examples)/i.test(combined)) {
-      formats["listicle"] = (formats["listicle"] ?? 0) + 1;
-    } else if (/how to|step.by.step|tutorial|guide to/i.test(combined)) {
-      formats["how-to"] = (formats["how-to"] ?? 0) + 1;
-    } else if (/vs\.?|versus|compared|comparison|alternative/i.test(combined)) {
-      formats["comparison"] = (formats["comparison"] ?? 0) + 1;
-    } else if (/checklist|worksheet|template/i.test(combined)) {
-      formats["checklist"] = (formats["checklist"] ?? 0) + 1;
-    } else if (/complete guide|ultimate guide|everything you need/i.test(combined)) {
-      formats["ultimate-guide"] = (formats["ultimate-guide"] ?? 0) + 1;
-    } else if (/review|roundup|expert|opinion/i.test(combined)) {
-      formats["roundup"] = (formats["roundup"] ?? 0) + 1;
-    } else {
-      formats["standard"] = (formats["standard"] ?? 0) + 1;
+    // Listicle signals
+    if (/\d+\s*(best|top|ways|tips|tools|strategies|examples|ideas|reasons|benefits|things|picks|favorites|resources)/i.test(combined) ||
+        /\blist\b|curated|ranked|ranking/i.test(combined) ||
+        /\/\d+-|\/best-|\/top-/i.test(url)) {
+      formats["listicle"] = (formats["listicle"] ?? 0) + weight;
+    }
+
+    // How-to signals
+    if (/how to|step[\s-]by[\s-]step|tutorial|guide to|beginner|getting started|learn to|walkthrough/i.test(combined) ||
+        /\/how-to-|\/tutorial|\/guide-/i.test(url)) {
+      formats["how-to"] = (formats["how-to"] ?? 0) + weight;
+    }
+
+    // Comparison signals
+    if (/\bvs\.?\b|versus|compared|comparison|alternative|differ|better than/i.test(combined) ||
+        /\/.*-vs-|\/compare|\/alternative/i.test(url)) {
+      formats["comparison"] = (formats["comparison"] ?? 0) + weight;
+    }
+
+    // Checklist signals
+    if (/checklist|worksheet|template|printable|download.*free/i.test(combined) ||
+        /\/checklist|\/template/i.test(url)) {
+      formats["checklist"] = (formats["checklist"] ?? 0) + weight;
+    }
+
+    // Ultimate guide signals
+    if (/complete guide|ultimate guide|everything you need|definitive guide|comprehensive|in-depth|a-to-z|101\b/i.test(combined) ||
+        /\/ultimate-|\/complete-guide|\/definitive/i.test(url)) {
+      formats["ultimate-guide"] = (formats["ultimate-guide"] ?? 0) + weight;
+    }
+
+    // Roundup signals
+    if (/review|roundup|expert|opinion|what.*think|according to|insights from/i.test(combined) ||
+        /\/review|\/roundup/i.test(url)) {
+      formats["roundup"] = (formats["roundup"] ?? 0) + weight;
     }
   }
 
   const sorted = Object.entries(formats).sort((a, b) => b[1] - a[1]);
-  const dominant = sorted[0]?.[0] ?? "standard";
+  // Only use a non-standard format if it has meaningful signal (2+ weighted votes)
+  const dominant = sorted[0] && sorted[0][1] >= 2 ? sorted[0][0] : "standard";
 
   return {
     dominantFormat: dominant,
