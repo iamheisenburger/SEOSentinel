@@ -16,6 +16,8 @@ import {
   ArrowUpRight,
   ChevronDown,
   Check,
+  BarChart3,
+  Link2,
 } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
@@ -32,6 +34,8 @@ const navSections = [
     items: [
       { href: "/plan", label: "Topics", icon: Target },
       { href: "/articles", label: "Articles", icon: FileText },
+      { href: "/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/backlinks", label: "Backlinks", icon: Link2 },
     ],
   },
   {

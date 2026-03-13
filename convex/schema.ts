@@ -64,6 +64,11 @@ export default defineSchema({
     gscEmail: v.optional(v.string()),
     gscConnectedAt: v.optional(v.number()),
 
+    // ── Content Syndication ──
+    mediumToken: v.optional(v.string()),       // Medium integration token
+    linkedinAccessToken: v.optional(v.string()), // LinkedIn OAuth access token
+    syndicationEnabled: v.optional(v.boolean()), // auto-syndicate on publish
+
     // ── Plan features (synced from Clerk) ──
     planFeatures: v.optional(v.array(v.string())), // e.g. ["max_sites_3", "max_articles_25"]
 

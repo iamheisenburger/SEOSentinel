@@ -35,6 +35,7 @@ import {
   BarChart3,
   ExternalLink,
   RefreshCw,
+  Share2,
 } from "lucide-react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -84,6 +85,9 @@ export default function SiteDetailPage() {
   const [painPoints, setPainPoints] = useState<string[]>([]);
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [keywords, setKeywords] = useState<string[]>([]);
+  const [mediumToken, setMediumToken] = useState("");
+  const [linkedinToken, setLinkedinToken] = useState("");
+  const [syndicationEnabled, setSyndicationEnabled] = useState(false);
 
   // Initialize settings from site data (once)
   if (site && !settingsInitialized) {
@@ -108,6 +112,9 @@ export default function SiteDetailPage() {
     setPainPoints(site.painPoints ?? []);
     setCompetitors(site.competitors ?? []);
     setKeywords(site.anchorKeywords ?? []);
+    setMediumToken(site.mediumToken ?? "");
+    setLinkedinToken(site.linkedinAccessToken ?? "");
+    setSyndicationEnabled(site.syndicationEnabled ?? false);
     setSettingsInitialized(true);
   }
 
@@ -180,6 +187,9 @@ export default function SiteDetailPage() {
         painPoints: painPoints.length > 0 ? painPoints : undefined,
         competitors: competitors.length > 0 ? competitors : undefined,
         anchorKeywords: keywords.length > 0 ? keywords : undefined,
+        mediumToken: mediumToken || undefined,
+        linkedinAccessToken: linkedinToken || undefined,
+        syndicationEnabled,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -330,6 +340,9 @@ export default function SiteDetailPage() {
           painPoints={painPoints} setPainPoints={setPainPoints}
           competitors={competitors} setCompetitors={setCompetitors}
           keywords={keywords} setKeywords={setKeywords}
+          mediumToken={mediumToken} setMediumToken={setMediumToken}
+          linkedinToken={linkedinToken} setLinkedinToken={setLinkedinToken}
+          syndicationEnabled={syndicationEnabled} setSyndicationEnabled={setSyndicationEnabled}
           saving={saving}
           saved={saved}
           onSave={handleSaveSettings}
@@ -726,6 +739,9 @@ function SettingsTab({
   painPoints, setPainPoints,
   competitors, setCompetitors,
   keywords, setKeywords,
+  mediumToken, setMediumToken,
+  linkedinToken, setLinkedinToken,
+  syndicationEnabled, setSyndicationEnabled,
   saving,
   saved,
   onSave,
@@ -752,6 +768,9 @@ function SettingsTab({
   painPoints: string[]; setPainPoints: (v: string[]) => void;
   competitors: string[]; setCompetitors: (v: string[]) => void;
   keywords: string[]; setKeywords: (v: string[]) => void;
+  mediumToken: string; setMediumToken: (v: string) => void;
+  linkedinToken: string; setLinkedinToken: (v: string) => void;
+  syndicationEnabled: boolean; setSyndicationEnabled: (v: boolean) => void;
   saving: boolean;
   saved: boolean;
   onSave: () => void;
@@ -778,6 +797,46 @@ function SettingsTab({
 
       {/* Google Search Console */}
       <GSCSection site={site} />
+
+      {/* Content Syndication */}
+      <SettingsSection title="Content Syndication" icon={Share2}>
+        <ToggleRow
+          label="Auto-Syndicate"
+          description="Automatically distribute articles to connected platforms when published"
+          value={syndicationEnabled}
+          onChange={setSyndicationEnabled}
+        />
+        <FieldRow label="Medium Integration Token" description="Get your token from medium.com/me/settings/security">
+          <Input
+            type="password"
+            value={mediumToken}
+            onChange={(e) => setMediumToken(e.target.value)}
+            placeholder="Enter Medium integration token"
+          />
+          {mediumToken ? (
+            <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#22C55E]">
+              <Check className="h-3 w-3" /> Token configured — articles will be posted as drafts with canonical URL
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[11px] text-[#565A6E]">Articles are posted as drafts on Medium with canonical URL pointing to your site</p>
+          )}
+        </FieldRow>
+        <FieldRow label="LinkedIn Access Token" description="OAuth access token for LinkedIn posting">
+          <Input
+            type="password"
+            value={linkedinToken}
+            onChange={(e) => setLinkedinToken(e.target.value)}
+            placeholder="Enter LinkedIn access token"
+          />
+          {linkedinToken ? (
+            <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#22C55E]">
+              <Check className="h-3 w-3" /> Token configured — AI-generated LinkedIn posts with article links
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[11px] text-[#565A6E]">Each article gets an AI-written LinkedIn post linking back to the original</p>
+          )}
+        </FieldRow>
+      </SettingsSection>
 
       {/* General */}
       <SettingsSection title="General" icon={Globe}>

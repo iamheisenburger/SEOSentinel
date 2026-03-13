@@ -27,6 +27,10 @@ import {
   ChevronRight,
   TrendingDown,
   RefreshCw,
+  BarChart3,
+  MousePointerClick,
+  Search,
+  TrendingUp,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -315,6 +319,13 @@ export default function ArticleDetailPage() {
   const site = useQuery(
     api.sites.get,
     article?.siteId ? { siteId: article.siteId } : "skip",
+  );
+  // Per-article GSC performance
+  const articleSlug = article?.slug ?? "";
+  const articlePageUrl = site?.domain && articleSlug ? `${site.domain}/${articleSlug}` : "";
+  const articleGSC = useQuery(
+    api.searchPerformance.getByPage,
+    site?._id && articlePageUrl ? { siteId: site._id, pageUrl: articlePageUrl } : "skip",
   );
   const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
@@ -668,6 +679,74 @@ export default function ArticleDetailPage() {
           </>
         )}
       </div>
+
+      {/* Per-Article GSC Performance */}
+      {articleGSC && articleGSC.length > 0 && (() => {
+        const totalClicks = articleGSC.reduce((s, r) => s + r.clicks, 0);
+        const totalImpressions = articleGSC.reduce((s, r) => s + r.impressions, 0);
+        const avgPos = articleGSC.length > 0
+          ? Math.round((articleGSC.reduce((s, r) => s + r.position, 0) / articleGSC.length) * 10) / 10
+          : 0;
+        const avgCtr = totalImpressions > 0 ? Math.round((totalClicks / totalImpressions) * 1000) / 10 : 0;
+        const topKeywords = [...articleGSC].sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions).slice(0, 5);
+        return (
+          <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
+              <h3 className="text-[13px] font-semibold text-[#EDEEF1]">Search Performance</h3>
+            </div>
+            <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-4">
+              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <MousePointerClick className="h-3 w-3 text-[#0EA5E9]" />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Clicks</span>
+                </div>
+                <p className="text-lg font-bold text-[#EDEEF1]">{totalClicks}</p>
+              </div>
+              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Eye className="h-3 w-3 text-[#22D3EE]" />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Impressions</span>
+                </div>
+                <p className="text-lg font-bold text-[#EDEEF1]">{totalImpressions.toLocaleString()}</p>
+              </div>
+              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <TrendingUp className="h-3 w-3 text-[#22C55E]" />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">CTR</span>
+                </div>
+                <p className="text-lg font-bold text-[#EDEEF1]">{avgCtr}%</p>
+              </div>
+              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Search className="h-3 w-3 text-[#F59E0B]" />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Avg Position</span>
+                </div>
+                <p className="text-lg font-bold text-[#EDEEF1]">{avgPos}</p>
+              </div>
+            </div>
+            {topKeywords.length > 0 && (
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Top Keywords for this Article</p>
+                <div className="flex flex-col gap-1">
+                  {topKeywords.map((q, i) => (
+                    <div key={i} className="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-1.5">
+                      <span className="text-[12px] text-[#EDEEF1] truncate">{q.query}</span>
+                      <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#565A6E]">
+                        <span>{q.clicks} clicks</span>
+                        <span>{q.impressions} imp</span>
+                        <span className={`font-mono ${q.position <= 3 ? "text-[#22C55E]" : q.position <= 10 ? "text-[#0EA5E9]" : q.position <= 20 ? "text-[#F59E0B]" : "text-[#565A6E]"}`}>
+                          pos {q.position}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Content Decay Alert */}
       {((article as any).decayStatus === "declining" || (article as any).decayStatus === "warning") && (

@@ -23,6 +23,12 @@ import {
   ExternalLink,
   AlertTriangle,
   RefreshCw,
+  TrendingDown,
+  TrendingUp,
+  BarChart3,
+  MousePointerClick,
+  Eye,
+  Link2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useEffect, useRef, useState } from "react";
@@ -33,9 +39,6 @@ import { useActiveSite } from "@/contexts/site-context";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
-  // Latch: once the wizard is shown, keep it visible until user finishes (page reload).
-  // Without this, Convex reactive updates (upsert saving siteSummary mid-wizard)
-  // would flip needsOnboarding false and yank the wizard away.
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
   const { userId: dashClerkId } = useAuth();
@@ -50,6 +53,18 @@ export default function DashboardPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
   const jobs = useQuery(api.jobs.listAll);
+  const gscSummary = useQuery(
+    api.searchPerformance.getSummary,
+    site?._id ? { siteId: site._id } : "skip",
+  );
+  const topQueries = useQuery(
+    api.searchPerformance.getTopQueries,
+    site?._id ? { siteId: site._id, limit: 5 } : "skip",
+  );
+  const decayingArticles = useQuery(
+    api.articles.listDecaying,
+    site?._id ? { siteId: site._id } : "skip",
+  );
   const generateNow = useAction(api.actions.pipeline.generateNow);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const [genBusy, setGenBusy] = useState(false);
@@ -81,6 +96,7 @@ export default function DashboardPage() {
       .length ?? 0;
   const recentJobs = jobs?.slice(0, 8) ?? [];
   const recentArticles = articles?.slice(0, 5) ?? [];
+  const decayCount = decayingArticles?.length ?? 0;
 
   const loading = sites === undefined;
 
@@ -115,14 +131,14 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  // Show wizard only when: no site exists at all, or user explicitly clicked "Add Website"
   if (!site || forceSetup) {
     wizardLatch.current = true;
   }
-  // Once latched, stay on wizard until page reload (wizard "done" step calls reload)
   if (wizardLatch.current || !site) {
     return <SetupWizard />;
   }
+
+  const hasGSC = !!gscSummary;
 
   return (
     <div className="flex flex-col gap-5">
@@ -204,6 +220,19 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Decay alert banner */}
+      {decayCount > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-[#EF4444]/[0.2] bg-[#EF4444]/[0.05] px-4 py-3">
+          <TrendingDown className="h-4 w-4 shrink-0 text-[#EF4444]" />
+          <p className="flex-1 text-[13px] text-[#F87171]">
+            {decayCount} article{decayCount > 1 ? "s" : ""} losing rankings.{" "}
+            <Link href="/articles" className="underline font-medium hover:text-white transition">
+              View declining articles
+            </Link>
+          </p>
+        </div>
+      )}
+
       {genMessage && (
         <div
           className={`rounded-lg px-4 py-2 text-[13px] ${
@@ -220,6 +249,88 @@ export default function DashboardPage() {
 
       {/* ─── Article Progress (live) ────────────── */}
       {site && <ArticleProgress siteId={site._id} />}
+
+      {/* ─── Search Performance (GSC) ────────────── */}
+      {hasGSC && (
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
+              <h2 className="text-[13px] font-semibold text-[#EDEEF1]">
+                Search Performance
+              </h2>
+            </div>
+            <Link
+              href="/analytics"
+              className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3] transition flex items-center gap-1"
+            >
+              Full analytics <ArrowRight className="h-2.5 w-2.5" />
+            </Link>
+          </div>
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <MousePointerClick className="h-3 w-3 text-[#0EA5E9]" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Clicks</span>
+              </div>
+              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.totalClicks.toLocaleString()}</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Eye className="h-3 w-3 text-[#22D3EE]" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Impressions</span>
+              </div>
+              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.totalImpressions.toLocaleString()}</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <TrendingUp className="h-3 w-3 text-[#22C55E]" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">CTR</span>
+              </div>
+              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.avgCtr}%</p>
+            </div>
+            <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Search className="h-3 w-3 text-[#F59E0B]" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Avg Position</span>
+              </div>
+              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.avgPosition}</p>
+            </div>
+          </div>
+
+          {/* Top Keywords */}
+          {topQueries && topQueries.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Top Keywords</p>
+              <div className="flex flex-col gap-1.5">
+                {topQueries.map((q, i) => {
+                  const maxClicks = topQueries[0].clicks || 1;
+                  return (
+                    <div key={i} className="group flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-[#565A6E] w-4 text-right shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-0.5">
+                          <span className="text-[12px] text-[#EDEEF1] truncate">{q.query}</span>
+                          <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#565A6E]">
+                            <span>{q.clicks} clicks</span>
+                            <span>pos {q.position}</span>
+                          </div>
+                        </div>
+                        <div className="h-1 w-full rounded-full bg-white/[0.04]">
+                          <div
+                            className="h-1 rounded-full bg-[#0EA5E9]/40 transition-all"
+                            style={{ width: `${Math.max((q.clicks / maxClicks) * 100, 2)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ─── Stats Row ────────────────────────────── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
@@ -289,35 +400,57 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Review Queue */}
+        {/* Content Health */}
         <div className={`rounded-xl border p-4 ${
-          reviewCount > 0
-            ? "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.03]"
-            : "border-white/[0.06] bg-[#0F1117]"
+          decayCount > 0
+            ? "border-[#EF4444]/[0.2] bg-[#EF4444]/[0.03]"
+            : reviewCount > 0
+              ? "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.03]"
+              : "border-white/[0.06] bg-[#0F1117]"
         }`}>
           <div className="flex items-center justify-between">
             <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E]">
-              {reviewCount > 0 ? "Needs Review" : "Queue"}
+              {decayCount > 0 ? "Attention" : reviewCount > 0 ? "Needs Review" : "Health"}
             </p>
-            <CheckCircle2 className={`h-3.5 w-3.5 ${reviewCount > 0 ? "text-[#F59E0B]" : "text-[#565A6E]"}`} />
+            {decayCount > 0 ? (
+              <TrendingDown className="h-3.5 w-3.5 text-[#EF4444]" />
+            ) : reviewCount > 0 ? (
+              <CheckCircle2 className="h-3.5 w-3.5 text-[#F59E0B]" />
+            ) : (
+              <CheckCircle2 className="h-3.5 w-3.5 text-[#22C55E]" />
+            )}
           </div>
-          <p className={`mt-2 text-2xl font-bold tracking-tight ${
-            reviewCount > 0 ? "text-[#FBBF24]" : "text-[#EDEEF1]"
-          }`}>
-            {reviewCount}
-          </p>
-          {reviewCount > 0 ? (
-            <Link href="/articles" className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-[#F59E0B] hover:text-[#FBBF24] transition">
-              Review articles <ArrowRight className="h-2.5 w-2.5" />
-            </Link>
+          {decayCount > 0 ? (
+            <>
+              <p className="mt-2 text-2xl font-bold tracking-tight text-[#F87171]">
+                {decayCount}
+              </p>
+              <Link href="/articles" className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-[#EF4444] hover:text-[#F87171] transition">
+                Declining articles <ArrowRight className="h-2.5 w-2.5" />
+              </Link>
+            </>
+          ) : reviewCount > 0 ? (
+            <>
+              <p className="mt-2 text-2xl font-bold tracking-tight text-[#FBBF24]">
+                {reviewCount}
+              </p>
+              <Link href="/articles" className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-[#F59E0B] hover:text-[#FBBF24] transition">
+                Review articles <ArrowRight className="h-2.5 w-2.5" />
+              </Link>
+            </>
           ) : (
-            <p className="mt-2 text-[10px] text-[#565A6E]">All clear</p>
+            <>
+              <p className="mt-2 text-2xl font-bold tracking-tight text-[#22C55E]">
+                Good
+              </p>
+              <p className="mt-2 text-[10px] text-[#565A6E]">All content healthy</p>
+            </>
           )}
         </div>
       </div>
 
       {/* ─── Quick Nav ────────────────────────────── */}
-      <div className="grid gap-3 grid-cols-3">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Link href="/plan" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
           <Target className="h-4 w-4 text-[#0EA5E9] mb-2" />
           <p className="text-[13px] font-medium text-[#EDEEF1]">Topics</p>
@@ -328,10 +461,15 @@ export default function DashboardPage() {
           <p className="text-[13px] font-medium text-[#EDEEF1]">Articles</p>
           <p className="text-[11px] text-[#565A6E]">{publishedCount} published · {totalArticles - publishedCount} drafts</p>
         </Link>
-        <Link href="/jobs" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
-          <Activity className="h-4 w-4 text-[#F59E0B] mb-2" />
-          <p className="text-[13px] font-medium text-[#EDEEF1]">Activity</p>
-          <p className="text-[11px] text-[#565A6E]">{runningJobs > 0 ? `${runningJobs} running` : "All clear"}</p>
+        <Link href="/analytics" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <BarChart3 className="h-4 w-4 text-[#22D3EE] mb-2" />
+          <p className="text-[13px] font-medium text-[#EDEEF1]">Analytics</p>
+          <p className="text-[11px] text-[#565A6E]">{hasGSC ? `${gscSummary.queryCount} keywords tracked` : "Connect GSC"}</p>
+        </Link>
+        <Link href="/backlinks" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <Link2 className="h-4 w-4 text-[#F59E0B] mb-2" />
+          <p className="text-[13px] font-medium text-[#EDEEF1]">Backlinks</p>
+          <p className="text-[11px] text-[#565A6E]">Analyze & outreach</p>
         </Link>
       </div>
 
@@ -368,6 +506,17 @@ export default function DashboardPage() {
                       <span>{Math.round(article.markdown.split(/\s+/).length).toLocaleString()} words</span>
                       <span className="text-white/[0.08]">·</span>
                       <span>{formatDistanceToNow(article.createdAt, { addSuffix: true })}</span>
+                      {(article.decayStatus === "warning" || article.decayStatus === "declining") && (
+                        <>
+                          <span className="text-white/[0.08]">·</span>
+                          <span className={`inline-flex items-center gap-1 ${
+                            article.decayStatus === "declining" ? "text-[#EF4444]" : "text-[#F59E0B]"
+                          }`}>
+                            <TrendingDown className="h-2.5 w-2.5" />
+                            {article.decayStatus === "declining" ? "Declining" : "Warning"}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <ExternalLink className="h-3 w-3 mt-1 text-[#565A6E] opacity-0 group-hover:opacity-100 transition shrink-0" />
@@ -475,8 +624,8 @@ function DashboardSkeleton() {
           </div>
         ))}
       </div>
-      <div className="grid gap-3 grid-cols-3">
-        {[...Array(3)].map((_, i) => (
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+        {[...Array(4)].map((_, i) => (
           <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
             <div className="h-4 w-4 animate-pulse rounded bg-white/[0.04] mb-2" />
             <div className="h-3.5 w-20 animate-pulse rounded bg-white/[0.04]" />

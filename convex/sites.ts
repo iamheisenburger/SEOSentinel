@@ -250,6 +250,10 @@ export const updateSite = mutation({
     wpAppPassword: v.optional(v.string()),
     webhookUrl: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
+    // Syndication
+    mediumToken: v.optional(v.string()),
+    linkedinAccessToken: v.optional(v.string()),
+    syndicationEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, { siteId, ...fields }) => {
     const patch: Record<string, unknown> = { updatedAt: now() };
