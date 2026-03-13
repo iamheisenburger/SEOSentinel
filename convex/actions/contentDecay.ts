@@ -233,7 +233,7 @@ async function heuristicDecayScan(ctx: any, published: any[], siteId: any) {
 // ── Scan all sites (cron entry point) ──
 
 export const scanAllSites = action({
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ totalFlagged: number }> => {
     const sites = await ctx.runQuery(api.sites.listAllForAutopilot);
     let totalFlagged = 0;
 
@@ -257,7 +257,7 @@ export const scanAllSites = action({
 
 export const refreshArticle = action({
   args: { articleId: v.id("articles") },
-  handler: async (ctx, { articleId }) => {
+  handler: async (ctx, { articleId }): Promise<{ success: boolean; wordCount?: number; factCheckScore?: number; error?: string }> => {
     const article = await ctx.runQuery(api.articles.get, { articleId });
     if (!article) throw new Error("Article not found");
 

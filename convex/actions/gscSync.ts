@@ -78,7 +78,7 @@ async function fetchSearchAnalytics(
 // ── Sync Action: Pull GSC data for all connected sites ──
 
 export const syncAllSites = action({
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ synced: number }> => {
     const sites = await ctx.runQuery(api.sites.listAllForAutopilot);
     let synced = 0;
 
@@ -102,7 +102,7 @@ export const syncAllSites = action({
 
 export const syncSite = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  handler: async (ctx, { siteId }): Promise<{ rows: number; saved: number }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
     if (!site.gscAccessToken || !site.gscProperty) throw new Error("GSC not connected for this site");

@@ -285,7 +285,7 @@ async function findBrokenLinkOpportunities(
 // Full backlink analysis for a site
 export const analyzeBacklinks = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  handler: async (ctx, { siteId }): Promise<{ profile: BacklinkProfile | null; mentions: UnlinkedMention[]; brokenLinks: BrokenLinkOpportunity[]; hasData: boolean }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 
@@ -349,7 +349,7 @@ export const generateOutreach = action({
       context: v.string(), // mention text or broken link URL
     })),
   },
-  handler: async (ctx, { siteId, opportunities }) => {
+  handler: async (ctx, { siteId, opportunities }): Promise<{ emails: { to: string; subject: string; body: string }[] }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 
@@ -426,7 +426,7 @@ BODY: [email body]`;
 // Used in the article pipeline for backlink suggestions per article
 export const quickBacklinkScan = action({
   args: { siteId: v.id("sites"), articleId: v.id("articles") },
-  handler: async (ctx, { siteId, articleId }) => {
+  handler: async (ctx, { siteId, articleId }): Promise<{ suggestions: { site: string; reason: string; anchor: string; targetUrl: string }[] }> => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
     if (!site) throw new Error("Site not found");
 
