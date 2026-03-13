@@ -1126,724 +1126,445 @@ async function handlePlan(
   jobId?: Id<"jobs">,
 ): Promise<{ count: number }> {
   const PLAN_STEPS = 6;
-  const reportPlanProgress = async (step: number, label: string) => {
+  const reportProgress = async (step: number, label: string) => {
     if (!jobId) return;
-    try {
-      await ctx.runMutation(api.jobs.updateProgress, {
-        jobId,
-        current: step,
-        total: PLAN_STEPS,
-        stepLabel: label,
-      });
-    } catch { /* never break pipeline for progress */ }
+    try { await ctx.runMutation(api.jobs.updateProgress, { jobId, current: step, total: PLAN_STEPS, stepLabel: label }); } catch { /* non-critical */ }
   };
 
   const site = await ctx.runQuery(api.sites.get, { siteId });
   if (!site) throw new Error("Site not found");
 
-  // Fetch ALL existing topics so the AI knows what's already covered
   const existingTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
-  const existingKeywords = existingTopics.map(
-    (t: { primaryKeyword: string }) => t.primaryKeyword,
-  );
-  const existingLabels = existingTopics.map(
-    (t: { label: string }) => t.label,
-  );
+  const existingKeywords = existingTopics.map((t: { primaryKeyword: string }) => t.primaryKeyword);
 
-  await reportPlanProgress(1, "Analyzing site authority and existing content...");
-  console.log(`Existing topics: ${existingTopics.length} — generating diverse new topics...`);
+  await reportProgress(1, "Analyzing site authority...");
 
   const productName = site.siteName ?? site.domain;
-  const competitorNames = (site.competitors ?? []).map((c: string) =>
-    c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
-  );
+  const locationCode = mapCountryToLocation(site.targetCountry);
 
-  // ── Build niche vocabulary from site profile (used for relevance filtering throughout) ──
-  const nicheTerms = new Set<string>();
-  const _nicheStopWords = new Set(["the","and","for","with","how","what","that","this","from","have","will","your","about","more","than","our","are","can","you","its","all","into","also","who","been","very","just","most","many","such","each","other","some","them"]);
-  const _addNicheTerms = (text: string | undefined) => {
-    if (!text) return;
-    for (const word of text.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/)) {
-      const clean = word.replace(/[^a-z0-9]/g, "");
-      if (clean.length >= 3 && !_nicheStopWords.has(clean)) nicheTerms.add(clean);
-    }
-  };
-  _addNicheTerms(site.niche);
-  _addNicheTerms(site.blogTheme);
-  _addNicheTerms(site.siteSummary);
-  _addNicheTerms(site.siteName);
-  if (site.keyFeatures?.length) site.keyFeatures.forEach((f: string) => _addNicheTerms(f));
-  if (site.painPoints?.length) site.painPoints.forEach((p: string) => _addNicheTerms(p));
-  if (site.anchorKeywords?.length) site.anchorKeywords.forEach((k: string) => _addNicheTerms(k));
-  _addNicheTerms(site.domain.replace(/\.\w+$/, ""));
-  console.log(`Niche vocabulary (${nicheTerms.size} terms): ${[...nicheTerms].slice(0, 20).join(", ")}...`);
+  // ══════════════════════════════════════════════════════════════════════
+  // STEP 1: Gather all intelligence about this site
+  // ══════════════════════════════════════════════════════════════════════
 
-  // ── Domain Authority: determine what difficulty level this site can realistically target ──
+  // 1a. Domain authority — what can this site realistically rank for?
   let domainMetrics: { domainRank: number; organicTraffic: number; backlinks: number; referringDomains: number } | null = null;
-  let maxKD = 35; // Conservative default
+  let maxKD = 35;
   try {
     const { getDomainAuthority, computeMaxKD } = await import("./seoData");
     domainMetrics = await getDomainAuthority(site.domain);
     maxKD = computeMaxKD(domainMetrics);
-    if (domainMetrics) {
-      console.log(`Domain authority: DR=${domainMetrics.domainRank}, traffic=${domainMetrics.organicTraffic}/mo, backlinks=${domainMetrics.backlinks}, referring_domains=${domainMetrics.referringDomains} → maxKD=${maxKD}`);
-    } else {
-      console.log(`Domain authority: no data (new or unindexed domain) → maxKD=${maxKD}`);
-    }
-  } catch (err) {
-    console.log("Domain authority lookup unavailable:", err);
-  }
-  const domainRank = domainMetrics?.domainRank ?? 0;
-  // KD weight for scoring — low-authority sites get much more reward for targeting easy keywords
-  const kdWeight = domainRank >= 50 ? 0.4 : domainRank >= 20 ? 0.5 : 0.6;
+    console.log(domainMetrics
+      ? `Domain: DR=${domainMetrics.domainRank}, traffic=${domainMetrics.organicTraffic}/mo → maxKD=${maxKD}`
+      : `Domain: no data → maxKD=${maxKD}`);
+  } catch (err) { console.log("Domain authority unavailable:", err); }
 
-  // ── Keyword Discovery: find real keywords from DataForSEO before AI topic generation ──
+  const dr = domainMetrics?.domainRank ?? 0;
+  const kdWeight = dr >= 50 ? 0.4 : dr >= 20 ? 0.5 : 0.6;
+
+  // 1b. Niche vocabulary — what terms define this business?
+  const nicheTerms = new Set<string>();
+  const stopList = new Set(["the","and","for","with","how","what","that","this","from","have","will","your","about","more","than","our","are","can","you","its","all","into","also","who","been","very","just","most","many","such","each","other","some","them","not","but"]);
+  const extractTerms = (text?: string) => {
+    if (!text) return;
+    for (const w of text.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/)) {
+      const c = w.replace(/[^a-z0-9]/g, "");
+      if (c.length >= 3 && !stopList.has(c)) nicheTerms.add(c);
+    }
+  };
+  [site.niche, site.blogTheme, site.siteSummary, site.siteName, site.productUsage].forEach(extractTerms);
+  (site.keyFeatures ?? []).forEach((f: string) => extractTerms(f));
+  (site.painPoints ?? []).forEach((p: string) => extractTerms(p));
+  (site.anchorKeywords ?? []).forEach((k: string) => extractTerms(k));
+  extractTerms(site.domain.replace(/\.\w+$/, ""));
+  console.log(`Niche vocabulary: ${nicheTerms.size} terms`);
+
+  // 1c. Competitor brands — what names to always block?
+  const blockedBrands = new Set<string>();
+  for (const c of site.competitors ?? []) {
+    const brand = c.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "").replace(/\.\w+$/, "").toLowerCase();
+    if (brand.length > 2) blockedBrands.add(brand);
+  }
+  // Well-known SaaS brands — keyword containing these drives traffic to THEM, not the user
+  const knownBrands = ["chatgpt","openai","jasper","writesonic","copyai","surfer","semrush","ahrefs","moz","grammarly","hubspot","wordpress","shopify","wix","squarespace","notion","canva","mailchimp","salesforce","zapier","hootsuite","buffer","yoast","clearscope","frase","scalenut","rytr","anyword","peppertype","contentbot"];
+  const ownBrand = (site.siteName ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (const b of knownBrands) {
+    if (b !== ownBrand && !ownBrand.includes(b)) blockedBrands.add(b);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // STEP 2: Discover real keywords from DataForSEO
+  // ══════════════════════════════════════════════════════════════════════
+
+  await reportProgress(2, "Discovering high-opportunity keywords...");
+
   let discoveredKeywords: { keyword: string; searchVolume: number; difficulty: number; cpc: number }[] = [];
   try {
-    const { discoverKeywords } = await import("./seoData");
-    // Build seed keywords from FULL site profile — use short, broad terms for max discovery
-    const seedKeywords: string[] = [];
+    const { discoverKeywords, findKeywordGaps } = await import("./seoData");
+
+    // Build seed keywords from the full site profile
+    const seeds: string[] = [];
     const addSeed = (text: string) => {
       const clean = text.trim().toLowerCase();
-      if (clean.split(/\s+/).length <= 4 && clean.length > 3 && !seedKeywords.includes(clean)) {
-        seedKeywords.push(clean);
-      }
+      if (clean.length > 3 && clean.split(/\s+/).length <= 4 && !seeds.includes(clean)) seeds.push(clean);
     };
-    // 1. Niche (primary seed — most important)
-    if (site.niche) {
-      for (const part of site.niche.split(/[,;]/)) addSeed(part);
-    }
-    // 2. Anchor keywords (explicitly chosen by user — high priority)
-    if (site.anchorKeywords?.length) {
-      for (const kw of site.anchorKeywords.slice(0, 5)) {
-        if (kw.split(/\s+/).length <= 5) addSeed(kw);
-      }
-    }
-    // 3. Key features (broad industry terms)
-    if (site.keyFeatures?.length) {
-      for (const f of site.keyFeatures.slice(0, 5)) {
-        addSeed(f.split(/[,.:;]/)[0]);
-      }
-    }
-    // 4. Pain points (what the audience searches for)
-    if (site.painPoints?.length) {
-      for (const p of site.painPoints.slice(0, 5)) {
-        addSeed(p.split(/[,.:;]/)[0]);
-      }
-    }
-    // 5. Blog theme (broader content direction)
-    if (site.blogTheme) {
-      for (const part of site.blogTheme.split(/[,;.]/)) addSeed(part);
-    }
-    // 6. Site summary (extract key phrases — take first 3 comma/period segments)
-    if (site.siteSummary) {
-      for (const part of site.siteSummary.split(/[,;.]/).slice(0, 3)) addSeed(part);
-    }
-    // Fallback: domain name
-    if (seedKeywords.length === 0) seedKeywords.push(site.domain.replace(/\.\w+$/, ""));
+    if (site.niche) for (const p of site.niche.split(/[,;]/)) addSeed(p);
+    if (site.anchorKeywords?.length) for (const kw of site.anchorKeywords.slice(0, 5)) addSeed(kw);
+    if (site.keyFeatures?.length) for (const f of site.keyFeatures.slice(0, 5)) addSeed(f.split(/[,.:;]/)[0]);
+    if (site.painPoints?.length) for (const p of site.painPoints.slice(0, 5)) addSeed(p.split(/[,.:;]/)[0]);
+    if (site.blogTheme) for (const p of site.blogTheme.split(/[,;.]/)) addSeed(p);
+    if (seeds.length === 0) seeds.push(site.domain.replace(/\.\w+$/, ""));
 
-    // 7. Cross-product seeds: combine core terms for long-tail discovery
-    const coreTerms = seedKeywords.slice(0, 3);
-    const modifiers = ["how to", "best", "tool", "software", "guide", "tips", "strategy", "automation"];
-    for (const core of coreTerms) {
-      for (const mod of modifiers) {
-        const combo = `${core} ${mod}`.trim();
-        if (combo.split(/\s+/).length <= 5 && !seedKeywords.includes(combo)) {
-          seedKeywords.push(combo);
-        }
+    // Expand seeds with modifiers for long-tail discovery
+    const baseSeedCount = seeds.length;
+    for (const core of seeds.slice(0, 3)) {
+      for (const mod of ["how to","best","tool","software","guide","strategy","automation","platform","for business","for startups"]) {
+        const combo = `${core} ${mod}`;
+        if (combo.split(/\s+/).length <= 5 && !seeds.includes(combo)) seeds.push(combo);
       }
-      if (seedKeywords.length >= 25) break; // Don't overwhelm the API
+      if (seeds.length >= 25) break;
     }
+    console.log(`Seeds: ${baseSeedCount} base + ${seeds.length - baseSeedCount} expanded = ${seeds.length} total`);
 
-    const locationCode = mapCountryToLocation(site.targetCountry);
-    console.log(`Discovering keywords with ${seedKeywords.length} seeds: ${seedKeywords.slice(0, 10).join(", ")}${seedKeywords.length > 10 ? "..." : ""}`);
-    discoveredKeywords = (await discoverKeywords(seedKeywords, locationCode, site.language ?? "en", 120))
-      .filter(k => k.searchVolume >= 10) // Keywords with any real search volume
+    discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 150))
+      .filter(k => k.searchVolume >= 10)
       .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
-    console.log(`Discovered ${discoveredKeywords.length} real keywords with volume.`);
+    console.log(`Discovered ${discoveredKeywords.length} keywords with volume`);
 
-    // ── Competitor Gap Analysis: find keywords competitors rank for that we don't ──
-    const competitors = site.competitors ?? [];
-    if (competitors.length > 0) {
+    // Add competitor gap keywords
+    if ((site.competitors ?? []).length > 0) {
       try {
-        const { findKeywordGaps } = await import("./seoData");
-        const gaps = await findKeywordGaps(site.domain, competitors, locationCode, site.language ?? "en");
-        const existingKwSet = new Set(discoveredKeywords.map(k => k.keyword.toLowerCase()));
+        const gaps = await findKeywordGaps(site.domain, site.competitors!, locationCode, site.language ?? "en");
+        const seen = new Set(discoveredKeywords.map(k => k.keyword.toLowerCase()));
         let added = 0;
-        for (const gap of gaps) {
-          if (!existingKwSet.has(gap.keyword.toLowerCase()) && gap.searchVolume >= 10) {
-            discoveredKeywords.push({
-              keyword: gap.keyword,
-              searchVolume: gap.searchVolume,
-              difficulty: gap.difficulty,
-              cpc: 0,
-            });
-            existingKwSet.add(gap.keyword.toLowerCase());
+        for (const g of gaps) {
+          if (!seen.has(g.keyword.toLowerCase()) && g.searchVolume >= 10) {
+            discoveredKeywords.push({ keyword: g.keyword, searchVolume: g.searchVolume, difficulty: g.difficulty, cpc: 0 });
+            seen.add(g.keyword.toLowerCase());
             added++;
           }
         }
-        if (added > 0) console.log(`Competitor gap analysis: added ${added} keywords from ${competitors.length} competitors.`);
-      } catch (gapErr) {
-        console.log("Competitor gap analysis unavailable:", gapErr);
-      }
+        if (added > 0) console.log(`Competitor gaps: +${added} keywords`);
+      } catch (e) { console.log("Competitor gap analysis failed:", e); }
     }
-  } catch (err) {
-    console.log("Keyword discovery unavailable, AI will generate keywords:", err);
+  } catch (err) { console.log("Keyword discovery unavailable:", err); }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // STEP 3: Filter, score, and rank keyword candidates
+  // ══════════════════════════════════════════════════════════════════════
+
+  const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
+
+  // Keyword-level quality filter (before AI sees them)
+  const isKeywordBlocked = (kw: string): string | null => {
+    const kwLower = kw.toLowerCase();
+    // Block third-party brand keywords
+    for (const brand of blockedBrands) {
+      if (kwLower.includes(brand)) return `brand:${brand}`;
+    }
+    // Block keywords with zero niche relevance (if we have enough niche context)
+    if (nicheTerms.size >= 5) {
+      const words = kwLower.replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
+      if (words.length > 0 && !words.some(w => nicheTerms.has(w))) return "off-topic";
+    }
+    return null;
+  };
+
+  // Score each keyword
+  const scoreKeyword = (k: { searchVolume: number; difficulty: number; cpc: number }) => {
+    const vol = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
+    const kd = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * kdWeight) : 5; // KD 0 = minimal reward
+    const cpc = Math.min(k.cpc * 4, 20);
+    const penalty = k.difficulty === 0 ? -10 : 0; // Unknown difficulty penalty
+    return Math.max(0, Math.round(vol + kd + cpc + penalty));
+  };
+
+  // Dedup helper
+  const _stemWord = (w: string) => w.replace(/(tion|sion|ment|ness|ity|ing|ive|ous|ful|less|able|ible|ated|ize|ise)$/, "");
+  const _kwStopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","best","top","free","online","guide","tips","using","about"]);
+  const tokenize = (s: string) => s.toLowerCase().replace(/-/g, " ").split(/\s+/).filter(w => w.length > 2 && !_kwStopWords.has(w)).map(_stemWord);
+  const isTooSimilar = (a: string, b: string) => {
+    const aSet = new Set(tokenize(a));
+    const bSet = new Set(tokenize(b));
+    if (aSet.size === 0 || bSet.size === 0) return false;
+    const overlap = [...aSet].filter(w => bSet.has(w)).length;
+    return overlap / Math.min(aSet.size, bSet.size) > 0.5;
+  };
+
+  let candidates: { keyword: string; searchVolume: number; difficulty: number; cpc: number; opportunity: number }[] = [];
+
+  if (discoveredKeywords.length >= 10) {
+    // Data-first: rank real keywords
+    const raw = discoveredKeywords
+      .filter(k => !existingSet.has(k.keyword.toLowerCase()))
+      .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
+      .filter(k => !isKeywordBlocked(k.keyword))
+      .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
+      .sort((a, b) => b.opportunity - a.opportunity);
+
+    // Dedup
+    for (const kw of raw) {
+      if (!candidates.some(c => isTooSimilar(c.keyword, kw.keyword))) {
+        candidates.push(kw);
+      }
+      if (candidates.length >= 40) break;
+    }
+    console.log(`Candidate pool: ${candidates.length} keywords (from ${discoveredKeywords.length} discovered)`);
   }
 
-  const topicSystemPrompt = [
-    `<role>`,
-    `You are the SEO content strategist at ${productName}. You plan blog topics that drive organic traffic specifically to ${productName}.`,
-    `Every topic you suggest must be one that ${productName}'s content team would actually write — relevant to the product, its users, and their problems.`,
-    `</role>`,
-    ``,
-    `<product>`,
+  // ══════════════════════════════════════════════════════════════════════
+  // STEP 4: AI Topic Generation
+  // ══════════════════════════════════════════════════════════════════════
+
+  await reportProgress(3, "AI strategist selecting optimal topics...");
+
+  // Build the comprehensive site context (used for both data-first and AI-first)
+  const siteContext = [
+    `<business>`,
     `Name: ${productName}`,
     `Domain: ${site.domain}`,
-    `Type: ${site.siteType ?? "Website"}`,
-    `What it does: ${site.siteSummary ?? ""}`,
-    `Niche: ${site.niche ?? ""}`,
-    `Blog Theme: ${site.blogTheme ?? ""}`,
-    site.keyFeatures?.length ? `Key Features:\n${site.keyFeatures.map((f: string) => `- ${f}`).join("\n")}` : "",
+    site.siteType ? `Type: ${site.siteType}` : "",
+    site.siteSummary ? `What it does: ${site.siteSummary}` : "",
+    site.niche ? `Niche: ${site.niche}` : "",
+    site.blogTheme ? `Blog theme: ${site.blogTheme}` : "",
+    site.keyFeatures?.length ? `Key features: ${site.keyFeatures.join("; ")}` : "",
     site.pricingInfo ? `Pricing: ${site.pricingInfo}` : "",
-    `</product>`,
+    `</business>`,
     ``,
-    `<audience>`,
-    site.targetAudienceSummary ? `Who they are: ${site.targetAudienceSummary}` : "",
-    site.painPoints?.length ? `Pain points:\n${site.painPoints.map((p: string) => `- ${p}`).join("\n")}` : "",
-    site.productUsage ? `How they use the product: ${site.productUsage}` : "",
-    site.targetCountry ? `Target market: ${site.targetCountry}` : "",
-    `</audience>`,
+    `<target_audience>`,
+    site.targetAudienceSummary ? `Who: ${site.targetAudienceSummary}` : "",
+    site.painPoints?.length ? `Pain points: ${site.painPoints.join("; ")}` : "",
+    site.productUsage ? `How they use it: ${site.productUsage}` : "",
+    site.targetCountry ? `Market: ${site.targetCountry}` : "",
+    `</target_audience>`,
     ``,
-    `<banned_content>`,
-    `NEVER generate topics that would require listing or naming competitor products.`,
-    site.competitors?.length ? `These are banned competitors — topics must never reference them:\n${site.competitors.map((c: string) => `- ${c}`).join("\n")}` : "",
-    competitorNames.length > 0 ? `Also banned by name: ${competitorNames.join(", ")}` : "",
-    `BANNED topic formats:`,
-    `- "N Best [tools/software/platforms]" — these force competitor listing`,
-    `- "[Product] vs [Competitor]" — these name competitors`,
-    `- "[Product] Alternatives" — these list competitors`,
-    `Instead use formats that position ${productName} as THE solution without needing to list others.`,
-    `</banned_content>`,
-    ``,
-    `<site_authority>`,
-    `Domain: ${site.domain}`,
-    `Domain Rank: ${domainRank}/100 (${domainRank <= 10 ? "low authority" : domainRank <= 30 ? "developing authority" : domainRank <= 50 ? "moderate authority" : "strong authority"})`,
-    `Max keyword difficulty to target: ${maxKD}`,
-    `Strategy: ${domainRank <= 10
-      ? "LOW AUTHORITY — focus on long-tail, low-competition keywords (3-5 words). Target gaps where small sites rank. Avoid head terms dominated by major sites. Best wins: how-to guides, specific niche queries, question-based keywords."
-      : domainRank <= 30
-        ? "DEVELOPING AUTHORITY — mix of long-tail and medium-competition keywords. Can start competing for keywords with KD up to " + maxKD + "."
-        : domainRank <= 50
-          ? "MODERATE AUTHORITY — can target medium-competition keywords. Mix of broad and niche terms."
-          : "STRONG AUTHORITY — can target competitive keywords. Focus on high-volume opportunities."}`,
-    `</site_authority>`,
-    ``,
-    `<topic_rules>`,
-    `CRITICAL: Your #1 job is to find keywords that ${productName} can REALISTICALLY RANK for given its domain authority (DR ${domainRank}). Every topic must target a keyword with real search demand AND achievable difficulty.`,
-    ``,
-    `1. KEYWORD-FIRST approach: Think "what are people in this niche Googling?" first, then connect it to ${productName}. NOT the reverse.`,
-    `   - Only use keywords that REAL PEOPLE actually type into Google. Think like a searcher, not a marketer.`,
-    `   - Use 2-5 word keywords. NEVER invent keywords — use established search terms.`,
-    `   - The article will naturally mention ${productName} — the keyword itself should be a generic search term`,
-    `2. Keyword styles (ordered by ranking potential for DR ${domainRank} sites):`,
-    `   - "How to [Achieve Outcome]" — actionable guides, often lower competition`,
-    `   - "[Topic] for [Specific Audience]" — niche targeting reduces competition`,
-    `   - "What Is [Concept]" — informational, can rank with good content`,
-    `   - "[Number] Best/Top [Category]" — listicles`,
-    `   - "[X] vs [Y]" — comparison searches (high commercial intent)`,
-    `   - "[Industry Problem]" — pure search demand`,
-    `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
-    `4. DIFFICULTY CEILING: Do NOT suggest keywords you estimate would have difficulty above ${maxKD}. This site cannot rank for those yet.`,
-    `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 meaningful word. Spread across the full breadth of the niche.`,
-    `6. Generate exactly 18 new topics. Return a JSON array with exactly 18 items.`,
-    `7. Topics should form a funnel: awareness → consideration → decision.`,
-    site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
-    site.language && site.language !== "en" ? `9. All topic labels and keywords must be in ${site.language}.` : "",
-    `</topic_rules>`,
-    ``,
-    `<priority_scoring>`,
-    `Score each topic 1-5 based on these criteria:`,
-    `5 = High search volume keyword + directly showcases ${productName}'s core feature + addresses top audience pain point`,
-    `4 = Good search volume + relevant to product + addresses a pain point`,
-    `3 = Moderate search potential + tangentially related to product`,
-    `2 = Niche keyword + loosely related`,
-    `1 = Very niche + awareness-only content`,
-    `Be honest with scores. Not every topic is a 5.`,
-    `</priority_scoring>`,
-    ``,
-    `<output_format>`,
-    `Output JSON only. No explanation outside the JSON.`,
-    `Return a JSON array:`,
-    `[{"label":"topic title","primaryKeyword":"main search keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":1-5,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this topic drives traffic to ${productName}"}]`,
-    ``,
-    `ARTICLE TYPE GUIDE — pick the best format for each topic:`,
-    `- "standard": Default deep-dive article`,
-    `- "listicle": "N Best/Top X" or list-based topics`,
-    `- "how-to": Step-by-step tutorials or guides`,
-    `- "checklist": Actionable checklist-style content`,
-    `- "comparison": X vs Y or feature comparisons`,
-    `- "roundup": Expert opinions or resource collections`,
-    `- "ultimate-guide": Comprehensive 5000+ word definitive resources`,
-    `Mix article types for variety. Not every topic should be "standard".`,
-    `</output_format>`,
+    `<seo_intelligence>`,
+    `Domain Rank: ${dr}/100 (${dr <= 10 ? "new/low authority" : dr <= 30 ? "developing" : dr <= 50 ? "moderate" : "strong"})`,
+    domainMetrics ? `Monthly organic traffic: ${domainMetrics.organicTraffic}` : "",
+    domainMetrics ? `Backlinks: ${domainMetrics.backlinks} from ${domainMetrics.referringDomains} domains` : "",
+    `Max targetable keyword difficulty: ${maxKD}/100`,
+    `Strategy: ${dr <= 15
+      ? "NEW SITE — target long-tail keywords (3-5 words) with KD under " + maxKD + ". Focus on specific queries where small sites can win: how-to guides, niche comparisons, question-based searches, specific use-case tutorials."
+      : dr <= 35
+        ? "GROWING SITE — mix of long-tail and medium-competition. Can compete for KD up to " + maxKD + ". Start building topical authority clusters."
+        : "ESTABLISHED SITE — target medium-to-high competition keywords. Build pillar content and dominate key topics."}`,
+    `</seo_intelligence>`,
   ].filter(Boolean).join("\n");
 
   let plan: z.infer<typeof PlanSchema>;
 
-  if (discoveredKeywords.length >= 10) {
-    // ── DATA-FIRST approach: discovered keywords drive topic selection ──
-    // Pre-filter: remove keywords with zero niche relevance before scoring
-    if (nicheTerms.size >= 5) {
-      const beforeFilter = discoveredKeywords.length;
-      discoveredKeywords = discoveredKeywords.filter(k => {
-        const kwWords = k.keyword.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
-        return kwWords.some(w => nicheTerms.has(w));
-      });
-      if (discoveredKeywords.length < beforeFilter) {
-        console.log(`Niche relevance pre-filter: ${beforeFilter} → ${discoveredKeywords.length} keywords (removed ${beforeFilter - discoveredKeywords.length} off-topic)`);
-      }
-    }
-
-    // Score and rank discovered keywords, filter out existing ones, take top candidates
-    const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
-    const scoredCandidates = discoveredKeywords
-      .filter(k => !existingSet.has(k.keyword.toLowerCase()))
-      .filter(k => k.difficulty <= maxKD || k.difficulty === 0) // Respect domain authority KD ceiling
-      .map(k => {
-        const volScore = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
-        // KD bonus scales with domain authority — weaker domains get more reward for low-KD keywords
-        // KD 0 = DataForSEO has no data → uncertain keyword, penalize rather than assume easy
-        const kdBonus = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * kdWeight) : 10;
-        const cpcSig = Math.min(k.cpc * 4, 20);
-        const kd0Penalty = k.difficulty === 0 ? -10 : 0; // Penalize unknown-difficulty keywords
-        return { ...k, opportunity: Math.max(0, Math.round(volScore + kdBonus + cpcSig + kd0Penalty)) };
-      })
-      .sort((a, b) => b.opportunity - a.opportunity);
-
-    // Pre-dedup candidates: ensure diversity by removing keywords too similar to already-selected ones
-    // Normalize hyphens and stem suffixes so "ai-powered content creation" matches "ai powered content generation"
-    const dedupStopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","best","top","free","online"]);
-    const stemCandWord = (w: string) => w.replace(/(tion|sion|ment|ness|ity|ing|ive|ous|ful|less|able|ible|ated|ize|ise)$/, "");
-    const candWords = (s: string) => s.toLowerCase().replace(/-/g, " ").split(/\s+/).filter(w => w.length > 3 && !dedupStopWords.has(w)).map(stemCandWord);
-    const candidates: typeof scoredCandidates = [];
-    for (const cand of scoredCandidates) {
-      const words = new Set(candWords(cand.keyword));
-      if (words.size === 0) { candidates.push(cand); continue; } // Single short words pass
-      const tooSimilar = candidates.some(kept => {
-        const keptWords = new Set(candWords(kept.keyword));
-        if (keptWords.size === 0) return false;
-        const overlap = [...words].filter(w => keptWords.has(w)).length;
-        // Block if >50% of the shorter keyword's stemmed words overlap
-        return overlap / Math.min(words.size, keptWords.size) > 0.5;
-      });
-      if (!tooSimilar) candidates.push(cand);
-      if (candidates.length >= 40) break; // Enough diverse candidates
-    }
-
-    console.log(`Data-first: ${candidates.length} keyword candidates for AI (from ${discoveredKeywords.length} discovered)`);
-
-    const dataFirstPrompt = [
-      `You are creating blog topics for ${productName}. Each topic MUST use one of the keywords below as its primaryKeyword (copy EXACTLY).`,
+  if (candidates.length >= 10) {
+    // ── DATA-FIRST: real keywords drive selection ──
+    const prompt = [
+      `You are an SEO strategist. Your job: select the best keywords from the list below to create a content plan for ${productName}.`,
       ``,
-      `<product>`,
-      `Name: ${productName} | Domain: ${site.domain}`,
-      site.siteSummary ? `About: ${site.siteSummary}` : "",
-      site.niche ? `Niche: ${site.niche}` : "",
-      site.blogTheme ? `Blog Theme: ${site.blogTheme}` : "",
-      site.keyFeatures?.length ? `Key Features: ${site.keyFeatures.join(", ")}` : "",
-      site.targetAudienceSummary ? `Target Audience: ${site.targetAudienceSummary}` : "",
-      site.painPoints?.length ? `Audience Pain Points: ${site.painPoints.join(", ")}` : "",
-      `</product>`,
+      siteContext,
       ``,
-      `<relevance_rules>`,
-      `STRICT RELEVANCE FILTER — this is the #1 most important rule:`,
+      `<your_task>`,
+      `From the keyword list below, select 10-15 that are MOST STRATEGIC for ${productName}. For each, create an article topic.`,
       ``,
-      `For EVERY keyword, ask yourself: "Would a potential user/customer of ${productName} search for this?"`,
-      `If the answer is NO or MAYBE, SKIP IT. No exceptions.`,
+      `SELECTION CRITERIA (in order of importance):`,
+      `1. RELEVANCE — Would someone searching this keyword be a potential ${productName} user? If not, SKIP IT.`,
+      `2. SEARCH VOLUME — Higher volume = more potential traffic`,
+      `3. DIFFICULTY — Lower KD = easier to rank (this site's ceiling is KD ${maxKD})`,
+      `4. COMMERCIAL VALUE — Higher CPC signals buyer intent`,
+      `5. FUNNEL COVERAGE — Mix TOFU (awareness), MOFU (consideration), BOFU (decision)`,
       ``,
-      `A keyword is RELEVANT if:`,
-      `- It directly relates to ${productName}'s core product, features, or use cases`,
-      `- It targets a problem that ${productName} solves`,
-      `- It's in the same industry/vertical as ${productName}`,
-      `- The searcher could plausibly become a ${productName} user after reading the article`,
-      ``,
-      `A keyword is IRRELEVANT — ALWAYS SKIP:`,
-      `- Different industry entirely (e.g., "b2b case study" for an SEO tool, "landing page design" for a CRM)`,
-      `- Generic business/marketing terms not specific to the niche (e.g., "conversion rate optimization" for a content tool)`,
-      `- Keywords naming competitor products (ChatGPT, Jasper, Writesonic, etc.)`,
-      `- Keywords the target audience would never search for`,
-      ``,
-      `BETTER to return 10 highly relevant topics than 18 with filler. Quality over quantity.`,
-      `</relevance_rules>`,
-      ``,
-      `<strategic_funnel>`,
-      `Build a content funnel that drives traffic AND conversions:`,
-      `- TOFU (40%): Informational keywords the target audience searches ("how to X", "what is Y")`,
-      `- MOFU (30%): Commercial investigation keywords ("best X tool", "X vs Y approach")`,
-      `- BOFU (30%): High-intent keywords closest to the product ("X software", "X automation", "X for [use case]")`,
-      `Prioritize keywords where ${productName} has a natural competitive advantage.`,
-      `</strategic_funnel>`,
+      `HARD RULES:`,
+      `- SKIP keywords about other products/brands (ChatGPT, Jasper, Semrush, etc.)`,
+      `- SKIP keywords unrelated to ${productName}'s niche — if you can't explain how it connects to the product, don't include it`,
+      `- SKIP generic marketing buzzwords that mega-sites dominate ("content marketing best practices", "digital marketing strategy")`,
+      `- Each keyword must target a DIFFERENT search intent — no near-duplicates`,
+      `- Use the EXACT keyword string from the list as primaryKeyword`,
+      site.competitors?.length ? `- NEVER reference these competitors: ${site.competitors.join(", ")}` : "",
+      `</your_task>`,
       ``,
       `<keywords>`,
-      ...candidates.map(k => `- "${k.keyword}" (${k.searchVolume}/mo, KD:${k.difficulty}, $${k.cpc.toFixed(2)} CPC, opp:${k.opportunity})`),
+      ...candidates.slice(0, 40).map(k => `- "${k.keyword}" (vol:${k.searchVolume}/mo, KD:${k.difficulty}, CPC:$${k.cpc.toFixed(2)}, score:${k.opportunity})`),
       `</keywords>`,
       ``,
-      existingKeywords.length > 0 ? `<existing_topics>\nSkip these:\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</existing_topics>` : "",
+      existingKeywords.length > 0 ? `<already_covered>\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</already_covered>` : "",
       ``,
-      `Return JSON array of up to 18 topics (only include RELEVANT ones). Use the EXACT keyword string as primaryKeyword. Format:`,
-      `[{"label":"compelling blog title","primaryKeyword":"exact keyword from list","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this keyword is relevant to ${productName}'s audience"}]`,
+      `Return a JSON array. Use EXACT keyword strings as primaryKeyword:`,
+      `[{"label":"article title","primaryKeyword":"exact keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this keyword serves ${productName}'s audience"}]`,
       ``,
-      `Prioritize: highest opportunity score + most relevant to ${productName}. Mix article types.`,
+      `Article types: standard (deep dive), listicle (list-based), how-to (tutorial), checklist (actionable), comparison (X vs Y), roundup (resources), ultimate-guide (5000+ words). Pick what fits the keyword's SERP intent.`,
+      site.language && site.language !== "en" ? `Write all labels and keywords in ${site.language}.` : "",
+      site.anchorKeywords?.length ? `Priority keywords to incorporate: ${site.anchorKeywords.join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
-    await reportPlanProgress(2, "AI creating topics from verified keywords...");
-    const text = await callClaude(dataFirstPrompt, `Create up to 18 topics from the keyword list. ONLY include keywords relevant to ${productName}. Use exact keywords as primaryKeyword. Skip irrelevant keywords.`, 8192);
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 18);
-    console.log(`AI generated ${plan.length} topics. Keywords: ${plan.map(t => `"${t.primaryKeyword}"`).join(", ")}`);
+    const text = await callClaude(prompt, `Select 10-15 strategic keywords and create topics. Quality > quantity. Use exact keywords.`, 8192);
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 15);
+    console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates`);
 
-    // Programmatic enforcement: if AI changed a keyword, snap it to the closest discovered match
+    // Snap AI-modified keywords back to exact discovered matches
     const discoveredLower = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k.keyword]));
     for (const topic of plan) {
       if (!discoveredLower.has(topic.primaryKeyword.toLowerCase())) {
-        // Find closest match by word overlap
-        let bestMatch = "";
-        let bestOverlap = 0;
         const topicWords = new Set(topic.primaryKeyword.toLowerCase().split(/\s+/));
-        for (const [candLower, candOrig] of discoveredLower) {
-          const candWords = new Set(candLower.split(/\s+/));
-          const overlap = [...topicWords].filter(w => candWords.has(w)).length;
-          if (overlap > bestOverlap) {
-            bestOverlap = overlap;
-            bestMatch = candOrig;
-          }
+        let bestMatch = "", bestOverlap = 0;
+        for (const [cl, orig] of discoveredLower) {
+          const overlap = [...topicWords].filter(w => new Set(cl.split(/\s+/)).has(w)).length;
+          if (overlap > bestOverlap) { bestOverlap = overlap; bestMatch = orig; }
         }
         if (bestMatch && bestOverlap >= 1) {
-          console.log(`Snapped "${topic.primaryKeyword}" → "${bestMatch}" (word overlap: ${bestOverlap})`);
+          console.log(`Snap: "${topic.primaryKeyword}" → "${bestMatch}"`);
           topic.primaryKeyword = bestMatch;
         }
       }
     }
-    console.log(`After snap-back: ${plan.length} topics. Keywords: ${plan.map(t => `"${t.primaryKeyword}"`).join(", ")}`);
-    // Log which are in discovered set vs not
-    const inDiscovered = plan.filter(t => discoveredLower.has(t.primaryKeyword.toLowerCase())).length;
-    console.log(`  → ${inDiscovered}/${plan.length} match discovered keywords, ${plan.length - inDiscovered} will need fresh lookup`);
   } else {
-    // ── AI-FIRST approach: no discovered keywords, let AI generate ──
-    const topicUserMessage = [
-      existingKeywords.length > 0
-        ? `<existing_topics>\nThese topics already exist. Do NOT duplicate or overlap:\n${existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n")}\n</existing_topics>\n`
-        : "",
-      `Generate EXACTLY 18 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 18 topics — no fewer. More is better — the system filters by quality.`,
+    // ── AI-FIRST: no DataForSEO data, let AI generate keywords ──
+    const prompt = [
+      `You are an SEO strategist creating a content plan for ${productName}.`,
+      ``,
+      siteContext,
+      ``,
+      `Generate 15 blog topics. Each must target a REAL search keyword that people actually Google.`,
+      ``,
+      `RULES:`,
+      `1. Keywords must be 2-5 words, natural search queries`,
+      `2. Every topic must be relevant to ${productName}'s niche and audience`,
+      `3. Max keyword difficulty: ${maxKD} (this is a ${dr <= 15 ? "new" : "growing"} site)`,
+      `4. Mix: 40% informational, 30% commercial, 30% transactional`,
+      `5. No competitor brand names. No generic buzzwords.`,
+      `6. Each keyword targets a DIFFERENT search intent`,
+      existingKeywords.length > 0 ? `7. Already covered (skip): ${existingKeywords.join(", ")}` : "",
+      site.anchorKeywords?.length ? `Priority keywords: ${site.anchorKeywords.join(", ")}` : "",
+      site.language && site.language !== "en" ? `Language: ${site.language}` : "",
+      ``,
+      `Return JSON array:`,
+      `[{"label":"title","primaryKeyword":"search keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why"}]`,
     ].filter(Boolean).join("\n");
 
-    await reportPlanProgress(2, "Generating topic ideas with AI strategist...");
-    const text = await callClaude(
-      topicSystemPrompt,
-      topicUserMessage,
-      8192,
-    );
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 18);
+    const text = await callClaude(prompt, `Generate 15 strategic topics for ${productName}. Real keywords only.`, 8192);
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 15);
   }
 
-  // Programmatic dedup: remove topics with exact same keyword or very high overlap
-  // Normalize hyphens and stem common suffixes so "ai-powered content creation" matches "ai powered content generation"
-  const stopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","than","its","you","using","about","best","top","guide","tips"]);
-  const stemWord = (w: string) => w.replace(/(tion|sion|ment|ness|ity|ing|ive|ous|ful|less|able|ible|ated|ize|ise)$/, "");
-  const getWords = (s: string) => s.toLowerCase().replace(/-/g, " ").split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
-  const getStemmed = (s: string) => new Set(getWords(s).map(stemWord));
-  const kept: typeof plan = [];
+  // ══════════════════════════════════════════════════════════════════════
+  // STEP 5: Programmatic quality enforcement
+  // ══════════════════════════════════════════════════════════════════════
+
+  await reportProgress(4, "Validating keywords with real data...");
+
+  // 5a. Dedup
+  const deduped: typeof plan = [];
   for (const topic of plan) {
-    const stems = getStemmed(topic.primaryKeyword);
-    const isDupe = kept.some(k => {
-      // Exact match = definite dupe
-      if (k.primaryKeyword.toLowerCase() === topic.primaryKeyword.toLowerCase()) return true;
-      const kStems = getStemmed(k.primaryKeyword);
-      const overlap = [...stems].filter(w => kStems.has(w)).length;
-      // Remove if >50% of the shorter keyword's stemmed words overlap
-      return stems.size > 0 && kStems.size > 0 && overlap / Math.min(stems.size, kStems.size) > 0.5;
-    });
-    if (!isDupe) kept.push(topic);
-    else console.log(`Dedup: removed "${topic.primaryKeyword}" (overlaps with existing topic)`);
+    if (deduped.some(k => k.primaryKeyword.toLowerCase() === topic.primaryKeyword.toLowerCase() || isTooSimilar(k.primaryKeyword, topic.primaryKeyword))) {
+      console.log(`Dedup: "${topic.primaryKeyword}"`);
+      continue;
+    }
+    deduped.push(topic);
   }
-  if (kept.length < plan.length) {
-    console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >60%).`);
-    plan = kept;
-  }
-  plan = plan.slice(0, 18); // Keep up to 18 candidates for enrichment (quality gate will trim to 10)
-  await reportPlanProgress(3, "Deduplicating topics...");
-  console.log(`${plan.length} candidate topics after dedup. Starting enrichment before saving...`);
+  plan = deduped;
+  console.log(`After dedup: ${plan.length} topics`);
 
-  // ── Enrich ALL topics in-memory before saving anything to DB ──
-  // This prevents half-baked topics from appearing in the UI.
+  // 5b. Fetch real metrics for all keywords
   try {
-    await reportPlanProgress(4, "Fetching keyword metrics (volume, difficulty, CPC)...");
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
-    const keywords = plan.map((t) => t.primaryKeyword);
-    const locationCode = mapCountryToLocation(site.targetCountry);
-
-    // Use pre-discovered metrics when available (avoids redundant API calls)
     const discoveredMap = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k]));
-    const undiscoveredKeywords = keywords.filter(kw => !discoveredMap.has(kw.toLowerCase()));
+    const allKeywords = plan.map(t => t.primaryKeyword);
+    const needFresh = allKeywords.filter(kw => !discoveredMap.has(kw.toLowerCase()));
 
-    let metrics: { keyword: string; searchVolume: number; difficulty: number; cpc: number; competition: number; intent: string; trend: number[] }[] = [];
+    type Metric = { keyword: string; searchVolume: number; difficulty: number; cpc: number; competition: number; intent: string; trend: number[] };
+    const metrics: Metric[] = [];
 
-    // Add pre-discovered metrics directly
-    for (const kw of keywords) {
+    // Reuse discovered metrics
+    for (const kw of allKeywords) {
       const pre = discoveredMap.get(kw.toLowerCase());
-      if (pre) {
-        metrics.push({
-          keyword: kw,
-          searchVolume: pre.searchVolume,
-          difficulty: pre.difficulty,
-          cpc: pre.cpc,
-          competition: 0,
-          intent: "informational",
-          trend: [],
-        });
-      }
+      if (pre) metrics.push({ keyword: kw, searchVolume: pre.searchVolume, difficulty: pre.difficulty, cpc: pre.cpc, competition: 0, intent: "informational", trend: [] });
+    }
+    // Fetch fresh for undiscovered
+    if (needFresh.length > 0) {
+      metrics.push(...await getKeywordMetrics(needFresh, locationCode, site.language ?? "en"));
     }
 
-    // Fetch metrics only for keywords not in discovered set
-    if (undiscoveredKeywords.length > 0) {
-      const freshMetrics = await getKeywordMetrics(undiscoveredKeywords, locationCode, site.language ?? "en");
-      metrics.push(...freshMetrics);
-    }
-    console.log(`Keyword metrics: ${metrics.length} total (${keywords.length - undiscoveredKeywords.length} pre-discovered, ${undiscoveredKeywords.length} fresh)`);
-
-    // ── QUALITY GATE: filter out topics with no SEO potential (in-memory) ──
+    // 5c. Quality gate — single pass, clean logic
     const enrichedPlan: typeof plan = [];
     const enrichmentData = new Map<string, {
       searchVolume: number; keywordDifficulty: number; cpc: number;
       serpIntent: string; volumeTrend: number[]; priority: number;
       articleType?: string; recommendedArticleType?: string; paaQuestions?: string[];
     }>();
+    let kd0Count = 0;
 
-    // Build competitor brand blocklist from site.competitors (e.g. "writesonic.com" → "writesonic")
-    const competitorBrands = new Set(
-      (site.competitors ?? []).map((c: string) =>
-        c.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "")
-          .replace(/\.\w+$/, "").toLowerCase(),
-      ).filter((b: string) => b.length > 2),
-    );
-    // Also add the cleaned competitor names
-    for (const name of competitorNames) {
-      if (name.length > 2) competitorBrands.add(name.toLowerCase());
-    }
-
-    // Adaptive thresholds based on domain authority — low-DR sites get relaxed gates
-    const minVolume = maxKD <= 35 ? 10 : 30;
-    const minOpportunity = maxKD <= 35 ? 15 : 25;
-    // Relaxed thresholds for backfill pass when not enough topics survive
-    const relaxedMinVolume = 5;
-    const relaxedMinOpportunity = 10;
-    const relaxedKDCeiling = maxKD + 15; // Allow slightly harder keywords as backfill
-
-    // Track rejected topics with their scores for potential backfill
-    const rejectedTopics: { topic: typeof plan[0]; reason: string; opportunityScore: number }[] = [];
-
-    const evaluateTopic = (topic: typeof plan[0], relaxed: boolean) => {
-      const effectiveMinVol = relaxed ? relaxedMinVolume : minVolume;
-      const effectiveMinOpp = relaxed ? relaxedMinOpportunity : minOpportunity;
-      const effectiveMaxKD = relaxed ? relaxedKDCeiling : maxKD;
-
-      // Always kill competitor brand mentions (never relax this)
-      const kwLower = topic.primaryKeyword.toLowerCase();
-      if (competitorBrands.size > 0) {
-        const labelLower = topic.label.toLowerCase();
-        const mentionsCompetitor = [...competitorBrands].find(
-          brand => kwLower.includes(brand) || labelLower.includes(brand),
-        );
-        if (mentionsCompetitor) return { pass: false, reason: `competitor brand "${mentionsCompetitor}"`, score: 0 };
-      }
-
-      // Kill keywords containing third-party product names that aren't the site's own product
-      // This is general: any keyword with a recognizable product brand drives traffic to THAT brand, not the user's
-      const ownBrand = (site.siteName ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const thirdPartyBrands = ["chatgpt","openai","jasper","writesonic","copy.ai","copyai","surfer","semrush","ahrefs","moz","grammarly","hubspot","wordpress","shopify","wix","squarespace","notion","canva","mailchimp","salesforce","zapier","hootsuite","buffer"];
-      const mentionsBrand = thirdPartyBrands.find(brand => {
-        if (brand === ownBrand) return false; // Don't filter own brand
-        return kwLower.includes(brand);
-      });
-      if (mentionsBrand) return { pass: false, reason: `third-party brand "${mentionsBrand}" in keyword (drives traffic to them, not us)`, score: 0 };
-
-      // ── Niche relevance check: KEYWORD must share at least 1 term with site's niche vocabulary ──
-      // Only check the keyword itself — NOT the AI-generated label (AI always makes labels sound relevant)
-      if (nicheTerms.size >= 5 && !relaxed) {
-        const kwWords = topic.primaryKeyword.toLowerCase().replace(/[-_/]/g, " ").split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, "")).filter(w => w.length >= 3);
-        const nicheOverlap = kwWords.filter(w => nicheTerms.has(w)).length;
-        if (nicheOverlap === 0) {
-          return { pass: false, reason: `keyword "${topic.primaryKeyword}" has no niche relevance (0 term overlap)`, score: 5 };
-        }
-      }
-
-      const kwMetric = metrics.find(
-        (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
-      );
-      if (!kwMetric) return { pass: true, reason: "no metrics", score: 30 }; // Keep — no data to reject on
-
-      // Always kill zero-data keywords (never relax)
-      if (kwMetric.searchVolume === 0 && kwMetric.difficulty === 0 && kwMetric.cpc === 0) {
-        return { pass: false, reason: "no search data", score: 0 };
-      }
-
-      // Always kill zero volume + very high difficulty
-      if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
-        return { pass: false, reason: `0 vol, KD ${kwMetric.difficulty}`, score: 0 };
-      }
-
-      // KD ceiling (relaxable)
-      if (kwMetric.difficulty > effectiveMaxKD && kwMetric.searchVolume < 5000) {
-        const score = kwMetric.searchVolume > 0 ? Math.round(Math.log10(kwMetric.searchVolume) * 13) : 0;
-        return { pass: false, reason: `KD ${kwMetric.difficulty} > ceiling ${effectiveMaxKD}`, score };
-      }
-
-      // Volume floor (relaxable)
-      if (kwMetric.searchVolume > 0 && kwMetric.searchVolume < effectiveMinVol) {
-        return { pass: false, reason: `${kwMetric.searchVolume}/mo < ${effectiveMinVol} floor`, score: kwMetric.searchVolume };
-      }
-
-      // Compute opportunity score
-      const volumeScore = kwMetric.searchVolume > 0 ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) : 0;
-      // KD 0 = no data from DataForSEO → uncertain keyword, don't reward as "easy"
-      const difficultyBonus = kwMetric.difficulty > 0 ? Math.max(0, (100 - kwMetric.difficulty) * kdWeight) : 10;
-      const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
-      const kd0Penalty = kwMetric.difficulty === 0 ? -10 : 0;
-      let trendBonus = 0;
-      if (kwMetric.trend.length >= 6) {
-        const recent = kwMetric.trend.slice(0, 3).reduce((a, b) => a + b, 0) / 3;
-        const older = kwMetric.trend.slice(3, 6).reduce((a, b) => a + b, 0) / 3;
-        if (older > 0) {
-          const change = (recent - older) / older;
-          trendBonus = Math.max(-5, Math.min(5, Math.round(change * 10)));
-        }
-      }
-      const opportunityScore = Math.max(0, Math.min(100, Math.round(volumeScore + difficultyBonus + cpcSignal + trendBonus + kd0Penalty)));
-
-      if (opportunityScore < effectiveMinOpp) {
-        return { pass: false, reason: `opportunity ${opportunityScore} < ${effectiveMinOpp}`, score: opportunityScore };
-      }
-
-      return { pass: true, reason: "passed", score: opportunityScore, kwMetric };
-    };
-
-    // ── First pass: standard thresholds ──
     for (const topic of plan) {
-      const result = evaluateTopic(topic, false);
-      if (!result.pass) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (${result.reason})`);
-        rejectedTopics.push({ topic, reason: result.reason, opportunityScore: result.score });
+      const kw = topic.primaryKeyword.toLowerCase();
+
+      // Brand check
+      const brandBlock = isKeywordBlocked(topic.primaryKeyword);
+      if (brandBlock) {
+        console.log(`Blocked: "${topic.primaryKeyword}" (${brandBlock})`);
         continue;
       }
 
-      const kwMetric = (result as any).kwMetric as typeof metrics[0] | undefined;
-      const opportunityScore = result.score;
-      const autoPriority = opportunityScore >= 70 ? 5
-        : opportunityScore >= 55 ? 4
-        : opportunityScore >= 40 ? 3
-        : opportunityScore >= 25 ? 2
-        : 1;
+      const m = metrics.find(x => x.keyword.toLowerCase() === kw);
+      if (!m) { enrichedPlan.push(topic); continue; } // No data — keep but don't score
 
-      enrichedPlan.push(topic);
-      if (kwMetric) {
-        enrichmentData.set(topic.primaryKeyword.toLowerCase(), {
-          searchVolume: kwMetric.searchVolume,
-          keywordDifficulty: kwMetric.difficulty,
-          cpc: kwMetric.cpc,
-          serpIntent: kwMetric.intent,
-          volumeTrend: kwMetric.trend,
-          priority: autoPriority,
-        });
+      // Hard kills
+      if (m.searchVolume === 0 && m.difficulty === 0 && m.cpc === 0) {
+        console.log(`Blocked: "${topic.primaryKeyword}" (no search data)`);
+        continue;
       }
-      console.log(`Scored "${topic.primaryKeyword}": opportunity=${opportunityScore}, priority=${autoPriority}${kwMetric ? `, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}` : ""}`);
-    }
 
-    console.log(`Quality gate pass 1: ${plan.length} → ${enrichedPlan.length} topics survived.`);
-
-    // ── Backfill pass: if fewer than 10 topics survived, re-evaluate rejected with relaxed thresholds ──
-    if (enrichedPlan.length < 10 && rejectedTopics.length > 0) {
-      // Sort rejected by opportunity score descending — best rejects first
-      rejectedTopics.sort((a, b) => b.opportunityScore - a.opportunityScore);
-      let backfilled = 0;
-      for (const { topic } of rejectedTopics) {
-        if (enrichedPlan.length >= 10) break;
-        const result = evaluateTopic(topic, true);
-        if (!result.pass) continue;
-
-        const kwMetric = (result as any).kwMetric as typeof metrics[0] | undefined;
-        const opportunityScore = result.score;
-        const autoPriority = opportunityScore >= 70 ? 5
-          : opportunityScore >= 55 ? 4
-          : opportunityScore >= 40 ? 3
-          : opportunityScore >= 15 ? 2
-          : 1;
-
-        enrichedPlan.push(topic);
-        if (kwMetric) {
-          enrichmentData.set(topic.primaryKeyword.toLowerCase(), {
-            searchVolume: kwMetric.searchVolume,
-            keywordDifficulty: kwMetric.difficulty,
-            cpc: kwMetric.cpc,
-            serpIntent: kwMetric.intent,
-            volumeTrend: kwMetric.trend,
-            priority: autoPriority,
-          });
-        }
-        backfilled++;
-        console.log(`Backfill: rescued "${topic.primaryKeyword}" (opportunity=${opportunityScore}${kwMetric ? `, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}` : ""})`);
+      // KD ceiling — allow up to maxKD+10 if volume justifies it (>1000/mo), strict maxKD otherwise
+      const effectiveMaxKD = m.searchVolume >= 1000 ? maxKD + 10 : maxKD;
+      if (m.difficulty > effectiveMaxKD) {
+        console.log(`Blocked: "${topic.primaryKeyword}" (KD ${m.difficulty} > ${effectiveMaxKD})`);
+        continue;
       }
-      if (backfilled > 0) console.log(`Backfill: rescued ${backfilled} topics with relaxed thresholds → ${enrichedPlan.length} total.`);
-    }
 
-    // ── KD 0 cap: max 2 topics with no difficulty data (speculative keywords) ──
-    let kd0Count = 0;
-    const kd0Capped: typeof enrichedPlan = [];
-    for (const topic of enrichedPlan) {
-      const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
-      if (data && data.keywordDifficulty === 0) {
+      // KD 0 cap — max 2 speculative keywords
+      if (m.difficulty === 0) {
         kd0Count++;
         if (kd0Count > 2) {
-          console.log(`KD0 cap: dropping "${topic.primaryKeyword}" (${kd0Count}th no-data keyword, max 2 allowed)`);
+          console.log(`Blocked: "${topic.primaryKeyword}" (KD0 cap: ${kd0Count}th unknown-difficulty keyword)`);
           continue;
         }
       }
-      kd0Capped.push(topic);
-    }
-    if (kd0Capped.length < enrichedPlan.length) {
-      console.log(`KD0 cap: ${enrichedPlan.length} → ${kd0Capped.length} (removed ${enrichedPlan.length - kd0Capped.length} speculative keywords)`);
-      enrichedPlan.length = 0;
-      enrichedPlan.push(...kd0Capped);
+
+      // Score it
+      const opportunity = scoreKeyword(m);
+      const priority = opportunity >= 70 ? 5 : opportunity >= 55 ? 4 : opportunity >= 40 ? 3 : opportunity >= 20 ? 2 : 1;
+
+      enrichedPlan.push(topic);
+      enrichmentData.set(kw, {
+        searchVolume: m.searchVolume, keywordDifficulty: m.difficulty, cpc: m.cpc,
+        serpIntent: m.intent, volumeTrend: m.trend, priority,
+      });
+      console.log(`✓ "${topic.primaryKeyword}": opp=${opportunity}, KD=${m.difficulty}, vol=${m.searchVolume}, pri=${priority}`);
     }
 
-    // ── SERP Analysis for surviving topics (in-memory) ──
-    await reportPlanProgress(5, "Analyzing Google SERPs for optimal article formats...");
+    console.log(`Quality gate: ${plan.length} → ${enrichedPlan.length} topics`);
+
+    // 5d. SERP analysis — determine optimal article format for each surviving topic
+    await reportProgress(5, "Analyzing SERPs for article format optimization...");
     for (const topic of enrichedPlan) {
       try {
-        const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
+        const serp = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
         const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
         if (data) {
-          data.articleType = serpAnalysis.recommendedArticleType;
-          data.recommendedArticleType = serpAnalysis.recommendedArticleType;
-          data.paaQuestions = serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined;
+          data.articleType = serp.recommendedArticleType;
+          data.recommendedArticleType = serp.recommendedArticleType;
+          data.paaQuestions = serp.paaQuestions.length > 0 ? serp.paaQuestions : undefined;
         }
-        // Override AI article type with SERP-recommended type
-        topic.articleType = serpAnalysis.recommendedArticleType as any;
-        console.log(`SERP optimized "${topic.primaryKeyword}": type=${serpAnalysis.recommendedArticleType}, PAA=${serpAnalysis.paaQuestions.length}`);
-      } catch (serpErr) {
-        console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);
-      }
+        topic.articleType = serp.recommendedArticleType as any;
+        console.log(`SERP: "${topic.primaryKeyword}" → ${serp.recommendedArticleType} (${serp.paaQuestions.length} PAA)`);
+      } catch (e) { console.error(`SERP failed for "${topic.primaryKeyword}":`, e); }
     }
 
-    // ── NOW save everything to DB in one shot — fully enriched ──
+    // ══════════════════════════════════════════════════════════════════════
+    // STEP 6: Save fully enriched topics to DB
+    // ══════════════════════════════════════════════════════════════════════
+
     plan = enrichedPlan.slice(0, 10);
     await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
-    console.log(`Saved ${plan.length} fully-enriched topics to DB.`);
+    console.log(`Saved ${plan.length} topics`);
 
-    // Apply SEO metrics to the saved topics
+    // Apply metrics
     const savedTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
     for (const topic of savedTopics) {
       const data = enrichmentData.get(topic.primaryKeyword.toLowerCase());
-      if (!data || topic.searchVolume !== undefined) continue; // Already enriched or no data
+      if (!data || topic.searchVolume !== undefined) continue;
       await ctx.runMutation(api.topics.updateSEOMetrics, {
         topicId: topic._id,
         searchVolume: data.searchVolume,
@@ -1852,23 +1573,17 @@ async function handlePlan(
         serpIntent: data.serpIntent,
         volumeTrend: data.volumeTrend.length > 0 ? data.volumeTrend : undefined,
         priority: data.priority,
-        ...(data.recommendedArticleType ? {
-          recommendedArticleType: data.recommendedArticleType,
-          articleType: data.articleType,
-        } : {}),
+        ...(data.recommendedArticleType ? { recommendedArticleType: data.recommendedArticleType, articleType: data.articleType } : {}),
         ...(data.paaQuestions ? { paaQuestions: data.paaQuestions } : {}),
       });
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`SEO optimization failed, saving topics without metrics: ${msg}`);
-    // Fallback: save un-enriched topics so user doesn't get nothing
+    console.error(`SEO enrichment failed, saving raw topics:`, err instanceof Error ? err.message : err);
     plan = plan.slice(0, 10);
     await ctx.runMutation(api.topics.upsertMany, { siteId, topics: plan });
-    console.log(`Fallback: saved ${plan.length} topics without SEO enrichment.`);
   }
 
-  await reportPlanProgress(6, "Content strategy ready!");
+  await reportProgress(6, "Content strategy ready!");
   return { count: plan.length };
 }
 
