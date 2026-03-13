@@ -31,7 +31,7 @@ const STEPS = [
 export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
   const runningJob = useQuery(api.jobs.getRunningBySite, { siteId });
 
-  if (!runningJob || !runningJob.stepProgress) return null;
+  if (!runningJob || !runningJob.stepProgress || runningJob.type !== "article") return null;
 
   const { current, total } = runningJob.stepProgress;
 

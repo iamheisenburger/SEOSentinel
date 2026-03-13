@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -293,7 +293,6 @@ export function SetupWizard() {
 
   // Loading states
   const [analyzing, setAnalyzing] = useState(false);
-  const generationStarted = useRef(false);
   const [generating, setGenerating] = useState(false);
 
   // Convex hooks
@@ -301,7 +300,6 @@ export function SetupWizard() {
   const upsert = useMutation(api.sites.upsert);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
-  const generateNow = useAction(api.actions.pipeline.generateNow);
 
   // After OAuth popup closes, server has saved token directly to Convex.
   // We just need to detect when the popup closes to update local UI state.
@@ -497,12 +495,6 @@ export function SetupWizard() {
 
       setStatusMsg(null);
       setStep("generate");
-
-      // Fire-and-forget: first article generates in the background
-      if (!generationStarted.current) {
-        generationStarted.current = true;
-        generateNow({ siteId }).catch(console.error);
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed");
       setStatusMsg(null);
