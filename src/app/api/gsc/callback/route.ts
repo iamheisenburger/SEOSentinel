@@ -135,7 +135,7 @@ export async function GET(req: NextRequest) {
 
   const msg = saved
     ? `Connected to Google Search Console!${gscProperty ? ` Property: ${gscProperty}` : ""}`
-    : "Connected! Close this window and refresh Settings.";
+    : "Connected! You can close this window.";
 
   const response = new NextResponse(renderPage(msg, true, email, saved), {
     headers: { "Content-Type": "text/html" },

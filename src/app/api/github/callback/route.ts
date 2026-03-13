@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const msg = saved ? "Connected to GitHub!" : "Connected to GitHub! Close this window and refresh Settings.";
+  const msg = saved ? "Connected to GitHub!" : "Connected to GitHub! You can close this window.";
 
   const response = new NextResponse(renderPage(msg, true, githubUsername, saved), {
     headers: { "Content-Type": "text/html" },

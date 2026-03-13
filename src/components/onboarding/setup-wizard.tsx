@@ -694,41 +694,14 @@ export function SetupWizard() {
                       onChange={(e) => setRepoName(e.target.value)}
                     />
                   </div>
-                  {githubConnected ? (
-                    <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
-                        <Check className="h-4 w-4 text-[#22C55E]" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[13px] font-medium text-[#22C55E]">GitHub connected</p>
-                        {githubUsername && (
-                          <p className="text-[11px] text-[#565A6E]">Signed in as @{githubUsername}</p>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => {
-                          startOAuthPopup(siteId || "");
-                        }}
-                        className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
-                      >
-                        Reconnect
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        startOAuthPopup(siteId || "");
-                      }}
-                      className="flex items-center justify-center gap-2 w-full rounded-lg border border-white/[0.1] bg-white/[0.02] px-4 py-3 text-[13px] font-medium text-[#EDEEF1] transition hover:bg-white/[0.05] hover:border-[#0EA5E9]/30"
-                    >
-                      <GitBranch className="h-4 w-4 text-[#8B8FA3]" />
-                      Connect GitHub
-                    </button>
-                  )}
                   <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                     <p className="text-[11px] text-[#8B8FA3]">
                       <FileText className="inline h-3 w-3 mr-1 text-[#8B8FA3]" />
                       Articles are committed as MDX files to your repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator.
+                    </p>
+                    <p className="text-[10px] text-[#565A6E] mt-1">
+                      <GitBranch className="inline h-3 w-3 mr-1" />
+                      You&apos;ll connect your GitHub account in the next steps.
                     </p>
                   </div>
                 </div>
@@ -1230,6 +1203,48 @@ export function SetupWizard() {
                 </div>
               )}
             </div>
+
+            {/* ── GitHub Connect (only for GitHub publish method) ── */}
+            {publishMethod === "github" && (
+              <div className="border-t border-white/[0.04] pt-5 mb-5">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <GitBranch className="h-4 w-4 text-[#8B8FA3]" />
+                  <h3 className="text-[13px] font-medium text-[#EDEEF1]">GitHub</h3>
+                  <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#0EA5E9]/[0.08] text-[#38BDF8]">Required for publishing</span>
+                </div>
+                <p className="text-[11px] text-[#565A6E] px-1 mb-3">
+                  Connect your GitHub account so Pentra can commit articles directly to your repo (<span className="text-[#8B8FA3]">{repoOwner}/{repoName}</span>).
+                </p>
+
+                {githubConnected ? (
+                  <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
+                      <Check className="h-4 w-4 text-[#22C55E]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-medium text-[#22C55E]">GitHub connected</p>
+                      {githubUsername && (
+                        <p className="text-[11px] text-[#565A6E]">Signed in as @{githubUsername}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => startOAuthPopup(siteId || "")}
+                      className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
+                    >
+                      Reconnect
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => startOAuthPopup(siteId || "")}
+                    className="flex items-center justify-center gap-2 w-full rounded-lg bg-[#0EA5E9] px-4 py-3 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
+                  >
+                    <GitBranch className="h-4 w-4" />
+                    Connect GitHub
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* ── Content Syndication ── */}
             <div className="border-t border-white/[0.04] pt-5">
