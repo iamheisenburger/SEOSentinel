@@ -1214,18 +1214,20 @@ async function handlePlan(
     if (site.blogTheme) for (const p of site.blogTheme.split(/[,;.]/)) addSeed(p);
     if (seeds.length === 0) seeds.push(site.domain.replace(/\.\w+$/, ""));
 
-    // Expand seeds with modifiers for long-tail discovery
+    // Expand seeds with modifiers for long-tail discovery — cast a WIDE net
     const baseSeedCount = seeds.length;
-    for (const core of seeds.slice(0, 3)) {
-      for (const mod of ["how to","best","tool","software","guide","strategy","automation","platform","for business","for startups"]) {
+    const modifiers = ["how to","best","tool","software","guide","strategy","automation","platform","for business","for startups","tips","examples","vs","alternatives","free","services","agency","checklist","template","mistakes"];
+    for (const core of seeds.slice(0, 5)) {
+      for (const mod of modifiers) {
         const combo = `${core} ${mod}`;
         if (combo.split(/\s+/).length <= 5 && !seeds.includes(combo)) seeds.push(combo);
       }
-      if (seeds.length >= 25) break;
+      if (seeds.length >= 40) break;
     }
     console.log(`Seeds: ${baseSeedCount} base + ${seeds.length - baseSeedCount} expanded = ${seeds.length} total`);
 
-    discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 150))
+    // Request 700 keywords — we need volume to ensure 10+ survive all filters
+    discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 700))
       .filter(k => k.searchVolume >= 10)
       .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
     console.log(`Discovered ${discoveredKeywords.length} keywords with volume`);
@@ -1298,12 +1300,12 @@ async function handlePlan(
       .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
       .sort((a, b) => b.opportunity - a.opportunity);
 
-    // Dedup
+    // Dedup — keep a large pool so AI has plenty to choose from
     for (const kw of raw) {
       if (!candidates.some(c => isTooSimilar(c.keyword, kw.keyword))) {
         candidates.push(kw);
       }
-      if (candidates.length >= 40) break;
+      if (candidates.length >= 80) break;
     }
     console.log(`Candidate pool: ${candidates.length} keywords (from ${discoveredKeywords.length} discovered)`);
   }
@@ -1357,7 +1359,7 @@ async function handlePlan(
       siteContext,
       ``,
       `<your_task>`,
-      `From the keyword list below, select 10-15 that are MOST STRATEGIC for ${productName}. For each, create an article topic.`,
+      `From the keyword list below, select 20-25 that are MOST STRATEGIC for ${productName}. For each, create an article topic. Select MORE than you think we need — our quality filters will narrow it down to the best 10.`,
       ``,
       `SELECTION CRITERIA (in order of importance):`,
       `1. RELEVANCE — Would someone searching this keyword be a potential ${productName} user? If not, SKIP IT.`,
@@ -1376,7 +1378,7 @@ async function handlePlan(
       `</your_task>`,
       ``,
       `<keywords>`,
-      ...candidates.slice(0, 40).map(k => `- "${k.keyword}" (vol:${k.searchVolume}/mo, KD:${k.difficulty}, CPC:$${k.cpc.toFixed(2)}, score:${k.opportunity})`),
+      ...candidates.slice(0, 80).map(k => `- "${k.keyword}" (vol:${k.searchVolume}/mo, KD:${k.difficulty}, CPC:$${k.cpc.toFixed(2)}, score:${k.opportunity})`),
       `</keywords>`,
       ``,
       existingKeywords.length > 0 ? `<already_covered>\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</already_covered>` : "",
@@ -1389,8 +1391,8 @@ async function handlePlan(
       site.anchorKeywords?.length ? `Priority keywords to incorporate: ${site.anchorKeywords.join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
-    const text = await callClaude(prompt, `Select 10-15 strategic keywords and create topics. Quality > quantity. Use exact keywords.`, 8192);
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 15);
+    const text = await callClaude(prompt, `Select 20-25 strategic keywords and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`, 12000);
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 25);
     console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates`);
 
     // Snap AI-modified keywords back to exact discovered matches

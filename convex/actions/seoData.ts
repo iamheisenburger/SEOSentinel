@@ -278,8 +278,11 @@ export async function discoverKeywords(
 
   const allResults: KeywordMetrics[] = [];
 
-  // Use keyword suggestions endpoint for each seed (max 15 seeds for broad discovery)
-  for (const seed of seedKeywords.slice(0, 15)) {
+  // Use keyword suggestions endpoint for each seed — scale per-seed limit to meet total target
+  const maxSeeds = Math.min(seedKeywords.length, 20);
+  const perSeedLimit = Math.max(50, Math.ceil(limit / maxSeeds * 1.5)); // Overshoot to account for dedup
+  for (const seed of seedKeywords.slice(0, maxSeeds)) {
+    if (allResults.length >= limit * 2) break; // Early exit if we have plenty
     try {
       const data = await dataForSEORequest(
         "keywords_data/google_ads/keywords_for_keywords/live",
@@ -288,7 +291,7 @@ export async function discoverKeywords(
           location_code: locationCode,
           language_code: languageCode,
           sort_by: "search_volume",
-          limit: 50,
+          limit: perSeedLimit,
         }],
       );
 
