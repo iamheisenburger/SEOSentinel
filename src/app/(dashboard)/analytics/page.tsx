@@ -1,13 +1,15 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useActiveSite } from "@/contexts/site-context";
 import Link from "next/link";
+import { useState } from "react";
 import {
   BarChart3,
   MousePointerClick,
   Eye,
+  Loader2,
   TrendingUp,
   Search,
   ArrowUpRight,
@@ -18,6 +20,9 @@ import {
 
 export default function AnalyticsPage() {
   const { activeSite: site } = useActiveSite();
+  const syncGSC = useAction(api.actions.gscSync.syncSite);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const gscSummary = useQuery(
     api.searchPerformance.getSummary,
@@ -33,6 +38,7 @@ export default function AnalyticsPage() {
   );
 
   const loading = gscSummary === undefined && site?._id;
+  const gscConnected = !!site?.gscAccessToken;
   const hasGSC = !!gscSummary;
 
   // Segment queries by position
@@ -61,7 +67,7 @@ export default function AnalyticsPage() {
         )}
       </div>
 
-      {!hasGSC ? (
+      {!gscConnected ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-16 px-6">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0EA5E9]/[0.08] mb-4">
             <BarChart3 className="h-7 w-7 text-[#0EA5E9]" />
@@ -92,6 +98,44 @@ export default function AnalyticsPage() {
             <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
             We only request read-only access.
           </p>
+        </div>
+      ) : !hasGSC ? (
+        <div className="flex flex-col items-center justify-center rounded-xl border border-[#22C55E]/[0.15] bg-[#22C55E]/[0.02] py-16 px-6">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#22C55E]/[0.08] mb-4">
+            <BarChart3 className="h-7 w-7 text-[#22C55E]" />
+          </div>
+          <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Google Search Console Connected</h2>
+          {site?.gscProperty && (
+            <p className="text-[12px] text-[#8B8FA3] mb-2">
+              Property: <span className="text-[#EDEEF1] font-medium">{site.gscProperty}</span>
+            </p>
+          )}
+          <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-4">
+            Your data will appear here after syncing. GSC data also syncs automatically every day.
+          </p>
+          <button
+            disabled={syncing}
+            onClick={async () => {
+              if (!site?._id) return;
+              setSyncing(true);
+              setSyncError(null);
+              try {
+                await syncGSC({ siteId: site._id });
+                window.location.reload();
+              } catch (e) {
+                setSyncError(e instanceof Error ? e.message : "Sync failed");
+              } finally {
+                setSyncing(false);
+              }
+            }}
+            className="inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-5 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90 disabled:opacity-50"
+          >
+            {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5" />}
+            {syncing ? "Syncing..." : "Sync Now"}
+          </button>
+          {syncError && (
+            <p className="mt-2 text-[11px] text-[#EF4444]">{syncError}</p>
+          )}
         </div>
       ) : (
         <>
