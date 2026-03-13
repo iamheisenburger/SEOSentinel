@@ -1209,6 +1209,32 @@ async function handlePlan(
       .filter(k => k.searchVolume >= 10) // Keywords with any real search volume
       .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
     console.log(`Discovered ${discoveredKeywords.length} real keywords with volume.`);
+
+    // ── Competitor Gap Analysis: find keywords competitors rank for that we don't ──
+    const competitors = site.competitors ?? [];
+    if (competitors.length > 0) {
+      try {
+        const { findKeywordGaps } = await import("./seoData");
+        const gaps = await findKeywordGaps(site.domain, competitors, locationCode, site.language ?? "en");
+        const existingKwSet = new Set(discoveredKeywords.map(k => k.keyword.toLowerCase()));
+        let added = 0;
+        for (const gap of gaps) {
+          if (!existingKwSet.has(gap.keyword.toLowerCase()) && gap.searchVolume >= 10) {
+            discoveredKeywords.push({
+              keyword: gap.keyword,
+              searchVolume: gap.searchVolume,
+              difficulty: gap.difficulty,
+              cpc: 0,
+            });
+            existingKwSet.add(gap.keyword.toLowerCase());
+            added++;
+          }
+        }
+        if (added > 0) console.log(`Competitor gap analysis: added ${added} keywords from ${competitors.length} competitors.`);
+      } catch (gapErr) {
+        console.log("Competitor gap analysis unavailable:", gapErr);
+      }
+    }
   } catch (err) {
     console.log("Keyword discovery unavailable, AI will generate keywords:", err);
   }
@@ -1320,10 +1346,10 @@ async function handlePlan(
       .sort((a, b) => b.opportunity - a.opportunity);
 
     // Pre-dedup candidates: ensure diversity by removing keywords too similar to already-selected ones
-    // Pre-dedup: keep keywords that don't have >50% word overlap with higher-scoring kept keywords
-    // This ensures diversity while preserving the best keywords. Uses >3 char words only.
+    // Normalize hyphens and stem suffixes so "ai-powered content creation" matches "ai powered content generation"
     const dedupStopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","best","top","free","online"]);
-    const candWords = (s: string) => s.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !dedupStopWords.has(w));
+    const stemCandWord = (w: string) => w.replace(/(tion|sion|ment|ness|ity|ing|ive|ous|ful|less|able|ible|ated|ize|ise)$/, "");
+    const candWords = (s: string) => s.toLowerCase().replace(/-/g, " ").split(/\s+/).filter(w => w.length > 3 && !dedupStopWords.has(w)).map(stemCandWord);
     const candidates: typeof scoredCandidates = [];
     for (const cand of scoredCandidates) {
       const words = new Set(candWords(cand.keyword));
@@ -1332,8 +1358,8 @@ async function handlePlan(
         const keptWords = new Set(candWords(kept.keyword));
         if (keptWords.size === 0) return false;
         const overlap = [...words].filter(w => keptWords.has(w)).length;
-        // Only block if majority of the SHORTER keyword's words are in the longer one
-        return overlap / Math.min(words.size, keptWords.size) >= 0.67;
+        // Block if >50% of the shorter keyword's stemmed words overlap
+        return overlap / Math.min(words.size, keptWords.size) > 0.5;
       });
       if (!tooSimilar) candidates.push(cand);
       if (candidates.length >= 30) break; // Enough diverse candidates
@@ -1413,18 +1439,21 @@ async function handlePlan(
   }
 
   // Programmatic dedup: remove topics with exact same keyword or very high overlap
+  // Normalize hyphens and stem common suffixes so "ai-powered content creation" matches "ai powered content generation"
   const stopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","than","its","you","using","about","best","top","guide","tips"]);
-  const getWords = (s: string) => s.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
+  const stemWord = (w: string) => w.replace(/(tion|sion|ment|ness|ity|ing|ive|ous|ful|less|able|ible|ated|ize|ise)$/, "");
+  const getWords = (s: string) => s.toLowerCase().replace(/-/g, " ").split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
+  const getStemmed = (s: string) => new Set(getWords(s).map(stemWord));
   const kept: typeof plan = [];
   for (const topic of plan) {
-    const words = new Set(getWords(topic.primaryKeyword));
+    const stems = getStemmed(topic.primaryKeyword);
     const isDupe = kept.some(k => {
       // Exact match = definite dupe
       if (k.primaryKeyword.toLowerCase() === topic.primaryKeyword.toLowerCase()) return true;
-      const kWords = new Set(getWords(k.primaryKeyword));
-      const overlap = [...words].filter(w => kWords.has(w)).length;
-      // Only remove if >60% overlap (was 40% — too aggressive for same-niche keywords)
-      return words.size > 0 && kWords.size > 0 && overlap / Math.min(words.size, kWords.size) > 0.6;
+      const kStems = getStemmed(k.primaryKeyword);
+      const overlap = [...stems].filter(w => kStems.has(w)).length;
+      // Remove if >50% of the shorter keyword's stemmed words overlap
+      return stems.size > 0 && kStems.size > 0 && overlap / Math.min(stems.size, kStems.size) > 0.5;
     });
     if (!isDupe) kept.push(topic);
     else console.log(`Dedup: removed "${topic.primaryKeyword}" (overlaps with existing topic)`);
@@ -1517,8 +1546,7 @@ async function handlePlan(
       }
 
       // ── Compute opportunity score: the autonomous ranking metric ──
-      // Uses logarithmic volume scaling so niche keywords (100-500/mo) still score well.
-      // Formula: volumeScore (0-40) + difficultyBonus (0-40) + cpcSignal (0-20) = max 100
+      // Formula: volumeScore (0-40) + difficultyBonus (0-40) + cpcSignal (0-20) + trendBonus (-5 to +5) = ~max 105
       const volumeScore = kwMetric.searchVolume > 0
         ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) // log10: 100→26, 500→35, 1K→39, 10K→40
         : 0;
@@ -1526,7 +1554,17 @@ async function handlePlan(
         ? Math.max(0, (100 - kwMetric.difficulty) * 0.4) // KD 30→28, KD 50→20, KD 100→0
         : 20; // KD=0 means no data — assume moderate difficulty (neutral 20/40)
       const cpcSignal = Math.min(kwMetric.cpc * 4, 20); // CPC $1→4, $3→12, $5→20
-      const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
+      // Trend bonus: compare recent 3 months avg vs older 3 months avg
+      let trendBonus = 0;
+      if (kwMetric.trend.length >= 6) {
+        const recent = kwMetric.trend.slice(0, 3).reduce((a, b) => a + b, 0) / 3;
+        const older = kwMetric.trend.slice(3, 6).reduce((a, b) => a + b, 0) / 3;
+        if (older > 0) {
+          const change = (recent - older) / older; // e.g. +0.3 = 30% growth
+          trendBonus = Math.max(-5, Math.min(5, Math.round(change * 10))); // cap at ±5
+        }
+      }
+      const opportunityScore = Math.max(0, Math.min(100, Math.round(volumeScore + difficultyBonus + cpcSignal + trendBonus)));
       // Map opportunity score to 1-5 priority (used by scheduler)
       const autoPriority = opportunityScore >= 70 ? 5
         : opportunityScore >= 55 ? 4
