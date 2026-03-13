@@ -1222,12 +1222,12 @@ async function handlePlan(
         const combo = `${core} ${mod}`;
         if (combo.split(/\s+/).length <= 5 && !seeds.includes(combo)) seeds.push(combo);
       }
-      if (seeds.length >= 40) break;
+      if (seeds.length >= 30) break;
     }
     console.log(`Seeds: ${baseSeedCount} base + ${seeds.length - baseSeedCount} expanded = ${seeds.length} total`);
 
-    // Request 700 keywords — we need volume to ensure 10+ survive all filters
-    discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 700))
+    // Request 300 keywords — enough volume for 10+ to survive filters without burning DataForSEO credits
+    discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 300))
       .filter(k => k.searchVolume >= 10)
       .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
     console.log(`Discovered ${discoveredKeywords.length} keywords with volume`);

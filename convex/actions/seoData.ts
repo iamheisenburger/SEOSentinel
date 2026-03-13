@@ -278,8 +278,8 @@ export async function discoverKeywords(
 
   const allResults: KeywordMetrics[] = [];
 
-  // Use keyword suggestions endpoint for each seed — scale per-seed limit to meet total target
-  const maxSeeds = Math.min(seedKeywords.length, 20);
+  // Use keyword suggestions endpoint — each seed is an API call ($), so cap seeds and scale per-seed limit
+  const maxSeeds = Math.min(seedKeywords.length, 15);
   const perSeedLimit = Math.max(50, Math.ceil(limit / maxSeeds * 1.5)); // Overshoot to account for dedup
   for (const seed of seedKeywords.slice(0, maxSeeds)) {
     if (allResults.length >= limit * 2) break; // Early exit if we have plenty
