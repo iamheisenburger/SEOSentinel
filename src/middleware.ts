@@ -43,6 +43,7 @@ export default clerkMiddleware(async (auth, request) => {
   const knownPrefixes = new Set([
     "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
     "pricing", "contact", "legal", "sign-in", "sign-up", "api", "_next", "blog",
+    "analytics", "backlinks",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);
   if (pathParts.length === 2 && !knownPrefixes.has(pathParts[0])) {
