@@ -1323,7 +1323,7 @@ async function handlePlan(
     `3. Mix of intents: ~40% informational, ~30% commercial, ~30% transactional`,
     `4. DIFFICULTY CEILING: Do NOT suggest keywords you estimate would have difficulty above ${maxKD}. This site cannot rank for those yet.`,
     `5. CRITICAL DIVERSITY RULE: Each topic must target a COMPLETELY DIFFERENT search query. No two topics should share more than 1 meaningful word. Spread across the full breadth of the niche.`,
-    `6. Generate exactly 12 new topics. Return a JSON array with exactly 12 items.`,
+    `6. Generate exactly 18 new topics. Return a JSON array with exactly 18 items.`,
     `7. Topics should form a funnel: awareness → consideration → decision.`,
     site.anchorKeywords?.length ? `8. Incorporate these priority keywords where natural: ${site.anchorKeywords.join(", ")}` : "",
     site.language && site.language !== "en" ? `9. All topic labels and keywords must be in ${site.language}.` : "",
@@ -1391,7 +1391,7 @@ async function handlePlan(
         return overlap / Math.min(words.size, keptWords.size) > 0.5;
       });
       if (!tooSimilar) candidates.push(cand);
-      if (candidates.length >= 30) break; // Enough diverse candidates
+      if (candidates.length >= 40) break; // Enough diverse candidates
     }
 
     console.log(`Data-first: ${candidates.length} keyword candidates for AI (from ${discoveredKeywords.length} discovered)`);
@@ -1412,15 +1412,15 @@ async function handlePlan(
       ``,
       existingKeywords.length > 0 ? `<existing_topics>\nSkip these:\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</existing_topics>` : "",
       ``,
-      `Return JSON array of 12 topics. Use the EXACT keyword string as primaryKeyword. Format:`,
+      `Return JSON array of 18 topics. Use the EXACT keyword string as primaryKeyword. Format:`,
       `[{"label":"compelling blog title","primaryKeyword":"exact keyword from list","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this matters for the audience"}]`,
       ``,
-      `Pick diverse keywords that cover different aspects of ${productName}'s niche. Mix article types.`,
+      `Pick diverse keywords that cover different aspects of ${productName}'s niche. Mix article types. Pick ALL 18 — the system will filter by quality, so more is better.`,
     ].filter(Boolean).join("\n");
 
     await reportPlanProgress(2, "AI creating topics from verified keywords...");
-    const text = await callClaude(dataFirstPrompt, `Create exactly 12 topics from the keyword list. Use exact keywords as primaryKeyword.`, 8192);
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 12);
+    const text = await callClaude(dataFirstPrompt, `Create exactly 18 topics from the keyword list. Use exact keywords as primaryKeyword. More is better — the system filters by quality.`, 8192);
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 18);
     console.log(`AI generated ${plan.length} topics. Keywords: ${plan.map(t => `"${t.primaryKeyword}"`).join(", ")}`);
 
     // Programmatic enforcement: if AI changed a keyword, snap it to the closest discovered match
@@ -1455,7 +1455,7 @@ async function handlePlan(
       existingKeywords.length > 0
         ? `<existing_topics>\nThese topics already exist. Do NOT duplicate or overlap:\n${existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n")}\n</existing_topics>\n`
         : "",
-      `Generate EXACTLY 12 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 12 topics — no fewer.`,
+      `Generate EXACTLY 18 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 18 topics — no fewer. More is better — the system filters by quality.`,
     ].filter(Boolean).join("\n");
 
     await reportPlanProgress(2, "Generating topic ideas with AI strategist...");
@@ -1464,7 +1464,7 @@ async function handlePlan(
       topicUserMessage,
       8192,
     );
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 12);
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 18);
   }
 
   // Programmatic dedup: remove topics with exact same keyword or very high overlap
@@ -1491,7 +1491,7 @@ async function handlePlan(
     console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >60%).`);
     plan = kept;
   }
-  plan = plan.slice(0, 12); // Keep up to 12 candidates for enrichment (quality gate will trim)
+  plan = plan.slice(0, 18); // Keep up to 18 candidates for enrichment (quality gate will trim to 10)
   await reportPlanProgress(3, "Deduplicating topics...");
   console.log(`${plan.length} candidate topics after dedup. Starting enrichment before saving...`);
 
@@ -1552,60 +1552,61 @@ async function handlePlan(
       if (name.length > 2) competitorBrands.add(name.toLowerCase());
     }
 
-    for (const topic of plan) {
-      // Kill topics that contain competitor brand names
+    // Adaptive thresholds based on domain authority — low-DR sites get relaxed gates
+    const minVolume = maxKD <= 35 ? 10 : 30;
+    const minOpportunity = maxKD <= 35 ? 15 : 25;
+    // Relaxed thresholds for backfill pass when not enough topics survive
+    const relaxedMinVolume = 5;
+    const relaxedMinOpportunity = 10;
+    const relaxedKDCeiling = maxKD + 15; // Allow slightly harder keywords as backfill
+
+    // Track rejected topics with their scores for potential backfill
+    const rejectedTopics: { topic: typeof plan[0]; reason: string; opportunityScore: number }[] = [];
+
+    const evaluateTopic = (topic: typeof plan[0], relaxed: boolean) => {
+      const effectiveMinVol = relaxed ? relaxedMinVolume : minVolume;
+      const effectiveMinOpp = relaxed ? relaxedMinOpportunity : minOpportunity;
+      const effectiveMaxKD = relaxed ? relaxedKDCeiling : maxKD;
+
+      // Always kill competitor brand mentions (never relax this)
       if (competitorBrands.size > 0) {
         const kwLower = topic.primaryKeyword.toLowerCase();
         const labelLower = topic.label.toLowerCase();
         const mentionsCompetitor = [...competitorBrands].find(
           brand => kwLower.includes(brand) || labelLower.includes(brand),
         );
-        if (mentionsCompetitor) {
-          console.log(`Quality gate: removing "${topic.primaryKeyword}" (contains competitor brand "${mentionsCompetitor}")`);
-          continue;
-        }
+        if (mentionsCompetitor) return { pass: false, reason: `competitor brand "${mentionsCompetitor}"`, score: 0 };
       }
 
       const kwMetric = metrics.find(
         (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
       );
-      if (!kwMetric) {
-        // No metrics found — keep with default priority but flag
-        enrichedPlan.push(topic);
-        continue;
-      }
+      if (!kwMetric) return { pass: true, reason: "no metrics", score: 30 }; // Keep — no data to reject on
 
-      // Kill topics where DataForSEO returned no data at all
+      // Always kill zero-data keywords (never relax)
       if (kwMetric.searchVolume === 0 && kwMetric.difficulty === 0 && kwMetric.cpc === 0) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (no search data — keyword doesn't exist)`);
-        continue;
+        return { pass: false, reason: "no search data", score: 0 };
       }
 
-      // Kill topics with zero volume AND high difficulty (unwinnable)
+      // Always kill zero volume + very high difficulty
       if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (0 volume, ${kwMetric.difficulty} KD — unwinnable)`);
-        continue;
+        return { pass: false, reason: `0 vol, KD ${kwMetric.difficulty}`, score: 0 };
       }
 
-      // Kill topics exceeding domain authority KD ceiling (unless volume is extremely high)
-      if (kwMetric.difficulty > maxKD && kwMetric.searchVolume < 5000) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (KD ${kwMetric.difficulty} exceeds domain ceiling ${maxKD} for ${kwMetric.searchVolume}/mo)`);
-        continue;
+      // KD ceiling (relaxable)
+      if (kwMetric.difficulty > effectiveMaxKD && kwMetric.searchVolume < 5000) {
+        const score = kwMetric.searchVolume > 0 ? Math.round(Math.log10(kwMetric.searchVolume) * 13) : 0;
+        return { pass: false, reason: `KD ${kwMetric.difficulty} > ceiling ${effectiveMaxKD}`, score };
       }
 
-      // Kill very low volume topics (< 30/mo) — not worth the pipeline cost
-      if (kwMetric.searchVolume > 0 && kwMetric.searchVolume < 30) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (${kwMetric.searchVolume}/mo — too low volume)`);
-        continue;
+      // Volume floor (relaxable)
+      if (kwMetric.searchVolume > 0 && kwMetric.searchVolume < effectiveMinVol) {
+        return { pass: false, reason: `${kwMetric.searchVolume}/mo < ${effectiveMinVol} floor`, score: kwMetric.searchVolume };
       }
 
-      // Compute opportunity score — kdWeight adapts to domain authority
-      const volumeScore = kwMetric.searchVolume > 0
-        ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40)
-        : 0;
-      const difficultyBonus = kwMetric.difficulty > 0
-        ? Math.max(0, (100 - kwMetric.difficulty) * kdWeight)
-        : 20;
+      // Compute opportunity score
+      const volumeScore = kwMetric.searchVolume > 0 ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) : 0;
+      const difficultyBonus = kwMetric.difficulty > 0 ? Math.max(0, (100 - kwMetric.difficulty) * kdWeight) : 20;
       const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
       let trendBonus = 0;
       if (kwMetric.trend.length >= 6) {
@@ -1618,11 +1619,24 @@ async function handlePlan(
       }
       const opportunityScore = Math.max(0, Math.min(100, Math.round(volumeScore + difficultyBonus + cpcSignal + trendBonus)));
 
-      if (opportunityScore < 25) {
-        console.log(`Quality gate: removing "${topic.primaryKeyword}" (opportunity ${opportunityScore}/100 — below threshold)`);
+      if (opportunityScore < effectiveMinOpp) {
+        return { pass: false, reason: `opportunity ${opportunityScore} < ${effectiveMinOpp}`, score: opportunityScore };
+      }
+
+      return { pass: true, reason: "passed", score: opportunityScore, kwMetric };
+    };
+
+    // ── First pass: standard thresholds ──
+    for (const topic of plan) {
+      const result = evaluateTopic(topic, false);
+      if (!result.pass) {
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (${result.reason})`);
+        rejectedTopics.push({ topic, reason: result.reason, opportunityScore: result.score });
         continue;
       }
 
+      const kwMetric = (result as any).kwMetric as typeof metrics[0] | undefined;
+      const opportunityScore = result.score;
       const autoPriority = opportunityScore >= 70 ? 5
         : opportunityScore >= 55 ? 4
         : opportunityScore >= 40 ? 3
@@ -1630,18 +1644,55 @@ async function handlePlan(
         : 1;
 
       enrichedPlan.push(topic);
-      enrichmentData.set(topic.primaryKeyword.toLowerCase(), {
-        searchVolume: kwMetric.searchVolume,
-        keywordDifficulty: kwMetric.difficulty,
-        cpc: kwMetric.cpc,
-        serpIntent: kwMetric.intent,
-        volumeTrend: kwMetric.trend,
-        priority: autoPriority,
-      });
-      console.log(`Scored "${topic.primaryKeyword}": opportunity=${opportunityScore}, priority=${autoPriority}, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}`);
+      if (kwMetric) {
+        enrichmentData.set(topic.primaryKeyword.toLowerCase(), {
+          searchVolume: kwMetric.searchVolume,
+          keywordDifficulty: kwMetric.difficulty,
+          cpc: kwMetric.cpc,
+          serpIntent: kwMetric.intent,
+          volumeTrend: kwMetric.trend,
+          priority: autoPriority,
+        });
+      }
+      console.log(`Scored "${topic.primaryKeyword}": opportunity=${opportunityScore}, priority=${autoPriority}${kwMetric ? `, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}` : ""}`);
     }
 
-    console.log(`Quality gate: ${plan.length} → ${enrichedPlan.length} topics survived.`);
+    console.log(`Quality gate pass 1: ${plan.length} → ${enrichedPlan.length} topics survived.`);
+
+    // ── Backfill pass: if fewer than 10 topics survived, re-evaluate rejected with relaxed thresholds ──
+    if (enrichedPlan.length < 10 && rejectedTopics.length > 0) {
+      // Sort rejected by opportunity score descending — best rejects first
+      rejectedTopics.sort((a, b) => b.opportunityScore - a.opportunityScore);
+      let backfilled = 0;
+      for (const { topic } of rejectedTopics) {
+        if (enrichedPlan.length >= 10) break;
+        const result = evaluateTopic(topic, true);
+        if (!result.pass) continue;
+
+        const kwMetric = (result as any).kwMetric as typeof metrics[0] | undefined;
+        const opportunityScore = result.score;
+        const autoPriority = opportunityScore >= 70 ? 5
+          : opportunityScore >= 55 ? 4
+          : opportunityScore >= 40 ? 3
+          : opportunityScore >= 15 ? 2
+          : 1;
+
+        enrichedPlan.push(topic);
+        if (kwMetric) {
+          enrichmentData.set(topic.primaryKeyword.toLowerCase(), {
+            searchVolume: kwMetric.searchVolume,
+            keywordDifficulty: kwMetric.difficulty,
+            cpc: kwMetric.cpc,
+            serpIntent: kwMetric.intent,
+            volumeTrend: kwMetric.trend,
+            priority: autoPriority,
+          });
+        }
+        backfilled++;
+        console.log(`Backfill: rescued "${topic.primaryKeyword}" (opportunity=${opportunityScore}${kwMetric ? `, KD=${kwMetric.difficulty}, vol=${kwMetric.searchVolume}` : ""})`);
+      }
+      if (backfilled > 0) console.log(`Backfill: rescued ${backfilled} topics with relaxed thresholds → ${enrichedPlan.length} total.`);
+    }
 
     // ── SERP Analysis for surviving topics (in-memory) ──
     await reportPlanProgress(5, "Analyzing Google SERPs for optimal article formats...");
