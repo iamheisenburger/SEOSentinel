@@ -1158,6 +1158,45 @@ async function handlePlan(
     c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
   );
 
+  // ── Keyword Discovery: find real keywords from DataForSEO before AI topic generation ──
+  let discoveredKeywords: { keyword: string; searchVolume: number; difficulty: number; cpc: number }[] = [];
+  try {
+    const { discoverKeywords } = await import("./seoData");
+    // Build seed keywords from site profile — use short, broad terms for max discovery
+    const seedKeywords: string[] = [];
+    // Extract short, broad phrases from niche (split on commas)
+    if (site.niche) {
+      for (const part of site.niche.split(/[,;]/)) {
+        const clean = part.trim().toLowerCase();
+        // Only take 2-4 word phrases
+        if (clean.split(/\s+/).length <= 4 && clean.length > 3) seedKeywords.push(clean);
+      }
+    }
+    // Add anchor keywords (these are explicitly chosen by user)
+    if (site.anchorKeywords?.length) {
+      for (const kw of site.anchorKeywords.slice(0, 5)) {
+        if (kw.split(/\s+/).length <= 5) seedKeywords.push(kw.toLowerCase());
+      }
+    }
+    // Add broad industry terms from key features
+    if (site.keyFeatures?.length) {
+      for (const f of site.keyFeatures.slice(0, 3)) {
+        const short = f.split(/[,.:;]/)[0].trim().toLowerCase();
+        if (short.split(/\s+/).length <= 4 && short.length > 3) seedKeywords.push(short);
+      }
+    }
+    if (seedKeywords.length === 0) seedKeywords.push(site.domain.replace(/\.\w+$/, ""));
+
+    const locationCode = mapCountryToLocation(site.targetCountry);
+    console.log(`Discovering keywords with seeds: ${seedKeywords.join(", ")}`);
+    discoveredKeywords = (await discoverKeywords(seedKeywords, locationCode, site.language ?? "en", 80))
+      .filter(k => k.searchVolume >= 10) // Keywords with any real search volume
+      .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
+    console.log(`Discovered ${discoveredKeywords.length} real keywords with volume.`);
+  } catch (err) {
+    console.log("Keyword discovery unavailable, AI will generate keywords:", err);
+  }
+
   const topicSystemPrompt = [
     `<role>`,
     `You are the SEO content strategist at ${productName}. You plan blog topics that drive organic traffic specifically to ${productName}.`,
@@ -1197,10 +1236,13 @@ async function handlePlan(
     `CRITICAL: Your #1 job is to find keywords people actually search for in HIGH VOLUME. Every topic must target a keyword with real search demand — not obscure product-specific phrases.`,
     ``,
     `1. KEYWORD-FIRST approach: Think "what are people in this niche Googling?" first, then connect it to ${productName}. NOT the reverse.`,
-    `   - Target keywords with 500+ monthly searches when possible`,
-    `   - Use broader industry/problem keywords, not hyper-specific product terms`,
-    `   - Example for an SEO tool: "content marketing strategy" (12K/mo) > "autonomous SEO content generation" (200/mo)`,
-    `   - The article will naturally mention ${productName} — the keyword itself doesn't need to`,
+    `   - CRITICAL: Only use keywords that REAL PEOPLE actually type into Google. Think like a searcher, not a marketer.`,
+    `   - Target keywords with 500+ monthly searches. Use common, well-known phrases people actually Google.`,
+    `   - Use 2-4 word keywords. Shorter = more search volume. "content marketing" > "automated content publishing workflow"`,
+    `   - NEVER invent keywords. Use established search terms from the industry. Google Autocomplete-style phrases.`,
+    `   - Examples of GOOD keywords: "content marketing strategy", "SEO tools", "blog post ideas", "how to write a blog post"`,
+    `   - Examples of BAD keywords: "autonomous content generation", "scale content production", "web research content writing"`,
+    `   - The article will naturally mention ${productName} — the keyword itself should be a generic search term`,
     `2. Allowed keyword styles (ordered by traffic potential):`,
     `   - "[Industry Problem/Question]" — pure search demand (e.g. "how to increase website traffic")`,
     `   - "What Is [Broad Concept]" — high-volume informational (e.g. "what is content marketing")`,
@@ -1245,37 +1287,134 @@ async function handlePlan(
     `</output_format>`,
   ].filter(Boolean).join("\n");
 
-  const topicUserMessage = [
-    existingKeywords.length > 0
-      ? `<existing_topics>\nThese topics already exist. Do NOT duplicate or overlap:\n${existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n")}\n</existing_topics>\n`
-      : "",
-    `Generate EXACTLY 12 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 12 topics — no fewer.`,
-  ].filter(Boolean).join("\n");
+  let plan: z.infer<typeof PlanSchema>;
 
-  await reportPlanProgress(2, "Generating topic ideas with AI strategist...");
-  const text = await callClaude(
-    topicSystemPrompt,
-    topicUserMessage,
-    8192,
-  );
+  if (discoveredKeywords.length >= 10) {
+    // ── DATA-FIRST approach: discovered keywords drive topic selection ──
+    // Score and rank discovered keywords, filter out existing ones, take top candidates
+    const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
+    const scoredCandidates = discoveredKeywords
+      .filter(k => !existingSet.has(k.keyword.toLowerCase()))
+      .map(k => {
+        const volScore = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
+        const kdBonus = k.difficulty > 0 ? Math.max(0, (100 - k.difficulty) * 0.4) : 20;
+        const cpcSig = Math.min(k.cpc * 4, 20);
+        return { ...k, opportunity: Math.round(volScore + kdBonus + cpcSig) };
+      })
+      .sort((a, b) => b.opportunity - a.opportunity);
 
-  let plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 12);
+    // Pre-dedup candidates: ensure diversity by removing keywords too similar to already-selected ones
+    // Pre-dedup: keep keywords that don't have >50% word overlap with higher-scoring kept keywords
+    // This ensures diversity while preserving the best keywords. Uses >3 char words only.
+    const dedupStopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","best","top","free","online"]);
+    const candWords = (s: string) => s.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !dedupStopWords.has(w));
+    const candidates: typeof scoredCandidates = [];
+    for (const cand of scoredCandidates) {
+      const words = new Set(candWords(cand.keyword));
+      if (words.size === 0) { candidates.push(cand); continue; } // Single short words pass
+      const tooSimilar = candidates.some(kept => {
+        const keptWords = new Set(candWords(kept.keyword));
+        if (keptWords.size === 0) return false;
+        const overlap = [...words].filter(w => keptWords.has(w)).length;
+        // Only block if majority of the SHORTER keyword's words are in the longer one
+        return overlap / Math.min(words.size, keptWords.size) >= 0.67;
+      });
+      if (!tooSimilar) candidates.push(cand);
+      if (candidates.length >= 30) break; // Enough diverse candidates
+    }
 
-  // Programmatic dedup: remove topics with >40% keyword overlap with each other
-  const stopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","than","its","you","using","about"]);
+    console.log(`Data-first: ${candidates.length} keyword candidates for AI (from ${discoveredKeywords.length} discovered)`);
+
+    const dataFirstPrompt = [
+      `You are creating blog topics for ${productName}. Each topic MUST use one of the keywords below as its primaryKeyword (copy EXACTLY).`,
+      `Create a compelling article topic for each keyword. Pick the best article type for each.`,
+      ``,
+      `<keywords>`,
+      ...candidates.map(k => `- "${k.keyword}" (${k.searchVolume}/mo, KD:${k.difficulty}, $${k.cpc.toFixed(2)} CPC, opp:${k.opportunity})`),
+      `</keywords>`,
+      ``,
+      `<product>`,
+      `Name: ${productName} | Domain: ${site.domain}`,
+      site.siteSummary ? `About: ${site.siteSummary}` : "",
+      site.niche ? `Niche: ${site.niche}` : "",
+      `</product>`,
+      ``,
+      existingKeywords.length > 0 ? `<existing_topics>\nSkip these:\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</existing_topics>` : "",
+      ``,
+      `Return JSON array of 12 topics. Use the EXACT keyword string as primaryKeyword. Format:`,
+      `[{"label":"compelling blog title","primaryKeyword":"exact keyword from list","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this matters for the audience"}]`,
+      ``,
+      `Pick diverse keywords that cover different aspects of ${productName}'s niche. Mix article types.`,
+    ].filter(Boolean).join("\n");
+
+    await reportPlanProgress(2, "AI creating topics from verified keywords...");
+    const text = await callClaude(dataFirstPrompt, `Create exactly 12 topics from the keyword list. Use exact keywords as primaryKeyword.`, 8192);
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 12);
+    console.log(`AI generated ${plan.length} topics. Keywords: ${plan.map(t => `"${t.primaryKeyword}"`).join(", ")}`);
+
+    // Programmatic enforcement: if AI changed a keyword, snap it to the closest discovered match
+    const discoveredLower = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k.keyword]));
+    for (const topic of plan) {
+      if (!discoveredLower.has(topic.primaryKeyword.toLowerCase())) {
+        // Find closest match by word overlap
+        let bestMatch = "";
+        let bestOverlap = 0;
+        const topicWords = new Set(topic.primaryKeyword.toLowerCase().split(/\s+/));
+        for (const [candLower, candOrig] of discoveredLower) {
+          const candWords = new Set(candLower.split(/\s+/));
+          const overlap = [...topicWords].filter(w => candWords.has(w)).length;
+          if (overlap > bestOverlap) {
+            bestOverlap = overlap;
+            bestMatch = candOrig;
+          }
+        }
+        if (bestMatch && bestOverlap >= 1) {
+          console.log(`Snapped "${topic.primaryKeyword}" → "${bestMatch}" (word overlap: ${bestOverlap})`);
+          topic.primaryKeyword = bestMatch;
+        }
+      }
+    }
+    console.log(`After snap-back: ${plan.length} topics. Keywords: ${plan.map(t => `"${t.primaryKeyword}"`).join(", ")}`);
+    // Log which are in discovered set vs not
+    const inDiscovered = plan.filter(t => discoveredLower.has(t.primaryKeyword.toLowerCase())).length;
+    console.log(`  → ${inDiscovered}/${plan.length} match discovered keywords, ${plan.length - inDiscovered} will need fresh lookup`);
+  } else {
+    // ── AI-FIRST approach: no discovered keywords, let AI generate ──
+    const topicUserMessage = [
+      existingKeywords.length > 0
+        ? `<existing_topics>\nThese topics already exist. Do NOT duplicate or overlap:\n${existingKeywords.map((kw: string, i: number) => `- "${kw}" (${existingLabels[i]})`).join("\n")}\n</existing_topics>\n`
+        : "",
+      `Generate EXACTLY 12 new topics for ${productName}'s blog. Follow all rules in the system prompt. You MUST return exactly 12 topics — no fewer.`,
+    ].filter(Boolean).join("\n");
+
+    await reportPlanProgress(2, "Generating topic ideas with AI strategist...");
+    const text = await callClaude(
+      topicSystemPrompt,
+      topicUserMessage,
+      8192,
+    );
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 12);
+  }
+
+  // Programmatic dedup: remove topics with exact same keyword or very high overlap
+  const stopWords = new Set(["the","and","for","with","how","what","why","are","can","your","that","this","from","have","will","into","more","than","its","you","using","about","best","top","guide","tips"]);
   const getWords = (s: string) => s.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
   const kept: typeof plan = [];
   for (const topic of plan) {
     const words = new Set(getWords(topic.primaryKeyword));
     const isDupe = kept.some(k => {
+      // Exact match = definite dupe
+      if (k.primaryKeyword.toLowerCase() === topic.primaryKeyword.toLowerCase()) return true;
       const kWords = new Set(getWords(k.primaryKeyword));
       const overlap = [...words].filter(w => kWords.has(w)).length;
-      return overlap / Math.min(words.size, kWords.size) > 0.4;
+      // Only remove if >60% overlap (was 40% — too aggressive for same-niche keywords)
+      return words.size > 0 && kWords.size > 0 && overlap / Math.min(words.size, kWords.size) > 0.6;
     });
     if (!isDupe) kept.push(topic);
+    else console.log(`Dedup: removed "${topic.primaryKeyword}" (overlaps with existing topic)`);
   }
   if (kept.length < plan.length) {
-    console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >40%).`);
+    console.log(`Removed ${plan.length - kept.length} duplicate topics (keyword overlap >60%).`);
     plan = kept;
   }
   plan = plan.slice(0, 10);
@@ -1289,8 +1428,35 @@ async function handlePlan(
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
     const keywords = plan.map((t) => t.primaryKeyword);
     const locationCode = mapCountryToLocation(site.targetCountry);
-    const metrics = await getKeywordMetrics(keywords, locationCode, site.language ?? "en");
-    console.log(`Keyword metrics fetched for ${metrics.length} keywords.`);
+
+    // Use pre-discovered metrics when available (avoids redundant API calls)
+    const discoveredMap = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k]));
+    const undiscoveredKeywords = keywords.filter(kw => !discoveredMap.has(kw.toLowerCase()));
+
+    let metrics: { keyword: string; searchVolume: number; difficulty: number; cpc: number; competition: number; intent: string; trend: number[] }[] = [];
+
+    // Add pre-discovered metrics directly
+    for (const kw of keywords) {
+      const pre = discoveredMap.get(kw.toLowerCase());
+      if (pre) {
+        metrics.push({
+          keyword: kw,
+          searchVolume: pre.searchVolume,
+          difficulty: pre.difficulty,
+          cpc: pre.cpc,
+          competition: 0,
+          intent: "informational",
+          trend: [],
+        });
+      }
+    }
+
+    // Fetch metrics only for keywords not in discovered set
+    if (undiscoveredKeywords.length > 0) {
+      const freshMetrics = await getKeywordMetrics(undiscoveredKeywords, locationCode, site.language ?? "en");
+      metrics.push(...freshMetrics);
+    }
+    console.log(`Keyword metrics: ${metrics.length} total (${keywords.length - undiscoveredKeywords.length} pre-discovered, ${undiscoveredKeywords.length} fresh)`);
 
     // Get all topics we just inserted to update them
     const allTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
@@ -1309,6 +1475,13 @@ async function handlePlan(
       );
       if (!kwMetric) continue;
 
+      // Kill topics where DataForSEO returned no data at all (keyword doesn't exist in search data)
+      if (kwMetric.searchVolume === 0 && kwMetric.difficulty === 0 && kwMetric.cpc === 0) {
+        topicsToRemove.push(topic._id);
+        console.log(`Quality gate: removing "${topic.primaryKeyword}" (no search data found — keyword too niche/nonexistent)`);
+        continue;
+      }
+
       // Kill topics with zero search volume AND high difficulty (unwinnable)
       if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
         topicsToRemove.push(topic._id);
@@ -1318,7 +1491,7 @@ async function handlePlan(
 
       // Kill topics with very low opportunity (below minimum threshold)
       const quickVolScore = kwMetric.searchVolume > 0 ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) : 0;
-      const quickDiffBonus = Math.max(0, (100 - kwMetric.difficulty) * 0.4);
+      const quickDiffBonus = kwMetric.difficulty > 0 ? Math.max(0, (100 - kwMetric.difficulty) * 0.4) : 0; // KD=0 means no data, not easy
       const quickCpc = Math.min(kwMetric.cpc * 4, 20);
       const quickOpp = Math.round(quickVolScore + quickDiffBonus + quickCpc);
       if (quickOpp < 25) {
@@ -1333,7 +1506,9 @@ async function handlePlan(
       const volumeScore = kwMetric.searchVolume > 0
         ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40) // log10: 100→26, 500→35, 1K→39, 10K→40
         : 0;
-      const difficultyBonus = Math.max(0, (100 - kwMetric.difficulty) * 0.4); // KD 0→40, KD 50→20, KD 100→0
+      const difficultyBonus = kwMetric.difficulty > 0
+        ? Math.max(0, (100 - kwMetric.difficulty) * 0.4) // KD 30→28, KD 50→20, KD 100→0
+        : 20; // KD=0 means no data — assume moderate difficulty (neutral 20/40)
       const cpcSignal = Math.min(kwMetric.cpc * 4, 20); // CPC $1→4, $3→12, $5→20
       const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
       // Map opportunity score to 1-5 priority (used by scheduler)
@@ -2464,29 +2639,22 @@ export const crawlAndAnalyze = action({
 });
 
 export const generatePlan = action({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => handlePlan(ctx, siteId),
-});
-
-// Job-based plan generation with real-time progress tracking
-export const processPlanJob = action({
-  args: { jobId: v.id("jobs") },
-  handler: async (ctx, { jobId }) => {
-    const job = await ctx.runQuery(api.jobs.get, { jobId });
-    if (!job || !job.siteId) throw new Error("Job not found or missing siteId");
-
-    // Mark as running
-    await ctx.runMutation(api.jobs.markRunning, { jobId });
-
-    try {
-      const result = await handlePlan(ctx, job.siteId, jobId);
-      await ctx.runMutation(api.jobs.markDone, { jobId, result });
-      return result;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      await ctx.runMutation(api.jobs.markFailed, { jobId, error: msg });
-      throw err;
+  args: { siteId: v.id("sites"), jobId: v.optional(v.id("jobs")) },
+  handler: async (ctx, { siteId, jobId }) => {
+    if (jobId) {
+      // Job-based: mark running, track progress, mark done/failed
+      await ctx.runMutation(api.jobs.markRunning, { jobId });
+      try {
+        const result = await handlePlan(ctx, siteId, jobId);
+        await ctx.runMutation(api.jobs.markDone, { jobId, result });
+        return result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        await ctx.runMutation(api.jobs.markFailed, { jobId, error: msg });
+        throw err;
+      }
     }
+    return handlePlan(ctx, siteId);
   },
 });
 

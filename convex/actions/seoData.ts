@@ -164,32 +164,32 @@ async function getKeywordMetricsFromAPI(
     }
   }
 
-  // Enrich with keyword difficulty scores
+  // Enrich with real keyword difficulty scores (DataForSEO Labs)
   if (results.length > 0) {
     try {
       const difficultyData = await dataForSEORequest(
-        "keywords_data/google_ads/keywords_for_keywords/live",
+        "dataforseo_labs/google/bulk_keyword_difficulty/live",
         [{
-          keywords: keywords.slice(0, 10), // API limit
+          keywords: keywords.slice(0, 1000),
           location_code: locationCode,
           language_code: languageCode,
         }],
       );
 
-      // Map difficulty from competition index
       for (const task of difficultyData.tasks ?? []) {
-        for (const item of task.result ?? []) {
-          const match = results.find(
-            (r) => r.keyword.toLowerCase() === (item.keyword ?? "").toLowerCase(),
-          );
-          if (match) {
-            match.difficulty = Math.round((item.competition_index ?? item.competition ?? 0) * 100);
+        for (const resultGroup of task.result ?? []) {
+          for (const item of resultGroup.items ?? []) {
+            const match = results.find(
+              (r) => r.keyword.toLowerCase() === (item.keyword ?? "").toLowerCase(),
+            );
+            if (match) {
+              match.difficulty = item.keyword_difficulty ?? 0;
+            }
           }
         }
       }
     } catch (err) {
-      console.error("Keyword difficulty enrichment failed:", err);
-      // Fall back to CPC-based difficulty estimation
+      console.error("Bulk keyword difficulty failed, falling back to competition index:", err);
       for (const r of results) {
         if (r.difficulty === 0) {
           r.difficulty = estimateDifficultyFromCPC(r.cpc, r.competition);
@@ -199,6 +199,96 @@ async function getKeywordMetricsFromAPI(
   }
 
   return results;
+}
+
+/**
+ * Discover real keywords with volume using DataForSEO keyword suggestions.
+ * Takes seed keywords and returns related keywords that people actually search for.
+ * Returns up to `limit` keywords sorted by search volume descending.
+ */
+export async function discoverKeywords(
+  seedKeywords: string[],
+  locationCode: number = 2840,
+  languageCode: string = "en",
+  limit: number = 50,
+): Promise<KeywordMetrics[]> {
+  const creds = getDataForSEOCredentials();
+  if (!creds) return []; // No DataForSEO = no discovery
+
+  const allResults: KeywordMetrics[] = [];
+
+  // Use keyword suggestions endpoint for each seed (max 8 seeds for broad discovery)
+  for (const seed of seedKeywords.slice(0, 8)) {
+    try {
+      const data = await dataForSEORequest(
+        "keywords_data/google_ads/keywords_for_keywords/live",
+        [{
+          keywords: [seed],
+          location_code: locationCode,
+          language_code: languageCode,
+          sort_by: "search_volume",
+          limit: 50,
+        }],
+      );
+
+      for (const task of data.tasks ?? []) {
+        for (const item of task.result ?? []) {
+          if (!item.keyword || item.search_volume === 0) continue;
+          // Skip if already in results
+          if (allResults.some(r => r.keyword.toLowerCase() === item.keyword.toLowerCase())) continue;
+
+          const monthlySearches = (item.monthly_searches ?? [])
+            .slice(0, 12)
+            .map((m: any) => m.search_volume ?? 0);
+
+          allResults.push({
+            keyword: item.keyword,
+            searchVolume: item.search_volume ?? 0,
+            difficulty: 0, // Will be enriched below
+            cpc: item.cpc ?? 0,
+            competition: item.competition ?? 0,
+            intent: mapCompetitionToIntent(item.competition ?? 0),
+            trend: monthlySearches,
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`Keyword discovery failed for seed "${seed}":`, err);
+    }
+  }
+
+  // Sort by volume descending and take top results
+  allResults.sort((a, b) => b.searchVolume - a.searchVolume);
+  const topResults = allResults.slice(0, limit);
+
+  // Enrich with real keyword difficulty
+  if (topResults.length > 0) {
+    try {
+      const difficultyData = await dataForSEORequest(
+        "dataforseo_labs/google/bulk_keyword_difficulty/live",
+        [{
+          keywords: topResults.map(r => r.keyword),
+          location_code: locationCode,
+          language_code: languageCode,
+        }],
+      );
+
+      for (const task of difficultyData.tasks ?? []) {
+        for (const resultGroup of task.result ?? []) {
+          for (const item of resultGroup.items ?? []) {
+            const match = topResults.find(
+              r => r.keyword.toLowerCase() === (item.keyword ?? "").toLowerCase(),
+            );
+            if (match) match.difficulty = item.keyword_difficulty ?? 0;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Keyword difficulty enrichment failed:", err);
+    }
+  }
+
+  return topResults;
 }
 
 async function getKeywordMetricsFromAI(

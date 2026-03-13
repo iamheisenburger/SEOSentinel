@@ -131,7 +131,7 @@ export default function PlanPage() {
     articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
   const atArticleLimit = articlesThisMonth >= maxArticles;
 
-  const queuePlan = useMutation(api.jobs.queuePlanGeneration);
+  const queuePlan = useMutation(api.planJobs.queuePlanGeneration);
   const runQueuedTopic = useMutation(api.jobs.runQueuedTopic);
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const removeTopic = useMutation(api.topics.remove);
