@@ -42,6 +42,27 @@ export const listPublishedByDomain = query({
   },
 });
 
+// For sitemap generation — returns all published article slugs + dates for a domain
+export const listPublishedSlugs = query({
+  args: { domain: v.string() },
+  handler: async (ctx, { domain }) => {
+    const sites = await ctx.db.query("sites").collect();
+    const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
+    if (!site) return [];
+
+    const all = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .collect();
+    return all
+      .filter((a) => a.status === "published")
+      .map((a) => ({
+        slug: normalizeSlug(a.slug || ""),
+        updatedAt: a.updatedAt ?? a.createdAt,
+      }));
+  },
+});
+
 export const getPublishedBySlug = query({
   args: { domain: v.string(), slug: v.string() },
   handler: async (ctx, { domain, slug }) => {

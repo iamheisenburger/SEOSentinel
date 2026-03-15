@@ -1,9 +1,12 @@
 import type { MetadataRoute } from "next";
+import { convexHttp } from "@/lib/convexHttpClient";
+import { api } from "../../convex/_generated/api";
 
-export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = "https://pentra.dev";
+const baseUrl = "https://pentra.dev";
 
-  return [
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  // Static pages
+  const staticPages: MetadataRoute.Sitemap = [
     {
       url: baseUrl,
       lastModified: new Date(),
@@ -11,16 +14,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 1,
     },
     {
-      url: `${baseUrl}/sign-in`,
+      url: `${baseUrl}/blog`,
       lastModified: new Date(),
-      changeFrequency: "monthly",
-      priority: 0.5,
-    },
-    {
-      url: `${baseUrl}/sign-up`,
-      lastModified: new Date(),
-      changeFrequency: "monthly",
-      priority: 0.5,
+      changeFrequency: "daily",
+      priority: 0.9,
     },
     {
       url: `${baseUrl}/pricing`,
@@ -28,5 +25,29 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "weekly",
       priority: 0.8,
     },
+    {
+      url: `${baseUrl}/contact`,
+      lastModified: new Date(),
+      changeFrequency: "monthly",
+      priority: 0.5,
+    },
   ];
+
+  // Dynamic blog posts from Convex
+  let blogPages: MetadataRoute.Sitemap = [];
+  try {
+    const articles = await convexHttp.query(api.blog.listPublishedSlugs, {
+      domain: "pentra.dev",
+    });
+    blogPages = articles.map((article: { slug: string; updatedAt?: number }) => ({
+      url: `${baseUrl}/${article.slug}`,
+      lastModified: article.updatedAt ? new Date(article.updatedAt) : new Date(),
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+    }));
+  } catch {
+    // If Convex is unavailable, return static pages only
+  }
+
+  return [...staticPages, ...blogPages];
 }
