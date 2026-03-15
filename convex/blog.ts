@@ -48,18 +48,21 @@ export const listPublishedSlugs = query({
   handler: async (ctx, { domain }) => {
     const sites = await ctx.db.query("sites").collect();
     const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
-    if (!site) return [];
+    if (!site) return { articles: [], urlStructure: "/blog/[slug]" };
+
+    const urlStructure = site.urlStructure ?? "/blog/[slug]";
 
     const all = await ctx.db
       .query("articles")
       .withIndex("by_site", (q) => q.eq("siteId", site._id))
       .collect();
-    return all
+    const articles = all
       .filter((a) => a.status === "published")
       .map((a) => ({
         slug: normalizeSlug(a.slug || ""),
         updatedAt: a.updatedAt ?? a.createdAt,
       }));
+    return { articles, urlStructure };
   },
 });
 
