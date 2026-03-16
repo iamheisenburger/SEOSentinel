@@ -162,8 +162,47 @@ export default function BlogPost() {
     );
   }
 
+  const articleSchema = {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: article.title,
+    description: article.metaDescription || "",
+    datePublished: new Date(article.createdAt).toISOString(),
+    dateModified: new Date(article.updatedAt || article.createdAt).toISOString(),
+    wordCount: article.wordCount || undefined,
+    author: { "@type": "Organization", name: "Pentra", url: "https://pentra.dev" },
+    publisher: {
+      "@type": "Organization",
+      name: "Pentra",
+      url: "https://pentra.dev",
+    },
+    ...(article.featuredImage && { image: article.featuredImage }),
+    mainEntityOfPage: {
+      "@type": "WebPage",
+      "@id": `https://${domain}/blog/${slug}`,
+    },
+  };
+
+  const breadcrumbSchema = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Home", item: `https://${domain}` },
+      { "@type": "ListItem", position: 2, name: "Blog", item: `https://${domain}/blog` },
+      { "@type": "ListItem", position: 3, name: article.title },
+    ],
+  };
+
   return (
     <div className="min-h-screen bg-[#08090E]">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(articleSchema) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+      />
       <LandingNav />
 
       <main className="mx-auto max-w-3xl px-6 pt-32 pb-20">

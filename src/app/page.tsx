@@ -865,9 +865,83 @@ function Footer() {
 
 /* ─── Page ─────────────────────────────────────── */
 
+/* ─── JSON-LD Schema Markup ────────────────────── */
+
+const organizationSchema = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Pentra",
+  url: "https://pentra.dev",
+  applicationCategory: "BusinessApplication",
+  operatingSystem: "Web",
+  description:
+    "AI-powered SEO content engine that automates research, writing, fact-checking, optimization, and publishing with built-in rank tracking and content maintenance.",
+  offers: {
+    "@type": "AggregateOffer",
+    lowPrice: "0",
+    highPrice: "499",
+    priceCurrency: "USD",
+    offerCount: "5",
+  },
+  featureList: [
+    "AI article generation with web research",
+    "Automated fact-checking with citations",
+    "Google Search Console rank tracking",
+    "Content decay detection and auto-refresh",
+    "Multi-platform publishing (GitHub, WordPress, Webhook)",
+    "Backlink analysis and outreach automation",
+    "JSON-LD schema markup generation",
+    "Internal linking optimization",
+  ],
+};
+
+const faqSchema = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: faqs.map((f) => ({
+    "@type": "Question",
+    name: f.q,
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: f.a,
+    },
+  })),
+};
+
+const breadcrumbSchema = {
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  itemListElement: [
+    {
+      "@type": "ListItem",
+      position: 1,
+      name: "Home",
+      item: "https://pentra.dev",
+    },
+  ],
+};
+
 export default function LandingPage() {
   return (
     <main className="relative min-h-screen overflow-hidden">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(organizationSchema),
+        }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(faqSchema),
+        }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(breadcrumbSchema),
+        }}
+      />
       <LandingNav />
       <Hero />
       <Stats />
