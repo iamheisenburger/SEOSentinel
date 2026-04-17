@@ -1,0 +1,813 @@
+---
+title: "Technical SEO Audit Checklist: The Complete Site Crawl Issues Checklist"
+description: "Complete technical SEO audit checklist covering crawlability, indexability, mobile optimization, Core Web Vitals, schema markup & redirects. Fix site crawl issues in 25 steps."
+featuredImage: "https://wary-starfish-773.convex.cloud/api/storage/fe9dcfd7-0a0d-4469-834e-317cfaf8dd20"
+readingTime: 14
+wordCount: 3157
+language: "en"
+date: "2026-04-17T09:04:57.823Z"
+sources:
+  - url: "https://support.google.com/webmasters/answer/9012289"
+    title: "Google Search Central — URL Inspection Tool"
+  - url: "https://support.google.com/webmasters/answer/7440203"
+    title: "Google Search Central — Coverage Report"
+  - url: "https://web.dev/vitals/"
+    title: "Google Search Central — Core Web Vitals Guide"
+  - url: "https://www.screamingfrog.co.uk/seo-spider/"
+    title: "Screaming Frog SEO Spider"
+  - url: "https://search.google.com/test/mobile-friendly"
+    title: "Google Mobile-Friendly Test"
+  - url: "https://www.ssllabs.com/ssltest/"
+    title: "SSL Labs SSL Test"
+  - url: "https://schema.org/docs/schemas.html"
+    title: "Schema.org Documentation"
+  - url: "https://pagespeed.web.dev/"
+    title: "Google PageSpeed Insights"
+  - url: "https://developer.chrome.com/docs/devtools/coverage/"
+    title: "Chrome DevTools Coverage Tab"
+  - url: "https://pentra.dev"
+    title: "Pentra — AI-Powered SEO Content Engine"
+  - url: "https://rankture.com/blog/technical-seo-audit-checklist"
+    title: "Technical SEO Audit Checklist: 50+ Points for 2025"
+  - url: "https://www.compose.ly/content-strategy/technical-seo-audit-checklist"
+    title: "Technical SEO Audit Checklist: How To Find and Fix Hidden Site Issues"
+  - url: "https://www.carrilagency.com/blog/us/technical-seo-audit-checklist-2026/"
+    title: "Technical SEO Audit Checklist for Your Website (2026)"
+  - url: "https://www.sitelogicdigital.com/resources/how-to-conduct-a-technical-seo-audit/"
+    title: "Technical SEO Audit Checklist: Complete Guide | Sitelogic"
+  - url: "https://www.seoclarity.net/blog/crawlability-problems"
+    title: "8 Crawlability Problems That Hurt SEO"
+internalLinks:
+  - anchor: "Blog"
+    href: "/blog"
+  - anchor: "Features"
+    href: "/#features"
+  - anchor: "How It Works"
+    href: "/#pipeline"
+  - anchor: "FAQ"
+    href: "/#faq"
+  - anchor: "Sign Up"
+    href: "/sign-up"
+  - anchor: "Contact"
+    href: "/contact"
+  - anchor: "Pricing"
+    href: "/#pricing"
+---
+
+# Technical SEO Audit Checklist: The Complete Site Crawl Issues Checklist
+
+A technical SEO audit is your first line of defense against hidden site crawl issues that silently destroy search engine visibility. These problems—redirect chains, broken internal links, misconfigured robots.txt files, duplicate content without canonical tags—often go unnoticed because they don't affect user experience directly. But search engines notice. And they penalize.
+
+Without a systematic technical audit, you'll never know why your site isn't ranking despite solid keyword research and quality content. This checklist covers all 25 critical areas that impact crawlability, indexability, and ranking potential. Skip even a few items, and you're leaving ranking positions on the table.
+
+Better yet: tools like Pentra can automatically detect many of these issues during site crawl and flag them for remediation, turning a manual 40-hour audit into a 15-minute scan.
+
+> **TL;DR:** A technical SEO audit identifies crawl errors, indexation blocks, and site architecture problems that prevent search engines from finding and ranking your content. Critical areas include robots.txt configuration, XML sitemaps, URL structure, redirect chains, duplicate content handling, mobile optimization, Core Web Vitals, structured data, and internal linking. Audit these 25 items quarterly and fix high-priority issues within 30 days to maintain search visibility and prevent ranking drops.
+
+## Table of Contents
+
+1. [Crawlability & Indexability Issues](#crawlability--indexability-issues)
+2. [Site Architecture & URL Structure](#site-architecture--url-structure)
+3. [Redirects, Broken Links & Link Equity](#redirects-broken-links--link-equity)
+4. [Duplicate Content & Canonicalization](#duplicate-content--canonicalization)
+5. [Mobile Optimization & Responsive Design](#mobile-optimization--responsive-design)
+6. [Page Speed & Core Web Vitals](#page-speed--core-web-vitals)
+7. [Structured Data & Schema Markup](#structured-data--schema-markup)
+
+---
+
+## Crawlability & Indexability Issues
+
+Crawlability is the foundation of technical SEO. If search engines can't crawl your pages, they can't index them—and they can't rank them. The first part of any technical SEO audit checklist focuses on removing barriers that prevent Googlebot and other crawlers from accessing your content.
+
+### ☐ Verify Robots.txt Configuration
+
+Your robots.txt file acts as a gatekeeper, telling search engines which pages they can and cannot crawl. A misconfigured robots.txt is one of the most common crawl issues that silently blocks indexation.
+
+**How to check:** Visit `yourdomain.com/robots.txt` and verify:
+- The file exists and is readable (returns a 200 status code, not 404)
+- User-agent rules are correct (should include `User-agent: *` for all bots)
+- Important directories are NOT blocked with `Disallow: /` rules
+- Dynamic pages, JavaScript files, and CSS aren't unnecessarily blocked
+
+**What to fix:** If you're blocking crawlable content, update the file to allow Googlebot access. Test changes in [Google Search Console's URL Inspection tool](https://support.google.com/webmasters/answer/9012289) before deploying.
+
+### ☐ Check XML Sitemap Submission
+
+An XML sitemap helps search engines discover and prioritize your pages, especially important for large sites or those with weak internal linking structures.
+
+**How to check:** 
+- Verify your sitemap exists at `yourdomain.com/sitemap.xml` (or submit multiple sitemaps)
+- Confirm all critical pages are listed (typically 50-10,000 URLs per sitemap)
+- Check that URLs in your sitemap return 200 status codes
+- Verify the sitemap is submitted to [Google Search Console](https://search.google.com/search-console) and [Bing Webmaster Tools](https://www.bing.com/webmasters)
+
+**What to fix:** Add any missing high-value pages to the sitemap. Regenerate it regularly—at minimum monthly, but ideally weekly if you publish content frequently. Remove 404 or redirect pages from the sitemap within 48 hours of deprecation.
+
+### ☐ Audit robots.txt Crawl Delays & Request Rate
+
+If your server can't handle Googlebot's crawl rate, pages may be skipped or crawled less frequently, causing staleness in your index.
+
+**How to check:**
+- Log into Google Search Console
+- Go to **Settings → Crawl Stats**
+- Review average daily crawl requests and pages crawled
+- Check for spikes or unusual drops in the last 30-90 days
+
+**What to fix:** If crawl budget is low, ensure your robots.txt isn't unnecessarily restrictive. If your site is slow (see Core Web Vitals section), focus on performance improvements—Googlebot will crawl more aggressively if your site responds quickly.
+
+### ☐ Check for Blocked Resources (CSS, JavaScript, Images)
+
+If your robots.txt or server configuration blocks CSS and JavaScript, Googlebot can't render your pages properly, leading to poor crawlability and ranking issues.
+
+**How to check:**
+- In Google Search Console, go to **URL Inspection → Coverage → Enhancement → Mobile Usability**
+- Run the URL Inspection tool on 5-10 pages and check for "Unable to retrieve CSS/JS" warnings
+- Use [Google's Mobile-Friendly Test](https://search.google.com/test/mobile-friendly)
+
+**What to fix:** Update robots.txt to allow crawling of CSS, JavaScript, and image files. For example:
+
+User-agent: *
+Allow: /wp-content/
+Allow: /wp-includes/
+Allow: /images/
+Disallow: /admin/
+Disallow: /temp/
+
+
+### ☐ Verify HTTPS & SSL Certificate Validity
+
+Google gives ranking preference to HTTPS sites. An expired or misconfigured SSL certificate can block crawling and tank rankings overnight.
+
+**How to check:**
+- Visit your domain in a browser—check for a green padlock
+- Use [SSL Labs SSL Test](https://www.ssllabs.com/ssltest/) to audit your certificate
+- Check certificate expiration date (should be at least 90 days in the future)
+- Verify no mixed content (HTTP images/scripts on an HTTPS page)
+
+**What to fix:** Renew your SSL certificate at least 30 days before expiration. Redirect all HTTP traffic to HTTPS using 301 redirects. Use HTTP Strict Transport Security (HSTS) headers to force HTTPS on all future requests.
+
+---
+
+
+![Technical SEO Audit Checklist: The Complete Site Crawl Issues Checklist infographic](https://wary-starfish-773.convex.cloud/api/storage/2e8f1d56-56d3-4f7f-8fea-4b36e30571da)
+*Process overview for technical SEO audit checklist*
+
+## Site Architecture & URL Structure
+
+Your URL structure and internal architecture signal to search engines what your site is about and which pages are most important. Poor architecture leads to crawl waste, diluted link equity, and weak topical authority.
+
+### ☐ Audit URL Structure for Clarity & Keywords
+
+Keyword-rich, descriptive URLs help both users and search engines understand page content at a glance. Cryptic URLs with random IDs or parameters create crawl inefficiency.
+
+**How to check:**
+- Pull a list of 20-30 random URLs from Google Search Console (via **Coverage** report)
+- Review for clarity: Can someone guess page content from the URL alone?
+- Check for excessive parameters (`?id=12345&cat=abc&page=2`)
+- Look for keyword relevance (URLs should include the target topic or keyword)
+
+**What to fix:** Redesign URLs following this pattern:
+- Good: `/[Blog](/blog)/how-to-improve-page-speed/`
+- Bad: `/post?id=12345&cat=seo`
+
+For existing URLs, keep old ones and 301 redirect to new ones. Update internal links and sitemaps immediately.
+
+### ☐ Implement Logical Site Hierarchy & Breadcrumbs
+
+A clear site hierarchy helps Googlebot understand topical relationships and distributes crawl budget efficiently. Breadcrumb navigation signals page importance and hierarchy to search engines.
+
+**How to check:**
+- Map your site's information architecture (IA) on paper or in a spreadsheet
+- Verify no page is more than 3-4 clicks from the homepage
+- Check that every non-homepage page has a clear parent page
+- Audit breadcrumb markup on 10+ pages
+
+**What to fix:** Reorganize pages to follow logical hierarchy (e.g., `/blog/ → /blog/seo/ → /blog/seo/technical-seo/`). Implement breadcrumb schema markup using JSON-LD:
+
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://example.com"},
+    {"@type": "ListItem", "position": 2, "name": "Blog", "item": "https://example.com/blog"},
+    {"@type": "ListItem", "position": 3, "name": "Technical SEO", "item": "https://example.com/blog/technical-seo"}
+  ]
+}
+
+
+### ☐ Check for Orphaned Pages
+
+Orphaned pages have no internal links pointing to them. Search engines struggle to discover and crawl them, resulting in poor indexation and zero visibility.
+
+**How to check:**
+- Export your GSC **Coverage** report
+- Cross-reference with your internal link structure (use a crawl tool like [Screaming Frog](https://www.screamingfrog.co.uk/seo-spider/) or [Google Search Console Coverage report](https://support.google.com/webmasters/answer/7440203))
+- Identify pages with 0 internal backlinks
+
+**What to fix:** Either add internal links to orphaned pages from relevant content, or remove/redirect them if they're no longer valuable. Prioritize high-equity pages (those with traffic or external links) first.
+
+### ☐ Optimize Internal Linking Depth & Anchor Text
+
+Internal links distribute crawl budget and PageRank throughout your site. Poor internal linking starves important pages of authority.
+
+**How to check:**
+- Use a crawler to build a link graph showing the distance between your homepage and key pages
+- Review anchor text on 50+ internal links—is it descriptive and keyword-relevant?
+- Check for over-optimization (exact-match anchor on >5% of internal links can trigger a spam signal)
+- Look for "click here" and "read more" links (low-value anchor text)
+
+**What to fix:**
+- Ensure all high-priority pages are within 2-3 clicks of the homepage
+- Use descriptive anchor text that includes the target keyword when natural: instead of "click here," use "learn how to optimize internal links"
+- Add internal links contextually within article body text, not just in navigation
+
+---
+
+## Redirects, Broken Links & Link Equity
+
+Redirects and broken links cause crawl waste, user friction, and rank loss. Every broken redirect or chain dilutes the crawl budget and link equity flowing to your important pages.
+
+### ☐ Identify & Fix Redirect Chains
+
+Redirect chains (A → B → C → C) slow down page load times, dilute link juice, and waste crawl budget. Search engines typically only follow up to 5 redirects before giving up.
+
+**How to check:**
+- Use a redirect checker tool like [Redirect Path Chrome Extension](https://chrome.google.com/webstore/detail/redirect-path/aomidfkchockclmnde6cisbombbatnms)
+- Check 20-30 important URLs (old blog posts, product pages, etc.)
+- Review Google Search Console **Coverage** report for redirect errors
+- Export crawl data from Screaming Frog and filter for redirect codes (301, 302, 307)
+
+**What to fix:** Map all redirects and consolidate chains:
+- Bad: `old-url.com → temporary-url.com → current-url.com`
+- Good: `old-url.com → current-url.com` (direct 301)
+
+Test each redirect before and after to ensure it's working (check for 5xx server errors).
+
+### ☐ Audit Temporary vs. Permanent Redirects
+
+Temporary redirects (302, 307) don't pass link equity, while permanent redirects (301) do. Using the wrong redirect type costs you rankings.
+
+**How to check:**
+- When you redirect a page, check whether it's returning a 301 or 302
+- Review all redirects in your server logs or via a crawler
+- Look specifically for outdated pages (5+ years old) that are still using 302 instead of 301
+
+**What to fix:**
+- Use 301 (permanent) for all permanent page moves
+- Use 302/307 only for temporary, short-term redirects (e.g., maintenance windows)
+- Migrate all old 302 redirects to 301 if the move is permanent
+
+### ☐ Find & Fix Broken Internal Links
+
+Broken internal links (links pointing to pages that return 404) hurt user experience and crawl efficiency. They also waste opportunities to pass link authority to important pages.
+
+**How to check:**
+- Use Screaming Frog or [Pentra Site Audit](https://Pentra.com/site-audit) to crawl your entire site
+- Filter for "4xx Client Errors" or "Broken" links
+- Review Google Search Console **Coverage → Errors** tab
+- Manually test 10-20 links from your most-trafficked pages
+
+**What to fix:**
+- Update broken internal links to point to the correct, live page
+- Use 301 redirects if the original URL structure can't be updated
+- Remove links to truly dead pages unless they're redirected elsewhere
+
+### ☐ Check for Redirect Loops
+
+Redirect loops (A → B → A) completely break page access and crawlability, causing 404 errors or infinite redirects.
+
+**How to check:**
+- Use the Redirect Path Chrome extension and check for "redirect loops" warnings
+- Test recently migrated pages and major navigation items
+- Review server logs for repeated 301/302 codes on the same URL
+
+**What to fix:** Immediately identify and break the loop. Example:
+- Bad: `example.com/old → example.com/new → example.com/old`
+- Fix: Remove the second redirect
+
+---
+
+## Duplicate Content & Canonicalization
+
+Duplicate content confuses search engines about which version of a page to rank. Without proper canonicalization, Google might rank a lower-quality duplicate instead of your preferred version, costing you rankings.
+
+### ☐ Implement Canonical Tags Site-Wide
+
+Canonical tags tell search engines which version of a page is the "preferred" one when duplicates exist (e.g., `example.com/page` vs. `example.com/page/`).
+
+**How to check:**
+- Use a crawler to check 50+ pages and confirm each has a canonical tag
+- Ensure canonicals point to absolute URLs (with https:// and domain name)
+- Check that canonical tags aren't pointing to redirects or other canonical pages (chain canonicalization)
+- Review pages with parameters (`?utm_source=email&utm_medium=newsletter`) to ensure they canonicalize correctly
+
+**What to fix:** Add canonical tags to every page:
+html
+<link rel="canonical" href="https://example.com/page/" />
+
+
+For parameter-heavy pages, use [Google Search Console URL Parameters tool](https://support.google.com/webmasters/answer/1235687) to tell Google to ignore tracking parameters.
+
+### ☐ Check for Self-Referential & Cross-Domain Canonicals
+
+Improper canonical implementation can accidentally canonicalize your page to a competitor's site or cause other severe indexation issues.
+
+**How to check:**
+- Use a crawler and filter for canonical tags
+- Verify each canonical URL resolves to a 200 status (not 404 or redirect)
+- Check that canonicals point to the same domain (unless intentional)
+- Search Google Search Console for warnings like "Crawl anomalies" or "Invalid URL in canonical tag"
+
+**What to fix:**
+- Ensure all canonicals point to your own, live pages on your domain
+- Remove canonicals pointing to external domains unless this is a syndication strategy
+- Update canonical URLs if the original page moves (change canonical to the new URL)
+
+### ☐ Detect & Resolve Duplicate Content Issues
+
+Duplicate content can occur due to parameters, printer-friendly versions, HTTPS/HTTP variations, or unintentional copying.
+
+**How to check:**
+- Use Google Search Console **Coverage** report and look for "Excluded [Duplicate]" entries
+- Use Screaming Frog to find pages with identical or near-identical content
+- Check for common duplicate sources:
+  - Session ID parameters (e.g., `?sessionid=123`)
+  - Print versions (`/print/` or `?print=true`)
+  - PDF and HTML versions of the same content
+  - Mobile and desktop versions
+
+**What to fix:**
+- Consolidate duplicate content into a single version and redirect others
+- Use canonical tags to point duplicates to the preferred version
+- Block non-canonical versions from indexing via robots.txt or meta robots noindex tag
+- For user-generated content platforms, add `noindex` to user-generated duplicates
+
+---
+
+<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/FJ9K37J0shQ" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>
+
+## Mobile Optimization & Responsive Design
+
+Google has used mobile-first indexing since 2018, meaning the mobile version of your site is the primary version Google uses for crawling, indexing, and ranking. Mobile optimization failures directly impact your ability to rank.
+
+### ☐ Verify Mobile-First Indexing Status
+
+Confirm that Google is actively crawling and indexing your mobile version as the primary index.
+
+**How to check:**
+- Go to Google Search Console **Settings → Crawl Stats**
+- Check the **User-Agent** distribution—should show high mobile crawl percentage (typically 90%+)
+- Run the [Google Mobile-Friendly Test](https://search.google.com/test/mobile-friendly) on 10+ pages
+- Check coverage to ensure mobile pages are indexed
+
+**What to fix:** If your site isn't mobile-friendly, implement responsive design immediately. Ensure:
+- Text is readable without zooming (font size ≥ 16px)
+- Touch buttons are large enough to tap (≥48x48 pixels)
+- Viewport meta tag is present: `<meta name="viewport" content="width=device-width, initial-scale=1" />`
+- Content doesn't overflow horizontally
+
+### ☐ Check for Mobile-Specific Issues
+
+Common mobile issues include blocked scripts, missing viewport tags, and mismatched content between desktop and mobile.
+
+**How to check:**
+- Use Google's Mobile-Friendly Test on homepage and 5-10 key pages
+- Check Search Console **Enhancements → Mobile Usability** for errors
+- Compare mobile and desktop versions using different browsers (Chrome DevTools Mobile Emulator, real devices)
+- Test touch responsiveness and navigation on mobile
+
+**What to fix:**
+- Fix "Clickable elements too close together" warnings
+- Ensure all interactive elements work on touchscreen
+- Remove or resize any full-screen pop-ups blocking content
+- Test forms on mobile to ensure they're usable
+
+### ☐ Ensure Content Parity Between Desktop & Mobile
+
+If your mobile version has less content than desktop (lazy-loading, hidden elements), Google may not index the full content, limiting ranking potential.
+
+**How to check:**
+- Inspect the HTML of desktop and mobile versions (use Developer Tools)
+- Count the number of words and sections on desktop vs. mobile
+- Check if major content (images, paragraphs, links) is hidden on mobile with CSS
+- Use Screaming Frog to compare crawled content between desktop and mobile user agents
+
+**What to fix:**
+- Ensure all important content is visible and crawlable on mobile
+- If using lazy-loading, ensure images are still discoverable in the HTML (don't rely on JavaScript to load critical images)
+- Add missing content to mobile pages to match desktop versions
+
+---
+
+## Page Speed & Core Web Vitals
+
+Page speed is both a direct ranking factor and a crawl budget factor. Slow pages are crawled less frequently and ranked lower than fast competitors. Core Web Vitals measure user experience through Largest Contentful Paint (LCP), Cumulative Layout Shift (CLS), and First Input Delay (FID).
+
+### ☐ Measure Core Web Vitals Performance
+
+Core Web Vitals are Google's official user experience metrics. Pages failing these metrics are penalized in rankings.
+
+**How to check:**
+- Go to Google Search Console **Enhancements → Core Web Vitals**
+- Check for "Poor" or "Needs Improvement" pages
+- Run [Google PageSpeed Insights](https://pagespeed.web.dev/) on homepage and 5-10 key pages
+- Review metrics:
+  - **LCP** (Largest Contentful Paint): Should be ≤2.5 seconds
+  - **FID** (First Input Delay): Should be ≤100 milliseconds
+  - **CLS** (Cumulative Layout Shift): Should be ≤0.1
+
+**What to fix:**
+Common issues and fixes:
+- **Slow LCP:** Optimize image delivery, reduce server response time, defer non-critical CSS/JS
+- **High FID:** Reduce JavaScript execution time, defer third-party scripts (ads, analytics, chatbots)
+- **High CLS:** Use fixed dimensions for images and videos, avoid inserting content above existing elements, use `font-display: swap` for web fonts
+
+### ☐ Optimize Image Delivery & Format
+
+Images are typically the largest contributors to slow page load times. Optimizing images can cut load time by 30-50%.
+
+**How to check:**
+- Run PageSpeed Insights and check for "Defer offscreen images" or "Image optimization" suggestions
+- Check image file sizes: JPEG/PNG images >100KB should be compressed
+- Use [Google's PageSpeed Insights Image Analysis](https://pagespeed.web.dev/) to identify unoptimized images
+- Verify modern formats (WebP) are being served where supported
+
+**What to fix:**
+- Compress images without quality loss (use TinyPNG, ImageOptim, or similar)
+- Use modern formats: WebP for Chrome/Edge, JPEG for older browsers
+- Implement responsive images with `srcset` to serve appropriately sized images
+- Lazy-load below-the-fold images with the `loading="lazy"` attribute
+
+### ☐ Minify & Defer Non-Critical JavaScript
+
+JavaScript is the most impactful factor on page speed. Minifying and deferring JS can improve load times significantly.
+
+**How to check:**
+- In PageSpeed Insights, check "Render-blocking resources" and "Minify JavaScript" suggestions
+- Use [Chrome DevTools Coverage tab](https://developer.chrome.com/docs/devtools/coverage/) to identify unused JS
+- Check how much JS is being served: >100KB of JS is worth optimizing
+
+**What to fix:**
+- Minify all JavaScript files (remove spaces, comments, unnecessary characters)
+- Defer non-critical JS with the `defer` attribute: `<script defer src="script.js"></script>`
+- Async-load third-party scripts: `<script async src="analytics.js"></script>`
+- Consider code-splitting to load only necessary JS per page
+
+### ☐ Optimize CSS Delivery
+
+CSS can block rendering if not optimized. Render-blocking CSS delays when users see content.
+
+**How to check:**
+- In DevTools, check CSS file sizes and how many CSS files are loaded
+- Use PageSpeed Insights to identify "Eliminate render-blocking resources"
+- Check if critical above-the-fold CSS is inlined
+
+**What to fix:**
+- Inline critical CSS needed for above-the-fold content
+- Defer non-critical CSS with media queries or async loading
+- Minify CSS and remove unused selectors
+- Consider using a CSS-in-JS approach for component-based architectures
+
+### ☐ Enable Caching & Compression
+
+Server-side caching and gzip compression can reduce file sizes and server response times dramatically.
+
+**How to check:**
+- Check response headers in DevTools → Network: Look for `Cache-Control` and `Content-Encoding: gzip`
+- Use [GTmetrix](https://gtmetrix.com/) to identify caching issues
+- Check Time to First Byte (TTFB): Should be <600ms
+
+**What to fix:**
+- Enable gzip compression on your server (should be enabled by default on modern hosting)
+- Set browser cache headers: `Cache-Control: public, max-age=31536000` for static assets
+- Use a CDN (Content Delivery Network) to serve static content from locations closer to users
+- Enable server-side caching for dynamic pages (cache for 1-24 hours depending on freshness needs)
+
+---
+
+## Structured Data & Schema Markup
+
+Structured data helps search engines understand your content and enables rich results (enhanced snippets, knowledge panels, featured snippets). Missing or incorrect schema markup costs you visibility and click-through rate.
+
+### ☐ Implement Core Schema Types for Your Industry
+
+Different content types require different schema markup. Articles need Article schema, local businesses need LocalBusiness schema, e-commerce sites need Product schema.
+
+**How to check:**
+- Review your content: What are the main types? (Articles, Products, Reviews, [FAQ](/#faq)s, Events, etc.)
+- Use [Google Structured Data Testing Tool](https://schema.org/docs/schemas.html) or [Google Rich Results Test](https://search.google.com/test/rich-results) to validate markup
+- Check Google Search Console **Enhancements** report for markup coverage
+
+**What to fix:** Add appropriate schema markup:
+
+**For Articles:**
+
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "Article Title",
+  "description": "Meta description",
+  "author": {"@type": "Person", "name": "Author Name"},
+  "datePublished": "2024-01-15",
+  "dateModified": "2024-01-20"
+}
+
+
+**For FAQs:**
+
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Q: How to optimize images?",
+      "acceptedAnswer": {"@type": "Answer", "text": "Answer text..."}
+    }
+  ]
+}
+
+
+### ☐ Check for Schema Errors & Warnings
+
+Even small schema errors (missing required properties, wrong data types) can prevent rich results from appearing.
+
+**How to check:**
+- Use [Google Rich Results Test](https://search.google.com/test/rich-results) on 10+ pages
+- Check Search Console **Enhancements** tabs for errors (Article, Product, etc.)
+- Review warnings about missing recommended properties
+
+**What to fix:**
+- Add all required properties for your schema type
+- Ensure data types match (dates should be ISO 8601 format: `2024-01-15T10:00:00Z`)
+- Test after changes with Rich Results Test
+- Monitor Search Console for new errors
+
+### ☐ Verify Organization & Logo Schema
+
+Organization schema helps Google understand your brand and can display your logo in search results.
+
+**How to check:**
+- Verify Organization schema is present in your site header/footer or homepage
+- Check that it includes: name, logo (at least 112x112px), [Contact](/contact) info, social profiles
+
+**What to fix:**
+
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "Company Name",
+  "url": "https://example.com",
+  "logo": "https://example.com/logo.png",
+  "contactPoint": {
+    "@type": "ContactPoint",
+    "contactType": "Sales",
+    "telephone": "+1-800-123-4567",
+    "email": "sales@example.com"
+  },
+  "sameAs": ["https://twitter.com/example", "https://facebook.com/example"]
+}
+
+
+### ☐ Optimize for AI Overviews & Featured Snippets
+
+Google's AI Overviews pull content from pages that answer questions clearly and directly. Structured data optimized for this format improves visibility.
+
+**How to check:**
+- Search your target keywords in Google—do AI Overviews appear?
+- Check if featured snippets appear and whether your content is featured
+- Review page structure: Do your H2s ask questions? Do you answer them clearly in the next paragraph?
+
+**What to fix:**
+- Structure content with question H2s followed by concise 40-50 word answers
+- Use lists and tables for comparison content
+- Implement HowTo, FAQ, or QAPage schema markup
+- Ensure your answer directly follows the question heading without other content in between
+
+---
+
+## Quick Reference Checklist
+
+**Crawlability & Indexability (5 items)**
+- ☐ Verify robots.txt allows crawling of important pages
+- ☐ Confirm XML sitemap exists, is updated, and submitted to GSC
+- ☐ Check robots.txt crawl delays and request rate in GSC Crawl Stats
+- ☐ Ensure CSS, JavaScript, and images aren't blocked in robots.txt
+- ☐ Verify HTTPS/SSL certificate is valid and not expired
+
+**Site Architecture & URL Structure (4 items)**
+- ☐ Audit URL structure for clarity, keywords, and cleanliness
+- ☐ Implement logical hierarchy (pages within 3-4 clicks of homepage)
+- ☐ Add breadcrumb navigation and schema markup
+- ☐ Identify and fix orphaned pages with no internal links
+- ☐ Optimize internal linking depth and anchor text
+
+**Redirects, Broken Links & Link Equity (4 items)**
+- ☐ Identify and consolidate redirect chains (A → B → C)
+- ☐ Check all redirects are permanent (301) not temporary (302)
+- ☐ Find and fix broken internal links (404 errors)
+- ☐ Check for redirect loops and fix immediately
+
+**Duplicate Content & Canonicalization (3 items)**
+- ☐ Implement canonical tags on all pages
+- ☐ Ensure canonicals point to live, 200 status pages on your domain
+- ☐ Detect and resolve duplicate content (parameters, versions, etc.)
+
+**Mobile Optimization (3 items)**
+- ☐ Confirm mobile-first indexing status in GSC
+- ☐ Check for mobile-specific issues (buttons, pop-ups, layout)
+- ☐ Ensure content parity between desktop and mobile versions
+
+**Page Speed & Core Web Vitals (5 items)**
+- ☐ Measure Core Web Vitals (LCP, FID, CLS) in GSC and PageSpeed Insights
+- ☐ Optimize image delivery, format, and compression
+- ☐ Minify and defer non-critical JavaScript
+- ☐ Optimize CSS delivery and remove unused rules
+- ☐ Enable caching and gzip compression
+
+**Structured Data & Schema (4 items)**
+- ☐ Implement core schema types (Article, Organization, etc.)
+- ☐ Check for schema errors and warnings in GSC Enhancements
+- ☐ Verify Organization and logo schema
+- ☐ Optimize for AI Overviews with clear question-answer patterns
+
+---
+
+## How Pentra Helps With Technical SEO Audits
+
+While this checklist covers the critical areas you need to audit manually, several items are automatically detected and monitored by Pentra's autonomous SEO engine:
+
+![Pentra website](https://wary-starfish-773.convex.cloud/api/storage/29c9b731-c995-4f78-bf87-37f457b3abd5)
+*Pentra — Pentra is an AI-powered autonomous SEO content engine that automates the entire content creation and management lifecycle*
+
+
+**Automated Site Crawl & Analysis:** When you first connect your site to Pentra, Pentra crawls 47+ pages to detect your niche, find content gaps, and identify technical issues. This automated crawl catches broken links, missing metadata, and orphaned pages that you'd manually hunt for in a traditional audit.
+
+**XML Sitemap & Publishing Optimization:** Pentra automatically injects JSON-LD schema markup (Article, FAQ, HowTo) into every published article, removes the need for manual markup implementation, and ensures all published content is included in your sitemap.
+
+**Content Decay Detection:** Beyond a one-time audit, Pentra monitors your rankings 24/7 and automatically flags articles losing positions (typically ranked 11-20, "striking distance keywords"). This continuous monitoring replaces the need for quarterly audits—issues are caught in real-time.
+
+**Automatic Content Refresh:** When decay is detected, Pentra refreshes the article with latest research, fact-checks the content (94% confidence), and republishes it—all without manual intervention. This keeps your site fresh and prevents stale content from hurting your rankings.
+
+**Redirect & Link Equity Tracking:** Pentra analyzes your backlink profile, detects broken links, identifies unlinked mentions, and generates personalized outreach emails for link building. This captures one of the most overlooked technical issues: links pointing to pages you've deleted or moved.
+
+**Performance Monitoring:** Through Google Search Console integration, Pentra tracks keywords, clicks, impressions, and per-article search performance daily. You'll know immediately when a page drops in rankings or when Core Web Vitals change—rather than discovering it months later in a quarterly audit.
+
+While some technical issues (robots.txt, HTTPS, Core Web Vitals) still require manual configuration, [**Try Pentra**](https://pentra.dev/sign-up) to automate the crawl analysis, content decay detection, and link monitoring that typically consume 30+ hours of manual auditing work each quarter.
+
+---
+
+## FAQ
+
+### ☐ How Often Should I Conduct a Technical SEO Audit?
+
+For most sites, conduct a full technical SEO audit quarterly (every 3 months). For high-traffic sites publishing daily or weekly content, audit monthly. If you make major site migrations or redesigns, audit immediately after launch. Use tools to monitor key metrics (Core Web Vitals, crawl stats, coverage) weekly—audits are snapshots, but monitoring is continuous.
+
+### ☐ What's the Difference Between a 301 and 302 Redirect?
+
+A 301 (Moved Permanently) tells search engines the original page permanently moved and passes all link equity to the new page. A 302 (Found) tells search engines the move is temporary and doesn't pass link equity. Use 301 for permanent moves and 302 only for temporary redirects lasting days or weeks. Accidentally using 302 for permanent moves costs you rankings over time.
+
+### ☐ What Happens if My Robots.txt Blocks Important Pages?
+
+If your robots.txt blocks pages with `Disallow: /`, search engines can't crawl or index those pages. They'll appear in Google Search Console as "Blocked by robots.txt" under Coverage. This prevents ranking entirely. Always test robots.txt changes in GSC's URL Inspection tool before deploying.
+
+### ☐ Why Is My Sitemap Not Helping My Rankings?
+
+A sitemap doesn't directly improve rankings—it only helps search engines discover pages. If your sitemap includes duplicate URLs, outdated pages, or 404 errors, it wastes crawl budget. Keep sitemaps clean: remove 404 pages within 48 hours, include only pages you want indexed (not duplicates), and regenerate weekly.
+
+### ☐ Can Duplicate Content Get My Site Penalized?
+
+Google doesn't penalize duplicate content per se, but it dilutes ranking potential. If you have 10 identical product descriptions across 10 pages, Google ranks only one—the others get zero traffic. Use canonical tags to tell Google which version to rank, and consolidate true duplicates into single pages. Avoid intentional keyword stuffing through duplicate content.
+
+### ☐ What Core Web Vitals Score Do I Need to Rank?
+
+Pages with "Poor" Core Web Vitals are less likely to rank well, but a "Needs Improvement" or even moderate performance won't block ranking if content is strong. However, in competitive niches, Core Web Vitals differences often determine ranking positions. Target "Good" performance (LCP ≤2.5s, FID ≤100ms, CLS ≤0.1) to compete for top positions.
+
+### ☐ How Long Does It Take to Fix Technical SEO Issues?
+
+Simple fixes (robots.txt, canonical tags, redirects) take hours to days. Complex fixes (site migration, redesign, Core Web Vitals optimization) take weeks to months. Prioritize high-impact issues first: crawlability blocks, broken links, and mobile optimization usually deliver the fastest ranking improvements. Monitor GSC for changes after fixes are deployed (can take 1-2 weeks for Google to reflect changes).
+
+---
+
+## Key Takeaways
+
+A technical SEO audit isn't optional—it's the foundation of your entire SEO strategy. Without addressing crawlability, indexability, site architecture, and mobile optimization issues, your content marketing efforts are capped. You're building on a faulty foundation.
+
+This checklist covers 25 critical areas, grouped into 7 categories, that determine whether search engines can crawl, index, and rank your site. Items like robots.txt configuration and canonical tags are non-negotiable—even one misconfiguration can tank a site's visibility.
+
+The good news: most of these issues are fixable within days. The challenge: you can't fix what you don't know about. That's why monitoring—not just auditing—is essential. Quarterly audits are too infrequent for sites publishing weekly or monthly content. You need real-time monitoring of crawl stats, Core Web Vitals, rankings, and indexation status.
+
+Start with this checklist today. Audit your crawlability and mobile optimization first—these have the highest impact on ranking potential. Then work through redirects, duplicate content, and page speed. Set up monitoring in Google Search Console to catch future issues before they impact your rankings.
+
+The cost of missing even one critical technical issue compounds over months. Every ranking position you lose to a broken redirect or uncrawlable page is traffic and revenue you'll never get back.
+
+## Sources
+
+[1] Google Search Central — URL Inspection Tool — https://support.google.com/webmasters/answer/9012289
+
+[2] Google Search Central — Coverage Report — https://support.google.com/webmasters/answer/7440203
+
+[3] Google Search Central — Core Web Vitals Guide — https://web.dev/vitals/
+
+[4] Pentra — AI-Powered SEO Content Engine — https://pentra.dev
+
+[5] Screaming Frog SEO Spider — https://www.screamingfrog.co.uk/seo-spider/
+
+[6] Google Mobile-Friendly Test — https://search.google.com/test/mobile-friendly
+
+[7] SSL Labs SSL Test — https://www.ssllabs.com/ssltest/
+
+[8] Schema.org Documentation — https://schema.org/docs/schemas.html
+
+[9] Google PageSpeed Insights — https://pagespeed.web.dev/
+
+[10] Chrome DevTools Coverage Tab — https://developer.chrome.com/docs/devtools/coverage/
+
+<div style="margin:2.5em 0 1em;padding:1.5em 2em;border-radius:12px;background:linear-gradient(135deg,#0EA5E915,#0EA5E908);border:1px solid #0EA5E930;text-align:center;">
+<p style="font-size:1.2em;font-weight:700;margin:0 0 0.4em;color:#0EA5E9;">Try Pentra</p>
+<p style="margin:0 0 1em;color:#555;font-size:0.95em;">Pentra is an AI-powered autonomous SEO content engine that automates the entire content creation and management lifecycle.</p>
+<a href="https://pentra.dev/sign-up" style="display:inline-block;padding:0.7em 2em;border-radius:8px;background:#0EA5E9;color:#fff;font-weight:600;text-decoration:none;font-size:0.95em;">Try Pentra →</a>
+</div>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "Technical SEO Audit Checklist: The Complete Site Crawl Issues Checklist",
+  "description": "Complete technical SEO audit checklist covering crawlability, indexability, mobile optimization, Core Web Vitals, schema markup & redirects. Fix site crawl issues in 25 steps.",
+  "url": "https://https://pentra.dev/blog/technical-seo-audit-checklist-site-crawl-issues",
+  "datePublished": "2026-04-17T09:04:57.823Z",
+  "publisher": {
+    "@type": "Organization",
+    "name": "https://pentra.dev",
+    "url": "https://https://pentra.dev"
+  },
+  "image": "https://wary-starfish-773.convex.cloud/api/storage/fe9dcfd7-0a0d-4469-834e-317cfaf8dd20"
+}
+</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "☐ How Often Should I Conduct a Technical SEO Audit?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "For most sites, conduct a full technical SEO audit quarterly (every 3 months). For high-traffic sites publishing daily or weekly content, audit monthly. If you make major site migrations or redesigns, audit immediately after launch. Use tools to monitor key metrics (Core Web Vitals, crawl stats, coverage) weekly—audits are snapshots, but monitoring is continuous."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "☐ What's the Difference Between a 301 and 302 Redirect?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A 301 (Moved Permanently) tells search engines the original page permanently moved and passes all link equity to the new page. A 302 (Found) tells search engines the move is temporary and doesn't pass link equity. Use 301 for permanent moves and 302 only for temporary redirects lasting days or weeks. Accidentally using 302 for permanent moves costs you rankings over time."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "☐ What Happens if My Robots.txt Blocks Important Pages?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "If your robots.txt blocks pages with `Disallow: /`, search engines can't crawl or index those pages. They'll appear in Google Search Console as \"Blocked by robots.txt\" under Coverage. This prevents ranking entirely. Always test robots.txt changes in GSC's URL Inspection tool before deploying."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "☐ Why Is My Sitemap Not Helping My Rankings?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A sitemap doesn't directly improve rankings—it only helps search engines discover pages. If your sitemap includes duplicate URLs, outdated pages, or 404 errors, it wastes crawl budget. Keep sitemaps clean: remove 404 pages within 48 hours, include only pages you want indexed (not duplicates), and regenerate weekly."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "☐ Can Duplicate Content Get My Site Penalized?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Google doesn't penalize duplicate content per se, but it dilutes ranking potential. If you have 10 identical product descriptions across 10 pages, Google ranks only one—the others get zero traffic. Use canonical tags to tell Google which version to rank, and consolidate true duplicates into single pages. Avoid intentional keyword stuffing through duplicate content."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "☐ What Core Web Vitals Score Do I Need to Rank?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Pages with \"Poor\" Core Web Vitals are less likely to rank well, but a \"Needs Improvement\" or even moderate performance won't block ranking if content is strong. However, in competitive niches, Core Web Vitals differences often determine ranking positions. Target \"Good\" performance (LCP ≤2.5s, FID ≤100ms, CLS ≤0.1) to compete for top positions."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "☐ How Long Does It Take to Fix Technical SEO Issues?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Simple fixes (robots.txt, canonical tags, redirects) take hours to days. Complex fixes (site migration, redesign, Core Web Vitals optimization) take weeks to months. Prioritize high-impact issues first: crawlability blocks, broken links, and mobile optimization usually deliver the fastest ranking improvements. Monitor GSC for changes after fixes are deployed (can take 1-2 weeks for Google to reflect changes).\n\n---"
+      }
+    }
+  ]
+}
+</script>
