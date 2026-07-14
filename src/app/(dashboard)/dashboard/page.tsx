@@ -503,7 +503,7 @@ export default function DashboardPage() {
                       {article.title}
                     </p>
                     <div className="mt-1 flex items-center gap-2 text-[11px] text-[#565A6E]">
-                      <span>{Math.round(article.markdown.split(/\s+/).length).toLocaleString()} words</span>
+                      <span>{(article.wordCount ?? 0).toLocaleString()} words</span>
                       <span className="text-white/[0.08]">·</span>
                       <span>{formatDistanceToNow(article.createdAt, { addSuffix: true })}</span>
                       {(article.decayStatus === "warning" || article.decayStatus === "declining") && (

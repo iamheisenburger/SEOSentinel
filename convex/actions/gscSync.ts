@@ -166,24 +166,23 @@ async function syncSiteGSC(ctx: any, site: any) {
     }
   }
 
-  // Save to search_performance table (upsert by date range midpoint)
+  // Save the complete response in one indexed mutation. This avoids hundreds
+  // of function calls and repeated same-date table scans per site.
   const midDate = new Date((startDate.getTime() + endDate.getTime()) / 2).toISOString().split("T")[0];
-  let saved = 0;
-
-  for (const [query, data] of queryMap) {
-    await ctx.runMutation(api.searchPerformance.upsert, {
-      siteId: site._id,
-      date: midDate,
+  const records = Array.from(queryMap, ([query, data]) => ({
       query,
       page: data.page || undefined,
       clicks: data.clicks,
       impressions: data.impressions,
       ctr: data.ctr,
       position: Math.round(data.position * 10) / 10,
-    });
-    saved++;
-  }
+  }));
+  const result = await ctx.runMutation(api.searchPerformance.upsertBatch, {
+    siteId: site._id,
+    date: midDate,
+    rows: records,
+  });
 
-  console.log(`Saved ${saved} query records for ${site.domain}`);
-  return { rows: rows.length, saved };
+  console.log(`Saved ${result.saved} query records for ${site.domain}`);
+  return { rows: rows.length, saved: result.saved };
 }

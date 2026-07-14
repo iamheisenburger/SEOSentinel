@@ -646,7 +646,7 @@ function ArticlesTab({
         </div>
 
         {articles.map((article) => {
-          const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
+          const wc = article.wordCount ?? 0;
           const isDeleting = deletingId === article._id;
 
           return (

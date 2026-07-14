@@ -203,7 +203,7 @@ export default function ArticlesPage() {
           </div>
 
           {filtered.map((article) => {
-            const wc = article.wordCount ?? Math.round(article.markdown.split(/\s+/).length);
+            const wc = article.wordCount ?? 0;
             const canDelete = article.status !== "published";
             return (
               <div

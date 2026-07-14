@@ -14,24 +14,22 @@ export const upsert = mutation({
     position: v.number(),
   },
   handler: async (ctx, args) => {
-    // Check for existing record with same site+date+query
     const existing = await ctx.db
       .query("search_performance")
-      .withIndex("by_site_date", (q) => q.eq("siteId", args.siteId).eq("date", args.date))
-      .collect();
+      .withIndex("by_site_date_query", (q) =>
+        q.eq("siteId", args.siteId).eq("date", args.date).eq("query", args.query),
+      )
+      .first();
 
-    const match = existing.find((r) => r.query === args.query);
-
-    if (match) {
-      // Update existing record
-      await ctx.db.patch(match._id, {
+    if (existing) {
+      await ctx.db.patch(existing._id, {
         clicks: args.clicks,
         impressions: args.impressions,
         ctr: args.ctr,
         position: args.position,
         page: args.page,
       });
-      return match._id;
+      return existing._id;
     }
 
     // Insert new record
@@ -49,19 +47,74 @@ export const upsert = mutation({
   },
 });
 
+// Save one GSC response in a single Convex mutation. The previous action made
+// one function call per query and scanned every row for that site/date again.
+export const upsertBatch = mutation({
+  args: {
+    siteId: v.id("sites"),
+    date: v.string(),
+    rows: v.array(v.object({
+      query: v.string(),
+      page: v.optional(v.string()),
+      clicks: v.number(),
+      impressions: v.number(),
+      ctr: v.number(),
+      position: v.number(),
+    })),
+  },
+  handler: async (ctx, { siteId, date, rows }) => {
+    let inserted = 0;
+    let updated = 0;
+
+    for (const row of rows) {
+      const existing = await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_date_query", (q) =>
+          q.eq("siteId", siteId).eq("date", date).eq("query", row.query),
+        )
+        .first();
+
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          page: row.page,
+          clicks: row.clicks,
+          impressions: row.impressions,
+          ctr: row.ctr,
+          position: row.position,
+        });
+        updated++;
+      } else {
+        await ctx.db.insert("search_performance", {
+          siteId,
+          date,
+          ...row,
+          createdAt: Date.now(),
+        });
+        inserted++;
+      }
+    }
+
+    return { inserted, updated, saved: rows.length };
+  },
+});
+
 // Get top queries for a site (last sync)
 export const getTopQueries = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
-    const all = await ctx.db
+    const latest = await ctx.db
       .query("search_performance")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .collect();
+      .withIndex("by_site_date", (q) => q.eq("siteId", siteId))
+      .order("desc")
+      .first();
+    if (!latest) return [];
 
-    // Get the most recent date
-    if (all.length === 0) return [];
-    const latestDate = all.reduce((max, r) => (r.date > max ? r.date : max), "");
-    const recent = all.filter((r) => r.date === latestDate);
+    const recent = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site_date", (q) =>
+        q.eq("siteId", siteId).eq("date", latest.date),
+      )
+      .collect();
 
     // Sort by clicks desc, then impressions desc
     recent.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
@@ -73,15 +126,19 @@ export const getTopQueries = query({
 export const getSummary = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const all = await ctx.db
+    const latest = await ctx.db
       .query("search_performance")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .withIndex("by_site_date", (q) => q.eq("siteId", siteId))
+      .order("desc")
+      .first();
+    if (!latest) return null;
+
+    const recent = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site_date", (q) =>
+        q.eq("siteId", siteId).eq("date", latest.date),
+      )
       .collect();
-
-    if (all.length === 0) return null;
-
-    const latestDate = all.reduce((max, r) => (r.date > max ? r.date : max), "");
-    const recent = all.filter((r) => r.date === latestDate);
 
     const totalClicks = recent.reduce((s, r) => s + r.clicks, 0);
     const totalImpressions = recent.reduce((s, r) => s + r.impressions, 0);
@@ -96,7 +153,7 @@ export const getSummary = query({
       avgPosition,
       avgCtr,
       queryCount: recent.length,
-      lastSync: latestDate,
+      lastSync: latest.date,
     };
   },
 });
@@ -105,9 +162,14 @@ export const getSummary = query({
 export const getByPage = query({
   args: { siteId: v.id("sites"), pageUrl: v.string() },
   handler: async (ctx, { siteId, pageUrl }) => {
+    const cutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
     const all = await ctx.db
       .query("search_performance")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .withIndex("by_site_date", (q) =>
+        q.eq("siteId", siteId).gte("date", cutoff),
+      )
       .collect();
 
     // Match by page URL (partial match for flexibility)
@@ -122,11 +184,17 @@ export const getByPage = query({
 
 // Get all historical data for trend detection (content decay)
 export const getHistory = query({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  args: { siteId: v.id("sites"), days: v.optional(v.number()) },
+  handler: async (ctx, { siteId, days }) => {
+    const boundedDays = Math.max(30, Math.min(days ?? 180, 365));
+    const cutoff = new Date(Date.now() - boundedDays * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
     return await ctx.db
       .query("search_performance")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .withIndex("by_site_date", (q) =>
+        q.eq("siteId", siteId).gte("date", cutoff),
+      )
       .collect();
   },
 });

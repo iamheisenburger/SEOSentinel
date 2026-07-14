@@ -23,21 +23,21 @@ export const listPublishedByDomain = query({
     const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
     if (!site) return [];
 
-    const all = await ctx.db
-      .query("articles")
-      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+    const published = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status_created", (q) =>
+        q.eq("siteId", site._id).eq("status", "published"),
+      )
       .order("desc")
       .collect();
-    return all
-      .filter((a) => a.status === "published")
-      .map((a) => ({
-        _id: a._id,
+    return published.map((a) => ({
+        _id: a.articleId,
         title: a.title,
         slug: normalizeSlug(a.slug || ""),
         metaDescription: a.metaDescription,
         featuredImage: a.featuredImage,
         readingTime: a.readingTime,
-        createdAt: a.createdAt,
+        createdAt: a.articleCreatedAt,
       }));
   },
 });
@@ -52,15 +52,15 @@ export const listPublishedSlugs = query({
 
     const urlStructure = site.urlStructure ?? "/blog/[slug]";
 
-    const all = await ctx.db
-      .query("articles")
-      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+    const published = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", site._id).eq("status", "published"),
+      )
       .collect();
-    const articles = all
-      .filter((a) => a.status === "published")
-      .map((a) => ({
+    const articles = published.map((a) => ({
         slug: normalizeSlug(a.slug || ""),
-        updatedAt: a.updatedAt ?? a.createdAt,
+        updatedAt: a.articleUpdatedAt ?? a.articleCreatedAt,
       }));
     return { articles, urlStructure };
   },
@@ -73,14 +73,25 @@ export const getPublishedBySlug = query({
     const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
     if (!site) return null;
 
-    const all = await ctx.db
-      .query("articles")
-      .withIndex("by_site", (q) => q.eq("siteId", site._id))
-      .collect();
-    const article = all.find(
-      (a) => normalizeSlug(a.slug || "") === normalizeSlug(slug) && a.status === "published",
-    );
-    if (!article) return null;
+    const normalizedSlug = normalizeSlug(slug);
+    let summary = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_slug", (q) =>
+        q.eq("siteId", site._id).eq("slug", normalizedSlug),
+      )
+      .first();
+    if (!summary) {
+      summary = await ctx.db
+        .query("article_summaries")
+        .withIndex("by_site_slug", (q) =>
+          q.eq("siteId", site._id).eq("slug", `/${normalizedSlug}`),
+        )
+        .first();
+    }
+    if (!summary || summary.status !== "published") return null;
+
+    const article = await ctx.db.get(summary.articleId);
+    if (!article || article.status !== "published") return null;
 
     return {
       _id: article._id,

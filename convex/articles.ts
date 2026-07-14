@@ -1,16 +1,114 @@
 import { mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 const now = () => Date.now();
+type ArticleSummaryFields = Omit<Doc<"article_summaries">, "_id" | "_creationTime">;
+
+function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
+  return {
+    articleId: article._id,
+    siteId: article.siteId,
+    topicId: article.topicId,
+    articleType: article.articleType,
+    status: article.status,
+    title: article.title,
+    slug: article.slug,
+    metaTitle: article.metaTitle,
+    metaDescription: article.metaDescription,
+    metaKeywords: article.metaKeywords,
+    language: article.language,
+    featuredImage: article.featuredImage,
+    readingTime: article.readingTime,
+    wordCount: article.wordCount,
+    factCheckScore: article.factCheckScore,
+    contentScore: article.contentScore,
+    entityCoverage: article.entityCoverage,
+    topicCompleteness: article.topicCompleteness,
+    serpDifficulty: article.serpDifficulty,
+    decayStatus: article.decayStatus,
+    decayDetectedAt: article.decayDetectedAt,
+    decayReason: article.decayReason,
+    lastRefreshedAt: article.lastRefreshedAt,
+    refreshCount: article.refreshCount,
+    articleCreatedAt: article.createdAt,
+    articleUpdatedAt: article.updatedAt,
+  };
+}
+
+async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) {
+  const article = await ctx.db.get(articleId);
+  if (!article) return;
+
+  const existing = await ctx.db
+    .query("article_summaries")
+    .withIndex("by_article", (q) => q.eq("articleId", articleId))
+    .first();
+  const fields = summaryFields(article);
+
+  if (existing) {
+    await ctx.db.patch(existing._id, fields);
+  } else {
+    await ctx.db.insert("article_summaries", fields);
+  }
+}
+
+function summaryListItem(summary: ArticleSummaryFields) {
+  return {
+    _id: summary.articleId,
+    _creationTime: summary.articleCreatedAt,
+    siteId: summary.siteId,
+    topicId: summary.topicId,
+    articleType: summary.articleType,
+    status: summary.status,
+    title: summary.title,
+    slug: summary.slug,
+    // Compatibility field for older clients. List views must use wordCount;
+    // full markdown is available only through articles.get.
+    markdown: "",
+    metaTitle: summary.metaTitle,
+    metaDescription: summary.metaDescription,
+    metaKeywords: summary.metaKeywords,
+    language: summary.language,
+    featuredImage: summary.featuredImage,
+    readingTime: summary.readingTime,
+    wordCount: summary.wordCount,
+    factCheckScore: summary.factCheckScore,
+    contentScore: summary.contentScore,
+    entityCoverage: summary.entityCoverage,
+    topicCompleteness: summary.topicCompleteness,
+    serpDifficulty: summary.serpDifficulty,
+    decayStatus: summary.decayStatus,
+    decayDetectedAt: summary.decayDetectedAt,
+    decayReason: summary.decayReason,
+    lastRefreshedAt: summary.lastRefreshedAt,
+    refreshCount: summary.refreshCount,
+    createdAt: summary.articleCreatedAt,
+    updatedAt: summary.articleUpdatedAt,
+  };
+}
 
 export const listBySite = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    return await ctx.db
+    const summaries = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_created", (q) => q.eq("siteId", siteId))
+      .order("desc")
+      .collect();
+
+    if (summaries.length > 0) {
+      return summaries.map(summaryListItem);
+    }
+
+    // Safe migration fallback until the one-time production backfill runs.
+    const articles = await ctx.db
       .query("articles")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .order("desc")
       .collect();
+    return articles.map((article) => summaryListItem(summaryFields(article)));
   },
 });
 
@@ -63,7 +161,7 @@ export const createDraft = mutation({
       console.log(`Duplicate slug detected, using: ${slug}`);
     }
 
-    return await ctx.db.insert("articles", {
+    const articleId = await ctx.db.insert("articles", {
       siteId: args.siteId,
       topicId: args.topicId,
       articleType: args.articleType,
@@ -85,6 +183,8 @@ export const createDraft = mutation({
       createdAt: now(),
       updatedAt: now(),
     });
+    await syncSummary(ctx, articleId);
+    return articleId;
   },
 });
 
@@ -92,6 +192,7 @@ export const updateStatus = mutation({
   args: { articleId: v.id("articles"), status: v.string() },
   handler: async (ctx, { articleId, status }) => {
     await ctx.db.patch(articleId, { status, updatedAt: now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -99,6 +200,7 @@ export const updateMarkdown = mutation({
   args: { articleId: v.id("articles"), markdown: v.string() },
   handler: async (ctx, { articleId, markdown }) => {
     await ctx.db.patch(articleId, { markdown, updatedAt: now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -114,6 +216,7 @@ export const updateLinks = mutation({
   },
   handler: async (ctx, { articleId, internalLinks }) => {
     await ctx.db.patch(articleId, { internalLinks, updatedAt: now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -121,6 +224,7 @@ export const updateFeaturedImage = mutation({
   args: { articleId: v.id("articles"), featuredImage: v.string() },
   handler: async (ctx, { articleId, featuredImage }) => {
     await ctx.db.patch(articleId, { featuredImage, updatedAt: now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -133,6 +237,7 @@ export const approve = mutation({
       throw new Error("Article is already published");
     }
     await ctx.db.patch(articleId, { status: "ready", updatedAt: now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -145,6 +250,7 @@ export const reject = mutation({
       throw new Error("Cannot reject a published article");
     }
     await ctx.db.patch(articleId, { status: "rejected", updatedAt: now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -159,11 +265,14 @@ export const countThisMonth = query({
 
     const logs = await ctx.db
       .query("usage_log")
-      .withIndex("by_user_type", (q) =>
-        q.eq("userId", userId).eq("type", "article_generated"),
+      .withIndex("by_user_type_created", (q) =>
+        q
+          .eq("userId", userId)
+          .eq("type", "article_generated")
+          .gte("createdAt", monthStart),
       )
       .collect();
-    return logs.filter((l) => l.createdAt >= monthStart).length;
+    return logs.length;
   },
 });
 
@@ -192,11 +301,14 @@ export const claimGenerationSlot = mutation({
 
     const logs = await ctx.db
       .query("usage_log")
-      .withIndex("by_user_type", (q) =>
-        q.eq("userId", userId).eq("type", "article_generated"),
+      .withIndex("by_user_type_created", (q) =>
+        q
+          .eq("userId", userId)
+          .eq("type", "article_generated")
+          .gte("createdAt", monthStart),
       )
       .collect();
-    const count = logs.filter((l) => l.createdAt >= monthStart).length;
+    const count = logs.length;
 
     if (count >= maxArticles) {
       return { ok: false, reason: `Limit reached (${count}/${maxArticles})` };
@@ -217,6 +329,11 @@ export const claimGenerationSlot = mutation({
 export const deleteArticle = mutation({
   args: { articleId: v.id("articles") },
   handler: async (ctx, { articleId }) => {
+    const summary = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_article", (q) => q.eq("articleId", articleId))
+      .first();
+    if (summary) await ctx.db.delete(summary._id);
     await ctx.db.delete(articleId);
   },
 });
@@ -238,6 +355,7 @@ export const updateContentScore = mutation({
       if (val !== undefined) patch[k] = val;
     }
     await ctx.db.patch(articleId, patch);
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -255,6 +373,7 @@ export const updateBacklinks = mutation({
   },
   handler: async (ctx, { articleId, backlinkSuggestions }) => {
     await ctx.db.patch(articleId, { backlinkSuggestions, updatedAt: Date.now() });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -279,6 +398,7 @@ export const updateDecayStatus = mutation({
     if (decayDetectedAt !== undefined) patch.decayDetectedAt = decayDetectedAt;
     if (positionHistory !== undefined) patch.positionHistory = positionHistory;
     await ctx.db.patch(articleId, patch);
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -292,6 +412,7 @@ export const markRefreshing = mutation({
       previousVersion: article.markdown,
       updatedAt: Date.now(),
     });
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -321,6 +442,7 @@ export const completeRefresh = mutation({
     if (factCheckScore !== undefined) patch.factCheckScore = factCheckScore;
     if (factCheckNotes !== undefined) patch.factCheckNotes = factCheckNotes;
     await ctx.db.patch(articleId, patch);
+    await syncSummary(ctx, articleId);
   },
 });
 
@@ -328,13 +450,15 @@ export const completeRefresh = mutation({
 export const listDecaying = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const articles = await ctx.db
-      .query("articles")
+    const summaries = await ctx.db
+      .query("article_summaries")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .collect();
-    return articles.filter((a) =>
-      a.decayStatus === "warning" || a.decayStatus === "declining"
-    );
+    return summaries
+      .filter((summary) =>
+        summary.decayStatus === "warning" || summary.decayStatus === "declining"
+      )
+      .map(summaryListItem);
   },
 });
 

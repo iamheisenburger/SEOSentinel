@@ -185,6 +185,43 @@ export default defineSchema({
     .index("by_site", ["siteId"])
     .index("by_topic", ["topicId"]),
 
+  // Compact projection used by list/dashboard/cron flows. Article bodies stay
+  // in `articles` and are only read when a single article is opened or edited.
+  article_summaries: defineTable({
+    articleId: v.id("articles"),
+    siteId: v.id("sites"),
+    topicId: v.optional(v.id("topic_clusters")),
+    articleType: v.optional(v.string()),
+    status: v.string(),
+    title: v.string(),
+    slug: v.string(),
+    metaTitle: v.optional(v.string()),
+    metaDescription: v.optional(v.string()),
+    metaKeywords: v.optional(v.array(v.string())),
+    language: v.optional(v.string()),
+    featuredImage: v.optional(v.string()),
+    readingTime: v.optional(v.number()),
+    wordCount: v.optional(v.number()),
+    factCheckScore: v.optional(v.number()),
+    contentScore: v.optional(v.number()),
+    entityCoverage: v.optional(v.number()),
+    topicCompleteness: v.optional(v.number()),
+    serpDifficulty: v.optional(v.string()),
+    decayStatus: v.optional(v.string()),
+    decayDetectedAt: v.optional(v.number()),
+    decayReason: v.optional(v.string()),
+    lastRefreshedAt: v.optional(v.number()),
+    refreshCount: v.optional(v.number()),
+    articleCreatedAt: v.number(),
+    articleUpdatedAt: v.number(),
+  })
+    .index("by_article", ["articleId"])
+    .index("by_site", ["siteId"])
+    .index("by_site_created", ["siteId", "articleCreatedAt"])
+    .index("by_site_status", ["siteId", "status"])
+    .index("by_site_status_created", ["siteId", "status", "articleCreatedAt"])
+    .index("by_site_slug", ["siteId", "slug"]),
+
   jobs: defineTable({
     siteId: v.optional(v.id("sites")),
     type: v.string(), // onboarding | plan | article | links | scheduler
@@ -221,7 +258,8 @@ export default defineSchema({
   })
     .index("by_site", ["siteId"])
     .index("by_site_date", ["siteId", "date"])
-    .index("by_site_query", ["siteId", "query"]),
+    .index("by_site_query", ["siteId", "query"])
+    .index("by_site_date_query", ["siteId", "date", "query"]),
 
   // Immutable usage log — tracks article generations (never deleted)
   usage_log: defineTable({
@@ -231,6 +269,6 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])
-    .index("by_user_type", ["userId", "type"]),
+    .index("by_user_type", ["userId", "type"])
+    .index("by_user_type_created", ["userId", "type", "createdAt"]),
 });
-

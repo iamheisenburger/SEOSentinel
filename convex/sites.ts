@@ -258,6 +258,12 @@ export const deleteSite = mutation({
       .collect();
     for (const a of articles) await ctx.db.delete(a._id);
 
+    const articleSummaries = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const summary of articleSummaries) await ctx.db.delete(summary._id);
+
     // Delete topics
     const topics = await ctx.db
       .query("topic_clusters")
@@ -278,6 +284,12 @@ export const deleteSite = mutation({
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .collect();
     for (const j of jobs) await ctx.db.delete(j._id);
+
+    const searchPerformance = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const row of searchPerformance) await ctx.db.delete(row._id);
 
     // Delete the site itself
     await ctx.db.delete(siteId);
@@ -331,7 +343,15 @@ export const setPlanFeatures = mutation({
 
 export const resetAll = mutation({
   handler: async (ctx) => {
-    const tables = ["sites", "pages", "topic_clusters", "articles", "jobs"] as const;
+    const tables = [
+      "sites",
+      "pages",
+      "topic_clusters",
+      "articles",
+      "article_summaries",
+      "jobs",
+      "search_performance",
+    ] as const;
     for (const table of tables) {
       const rows = await ctx.db.query(table).collect();
       for (const row of rows) {
