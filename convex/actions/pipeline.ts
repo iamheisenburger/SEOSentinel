@@ -296,6 +296,8 @@ async function generateHeroImage(
     n: 1,
     size: "1536x1024",
     quality: "medium",
+    output_format: "webp",
+    output_compression: 80,
   });
 
   const b64 = response.data?.[0]?.b64_json;
@@ -303,7 +305,7 @@ async function generateHeroImage(
 
   // Store in Convex file storage
   const imageBytes = Buffer.from(b64, "base64");
-  const blob = new Blob([imageBytes], { type: "image/png" });
+  const blob = new Blob([imageBytes], { type: "image/webp" });
   const storageId = await ctx.storage.store(blob);
   const imageUrl = await ctx.storage.getUrl(storageId);
   if (!imageUrl) throw new Error("Failed to get storage URL for image");
@@ -338,13 +340,15 @@ async function generateInfographic(
     n: 1,
     size: "1024x1536",
     quality: "medium",
+    output_format: "webp",
+    output_compression: 80,
   });
 
   const b64 = response.data?.[0]?.b64_json;
   if (!b64) throw new Error("No image data returned from OpenAI");
 
   const imageBytes = Buffer.from(b64, "base64");
-  const blob = new Blob([imageBytes], { type: "image/png" });
+  const blob = new Blob([imageBytes], { type: "image/webp" });
   const storageId = await ctx.storage.store(blob);
   const imageUrl = await ctx.storage.getUrl(storageId);
   if (!imageUrl) throw new Error("Failed to get storage URL for infographic");
@@ -3689,4 +3693,3 @@ export const backfillTopicMetrics = action({
     return { enriched, removed };
   },
 });
-
