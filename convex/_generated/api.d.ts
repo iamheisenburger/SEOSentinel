@@ -19,6 +19,7 @@ import type * as articles from "../articles.js";
 import type * as blog from "../blog.js";
 import type * as crons from "../crons.js";
 import type * as jobs from "../jobs.js";
+import type * as lib_articleQuality from "../lib/articleQuality.js";
 import type * as pages from "../pages.js";
 import type * as planJobs from "../planJobs.js";
 import type * as planLimits from "../planLimits.js";
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   blog: typeof blog;
   crons: typeof crons;
   jobs: typeof jobs;
+  "lib/articleQuality": typeof lib_articleQuality;
   pages: typeof pages;
   planJobs: typeof planJobs;
   planLimits: typeof planLimits;

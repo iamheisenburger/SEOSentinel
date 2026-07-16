@@ -6,6 +6,11 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 import { createHmac } from "crypto";
+import {
+  evaluatePublicationQuality,
+  normalizeSiteOrigin,
+  type PublicationQualityMode,
+} from "./lib/articleQuality";
 
 type FileContent = {
   path: string;
@@ -22,6 +27,8 @@ type ArticleRecord = {
   featuredImage?: string;
   readingTime?: number;
   wordCount?: number;
+  factCheckScore?: number;
+  contentScore?: number;
   createdAt: number;
   sources?: { url: string; title?: string }[];
   internalLinks?: { anchor: string; href: string }[];
@@ -48,34 +55,50 @@ type SiteRecord = {
 // ── Shared Utilities ────────────────────────────────────
 
 /**
- * Build YAML frontmatter + markdown body + optional schema markup.
+ * Build the canonical Pentra MDX contract consumed by GitHub-backed sites.
  */
-function buildMdx(article: ArticleRecord, domain: string): string {
+function buildMdx(article: ArticleRecord, site: SiteRecord): string {
   const slug = article.slug.replace(/^\//, "");
-  const schemaMarkup = generateSchemaMarkup(article, domain, slug);
+  const origin = normalizeSiteOrigin(site.domain);
+  const pathTemplate = site.urlStructure || "/blog/[slug]";
+  const canonicalPath = pathTemplate.includes("[")
+    ? pathTemplate.replace(/\[[^\]]+\]/, slug)
+    : `${pathTemplate.replace(/\/$/, "")}/${slug}`;
+  const canonicalUrl = `${origin}${canonicalPath.startsWith("/") ? "" : "/"}${canonicalPath}`;
+  const yamlString = (value: string) => JSON.stringify(value);
 
   const frontmatter = [
     "---",
-    `title: "${article.title.replace(/"/g, '\\"')}"`,
+    `title: ${yamlString(article.title)}`,
     article.metaDescription
-      ? `description: "${article.metaDescription.replace(/"/g, '\\"')}"`
+      ? `description: ${yamlString(article.metaDescription)}`
       : undefined,
-    article.featuredImage ? `featuredImage: "${article.featuredImage}"` : undefined,
+    `generator: "pentra"`,
+    `status: "published"`,
+    `qualityGateVersion: 1`,
+    `canonicalUrl: ${yamlString(canonicalUrl)}`,
+    article.featuredImage ? `featuredImage: ${yamlString(article.featuredImage)}` : undefined,
     article.readingTime ? `readingTime: ${article.readingTime}` : undefined,
     article.wordCount ? `wordCount: ${article.wordCount}` : undefined,
-    article.language ? `language: "${article.language}"` : undefined,
+    article.factCheckScore !== undefined
+      ? `factCheckScore: ${article.factCheckScore}`
+      : undefined,
+    article.contentScore !== undefined
+      ? `contentScore: ${article.contentScore}`
+      : undefined,
+    article.language ? `language: ${yamlString(article.language)}` : undefined,
     `date: "${new Date(article.createdAt ?? Date.now()).toISOString()}"`,
     article.sources && article.sources.length
       ? `sources:\n${article.sources
           .map(
             (s) =>
-              `  - url: "${s.url}"${s.title ? `\n    title: "${s.title}"` : ""}`,
+              `  - url: ${yamlString(s.url)}${s.title ? `\n    title: ${yamlString(s.title)}` : ""}`,
           )
           .join("\n")}`
       : undefined,
     article.internalLinks && article.internalLinks.length
       ? `internalLinks:\n${article.internalLinks
-          .map((l) => `  - anchor: "${l.anchor}"\n    href: "${l.href}"`)
+          .map((l) => `  - anchor: ${yamlString(l.anchor)}\n    href: ${yamlString(l.href)}`)
           .join("\n")}`
       : undefined,
     "---",
@@ -83,7 +106,7 @@ function buildMdx(article: ArticleRecord, domain: string): string {
     .filter(Boolean)
     .join("\n");
 
-  return `${frontmatter}\n\n${article.markdown}${schemaMarkup ? `\n\n${schemaMarkup}` : ""}`;
+  return `${frontmatter}\n\n${article.markdown.trim()}\n`;
 }
 
 type BrandStyle = {
@@ -171,98 +194,6 @@ function markdownToHtml(md: string, brand?: BrandStyle): string {
   return html;
 }
 
-
-/**
- * Generate JSON-LD schema markup for rich snippets.
- */
-function generateSchemaMarkup(
-  article: {
-    title: string;
-    markdown: string;
-    metaDescription?: string;
-    featuredImage?: string;
-    createdAt: number;
-  },
-  domain: string,
-  slug: string,
-): string {
-  const schemas: object[] = [];
-  const url = `https://${domain}/blog/${slug}`;
-
-  const articleSchema: Record<string, unknown> = {
-    "@context": "https://schema.org",
-    "@type": "Article",
-    headline: article.title,
-    description: article.metaDescription ?? "",
-    url,
-    datePublished: new Date(article.createdAt).toISOString(),
-    publisher: {
-      "@type": "Organization",
-      name: domain,
-      url: `https://${domain}`,
-    },
-  };
-  if (article.featuredImage) {
-    articleSchema.image = article.featuredImage;
-  }
-  schemas.push(articleSchema);
-
-  // FAQ schema
-  const faqRegex = /#{2,3}\s+(.+\?)\s*\n+([\s\S]*?)(?=\n#{2,3}\s|\n*$)/g;
-  const faqs: { question: string; answer: string }[] = [];
-  let match;
-  while ((match = faqRegex.exec(article.markdown)) !== null) {
-    const question = match[1].trim();
-    const answer = match[2].trim().slice(0, 500);
-    if (question && answer) faqs.push({ question, answer });
-  }
-  if (faqs.length >= 3) {
-    schemas.push({
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: faqs.map((faq) => ({
-        "@type": "Question",
-        name: faq.question,
-        acceptedAnswer: { "@type": "Answer", text: faq.answer },
-      })),
-    });
-  }
-
-  // HowTo schema
-  if (/how\s+to/i.test(article.title)) {
-    const stepRegex =
-      /#{2,3}\s+(?:Step\s+\d+[:.]\s*)?(.+)\n+([\s\S]*?)(?=\n#{2,3}\s|\n*$)/g;
-    const steps: { name: string; text: string }[] = [];
-    let stepMatch;
-    while ((stepMatch = stepRegex.exec(article.markdown)) !== null) {
-      const name = stepMatch[1].trim();
-      const text = stepMatch[2].trim().slice(0, 300);
-      if (name && text && !/FAQ|Frequently/i.test(name))
-        steps.push({ name, text });
-    }
-    if (steps.length >= 3) {
-      schemas.push({
-        "@context": "https://schema.org",
-        "@type": "HowTo",
-        name: article.title,
-        step: steps.map((s, i) => ({
-          "@type": "HowToStep",
-          position: i + 1,
-          name: s.name,
-          text: s.text,
-        })),
-      });
-    }
-  }
-
-  if (schemas.length === 0) return "";
-  return schemas
-    .map(
-      (s) =>
-        `<script type="application/ld+json">\n${JSON.stringify(s, null, 2)}\n</script>`,
-    )
-    .join("\n\n");
-}
 
 // ── GitHub Adapter ──────────────────────────────────────
 
@@ -476,7 +407,7 @@ async function publishToGitHub(
 
   const slug = article.slug.replace(/^\//, "");
   const filePath = `${contentDir}/${slug}.mdx`;
-  const mdx = buildMdx(article, site.domain);
+  const mdx = buildMdx(article, site);
 
   const { commitUrl } = await commitToMain({
     token,
@@ -670,6 +601,26 @@ export const publishArticle = action({
       articleId: args.articleId,
     });
     if (!article) throw new Error("Article not found");
+
+    const origin = normalizeSiteOrigin(site.domain);
+    const mode: PublicationQualityMode =
+      new URL(origin).hostname === "leadpilot.chat" ? "strict" : "standard";
+    const quality = evaluatePublicationQuality(article, mode);
+    await ctx.runMutation(api.articles.recordPublicationCheck, {
+      articleId: article._id,
+      status: quality.passed ? "passed" : "blocked",
+      issues: quality.issues,
+      warnings: quality.warnings,
+    });
+    if (!quality.passed) {
+      await ctx.runMutation(api.articles.updateStatus, {
+        articleId: article._id,
+        status: "review",
+      });
+      throw new Error(
+        `Publication quality gate blocked this article: ${quality.issues.join(" ")}`,
+      );
+    }
 
     const method = site.publishMethod ?? "github";
 

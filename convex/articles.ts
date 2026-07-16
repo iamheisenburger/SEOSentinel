@@ -24,6 +24,10 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     wordCount: article.wordCount,
     factCheckScore: article.factCheckScore,
     contentScore: article.contentScore,
+    publicationGateStatus: article.publicationGateStatus,
+    publicationGateIssues: article.publicationGateIssues,
+    publicationGateWarnings: article.publicationGateWarnings,
+    publicationCheckedAt: article.publicationCheckedAt,
     entityCoverage: article.entityCoverage,
     topicCompleteness: article.topicCompleteness,
     serpDifficulty: article.serpDifficulty,
@@ -76,6 +80,10 @@ function summaryListItem(summary: ArticleSummaryFields) {
     wordCount: summary.wordCount,
     factCheckScore: summary.factCheckScore,
     contentScore: summary.contentScore,
+    publicationGateStatus: summary.publicationGateStatus,
+    publicationGateIssues: summary.publicationGateIssues,
+    publicationGateWarnings: summary.publicationGateWarnings,
+    publicationCheckedAt: summary.publicationCheckedAt,
     entityCoverage: summary.entityCoverage,
     topicCompleteness: summary.topicCompleteness,
     serpDifficulty: summary.serpDifficulty,
@@ -192,6 +200,25 @@ export const updateStatus = mutation({
   args: { articleId: v.id("articles"), status: v.string() },
   handler: async (ctx, { articleId, status }) => {
     await ctx.db.patch(articleId, { status, updatedAt: now() });
+    await syncSummary(ctx, articleId);
+  },
+});
+
+export const recordPublicationCheck = mutation({
+  args: {
+    articleId: v.id("articles"),
+    status: v.string(),
+    issues: v.array(v.string()),
+    warnings: v.array(v.string()),
+  },
+  handler: async (ctx, { articleId, status, issues, warnings }) => {
+    await ctx.db.patch(articleId, {
+      publicationGateStatus: status,
+      publicationGateIssues: issues,
+      publicationGateWarnings: warnings,
+      publicationCheckedAt: now(),
+      updatedAt: now(),
+    });
     await syncSummary(ctx, articleId);
   },
 });

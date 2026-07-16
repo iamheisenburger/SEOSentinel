@@ -108,29 +108,29 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
       return [
         `ARTICLE TYPE: LISTICLE (N Best/Top X format)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Open with why this list matters — a compelling stat or pain point. Briefly introduce ${productName} as a standout option.`,
+        `1. HOOK: Open with the decision or problem this list helps the reader solve. Do not force a statistic.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote (2-3 sentences summarizing the top picks).`,
         `3. TABLE OF CONTENTS: "## Table of Contents" linking to each list item.`,
         `4. QUICK COMPARISON TABLE: A summary table comparing all items at a glance.`,
         `5. LIST ITEMS: Each as an H2 (e.g., "## 1. [Item Name] — [One-line value prop]").`,
         `   Each item: 250-400 words covering key features, pros/cons, pricing, and who it's best for.`,
-        `   Include a real screenshot or image for at least 3 items.`,
-        `6. HOW ${productName} FITS IN: A dedicated section showing how ${productName} compares or complements these options.`,
+        `   Include an image only when the system supplies one with clear reuse rights.`,
+        `6. WHERE ${productName} FITS: Include only if the product is genuinely relevant, and ground every capability in the supplied product evidence.`,
         `7. HOW TO CHOOSE: Decision criteria or flowchart to help readers pick.`,
         `8. FAQ: 6-8 questions about the category.`,
         `9. KEY TAKEAWAYS: 5-7 bullet points.`,
-        `10. SOURCES + STYLED CTA BOX.`,
+        `10. SOURCES + a concise Markdown CTA.`,
       ].join("\n");
 
     case "how-to":
       return [
         `ARTICLE TYPE: HOW-TO GUIDE (Step-by-step tutorial)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Start with what the reader will achieve by following this guide. Briefly mention ${productName} as a solution that makes this achievable.`,
+        `1. HOOK: Start with the concrete outcome the reader can achieve by following this guide.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick steps summary.`,
         `3. TABLE OF CONTENTS: Linking to each major section.`,
         `4. PREREQUISITES: "## What You'll Need" — tools, knowledge, or setup required.`,
-        `5. STEPS: Each step as an H2 (e.g., "## Step 1: [Action]"). In at least one early step, naturally reference how ${productName} handles or simplifies this.`,
+        `5. STEPS: Each step as an H2 (e.g., "## Step 1: [Action]").`,
         `   Each step: 300-500 words with detailed instructions, code snippets or examples where relevant.`,
         `   Include numbered sub-steps where needed.`,
         `   Add "💡 Pro Tip:" callouts for advanced users.`,
@@ -138,14 +138,14 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
         `7. HOW ${productName} HELPS: Show how ${productName} simplifies or automates part of this process.`,
         `8. FAQ: 6-8 questions about the process.`,
         `9. KEY TAKEAWAYS: Step summary as bullet points.`,
-        `10. SOURCES + STYLED CTA BOX.`,
+        `10. SOURCES + a concise Markdown CTA.`,
       ].join("\n");
 
     case "checklist":
       return [
         `ARTICLE TYPE: CHECKLIST (Actionable checkbox-style guide)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Why this checklist matters — what happens if you skip items. Mention ${productName} as a tool that automates key items.`,
+        `1. HOOK: Explain why this checklist matters and what breaks when important items are skipped.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
         `3. TABLE OF CONTENTS: Linking to each checklist section.`,
         `4. CHECKLIST SECTIONS: Group items into 4-6 categories, each as an H2.`,
@@ -154,47 +154,47 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
         `5. PRINTABLE SUMMARY: "## Quick Reference Checklist" — all items in a single bulleted list.`,
         `6. HOW ${productName} HELPS: Which checklist items ${productName} handles automatically.`,
         `7. FAQ: 5-7 questions.`,
-        `8. KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+        `8. KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
       ].join("\n");
 
     case "comparison":
       return [
         `ARTICLE TYPE: COMPARISON / VS ARTICLE`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Frame the decision the reader is facing. Mention ${productName} as one option worth considering.`,
+        `1. HOOK: Frame the decision the reader is facing and the criteria that should determine it.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick verdict.`,
         `3. TABLE OF CONTENTS.`,
         `4. OVERVIEW: Brief intro to both/all options being compared.`,
         `5. DETAILED COMPARISON TABLE: Comprehensive feature-by-feature markdown table.`,
         `6. CATEGORY BREAKDOWNS: 5-7 H2 sections comparing specific aspects (e.g., "## Pricing", "## Ease of Use", "## Performance").`,
-        `   Each section: 200-400 words with specific data, not opinions.`,
+        `   Each section: 200-400 words using specific data only when that data appears in the supplied evidence.`,
         `7. WHO SHOULD USE WHAT: "## Which One Is Right for You?" — scenario-based recommendations.`,
         `8. HOW ${productName} COMPARES: Where ${productName} fits in this landscape.`,
         `9. FAQ: 6-8 questions about the comparison.`,
-        `10. VERDICT + KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+        `10. VERDICT + KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
       ].join("\n");
 
     case "roundup":
       return [
         `ARTICLE TYPE: ROUNDUP (Expert opinions or resource collection)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Why this topic has multiple expert perspectives worth hearing. Briefly mention ${productName} as a relevant solution in this space.`,
+        `1. HOOK: Explain why this topic benefits from several evidence-backed perspectives.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
         `3. TABLE OF CONTENTS.`,
         `4. CONTEXT: Background on why this topic matters now.`,
         `5. EXPERT INSIGHTS / RESOURCES: 7-12 items, each as an H2 or H3.`,
-        `   Each: attributed quote or resource summary (200-300 words), with source link.`,
+        `   Use attributed quotes only when the exact quote and primary source are present in the research. Otherwise summarize the source without quotation marks.`,
         `6. KEY THEMES: "## Common Themes" — patterns across the insights.`,
         `7. HOW ${productName} APPLIES: Connect the insights to what ${productName} does.`,
         `8. FAQ: 5-7 questions.`,
-        `9. KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+        `9. KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
       ].join("\n");
 
     case "ultimate-guide":
       return [
-        `ARTICLE TYPE: ULTIMATE GUIDE (Comprehensive, definitive resource — 5000+ words)`,
+        `ARTICLE TYPE: ULTIMATE GUIDE (Comprehensive, focused reference)`,
         `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Establish this as THE definitive resource on the topic. Reference ${productName} as a practical tool readers will learn about.`,
+        `1. HOOK: State the practical problem this guide resolves and what the reader will learn.`,
         `2. TL;DR: "> **TL;DR:** ..." blockquote (what the reader will learn).`,
         `3. TABLE OF CONTENTS: Comprehensive, linking to all major sections.`,
         `4. FUNDAMENTALS: "## What Is [Topic]?" — definitions, history, why it matters.`,
@@ -204,11 +204,11 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
         `6. ADVANCED STRATEGIES: 2-3 sections for experienced readers.`,
         `7. TOOLS & RESOURCES: Including how ${productName} fits into the toolkit.`,
         `8. COMMON MISTAKES: 5-7 pitfalls to avoid.`,
-        `9. EXPERT QUOTES: 3-5 real expert quotes with citations.`,
+        `9. EVIDENCE: Use direct quotations only when the exact language and primary source are supplied.`,
         `10. FAQ: 8-12 comprehensive questions.`,
-        `11. KEY TAKEAWAYS + SOURCES + STYLED CTA BOX.`,
+        `11. KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
         ``,
-        `WORD COUNT: 5000-7000 words (this is an ULTIMATE guide — be thorough).`,
+        `WORD COUNT: 2800-4000 words. Prefer complete, useful coverage over artificial length.`,
       ].join("\n");
 
     default: // "standard"
@@ -326,10 +326,11 @@ async function generateInfographic(
   const colorHint = brandColor ? ` Primary accent color: ${brandColor}.` : "";
   const prompt =
     `Create a detailed process flow infographic for the topic: "${primaryKeyword || title}". Industry: ${niche || "technology"}.` +
-    ` Style: Step-by-step process diagram or statistical overview — think McKinsey or HubSpot blog infographic.` +
-    ` Light/white background with clean typography and numbered steps or percentage statistics.${colorHint}` +
-    ` Include visual elements: numbered steps, arrows, icons, metric callouts, flowchart nodes.` +
-    ` NO logos, NO watermarks, NO text that says "infographic".` +
+    ` Style: Step-by-step process diagram with a clear visual hierarchy.` +
+    ` Light/white background with clean typography and numbered stages.${colorHint}` +
+    ` Include visual elements: numbered stages, arrows, restrained icons, and flowchart nodes.` +
+    ` Do not invent percentages, metrics, customer results, or quantitative claims.` +
+    ` Keep labels short and legible. NO logos, NO watermarks, NO text that says "infographic".` +
     ` Ultra-clean, modern, professional quality. Tall/portrait format (2:3 ratio).`;
 
   console.log(`Generating mid-article infographic for: "${primaryKeyword}"...`);
@@ -389,75 +390,6 @@ async function captureScreenshot(
 
   console.log(`Screenshot stored: ${imageUrl}`);
   return imageUrl;
-}
-
-/** Search for relevant infographics and data visualizations from the web. */
-async function searchWebImages(
-  topic: string,
-  niche: string,
-): Promise<{ url: string; alt: string; source: string }[]> {
-  const client = openaiClient();
-
-  const completion = await client.responses.create({
-    model: "gpt-4o-mini",
-    tools: [{ type: "web_search_preview" as any }],
-    input: [
-      {
-        role: "system",
-        content:
-          "Search the web for high-quality infographics, charts, statistics images, and data visualizations. " +
-          "Return ONLY URLs that point to actual, publicly accessible image files (.png, .jpg, .webp). " +
-          "Prefer images from reputable sources (Statista, HubSpot, McKinsey, Gartner, industry blogs). " +
-          "Output JSON only — no explanation.",
-      },
-      {
-        role: "user",
-        content:
-          `Find 2-4 relevant infographics, charts, or data visualizations about: "${topic}" in the ${niche || "general"} space.\n` +
-          `Return JSON: {"images": [{"url": "direct_image_url", "alt": "descriptive alt text for SEO", "source": "source website name"}]}`,
-      },
-    ],
-  });
-
-  const result = parseJson<{
-    images: { url: string; alt: string; source: string }[];
-  }>(
-    z.object({
-      images: z
-        .array(
-          z.object({
-            url: z.string(),
-            alt: z.string(),
-            source: z.string(),
-          }),
-        )
-        .default([]),
-    }),
-    completion.output_text,
-  );
-
-  // Validate URLs and check they're actual image files (not HTML pages)
-  const validImages: typeof result.images = [];
-  for (const img of result.images) {
-    try {
-      const u = new URL(img.url);
-      // Must end with image extension or be from known image CDNs
-      const isImageUrl = /\.(png|jpg|jpeg|webp|gif|svg)(\?.*)?$/i.test(u.pathname) ||
-        u.hostname.includes('imgur') || u.hostname.includes('cloudinary') ||
-        u.hostname.includes('unsplash') || u.hostname.includes('pexels');
-      if (!isImageUrl) continue;
-      // HEAD check to verify image is accessible (skip if blocked)
-      try {
-        const headRes = await fetch(img.url, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-        const ct = headRes.headers.get('content-type') || '';
-        if (!ct.startsWith('image/')) continue;
-      } catch { continue; }
-      validImages.push(img);
-    } catch { continue; }
-  }
-
-  console.log(`Found ${validImages.length} web images for "${topic}".`);
-  return validImages;
 }
 
 /** Crawl a page and extract text content (strips HTML). */
@@ -948,6 +880,8 @@ async function factCheckArticle(
   markdown: string,
   sources: z.infer<typeof ArticleSchema>["sources"],
   bannedNames: string[] = [],
+  productEvidence = "",
+  researchEvidence = "",
 ) {
   const text = await callClaude(
     "You are a fact-checking editor. Review the article against provided sources and score factual accuracy.\n\n" +
@@ -955,20 +889,21 @@ async function factCheckArticle(
     "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
     "2. Do NOT add fact-check summaries or editorial commentary into the markdown.\n" +
     "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
-    "4. NEVER remove product names, brand mentions, CTA links, or product feature descriptions. These are intentional marketing content — they are not factual claims that need verification.\n" +
-    "5. ONLY correct external third-party statistics, quotes attributed to real people, and factual data claims.\n" +
-    (bannedNames.length > 0 ? `6. BANNED NAMES: The following names must be REMOVED from the article and replaced with generic terms ("your CRM", "popular tools", "other platforms"): ${bannedNames.join(", ")}. Replace every occurrence.\n` : "") +
-    "6. For each factual claim you can identify, assess whether it is supported by the provided sources.\n" +
-    "7. 'confidenceScore' = overall percentage (0-100) of how well-supported the article's claims are.\n" +
+    "4. Product features, pricing, integrations, and capabilities ARE factual claims. Keep them only when supported by the supplied product evidence; otherwise remove or soften them.\n" +
+    "5. Correct or remove unsupported third-party statistics, attributed quotes, benchmarks, dates, and factual claims. Never invent replacement evidence.\n" +
+    "6. A direct quotation is allowed only when its exact language appears in a supplied source. Otherwise paraphrase without quotation marks.\n" +
+    (bannedNames.length > 0 ? `7. BANNED NAMES: The following names must be REMOVED from the article and replaced with neutral category language: ${bannedNames.join(", ")}. Replace every occurrence.\n` : "") +
+    "8. For every factual claim, assess whether it is supported by a supplied source or the product evidence.\n" +
+    "9. 'confidenceScore' = overall percentage (0-100) of how well-supported the final corrected article's claims are.\n" +
     "   - 90-100: All major claims verified against sources\n" +
     "   - 70-89: Most claims verified, minor gaps\n" +
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
-    "8. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by sources.\n" +
-    "9. Output JSON only.",
+    "10. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
+    "11. Output JSON only.",
     `Return JSON: {"markdown":"<full corrected article>","notes":"<reviewer summary>","confidenceScore":<0-100>,"claimCount":<number>,"verifiedCount":<number>,"citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
       sources ?? [],
-    )}\n\nArticle to review:\n${markdown}`,
+    )}\n\nResearch evidence gathered from the cited sources:\n${researchEvidence || "No research summary supplied."}\n\nFirst-party product evidence:\n${productEvidence || "No first-party product evidence supplied."}\n\nArticle to review:\n${markdown}`,
     16384,
   );
 
@@ -1029,8 +964,10 @@ async function webResearch(
         role: "system",
         content:
           "You are a research assistant. Search the web for current, factual information on the given topic. " +
-          "Compile a detailed research brief with key facts, statistics, trends, and expert opinions. " +
-          "Include all source URLs you find. Output JSON only." +
+          "Prefer primary evidence: official documentation, original research, public datasets, standards bodies, and first-party product pages. " +
+          "Avoid affiliate roundups, anonymous content farms, and secondary summaries when a primary source exists. " +
+          "Use statistics and quotations only when the exact claim is visible in the source; otherwise omit them. " +
+          "Compile a detailed research brief and include every source URL used. Output JSON only." +
           competitorExclusion,
       },
       {
@@ -1202,6 +1139,7 @@ async function handlePlan(
   await reportProgress(2, "Discovering high-opportunity keywords...");
 
   let discoveredKeywords: { keyword: string; searchVolume: number; difficulty: number; cpc: number }[] = [];
+  let keywordDiscoveryError: unknown = null;
   try {
     const { discoverKeywords, findKeywordGaps } = await import("./seoData");
 
@@ -1252,7 +1190,19 @@ async function handlePlan(
         if (added > 0) console.log(`Competitor gaps: +${added} keywords`);
       } catch (e) { console.log("Competitor gap analysis failed:", e); }
     }
-  } catch (err) { console.log("Keyword discovery unavailable:", err); }
+  } catch (err) {
+    keywordDiscoveryError = err;
+    console.log("Keyword discovery unavailable:", err);
+  }
+
+  if (site.verifiedKeywordDataRequired && discoveredKeywords.length === 0) {
+    const reason = keywordDiscoveryError instanceof Error
+      ? keywordDiscoveryError.message
+      : "no verified keyword metrics were returned";
+    throw new Error(
+      `Verified keyword data is required for ${site.domain}; refusing to save an AI-only content plan (${reason}).`,
+    );
+  }
 
   // ══════════════════════════════════════════════════════════════════════
   // STEP 3: Filter, score, and rank keyword candidates
@@ -1394,7 +1344,7 @@ async function handlePlan(
       `Return a JSON array. Use EXACT keyword strings as primaryKeyword:`,
       `[{"label":"article title","primaryKeyword":"exact keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this keyword serves ${productName}'s audience"}]`,
       ``,
-      `Article types: standard (deep dive), listicle (list-based), how-to (tutorial), checklist (actionable), comparison (X vs Y), roundup (resources), ultimate-guide (5000+ words). Pick what fits the keyword's SERP intent.`,
+      `Article types: standard (deep dive), listicle (list-based), how-to (tutorial), checklist (actionable), comparison (X vs Y), roundup (resources), ultimate-guide (comprehensive reference). Pick what fits the keyword's SERP intent.`,
       site.language && site.language !== "en" ? `Write all labels and keywords in ${site.language}.` : "",
       site.anchorKeywords?.length ? `Priority keywords to incorporate: ${site.anchorKeywords.join(", ")}` : "",
     ].filter(Boolean).join("\n");
@@ -1802,18 +1752,11 @@ async function handleArticle(
     console.error(`Screenshot capture failed (continuing without): ${msg}`);
   }
 
-  // ── Step 1d: Web Image Search (graceful degradation) ──
-  await reportProgress(5, "Searching for images...");
-  let webImages: { url: string; alt: string; source: string }[] = [];
-
-  if (topic) {
-    try {
-      webImages = await searchWebImages(topic.label, site.niche ?? "");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      console.error(`Web image search failed (continuing without): ${msg}`);
-    }
-  }
+  // ── Step 1d: Media preparation ──
+  // Hero/infographic assets are generated later and the product screenshot is
+  // captured above. Do not hotlink arbitrary search-result images whose reuse
+  // rights, permanence, and dimensions are unknown.
+  await reportProgress(5, "Preparing article media...");
 
   // ── Step 1e: Live Site Data Crawl (graceful degradation) ──
   await reportProgress(6, "Crawling site data...");
@@ -1852,9 +1795,10 @@ async function handleArticle(
 
   const systemPrompt = [
     `<role>`,
-    `You are the in-house content marketer at ${productName}. You write for ${productName}'s blog.`,
-    `You know this product inside out. You write like an employee, not a freelancer.`,
-    `Every article you write positions ${productName} as THE solution to the reader's problem.`,
+    `You are a senior editor writing for ${productName}'s audience.`,
+    `Teach the reader something useful enough to act on without buying anything.`,
+    `Mention ${productName} only where its verified capabilities genuinely help with the reader's problem.`,
+    `Editorial trust is more important than keyword density or promotional repetition.`,
     `</role>`,
     ``,
     `<banned_content>`,
@@ -1895,17 +1839,9 @@ async function handleArticle(
     (() => {
       const ctaLabel = site.ctaText || `Try ${productName}`;
       const ctaLink = site.ctaUrl || `https://${site.domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
-      const color = site.brandPrimaryColor ?? "#0EA5E9";
-      const tagline = site.siteSummary ? site.siteSummary.split(".")[0] + "." : `Get started with ${productName} today.`;
       return [
         `CTA: Naturally weave in "${ctaLabel}" linking to ${ctaLink} once in the body (organic, not salesy).`,
-        `STYLED CTA BOX: At the very end of the article (after Sources), include this exact HTML CTA box:`,
-        `<div style="margin:2.5em 0 1em;padding:1.5em 2em;border-radius:12px;background:linear-gradient(135deg,${color}15,${color}08);border:1px solid ${color}30;text-align:center;">`,
-        `<p style="font-size:1.2em;font-weight:700;margin:0 0 0.4em;color:${color};">${ctaLabel}</p>`,
-        `<p style="margin:0 0 1em;color:#555;font-size:0.95em;">${tagline}</p>`,
-        `<a href="${ctaLink}" style="display:inline-block;padding:0.7em 2em;border-radius:8px;background:${color};color:#fff;font-weight:600;text-decoration:none;font-size:0.95em;">${ctaLabel} →</a>`,
-        `</div>`,
-        `Copy this HTML exactly at the very end. Do not modify the styles or structure.`,
+        `FINAL CTA: End with one short, relevant Markdown sentence linking to [${ctaLabel}](${ctaLink}). Do not output raw HTML or a promotional box.`,
       ].join("\n");
     })(),
     site.anchorKeywords?.length ? `Anchor Keywords: Naturally incorporate these throughout: ${site.anchorKeywords.join(", ")}` : "",
@@ -1935,9 +1871,7 @@ async function handleArticle(
     ``,
     `<images>`,
     `Note: A product screenshot will be automatically added to the product section by the system. Do NOT add any screenshot yourself.`,
-    webImages.length > 0
-      ? `Web Infographics/Charts (REAL — found on the web):\n${webImages.map((img) => `- ![${img.alt}](${img.url})\n  Caption: *Source: ${img.source}*`).join("\n")}\nInclude at least 2-3 of these images throughout the article to break up text and add visual context. Place each after the section it relates to. Add italic captions below each image.`
-      : `No web images available.`,
+    `A generated hero image and a generated explanatory infographic are added by the system. Do not hotlink arbitrary web images.`,
     `</images>`,
     ``,
     `<article_structure>`,
@@ -1949,35 +1883,21 @@ async function handleArticle(
       // Default standard structure
       return [
         `REQUIRED CONTENT ORDER (follow this sequence exactly):`,
-        `1. HOOK: Open with a compelling statistic or data point from the research. NEVER start with a generic statement. Briefly introduce ${productName} as a solution worth exploring.`,
+        `1. HOOK: Open with a concrete reader problem, decision, or useful observation. Use a statistic only when it is present in the supplied research.`,
         `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
         `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
         `4. SECTIONS 1-2: First two H2 sections covering background/context of the topic.`,
         `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
         `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
         `   YouTube embed goes HERE — place it after the section it relates to most.`,
-        `6. PRODUCT SECTION (MANDATORY — DO NOT SKIP): Create a dedicated H2 section with the EXACT title "How ${productName} Helps With [Topic]".
-        CRITICAL RULES FOR THIS SECTION:
-        - The H2 heading MUST contain the exact word "${productName}" — not a generic term, not "your tool", not paraphrased
-        - Be 300-500 words explaining how ${productName} specifically solves the problems discussed
-        - A product screenshot will be automatically injected by the system — do NOT add one yourself
-        - Mention specific ${productName} features from the product identity
-        - Link to ${productName}'s website
-        BRAND NAME RULE: Use the EXACT name "${productName}" at least 15-20 times throughout the ENTIRE article. NEVER replace "${productName}" with generic terms like "the tool", "the platform", "your solution", "this software", "your CRM", "the product", or similar. The word "${productName}" must appear in:
-        - The article title or first paragraph
-        - At least 3 H2/H3 headings
-        - The product section heading (MANDATORY: "How ${productName} Helps With...")
-        - The TL;DR
-        - The Key Takeaways
-        - The FAQ section (at least 2 questions should mention ${productName} by name)
-        If you catch yourself writing a generic term instead of "${productName}", STOP and replace it with "${productName}".`,
-        `7. COMPARISON TABLE: At least one markdown table with real data. Compare approaches/categories (NOT named competitors).`,
+        `6. PRODUCT SECTION: If ${productName} is directly relevant, include one focused 150-250 word H2 section explaining the useful, verified connection. Do not force the product into unrelated headings or repeat its name unnaturally. A screenshot is injected automatically when this section exists.`,
+        `7. COMPARISON TABLE: Include a markdown table only when the available evidence supports a meaningful comparison. Never invent table data.`,
         `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
-        `9. EXPERT QUOTES: 2-3 blockquotes from real experts. Format: > *"Quote."* — **Name**, Title, Company [citation]. NEVER fabricate quotes.`,
-        `10. FAQ: "## Frequently Asked Questions" with 8-10 questions. Format: ### Question?\n Answer paragraph.`,
-        `11. KEY TAKEAWAYS: "## Key Takeaways" with 5-7 bullet points.`,
+        `9. EVIDENCE: Quote a named person only when the exact quote appears in the supplied research. Otherwise paraphrase the source.`,
+        `10. FAQ: "## Frequently Asked Questions" with 4-7 questions that resolve real remaining search intent.`,
+        `11. KEY TAKEAWAYS: "## Key Takeaways" with 4-6 useful bullet points.`,
         `12. SOURCES: "## Sources" section with numbered citation links.`,
-        `13. STYLED CTA BOX: Place the HTML CTA box last, after Sources.`,
+        `13. FINAL CTA: Place the concise Markdown CTA last, after Sources.`,
       ].join("\n");
     })(),
     ``,
@@ -1994,7 +1914,7 @@ async function handleArticle(
     `- Google's AI Overviews cite content with clear, authoritative, direct answers. Structure content to be "citation-worthy."`,
     `- Lead each major section with a definitive 1-2 sentence answer BEFORE expanding with detail. AI Overviews extract these lead-in answers.`,
     `- Use "What is X", "How does X work", "Why is X important" patterns in H2s — these match AI Overview trigger queries.`,
-    `- Include specific numbers, percentages, and year-dated statistics (e.g. "As of 2026, 65% of..."). AI Overviews prefer quantified claims.`,
+    `- Include numbers, percentages, or dates only when they are directly supported by supplied research and cited inline.`,
     `- Add comparison tables and structured data — AI Overviews frequently pull from tables and lists.`,
     `- Cite authoritative sources inline (not just in a Sources section). AI Overviews prefer content that references credible data.`,
     `- Target long-tail question variants in subheadings — AI Overviews appear less on long-tail queries, so organic clicks are higher there.`,
@@ -2004,7 +1924,7 @@ async function handleArticle(
     `- Each H2 heading should contain a relevant entity or keyword variation.`,
     `- Maintain natural keyword frequency throughout — aim for the primary keyword every 200-300 words.`,
     `- Include semantically related terms and synonyms, not just exact-match keywords.`,
-    `- Reference real people, companies, tools, and concepts by name (entities Google's Knowledge Graph recognizes).`,
+    `- Reference real entities only when they are relevant and supported by supplied evidence.`,
     ``,
     serpPaaQuestions.length > 0
       ? [
@@ -2021,8 +1941,9 @@ async function handleArticle(
     `</serp_intelligence>`,
     ``,
     `GLOBAL RULES:`,
-    `- WORD COUNT: ${((topic as any)?.articleType === "ultimate-guide") ? "5000-7000" : "3500-4500"} words.`,
-    `- NO FLUFF: Every paragraph must contain specific data, examples, or actionable advice.`,
+    `- WORD COUNT: ${((topic as any)?.articleType === "ultimate-guide") ? "2800-4000" : "1800-2600"} words. Stop when the search intent is fully answered.`,
+    `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
+    `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
     `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
     `</article_structure>`,
@@ -2032,7 +1953,7 @@ async function handleArticle(
     `{`,
     `  "title": "string",`,
     `  "slug": "string",`,
-    `  "markdown": "string (the full 3500-4500 word article)",`,
+    `  "markdown": "string (the full article)",`,
     `  "metaTitle": "string (max 60 chars, include primary keyword)",`,
     `  "metaDescription": "string (max 155 chars, compelling + keyword)",`,
     `  "metaKeywords": ["keyword1", ...] (8-12 SEO keywords),`,
@@ -2056,9 +1977,10 @@ async function handleArticle(
       `</research>`,
     ].join("\n") : "",
     ``,
-    siteData.pricing || siteData.features ? [
+    siteData.pricing || siteData.features || siteData.homepage ? [
       `<live_crawled_data>`,
       `This data was crawled directly from ${site.domain} moments ago. Use it for accurate pricing and feature information.`,
+      siteData.homepage ? `\n--- HOMEPAGE ---\n${siteData.homepage.slice(0, 3000)}` : "",
       siteData.pricing ? `\n--- PRICING PAGE ---\n${siteData.pricing.slice(0, 3000)}` : "",
       siteData.features ? `\n--- FEATURES PAGE ---\n${siteData.features.slice(0, 3000)}` : "",
       `</live_crawled_data>`,
@@ -2134,14 +2056,39 @@ async function handleArticle(
   let finalSources = dedupedSources;
   let factCheckScore: number | undefined;
   let factCheckNotes: string | undefined;
+  const allBannedNames = [
+    ...(site.competitors ?? []),
+    ...(site.competitors ?? []).map((c: string) =>
+      c
+        .replace(/^https?:\/\//, "")
+        .replace(/\/$/, "")
+        .replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
+    ),
+  ];
+  const productEvidence = [
+    `Name: ${productName}`,
+    `Domain: ${site.domain}`,
+    site.siteSummary ? `Summary: ${site.siteSummary}` : "",
+    site.keyFeatures?.length
+      ? `Configured features:\n${site.keyFeatures.map((feature: string) => `- ${feature}`).join("\n")}`
+      : "",
+    site.pricingInfo ? `Configured pricing:\n${site.pricingInfo}` : "",
+    siteData.homepage ? `Crawled homepage:\n${siteData.homepage.slice(0, 4000)}` : "",
+    siteData.features ? `Crawled features page:\n${siteData.features.slice(0, 4000)}` : "",
+    siteData.pricing ? `Crawled pricing page:\n${siteData.pricing.slice(0, 4000)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   try {
     console.log("Running fact check...");
-    const allBannedNames = [
-      ...(site.competitors ?? []),
-      ...(site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, "")),
-    ];
-    const reviewed = await factCheckArticle(finalMarkdown, dedupedSources, allBannedNames);
+    const reviewed = await factCheckArticle(
+      finalMarkdown,
+      dedupedSources,
+      allBannedNames,
+      productEvidence,
+      researchContext,
+    );
     finalMarkdown = reviewed.markdown;
     if (reviewed.citations?.length) {
       const additionalSources = reviewed.citations.filter(
@@ -2174,7 +2121,7 @@ async function handleArticle(
     console.log("Fact check complete.");
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`Fact check failed (using original article): ${msg}`);
+    console.error(`Fact check failed; strict sites will hold this article for review: ${msg}`);
   }
 
   // ── Step 4: Featured Image (hero) + Mid-article Infographic ──
@@ -2290,36 +2237,6 @@ async function handleArticle(
   // Fix separator rows that are missing dashes
   finalMarkdown = finalMarkdown.replace(/\|\s*\|/g, '| --- |');
 
-  // ── Step 4b2: Programmatic product name enforcement ──
-  // If the AI genericized the product name in the product section H2, fix it
-  {
-    const pName = site.siteName || "the product";
-    const lines = finalMarkdown.split("\n");
-    let fixed = false;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.startsWith("## ") && /how\s/i.test(line) && /helps?/i.test(line) && !line.toLowerCase().includes(pName.toLowerCase())) {
-        // Replace generic "How Your/The X Helps" with "How {productName} Helps"
-        lines[i] = line.replace(/How\s+(?:Your|The|This|Our|A)\s+\S+\s+Helps/i, `How ${pName} Helps`);
-        console.log(`Fixed product section heading: "${line}" → "${lines[i]}"`);
-        fixed = true;
-        break;
-      }
-    }
-    // Also do a global replace of generic product references
-    if (pName !== "the product") {
-      const genericTerms = ["your CRM", "the CRM", "this CRM", "your platform", "the platform", "this platform", "your tool", "the tool", "this tool", "your software", "the software"];
-      for (const term of genericTerms) {
-        if (finalMarkdown.toLowerCase().includes(term.toLowerCase())) {
-          const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\  // ── Step 4c: Programmatic Screenshot Injection (inside product section) ──'), 'gi');
-          finalMarkdown = finalMarkdown.replace(regex, pName);
-          console.log(`Replaced generic term "${term}" → "${pName}"`);
-        }
-      }
-    }
-    if (fixed) finalMarkdown = lines.join("\n");
-  }
-
   // ── Step 4c: Programmatic Screenshot Injection (inside product section) ──
   if (screenshotUrl) {
     const pName = site.siteName || "the product";
@@ -2351,6 +2268,7 @@ async function handleArticle(
   // ── Step 5: Content Score (graceful degradation) ──
   await reportProgress(10, "Scoring content quality...");
   let contentScoreResult: { overallScore?: number; entityCoverage?: number; topicCompleteness?: number; missingEntities?: string[]; missingTopics?: string[] } = {};
+  let contentWasEnhanced = false;
 
   if (topic) {
     try {
@@ -2379,12 +2297,15 @@ async function handleArticle(
             `- Add the missing entities/topics naturally — don't force them awkwardly`,
             `- Add new H2/H3 sections if a missing subtopic needs its own section`,
             `- Keep the same tone and style`,
+            `- Do not add any new number, statistic, benchmark, date, customer outcome, quotation, named company, product feature, pricing claim, or integration`,
+            `- If a missing topic would require evidence that is not already present, explain the concept generically or leave it out`,
             `- Return ONLY the enhanced markdown, nothing else`,
           ].filter(Boolean).join("\n");
 
           const enhanced = await callClaude(enhancePrompt, finalMarkdown, 16384);
           if (enhanced && enhanced.length > finalMarkdown.length * 0.8) {
             finalMarkdown = enhanced;
+            contentWasEnhanced = true;
             // Re-score after enhancement
             const rescore = await scoreContent(finalMarkdown, topic.primaryKeyword, serpData.results);
             contentScoreResult = rescore;
@@ -2396,6 +2317,36 @@ async function handleArticle(
       }
     } catch (err) {
       console.error(`Content scoring failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
+    }
+  }
+
+  // Auto-enhancement happens after the first factual review. Recheck the final
+  // prose so an SEO optimization pass cannot smuggle unsupported claims into a
+  // publishable article.
+  if (contentWasEnhanced) {
+    try {
+      console.log("Re-running fact check after content enhancement...");
+      const reviewed = await factCheckArticle(
+        finalMarkdown,
+        finalSources,
+        allBannedNames,
+        productEvidence,
+        researchContext,
+      );
+      finalMarkdown = reviewed.markdown;
+      factCheckScore = reviewed.confidenceScore;
+      factCheckNotes = reviewed.notes;
+      if (reviewed.citations?.length) {
+        const known = new Set(finalSources.map((source) => source.url));
+        finalSources = [
+          ...finalSources,
+          ...reviewed.citations.filter((source) => !known.has(source.url)),
+        ];
+      }
+    } catch (err) {
+      factCheckScore = undefined;
+      factCheckNotes = `Final fact check failed: ${err instanceof Error ? err.message : "unknown"}`;
+      console.error(`${factCheckNotes} Strict sites will hold the article for review.`);
     }
   }
 

@@ -99,6 +99,15 @@ async function dataForSEORequest(
     throw new Error(`DataForSEO error: ${data.status_message ?? "unknown"}`);
   }
 
+  const failedTask = (data.tasks ?? []).find(
+    (task: { status_code?: number }) => task.status_code !== 20000,
+  );
+  if (failedTask) {
+    throw new Error(
+      `DataForSEO task error (${failedTask.status_code ?? "unknown"}): ${failedTask.status_message ?? "unknown"}`,
+    );
+  }
+
   return data;
 }
 
@@ -123,8 +132,14 @@ export async function getDomainAuthority(domain: string): Promise<DomainMetrics 
 
   try {
     const data = await dataForSEORequest(
-      "dataforseo_labs/google/domain_rank/live",
-      [{ target: cleanDomain }],
+      "backlinks/summary/live",
+      [{
+        target: cleanDomain,
+        include_subdomains: true,
+        exclude_internal_backlinks: true,
+        backlinks_status_type: "live",
+        rank_scale: "one_hundred",
+      }],
     );
 
     const item = data.tasks?.[0]?.result?.[0];
@@ -132,7 +147,9 @@ export async function getDomainAuthority(domain: string): Promise<DomainMetrics 
 
     return {
       domainRank: item.rank ?? 0,
-      organicTraffic: item.organic_etv ?? 0,
+      // Backlink authority and organic traffic are different metrics. Keep
+      // traffic unknown here instead of presenting backlink data as traffic.
+      organicTraffic: 0,
       backlinks: item.backlinks ?? 0,
       referringDomains: item.referring_domains ?? 0,
     };
@@ -278,46 +295,45 @@ export async function discoverKeywords(
 
   const allResults: KeywordMetrics[] = [];
 
-  // Use keyword suggestions endpoint — each seed is an API call ($), so cap seeds and scale per-seed limit
-  const maxSeeds = Math.min(seedKeywords.length, 15);
-  const perSeedLimit = Math.max(50, Math.ceil(limit / maxSeeds * 1.5)); // Overshoot to account for dedup
-  for (const seed of seedKeywords.slice(0, maxSeeds)) {
-    if (allResults.length >= limit * 2) break; // Early exit if we have plenty
-    try {
-      const data = await dataForSEORequest(
-        "keywords_data/google_ads/keywords_for_keywords/live",
-        [{
-          keywords: [seed],
-          location_code: locationCode,
-          language_code: languageCode,
-          sort_by: "search_volume",
-          limit: perSeedLimit,
-        }],
-      );
+  // Google Ads accepts up to 20 seeds in one live request. Batching prevents
+  // the previous 15x request amplification while preserving a broad seed set.
+  const seeds = [...new Set(seedKeywords.map((seed) => seed.trim()).filter(Boolean))].slice(0, 20);
+  if (seeds.length === 0) return [];
 
-      for (const task of data.tasks ?? []) {
-        for (const item of task.result ?? []) {
-          if (!item.keyword || item.search_volume === 0) continue;
-          // Skip if already in results
-          if (allResults.some(r => r.keyword.toLowerCase() === item.keyword.toLowerCase())) continue;
+  const data = await dataForSEORequest(
+    "keywords_data/google_ads/keywords_for_keywords/live",
+    [{
+      keywords: seeds,
+      location_code: locationCode,
+      language_code: languageCode,
+      sort_by: "search_volume",
+    }],
+  );
 
-          const monthlySearches = (item.monthly_searches ?? [])
-            .slice(0, 12)
-            .map((m: any) => m.search_volume ?? 0);
+  for (const task of data.tasks ?? []) {
+    for (const item of task.result ?? []) {
+      if (!item.keyword || !item.search_volume) continue;
+      if (allResults.some(r => r.keyword.toLowerCase() === item.keyword.toLowerCase())) continue;
 
-          allResults.push({
-            keyword: item.keyword,
-            searchVolume: item.search_volume ?? 0,
-            difficulty: 0, // Will be enriched below
-            cpc: item.cpc ?? 0,
-            competition: item.competition ?? 0,
-            intent: mapCompetitionToIntent(item.competition ?? 0),
-            trend: monthlySearches,
-          });
-        }
-      }
-    } catch (err) {
-      console.error(`Keyword discovery failed for seed "${seed}":`, err);
+      const monthlySearches = (item.monthly_searches ?? [])
+        .slice(0, 12)
+        .map((m: any) => m.search_volume ?? 0);
+
+      const competition = typeof item.competition_index === "number"
+        ? item.competition_index / 100
+        : typeof item.competition === "number"
+          ? item.competition
+          : 0;
+
+      allResults.push({
+        keyword: item.keyword,
+        searchVolume: item.search_volume ?? 0,
+        difficulty: 0, // Enriched below.
+        cpc: item.cpc ?? 0,
+        competition,
+        intent: mapCompetitionToIntent(competition),
+        trend: monthlySearches,
+      });
     }
   }
 

@@ -55,6 +55,7 @@ export default defineSchema({
     externalLinking: v.optional(v.boolean()),
     sourceCitations: v.optional(v.boolean()),
     youtubeEmbeds: v.optional(v.boolean()),
+    verifiedKeywordDataRequired: v.optional(v.boolean()),
     urlStructure: v.optional(v.string()), // e.g. /blog/[slug]
 
     // ── Google Search Console ──
@@ -145,6 +146,10 @@ export default defineSchema({
     wordCount: v.optional(v.number()), // total word count
     factCheckScore: v.optional(v.number()), // 0-100 overall confidence
     factCheckNotes: v.optional(v.string()),
+    publicationGateStatus: v.optional(v.string()), // passed | blocked
+    publicationGateIssues: v.optional(v.array(v.string())),
+    publicationGateWarnings: v.optional(v.array(v.string())),
+    publicationCheckedAt: v.optional(v.number()),
 
     // ── Content SEO Score (computed after generation) ──
     contentScore: v.optional(v.number()), // 0-100 overall SEO content score
@@ -204,6 +209,10 @@ export default defineSchema({
     wordCount: v.optional(v.number()),
     factCheckScore: v.optional(v.number()),
     contentScore: v.optional(v.number()),
+    publicationGateStatus: v.optional(v.string()),
+    publicationGateIssues: v.optional(v.array(v.string())),
+    publicationGateWarnings: v.optional(v.array(v.string())),
+    publicationCheckedAt: v.optional(v.number()),
     entityCoverage: v.optional(v.number()),
     topicCompleteness: v.optional(v.number()),
     serpDifficulty: v.optional(v.string()),

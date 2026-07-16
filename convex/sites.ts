@@ -71,6 +71,7 @@ export const upsert = mutation({
     externalLinking: v.optional(v.boolean()),
     sourceCitations: v.optional(v.boolean()),
     youtubeEmbeds: v.optional(v.boolean()),
+    verifiedKeywordDataRequired: v.optional(v.boolean()),
     urlStructure: v.optional(v.string()),
     mediumToken: v.optional(v.string()),
     linkedinAccessToken: v.optional(v.string()),
@@ -151,6 +152,7 @@ export const upsert = mutation({
       externalLinking: args.externalLinking,
       sourceCitations: args.sourceCitations,
       youtubeEmbeds: args.youtubeEmbeds,
+      verifiedKeywordDataRequired: args.verifiedKeywordDataRequired,
       urlStructure: args.urlStructure,
       updatedAt: now(),
     };
@@ -215,6 +217,7 @@ export const updateSite = mutation({
     externalLinking: v.optional(v.boolean()),
     sourceCitations: v.optional(v.boolean()),
     youtubeEmbeds: v.optional(v.boolean()),
+    verifiedKeywordDataRequired: v.optional(v.boolean()),
     urlStructure: v.optional(v.string()),
     brandPrimaryColor: v.optional(v.string()),
     brandAccentColor: v.optional(v.string()),
