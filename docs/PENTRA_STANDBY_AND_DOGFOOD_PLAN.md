@@ -179,3 +179,38 @@ Avoid selling "AI articles." Sell a measurable SEO operating system:
 
 Until the evidence exists, Pentra stays a valuable internal engine and product
 candidate, not a proven traffic-growth promise.
+
+## Implementation Status: 2026-07-16
+
+The LeadPilot cutover is now implemented and deployed.
+
+- LeadPilot reads only `content/blog` articles with the explicit Pentra
+  publication contract: `generator: pentra`, `status: published`, and
+  `qualityGateVersion >= 1`.
+- The SEObot runtime client and dependency were removed. Its nine public article
+  URLs permanently redirect to the two retained Pentra articles so existing
+  links do not become dead ends.
+- Pentra now applies deterministic publication checks for article thickness,
+  metadata, source URLs, quantified claims, scripts, iframes, featured images,
+  and fact-check completion. LeadPilot uses strict mode.
+- GitHub publication emits canonical LeadPilot MDX metadata instead of embedded
+  raw structured-data scripts. LeadPilot owns canonical and Article JSON-LD
+  rendering.
+- Article generation prompts no longer require invented statistics,
+  testimonials, quotations, or forced product mentions. Generated images are
+  preferred over hotlinked search-result images.
+- LeadPilot is registered in production Pentra at two articles per week with
+  approval required and autopilot disabled during dogfood validation.
+- LeadPilot requires verified keyword data. If DataForSEO is unavailable or
+  returns no measured keywords, Pentra refuses to save an AI-only content plan.
+- DataForSEO keyword seeds are batched into one request instead of issuing up to
+  fifteen separately billable requests. Domain authority now uses the current
+  backlinks summary endpoint.
+- Production verification confirmed two Pentra articles, valid canonical
+  metadata, Article JSON-LD, working images, and all nine legacy redirects.
+
+The remaining activation blocker is operational, not architectural:
+DataForSEO currently returns HTTP 402. Fund that account, generate a fresh
+measured topic plan, review the first article end to end, and only then enable
+LeadPilot autopilot. Do not bypass the verified-keyword gate to manufacture
+publishing activity.
