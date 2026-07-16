@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../../../../convex/_generated/api";
+import type { Id } from "../../../../../convex/_generated/dataModel";
+import {
+  findMatchingGscProperty,
+  hasGscReadonlyScope,
+} from "@/lib/gsc-oauth";
 
 const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 
@@ -63,6 +68,31 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  let grantedScopes = typeof tokenData.scope === "string" ? tokenData.scope : "";
+  if (!hasGscReadonlyScope(grantedScopes)) {
+    try {
+      const tokenInfoRes = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+      );
+      if (tokenInfoRes.ok) {
+        const tokenInfo = await tokenInfoRes.json();
+        grantedScopes = typeof tokenInfo.scope === "string" ? tokenInfo.scope : grantedScopes;
+      }
+    } catch {
+      // The explicit permission check below remains authoritative.
+    }
+  }
+
+  if (!hasGscReadonlyScope(grantedScopes)) {
+    return new NextResponse(
+      renderPage(
+        "Search Console permission was not granted. Reconnect and allow read-only Search Console access.",
+        false,
+      ),
+      { status: 403, headers: { "Content-Type": "text/html" } },
+    );
+  }
+
   // Get user email
   let email = "";
   try {
@@ -75,45 +105,57 @@ export async function GET(req: NextRequest) {
     }
   } catch { /* non-critical */ }
 
-  // Auto-detect GSC property for this site
+  // Match the exact GSC property for this Pentra site. Never attach an
+  // unrelated first property from a multi-site Google account.
   let gscProperty = "";
+  let siteDomain = "";
+  if (siteId) {
+    try {
+      const site = await convex.query(api.sites.get, { siteId: siteId as any });
+      siteDomain = site?.domain ?? "";
+    } catch (error) {
+      console.error("Failed to load Pentra site for GSC matching:", error);
+    }
+  }
+
+  if (!siteDomain) {
+    return new NextResponse(renderPage("Pentra could not identify the website for this connection.", false), {
+      status: 400,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
   try {
     const sitesRes = await fetch("https://www.googleapis.com/webmasters/v3/sites", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (sitesRes.ok) {
-      const sitesData = await sitesRes.json();
-      const entries = sitesData.siteEntry || [];
-
-      // Try to find a matching property for the site's domain
-      // We need the site domain from Convex — get it via the siteId
-      let siteDomain = "";
-      if (siteId) {
-        try {
-          const site = await convex.query(api.sites.get, { siteId: siteId as any });
-          if (site) siteDomain = site.domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "").toLowerCase();
-        } catch { /* non-critical */ }
-      }
-
-      if (siteDomain) {
-        // Match domain property (sc-domain:) or URL-prefix property
-        for (const entry of entries) {
-          const url = (entry.siteUrl || "").toLowerCase();
-          const cleanUrl = url.replace(/^sc-domain:/, "").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
-          if (cleanUrl === siteDomain) {
-            gscProperty = entry.siteUrl;
-            break;
-          }
-        }
-      }
-
-      // If no match, use the first available property
-      if (!gscProperty && entries.length > 0) {
-        gscProperty = entries[0].siteUrl || "";
-      }
+    if (!sitesRes.ok) {
+      const errorText = await sitesRes.text();
+      console.error("GSC property listing failed:", errorText);
+      return new NextResponse(
+        renderPage("Pentra could not verify Search Console access. Reconnect and allow read-only access.", false),
+        { status: 403, headers: { "Content-Type": "text/html" } },
+      );
     }
+
+    const sitesData = await sitesRes.json();
+    gscProperty = findMatchingGscProperty(sitesData.siteEntry || [], siteDomain) || "";
   } catch (e) {
     console.error("Failed to list GSC properties:", e);
+    return new NextResponse(renderPage("Pentra could not load your Search Console properties.", false), {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
+  if (!gscProperty) {
+    return new NextResponse(
+      renderPage(
+        `No Search Console property matching ${siteDomain} was found. Verify that exact site in Search Console, then reconnect.`,
+        false,
+      ),
+      { status: 404, headers: { "Content-Type": "text/html" } },
+    );
   }
 
   // Save tokens to Convex
@@ -121,10 +163,10 @@ export async function GET(req: NextRequest) {
   if (siteId) {
     try {
       await convex.mutation(api.sites.setGscToken, {
-        siteId,
+        siteId: siteId as Id<"sites">,
         gscAccessToken: accessToken,
         gscRefreshToken: refreshToken || undefined,
-        gscProperty: gscProperty || undefined,
+        gscProperty,
         gscEmail: email || undefined,
       });
       saved = true;
@@ -134,7 +176,7 @@ export async function GET(req: NextRequest) {
   }
 
   const msg = saved
-    ? `Connected to Google Search Console!${gscProperty ? ` Property: ${gscProperty}` : ""}`
+    ? `Connected to Google Search Console! Property: ${gscProperty}`
     : "Connected! You can close this window.";
 
   const response = new NextResponse(renderPage(msg, true, email, saved), {

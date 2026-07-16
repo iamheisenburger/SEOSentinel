@@ -38,7 +38,7 @@ export default function AnalyticsPage() {
   );
 
   const loading = gscSummary === undefined && site?._id;
-  const gscConnected = !!site?.gscAccessToken;
+  const gscConnected = !!site?.gscAccessToken && !!site?.gscProperty;
   const hasGSC = !!gscSummary;
 
   // Segment queries by position

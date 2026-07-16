@@ -399,19 +399,23 @@ export const setGithubToken = mutation({
 // Set Google Search Console OAuth tokens via HTTP API
 export const setGscToken = mutation({
   args: {
-    siteId: v.string(),
+    siteId: v.id("sites"),
     gscAccessToken: v.string(),
     gscRefreshToken: v.optional(v.string()),
     gscProperty: v.optional(v.string()),
     gscEmail: v.optional(v.string()),
   },
   handler: async (ctx, { siteId, gscAccessToken, gscRefreshToken, gscProperty, gscEmail }) => {
-    const site = await ctx.db.get(siteId as any);
+    const site = await ctx.db.get(siteId);
     if (!site) throw new Error("Site not found");
-    const patch: Record<string, any> = { gscAccessToken, gscConnectedAt: now(), updatedAt: now() };
+    if (!gscProperty && !site.gscProperty) {
+      throw new Error("A matching Search Console property is required for the initial connection");
+    }
+    const patch: Record<string, any> = { gscAccessToken, updatedAt: now() };
     if (gscRefreshToken) patch.gscRefreshToken = gscRefreshToken;
     if (gscProperty) patch.gscProperty = gscProperty;
     if (gscEmail) patch.gscEmail = gscEmail;
+    if (!site.gscConnectedAt) patch.gscConnectedAt = now();
     await ctx.db.patch(site._id, patch);
   },
 });

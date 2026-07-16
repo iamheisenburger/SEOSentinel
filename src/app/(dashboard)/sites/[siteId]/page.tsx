@@ -1201,7 +1201,7 @@ function GSCSection({ site }: { site: any }) {
   const disconnectGsc = useMutation(api.sites.disconnectGsc);
   const [disconnecting, setDisconnecting] = useState(false);
 
-  const isConnected = !!site.gscAccessToken;
+  const isConnected = !!site.gscAccessToken && !!site.gscProperty;
 
   const handleConnect = () => {
     window.open(

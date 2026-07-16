@@ -295,8 +295,6 @@ export function SetupWizard() {
   const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(null);
 
   // Integrations
-  const [gscConnected, setGscConnected] = useState(false);
-  const [gscEmail, setGscEmail] = useState("");
   const [mediumToken, setMediumToken] = useState("");
   const [linkedinToken, setLinkedinToken] = useState("");
   const [syndicationEnabled, setSyndicationEnabled] = useState(false);
@@ -334,6 +332,12 @@ export function SetupWizard() {
     api.articles.listBySite,
     siteId ? { siteId } : "skip",
   );
+  const connectedSite = useQuery(
+    api.sites.get,
+    siteId ? { siteId } : "skip",
+  );
+  const gscConnected = !!connectedSite?.gscAccessToken && !!connectedSite?.gscProperty;
+  const gscEmail = connectedSite?.gscEmail ?? "";
 
   const currentIdx = STEPS.findIndex((s) => s.key === step);
 
@@ -456,7 +460,6 @@ export function SetupWizard() {
     const timer = setInterval(() => {
       if (popup.closed) {
         clearInterval(timer);
-        setGscConnected(true);
       }
     }, 500);
   };

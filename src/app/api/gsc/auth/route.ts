@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { GSC_READONLY_SCOPE } from "@/lib/gsc-oauth";
 
 export async function GET(req: NextRequest) {
   const clientId = process.env.GSC_CLIENT_ID;
@@ -18,9 +19,10 @@ export async function GET(req: NextRequest) {
     client_id: clientId,
     redirect_uri: callbackUrl,
     response_type: "code",
-    scope: "https://www.googleapis.com/auth/webmasters.readonly openid email",
+    scope: `${GSC_READONLY_SCOPE} openid email`,
     access_type: "offline",
     prompt: "consent", // Force consent to get refresh token
+    include_granted_scopes: "true",
     state,
   });
 
