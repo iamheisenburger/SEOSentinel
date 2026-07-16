@@ -231,6 +231,21 @@ export const updateMarkdown = mutation({
   },
 });
 
+export const updateMetadata = mutation({
+  args: {
+    articleId: v.id("articles"),
+    metaTitle: v.optional(v.string()),
+    metaDescription: v.optional(v.string()),
+  },
+  handler: async (ctx, { articleId, metaTitle, metaDescription }) => {
+    const patch: Record<string, string | number> = { updatedAt: now() };
+    if (metaTitle !== undefined) patch.metaTitle = metaTitle;
+    if (metaDescription !== undefined) patch.metaDescription = metaDescription;
+    await ctx.db.patch(articleId, patch);
+    await syncSummary(ctx, articleId);
+  },
+});
+
 export const updateLinks = mutation({
   args: {
     articleId: v.id("articles"),

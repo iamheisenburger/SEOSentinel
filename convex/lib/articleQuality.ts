@@ -77,6 +77,25 @@ export function normalizeSiteOrigin(domain: string): string {
   return parsed.origin;
 }
 
+export function clampMetaDescription(
+  value: string | undefined,
+  maxLength = 155,
+): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) return normalized;
+
+  const candidate = normalized.slice(0, maxLength + 1);
+  const lastSpace = candidate.lastIndexOf(" ");
+  const cutAt = lastSpace >= Math.floor(maxLength * 0.7)
+    ? lastSpace
+    : maxLength;
+  const clipped = normalized
+    .slice(0, cutAt)
+    .replace(/[\s,;:.!?–—-]+$/g, "");
+  return `${clipped}.`.slice(0, maxLength);
+}
+
 function quantifiedParagraphs(markdown: string): string[] {
   return markdown
     .replace(/```[\s\S]*?```/g, "")
@@ -129,6 +148,9 @@ export function evaluatePublicationQuality(
   }
   if (/https?:\/\/https?:\/\//i.test(markdown)) {
     issues.push("Article contains a malformed duplicated URL scheme.");
+  }
+  if (/https?:\/\/\[[^\]]+\]\([^)]+\)/i.test(markdown)) {
+    issues.push("Article contains markdown inserted inside an external URL.");
   }
 
   for (const source of sources) {

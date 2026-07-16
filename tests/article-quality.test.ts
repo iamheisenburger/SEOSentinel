@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  clampMetaDescription,
   evaluatePublicationQuality,
   normalizeSiteOrigin,
 } from "../convex/lib/articleQuality.ts";
+import {
+  injectInternalLinks,
+  validateInternalLinkSuggestions,
+} from "../convex/lib/internalLinks.ts";
 
 const body = Array.from(
   { length: 950 },
@@ -17,6 +22,18 @@ test("normalizes bare and fully-qualified site domains", () => {
     normalizeSiteOrigin("https://leadpilot.chat/"),
     "https://leadpilot.chat",
   );
+});
+
+test("clamps meta descriptions cleanly without cutting through a word", () => {
+  const description = clampMetaDescription(
+    "Learn how to deploy a lead qualification chatbot, score buyer fit in real time, and hand warm leads to sales with a practical step-by-step workflow that keeps going.",
+    120,
+  );
+
+  assert.ok(description);
+  assert.ok(description.length <= 120);
+  assert.match(description, /\.$/);
+  assert.doesNotMatch(description, /\s\.$/);
 });
 
 test("accepts a grounded strict article", () => {
@@ -71,4 +88,71 @@ test("rejects malformed URLs and executable scripts", () => {
   assert.ok(result.issues.some((issue) => issue.includes("duplicated URL")));
   assert.ok(result.issues.some((issue) => issue.includes("source URL")));
   assert.ok(result.issues.some((issue) => issue.includes("unsupported iframe")));
+});
+
+test("validates contextual internal-link suggestions against crawled pages", () => {
+  const links = validateInternalLinkSuggestions(
+    [
+      { anchor: "Blog", href: "/blog" },
+      { anchor: "lead qualification workflow", href: "/#features" },
+      { anchor: "LeadPilot pricing options", href: "/#pricing" },
+      { anchor: "external destination", href: "https://example.com" },
+      { anchor: "current article guide", href: "/current-article" },
+    ],
+    ["/blog", "/#features", "/#pricing", "/current-article"],
+    "/current-article",
+  );
+
+  assert.deepEqual(links, [
+    { anchor: "lead qualification workflow", href: "/#features" },
+    { anchor: "LeadPilot pricing options", href: "/#pricing" },
+  ]);
+});
+
+test("injects links only into eligible article prose", () => {
+  const markdown = [
+    "# Lead qualification workflow",
+    "",
+    "## Table of Contents",
+    "",
+    "- [Lead qualification workflow](#workflow)",
+    "",
+    "## Workflow",
+    "",
+    "A lead qualification workflow helps sales teams route serious buyers.",
+    "",
+    "An [existing qualification guide](https://example.com/guide) stays intact.",
+    "",
+    "`lead qualification workflow` remains code.",
+    "",
+    "## Sources",
+    "",
+    "[1] Blog source — https://blog.happyfox.com/lead-qualification-workflow/",
+  ].join("\n");
+
+  const result = injectInternalLinks(markdown, [
+    { anchor: "lead qualification workflow", href: "/#features" },
+    { anchor: "Blog source", href: "/blog" },
+  ]);
+
+  assert.equal(result.inserted.length, 1);
+  assert.match(
+    result.markdown,
+    /A \[lead qualification workflow\]\(\/#features\) helps sales teams/,
+  );
+  assert.match(result.markdown, /https:\/\/blog\.happyfox\.com\/lead-qualification-workflow\//);
+  assert.doesNotMatch(result.markdown, /https:\/\/\[Blog\]/);
+  assert.match(result.markdown, /`lead qualification workflow` remains code/);
+});
+
+test("publication quality blocks markdown inserted inside an external URL", () => {
+  const result = evaluatePublicationQuality({
+    title: "Safe article",
+    metaDescription: "A safe description.",
+    markdown: `${body}\n\nhttps://[Blog](/blog).example.com/source`,
+    sources: [{ url: "https://example.com/source" }],
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((issue) => issue.includes("inside an external URL")));
 });

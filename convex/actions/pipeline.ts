@@ -8,6 +8,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
+import {
+  injectInternalLinks,
+  validateInternalLinkSuggestions,
+} from "../lib/internalLinks";
+import { clampMetaDescription } from "../lib/articleQuality";
 
 const defaultModel = "claude-haiku-4-5-20251001";
 
@@ -900,7 +905,8 @@ async function factCheckArticle(
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
     "10. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
-    "11. Output JSON only.",
+    "11. Every quantified outcome claim in the corrected markdown MUST either end with the matching numbered inline citation [n], using the supplied source-array order, or have its unsupported number removed. Never leave a numeric performance claim uncited.\n" +
+    "12. Output JSON only.",
     `Return JSON: {"markdown":"<full corrected article>","notes":"<reviewer summary>","confidenceScore":<0-100>,"claimCount":<number>,"verifiedCount":<number>,"citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nResearch evidence gathered from the cited sources:\n${researchEvidence || "No research summary supplied."}\n\nFirst-party product evidence:\n${productEvidence || "No first-party product evidence supplied."}\n\nArticle to review:\n${markdown}`,
@@ -2365,7 +2371,7 @@ async function handleArticle(
     slug: slug.startsWith("/") ? slug : `/${slug}`,
     markdown: finalMarkdown,
     metaTitle: article.metaTitle,
-    metaDescription: article.metaDescription,
+    metaDescription: clampMetaDescription(article.metaDescription),
     metaKeywords: article.metaKeywords,
     sources: finalSources.length > 0 ? finalSources : undefined,
     language: site.language,
@@ -2411,53 +2417,58 @@ async function handleLinks(
   if (!site || !article) throw new Error("Missing site or article");
   const pages = await ctx.runQuery(api.pages.listBySite, { siteId });
 
+  if (!article.markdown || pages.length === 0) {
+    await ctx.runMutation(api.articles.updateLinks, {
+      articleId,
+      internalLinks: [],
+    });
+    return { count: 0 };
+  }
+
   const linkText = await callClaude(
-    "Suggest concise internal links. Output JSON array only: [{\"anchor\":\"...\",\"href\":\"/path\"}].",
-    `Use this article and site pages to propose 5-10 internal links. Article title: ${article.title}. Slug: ${article.slug}. Pages: ${pages
-      .map((p: { slug: string; title?: string }) => `${p.slug}:${p.title ?? ""}`)
-      .join("; ")}`,
+    [
+      "Select contextual internal links for an SEO article.",
+      "Output a JSON array only: [{\"anchor\":\"exact phrase from article\",\"href\":\"/allowed-path\"}].",
+      "Every anchor must be a descriptive 2-8 word phrase that already appears verbatim in article prose.",
+      "Never use navigation labels or generic anchors such as Blog, Pricing, Features, FAQ, Home, Get Started, Sign Up, Here, or Learn More.",
+      "Use only an allowed destination exactly as supplied. Never link the article to itself.",
+      "Do not select text from headings, the table of contents, code, existing links, or the Sources section.",
+      "Return at most 6 links. Return [] when no natural contextual match exists.",
+    ].join(" "),
+    [
+      `Article title: ${article.title}`,
+      `Article slug: ${article.slug}`,
+      `Allowed destinations: ${JSON.stringify(
+        pages.map((p: { slug: string; title?: string }) => ({
+          href: p.slug,
+          title: p.title ?? "",
+        })),
+      )}`,
+      `Article markdown:\n${article.markdown.slice(0, 24000)}`,
+    ].join("\n\n"),
     2048,
   );
 
-  const links = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, linkText);
-  await ctx.runMutation(api.articles.updateLinks, { articleId, internalLinks: links });
+  const suggestions = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, linkText);
+  const links = validateInternalLinkSuggestions(
+    suggestions,
+    pages.map((p: { slug: string }) => p.slug),
+    article.slug,
+  );
+  const result = injectInternalLinks(article.markdown, links);
 
-  // Inject links into the article markdown body for actual SEO value
-  if (links.length > 0 && article.markdown) {
-    let updatedMarkdown = article.markdown;
-
-    // Find the TOC section boundaries so we never inject links inside it
-    const tocStart = updatedMarkdown.indexOf("## Table of Contents");
-    const tocEnd = tocStart >= 0 ? updatedMarkdown.indexOf("\n## ", tocStart + 1) : -1;
-
-    for (const link of links) {
-      // Skip if this link target is the article's own slug
-      if (link.href === article.slug) continue;
-      // Only replace the first occurrence, and only if not already a markdown link
-      const anchor = link.anchor;
-      const escapedAnchor = anchor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      // Match anchor text that is NOT already inside a markdown link [...](...)
-      const regex = new RegExp(`(?<!\\[)${escapedAnchor}(?!\\]\\()`, "i");
-      const replacement = `[${anchor}](${link.href})`;
-      const match = regex.exec(updatedMarkdown);
-      if (match) {
-        // Skip if the match falls inside the Table of Contents section
-        if (tocStart >= 0 && tocEnd > tocStart && match.index >= tocStart && match.index < tocEnd) {
-          continue;
-        }
-        updatedMarkdown = updatedMarkdown.replace(regex, replacement);
-      }
-    }
-    // Save the updated markdown with embedded links
-    if (updatedMarkdown !== article.markdown) {
-      await ctx.runMutation(api.articles.updateMarkdown, {
-        articleId,
-        markdown: updatedMarkdown,
-      });
-    }
+  await ctx.runMutation(api.articles.updateLinks, {
+    articleId,
+    internalLinks: result.inserted,
+  });
+  if (result.markdown !== article.markdown) {
+    await ctx.runMutation(api.articles.updateMarkdown, {
+      articleId,
+      markdown: result.markdown,
+    });
   }
 
-  return { count: links.length };
+  return { count: result.inserted.length };
 }
 
 /** Deep AI analysis of a crawled site — extracts profile, audience, strategy. */
