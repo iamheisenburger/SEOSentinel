@@ -374,3 +374,87 @@ repeats across multiple articles and more than one site.
 8. Replace the two existing fabricated-interface hero images with reviewed,
    truthful editorial assets.
 9. Enable controlled autopilot only after repeated clean output.
+
+## July 16 Live-Corpus And Technical Audit
+
+The live LeadPilot corpus was audited separately from the generation engine.
+This distinction mattered: the current Pentra pipeline was stronger than the
+two pages representing it in production.
+
+### Existing article media
+
+Both published articles used older generated hero images. They were visually
+polished, but each depicted a fabricated software interface rather than a real
+LeadPilot screen or a useful editorial explanation. They failed the current
+truthfulness standard and were removed from the live corpus.
+
+The controlled-generation homepage screenshot was also inspected at its native
+1280x853 resolution. It showed the current LeadPilot page, recognizable product
+copy, and the actual example workflow without screenshot-service branding,
+loading UI, or unrelated content. It replaced the generated hero on the most
+directly product-relevant article. The second article now intentionally has no
+hero rather than carrying a deceptive visual.
+
+Two ignored legacy SEObot MDX files were deleted from the LeadPilot repository.
+They contained unsupported marketing statistics and were already excluded by
+the Pentra publication contract. Permanent redirects now preserve any historic
+links to those slugs without reviving the weak pages.
+
+### Media execution order
+
+Strict publication sites now defer optional media work until the exact final
+prose has passed the factual, editorial, and deterministic evidence gates.
+
+- YouTube discovery no longer runs before a strict article proves publishable.
+- Product screenshot capture no longer runs unless the passed article contains
+  a relevant product section.
+- Video still requires verified metadata and section-level relevance.
+- Screenshot capture still requires independent visual review.
+- Generated hero and supporting art remain omit-preferred when review fails.
+
+This removes paid media work from articles that will remain in review and makes
+media relevance depend on the finished article rather than its initial topic.
+
+### Technical search audit
+
+LeadPilot now has:
+
+- explicit canonical and social metadata for the blog index;
+- canonical and modified-time metadata for each article;
+- `BlogPosting` and breadcrumb structured data;
+- sitemap `lastmod` values based on article updates rather than publication
+  dates alone;
+- the editorial policy in the sitemap;
+- sign-in and sign-up removed from the sitemap and explicitly marked `noindex`;
+- permanent redirects for the known legacy SEObot URLs;
+- only Pentra-contract articles exposed in the static blog route set.
+
+The production robots file, canonical article URLs, server-rendered pages, and
+current sitemap were already healthy. Search results still showed cached old
+LeadPilot claims and legacy article titles during this audit. Those results no
+longer match the current site and should converge after recrawl; they are not a
+reason to restore the removed content.
+
+### Measurement baseline and activation verdict
+
+The production Google Search Console sync returned no data because LeadPilot is
+not connected to GSC. Pentra therefore cannot yet measure:
+
+- indexing and Google-selected canonicals;
+- non-branded impressions or clicks;
+- query discovery, CTR, or average position;
+- article-level organic growth over time.
+
+This is a launch dependency, not a cosmetic integration. Autopilot remains off.
+The next controlled publication may proceed only after:
+
+1. LeadPilot is connected to GSC and the empty baseline is recorded.
+2. A newly generated article clears every publication gate without a manual
+   rescue or unsupported claim.
+3. Its rendered page, metadata, sources, redirects, and media pass production
+   inspection.
+
+Only then should the article be submitted for recrawl and measured on the 7,
+14, 28, and 56-day scorecard. Pentra is now materially safer and more
+intentional, but it is not yet proven to generate traffic. That claim requires
+repeated live search outcomes.

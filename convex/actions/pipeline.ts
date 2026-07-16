@@ -2402,7 +2402,7 @@ async function handleArticle(
   const enableImages = options?.includeImages !== false;
   const enableYouTube = options?.includeYouTube ?? site.youtubeEmbeds !== false;
 
-  if (enableYouTube && topic) {
+  if (enableYouTube && topic && !isStrictPublication) {
     try {
       youtubeVideos = await verifyYouTubeCandidates(
         await searchYouTubeVideos(
@@ -2420,13 +2420,17 @@ async function handleArticle(
       console.error(`YouTube search failed (continuing without): ${msg}`);
       mediaQualityNotes.push(`YouTube discovery skipped: ${msg}`);
     }
+  } else if (enableYouTube && isStrictPublication) {
+    mediaQualityNotes.push(
+      "YouTube discovery deferred until the exact prose clears strict review.",
+    );
   }
 
   // ── Step 1c: Screenshot Capture (graceful degradation) ──
   await reportProgress(4, "Capturing site screenshot...");
   let screenshotUrl: string | undefined;
 
-  if (enableImages) {
+  if (enableImages && !isStrictPublication) {
     try {
       screenshotUrl = await captureScreenshot(ctx, site.domain, productName);
       console.log(`Site screenshot captured: ${screenshotUrl}`);
@@ -2435,14 +2439,18 @@ async function handleArticle(
       console.error(`Screenshot capture failed (continuing without): ${msg}`);
       mediaQualityNotes.push(`Product screenshot omitted: ${msg}`);
     }
-  } else {
+  } else if (!enableImages) {
     mediaQualityNotes.push("Product screenshot disabled for this run.");
+  } else {
+    mediaQualityNotes.push(
+      "Product screenshot capture deferred until the exact prose clears strict review and contains a relevant product section.",
+    );
   }
 
   // ── Step 1d: Media preparation ──
-  // Hero/infographic assets are generated later and the product screenshot is
-  // captured above. Do not hotlink arbitrary search-result images whose reuse
-  // rights, permanence, and dimensions are unknown.
+  // Strict sites defer every optional media expense until the exact prose has
+  // passed. Do not hotlink arbitrary search-result images whose reuse rights,
+  // permanence, and dimensions are unknown.
   await reportProgress(5, "Preparing article media...");
 
   // ── Step 1e: Live Site Data Crawl (graceful degradation) ──
@@ -3244,14 +3252,42 @@ async function handleArticle(
     mediaQualityNotes.push("Supporting illustration omitted because the exact prose did not clear strict review.");
   }
 
+  const productSectionLines = finalMarkdown.split("\n");
+  const productHeading = productSectionLines.findIndex(
+    (line) =>
+      line.startsWith("## ") &&
+      (line.toLowerCase().includes(productName.toLowerCase()) ||
+        (/how\s/i.test(line) && /helps?/i.test(line))),
+  );
+
+  if (
+    enableImages &&
+    isStrictPublication &&
+    strictProsePassed &&
+    productHeading >= 0 &&
+    !screenshotUrl
+  ) {
+    try {
+      screenshotUrl = await captureScreenshot(ctx, site.domain, productName);
+      console.log(`Site screenshot captured after strict prose clearance: ${screenshotUrl}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown";
+      console.error(`Screenshot capture failed (continuing without): ${message}`);
+      mediaQualityNotes.push(`Product screenshot omitted: ${message}`);
+    }
+  } else if (
+    enableImages &&
+    isStrictPublication &&
+    strictProsePassed &&
+    productHeading < 0
+  ) {
+    mediaQualityNotes.push(
+      "Product screenshot omitted before capture because the article had no relevant product section.",
+    );
+  }
+
   if (screenshotUrl && strictProsePassed) {
     const lines = finalMarkdown.split("\n");
-    const productHeading = lines.findIndex(
-      (line) =>
-        line.startsWith("## ") &&
-        (line.toLowerCase().includes(productName.toLowerCase()) ||
-          (/how\s/i.test(line) && /helps?/i.test(line))),
-    );
     if (productHeading >= 0) {
       let insertionLine = productHeading + 1;
       while (insertionLine < lines.length && lines[insertionLine].trim() === "") insertionLine++;
@@ -3271,6 +3307,34 @@ async function handleArticle(
     }
   } else if (screenshotUrl) {
     mediaQualityNotes.push("Validated product screenshot omitted because the exact prose did not clear strict review.");
+  }
+
+  if (
+    enableYouTube &&
+    isStrictPublication &&
+    strictProsePassed &&
+    topic &&
+    youtubeVideos.length === 0
+  ) {
+    try {
+      youtubeVideos = await verifyYouTubeCandidates(
+        await searchYouTubeVideos(
+          topic.label,
+          topic.primaryKeyword ?? "",
+          site.niche ?? "",
+          site.language ?? "en",
+        ),
+      );
+      if (youtubeVideos.length === 0) {
+        mediaQualityNotes.push(
+          "No verified, embeddable YouTube candidate was found after strict prose clearance.",
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown";
+      console.error(`YouTube search failed (continuing without): ${message}`);
+      mediaQualityNotes.push(`YouTube discovery skipped: ${message}`);
+    }
   }
 
   if (enableYouTube && youtubeVideos.length > 0 && strictProsePassed) {
