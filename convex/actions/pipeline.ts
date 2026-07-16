@@ -1,6 +1,6 @@
 "use node";
 
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { action } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
@@ -3850,6 +3850,151 @@ export const generateArticle = action({
     }
 
     return res;
+  },
+});
+
+// Re-audit the exact prose of an edited, unpublished draft. This closes the
+// quality-control loop without consuming another generation slot or creating a
+// duplicate article.
+export const reviewExistingArticle = action({
+  args: {
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+  },
+  handler: async (ctx, { siteId, articleId }) => {
+    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const article = await ctx.runQuery(api.articles.get, { articleId });
+    if (!site) throw new Error("Site not found");
+    if (!article || article.siteId !== siteId) throw new Error("Article not found for site");
+    if (article.status === "published") {
+      throw new Error("Published articles must use the refresh workflow");
+    }
+
+    const topic = article.topicId
+      ? await ctx.runQuery(api.topics.get, { topicId: article.topicId })
+      : null;
+    const productName = site.siteName ?? site.domain;
+    const sources = article.sources ?? [];
+    const maxWords = articleWordCeiling(article.articleType);
+    let siteData = { pricing: "", features: "", homepage: "" };
+    try {
+      siteData = await crawlSiteData(site.domain);
+    } catch (error) {
+      console.error(
+        `Live product evidence crawl failed during draft review: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+
+    const productEvidence = [
+      `Name: ${productName}`,
+      `Domain: ${site.domain}`,
+      site.siteSummary ? `Summary: ${site.siteSummary}` : "",
+      site.keyFeatures?.length
+        ? `Configured features:\n${site.keyFeatures
+            .map((feature: string) => `- ${feature}`)
+            .join("\n")}`
+        : "",
+      site.pricingInfo ? `Configured pricing:\n${site.pricingInfo}` : "",
+      siteData.homepage ? `Crawled homepage:\n${siteData.homepage.slice(0, 4000)}` : "",
+      siteData.features ? `Crawled features page:\n${siteData.features.slice(0, 4000)}` : "",
+      siteData.pricing ? `Crawled pricing page:\n${siteData.pricing.slice(0, 4000)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const researchEvidence = sources.length > 0
+      ? "The stored source list contains references but no preserved source excerpts. Do not add or broaden any external claim; retain only claims already supported by a matching inline citation."
+      : "No external evidence is supplied. Treat non-product material as clearly framed recommendations and remove statistics, benchmarks, universal outcomes, and attributed claims.";
+    const normalizedProductName = productName.trim().toLowerCase();
+    const bannedNames = [
+      ...(site.competitors ?? []),
+      ...(site.competitors ?? []).map((competitor: string) =>
+        competitor
+          .replace(/^https?:\/\//, "")
+          .replace(/\/$/, "")
+          .replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
+      ),
+    ].filter((name) => name.trim().toLowerCase() !== normalizedProductName);
+
+    const reviewed = await factCheckArticle(
+      article.markdown,
+      sources,
+      bannedNames,
+      productName,
+      productEvidence,
+      researchEvidence,
+    );
+    if (reviewed.confidenceScore === undefined) {
+      throw new Error("Draft fact check returned no confidence score");
+    }
+    const stats = calculateArticleStats(reviewed.markdown);
+    if (stats.wordCount < 900 || stats.wordCount > maxWords) {
+      throw new Error(
+        `Reviewed draft missed the length contract (${stats.wordCount}/900-${maxWords} words)`,
+      );
+    }
+
+    const audit = await auditFinalArticle({
+      markdown: reviewed.markdown,
+      articleType: article.articleType ?? "standard",
+      primaryKeyword: topic?.primaryKeyword ?? article.title,
+      productName,
+      productEvidence,
+      researchEvidence,
+      sources,
+      maxWords,
+    });
+    const evidenceDefects = uncitedEvidenceRequiredParagraphs(reviewed.markdown);
+    const editorialQualityScore = evidenceDefects.length > 0
+      ? Math.min(audit.score, 84)
+      : audit.score;
+    const metadata = await generateFinalMetadata({
+      title: article.title,
+      markdown: reviewed.markdown,
+      primaryKeyword: topic?.primaryKeyword ?? article.title,
+      sources,
+    });
+
+    await ctx.runMutation(internal.articles.applyQualityReview, {
+      articleId,
+      title: metadata.title.trim(),
+      markdown: reviewed.markdown,
+      metaTitle: clampMetaTitle(metadata.metaTitle),
+      metaDescription: clampMetaDescription(metadata.metaDescription),
+      wordCount: stats.wordCount,
+      readingTime: stats.readingTime,
+      factCheckScore: reviewed.confidenceScore,
+      factCheckNotes: [
+        reviewed.notes,
+        evidenceDefects.length > 0
+          ? `${evidenceDefects.length} deterministic evidence defect(s) remain.`
+          : "Deterministic numeric evidence scan passed.",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      editorialQualityScore,
+      editorialQualityNotes: [
+        `Existing draft exact-prose audit: ${editorialQualityScore}/100.`,
+        ...audit.notes,
+        ...evidenceDefects.map(
+          (claim, index) =>
+            `Deterministic evidence defect ${index + 1}: ${claim.slice(0, 320)}`,
+        ),
+      ],
+    });
+
+    return {
+      articleId,
+      factCheckScore: reviewed.confidenceScore,
+      editorialQualityScore,
+      evidenceDefectCount: evidenceDefects.length,
+      wordCount: stats.wordCount,
+      readyForPublication:
+        reviewed.confidenceScore >= 85 &&
+        editorialQualityScore >= 85 &&
+        evidenceDefects.length === 0,
+    };
   },
 });
 

@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -259,6 +259,49 @@ export const updateMetadata = mutation({
     if (metaDescription !== undefined) patch.metaDescription = metaDescription;
     await ctx.db.patch(articleId, patch);
     await syncSummary(ctx, articleId);
+  },
+});
+
+export const applyQualityReview = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    title: v.string(),
+    markdown: v.string(),
+    metaTitle: v.optional(v.string()),
+    metaDescription: v.optional(v.string()),
+    wordCount: v.number(),
+    readingTime: v.number(),
+    factCheckScore: v.number(),
+    factCheckNotes: v.string(),
+    editorialQualityScore: v.number(),
+    editorialQualityNotes: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const article = await ctx.db.get(args.articleId);
+    if (!article) throw new Error("Article not found");
+    if (article.status === "published") {
+      throw new Error("Published articles must use the refresh workflow");
+    }
+
+    await ctx.db.patch(args.articleId, {
+      title: args.title,
+      markdown: args.markdown,
+      metaTitle: args.metaTitle,
+      metaDescription: args.metaDescription,
+      wordCount: args.wordCount,
+      readingTime: args.readingTime,
+      factCheckScore: args.factCheckScore,
+      factCheckNotes: args.factCheckNotes,
+      editorialQualityScore: args.editorialQualityScore,
+      editorialQualityNotes: args.editorialQualityNotes,
+      status: "review",
+      publicationGateStatus: undefined,
+      publicationGateIssues: undefined,
+      publicationGateWarnings: undefined,
+      publicationCheckedAt: undefined,
+      updatedAt: now(),
+    });
+    await syncSummary(ctx, args.articleId);
   },
 });
 
