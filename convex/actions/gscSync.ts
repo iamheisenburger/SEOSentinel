@@ -1,7 +1,7 @@
 "use node";
 
 import { action } from "../_generated/server";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { v } from "convex/values";
 
 // ── Token Refresh ──
@@ -79,7 +79,7 @@ async function fetchSearchAnalytics(
 
 export const syncAllSites = action({
   handler: async (ctx): Promise<{ synced: number }> => {
-    const sites = await ctx.runQuery(api.sites.listAllForAutopilot);
+    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
     let synced = 0;
 
     for (const site of sites) {
@@ -103,7 +103,7 @@ export const syncAllSites = action({
 export const syncSite = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ rows: number; saved: number }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     if (!site.gscAccessToken || !site.gscProperty) throw new Error("GSC not connected for this site");
 
@@ -120,7 +120,7 @@ async function syncSiteGSC(ctx: any, site: any) {
     if (refreshed) {
       accessToken = refreshed.accessToken;
       // Update the access token in DB
-      await ctx.runMutation(api.sites.setGscToken, {
+      await ctx.runMutation(internal.sites.setGscTokenInternal, {
         siteId: site._id,
         gscAccessToken: accessToken,
       });

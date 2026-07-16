@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ConvexHttpClient } from "convex/browser";
-import { api } from "../../../../../convex/_generated/api";
-import type { Id } from "../../../../../convex/_generated/dataModel";
 import {
   findMatchingGscProperty,
   hasGscReadonlyScope,
 } from "@/lib/gsc-oauth";
-
-const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
+import { callPentraInternal } from "@/lib/pentra-internal-api";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -111,8 +107,11 @@ export async function GET(req: NextRequest) {
   let siteDomain = "";
   if (siteId) {
     try {
-      const site = await convex.query(api.sites.get, { siteId: siteId as any });
-      siteDomain = site?.domain ?? "";
+      const site = await callPentraInternal<{ domain: string }>(
+        "/internal/oauth/site",
+        { siteId },
+      );
+      siteDomain = site.domain;
     } catch (error) {
       console.error("Failed to load Pentra site for GSC matching:", error);
     }
@@ -162,8 +161,8 @@ export async function GET(req: NextRequest) {
   let saved = false;
   if (siteId) {
     try {
-      await convex.mutation(api.sites.setGscToken, {
-        siteId: siteId as Id<"sites">,
+      await callPentraInternal("/internal/oauth/gsc", {
+        siteId,
         gscAccessToken: accessToken,
         gscRefreshToken: refreshToken || undefined,
         gscProperty,

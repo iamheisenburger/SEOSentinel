@@ -13,7 +13,7 @@
  */
 
 import { action } from "../_generated/server";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { v } from "convex/values";
 
 // ── Types ──
@@ -286,7 +286,7 @@ async function findBrokenLinkOpportunities(
 export const analyzeBacklinks = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ profile: BacklinkProfile | null; mentions: UnlinkedMention[]; brokenLinks: BrokenLinkOpportunity[]; hasData: boolean }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     const hasDataForSEO = !!getCredentials();
@@ -350,7 +350,7 @@ export const generateOutreach = action({
     })),
   },
   handler: async (ctx, { siteId, opportunities }): Promise<{ emails: { to: string; subject: string; body: string }[] }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
@@ -427,7 +427,7 @@ BODY: [email body]`;
 export const quickBacklinkScan = action({
   args: { siteId: v.id("sites"), articleId: v.id("articles") },
   handler: async (ctx, { siteId, articleId }): Promise<{ suggestions: { site: string; reason: string; anchor: string; targetUrl: string }[] }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     const article = await ctx.runQuery(api.articles.get, { articleId });

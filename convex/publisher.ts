@@ -4,7 +4,7 @@ import { action } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { createHmac } from "crypto";
 import {
   evaluatePublicationQuality,
@@ -609,7 +609,7 @@ export const publishArticle = action({
       contentDir?: string;
     },
   ): Promise<PublishResult> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId: args.siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId: args.siteId });
     if (!site) throw new Error("Site not found");
 
     const article = await ctx.runQuery(api.articles.get, {

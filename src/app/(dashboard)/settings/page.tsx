@@ -40,9 +40,9 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
 
   const [wpUrl, setWpUrl] = useState(pubSite.wpUrl || "");
   const [wpUsername, setWpUsername] = useState(pubSite.wpUsername || "");
-  const [wpAppPassword, setWpAppPassword] = useState(pubSite.wpAppPassword || "");
+  const [wpAppPassword, setWpAppPassword] = useState("");
   const [webhookUrl, setWebhookUrl] = useState(pubSite.webhookUrl || "");
-  const [webhookSecret, setWebhookSecret] = useState(pubSite.webhookSecret || "");
+  const [webhookSecret, setWebhookSecret] = useState("");
   const [repoOwner, setRepoOwner] = useState(pubSite.repoOwner || "");
   const [repoName, setRepoName] = useState(pubSite.repoName || "");
 
@@ -54,7 +54,7 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
   const isWp = method === "wordpress";
   const isWebhook = method === "webhook";
   const isManual = method === "manual";
-  const hasGithubToken = !!pubSite.githubToken;
+  const hasGithubToken = !!pubSite.githubConnected;
 
   const handleSave = async () => {
     setSaving(true);
@@ -151,7 +151,7 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[12px] font-medium text-[#8B8FA3]">App Password</label>
-                      <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder="xxxx xxxx xxxx" className={inputCls} />
+                      <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder={pubSite.wordpressConfigured ? "Leave blank to keep current password" : "xxxx xxxx xxxx"} className={inputCls} />
                     </div>
                   </div>
                 </>
@@ -164,7 +164,7 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">Secret (optional)</label>
-                    <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder="your-webhook-secret" className={inputCls} />
+                    <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={pubSite.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
                 </>
               )}
@@ -210,7 +210,7 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
           )}
 
           {isWp && (() => {
-            const wpConfigured = !!(pubSite.wpUrl && pubSite.wpUsername && pubSite.wpAppPassword);
+            const wpConfigured = !!pubSite.wordpressConfigured;
             return (
               <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${wpConfigured ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]"}`}>
                 {wpConfigured ? (

@@ -336,7 +336,7 @@ export function SetupWizard() {
     api.sites.get,
     siteId ? { siteId } : "skip",
   );
-  const gscConnected = !!connectedSite?.gscAccessToken && !!connectedSite?.gscProperty;
+  const gscConnected = !!connectedSite?.gscConnected;
   const gscEmail = connectedSite?.gscEmail ?? "";
 
   const currentIdx = STEPS.findIndex((s) => s.key === step);

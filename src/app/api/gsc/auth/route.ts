@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GSC_READONLY_SCOPE } from "@/lib/gsc-oauth";
+import { getOwnedSite } from "@/lib/owned-site";
 
 export async function GET(req: NextRequest) {
   const clientId = process.env.GSC_CLIENT_ID;
@@ -8,6 +9,9 @@ export async function GET(req: NextRequest) {
   }
 
   const siteId = req.nextUrl.searchParams.get("siteId") || "";
+  if (!siteId || !(await getOwnedSite(siteId))) {
+    return NextResponse.json({ error: "Site not found" }, { status: 404 });
+  }
 
   // State = CSRF token + siteId so callback knows which site to update
   const csrf = crypto.randomUUID();

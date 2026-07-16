@@ -1,7 +1,7 @@
 "use node";
 
 import { action } from "../_generated/server";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { v } from "convex/values";
 
 // ── Content Decay Detection (GSC-powered) ──
@@ -27,7 +27,7 @@ interface DecaySignal {
 export const scanForDecay = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ scanned: number; flagged: number; signals: DecaySignal[] }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     const articles = await ctx.runQuery(api.articles.listBySite, { siteId });
@@ -234,7 +234,7 @@ async function heuristicDecayScan(ctx: any, published: any[], siteId: any) {
 
 export const scanAllSites = action({
   handler: async (ctx): Promise<{ totalFlagged: number }> => {
-    const sites = await ctx.runQuery(api.sites.listAllForAutopilot);
+    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
     let totalFlagged = 0;
 
     for (const site of sites) {
@@ -261,7 +261,7 @@ export const refreshArticle = action({
     const article = await ctx.runQuery(api.articles.get, { articleId });
     if (!article) throw new Error("Article not found");
 
-    const site = await ctx.runQuery(api.sites.get, { siteId: article.siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId: article.siteId });
     if (!site) throw new Error("Site not found");
 
     console.log(`Refreshing article: "${article.title}" (${article.slug})`);
@@ -481,7 +481,7 @@ Output ONLY the markdown content. No explanations or meta-commentary.`;
 export const autoRefreshTop = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ refreshed: boolean; reason?: string; articleId?: string; title?: string }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     // Only auto-refresh if autopilot is enabled
@@ -528,7 +528,7 @@ export const autoRefreshTop = action({
 
 export const autoRefreshAllSites = action({
   handler: async (ctx): Promise<{ refreshed: number }> => {
-    const sites = await ctx.runQuery(api.sites.listAllForAutopilot);
+    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
     let refreshed = 0;
 
     for (const site of sites) {

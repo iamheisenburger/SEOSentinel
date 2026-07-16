@@ -1162,11 +1162,12 @@ async function inferSiteProfile(
     text,
   );
   if (inferred.niche || inferred.tone) {
-    await ctx.runMutation(api.sites.upsert, {
-      id: siteId,
-      domain: site.domain,
-      niche: inferred.niche ?? site.niche,
-      tone: inferred.tone ?? site.tone,
+    await ctx.runMutation(internal.sites.patchInternal, {
+      siteId,
+      patch: {
+        niche: inferred.niche ?? site.niche,
+        tone: inferred.tone ?? site.tone,
+      },
     });
   }
 }
@@ -1649,7 +1650,7 @@ async function handleOnboarding(
   pages: { slug: string; title: string; summary: string; keywords?: string[] }[];
   siteSummary: string;
 }> {
-  const site = await ctx.runQuery(api.sites.get, { siteId });
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
   const { html } = await fetchHtml(site.domain);
 
@@ -1713,7 +1714,7 @@ async function handlePlan(
     try { await ctx.runMutation(api.jobs.updateProgress, { jobId, current: step, total: PLAN_STEPS, stepLabel: label }); } catch { /* non-critical */ }
   };
 
-  const site = await ctx.runQuery(api.sites.get, { siteId });
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
 
   const existingTopics = await ctx.runQuery(api.topics.listBySite, { siteId });
@@ -2251,7 +2252,7 @@ async function handleArticle(
   jobId?: Id<"jobs">,
 ): Promise<{ articleId: Id<"articles"> }> {
   const TOTAL_STEPS = 11;
-  const site = await ctx.runQuery(api.sites.get, { siteId });
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   const topic = topicId
     ? await ctx.runQuery(api.topics.get, { topicId })
     : null;
@@ -3447,7 +3448,7 @@ async function handleLinks(
   siteId: Id<"sites">,
   articleId: Id<"articles">,
 ): Promise<{ count: number }> {
-  const site = await ctx.runQuery(api.sites.get, { siteId });
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   const article = await ctx.runQuery(api.articles.get, { articleId });
   if (!site || !article) throw new Error("Missing site or article");
   const pages = await ctx.runQuery(api.pages.listBySite, { siteId });
@@ -3529,7 +3530,7 @@ async function handleAnalyzeSite(
   suggestedCompetitors: string[];
   suggestedAnchorKeywords: string[];
 }> {
-  const site = await ctx.runQuery(api.sites.get, { siteId });
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
 
   // Feed homepage HTML + all page summaries to Claude for deep analysis
@@ -3638,24 +3639,25 @@ async function handleAnalyzeSite(
   }
 
   // Save analysis to the site record
-  await ctx.runMutation(api.sites.upsert, {
-    id: siteId,
-    domain: site.domain,
-    siteName: analysis.siteName,
-    siteType: analysis.siteType,
-    siteSummary: analysis.siteSummary,
-    blogTheme: analysis.blogTheme,
-    keyFeatures: analysis.keyFeatures,
-    pricingInfo: analysis.pricingInfo,
-    founders: analysis.founders,
-    niche: analysis.niche,
-    tone: analysis.tone,
-    targetCountry: analysis.targetCountry,
-    targetAudienceSummary: analysis.targetAudienceSummary,
-    painPoints: analysis.painPoints,
-    productUsage: analysis.productUsage,
-    competitors: analysis.suggestedCompetitors,
-    anchorKeywords: analysis.suggestedAnchorKeywords,
+  await ctx.runMutation(internal.sites.patchInternal, {
+    siteId,
+    patch: {
+      siteName: analysis.siteName,
+      siteType: analysis.siteType,
+      siteSummary: analysis.siteSummary,
+      blogTheme: analysis.blogTheme,
+      keyFeatures: analysis.keyFeatures,
+      pricingInfo: analysis.pricingInfo,
+      founders: analysis.founders,
+      niche: analysis.niche,
+      tone: analysis.tone,
+      targetCountry: analysis.targetCountry,
+      targetAudienceSummary: analysis.targetAudienceSummary,
+      painPoints: analysis.painPoints,
+      productUsage: analysis.productUsage,
+      competitors: analysis.suggestedCompetitors,
+      anchorKeywords: analysis.suggestedAnchorKeywords,
+    },
   });
 
   console.log(`Site analysis complete for ${site.domain}: ${analysis.siteName} (${analysis.siteType})`);
@@ -3675,7 +3677,7 @@ export const crawlAndAnalyze = action({
     const crawlResult = await handleOnboarding(ctx, siteId);
 
     // Step 2: Fetch homepage HTML again for deep analysis + brand detection
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     const { html, url } = await fetchHtml(site.domain);
 
@@ -3684,13 +3686,14 @@ export const crawlAndAnalyze = action({
     try {
       brand = await extractBrandFromHtml(html, url);
       console.log(`Brand detection: primary=${brand.primaryColor}, accent=${brand.accentColor}, font=${brand.fontFamily}, logo=${brand.logoUrl ? "found" : "none"}`);
-      await ctx.runMutation(api.sites.upsert, {
-        id: siteId,
-        domain: site.domain,
-        brandPrimaryColor: brand.primaryColor ?? undefined,
-        brandAccentColor: brand.accentColor ?? undefined,
-        brandFontFamily: brand.fontFamily ?? undefined,
-        brandLogoUrl: brand.logoUrl ?? undefined,
+      await ctx.runMutation(internal.sites.patchInternal, {
+        siteId,
+        patch: {
+          brandPrimaryColor: brand.primaryColor ?? undefined,
+          brandAccentColor: brand.accentColor ?? undefined,
+          brandFontFamily: brand.fontFamily ?? undefined,
+          brandLogoUrl: brand.logoUrl ?? undefined,
+        },
       });
     } catch (err) {
       console.error(`Brand detection failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
@@ -3703,10 +3706,11 @@ export const crawlAndAnalyze = action({
     } catch (err) {
       console.error(`Site analysis failed (non-fatal): ${err instanceof Error ? err.message : "unknown"}`);
       // Save a basic siteSummary so the overview page works
-      await ctx.runMutation(api.sites.upsert, {
-        id: siteId,
-        domain: site.domain,
-        siteSummary: `Website at ${site.domain}`,
+      await ctx.runMutation(internal.sites.patchInternal, {
+        siteId,
+        patch: {
+          siteSummary: `Website at ${site.domain}`,
+        },
       });
     }
 
@@ -3758,7 +3762,7 @@ export const generateArticle = action({
     ),
   },
   handler: async (ctx, { siteId, topicId, options }) => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     let generationReservationId: Id<"usage_log"> | undefined;
 
     // Enforce article limit
@@ -3862,7 +3866,7 @@ export const reviewExistingArticle = action({
     articleId: v.id("articles"),
   },
   handler: async (ctx, { siteId, articleId }) => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     const article = await ctx.runQuery(api.articles.get, { articleId });
     if (!site) throw new Error("Site not found");
     if (!article || article.siteId !== siteId) throw new Error("Article not found for site");
@@ -4020,7 +4024,7 @@ export const publishApproved = action({
 export const generateNow = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     // Enforce article limit
@@ -4133,7 +4137,7 @@ export const suggestInternalLinks = action({
 export const autopilotCron = action({
   args: {},
   handler: async (ctx) => {
-    const sites = await ctx.runQuery(api.sites.listAllForAutopilot, {});
+    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot, {});
     if (!sites?.length) return { processed: 0 };
     let processed = 0;
     for (const site of sites) {
@@ -4155,7 +4159,7 @@ export const autopilotCron = action({
 export const relinkAllArticles = action({
   args: {},
   handler: async (ctx) => {
-    const sites = await ctx.runQuery(api.sites.listAllForAutopilot, {});
+    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot, {});
     if (!sites?.length) return { relinked: 0 };
 
     let relinked = 0;
@@ -4209,7 +4213,7 @@ export const generateProgrammaticTemplate = action({
     fields: string[];
     samplePage: string;
   }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     const text = await callClaude(
       "You generate programmatic SEO templates (MDX/Markdown) with slots and examples.",
@@ -4251,7 +4255,7 @@ export const generateNewsArticle = action({
     markdown: string;
     sources?: { url: string; title?: string }[];
   }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     const newsText = await callClaude(
       "You are a news-focused SEO writer. Produce a concise news article with sources and a quick facts box. Output JSON only.",
@@ -4283,7 +4287,7 @@ export const suggestBacklinks = action({
   ): Promise<
     { site: string; reason: string; anchor: string; targetUrl: string }[]
   > => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     const backlinkText = await callClaude(
       "List high-quality backlink prospects with anchor suggestions. Output JSON only.",
@@ -4308,7 +4312,7 @@ export const suggestBacklinks = action({
 export const autopilotTick = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     // 1. Reset any stuck "running" jobs first
@@ -4409,7 +4413,7 @@ export const processSpecificJob = action({
         throw new Error("processSpecificJob only handles article jobs");
       }
 
-      const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
+      const site = await ctx.runQuery(internal.sites.getFull, { siteId: job.siteId });
       const payload = job.payload as { topicId?: string } | undefined;
 
       // Enforce article limit atomically
@@ -4551,7 +4555,7 @@ export const processNextJob = action({
         await handlePlan(ctx, job.siteId, job._id);
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
-        const site = await ctx.runQuery(api.sites.get, { siteId: job.siteId });
+        const site = await ctx.runQuery(internal.sites.getFull, { siteId: job.siteId });
 
         // Enforce article limit ATOMICALLY — claim a slot before generating
         // This prevents race conditions where two concurrent jobs both pass the check
@@ -4681,7 +4685,7 @@ export const analyzeKeywordGaps = action({
   handler: async (ctx, { siteId }): Promise<{
     gaps: { keyword: string; searchVolume: number; difficulty: number; competitorUrl: string; opportunity: string }[];
   }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     if (!site.competitors?.length) {
       return { gaps: [] };
@@ -4793,7 +4797,7 @@ export const detectContentDecay = action({
 export const backfillTopicMetrics = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ enriched: number; removed: number }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     const allTopics = await ctx.runQuery(api.topics.listBySite, { siteId });

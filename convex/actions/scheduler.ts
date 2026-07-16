@@ -1,6 +1,6 @@
 "use node";
 
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { action } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
@@ -12,7 +12,7 @@ export const scheduleCadence = action({
     ctx: ActionCtx,
     { siteId },
   ): Promise<{ scheduled: number }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
     // ── Article quota check ──
@@ -35,7 +35,7 @@ export const scheduleCadence = action({
       }
 
       // ── Site over-limit check (downgrade protection) ──
-      const allUserSites = await ctx.runQuery(api.sites.listAllForAutopilot);
+      const allUserSites = await ctx.runQuery(internal.sites.listAllForAutopilot);
       const userSiteCount = allUserSites.filter((s) => s.userId === site.userId).length;
       if (userSiteCount > limits.maxSites) {
         console.log(

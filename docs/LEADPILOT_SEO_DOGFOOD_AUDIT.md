@@ -38,9 +38,9 @@ The July 16 quality rebuild corrects the known failure modes:
 - LeadPilot publication is blocked unless strict factual, editorial, media,
   metadata, source, and rendering checks pass.
 
-Autopilot remains off until a new article clears human inspection of this full
-contract. Passing one article proves the pipeline is usable, not that SEO
-growth is proven.
+One controlled article has now cleared human inspection of this full contract.
+That permits an approval-gated weekly draft cadence; it does not permit blind
+publication and does not prove SEO growth.
 
 ## Production Sample Findings
 
@@ -437,24 +437,58 @@ reason to restore the removed content.
 
 ### Measurement baseline and activation verdict
 
-The production Google Search Console sync returned no data because LeadPilot is
-not connected to GSC. Pentra therefore cannot yet measure:
+LeadPilot is now connected to the exact Search Console domain property
+`sc-domain:leadpilot.chat` through `leadpilotchat@gmail.com`. The pre-activation
+baseline for June 15 through July 13, 2026 is:
 
-- indexing and Google-selected canonicals;
-- non-branded impressions or clicks;
-- query discovery, CTR, or average position;
-- article-level organic growth over time.
+- 190 impressions;
+- 1 click;
+- 0.5% CTR;
+- average position 49.1;
+- visibility dominated by branded queries.
 
-This is a launch dependency, not a cosmetic integration. Autopilot remains off.
-The next controlled publication may proceed only after:
+The first controlled article to clear the complete production contract is:
 
-1. LeadPilot is connected to GSC and the empty baseline is recorded.
-2. A newly generated article clears every publication gate without a manual
-   rescue or unsupported claim.
-3. Its rendered page, metadata, sources, redirects, and media pass production
-   inspection.
+- title: `Chatbot for Lead Generation: Does It Actually Work?`;
+- measured keyword: `chatbot for lead generation`;
+- original DataForSEO metrics: volume 170, difficulty 16, CPC 17.68;
+- final length: 2,043 words;
+- factual score: 92;
+- editorial score: 88;
+- deterministic evidence defects: 0;
+- live URL: `https://leadpilot.chat/blog/chatbot-for-lead-generation-does-it-work-2`.
 
-Only then should the article be submitted for recrawl and measured on the 7,
-14, 28, and 56-day scorecard. Pentra is now materially safer and more
-intentional, but it is not yet proven to generate traffic. That claim requires
-repeated live search outcomes.
+The real LeadPilot screenshot passed review. Generated hero/supporting images
+and YouTube candidates were omitted because they did not meet the relevance and
+truthfulness gates. The article was published only after manual review, and the
+GitHub publisher now prevents duplicate titles as well as duplicate slugs.
+
+This clears the pipeline for one approval-gated draft per week. Every generated
+article must remain in review until manually approved during the dogfood phase.
+Results are measured at 7, 14, 28, and 56 days. Pentra remains unproven as a
+traffic-growth product until relevant non-branded impressions, clicks, and
+LeadPilot business actions repeat across multiple articles.
+
+## July 16 Production Security Boundary
+
+The final production audit found that authenticated site queries exposed stored
+publisher, Search Console, webhook, and syndication credentials to the browser.
+It also found that plan features could be supplied by the client. Both issues
+were corrected before controlled activation:
+
+- public site queries now require authentication, enforce ownership, and return
+  sanitized records with connection flags rather than secrets;
+- GitHub, WordPress, webhook, GSC, Medium, and LinkedIn credentials remain
+  server-side;
+- OAuth callbacks write credentials only through a bearer-protected Convex
+  internal bridge;
+- plan entitlements are derived server-side from Clerk and filtered against the
+  known feature set;
+- site update, disconnect, deletion, and reset paths enforce ownership;
+- account reset deletes only the authenticated user's records;
+- cross-account domain merging is blocked;
+- the obsolete unauthenticated autopilot HTTP route is removed.
+
+The production bridge rejects unauthenticated traffic and resolves the exact
+LeadPilot record only with the shared Convex/Vercel secret. Existing customer
+sites, articles, schedules, publisher connections, and quotas were preserved.

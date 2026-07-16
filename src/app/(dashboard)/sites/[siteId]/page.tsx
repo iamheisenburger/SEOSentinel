@@ -112,8 +112,8 @@ export default function SiteDetailPage() {
     setPainPoints(site.painPoints ?? []);
     setCompetitors(site.competitors ?? []);
     setKeywords(site.anchorKeywords ?? []);
-    setMediumToken(site.mediumToken ?? "");
-    setLinkedinToken(site.linkedinAccessToken ?? "");
+    setMediumToken("");
+    setLinkedinToken("");
     setSyndicationEnabled(site.syndicationEnabled ?? false);
     setSettingsInitialized(true);
   }
@@ -380,7 +380,7 @@ function OverviewTab({
     publishMethod?: string;
     repoOwner?: string;
     repoName?: string;
-    githubToken?: string;
+    githubConnected?: boolean;
     wpUrl?: string;
     wpUsername?: string;
     webhookUrl?: string;
@@ -507,8 +507,8 @@ function OverviewTab({
             <DetailRow label="Repository" value={site.repoOwner + "/" + (site.repoName || "")} />
           )}
           {site.publishMethod === "github" && (
-            <DetailRow label="GitHub Status" value={site.githubToken ? "Connected" : "Not connected"}>
-              <span className={"h-2 w-2 rounded-full " + (site.githubToken ? "bg-[#22C55E]" : "bg-[#F59E0B]")} />
+            <DetailRow label="GitHub Status" value={site.githubConnected ? "Connected" : "Not connected"}>
+              <span className={"h-2 w-2 rounded-full " + (site.githubConnected ? "bg-[#22C55E]" : "bg-[#F59E0B]")} />
             </DetailRow>
           )}
           {site.publishMethod === "wordpress" && site.wpUrl && (
@@ -811,9 +811,9 @@ function SettingsTab({
             type="password"
             value={mediumToken}
             onChange={(e) => setMediumToken(e.target.value)}
-            placeholder="Enter Medium integration token"
+            placeholder={site.mediumConnected ? "Leave blank to keep current token" : "Enter Medium integration token"}
           />
-          {mediumToken ? (
+          {mediumToken || site.mediumConnected ? (
             <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#22C55E]">
               <Check className="h-3 w-3" /> Token configured — articles will be posted as drafts with canonical URL
             </p>
@@ -826,9 +826,9 @@ function SettingsTab({
             type="password"
             value={linkedinToken}
             onChange={(e) => setLinkedinToken(e.target.value)}
-            placeholder="Enter LinkedIn access token"
+            placeholder={site.linkedinConnected ? "Leave blank to keep current token" : "Enter LinkedIn access token"}
           />
-          {linkedinToken ? (
+          {linkedinToken || site.linkedinConnected ? (
             <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#22C55E]">
               <Check className="h-3 w-3" /> Token configured — AI-generated LinkedIn posts with article links
             </p>
@@ -1024,9 +1024,9 @@ function ConnectionSection({ site }: { site: any }) {
   const [repoName, setRepoName] = useState(site.repoName || "");
   const [wpUrl, setWpUrl] = useState(site.wpUrl || "");
   const [wpUsername, setWpUsername] = useState(site.wpUsername || "");
-  const [wpAppPassword, setWpAppPassword] = useState(site.wpAppPassword || "");
+  const [wpAppPassword, setWpAppPassword] = useState("");
   const [webhookUrl, setWebhookUrl] = useState(site.webhookUrl || "");
-  const [webhookSecret, setWebhookSecret] = useState(site.webhookSecret || "");
+  const [webhookSecret, setWebhookSecret] = useState("");
 
   const method = site.publishMethod || "github";
   const labels = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" } as Record<string, string>;
@@ -1036,7 +1036,7 @@ function ConnectionSection({ site }: { site: any }) {
   const isWp = method === "wordpress";
   const isWebhook = method === "webhook";
   const isManual = method === "manual";
-  const hasGithubToken = !!site.githubToken;
+  const hasGithubToken = !!site.githubConnected;
 
   const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] placeholder-[#565A6E] outline-none focus:border-[#0EA5E9]/50";
 
@@ -1112,7 +1112,7 @@ function ConnectionSection({ site }: { site: any }) {
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[12px] font-medium text-[#8B8FA3]">App Password</label>
-                      <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder="xxxx xxxx xxxx" className={inputCls} />
+                      <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder={site.wordpressConfigured ? "Leave blank to keep current password" : "xxxx xxxx xxxx"} className={inputCls} />
                     </div>
                   </div>
                 </>
@@ -1125,7 +1125,7 @@ function ConnectionSection({ site }: { site: any }) {
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">Secret (optional)</label>
-                    <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder="your-webhook-secret" className={inputCls} />
+                    <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={site.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
                 </>
               )}
@@ -1158,7 +1158,7 @@ function ConnectionSection({ site }: { site: any }) {
           )}
 
           {isWp && (() => {
-            const ok = !!(site.wpUrl && site.wpUsername && site.wpAppPassword);
+            const ok = !!site.wordpressConfigured;
             return (
               <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
                 {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">WordPress configured</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">WordPress credentials missing</span></>)}
@@ -1201,7 +1201,7 @@ function GSCSection({ site }: { site: any }) {
   const disconnectGsc = useMutation(api.sites.disconnectGsc);
   const [disconnecting, setDisconnecting] = useState(false);
 
-  const isConnected = !!site.gscAccessToken && !!site.gscProperty;
+  const isConnected = !!site.gscConnected;
 
   const handleConnect = () => {
     window.open(

@@ -1,27 +1,78 @@
-import { mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
-import { getLimitsFromFeatures } from "./planLimits";
+import { ALL_FEATURE_KEYS, getLimitsFromFeatures } from "./planLimits";
+import type { Id } from "./_generated/dataModel";
+import { sanitizeSiteForClient } from "./lib/siteSecurity";
 
 const now = () => Date.now();
 
+async function requireSiteOwner(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Authentication required");
+
+  const site = await ctx.db.get(siteId);
+  if (!site || site.userId !== identity.subject) {
+    throw new Error("Site not found");
+  }
+  return site;
+}
+
 export const list = query({
   args: { clerkUserId: v.optional(v.string()) },
-  handler: async (ctx, args) => {
+  handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    const userId = identity?.subject ?? args.clerkUserId;
+    const userId = identity?.subject;
     if (!userId) return [];
-    return ctx.db
+    const sites = await ctx.db
       .query("sites")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .order("asc")
       .collect();
+    return sites.map(sanitizeSiteForClient);
   },
 });
 
 export const get = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    return await ctx.db.get(siteId);
+    try {
+      const site = await requireSiteOwner(ctx, siteId);
+      return sanitizeSiteForClient(site);
+    } catch {
+      return null;
+    }
+  },
+});
+
+export const getFull = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => ctx.db.get(siteId),
+});
+
+export const patchInternal = internalMutation({
+  args: { siteId: v.id("sites"), patch: v.any() },
+  handler: async (ctx, { siteId, patch }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+
+    const safePatch = Object.fromEntries(
+      Object.entries((patch ?? {}) as Record<string, unknown>).filter(
+        ([key, value]) =>
+          value !== undefined &&
+          !["_id", "_creationTime", "userId", "createdAt"].includes(key),
+      ),
+    );
+    await ctx.db.patch(siteId, { ...safePatch, updatedAt: now() });
   },
 });
 
@@ -79,7 +130,12 @@ export const upsert = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    const userId = identity?.subject ?? args.clerkUserId ?? undefined;
+    const userId = identity?.subject;
+    if (!userId) throw new Error("Authentication required");
+
+    if (args.id) {
+      await requireSiteOwner(ctx, args.id);
+    }
 
     // ── Site count limit (only on new site creation, not updates) ──
     if (!args.id && userId) {
@@ -174,6 +230,9 @@ export const upsert = mutation({
       .unique();
 
     if (existing?._id) {
+      if (existing.userId !== userId) {
+        throw new Error("This domain is already connected to another account");
+      }
       // Merge: only overwrite fields that are explicitly provided
       const merged: Record<string, unknown> = { updatedAt: now(), userId };
       for (const [key, value] of Object.entries(data)) {
@@ -184,7 +243,6 @@ export const upsert = mutation({
       return existing._id;
     }
 
-    if (!userId) throw new Error("Unable to determine user identity. Please try again.");
     return await ctx.db.insert("sites", {
       ...data,
       userId,
@@ -242,6 +300,7 @@ export const updateSite = mutation({
     syndicationEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, { siteId, ...fields }) => {
+    await requireSiteOwner(ctx, siteId);
     const patch: Record<string, unknown> = { updatedAt: now() };
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) patch[key] = value;
@@ -254,6 +313,7 @@ export const updateSite = mutation({
 export const deleteSite = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
+    await requireSiteOwner(ctx, siteId);
     // Delete articles
     const articles = await ctx.db
       .query("articles")
@@ -299,32 +359,33 @@ export const deleteSite = mutation({
   },
 });
 
-// List ALL sites — used by autopilot cron (no auth context)
-export const listAllForAutopilot = query({
+// List ALL sites for trusted cron/actions only.
+export const listAllForAutopilot = internalQuery({
   handler: async (ctx) => {
     return ctx.db.query("sites").collect();
   },
 });
 
-// Sync plan features from Clerk to all user's sites (called from client after auth)
-export const syncPlanFeatures = mutation({
-  args: { planFeatures: v.array(v.string()) },
-  handler: async (ctx, { planFeatures }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return;
-    const userId = identity.subject;
+// Plan features are accepted only from the authenticated Next.js billing bridge.
+export const syncPlanFeaturesInternal = internalMutation({
+  args: { userId: v.string(), planFeatures: v.array(v.string()) },
+  handler: async (ctx, { userId, planFeatures }) => {
+    const allowedFeatures = new Set(ALL_FEATURE_KEYS);
+    const verifiedFeatures = planFeatures.filter((feature) =>
+      allowedFeatures.has(feature),
+    );
     const sites = await ctx.db
       .query("sites")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
     for (const site of sites) {
-      await ctx.db.patch(site._id, { planFeatures });
+      await ctx.db.patch(site._id, { planFeatures: verifiedFeatures });
     }
   },
 });
 
-// Count sites owned by a specific user
-export const countByUser = query({
+// Count sites for trusted server-side diagnostics.
+export const countByUser = internalQuery({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
     const sites = await ctx.db
@@ -337,7 +398,7 @@ export const countByUser = query({
 
 // Wipe all data — for dev/reset only
 // Admin: set plan features on a site directly
-export const setPlanFeatures = mutation({
+export const setPlanFeatures = internalMutation({
   args: { siteId: v.id("sites"), planFeatures: v.array(v.string()) },
   handler: async (ctx, { siteId, planFeatures }) => {
     await ctx.db.patch(siteId, { planFeatures } as any);
@@ -346,8 +407,13 @@ export const setPlanFeatures = mutation({
 
 export const resetAll = mutation({
   handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required");
+    const sites = await ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .collect();
     const tables = [
-      "sites",
       "pages",
       "topic_clusters",
       "articles",
@@ -355,21 +421,26 @@ export const resetAll = mutation({
       "jobs",
       "search_performance",
     ] as const;
-    for (const table of tables) {
-      const rows = await ctx.db.query(table).collect();
-      for (const row of rows) {
-        await ctx.db.delete(row._id);
+    for (const site of sites) {
+      for (const table of tables) {
+        const rows = await ctx.db
+          .query(table)
+          .withIndex("by_site", (q: any) => q.eq("siteId", site._id))
+          .collect();
+        for (const row of rows) {
+          await ctx.db.delete(row._id);
+        }
       }
+      await ctx.db.delete(site._id);
     }
   },
 });
 
 // One-off: fix orphaned sites that have no userId
-export const fixOrphanSites = mutation({
-  args: { clerkUserId: v.optional(v.string()) },
+export const fixOrphanSites = internalMutation({
+  args: { clerkUserId: v.string() },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    const userId = identity?.subject ?? args.clerkUserId;
+    const userId = args.clerkUserId;
     if (!userId) return { fixed: 0, userId: null };
     const allSites = await ctx.db.query('sites').collect();
     let fixed = 0;
@@ -384,7 +455,7 @@ export const fixOrphanSites = mutation({
 });
 
 // Set GitHub OAuth token via HTTP API (accepts string siteId)
-export const setGithubToken = mutation({
+export const setGithubTokenInternal = internalMutation({
   args: {
     siteId: v.string(),
     githubToken: v.string(),
@@ -397,7 +468,7 @@ export const setGithubToken = mutation({
 });
 
 // Set Google Search Console OAuth tokens via HTTP API
-export const setGscToken = mutation({
+export const setGscTokenInternal = internalMutation({
   args: {
     siteId: v.id("sites"),
     gscAccessToken: v.string(),
@@ -424,8 +495,7 @@ export const setGscToken = mutation({
 export const disconnectGsc = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const site = await ctx.db.get(siteId);
-    if (!site) throw new Error("Site not found");
+    await requireSiteOwner(ctx, siteId);
     await ctx.db.patch(siteId, {
       gscAccessToken: undefined,
       gscRefreshToken: undefined,

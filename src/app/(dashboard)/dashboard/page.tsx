@@ -1,8 +1,6 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
-
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -31,7 +29,7 @@ import {
   Link2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
@@ -41,9 +39,6 @@ export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
-  const { userId: dashClerkId } = useAuth();
-  const fixOrphan = useMutation(api.sites.fixOrphanSites);
-  useEffect(() => { if (dashClerkId) fixOrphan({ clerkUserId: dashClerkId }).catch(() => {}); }, [dashClerkId]);
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",

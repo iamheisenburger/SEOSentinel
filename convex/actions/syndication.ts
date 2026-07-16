@@ -1,7 +1,7 @@
 "use node";
 
 import { action } from "../_generated/server";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { v } from "convex/values";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -70,7 +70,7 @@ export const syndicateToMedium = action({
   handler: async (ctx, { siteId, articleId }): Promise<{ success: boolean; error?: string; url?: string }> => {
     try {
       // Fetch site and article
-      const site = await ctx.runQuery(api.sites.get, { siteId });
+      const site = await ctx.runQuery(internal.sites.getFull, { siteId });
       if (!site) return { success: false, error: "Site not found" };
 
       const article = await ctx.runQuery(api.articles.get, { articleId });
@@ -158,7 +158,7 @@ export const syndicateToLinkedIn = action({
   handler: async (ctx, { siteId, articleId }): Promise<{ success: boolean; error?: string }> => {
     try {
       // Fetch site and article
-      const site = await ctx.runQuery(api.sites.get, { siteId });
+      const site = await ctx.runQuery(internal.sites.getFull, { siteId });
       if (!site) return { success: false, error: "Site not found" };
 
       const article = await ctx.runQuery(api.articles.get, { articleId });
@@ -258,7 +258,7 @@ export const syndicateArticle = action({
     medium: { success: boolean; error?: string; url?: string };
     linkedin: { success: boolean; error?: string };
   }> => {
-    const site = await ctx.runQuery(api.sites.get, { siteId });
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
 
     // Determine which platforms are configured
     const siteAny = (site ?? {}) as Record<string, unknown>;

@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ConvexHttpClient } from "convex/browser";
-import { api } from "../../../../../convex/_generated/api";
-
-const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
+import { callPentraInternal } from "@/lib/pentra-internal-api";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -66,7 +63,10 @@ export async function GET(req: NextRequest) {
   let saved = false;
   if (siteId) {
     try {
-      await convex.mutation(api.sites.setGithubToken, { siteId, githubToken: accessToken });
+      await callPentraInternal("/internal/oauth/github", {
+        siteId,
+        githubToken: accessToken,
+      });
       saved = true;
     } catch (e) {
       console.error("Failed to save GitHub token to Convex:", e);

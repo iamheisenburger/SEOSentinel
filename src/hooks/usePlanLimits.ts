@@ -1,9 +1,7 @@
 "use client";
 
 import { useAuth, useUser } from "@clerk/nextjs";
-import { useMutation } from "convex/react";
 import { useEffect, useRef } from "react";
-import { api } from "../../convex/_generated/api";
 import {
   ALL_FEATURE_KEYS,
   getLimitsFromFeatures,
@@ -16,8 +14,7 @@ import {
  * 3. Returns { maxSites, maxArticles } for client-side gating
  */
 export function usePlanLimits() {
-  const { has, isSignedIn } = useAuth();
-  const syncFeatures = useMutation(api.sites.syncPlanFeatures);
+  const { has, isLoaded, isSignedIn } = useAuth();
   const lastSynced = useRef<string>("");
 
   // Determine which features the user has
@@ -46,15 +43,22 @@ export function usePlanLimits() {
   const limits = getLimitsFromFeatures(features);
   const featuresKey = features.sort().join(",");
 
-  // Sync to Convex whenever features change
+  // Ask the server to derive the authoritative Clerk features. Never trust a
+  // feature list supplied by the browser for backend quota enforcement.
   useEffect(() => {
-    if (!isSignedIn || !featuresKey || featuresKey === lastSynced.current)
-      return;
-    lastSynced.current = featuresKey;
-    syncFeatures({ planFeatures: features }).catch(() => {
-      // Silently fail — non-critical
-    });
-  }, [isSignedIn, featuresKey]);
+    if (!isLoaded || !isSignedIn) return;
+    const syncKey = featuresKey || "free";
+    if (syncKey === lastSynced.current) return;
+
+    fetch("/api/billing/sync-plan", { method: "POST" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Plan sync failed");
+        lastSynced.current = syncKey;
+      })
+      .catch(() => {
+        // The next authenticated render retries. Client gating remains intact.
+      });
+  }, [isLoaded, isSignedIn, featuresKey]);
 
   return {
     ...limits,
