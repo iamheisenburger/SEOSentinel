@@ -1,3 +1,5 @@
+import { classifyEvidenceSource } from "./sourceQuality.ts";
+
 export type PublicationQualityMode = "standard" | "strict";
 
 export type PublicationSource = {
@@ -8,10 +10,16 @@ export type PublicationSource = {
 export type PublicationArticle = {
   title: string;
   markdown: string;
+  articleType?: string;
+  metaTitle?: string;
   metaDescription?: string;
   featuredImage?: string;
   wordCount?: number;
   factCheckScore?: number;
+  editorialQualityScore?: number;
+  editorialQualityNotes?: string[];
+  mediaQualityStatus?: string;
+  mediaQualityNotes?: string[];
   sources?: PublicationSource[];
 };
 
@@ -23,7 +31,10 @@ export type PublicationQualityResult = {
     wordCount: number;
     sourceCount: number;
     sourceHostCount: number;
+    strictEvidenceSourceCount: number;
     quantifiedClaimCount: number;
+    youtubeEmbedCount: number;
+    malformedTableCount: number;
   };
 };
 
@@ -33,6 +44,29 @@ const QUANTIFIED_OUTCOME_PATTERN =
   /(?:\b(?:increase|improve|boost|grow|lift|raise|reduce|decrease|cut|save|recover|free up)\w*\b[^\n.!?]{0,70}\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\b|minutes?\b|days?\b|\$))|(?:\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\s*(?:\/|per)\s*week)\b)/i;
 const INLINE_CITATION_PATTERN = /\[\d+(?:\s*,\s*\d+)*\]/;
 const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
+const DANGLING_META_END_PATTERN =
+  /\b(?:a|an|and|at|by|for|from|in|of|on|or|the|to|with|which|that)$/i;
+
+export function articleWordCeiling(articleType?: string): number {
+  switch (articleType) {
+    case "checklist":
+      return 2400;
+    case "standard":
+    case undefined:
+      return 2600;
+    case "how-to":
+      return 2800;
+    case "comparison":
+      return 3000;
+    case "listicle":
+    case "roundup":
+      return 3200;
+    case "ultimate-guide":
+      return 3600;
+    default:
+      return 2800;
+  }
+}
 
 function countWords(markdown: string): number {
   return markdown
@@ -93,7 +127,21 @@ export function clampMetaDescription(
   const clipped = normalized
     .slice(0, cutAt)
     .replace(/[\s,;:.!?–—-]+$/g, "");
-  return `${clipped}.`.slice(0, maxLength);
+  let complete = clipped;
+  while (DANGLING_META_END_PATTERN.test(complete)) {
+    complete = complete.replace(/\s+\S+$/, "").replace(/[\s,;:.!?–—-]+$/g, "");
+  }
+  return `${complete}.`.slice(0, maxLength);
+}
+
+export function clampMetaTitle(value: string | undefined, maxLength = 60): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) return normalized;
+  const candidate = normalized.slice(0, maxLength + 1);
+  const lastSpace = candidate.lastIndexOf(" ");
+  const cutAt = lastSpace >= Math.floor(maxLength * 0.7) ? lastSpace : maxLength;
+  return normalized.slice(0, cutAt).replace(/[\s,;:.!?–—-]+$/g, "");
 }
 
 function quantifiedParagraphs(markdown: string): string[] {
@@ -109,6 +157,43 @@ function quantifiedParagraphs(markdown: string): string[] {
     );
 }
 
+function markdownTableProblems(markdown: string): string[] {
+  const lines = markdown.replace(/```[\s\S]*?```/g, "").split("\n");
+  const problems: string[] = [];
+
+  for (let index = 0; index < lines.length; index++) {
+    if (!/^\s*\|/.test(lines[index])) continue;
+    const start = index;
+    const block: string[] = [];
+    while (index < lines.length && /^\s*\|/.test(lines[index])) {
+      block.push(lines[index].trim());
+      index++;
+    }
+    index--;
+
+    if (block.length < 2) {
+      problems.push(`Table near line ${start + 1} has no header separator row.`);
+      continue;
+    }
+    const cells = (line: string) =>
+      line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+    const headerCells = cells(block[0]);
+    const separatorCells = cells(block[1]);
+    const separatorValid =
+      separatorCells.length === headerCells.length &&
+      separatorCells.every((cell) => /^:?-{3,}:?$/.test(cell));
+    if (!separatorValid) {
+      problems.push(`Table near line ${start + 1} has an invalid separator row.`);
+      continue;
+    }
+    if (block.some((line) => cells(line).length !== headerCells.length)) {
+      problems.push(`Table near line ${start + 1} has inconsistent column counts.`);
+    }
+  }
+
+  return problems;
+}
+
 export function evaluatePublicationQuality(
   article: PublicationArticle,
   mode: PublicationQualityMode = "standard",
@@ -117,8 +202,10 @@ export function evaluatePublicationQuality(
   const warnings: string[] = [];
   const markdown = article.markdown.trim();
   const measuredWordCount = countWords(markdown);
+  const tableProblems = markdownTableProblems(markdown);
   const sources = article.sources ?? [];
   const validSources: URL[] = [];
+  let strictEvidenceSourceCount = 0;
   const sourceUrls = new Set<string>();
 
   if (!article.title.trim()) issues.push("Article title is missing.");
@@ -133,11 +220,39 @@ export function evaluatePublicationQuality(
       `Stored word count (${article.wordCount}) differs from measured content (${measuredWordCount}).`,
     );
   }
+  if (tableProblems.length > 0) {
+    issues.push(...tableProblems);
+  }
 
   if (!article.metaDescription?.trim()) {
     issues.push("Meta description is missing.");
   } else if (article.metaDescription.length > 160) {
     issues.push(`Meta description is ${article.metaDescription.length} characters; maximum is 160.`);
+  }
+
+  if (mode === "strict") {
+    if (!article.metaTitle?.trim()) {
+      issues.push("Meta title is missing.");
+    } else if (article.metaTitle.length > 65) {
+      issues.push(`Meta title is ${article.metaTitle.length} characters; maximum is 65.`);
+    }
+    if ((article.metaDescription?.trim().length ?? 0) < 100) {
+      issues.push("Meta description is too short for a useful search snippet (minimum 100 characters).");
+    } else if (!/[.!?]$/.test(article.metaDescription!.trim())) {
+      issues.push("Meta description must end as a complete sentence.");
+    } else if (
+      DANGLING_META_END_PATTERN.test(
+        article.metaDescription!.trim().replace(/[.!?]+$/, "").trim(),
+      )
+    ) {
+      issues.push("Meta description ends with a dangling word or conjunction.");
+    }
+    const titleYears = new Set(article.title.match(/\b20\d{2}\b/g) ?? []);
+    const metaYears = article.metaTitle?.match(/\b20\d{2}\b/g) ?? [];
+    const unsupportedMetaYear = metaYears.find((year) => !titleYears.has(year));
+    if (unsupportedMetaYear) {
+      issues.push(`Meta title introduces unsupported year ${unsupportedMetaYear}.`);
+    }
   }
 
   if (/<script\b/i.test(markdown)) {
@@ -165,6 +280,9 @@ export function evaluatePublicationQuality(
     }
     sourceUrls.add(parsed.href);
     validSources.push(parsed);
+    if (classifyEvidenceSource(parsed.href).strictEligible) {
+      strictEvidenceSourceCount++;
+    }
   }
 
   const sourceHosts = new Set(validSources.map((source) => source.hostname));
@@ -192,7 +310,9 @@ export function evaluatePublicationQuality(
     );
   }
 
-  const youtubeEmbeds = [...markdown.matchAll(/youtube\.com\/embed\/([^"?\s<]+)/gi)];
+  const youtubeEmbeds = [
+    ...markdown.matchAll(/youtube(?:-nocookie)?\.com\/embed\/([^"?\s<]+)/gi),
+  ];
   for (const embed of youtubeEmbeds) {
     if (!/^[A-Za-z0-9_-]{11}$/.test(embed[1])) {
       issues.push(`Invalid YouTube embed identifier: ${embed[1]}`);
@@ -202,25 +322,51 @@ export function evaluatePublicationQuality(
     ...markdown.matchAll(/<iframe\b[^>]*src=["']([^"']+)["'][^>]*>/gi),
   ].filter(
     (match) =>
-      !/^https:\/\/(?:www\.)?youtube\.com\/embed\/[A-Za-z0-9_-]{11}(?:[?"']|$)/i.test(
+      !/^https:\/\/(?:www\.)?youtube(?:-nocookie)?\.com\/embed\/[A-Za-z0-9_-]{11}(?:[?"']|$)/i.test(
         match[1],
       ),
   );
   if (unsupportedIframes.length > 0) {
     issues.push("Article contains an unsupported iframe source.");
   }
+  if (youtubeEmbeds.length > 1) {
+    issues.push(`Article contains ${youtubeEmbeds.length} YouTube embeds; maximum is one relevant video.`);
+  }
 
   if (mode === "strict") {
-    if (!article.featuredImage || !safeHttpsUrl(article.featuredImage)) {
-      issues.push("Strict publication requires a valid HTTPS featured image.");
+    if (article.featuredImage && !safeHttpsUrl(article.featuredImage)) {
+      issues.push("Featured image must use a valid HTTPS URL.");
+    } else if (!article.featuredImage) {
+      warnings.push("No featured image is attached; omission is preferable to an unreviewed asset.");
     }
     if (article.factCheckScore === undefined) {
       issues.push("Strict publication requires a completed fact check.");
-    } else if (article.factCheckScore < 80) {
-      issues.push(`Fact-check score is ${article.factCheckScore}; strict minimum is 80.`);
+    } else if (article.factCheckScore < 85) {
+      issues.push(`Fact-check score is ${article.factCheckScore}; strict minimum is 85.`);
+    }
+    if (article.editorialQualityScore === undefined) {
+      issues.push("Strict publication requires a completed people-first editorial review.");
+    } else if (article.editorialQualityScore < 85) {
+      issues.push(
+        `Editorial quality score is ${article.editorialQualityScore}; strict minimum is 85.`,
+      );
+    }
+    if (article.mediaQualityStatus !== "passed") {
+      issues.push("Strict publication requires a completed media-quality review.");
+    }
+    const maxWords = articleWordCeiling(article.articleType);
+    if (measuredWordCount > maxWords) {
+      issues.push(
+        `Article is overlong for its format (${measuredWordCount} words; review ceiling ${maxWords}).`,
+      );
     }
     if (paragraphsWithClaims.length > 0 && validSources.length < 2) {
       issues.push("Quantified outcome claims require at least two valid sources.");
+    }
+    if (paragraphsWithClaims.length > 0 && strictEvidenceSourceCount < 2) {
+      issues.push(
+        "Quantified outcome claims require at least two primary or authoritative evidence sources.",
+      );
     }
     if (
       QUANTIFIED_OUTCOME_PATTERN.test(article.title) ||
@@ -244,7 +390,10 @@ export function evaluatePublicationQuality(
       wordCount: measuredWordCount,
       sourceCount: validSources.length,
       sourceHostCount: sourceHosts.size,
+      strictEvidenceSourceCount,
       quantifiedClaimCount: paragraphsWithClaims.length,
+      youtubeEmbedCount: youtubeEmbeds.length,
+      malformedTableCount: tableProblems.length,
     },
   };
 }

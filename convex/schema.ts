@@ -146,6 +146,10 @@ export default defineSchema({
     wordCount: v.optional(v.number()), // total word count
     factCheckScore: v.optional(v.number()), // 0-100 overall confidence
     factCheckNotes: v.optional(v.string()),
+    editorialQualityScore: v.optional(v.number()), // 0-100 people-first editorial review
+    editorialQualityNotes: v.optional(v.array(v.string())),
+    mediaQualityStatus: v.optional(v.string()), // passed | failed
+    mediaQualityNotes: v.optional(v.array(v.string())),
     publicationGateStatus: v.optional(v.string()), // passed | blocked
     publicationGateIssues: v.optional(v.array(v.string())),
     publicationGateWarnings: v.optional(v.array(v.string())),
@@ -209,6 +213,10 @@ export default defineSchema({
     wordCount: v.optional(v.number()),
     factCheckScore: v.optional(v.number()),
     contentScore: v.optional(v.number()),
+    editorialQualityScore: v.optional(v.number()),
+    editorialQualityNotes: v.optional(v.array(v.string())),
+    mediaQualityStatus: v.optional(v.string()),
+    mediaQualityNotes: v.optional(v.array(v.string())),
     publicationGateStatus: v.optional(v.string()),
     publicationGateIssues: v.optional(v.array(v.string())),
     publicationGateWarnings: v.optional(v.array(v.string())),

@@ -6,13 +6,30 @@ import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import type { ResponseInput } from "openai/resources/responses/responses";
 import { z } from "zod";
 import type { Id } from "../_generated/dataModel";
 import {
   injectInternalLinks,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
-import { clampMetaDescription } from "../lib/articleQuality";
+import {
+  articleWordCeiling,
+  clampMetaDescription,
+  clampMetaTitle,
+  normalizeSiteOrigin,
+} from "../lib/articleQuality";
+import { strictEvidenceSources } from "../lib/sourceQuality";
+import {
+  articleH2Headings,
+  buildHeroImagePrompt,
+  buildMediaReviewPrompt,
+  buildSupportingImagePrompt,
+  insertImageUnderSection,
+  insertYouTubeAfterSection,
+  type MediaAssetKind,
+  type MediaReview,
+} from "../lib/mediaQuality";
 
 const defaultModel = "claude-haiku-4-5-20251001";
 
@@ -52,6 +69,33 @@ const ArticleSchema = z.object({
     )
     .optional(),
 });
+
+const MediaReviewSchema = z.object({
+  passed: z.boolean(),
+  score: z.number().min(0).max(100),
+  issues: z.array(z.string()).default([]),
+  description: z.string().default(""),
+});
+
+type YouTubeCandidate = {
+  videoId: string;
+  title: string;
+  authorName?: string;
+};
+
+type YouTubeSelection = {
+  placement?: { videoId: string; title: string; sectionHeading: string };
+  reason: string;
+};
+
+type SupportingVisualDecision = {
+  include: boolean;
+  sectionHeading?: string;
+  visualConcept?: string;
+  altText?: string;
+  caption?: string;
+  reason: string;
+};
 
 const LinkSchema = z.array(
   z.object({
@@ -268,6 +312,62 @@ const openaiClient = () => {
   return new OpenAI({ apiKey });
 };
 
+async function reviewMediaAsset(
+  imageBytes: Buffer,
+  mimeType: string,
+  kind: MediaAssetKind,
+  context: { title?: string; productName?: string; domain?: string },
+): Promise<MediaReview> {
+  const client = openaiClient();
+  const input: ResponseInput = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: buildMediaReviewPrompt(kind, context),
+        },
+        {
+          type: "input_image",
+          image_url: `data:${mimeType};base64,${imageBytes.toString("base64")}`,
+          detail: kind === "screenshot" ? "high" : "low",
+        },
+      ],
+    },
+  ];
+  const response = await client.responses.create({
+    model: "gpt-4o-mini",
+    input,
+  });
+  const review = parseJson<MediaReview>(MediaReviewSchema, response.output_text);
+  return {
+    ...review,
+    passed: review.passed && review.score >= 85 && review.issues.length === 0,
+  };
+}
+
+async function storeReviewedImage(
+  ctx: ActionCtx,
+  imageBytes: Buffer,
+  mimeType: string,
+  kind: MediaAssetKind,
+  context: { title?: string; productName?: string; domain?: string },
+): Promise<string> {
+  const review = await reviewMediaAsset(imageBytes, mimeType, kind, context);
+  if (!review.passed) {
+    throw new Error(
+      `${kind} visual review failed (${review.score}/100): ${review.issues.join("; ") || review.description}`,
+    );
+  }
+
+  const storageId = await ctx.storage.store(
+    new Blob([Uint8Array.from(imageBytes)], { type: mimeType }),
+  );
+  const imageUrl = await ctx.storage.getUrl(storageId);
+  if (!imageUrl) throw new Error(`Failed to get storage URL for ${kind} image`);
+  return imageUrl;
+}
+
 /** Generate an AI hero image for an article. Returns a Convex storage URL. */
 async function generateHeroImage(
   ctx: ActionCtx,
@@ -277,21 +377,12 @@ async function generateHeroImage(
   brandColor?: string,
 ): Promise<string> {
   const client = openaiClient();
-  const colorHint = brandColor ? ` Use ${brandColor} as the primary accent color.` : "";
-  const prompt = brandingPrompt
-    ? `${brandingPrompt}. Topic: ${title}`
-    : `Create a photorealistic, editorially styled blog hero image that visually represents: "${title}".` +
-      ` Industry: ${niche || "technology"}.` +
-      ` The image should look like a premium stock photo or editorial illustration that directly relates to the specific topic.` +
-      ` Think: what real-world scene, object, or concept does this article title evoke?` +
-      ` For example: if about lead capture, show a laptop with a chat widget and notifications.` +
-      ` If about sales automation, show a modern workspace with AI dashboard screens.` +
-      ` If about chatbots, show a phone or screen with a conversation UI.` +
-      ` If about conversion optimization, show a funnel visualization on a real monitor.` +
-      ` The visual must be UNIQUE to this specific topic — not a generic tech illustration.` +
-      ` Warm, professional lighting. Shallow depth of field. High production value.${colorHint}` +
-      ` NO text, NO words, NO letters, NO numbers, NO watermarks, NO stock photo badges.` +
-      ` Photorealistic or high-end 3D render quality. 16:9 aspect ratio.`;
+  const prompt = buildHeroImagePrompt({
+    title,
+    niche,
+    brandingPrompt,
+    brandColor,
+  });
 
   console.log(`Generating hero image for: "${title}"...`);
 
@@ -308,43 +399,37 @@ async function generateHeroImage(
   const b64 = response.data?.[0]?.b64_json;
   if (!b64) throw new Error("No image data returned from OpenAI");
 
-  // Store in Convex file storage
   const imageBytes = Buffer.from(b64, "base64");
-  const blob = new Blob([imageBytes], { type: "image/webp" });
-  const storageId = await ctx.storage.store(blob);
-  const imageUrl = await ctx.storage.getUrl(storageId);
-  if (!imageUrl) throw new Error("Failed to get storage URL for image");
-
-  console.log(`Hero image generated and stored: ${storageId}`);
-  return imageUrl;
+  return storeReviewedImage(ctx, imageBytes, "image/webp", "hero", { title });
 }
 
-/** Generate a mid-article process/stats infographic to embed inline. Returns a Convex storage URL. */
-async function generateInfographic(
+/** Generate one factual-neutral, text-free supporting image. */
+async function generateSupportingIllustration(
   ctx: ActionCtx,
   title: string,
   primaryKeyword: string,
   niche: string,
+  sectionHeading: string,
+  visualConcept: string,
   brandColor?: string,
 ): Promise<string> {
   const client = openaiClient();
-  const colorHint = brandColor ? ` Primary accent color: ${brandColor}.` : "";
-  const prompt =
-    `Create a detailed process flow infographic for the topic: "${primaryKeyword || title}". Industry: ${niche || "technology"}.` +
-    ` Style: Step-by-step process diagram with a clear visual hierarchy.` +
-    ` Light/white background with clean typography and numbered stages.${colorHint}` +
-    ` Include visual elements: numbered stages, arrows, restrained icons, and flowchart nodes.` +
-    ` Do not invent percentages, metrics, customer results, or quantitative claims.` +
-    ` Keep labels short and legible. NO logos, NO watermarks, NO text that says "infographic".` +
-    ` Ultra-clean, modern, professional quality. Tall/portrait format (2:3 ratio).`;
+  const prompt = buildSupportingImagePrompt({
+    title,
+    primaryKeyword,
+    niche,
+    sectionHeading,
+    visualConcept,
+    brandColor,
+  });
 
-  console.log(`Generating mid-article infographic for: "${primaryKeyword}"...`);
+  console.log(`Generating supporting illustration for: "${primaryKeyword}"...`);
 
   const response = await client.images.generate({
     model: "gpt-image-1.5",
     prompt,
     n: 1,
-    size: "1024x1536",
+    size: "1536x1024",
     quality: "medium",
     output_format: "webp",
     output_compression: 80,
@@ -354,19 +439,16 @@ async function generateInfographic(
   if (!b64) throw new Error("No image data returned from OpenAI");
 
   const imageBytes = Buffer.from(b64, "base64");
-  const blob = new Blob([imageBytes], { type: "image/webp" });
-  const storageId = await ctx.storage.store(blob);
-  const imageUrl = await ctx.storage.getUrl(storageId);
-  if (!imageUrl) throw new Error("Failed to get storage URL for infographic");
-
-  console.log(`Infographic generated and stored: ${storageId}`);
-  return imageUrl;
+  return storeReviewedImage(ctx, imageBytes, "image/webp", "supporting", {
+    title: `${title}; section: ${sectionHeading}; concept: ${visualConcept}`,
+  });
 }
 
 /** Capture a real screenshot of a website. Stores in Convex file storage. */
 async function captureScreenshot(
   ctx: ActionCtx,
   url: string,
+  productName: string,
   options?: { width?: number; cropHeight?: number },
 ): Promise<string> {
   const width = options?.width ?? 1280;
@@ -375,26 +457,44 @@ async function captureScreenshot(
   let targetUrl = url.replace(/\/+$/, "").trim();
   if (!targetUrl.startsWith("http")) targetUrl = `https://${targetUrl}`;
 
-  // thum.io free screenshot API — wait/3 lets JS hydrate
-  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/wait/3/${targetUrl}`;
-  console.log(`Capturing screenshot: ${screenshotApiUrl}`);
+  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/wait/5/${targetUrl}`;
+  let lastError = "unknown screenshot error";
 
-  const response = await fetch(screenshotApiUrl);
-  if (!response.ok) {
-    throw new Error(`Screenshot API returned ${response.status}`);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(`Capturing screenshot (attempt ${attempt}/3): ${screenshotApiUrl}`);
+    try {
+      const response = await fetch(screenshotApiUrl, {
+        headers: { Accept: "image/avif,image/webp,image/png,image/jpeg" },
+      });
+      if (!response.ok) {
+        throw new Error(`Screenshot API returned ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type") || "image/png";
+      if (!contentType.startsWith("image/")) {
+        throw new Error(`Screenshot API returned ${contentType}`);
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length < 10_000) {
+        throw new Error(`Screenshot too small (${bytes.length} bytes)`);
+      }
+      return await storeReviewedImage(
+        ctx,
+        bytes,
+        contentType.split(";")[0],
+        "screenshot",
+        { productName, domain: targetUrl },
+      );
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "unknown screenshot error";
+      console.error(`Screenshot attempt ${attempt} rejected: ${lastError}`);
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 2500 * attempt));
+      }
+    }
   }
 
-  const blob = await response.blob();
-  console.log(`Screenshot fetched: ${blob.size} bytes`);
-  if (blob.size < 5000) {
-    throw new Error(`Screenshot too small (${blob.size} bytes) — likely blank`);
-  }
-  const storageId = await ctx.storage.store(blob);
-  const imageUrl = await ctx.storage.getUrl(storageId);
-  if (!imageUrl) throw new Error("Failed to get storage URL for screenshot");
-
-  console.log(`Screenshot stored: ${imageUrl}`);
-  return imageUrl;
+  throw new Error(lastError);
 }
 
 /** Crawl a page and extract text content (strips HTML). */
@@ -575,6 +675,181 @@ async function searchYouTubeVideos(
   return [];
 }
 
+async function verifyYouTubeCandidates(
+  candidates: { videoId: string; title: string }[],
+): Promise<YouTubeCandidate[]> {
+  const verified: YouTubeCandidate[] = [];
+  for (const candidate of candidates.slice(0, 6)) {
+    try {
+      const url = new URL("https://www.youtube.com/oembed");
+      url.searchParams.set("url", `https://www.youtube.com/watch?v=${candidate.videoId}`);
+      url.searchParams.set("format", "json");
+      const response = await fetch(url, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) continue;
+      const metadata = (await response.json()) as {
+        title?: string;
+        author_name?: string;
+      };
+      if (!metadata.title?.trim()) continue;
+      verified.push({
+        videoId: candidate.videoId,
+        title: metadata.title.trim(),
+        authorName: metadata.author_name?.trim(),
+      });
+    } catch {
+      // Invalid, removed, or non-embeddable videos are omitted.
+    }
+  }
+  return verified;
+}
+
+async function selectYouTubePlacement(args: {
+  articleTitle: string;
+  primaryKeyword: string;
+  markdown: string;
+  candidates: YouTubeCandidate[];
+}): Promise<YouTubeSelection> {
+  if (args.candidates.length === 0) {
+    return { reason: "No verified, embeddable YouTube candidate was available." };
+  }
+  const headings = articleH2Headings(args.markdown).filter(
+    (heading) => !/^(?:table of contents|sources|faq|frequently asked|key takeaways)/i.test(heading),
+  );
+  if (headings.length === 0) {
+    return { reason: "The final article had no section suitable for a useful video." };
+  }
+
+  const response = await openaiClient().responses.create({
+    model: "gpt-4o-mini",
+    input: [
+      {
+        role: "system",
+        content:
+          "You are a strict editorial video curator. Select at most one video only when it directly teaches the exact subject of one article section and materially helps the reader. Broadly adjacent, promotional, low-authority, or generic automation videos must be rejected. Return JSON only.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          articleTitle: args.articleTitle,
+          primaryKeyword: args.primaryKeyword,
+          sectionHeadings: headings,
+          candidates: args.candidates,
+          articleExcerpt: args.markdown.slice(0, 7000),
+          output:
+            'Return {"selected":false,"reason":"..."} or {"selected":true,"videoId":"...","sectionHeading":"exact supplied H2","relevanceScore":0-100,"reason":"..."}. Require at least 85/100 relevance.',
+        }),
+      },
+    ],
+  });
+
+  const selection = parseJson<{
+    selected: boolean;
+    videoId?: string;
+    sectionHeading?: string;
+    relevanceScore?: number;
+    reason?: string;
+  }>(
+    z.object({
+      selected: z.boolean(),
+      videoId: z.string().optional(),
+      sectionHeading: z.string().optional(),
+      relevanceScore: z.number().optional(),
+      reason: z.string().optional(),
+    }),
+    response.output_text,
+  );
+  if (
+    !selection.selected ||
+    !selection.videoId ||
+    !selection.sectionHeading ||
+    (selection.relevanceScore ?? 0) < 85 ||
+    !headings.includes(selection.sectionHeading)
+  ) {
+    return {
+      reason:
+        selection.reason ||
+        "No candidate cleared the 85/100 section-specific relevance threshold.",
+    };
+  }
+
+  const candidate = args.candidates.find(
+    (item) => item.videoId === selection.videoId,
+  );
+  if (!candidate) {
+    return { reason: "The selected video was not present in the verified candidate set." };
+  }
+  return {
+    placement: {
+      videoId: candidate.videoId,
+      title: candidate.title,
+      sectionHeading: selection.sectionHeading,
+    },
+    reason: selection.reason || "Selected as a directly useful section-level explainer.",
+  };
+}
+
+async function selectSupportingVisual(args: {
+  articleTitle: string;
+  primaryKeyword: string;
+  markdown: string;
+}): Promise<SupportingVisualDecision> {
+  const headings = articleH2Headings(args.markdown).filter(
+    (heading) =>
+      !/^(?:table of contents|sources|faq|frequently asked|key takeaways|conclusion)/i.test(
+        heading,
+      ),
+  );
+  if (headings.length === 0) {
+    return { include: false, reason: "No suitable article section exists." };
+  }
+
+  const response = await openaiClient().responses.create({
+    model: "gpt-4o-mini",
+    input: [
+      {
+        role: "system",
+        content:
+          "You are a strict editorial art director. Recommend one supporting image only when a text-free visual would materially clarify a specific article section. Reject decorative, generic, text-dependent, factual-chart, product-UI, or statistic-based concepts. Return JSON only.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          articleTitle: args.articleTitle,
+          primaryKeyword: args.primaryKeyword,
+          allowedSectionHeadings: headings,
+          article: args.markdown,
+          output:
+            'Return {"include":false,"reason":"..."} or {"include":true,"sectionHeading":"exact supplied H2","visualConcept":"specific text-free concept grounded in that section","altText":"concise description of what the image will visibly show, without keyword stuffing","caption":"optional short editorial caption explaining why the visual matters","reason":"..."}.',
+        }),
+      },
+    ],
+  });
+
+  const decision = parseJson<SupportingVisualDecision>(
+    z.object({
+      include: z.boolean(),
+      sectionHeading: z.string().optional(),
+      visualConcept: z.string().optional(),
+      altText: z.string().max(180).optional(),
+      caption: z.string().max(220).optional(),
+      reason: z.string().default(""),
+    }),
+    response.output_text,
+  );
+  if (
+    !decision.include ||
+    !decision.sectionHeading ||
+    !decision.visualConcept ||
+    !decision.altText ||
+    !headings.includes(decision.sectionHeading)
+  ) {
+    return { include: false, reason: decision.reason || "No suitable visual selected." };
+  }
+  return decision;
+}
+
 /** Calculate reading time and word count from markdown. */
 function calculateArticleStats(markdown: string): {
   readingTime: number;
@@ -614,6 +889,58 @@ async function callClaude(
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Unexpected response type from Claude");
   return block.text;
+}
+
+type ObjectJsonSchema = {
+  type: "object";
+  properties: Record<string, unknown>;
+  required: string[];
+  additionalProperties: false;
+};
+
+/**
+ * Force long structured responses through Anthropic tool input instead of
+ * embedding Markdown inside a hand-escaped JSON string. This avoids malformed
+ * JSON when an article contains quotes, code, tables, or long source lists.
+ */
+async function callClaudeStructured<T>(args: {
+  system: string;
+  userMessage: string;
+  toolName: string;
+  toolDescription: string;
+  inputSchema: ObjectJsonSchema;
+  outputSchema: z.ZodType<T>;
+  maxTokens?: number;
+}): Promise<T> {
+  const client = anthropicClient();
+  const response = await client.messages.create({
+    model: defaultModel,
+    max_tokens: args.maxTokens ?? 8192,
+    system: args.system,
+    messages: [{ role: "user", content: args.userMessage }],
+    tools: [
+      {
+        name: args.toolName,
+        description: args.toolDescription,
+        input_schema: args.inputSchema,
+        strict: true,
+      },
+    ],
+    tool_choice: {
+      type: "tool",
+      name: args.toolName,
+      disable_parallel_tool_use: true,
+    },
+  });
+
+  const toolUse = response.content.find(
+    (block) => block.type === "tool_use" && block.name === args.toolName,
+  );
+  if (!toolUse || toolUse.type !== "tool_use") {
+    throw new Error(`Claude did not submit the required ${args.toolName} tool output`);
+  }
+
+  return args.outputSchema.parse(toolUse.input);
 }
 
 async function fetchHtml(domain: string) {
@@ -885,11 +1212,16 @@ async function factCheckArticle(
   markdown: string,
   sources: z.infer<typeof ArticleSchema>["sources"],
   bannedNames: string[] = [],
+  productName = "",
   productEvidence = "",
   researchEvidence = "",
 ) {
-  const text = await callClaude(
-    "You are a fact-checking editor. Review the article against provided sources and score factual accuracy.\n\n" +
+  const normalizedProductName = productName.trim().toLowerCase();
+  const effectiveBannedNames = bannedNames.filter(
+    (name) => name.trim().toLowerCase() !== normalizedProductName,
+  );
+  const reviewed = await callClaudeStructured({
+    system: "You are a fact-checking editor. Review the article against provided sources and score factual accuracy.\n\n" +
     "CRITICAL RULES:\n" +
     "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
     "2. Do NOT add fact-check summaries or editorial commentary into the markdown.\n" +
@@ -897,36 +1229,59 @@ async function factCheckArticle(
     "4. Product features, pricing, integrations, and capabilities ARE factual claims. Keep them only when supported by the supplied product evidence; otherwise remove or soften them.\n" +
     "5. Correct or remove unsupported third-party statistics, attributed quotes, benchmarks, dates, and factual claims. Never invent replacement evidence.\n" +
     "6. A direct quotation is allowed only when its exact language appears in a supplied source. Otherwise paraphrase without quotation marks.\n" +
-    (bannedNames.length > 0 ? `7. BANNED NAMES: The following names must be REMOVED from the article and replaced with neutral category language: ${bannedNames.join(", ")}. Replace every occurrence.\n` : "") +
-    "8. For every factual claim, assess whether it is supported by a supplied source or the product evidence.\n" +
-    "9. 'confidenceScore' = overall percentage (0-100) of how well-supported the final corrected article's claims are.\n" +
+    (productName ? `7. ALLOWED PRODUCT NAME: ${productName} is the publisher's own product and is explicitly allowed when supported by first-party product evidence. Never classify it as a banned competitor.\n` : "") +
+    (effectiveBannedNames.length > 0 ? `8. BANNED NAMES: The following names must be REMOVED from the article and replaced with neutral category language: ${effectiveBannedNames.join(", ")}. Replace every occurrence.\n` : "") +
+    "9. For every factual claim, assess whether it is supported by a supplied source or the product evidence. A vendor blog or secondary article cannot support a universal numerical outcome claim.\n" +
+    "10. 'confidenceScore' = overall percentage (0-100) of how well-supported the final corrected article's claims are.\n" +
     "   - 90-100: All major claims verified against sources\n" +
     "   - 70-89: Most claims verified, minor gaps\n" +
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
-    "10. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
-    "11. Every quantified outcome claim in the corrected markdown MUST either end with the matching numbered inline citation [n], using the supplied source-array order, or have its unsupported number removed. Never leave a numeric performance claim uncited.\n" +
-    "12. Output JSON only.",
-    `Return JSON: {"markdown":"<full corrected article>","notes":"<reviewer summary>","confidenceScore":<0-100>,"claimCount":<number>,"verifiedCount":<number>,"citations":[{"url":"...","title":"..."}]}\n\nSources to validate against: ${JSON.stringify(
+    "11. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
+    "12. Every quantified outcome claim in the corrected markdown MUST either end with the matching numbered inline citation [n], using the supplied source-array order, or have its unsupported number removed. Never leave a numeric performance claim uncited.\n" +
+    "13. Submit the complete corrected article and review metadata through the review_article tool.",
+    userMessage: `Sources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nResearch evidence gathered from the cited sources:\n${researchEvidence || "No research summary supplied."}\n\nFirst-party product evidence:\n${productEvidence || "No first-party product evidence supplied."}\n\nArticle to review:\n${markdown}`,
-    16384,
-  );
-
-  const reviewed = parseJson<{
-    markdown: string;
-    notes?: string;
-    confidenceScore?: number;
-    claimCount?: number;
-    verifiedCount?: number;
-    citations?: { url: string; title?: string }[];
-  }>(
-    z.object({
+    toolName: "review_article",
+    toolDescription: "Submit the complete corrected article and its factual review metadata.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        markdown: { type: "string", description: "The complete corrected Markdown article." },
+        notes: { type: "string", description: "A concise reviewer summary." },
+        confidenceScore: { type: "number" },
+        claimCount: { type: "number" },
+        verifiedCount: { type: "number" },
+        citations: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              url: { type: "string" },
+              title: { type: "string" },
+            },
+            required: ["url", "title"],
+          },
+        },
+      },
+      required: [
+        "markdown",
+        "notes",
+        "confidenceScore",
+        "claimCount",
+        "verifiedCount",
+        "citations",
+      ],
+    },
+    outputSchema: z.object({
       markdown: z.string(),
       notes: z.string().optional(),
-      confidenceScore: z.number().optional(),
-      claimCount: z.number().optional(),
-      verifiedCount: z.number().optional(),
+      confidenceScore: z.number().min(0).max(100).optional(),
+      claimCount: z.number().int().min(0).optional(),
+      verifiedCount: z.number().int().min(0).optional(),
       citations: z
         .array(
           z.object({
@@ -936,9 +1291,219 @@ async function factCheckArticle(
         )
         .optional(),
     }),
-    text,
-  );
+    maxTokens: 16384,
+  });
   return reviewed;
+}
+
+async function editorialReviewArticle(args: {
+  markdown: string;
+  articleType: string;
+  primaryKeyword: string;
+  productName: string;
+  productEvidence: string;
+  researchEvidence: string;
+  sources: { url: string; title?: string }[];
+  maxWords: number;
+}): Promise<{ markdown: string; score: number; notes: string[] }> {
+  const isLongGuide = args.articleType === "ultimate-guide";
+  const targetRange = isLongGuide ? "2200-3400" : "1400-2600";
+  return callClaudeStructured({
+    system: [
+      "You are the final accountable editor for a people-first SEO publication.",
+      "Rewrite the complete article so it is genuinely useful, concise, accurate, and ready for a discerning reader.",
+      "Submit the complete rewrite, score, and notes through the submit_editorial_review tool.",
+      "The score measures search-intent satisfaction, original usefulness, factual and product grounding, structure, clarity, and restraint.",
+      "A score of 85 requires no material unsupported claim, no filler, no malformed Markdown, and at least one concrete decision framework, worked example, or actionable checklist grounded in the supplied evidence.",
+    ].join(" "),
+    userMessage: [
+      `ARTICLE TYPE: ${args.articleType}`,
+      `PRIMARY KEYWORD: ${args.primaryKeyword}`,
+      `PRODUCT: ${args.productName}`,
+      `TARGET LENGTH: ${targetRange} words when the subject warrants it. Google has no preferred word count; never pad to reach the range.`,
+      `HARD MAXIMUM: ${args.maxWords} measured prose words. The complete rewrite must remain at or below this ceiling.`,
+      "",
+      "BINDING EDITORIAL RULES:",
+      "- Answer the reader's main question near the beginning and keep every section necessary to that intent.",
+      "- Remove repetition, generic AI phrasing, empty transitions, decorative emojis, arbitrary timelines, and unsupported best-practice claims.",
+      "- Remove fabricated customer stories, outcomes, percentages, quotes, features, integrations, workflows, or product behavior.",
+      "- Product capabilities may appear only when directly supported by first-party product evidence below.",
+      "- Preserve numbered citations only when the claim is supported by the matching supplied source. Do not invent a new source or citation.",
+      "- Prefer primary and authoritative evidence. Do not turn vendor anecdotes into universal conclusions.",
+      "- Include at least one genuinely useful framework, example, comparison, template, or checklist, but derive it from the article's supported reasoning rather than invented results.",
+      "- Use correct Markdown tables: every table needs one header row, one separator row, consistent columns, and one row per line.",
+      "- Keep at most one natural body CTA and one concise final CTA. Remove duplicated links and repetitive product promotion.",
+      "- Do not add images, screenshots, videos, raw HTML, or editorial commentary.",
+      "- Return the FULL rewritten article, including a clean Sources section when sources are used.",
+      "",
+      `FIRST-PARTY PRODUCT EVIDENCE:\n${args.productEvidence || "No product evidence supplied."}`,
+      "",
+      `RESEARCH EVIDENCE:\n${args.researchEvidence || "No research evidence supplied."}`,
+      "",
+      `SOURCE ARRAY IN CITATION ORDER:\n${JSON.stringify(args.sources)}`,
+      "",
+      `ARTICLE:\n${args.markdown}`,
+    ].join("\n"),
+    toolName: "submit_editorial_review",
+    toolDescription: "Submit the complete editorial rewrite and its quality assessment.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        markdown: { type: "string", description: "The complete rewritten Markdown article." },
+        score: { type: "number" },
+        notes: { type: "array", items: { type: "string" } },
+      },
+      required: ["markdown", "score", "notes"],
+    },
+    outputSchema: z.object({
+      markdown: z.string(),
+      score: z.number().min(0).max(100),
+      notes: z.array(z.string()).default([]),
+    }),
+    maxTokens: 16384,
+  });
+}
+
+async function compressArticleToCeiling(args: {
+  markdown: string;
+  maxWords: number;
+  productName: string;
+  sources: { url: string; title?: string }[];
+}): Promise<{ markdown: string; score: number; notes: string[] }> {
+  return callClaudeStructured({
+    system: [
+      "You are a surgical senior editor.",
+      "Compress the complete article below its hard word ceiling without deleting the answer to the reader's main question.",
+      "Remove repetition, filler, redundant examples, repeated CTAs, and low-value FAQ entries before removing useful instructions.",
+      "Do not introduce any new fact, number, quotation, source, feature, claim, heading promise, image, or video.",
+      "Preserve valid numbered citations, the Sources section, and any accurately grounded product section.",
+      "Return the complete article through the compress_article tool.",
+    ].join(" "),
+    userMessage: [
+      `HARD MAXIMUM: ${args.maxWords} measured prose words.`,
+      `ALLOWED PRODUCT: ${args.productName}`,
+      `SOURCE ARRAY: ${JSON.stringify(args.sources)}`,
+      "",
+      args.markdown,
+    ].join("\n"),
+    toolName: "compress_article",
+    toolDescription: "Submit the complete compressed article and a quality assessment.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        markdown: { type: "string" },
+        score: { type: "number" },
+        notes: { type: "array", items: { type: "string" } },
+      },
+      required: ["markdown", "score", "notes"],
+    },
+    outputSchema: z.object({
+      markdown: z.string(),
+      score: z.number().min(0).max(100),
+      notes: z.array(z.string()).default([]),
+    }),
+    maxTokens: 16384,
+  });
+}
+
+async function auditFinalArticle(args: {
+  markdown: string;
+  articleType: string;
+  primaryKeyword: string;
+  productName: string;
+  productEvidence: string;
+  researchEvidence: string;
+  sources: { url: string; title?: string }[];
+  maxWords: number;
+}): Promise<{ score: number; notes: string[] }> {
+  return callClaudeStructured({
+    system: [
+      "You are the final independent publication auditor for a people-first SEO publication.",
+      "Assess the exact finished article without rewriting it.",
+      "The score measures search-intent satisfaction, usefulness, factual restraint, product grounding, clarity, structure, citation integrity, and absence of generic AI filler.",
+      "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
+      "Do not reward length, keyword repetition, entity coverage, or promotional language.",
+      "Submit only the score and concise actionable notes through the audit_final_article tool.",
+    ].join(" "),
+    userMessage: [
+      `ARTICLE TYPE: ${args.articleType}`,
+      `PRIMARY KEYWORD: ${args.primaryKeyword}`,
+      `PRODUCT: ${args.productName}`,
+      `HARD MAXIMUM: ${args.maxWords} measured prose words.`,
+      "",
+      `FIRST-PARTY PRODUCT EVIDENCE:\n${args.productEvidence || "No product evidence supplied."}`,
+      "",
+      `RESEARCH EVIDENCE:\n${args.researchEvidence || "No research evidence supplied."}`,
+      "",
+      `SOURCE ARRAY IN CITATION ORDER:\n${JSON.stringify(args.sources)}`,
+      "",
+      `EXACT FINISHED ARTICLE:\n${args.markdown}`,
+    ].join("\n"),
+    toolName: "audit_final_article",
+    toolDescription: "Score the exact finished article without rewriting it.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        score: { type: "number" },
+        notes: { type: "array", items: { type: "string" } },
+      },
+      required: ["score", "notes"],
+    },
+    outputSchema: z.object({
+      score: z.number().min(0).max(100),
+      notes: z.array(z.string()).default([]),
+    }),
+    maxTokens: 2048,
+  });
+}
+
+async function generateFinalMetadata(args: {
+  title: string;
+  markdown: string;
+  primaryKeyword: string;
+  sources: { url: string; title?: string }[];
+}): Promise<{ title: string; metaTitle: string; metaDescription: string }> {
+  const currentYear = new Date().getUTCFullYear();
+  return callClaudeStructured({
+    system: [
+      "You are an exacting search editor writing final metadata from the finished article, not from an earlier draft.",
+      "The H1 title must be clear and descriptive. The meta title must be concise and unique. The meta description must be one complete natural sentence.",
+      "Do not add a year unless that exact year is already essential to the supplied article title and body.",
+      "Do not add a statistic, percentage, benchmark, guarantee, or performance promise that is absent from authoritative cited evidence.",
+      "Avoid hype, truncation, dangling conjunctions, keyword stuffing, and generic clickbait.",
+    ].join(" "),
+    userMessage: [
+      `CURRENT YEAR: ${currentYear}`,
+      `PRIMARY KEYWORD: ${args.primaryKeyword}`,
+      `CURRENT TITLE: ${args.title}`,
+      `VERIFIED SOURCES: ${JSON.stringify(args.sources)}`,
+      "",
+      "Return an H1 title, a meta title of at most 60 characters, and a complete meta description between 110 and 155 characters.",
+      "",
+      args.markdown.slice(0, 14000),
+    ].join("\n"),
+    toolName: "submit_final_metadata",
+    toolDescription: "Submit final metadata grounded in the finished article.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        metaTitle: { type: "string" },
+        metaDescription: { type: "string" },
+      },
+      required: ["title", "metaTitle", "metaDescription"],
+    },
+    outputSchema: z.object({
+      title: z.string().min(1),
+      metaTitle: z.string().min(1),
+      metaDescription: z.string().min(1),
+    }),
+    maxTokens: 1024,
+  });
 }
 
 async function webResearch(
@@ -1002,8 +1567,47 @@ async function webResearch(
     completion.output_text,
   );
 
-  console.log(`Web research complete: ${result.sources.length} sources found.`);
-  return result;
+  // Treat only provider-attributed web citations as verified sources. URLs that
+  // merely appear inside model-authored JSON can be plausible but fabricated.
+  const citedSources: { url: string; title?: string }[] = [];
+  for (const item of completion.output) {
+    if (item.type !== "message") continue;
+    for (const content of item.content) {
+      if (content.type !== "output_text") continue;
+      for (const annotation of content.annotations) {
+        if (annotation.type !== "url_citation") continue;
+        citedSources.push({
+          url: annotation.url,
+          title: annotation.title || undefined,
+        });
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const verifiedSources = citedSources.filter((source) => {
+    try {
+      const parsed = new URL(source.url);
+      if (parsed.protocol !== "https:") return false;
+      parsed.hash = "";
+      const key = parsed.href;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      source.url = key;
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  console.log(
+    `Web research complete: ${verifiedSources.length} provider-attributed sources verified ` +
+      `(${result.sources.length} model-listed source(s) ignored).`,
+  );
+  return {
+    researchSummary: result.researchSummary,
+    sources: verifiedSources,
+  };
 }
 
 async function handleOnboarding(
@@ -1518,7 +2122,12 @@ async function handlePlan(
 
       const m = findMetrics(topic.primaryKeyword);
       if (!m) {
-        // No data even after fuzzy match — keep up to 3 (AI thinks they're relevant, just no DataForSEO data)
+        if (site.verifiedKeywordDataRequired) {
+          console.log(`Blocked: "${topic.primaryKeyword}" (verified keyword data required)`);
+          continue;
+        }
+        // Non-strict sites may preserve a small exploratory set, clearly
+        // separated from verified keyword opportunities.
         noDataCount++;
         if (noDataCount > 3) {
           console.log(`Blocked: "${topic.primaryKeyword}" (no metrics data, cap reached)`);
@@ -1632,6 +2241,11 @@ async function handleArticle(
   };
   if (!site) throw new Error("Site not found");
   if (topicId && !topic) throw new Error("Topic not found");
+  const productName = site.siteName ?? site.domain;
+  const isStrictPublication =
+    new URL(normalizeSiteOrigin(site.domain)).hostname === "leadpilot.chat";
+  const mediaQualityNotes: string[] = [];
+  const researchQualityNotes: string[] = [];
 
   // ── Step 0: SERP Analysis + Article Type Selection (graceful degradation) ──
   let serpPaaQuestions: string[] = [];
@@ -1720,6 +2334,30 @@ async function handleArticle(
         }
       }
 
+      if (isStrictPublication) {
+        const strictSources = strictEvidenceSources(researchSources);
+        researchSources = strictSources.accepted;
+        if (strictSources.rejected.length > 0) {
+          researchQualityNotes.push(
+            `Excluded ${strictSources.rejected.length} secondary or vendor-authored source(s) from strict evidence.`,
+          );
+          console.log(
+            `Strict evidence filter excluded ${strictSources.rejected.length} source(s): ` +
+              strictSources.rejected
+                .map(({ source }) => source.url)
+                .join(", "),
+          );
+        }
+        if (strictSources.rejected.length > 0 || researchSources.length === 0) {
+          researchContext = [
+            "Strict evidence mode is active.",
+            "Secondary and vendor-authored sources were excluded from the article evidence set.",
+            "Do not use external statistics, percentages, benchmarks, attributed quotations, dates, or universal performance claims.",
+            "Write practical, product-grounded guidance and use only the authoritative sources listed separately for factual mechanics.",
+          ].join(" ");
+        }
+      }
+
       console.log(`Research gathered: ${researchContext.length} chars, ${researchSources.length} sources`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
@@ -1729,20 +2367,27 @@ async function handleArticle(
 
   // ── Step 1b: YouTube Video Search (graceful degradation) ──
   await reportProgress(3, "Searching YouTube videos...");
-  let youtubeVideos: { videoId: string; title: string }[] = [];
-  const enableYouTube = site.youtubeEmbeds !== false;
+  let youtubeVideos: YouTubeCandidate[] = [];
+  const enableImages = options?.includeImages !== false;
+  const enableYouTube = options?.includeYouTube ?? site.youtubeEmbeds !== false;
 
   if (enableYouTube && topic) {
     try {
-      youtubeVideos = await searchYouTubeVideos(
-        topic.label,
-        topic.primaryKeyword ?? "",
-        site.niche ?? "",
-        site.language ?? "en",
+      youtubeVideos = await verifyYouTubeCandidates(
+        await searchYouTubeVideos(
+          topic.label,
+          topic.primaryKeyword ?? "",
+          site.niche ?? "",
+          site.language ?? "en",
+        ),
       );
+      if (youtubeVideos.length === 0) {
+        mediaQualityNotes.push("No verified, embeddable YouTube candidate was found.");
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
       console.error(`YouTube search failed (continuing without): ${msg}`);
+      mediaQualityNotes.push(`YouTube discovery skipped: ${msg}`);
     }
   }
 
@@ -1750,12 +2395,17 @@ async function handleArticle(
   await reportProgress(4, "Capturing site screenshot...");
   let screenshotUrl: string | undefined;
 
-  try {
-    screenshotUrl = await captureScreenshot(ctx, site.domain);
-    console.log(`Site screenshot captured: ${screenshotUrl}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`Screenshot capture failed (continuing without): ${msg}`);
+  if (enableImages) {
+    try {
+      screenshotUrl = await captureScreenshot(ctx, site.domain, productName);
+      console.log(`Site screenshot captured: ${screenshotUrl}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`Screenshot capture failed (continuing without): ${msg}`);
+      mediaQualityNotes.push(`Product screenshot omitted: ${msg}`);
+    }
+  } else {
+    mediaQualityNotes.push("Product screenshot disabled for this run.");
   }
 
   // ── Step 1d: Media preparation ──
@@ -1780,8 +2430,6 @@ async function handleArticle(
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
 
   // Old block-building code removed — all context is now in the structured XML system prompt above
-
-  const productName = site.siteName ?? site.domain;
 
   // ── Build existing article keywords for anti-cannibalization ──
   const existingArticles = await ctx.runQuery(api.articles.listBySite, { siteId });
@@ -1860,24 +2508,12 @@ async function handleArticle(
     `</content_settings>`,
     ``,
     `<youtube_embeds>`,
-    enableYouTube && youtubeVideos.length > 0
-      ? [
-          `YouTube embedding is ENABLED. You have ${youtubeVideos.length} real YouTube video(s) available.`,
-          `Include at least 1-2 of these videos in the article. Place each video AFTER the section it relates to most. Choose the most relevant videos for the article's topic.`,
-          `Use this exact HTML for each embed:`,
-          ...youtubeVideos.map((v) =>
-            `Video "${v.title}":\n<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen></iframe></div>`
-          ),
-          `Copy the HTML exactly. Do not modify the iframe code. Do NOT skip all videos — include the best 1-2.`,
-        ].join("\n")
-      : enableYouTube
-        ? `YouTube embedding is ENABLED but no videos were found for this topic. Skip YouTube embeds.`
-        : `YouTube embedding is DISABLED. Do NOT include any YouTube embeds.`,
+    `Do NOT add a YouTube embed or raw iframe. After editorial review, the system may add at most one independently verified video when it is directly relevant to a specific section. A video is optional, never a completeness requirement.`,
     `</youtube_embeds>`,
     ``,
     `<images>`,
-    `Note: A product screenshot will be automatically added to the product section by the system. Do NOT add any screenshot yourself.`,
-    `A generated hero image and a generated explanatory infographic are added by the system. Do not hotlink arbitrary web images.`,
+    `Do NOT add screenshots, generated images, image URLs, or raw image HTML. The system separately reviews each media asset and may omit all optional media when quality is insufficient.`,
+    `Do not refer to an image, screenshot, diagram, or video that is not present in the supplied evidence.`,
     `</images>`,
     ``,
     `<article_structure>`,
@@ -1926,10 +2562,10 @@ async function handleArticle(
     `- Target long-tail question variants in subheadings — AI Overviews appear less on long-tail queries, so organic clicks are higher there.`,
     ``,
     `ENTITY OPTIMIZATION:`,
-    `- Mention the primary keyword and key entities within the first 100 words of the article.`,
-    `- Each H2 heading should contain a relevant entity or keyword variation.`,
-    `- Maintain natural keyword frequency throughout — aim for the primary keyword every 200-300 words.`,
-    `- Include semantically related terms and synonyms, not just exact-match keywords.`,
+    `- Answer the primary search intent clearly near the beginning; use the query naturally when it helps the reader.`,
+    `- Write descriptive H2 headings for the actual questions and decisions covered. Do not force keywords into every heading.`,
+    `- Use topic terminology naturally. Never target a keyword density or repeat an exact phrase on a schedule.`,
+    `- Include semantically related terms only where they improve precision or comprehension.`,
     `- Reference real entities only when they are relevant and supported by supplied evidence.`,
     ``,
     serpPaaQuestions.length > 0
@@ -1955,16 +2591,8 @@ async function handleArticle(
     `</article_structure>`,
     ``,
     `<output_format>`,
-    `Output a single JSON object (no markdown code blocks around it):`,
-    `{`,
-    `  "title": "string",`,
-    `  "slug": "string",`,
-    `  "markdown": "string (the full article)",`,
-    `  "metaTitle": "string (max 60 chars, include primary keyword)",`,
-    `  "metaDescription": "string (max 155 chars, compelling + keyword)",`,
-    `  "metaKeywords": ["keyword1", ...] (8-12 SEO keywords),`,
-    `  "sources": [{"url": "string", "title": "string"}]`,
-    `}`,
+    `Submit the complete article and metadata through the submit_article tool.`,
+    `The markdown field must contain the full article, not a summary or excerpt.`,
     `</output_format>`,
   ].filter(Boolean).join("\n");
 
@@ -1983,6 +2611,22 @@ async function handleArticle(
       `</research>`,
     ].join("\n") : "",
     ``,
+    researchSources.length > 0
+      ? [
+          `<verified_sources>`,
+          `These are the only externally verified sources. Preserve this order for numbered citations and do not add any other URL:`,
+          ...researchSources.map(
+            (source, index) =>
+              `[${index + 1}] ${source.title ?? "Source"} — ${source.url}`,
+          ),
+          `</verified_sources>`,
+        ].join("\n")
+      : [
+          `<verified_sources>`,
+          `No external source URL was independently verified. Do not include statistics, attributed quotations, numbered citations, or a Sources section.`,
+          `</verified_sources>`,
+        ].join("\n"),
+    ``,
     siteData.pricing || siteData.features || siteData.homepage ? [
       `<live_crawled_data>`,
       `This data was crawled directly from ${site.domain} moments ago. Use it for accurate pricing and feature information.`,
@@ -1995,16 +2639,47 @@ async function handleArticle(
     `Write the article now. Follow every instruction in the system prompt exactly.`,
   ].filter(Boolean).join("\n");
 
-  const articleText = await callClaude(
-    systemPrompt,
+  const article = await callClaudeStructured({
+    system: systemPrompt,
     userMessage,
-    16384,
-  );
-
-  const article = parseJson<z.infer<typeof ArticleSchema>>(
-    ArticleSchema,
-    articleText,
-  );
+    toolName: "submit_article",
+    toolDescription: "Submit the complete SEO article and all publication metadata.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        slug: { type: "string" },
+        markdown: { type: "string", description: "The complete Markdown article." },
+        metaTitle: { type: "string", maxLength: 60 },
+        metaDescription: { type: "string", maxLength: 155 },
+        metaKeywords: { type: "array", items: { type: "string" }, minItems: 1 },
+        sources: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              url: { type: "string" },
+              title: { type: "string" },
+            },
+            required: ["url", "title"],
+          },
+        },
+      },
+      required: [
+        "title",
+        "slug",
+        "markdown",
+        "metaTitle",
+        "metaDescription",
+        "metaKeywords",
+        "sources",
+      ],
+    },
+    outputSchema: ArticleSchema,
+    maxTokens: 16384,
+  });
 
   // ── Programmatic competitor scrub (safety net) ──
   // Even with prompt instructions, LLMs sometimes mention competitors.
@@ -2022,10 +2697,10 @@ async function handleArticle(
     for (const name of compNames) {
       if (name.length < 3) continue; // skip very short names to avoid false positives
       const regex = new RegExp(`\\b${name}\\b`, "gi");
-      scrubbed = scrubbed.replace(regex, productName);
+      scrubbed = scrubbed.replace(regex, "other platforms");
     }
     if (scrubbed !== article.markdown) {
-      console.log(`Competitor scrub: replaced competitor mentions with ${productName} in article markdown.`);
+      console.log("Competitor scrub: replaced competitor mentions with neutral category language.");
       article.markdown = scrubbed;
     }
 
@@ -2034,13 +2709,23 @@ async function handleArticle(
     for (const name of compNames) {
       if (name.length < 3) continue;
       const regex = new RegExp(`\\b${name}\\b`, "gi");
-      scrubbedTitle = scrubbedTitle.replace(regex, productName);
+      scrubbedTitle = scrubbedTitle.replace(regex, "other platforms");
     }
     article.title = scrubbedTitle;
   }
 
-  // Merge research sources with article-generated sources (deduplicate by URL)
-  const allSources = [...(article.sources ?? []), ...researchSources];
+  // Only the web-search provider's attributed citations are trusted. The
+  // writer's source field is advisory and must never expand the bibliography.
+  const verifiedResearchUrls = new Set(researchSources.map((source) => source.url));
+  const unverifiedArticleSources = (article.sources ?? []).filter(
+    (source) => !verifiedResearchUrls.has(source.url),
+  );
+  if (unverifiedArticleSources.length > 0) {
+    console.log(
+      `Discarded ${unverifiedArticleSources.length} writer-supplied source URL(s) that were not independently verified.`,
+    );
+  }
+  const allSources = [...researchSources];
   const seenUrls = new Set<string>();
   const compDomainsForFilter = (site.competitors ?? []).map((c: string) =>
     c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
@@ -2070,7 +2755,9 @@ async function handleArticle(
         .replace(/\/$/, "")
         .replace(/\.com$|\.io$|\.co$|\.org$|\.net$/, ""),
     ),
-  ];
+  ].filter(
+    (name) => name.trim().toLowerCase() !== productName.trim().toLowerCase(),
+  );
   const productEvidence = [
     `Name: ${productName}`,
     `Domain: ${site.domain}`,
@@ -2092,15 +2779,13 @@ async function handleArticle(
       finalMarkdown,
       dedupedSources,
       allBannedNames,
+      productName,
       productEvidence,
       researchContext,
     );
     finalMarkdown = reviewed.markdown;
-    if (reviewed.citations?.length) {
-      const additionalSources = reviewed.citations.filter(
-        (c) => !seenUrls.has(c.url),
-      );
-      finalSources = [...dedupedSources, ...additionalSources];
+    if (reviewed.citations?.some((citation) => !seenUrls.has(citation.url))) {
+      console.log("Fact checker proposed unverified source URL(s); bibliography remained unchanged.");
     }
     // Programmatic competitor name scrub (belt-and-suspenders)
     const scrubNames = [...new Set(allBannedNames.filter(n => n.length > 2))];
@@ -2130,145 +2815,35 @@ async function handleArticle(
     console.error(`Fact check failed; strict sites will hold this article for review: ${msg}`);
   }
 
-  // ── Step 4: Featured Image (hero) + Mid-article Infographic ──
-  // Hero: wide 16:9 abstract data visualization shown at top of article
-  // Infographic: tall 2:3 process/stats diagram injected after the 3rd H2 section
+  // ── Step 4: Generate media, but attach it only after editorial review ──
   await reportProgress(9, "Generating images...");
   let featuredImage: string | undefined;
-  let infographicUrl: string | undefined;
 
-  // Try hero image up to 2 times — OpenAI image gen can be flaky
-  for (let heroAttempt = 0; heroAttempt < 2; heroAttempt++) {
-    try {
-      featuredImage = await generateHeroImage(
-        ctx,
-        article.title,
-        site.niche ?? "",
-        site.imageBrandingPrompt ?? undefined,
-        site.brandPrimaryColor ?? undefined,
-      );
-      console.log(`Hero image generated: ${featuredImage}`);
-      break; // Success
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      console.error(`Hero image attempt ${heroAttempt + 1} failed: ${msg}`);
-      if (heroAttempt === 1) {
-        // Final attempt failed — fall back to screenshot if available
-        if (screenshotUrl) {
-          featuredImage = screenshotUrl;
-          console.log("Using site screenshot as hero image fallback.");
-        } else {
+  // Every generated asset must pass independent visual review before storage.
+  if (enableImages) {
+    for (let heroAttempt = 0; heroAttempt < 2; heroAttempt++) {
+      try {
+        featuredImage = await generateHeroImage(
+          ctx,
+          article.title,
+          site.niche ?? "",
+          site.imageBrandingPrompt ?? undefined,
+          site.brandPrimaryColor ?? undefined,
+        );
+        console.log(`Hero image generated: ${featuredImage}`);
+        mediaQualityNotes.push("Hero image passed visual review.");
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        console.error(`Hero image attempt ${heroAttempt + 1} failed: ${msg}`);
+        if (heroAttempt === 1) {
           featuredImage = undefined;
+          mediaQualityNotes.push(`Hero image omitted after visual review: ${msg}`);
         }
       }
     }
-  }
-
-  try {
-    infographicUrl = await generateInfographic(
-      ctx,
-      article.title,
-      topic?.primaryKeyword ?? article.title,
-      site.niche ?? "",
-      site.brandPrimaryColor ?? undefined,
-    );
-    console.log(`Mid-article infographic generated: ${infographicUrl}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    console.error(`Infographic generation failed (skipping): ${msg}`);
-    infographicUrl = undefined;
-  }
-
-  // Inject infographic after the 3rd H2 section in the article body
-  if (infographicUrl) {
-    const h2Regex = /^## /gm;
-    let matchCount = 0;
-    let insertIndex = -1;
-    let match: RegExpExecArray | null;
-    while ((match = h2Regex.exec(finalMarkdown)) !== null) {
-      matchCount++;
-      if (matchCount === 3) {
-        insertIndex = match.index;
-        break;
-      }
-    }
-    if (insertIndex !== -1) {
-      const infographicMd = `\n![${article.title} infographic](${infographicUrl})\n*Process overview for ${topic?.primaryKeyword ?? article.title}*\n\n`;
-      finalMarkdown = finalMarkdown.slice(0, insertIndex) + infographicMd + finalMarkdown.slice(insertIndex);
-      console.log("Infographic injected after 3rd H2 section.");
-    }
-  }
-
-  // ── Step 4b: Programmatic YouTube Video Injection ──
-  // Claude often ignores YouTube embed instructions, so we inject them ourselves
-  if (youtubeVideos.length > 0) {
-    const hasYouTube = finalMarkdown.includes("youtube.com/embed/");
-    if (!hasYouTube) {
-      console.log(`Claude skipped YouTube embeds. Injecting ${Math.min(youtubeVideos.length, 2)} video(s) programmatically...`);
-      // Find a good insertion point: after the 4th or 5th H2 (middle of article)
-      const h2Regex = /^## /gm;
-      let h2Count = 0;
-      let youtubeInsertIndex = -1;
-      let h2Match: RegExpExecArray | null;
-      while ((h2Match = h2Regex.exec(finalMarkdown)) !== null) {
-        h2Count++;
-        if (h2Count === 5) {
-          youtubeInsertIndex = h2Match.index;
-          break;
-        }
-      }
-      // Fallback: if fewer than 5 H2s, insert before the last H2
-      if (youtubeInsertIndex === -1 && h2Count >= 2) {
-        const allH2 = [...finalMarkdown.matchAll(/^## /gm)];
-        youtubeInsertIndex = allH2[allH2.length - 2].index!;
-      }
-      if (youtubeInsertIndex !== -1) {
-        const videosToInject = youtubeVideos.slice(0, 2);
-        const youtubeMd = videosToInject.map((v) =>
-          `\n<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.5em 0;border-radius:8px;"><iframe src="https://www.youtube.com/embed/${v.videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen loading="lazy"></iframe></div>\n*${v.title}*\n`
-        ).join("\n");
-        finalMarkdown = finalMarkdown.slice(0, youtubeInsertIndex) + youtubeMd + "\n" + finalMarkdown.slice(youtubeInsertIndex);
-        console.log(`YouTube videos injected: ${videosToInject.map(v => v.videoId).join(", ")}`);
-      } else {
-        console.log("Could not find suitable H2 for YouTube injection.");
-      }
-    } else {
-      console.log("Claude included YouTube embeds — no injection needed.");
-    }
-  }
-
-  // ── Step 4b1: Fix broken markdown tables ──
-  // AI sometimes generates broken separator rows with double pipes
-  finalMarkdown = finalMarkdown.replace(/\|\|+/g, '|');
-  // Fix separator rows that are missing dashes
-  finalMarkdown = finalMarkdown.replace(/\|\s*\|/g, '| --- |');
-
-  // ── Step 4c: Programmatic Screenshot Injection (inside product section) ──
-  if (screenshotUrl) {
-    const pName = site.siteName || "the product";
-    const mdLines = finalMarkdown.split("\n");
-    let productH2Line = -1;
-    for (let li = 0; li < mdLines.length; li++) {
-      if (mdLines[li].startsWith("## ") && (mdLines[li].toLowerCase().includes(pName.toLowerCase()) || (/how\s/i.test(mdLines[li]) && /helps?/i.test(mdLines[li])))) {
-        productH2Line = li;
-        break;
-      }
-    }
-    if (productH2Line !== -1) {
-      let insertLine = productH2Line + 1;
-      while (insertLine < mdLines.length && mdLines[insertLine].trim() === "") insertLine++;
-      while (insertLine < mdLines.length && mdLines[insertLine].trim() !== "") insertLine++;
-      mdLines.splice(insertLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — ${site.siteSummary ? site.siteSummary.split(".")[0] : "see it in action"}*`, "");
-      finalMarkdown = mdLines.join("\n");
-      console.log("Screenshot injected inside product section (after intro paragraph).");
-    } else {
-      const faqLine = mdLines.findIndex(l => l.startsWith("## FAQ") || l.startsWith("## Frequently") || /##.*(?:faq|frequently)/i.test(l));
-      if (faqLine !== -1) {
-        mdLines.splice(faqLine, 0, "", `![${pName} website](${screenshotUrl})`, `*${pName} — see it in action*`, "");
-        finalMarkdown = mdLines.join("\n");
-        console.log("Screenshot injected (fallback: before FAQ).");
-      }
-    }
+  } else {
+    mediaQualityNotes.push("Hero image disabled for this run.");
   }
 
   // ── Step 5: Content Score (graceful degradation) ──
@@ -2287,7 +2862,11 @@ async function handleArticle(
       console.log(`Content score: overall=${score.overallScore}, entities=${score.entityCoverage}, completeness=${score.topicCompleteness}`);
 
       // ── AUTO-ENHANCEMENT: If score is below 70, inject missing entities/topics ──
-      if (score.overallScore < 70 && (score.missingEntities.length > 0 || score.missingTopics.length > 0)) {
+      if (
+        !isStrictPublication &&
+        score.overallScore < 70 &&
+        (score.missingEntities.length > 0 || score.missingTopics.length > 0)
+      ) {
         console.log(`Content score ${score.overallScore}/100 — auto-enhancing with ${score.missingEntities.length} missing entities, ${score.missingTopics.length} missing topics...`);
         try {
           const enhancePrompt = [
@@ -2320,6 +2899,17 @@ async function handleArticle(
         } catch (enhErr) {
           console.error(`Auto-enhancement failed (keeping original): ${enhErr instanceof Error ? enhErr.message : "unknown"}`);
         }
+      } else if (
+        isStrictPublication &&
+        score.overallScore < 70 &&
+        (score.missingEntities.length > 0 || score.missingTopics.length > 0)
+      ) {
+        researchQualityNotes.push(
+          `SERP content score ${score.overallScore}/100 was retained as a diagnostic; no entity-stuffing rewrite was applied.`,
+        );
+        console.log(
+          `Strict publication kept the ${score.overallScore}/100 SERP score diagnostic-only; no entity injection was applied.`,
+        );
       }
     } catch (err) {
       console.error(`Content scoring failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
@@ -2336,24 +2926,262 @@ async function handleArticle(
         finalMarkdown,
         finalSources,
         allBannedNames,
+        productName,
         productEvidence,
         researchContext,
       );
       finalMarkdown = reviewed.markdown;
       factCheckScore = reviewed.confidenceScore;
       factCheckNotes = reviewed.notes;
-      if (reviewed.citations?.length) {
-        const known = new Set(finalSources.map((source) => source.url));
-        finalSources = [
-          ...finalSources,
-          ...reviewed.citations.filter((source) => !known.has(source.url)),
-        ];
+      if (reviewed.citations?.some(
+        (citation) => !finalSources.some((source) => source.url === citation.url),
+      )) {
+        console.log("Post-enhancement fact checker proposed unverified source URL(s); ignored.");
       }
     } catch (err) {
       factCheckScore = undefined;
       factCheckNotes = `Final fact check failed: ${err instanceof Error ? err.message : "unknown"}`;
       console.error(`${factCheckNotes} Strict sites will hold the article for review.`);
     }
+  }
+
+  // ── Step 5b: Final people-first editorial review ──
+  let editorialQualityScore: number | undefined;
+  let editorialQualityNotes: string[] = [];
+  let editorialReviewCompleted = false;
+  try {
+    console.log("Running final editorial quality review...");
+    const editorial = await editorialReviewArticle({
+      markdown: finalMarkdown,
+      articleType: effectiveArticleType,
+      primaryKeyword: topic?.primaryKeyword ?? article.title,
+      productName,
+      productEvidence,
+      researchEvidence: researchContext,
+      sources: finalSources,
+      maxWords: articleWordCeiling(effectiveArticleType),
+    });
+    const editorialStats = calculateArticleStats(editorial.markdown);
+    if (editorialStats.wordCount < 900) {
+      throw new Error(`Editorial rewrite became too thin (${editorialStats.wordCount} words)`);
+    }
+    finalMarkdown = editorial.markdown;
+    editorialQualityScore = editorial.score;
+    editorialQualityNotes = [...researchQualityNotes, ...editorial.notes];
+
+    const maxWords = articleWordCeiling(effectiveArticleType);
+    if (editorialStats.wordCount > maxWords) {
+      console.log(
+        `Editorial rewrite is ${editorialStats.wordCount} words; compressing to hard ceiling ${maxWords}.`,
+      );
+      const compressed = await compressArticleToCeiling({
+        markdown: finalMarkdown,
+        maxWords,
+        productName,
+        sources: finalSources,
+      });
+      const compressedStats = calculateArticleStats(compressed.markdown);
+      if (compressedStats.wordCount > maxWords) {
+        throw new Error(
+          `Compression missed the hard ceiling (${compressedStats.wordCount}/${maxWords} words)`,
+        );
+      }
+      if (compressedStats.wordCount < 900) {
+        throw new Error(`Compression became too thin (${compressedStats.wordCount} words)`);
+      }
+      finalMarkdown = compressed.markdown;
+      editorialQualityScore = Math.min(editorial.score, compressed.score);
+      editorialQualityNotes.push(
+        `Compressed from ${editorialStats.wordCount} to ${compressedStats.wordCount} words to match the ${effectiveArticleType} ceiling.`,
+        ...compressed.notes,
+      );
+    }
+    editorialReviewCompleted = true;
+    console.log(`Editorial quality score: ${editorialQualityScore}/100`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown editorial error";
+    editorialQualityNotes = [`Editorial review failed: ${message}`];
+    console.error(`${editorialQualityNotes[0]} Strict sites will hold the article for review.`);
+  }
+
+  // The editorial rewrite can remove or rephrase claims, so the final factual
+  // review must run on the exact prose that will be stored.
+  if (editorialReviewCompleted) {
+    try {
+      const reviewed = await factCheckArticle(
+        finalMarkdown,
+        finalSources,
+        allBannedNames,
+        productName,
+        productEvidence,
+        researchContext,
+      );
+      finalMarkdown = reviewed.markdown;
+      factCheckScore = reviewed.confidenceScore;
+      factCheckNotes = reviewed.notes;
+      if (reviewed.citations?.some(
+        (citation) => !finalSources.some((source) => source.url === citation.url),
+      )) {
+        console.log("Post-editorial fact checker proposed unverified source URL(s); ignored.");
+      }
+    } catch (error) {
+      factCheckScore = undefined;
+      factCheckNotes = `Post-editorial fact check failed: ${error instanceof Error ? error.message : "unknown"}`;
+      console.error(`${factCheckNotes} Strict sites will hold the article for review.`);
+    }
+  }
+
+  // The fact checker above may make small corrections after the rewrite. Audit
+  // the exact prose that will be stored so the editorial score cannot describe
+  // an earlier version of the article.
+  if (isStrictPublication && editorialReviewCompleted) {
+    try {
+      const finalAudit = await auditFinalArticle({
+        markdown: finalMarkdown,
+        articleType: effectiveArticleType,
+        primaryKeyword: topic?.primaryKeyword ?? article.title,
+        productName,
+        productEvidence,
+        researchEvidence: researchContext,
+        sources: finalSources,
+        maxWords: articleWordCeiling(effectiveArticleType),
+      });
+      editorialQualityScore = finalAudit.score;
+      editorialQualityNotes.push(
+        `Final exact-prose editorial audit: ${finalAudit.score}/100.`,
+        ...finalAudit.notes,
+      );
+      console.log(`Final exact-prose editorial audit: ${finalAudit.score}/100`);
+    } catch (error) {
+      editorialQualityScore = undefined;
+      const message = error instanceof Error ? error.message : "unknown final audit error";
+      editorialQualityNotes.push(`Final exact-prose editorial audit failed: ${message}`);
+      console.error(`Final exact-prose editorial audit failed: ${message}`);
+    }
+  }
+
+  // ── Step 5c: Attach only reviewed, contextually relevant media ──
+  if (enableImages) {
+    try {
+      const visual = await selectSupportingVisual({
+        articleTitle: article.title,
+        primaryKeyword: topic?.primaryKeyword ?? article.title,
+        markdown: finalMarkdown,
+      });
+      if (
+        visual.include &&
+        visual.sectionHeading &&
+        visual.visualConcept &&
+        visual.altText
+      ) {
+        const supportingImageUrl = await generateSupportingIllustration(
+          ctx,
+          article.title,
+          topic?.primaryKeyword ?? article.title,
+          site.niche ?? "",
+          visual.sectionHeading,
+          visual.visualConcept,
+          site.brandPrimaryColor ?? undefined,
+        );
+        const sectionLabel = visual.sectionHeading.replace(/[\[\]]/g, "").trim();
+        const altText = visual.altText.replace(/[\[\]\n]/g, " ").trim();
+        const caption = visual.caption?.replace(/[\n]/g, " ").trim();
+        finalMarkdown = insertImageUnderSection(
+          finalMarkdown,
+          visual.sectionHeading,
+          [
+            `![${altText}](${supportingImageUrl})`,
+            caption ? `*${caption}*` : `*A visual explanation of ${sectionLabel}.*`,
+          ].join("\n"),
+        );
+        mediaQualityNotes.push(
+          `Supporting illustration passed review for section "${visual.sectionHeading}".`,
+        );
+      } else {
+        mediaQualityNotes.push(`Supporting illustration omitted: ${visual.reason}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown review error";
+      console.error(`Supporting illustration omitted: ${message}`);
+      mediaQualityNotes.push(`Supporting illustration omitted: ${message}`);
+    }
+  } else {
+    mediaQualityNotes.push("Supporting illustration disabled for this run.");
+  }
+
+  if (screenshotUrl) {
+    const lines = finalMarkdown.split("\n");
+    const productHeading = lines.findIndex(
+      (line) =>
+        line.startsWith("## ") &&
+        (line.toLowerCase().includes(productName.toLowerCase()) ||
+          (/how\s/i.test(line) && /helps?/i.test(line))),
+    );
+    if (productHeading >= 0) {
+      let insertionLine = productHeading + 1;
+      while (insertionLine < lines.length && lines[insertionLine].trim() === "") insertionLine++;
+      while (insertionLine < lines.length && lines[insertionLine].trim() !== "") insertionLine++;
+      lines.splice(
+        insertionLine,
+        0,
+        "",
+        `![${productName} website interface](${screenshotUrl})`,
+        `*${productName}'s current website experience.*`,
+        "",
+      );
+      finalMarkdown = lines.join("\n");
+      mediaQualityNotes.push("Validated product screenshot placed in the product section.");
+    } else {
+      mediaQualityNotes.push("Validated product screenshot omitted because the article had no relevant product section.");
+    }
+  }
+
+  if (enableYouTube && youtubeVideos.length > 0) {
+    try {
+      const placement = await selectYouTubePlacement({
+        articleTitle: article.title,
+        primaryKeyword: topic?.primaryKeyword ?? article.title,
+        markdown: finalMarkdown,
+        candidates: youtubeVideos,
+      });
+      if (placement.placement) {
+        finalMarkdown = insertYouTubeAfterSection(finalMarkdown, placement.placement);
+        mediaQualityNotes.push(
+          `Verified "${placement.placement.title}" for section "${placement.placement.sectionHeading}": ${placement.reason}`,
+        );
+      } else {
+        mediaQualityNotes.push(
+          `YouTube omitted after reviewing ${youtubeVideos.map((video) => `"${video.title}"`).join(", ")}: ${placement.reason}`,
+        );
+      }
+    } catch (error) {
+      mediaQualityNotes.push(
+        `YouTube placement omitted: ${error instanceof Error ? error.message : "unknown review error"}`,
+      );
+    }
+  }
+
+  // Metadata is generated from the final edited prose. Earlier metadata may no
+  // longer describe the article after factual corrections and compression.
+  try {
+    const metadata = await generateFinalMetadata({
+      title: article.title,
+      markdown: finalMarkdown,
+      primaryKeyword: topic?.primaryKeyword ?? article.title,
+      sources: finalSources,
+    });
+    article.title = metadata.title.trim();
+    article.metaTitle = clampMetaTitle(metadata.metaTitle);
+    article.metaDescription = clampMetaDescription(metadata.metaDescription);
+    console.log(
+      `Final metadata regenerated: title=${article.metaTitle?.length ?? 0} chars, description=${article.metaDescription?.length ?? 0} chars.`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown metadata error";
+    editorialQualityNotes.push(`Final metadata generation failed: ${message}`);
+    article.metaTitle = clampMetaTitle(article.metaTitle || article.title);
+    article.metaDescription = clampMetaDescription(article.metaDescription);
+    console.error(`Final metadata fallback used: ${message}`);
   }
 
   // ── Step 6: Calculate Article Stats ──
@@ -2371,7 +3199,7 @@ async function handleArticle(
     slug: slug.startsWith("/") ? slug : `/${slug}`,
     markdown: finalMarkdown,
     metaTitle: article.metaTitle,
-    metaDescription: clampMetaDescription(article.metaDescription),
+    metaDescription: article.metaDescription,
     metaKeywords: article.metaKeywords,
     sources: finalSources.length > 0 ? finalSources : undefined,
     language: site.language,
@@ -2380,6 +3208,10 @@ async function handleArticle(
     wordCount,
     factCheckScore,
     factCheckNotes,
+    editorialQualityScore,
+    editorialQualityNotes,
+    mediaQualityStatus: "passed",
+    mediaQualityNotes,
   });
 
   // Save content score if available
@@ -2724,6 +3556,7 @@ export const generateArticle = action({
   },
   handler: async (ctx, { siteId, topicId, options }) => {
     const site = await ctx.runQuery(api.sites.get, { siteId });
+    let generationReservationId: Id<"usage_log"> | undefined;
 
     // Enforce article limit
     if (site?.userId) {
@@ -2736,6 +3569,7 @@ export const generateArticle = action({
         maxArticles: limits.maxArticles,
       });
       if (!claim.ok) throw new Error(`Article limit reached (${limits.maxArticles}/month). Upgrade your plan.`);
+      generationReservationId = claim.reservationId;
     }
 
     // Create a tracking job for progress visibility
@@ -2749,6 +3583,13 @@ export const generateArticle = action({
     try {
       res = await handleArticle(ctx, siteId, topicId, options ?? undefined, jobId);
     } catch (err) {
+      if (generationReservationId && site?.userId) {
+        await ctx.runMutation(api.articles.releaseGenerationSlot, {
+          reservationId: generationReservationId,
+          userId: site.userId,
+          siteId,
+        });
+      }
       await ctx.runMutation(api.jobs.markFailed, {
         jobId,
         error: err instanceof Error ? err.message : "unknown",
@@ -3263,7 +4104,40 @@ export const processSpecificJob = action({
         console.error("Internal linking failed:", err instanceof Error ? err.message : "unknown");
       }
 
-      // Publish
+      // Respect the same publication policy as every other article path. A
+      // manually queued job must never bypass approvalRequired.
+      if (site?.approvalRequired) {
+        await ctx.runMutation(api.articles.updateStatus, {
+          articleId: articleResult.articleId,
+          status: "review",
+        });
+        await ctx.runMutation(api.jobs.markDone, {
+          jobId: job._id,
+          result: { articleId: articleResult.articleId },
+        });
+        console.log(
+          `Approval required — article ${articleResult.articleId} held at "review" status.`,
+        );
+        return { processed: true };
+      }
+
+      if (site?.publishMethod === "manual") {
+        await ctx.runMutation(api.articles.updateStatus, {
+          articleId: articleResult.articleId,
+          status: "ready",
+        });
+        await ctx.runMutation(api.jobs.markDone, {
+          jobId: job._id,
+          result: { articleId: articleResult.articleId },
+        });
+        console.log(
+          `Manual publish mode — article ${articleResult.articleId} held at "ready" status.`,
+        );
+        return { processed: true };
+      }
+
+      // Auto-publish only for sites that explicitly require neither review nor
+      // manual delivery.
       try {
         await ctx.runAction(api.publisher.publishArticle, {
           siteId: job.siteId,

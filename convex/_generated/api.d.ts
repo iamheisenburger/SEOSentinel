@@ -21,6 +21,8 @@ import type * as crons from "../crons.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_articleQuality from "../lib/articleQuality.js";
 import type * as lib_internalLinks from "../lib/internalLinks.js";
+import type * as lib_mediaQuality from "../lib/mediaQuality.js";
+import type * as lib_sourceQuality from "../lib/sourceQuality.js";
 import type * as pages from "../pages.js";
 import type * as planJobs from "../planJobs.js";
 import type * as planLimits from "../planLimits.js";
@@ -49,6 +51,8 @@ declare const fullApi: ApiFromModules<{
   jobs: typeof jobs;
   "lib/articleQuality": typeof lib_articleQuality;
   "lib/internalLinks": typeof lib_internalLinks;
+  "lib/mediaQuality": typeof lib_mediaQuality;
+  "lib/sourceQuality": typeof lib_sourceQuality;
   pages: typeof pages;
   planJobs: typeof planJobs;
   planLimits: typeof planLimits;

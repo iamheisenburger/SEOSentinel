@@ -22,6 +22,7 @@ type ArticleRecord = {
   title: string;
   slug: string;
   markdown: string;
+  metaTitle?: string;
   metaDescription?: string;
   language?: string;
   featuredImage?: string;
@@ -29,6 +30,11 @@ type ArticleRecord = {
   wordCount?: number;
   factCheckScore?: number;
   contentScore?: number;
+  editorialQualityScore?: number;
+  editorialQualityNotes?: string[];
+  mediaQualityStatus?: string;
+  mediaQualityNotes?: string[];
+  articleType?: string;
   createdAt: number;
   sources?: { url: string; title?: string }[];
   internalLinks?: { anchor: string; href: string }[];
@@ -70,12 +76,13 @@ function buildMdx(article: ArticleRecord, site: SiteRecord): string {
   const frontmatter = [
     "---",
     `title: ${yamlString(article.title)}`,
+    article.metaTitle ? `metaTitle: ${yamlString(article.metaTitle)}` : undefined,
     article.metaDescription
       ? `description: ${yamlString(article.metaDescription)}`
       : undefined,
     `generator: "pentra"`,
     `status: "published"`,
-    `qualityGateVersion: 1`,
+    `qualityGateVersion: 2`,
     `canonicalUrl: ${yamlString(canonicalUrl)}`,
     article.featuredImage ? `featuredImage: ${yamlString(article.featuredImage)}` : undefined,
     article.readingTime ? `readingTime: ${article.readingTime}` : undefined,
@@ -85,6 +92,12 @@ function buildMdx(article: ArticleRecord, site: SiteRecord): string {
       : undefined,
     article.contentScore !== undefined
       ? `contentScore: ${article.contentScore}`
+      : undefined,
+    article.editorialQualityScore !== undefined
+      ? `editorialQualityScore: ${article.editorialQualityScore}`
+      : undefined,
+    article.mediaQualityStatus
+      ? `mediaQualityStatus: ${yamlString(article.mediaQualityStatus)}`
       : undefined,
     article.language ? `language: ${yamlString(article.language)}` : undefined,
     `date: "${new Date(article.createdAt ?? Date.now()).toISOString()}"`,

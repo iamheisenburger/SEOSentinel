@@ -209,8 +209,12 @@ The LeadPilot cutover is now implemented and deployed.
 - Production verification confirmed two Pentra articles, valid canonical
   metadata, Article JSON-LD, working images, and all nine legacy redirects.
 
-The remaining activation blocker is operational, not architectural:
-DataForSEO currently returns HTTP 402. Fund that account, generate a fresh
-measured topic plan, review the first article end to end, and only then enable
-LeadPilot autopilot. Do not bypass the verified-keyword gate to manufacture
-publishing activity.
+DataForSEO funding and production credentials were restored on 2026-07-16.
+The measured LeadPilot topic plan is active, but three controlled generation
+attempts remained unpublished and exposed transport, source-authority,
+metadata, length, and product-grounding defects. The fixes are now implemented
+locally; the remaining activation gate is to deploy them, generate one fresh
+review-only article, and inspect it end to end. Do not bypass the
+verified-keyword gate, enable autopilot, or publish a weak article to
+manufacture activity. The detailed production contract and traffic scorecard live in
+`docs/LEADPILOT_SEO_DOGFOOD_AUDIT.md`.

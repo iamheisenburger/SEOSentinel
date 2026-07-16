@@ -24,6 +24,10 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     wordCount: article.wordCount,
     factCheckScore: article.factCheckScore,
     contentScore: article.contentScore,
+    editorialQualityScore: article.editorialQualityScore,
+    editorialQualityNotes: article.editorialQualityNotes,
+    mediaQualityStatus: article.mediaQualityStatus,
+    mediaQualityNotes: article.mediaQualityNotes,
     publicationGateStatus: article.publicationGateStatus,
     publicationGateIssues: article.publicationGateIssues,
     publicationGateWarnings: article.publicationGateWarnings,
@@ -80,6 +84,10 @@ function summaryListItem(summary: ArticleSummaryFields) {
     wordCount: summary.wordCount,
     factCheckScore: summary.factCheckScore,
     contentScore: summary.contentScore,
+    editorialQualityScore: summary.editorialQualityScore,
+    editorialQualityNotes: summary.editorialQualityNotes,
+    mediaQualityStatus: summary.mediaQualityStatus,
+    mediaQualityNotes: summary.mediaQualityNotes,
     publicationGateStatus: summary.publicationGateStatus,
     publicationGateIssues: summary.publicationGateIssues,
     publicationGateWarnings: summary.publicationGateWarnings,
@@ -150,6 +158,10 @@ export const createDraft = mutation({
     wordCount: v.optional(v.number()),
     factCheckScore: v.optional(v.number()),
     factCheckNotes: v.optional(v.string()),
+    editorialQualityScore: v.optional(v.number()),
+    editorialQualityNotes: v.optional(v.array(v.string())),
+    mediaQualityStatus: v.optional(v.string()),
+    mediaQualityNotes: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     // Deduplicate slug — prevent multiple articles with the same URL path
@@ -187,6 +199,10 @@ export const createDraft = mutation({
       wordCount: args.wordCount,
       factCheckScore: args.factCheckScore,
       factCheckNotes: args.factCheckNotes,
+      editorialQualityScore: args.editorialQualityScore,
+      editorialQualityNotes: args.editorialQualityNotes,
+      mediaQualityStatus: args.mediaQualityStatus,
+      mediaQualityNotes: args.mediaQualityNotes,
       internalLinks: [],
       createdAt: now(),
       updatedAt: now(),
@@ -357,14 +373,35 @@ export const claimGenerationSlot = mutation({
     }
 
     // Claim the slot by logging immediately (before article generation starts)
-    await ctx.db.insert("usage_log", {
+    const reservationId = await ctx.db.insert("usage_log", {
       userId,
       siteId,
       type: "article_generated",
       createdAt: Date.now(),
     });
 
-    return { ok: true, reason: "" };
+    return { ok: true, reason: "", reservationId };
+  },
+});
+
+export const releaseGenerationSlot = mutation({
+  args: {
+    reservationId: v.id("usage_log"),
+    userId: v.string(),
+    siteId: v.id("sites"),
+  },
+  handler: async (ctx, { reservationId, userId, siteId }) => {
+    const reservation = await ctx.db.get(reservationId);
+    if (
+      reservation &&
+      reservation.userId === userId &&
+      reservation.siteId === siteId &&
+      reservation.type === "article_generated"
+    ) {
+      await ctx.db.delete(reservationId);
+      return { released: true };
+    }
+    return { released: false };
   },
 });
 
