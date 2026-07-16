@@ -492,3 +492,23 @@ were corrected before controlled activation:
 The production bridge rejects unauthenticated traffic and resolves the exact
 LeadPilot record only with the shared Convex/Vercel secret. Existing customer
 sites, articles, schedules, publisher connections, and quotas were preserved.
+
+### Controlled production activation
+
+The hardened release was deployed to Pentra production on July 16, 2026:
+
+- Git commit: `60b74db`;
+- Vercel deployment: `dpl_69hD2KeQj1pgyNGxSyXHyA8EwJq5`;
+- production aliases: `pentra.dev` and `seo-sentinel.vercel.app`;
+- Convex deployment: `wary-starfish-773`;
+- production homepage and the controlled LeadPilot article both returned HTTP
+  200 after deployment;
+- the Convex internal bridge returned HTTP 401 without its bearer secret;
+- LeadPilot had zero pending and zero running jobs at activation.
+
+Only the LeadPilot dogfood site was activated. Its frozen production settings
+are one draft per week, autopilot scheduling enabled, manual approval required,
+verified keyword data required, GitHub publishing configured, and the exact
+`sc-domain:leadpilot.chat` Search Console property connected. This schedules
+research and draft creation; it does not permit blind publication. No other
+Pentra customer's site, cadence, content, connection, or quota was changed.
