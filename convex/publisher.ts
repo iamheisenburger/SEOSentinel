@@ -11,6 +11,7 @@ import {
   normalizeSiteOrigin,
   type PublicationQualityMode,
 } from "./lib/articleQuality";
+import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 
 type FileContent = {
   path: string;
@@ -72,6 +73,7 @@ function buildMdx(article: ArticleRecord, site: SiteRecord): string {
     : `${pathTemplate.replace(/\/$/, "")}/${slug}`;
   const canonicalUrl = `${origin}${canonicalPath.startsWith("/") ? "" : "/"}${canonicalPath}`;
   const yamlString = (value: string) => JSON.stringify(value);
+  const body = stripLeadingDocumentTitle(article.markdown, article.title);
 
   const frontmatter = [
     "---",
@@ -119,7 +121,7 @@ function buildMdx(article: ArticleRecord, site: SiteRecord): string {
     .filter(Boolean)
     .join("\n");
 
-  return `${frontmatter}\n\n${article.markdown.trim()}\n`;
+  return `${frontmatter}\n\n${body}\n`;
 }
 
 type BrandStyle = {
