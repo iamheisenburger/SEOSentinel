@@ -257,7 +257,7 @@ promise.
 
 ## Controlled Generation Findings
 
-Three review-only generation attempts were run on the measured keyword
+Four review-only generation attempts were run on the measured keyword
 `chatbot for lead generation` (monthly volume 170, keyword difficulty 16, and
 CPC 17.68 in the configured DataForSEO market). Autopilot remained off and no
 attempt was published.
@@ -288,6 +288,46 @@ The resulting upstream fixes are now part of the contract:
 - metadata is regenerated from final prose;
 - format-specific length ceilings run before publication;
 - media omission reasons remain visible in the article audit record.
+
+4. The fourth attempt tested the rebuilt exact-prose audit and one bounded
+   remediation pass. It received an initial accountable score of 78 and a
+   post-remediation score of 82, so it remained in review. The article still
+   contained unsupported operational numbers, scoring thresholds, timelines,
+   and an unlabeled invented sales conversation. Its meta description ended in
+   the broken phrase `with full.`. The real LeadPilot homepage screenshot
+   passed review, but two hero attempts and one supporting visual were rejected
+   as ambiguous, misleading, or visually malformed. Three YouTube candidates
+   were reviewed and all were omitted because none directly taught a section.
+   No media or article was forced into production.
+
+This fourth attempt exposed an older prompt architecture beneath the newer
+quality gates. Pentra was still asking writers for fixed TL;DR blocks, tables of
+contents, FAQ counts, link quotas, snippet-sized paragraphs, AI Overview
+patterns, entity coverage, and target word ranges. Those instructions rewarded
+formulaic completeness rather than reader value and created many of the defects
+the final editor then had to remove.
+
+The prompt architecture is now intent-led across every customer site:
+
+- article formats describe the reader decision or workflow instead of a fixed
+  section and item count;
+- there is no target word count, keyword density, outbound-link quota, FAQ
+  quota, or mandatory table of contents;
+- People Also Ask questions are optional context rather than required headings;
+- numeric guidance must be directly evidenced and cited, including operational
+  thresholds, timelines, prices, ranges, scores, and counts;
+- invented scenarios must be labelled hypothetical;
+- a deterministic evidence scan supplies exact offending paragraphs to the one
+  bounded remediation pass and caps the article below 85 while any remain;
+- metadata is cleaned as a complete sentence even when it is already below the
+  character limit;
+- strict sites spend on generated media only after the exact prose clears both
+  factual and editorial gates.
+
+This changes the role of media as well. A real product screenshot can be useful
+first-party evidence. Generated hero art and embedded video are optional
+editorial aids, not SEO completeness signals. Omitting weak media is a quality
+success, not a failed generation.
 
 ## Traffic Scorecard
 

@@ -42,10 +42,14 @@ const HYPE_PATTERN =
   /\b(?:guaranteed|proven(?:\s+results?)?|skyrocket|game[- ]changing|transformational|staggering|revolutionary)\b/i;
 const QUANTIFIED_OUTCOME_PATTERN =
   /(?:\b(?:increase|improve|boost|grow|lift|raise|reduce|decrease|cut|save|recover|free up)\w*\b[^\n.!?]{0,70}\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\b|minutes?\b|days?\b|\$))|(?:\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\s*(?:\/|per)\s*week)\b)/i;
+const EVIDENCE_REQUIRED_NUMBER_PATTERN =
+  /(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\$?\d[\d,]*(?:\.\d+)?)?|\b\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\d[\d,]*(?:\.\d+)?)?\s*\+?\s*(?:%|x|[-‑–— ]?(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|questions?|conversations?|orders?|customers?|users?|visitors?|leads?|calls?|employees?|responses?|messages?|sessions?|articles?|posts?|points?|scores?))|\b\d+(?:\s*\/\s*\d+)+\s*(?:points?|scores?)\b|\b(?:above|below|under|over|at\s+least|at\s+most|more\s+than|fewer\s+than)\s+\d+(?:\.\d+)?\b)(?![\w])/i;
 const INLINE_CITATION_PATTERN = /\[\d+(?:\s*,\s*\d+)*\]/;
 const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
 const DANGLING_META_END_PATTERN =
   /\b(?:a|an|and|at|by|for|from|in|of|on|or|the|to|with|which|that)$/i;
+const INCOMPLETE_META_PHRASE_END_PATTERN =
+  /\b(?:with|for|to|of)\s+(?:full|complete|detailed|relevant|useful|better|clear|strong)$/i;
 
 export function articleWordCeiling(articleType?: string): number {
   switch (articleType) {
@@ -117,20 +121,27 @@ export function clampMetaDescription(
 ): string | undefined {
   if (!value) return undefined;
   const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length <= maxLength) return normalized;
-
-  const candidate = normalized.slice(0, maxLength + 1);
+  const candidate = normalized.length <= maxLength
+    ? normalized
+    : normalized.slice(0, maxLength + 1);
   const lastSpace = candidate.lastIndexOf(" ");
-  const cutAt = lastSpace >= Math.floor(maxLength * 0.7)
-    ? lastSpace
-    : maxLength;
-  const clipped = normalized
+  const cutAt = normalized.length <= maxLength
+    ? normalized.length
+    : lastSpace >= Math.floor(maxLength * 0.7)
+      ? lastSpace
+      : maxLength;
+  let complete = normalized
     .slice(0, cutAt)
     .replace(/[\s,;:.!?–—-]+$/g, "");
-  let complete = clipped;
+  while (INCOMPLETE_META_PHRASE_END_PATTERN.test(complete)) {
+    complete = complete
+      .replace(/\s+\S+\s+\S+$/, "")
+      .replace(/[\s,;:.!?–—-]+$/g, "");
+  }
   while (DANGLING_META_END_PATTERN.test(complete)) {
     complete = complete.replace(/\s+\S+$/, "").replace(/[\s,;:.!?–—-]+$/g, "");
   }
+  if (!complete) return undefined;
   return `${complete}.`.slice(0, maxLength);
 }
 
@@ -145,6 +156,28 @@ export function clampMetaTitle(value: string | undefined, maxLength = 60): strin
 }
 
 function quantifiedParagraphs(markdown: string): string[] {
+  return markdown
+    .replace(/```[\s\S]*?```/g, "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(
+      (paragraph) =>
+        paragraph.length > 0 &&
+        !paragraph.startsWith("#") &&
+        (QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
+          EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph)),
+    );
+}
+
+export function uncitedEvidenceRequiredParagraphs(markdown: string): string[] {
+  return quantifiedParagraphs(markdown).filter(
+    (paragraph) =>
+      !INLINE_CITATION_PATTERN.test(paragraph) &&
+      !EXTERNAL_LINK_PATTERN.test(paragraph),
+  );
+}
+
+function quantifiedOutcomeParagraphs(markdown: string): string[] {
   return markdown
     .replace(/```[\s\S]*?```/g, "")
     .split(/\n\s*\n/)
@@ -243,9 +276,12 @@ export function evaluatePublicationQuality(
     } else if (
       DANGLING_META_END_PATTERN.test(
         article.metaDescription!.trim().replace(/[.!?]+$/, "").trim(),
+      ) ||
+      INCOMPLETE_META_PHRASE_END_PATTERN.test(
+        article.metaDescription!.trim().replace(/[.!?]+$/, "").trim(),
       )
     ) {
-      issues.push("Meta description ends with a dangling word or conjunction.");
+      issues.push("Meta description ends with a dangling or incomplete phrase.");
     }
     const titleYears = new Set(article.title.match(/\b20\d{2}\b/g) ?? []);
     const metaYears = article.metaTitle?.match(/\b20\d{2}\b/g) ?? [];
@@ -287,13 +323,10 @@ export function evaluatePublicationQuality(
 
   const sourceHosts = new Set(validSources.map((source) => source.hostname));
   const paragraphsWithClaims = quantifiedParagraphs(markdown);
-  const uncitedClaims = paragraphsWithClaims.filter(
-    (paragraph) =>
-      !INLINE_CITATION_PATTERN.test(paragraph) &&
-      !EXTERNAL_LINK_PATTERN.test(paragraph),
-  );
+  const paragraphsWithOutcomes = quantifiedOutcomeParagraphs(markdown);
+  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown);
   if (uncitedClaims.length > 0) {
-    const message = `${uncitedClaims.length} quantified outcome claim(s) lack an inline citation.`;
+    const message = `${uncitedClaims.length} quantified outcome or operational claim(s) lack an inline citation.`;
     if (mode === "strict") issues.push(message);
     else warnings.push(message);
   }
@@ -360,10 +393,10 @@ export function evaluatePublicationQuality(
         `Article is overlong for its format (${measuredWordCount} words; review ceiling ${maxWords}).`,
       );
     }
-    if (paragraphsWithClaims.length > 0 && validSources.length < 2) {
+    if (paragraphsWithOutcomes.length > 0 && validSources.length < 2) {
       issues.push("Quantified outcome claims require at least two valid sources.");
     }
-    if (paragraphsWithClaims.length > 0 && strictEvidenceSourceCount < 2) {
+    if (paragraphsWithOutcomes.length > 0 && strictEvidenceSourceCount < 2) {
       issues.push(
         "Quantified outcome claims require at least two primary or authoritative evidence sources.",
       );

@@ -18,6 +18,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   normalizeSiteOrigin,
+  uncitedEvidenceRequiredParagraphs,
 } from "../lib/articleQuality";
 import { strictEvidenceSources } from "../lib/sourceQuality";
 import {
@@ -155,113 +156,75 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
   switch (articleType) {
     case "listicle":
       return [
-        `ARTICLE TYPE: LISTICLE (N Best/Top X format)`,
-        `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Open with the decision or problem this list helps the reader solve. Do not force a statistic.`,
-        `2. TL;DR: "> **TL;DR:** ..." blockquote (2-3 sentences summarizing the top picks).`,
-        `3. TABLE OF CONTENTS: "## Table of Contents" linking to each list item.`,
-        `4. QUICK COMPARISON TABLE: A summary table comparing all items at a glance.`,
-        `5. LIST ITEMS: Each as an H2 (e.g., "## 1. [Item Name] — [One-line value prop]").`,
-        `   Each item: 250-400 words covering key features, pros/cons, pricing, and who it's best for.`,
-        `   Include an image only when the system supplies one with clear reuse rights.`,
-        `6. WHERE ${productName} FITS: Include only if the product is genuinely relevant, and ground every capability in the supplied product evidence.`,
-        `7. HOW TO CHOOSE: Decision criteria or flowchart to help readers pick.`,
-        `8. FAQ: 6-8 questions about the category.`,
-        `9. KEY TAKEAWAYS: 5-7 bullet points.`,
-        `10. SOURCES + a concise Markdown CTA.`,
+        `ARTICLE TYPE: EVIDENCE-LED LISTICLE`,
+        `Open with the decision this list helps the reader make, then state the inclusion and evaluation criteria.`,
+        `Include only items whose identity, capabilities, and relevant details are supported by supplied evidence. Never pad the list to match a number in the proposed title.`,
+        `Evaluate every item against the same useful criteria and explain meaningful tradeoffs, limitations, and best-fit scenarios.`,
+        `Use a comparison table only when the evidence supports consistent fields for every item.`,
+        `Include ${productName} only when it genuinely meets the stated criteria, and ground every capability in first-party product evidence.`,
+        `End with a practical selection framework. Add an FAQ only for important questions the body has not already resolved.`,
       ].join("\n");
 
     case "how-to":
       return [
-        `ARTICLE TYPE: HOW-TO GUIDE (Step-by-step tutorial)`,
-        `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Start with the concrete outcome the reader can achieve by following this guide.`,
-        `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick steps summary.`,
-        `3. TABLE OF CONTENTS: Linking to each major section.`,
-        `4. PREREQUISITES: "## What You'll Need" — tools, knowledge, or setup required.`,
-        `5. STEPS: Each step as an H2 (e.g., "## Step 1: [Action]").`,
-        `   Each step: 300-500 words with detailed instructions, code snippets or examples where relevant.`,
-        `   Include numbered sub-steps where needed.`,
-        `   Add "💡 Pro Tip:" callouts for advanced users.`,
-        `6. COMMON MISTAKES: "## Common Mistakes to Avoid" — 4-6 pitfalls.`,
-        `7. HOW ${productName} HELPS: Show how ${productName} simplifies or automates part of this process.`,
-        `8. FAQ: 6-8 questions about the process.`,
-        `9. KEY TAKEAWAYS: Step summary as bullet points.`,
-        `10. SOURCES + a concise Markdown CTA.`,
+        `ARTICLE TYPE: PRACTICAL HOW-TO`,
+        `State the outcome and who the guide is for. Mention prerequisites only when the reader actually needs them.`,
+        `Arrange the work in causal or chronological steps. For each step, explain the action, why it matters, how to carry it out, and how the reader can verify completion.`,
+        `Use examples only when they clarify the action; label invented scenarios as hypothetical.`,
+        `Cover consequential failure modes and recovery steps rather than manufacturing a fixed mistakes list.`,
+        `Explain how ${productName} helps only where first-party evidence shows a real implementation shortcut or capability.`,
+        `Finish when the reader can complete and verify the task. Add an FAQ only for unresolved edge cases.`,
       ].join("\n");
 
     case "checklist":
       return [
-        `ARTICLE TYPE: CHECKLIST (Actionable checkbox-style guide)`,
-        `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Explain why this checklist matters and what breaks when important items are skipped.`,
-        `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
-        `3. TABLE OF CONTENTS: Linking to each checklist section.`,
-        `4. CHECKLIST SECTIONS: Group items into 4-6 categories, each as an H2.`,
-        `   Format each item as: "### ☐ [Action Item]" followed by 100-200 words explaining why and how.`,
-        `   Include 15-25 total checklist items across all sections.`,
-        `5. PRINTABLE SUMMARY: "## Quick Reference Checklist" — all items in a single bulleted list.`,
-        `6. HOW ${productName} HELPS: Which checklist items ${productName} handles automatically.`,
-        `7. FAQ: 5-7 questions.`,
-        `8. KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
+        `ARTICLE TYPE: ACTIONABLE CHECKLIST`,
+        `Explain the outcome the checklist protects and group checks by the reader's real workflow.`,
+        `Each item must state the action, why it matters, and an observable completion criterion. Omit trivial or duplicative checks.`,
+        `Do not target an arbitrary item count and do not repeat the entire checklist in a second summary section.`,
+        `Map ${productName} to checklist items only when first-party evidence shows that it performs or supports them.`,
+        `Add troubleshooting or an FAQ only when it resolves a meaningful ambiguity.`,
       ].join("\n");
 
     case "comparison":
       return [
-        `ARTICLE TYPE: COMPARISON / VS ARTICLE`,
-        `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Frame the decision the reader is facing and the criteria that should determine it.`,
-        `2. TL;DR: "> **TL;DR:** ..." blockquote with the quick verdict.`,
-        `3. TABLE OF CONTENTS.`,
-        `4. OVERVIEW: Brief intro to both/all options being compared.`,
-        `5. DETAILED COMPARISON TABLE: Comprehensive feature-by-feature markdown table.`,
-        `6. CATEGORY BREAKDOWNS: 5-7 H2 sections comparing specific aspects (e.g., "## Pricing", "## Ease of Use", "## Performance").`,
-        `   Each section: 200-400 words using specific data only when that data appears in the supplied evidence.`,
-        `7. WHO SHOULD USE WHAT: "## Which One Is Right for You?" — scenario-based recommendations.`,
-        `8. HOW ${productName} COMPARES: Where ${productName} fits in this landscape.`,
-        `9. FAQ: 6-8 questions about the comparison.`,
-        `10. VERDICT + KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
+        `ARTICLE TYPE: EVIDENCE-LED COMPARISON`,
+        `Define the reader's decision and evaluation criteria before comparing options.`,
+        `Use the same evidence standard for every option. Distinguish verified facts from editorial judgment and state when evidence is unavailable.`,
+        `Use a comparison table only for genuinely comparable, supported fields; never infer missing pricing, features, or performance.`,
+        `Explain tradeoffs and scenario fit instead of forcing one universal winner.`,
+        `Include ${productName} only when it is one of the reader's real options and first-party evidence supports the comparison.`,
       ].join("\n");
 
     case "roundup":
       return [
-        `ARTICLE TYPE: ROUNDUP (Expert opinions or resource collection)`,
-        `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: Explain why this topic benefits from several evidence-backed perspectives.`,
-        `2. TL;DR: "> **TL;DR:** ..." blockquote.`,
-        `3. TABLE OF CONTENTS.`,
-        `4. CONTEXT: Background on why this topic matters now.`,
-        `5. EXPERT INSIGHTS / RESOURCES: 7-12 items, each as an H2 or H3.`,
-        `   Use attributed quotes only when the exact quote and primary source are present in the research. Otherwise summarize the source without quotation marks.`,
-        `6. KEY THEMES: "## Common Themes" — patterns across the insights.`,
-        `7. HOW ${productName} APPLIES: Connect the insights to what ${productName} does.`,
-        `8. FAQ: 5-7 questions.`,
-        `9. KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
+        `ARTICLE TYPE: CURATED ROUNDUP`,
+        `State the curation criteria and include only named resources or perspectives that can be verified from supplied sources.`,
+        `Use attributed quotations only when the exact language and primary source are available. Otherwise paraphrase accurately without quotation marks.`,
+        `Do not fabricate experts, resources, examples, or a target item count.`,
+        `Synthesize useful patterns, disagreements, and implications rather than presenting disconnected summaries.`,
+        `Connect the synthesis to ${productName} only when first-party evidence supports the relationship.`,
       ].join("\n");
 
     case "ultimate-guide":
       return [
-        `ARTICLE TYPE: ULTIMATE GUIDE (Comprehensive, focused reference)`,
-        `REQUIRED CONTENT ORDER:`,
-        `1. HOOK: State the practical problem this guide resolves and what the reader will learn.`,
-        `2. TL;DR: "> **TL;DR:** ..." blockquote (what the reader will learn).`,
-        `3. TABLE OF CONTENTS: Comprehensive, linking to all major sections.`,
-        `4. FUNDAMENTALS: "## What Is [Topic]?" — definitions, history, why it matters.`,
-        `5. CORE SECTIONS: 6-8 H2 sections covering every major aspect of the topic.`,
-        `   Each section: 500-800 words with sub-headings (H3), examples, data, and actionable advice.`,
-        `   Include tables, lists, and visuals throughout.`,
-        `6. ADVANCED STRATEGIES: 2-3 sections for experienced readers.`,
-        `7. TOOLS & RESOURCES: Including how ${productName} fits into the toolkit.`,
-        `8. COMMON MISTAKES: 5-7 pitfalls to avoid.`,
-        `9. EVIDENCE: Use direct quotations only when the exact language and primary source are supplied.`,
-        `10. FAQ: 8-12 comprehensive questions.`,
-        `11. KEY TAKEAWAYS + SOURCES + a concise Markdown CTA.`,
-        ``,
-        `WORD COUNT: 2800-4000 words. Prefer complete, useful coverage over artificial length.`,
+        `ARTICLE TYPE: SCOPED REFERENCE GUIDE`,
+        `Define the scope, reader, and practical outcome near the beginning. Cover the concepts, decisions, and implementation details needed to achieve that outcome.`,
+        `Depth must come from useful explanation, evidence, and first-party insight rather than exhaustive padding.`,
+        `Include advanced material, tools, tables, examples, or troubleshooting only when they improve the reader's ability to act.`,
+        `Explain where ${productName} fits only when first-party evidence supports the connection.`,
+        `Use a table of contents only when the finished guide is long enough to need navigation. Add an FAQ only for unresolved questions.`,
       ].join("\n");
 
     default: // "standard"
-      return ""; // Use the existing default structure
+      return [
+        `ARTICLE TYPE: FOCUSED EXPLANER`,
+        `Answer the primary search intent near the beginning, then organize the article around the reader's real questions and decisions.`,
+        `Use descriptive headings as navigation. Include a framework, example, checklist, or comparison only when it materially improves the answer.`,
+        `Include one focused ${productName} section only when the product is genuinely relevant and every capability is supported by first-party evidence.`,
+        `Avoid repeating the introduction as a TL;DR, key takeaways, and conclusion. Stop when the intent is fully answered.`,
+        `Add an FAQ only for important questions not already answered in the body.`,
+      ].join("\n");
   }
 }
 
@@ -1238,8 +1201,10 @@ async function factCheckArticle(
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
     "11. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
-    "12. Every quantified outcome claim in the corrected markdown MUST either end with the matching numbered inline citation [n], using the supplied source-array order, or have its unsupported number removed. Never leave a numeric performance claim uncited.\n" +
-    "13. Submit the complete corrected article and review metadata through the review_article tool.",
+    "12. Every operational number, range, timeline, threshold, duration, score, volume, percentage, price, or quantified outcome MUST have direct support in the supplied evidence and the matching numbered inline citation [n]. Otherwise remove the number. Calling it a best practice, example, framework, or rule of thumb is not an exemption.\n" +
+    "13. Any invented scenario must be explicitly labelled hypothetical. Its names, numbers, timelines, dialogue, and results are illustration only and cannot support a factual conclusion.\n" +
+    "14. Before returning, scan the complete markdown for every digit and currency symbol. Verify each factual use against supplied evidence or remove it. Step numbers and source citation markers are the only structural exceptions.\n" +
+    "15. Submit the complete corrected article and review metadata through the review_article tool.",
     userMessage: `Sources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nResearch evidence gathered from the cited sources:\n${researchEvidence || "No research summary supplied."}\n\nFirst-party product evidence:\n${productEvidence || "No first-party product evidence supplied."}\n\nArticle to review:\n${markdown}`,
@@ -1306,8 +1271,6 @@ async function editorialReviewArticle(args: {
   sources: { url: string; title?: string }[];
   maxWords: number;
 }): Promise<{ markdown: string; score: number; notes: string[] }> {
-  const isLongGuide = args.articleType === "ultimate-guide";
-  const targetRange = isLongGuide ? "2200-3400" : "1400-2600";
   return callClaudeStructured({
     system: [
       "You are the final accountable editor for a people-first SEO publication.",
@@ -1320,12 +1283,13 @@ async function editorialReviewArticle(args: {
       `ARTICLE TYPE: ${args.articleType}`,
       `PRIMARY KEYWORD: ${args.primaryKeyword}`,
       `PRODUCT: ${args.productName}`,
-      `TARGET LENGTH: ${targetRange} words when the subject warrants it. Google has no preferred word count; never pad to reach the range.`,
-      `HARD MAXIMUM: ${args.maxWords} measured prose words. The complete rewrite must remain at or below this ceiling.`,
+      `LENGTH CONTRACT: Use only the space needed to answer the intent, with a hard maximum of ${args.maxWords} measured prose words. Never pad toward a target.`,
       "",
       "BINDING EDITORIAL RULES:",
       "- Answer the reader's main question near the beginning and keep every section necessary to that intent.",
       "- Remove repetition, generic AI phrasing, empty transitions, decorative emojis, arbitrary timelines, and unsupported best-practice claims.",
+      "- Inspect every digit, percentage, currency symbol, range, duration, count, score, and threshold. Keep it only when directly supported by supplied evidence and the matching inline citation; otherwise remove it.",
+      "- Label every invented scenario explicitly as hypothetical and do not use its details as evidence.",
       "- Remove fabricated customer stories, outcomes, percentages, quotes, features, integrations, workflows, or product behavior.",
       "- Product capabilities may appear only when directly supported by first-party product evidence below.",
       "- Preserve numbered citations only when the claim is supported by the matching supplied source. Do not invent a new source or citation.",
@@ -1424,6 +1388,7 @@ async function auditFinalArticle(args: {
       "Assess the exact finished article without rewriting it.",
       "The score measures search-intent satisfaction, usefulness, factual restraint, product grounding, clarity, structure, citation integrity, and absence of generic AI filler.",
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
+      "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "Do not reward length, keyword repetition, entity coverage, or promotional language.",
       "Submit only the score and concise actionable notes through the audit_final_article tool.",
     ].join(" "),
@@ -1460,6 +1425,71 @@ async function auditFinalArticle(args: {
   });
 }
 
+async function remediateFinalArticle(args: {
+  markdown: string;
+  articleType: string;
+  primaryKeyword: string;
+  productName: string;
+  productEvidence: string;
+  researchEvidence: string;
+  sources: { url: string; title?: string }[];
+  maxWords: number;
+  auditNotes: string[];
+}): Promise<{ markdown: string; notes: string[] }> {
+  return callClaudeStructured({
+    system: [
+      "You are a senior editor performing one bounded remediation pass on an audited article.",
+      "Fix only the material defects identified by the independent audit and return the complete revised article.",
+      "Do not restart the article, add new sources, invent evidence, or optimize for a higher score through extra length.",
+      "Submit the complete article and concise change notes through the remediate_final_article tool.",
+    ].join(" "),
+    userMessage: [
+      `ARTICLE TYPE: ${args.articleType}`,
+      `PRIMARY KEYWORD: ${args.primaryKeyword}`,
+      `PRODUCT: ${args.productName}`,
+      `HARD MAXIMUM: ${args.maxWords} measured prose words.`,
+      "",
+      "BINDING REMEDIATION RULES:",
+      "- Address every audit note directly; do not make unrelated stylistic changes.",
+      "- Remove every unsupported number, percentage, range, benchmark, duration, threshold, timeline, volume, and outcome. Keep one only when the supplied evidence directly supports it and the paragraph includes the matching numbered citation.",
+      "- Do not disguise an unsupported number as a vague universal rule. Replace it with a decision principle the supplied evidence actually supports, or delete it.",
+      "- Label invented scenarios explicitly as hypothetical examples. Never imply that an invented company, customer, result, quote, or product outcome actually occurred.",
+      "- Use product-specific mechanics only when they appear in the first-party product evidence. Do not imply that the product exposes a metric, dashboard, workflow, or feature that the evidence does not show.",
+      "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
+      "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
+      "- Preserve the reader's core answer, useful framework, internal links, restrained CTA, and valid Markdown.",
+      "- Keep the complete revision between 900 words and the hard maximum.",
+      "- Before returning, scan every digit and currency symbol in the complete article. Apart from step labels and citation markers, each factual number must have direct supplied evidence and a matching citation or be removed.",
+      "",
+      `INDEPENDENT AUDIT NOTES:\n${args.auditNotes.map((note) => `- ${note}`).join("\n")}`,
+      "",
+      `FIRST-PARTY PRODUCT EVIDENCE:\n${args.productEvidence || "No product evidence supplied."}`,
+      "",
+      `RESEARCH EVIDENCE:\n${args.researchEvidence || "No research evidence supplied."}`,
+      "",
+      `SOURCE ARRAY IN CITATION ORDER:\n${JSON.stringify(args.sources)}`,
+      "",
+      `ARTICLE TO REMEDIATE:\n${args.markdown}`,
+    ].join("\n"),
+    toolName: "remediate_final_article",
+    toolDescription: "Submit the complete bounded remediation and a concise list of changes.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        markdown: { type: "string" },
+        notes: { type: "array", items: { type: "string" } },
+      },
+      required: ["markdown", "notes"],
+    },
+    outputSchema: z.object({
+      markdown: z.string(),
+      notes: z.array(z.string()).default([]),
+    }),
+    maxTokens: 16384,
+  });
+}
+
 async function generateFinalMetadata(args: {
   title: string;
   markdown: string;
@@ -1473,7 +1503,8 @@ async function generateFinalMetadata(args: {
       "The H1 title must be clear and descriptive. The meta title must be concise and unique. The meta description must be one complete natural sentence.",
       "Do not add a year unless that exact year is already essential to the supplied article title and body.",
       "Do not add a statistic, percentage, benchmark, guarantee, or performance promise that is absent from authoritative cited evidence.",
-      "Avoid hype, truncation, dangling conjunctions, keyword stuffing, and generic clickbait.",
+      "Avoid hype, truncation, dangling conjunctions, orphaned prepositions, incomplete adjective phrases, keyword stuffing, and generic clickbait.",
+      "Reread the exact meta description as a standalone sentence before returning it. Every word must have a grammatical object or complement.",
     ].join(" "),
     userMessage: [
       `CURRENT YEAR: ${currentYear}`,
@@ -1535,10 +1566,10 @@ async function webResearch(
         role: "system",
         content:
           "You are a research assistant. Search the web for current, factual information on the given topic. " +
-          "Prefer primary evidence: official documentation, original research, public datasets, standards bodies, and first-party product pages. " +
-          "Avoid affiliate roundups, anonymous content farms, and secondary summaries when a primary source exists. " +
-          "Use statistics and quotations only when the exact claim is visible in the source; otherwise omit them. " +
-          "Compile a detailed research brief and include every source URL used. Output JSON only." +
+          "Use primary evidence only: official documentation for mechanics, original research, public datasets, standards bodies, government or academic material, and first-party pages solely for that product's own facts. " +
+          "Do not substitute vendor blogs, affiliate roundups, content farms, or secondary summaries when primary evidence is unavailable. Returning no sources is valid and preferable to weak evidence. " +
+          "Do not manufacture a statistics or quotations section. Include a number or quotation only when the exact claim is visible in a primary source. " +
+          "Identify the reader's unresolved questions, supported mechanisms, and useful evidence gaps. Compile a concise research brief and include every source URL actually used. Output JSON only." +
           competitorExclusion,
       },
       {
@@ -1549,7 +1580,7 @@ async function webResearch(
           `Primary Keyword: ${topic.primaryKeyword}\n` +
           `Secondary Keywords: ${topic.secondaryKeywords?.join(", ") ?? "none"}\n` +
           `Search Intent: ${topic.intent ?? "informational"}\n\n` +
-          `Return JSON: {"researchSummary": "detailed findings with facts, stats, and quotes...", "sources": [{"url": "...", "title": "..."}]}`,
+          `Return JSON: {"researchSummary": "supported findings, reader questions, mechanisms, and explicit evidence gaps", "sources": [{"url": "...", "title": "..."}]}. If no primary evidence supports the topic, return an empty sources array and say so plainly.`,
       },
     ],
   });
@@ -2493,17 +2524,14 @@ async function handleArticle(
     (() => {
       const ctaLabel = site.ctaText || `Try ${productName}`;
       const ctaLink = site.ctaUrl || `https://${site.domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
-      return [
-        `CTA: Naturally weave in "${ctaLabel}" linking to ${ctaLink} once in the body (organic, not salesy).`,
-        `FINAL CTA: End with one short, relevant Markdown sentence linking to [${ctaLabel}](${ctaLink}). Do not output raw HTML or a promotional box.`,
-      ].join("\n");
+      return `CTA: Include at most one relevant Markdown CTA linking to [${ctaLabel}](${ctaLink}), after the article has delivered its answer. Omit it when the product is not a natural next step.`;
     })(),
-    site.anchorKeywords?.length ? `Anchor Keywords: Naturally incorporate these throughout: ${site.anchorKeywords.join(", ")}` : "",
+    site.anchorKeywords?.length ? `Anchor vocabulary: Use these terms only where they improve precision; never force or repeat them for density: ${site.anchorKeywords.join(", ")}` : "",
     site.sourceCitations !== false
-      ? `Citations: Use numbered inline citations [1], [2], [3] for statistics, quotes, and factual claims. Add a "## Sources" section at the end listing each as: [1] Title — URL`
+      ? `Citations: Cite factual claims with the matching numbered source supplied in the research. Add a Sources section only when sources are actually used.`
       : `Citations: Do NOT add inline citations or a sources section.`,
     site.externalLinking !== false
-      ? `External Links: Include 5-10 outbound links to authoritative sources naturally within the text.`
+      ? `External links: Link only to verified sources supplied in the research when the link helps the reader inspect the evidence. There is no link quota.`
       : `External Links: Do NOT include external links in the article body.`,
     `</content_settings>`,
     ``,
@@ -2520,72 +2548,38 @@ async function handleArticle(
     // Use type-specific structure if the topic has an articleType set
     (() => {
       const articleType = (effectiveArticleType ?? "standard") as ArticleType;
-      const typeStructure = getArticleTypeStructure(articleType, productName);
-      if (typeStructure) return typeStructure;
-      // Default standard structure
-      return [
-        `REQUIRED CONTENT ORDER (follow this sequence exactly):`,
-        `1. HOOK: Open with a concrete reader problem, decision, or useful observation. Use a statistic only when it is present in the supplied research.`,
-        `2. TL;DR: After the hook, include a "> **TL;DR:** ..." blockquote (2-3 sentences).`,
-        `3. TABLE OF CONTENTS: "## Table of Contents" with bullet list linking to each H2 using markdown anchors.`,
-        `4. SECTIONS 1-2: First two H2 sections covering background/context of the topic.`,
-        `   [An infographic will be automatically injected here by the system — do NOT add it yourself]`,
-        `5. SECTIONS 3-5: Middle H2 sections covering the main how-to or strategy content.`,
-        `   YouTube embed goes HERE — place it after the section it relates to most.`,
-        `6. PRODUCT SECTION: If ${productName} is directly relevant, include one focused 150-250 word H2 section explaining the useful, verified connection. Do not force the product into unrelated headings or repeat its name unnaturally. A screenshot is injected automatically when this section exists.`,
-        `7. COMPARISON TABLE: Include a markdown table only when the available evidence supports a meaningful comparison. Never invent table data.`,
-        `8. PRO TIPS or BEST PRACTICES: Numbered actionable items.`,
-        `9. EVIDENCE: Quote a named person only when the exact quote appears in the supplied research. Otherwise paraphrase the source.`,
-        `10. FAQ: "## Frequently Asked Questions" with 4-7 questions that resolve real remaining search intent.`,
-        `11. KEY TAKEAWAYS: "## Key Takeaways" with 4-6 useful bullet points.`,
-        `12. SOURCES: "## Sources" section with numbered citation links.`,
-        `13. FINAL CTA: Place the concise Markdown CTA last, after Sources.`,
-      ].join("\n");
+      return getArticleTypeStructure(articleType, productName);
     })(),
     ``,
     existingKwSummary ? `<anti_cannibalization>\nThese keywords are already targeted by existing articles on this blog. Your article MUST target DIFFERENT keywords and angles:\n${existingKwSummary}\nDo NOT repeat these keywords in your metaKeywords output. Focus on unique long-tail variations.\n</anti_cannibalization>` : "",
     ``,
-    `<serp_intelligence>`,
-    `FEATURED SNIPPET OPTIMIZATION:`,
-    `- After each H2 heading, include a concise 40-50 word "snippet-ready" paragraph that directly answers the heading's question.`,
-    `- Use an objective, dictionary-style tone for these answer paragraphs (Google extracts these for featured snippets).`,
-    `- For list-based sections, use clean numbered or bulleted lists that Google can extract directly.`,
-    `- For data comparisons, use clean markdown tables with keyword-rich column headers.`,
-    ``,
-    `AI OVERVIEW OPTIMIZATION:`,
-    `- Google's AI Overviews cite content with clear, authoritative, direct answers. Structure content to be "citation-worthy."`,
-    `- Lead each major section with a definitive 1-2 sentence answer BEFORE expanding with detail. AI Overviews extract these lead-in answers.`,
-    `- Use "What is X", "How does X work", "Why is X important" patterns in H2s — these match AI Overview trigger queries.`,
-    `- Include numbers, percentages, or dates only when they are directly supported by supplied research and cited inline.`,
-    `- Add comparison tables and structured data — AI Overviews frequently pull from tables and lists.`,
-    `- Cite authoritative sources inline (not just in a Sources section). AI Overviews prefer content that references credible data.`,
-    `- Target long-tail question variants in subheadings — AI Overviews appear less on long-tail queries, so organic clicks are higher there.`,
-    ``,
-    `ENTITY OPTIMIZATION:`,
-    `- Answer the primary search intent clearly near the beginning; use the query naturally when it helps the reader.`,
-    `- Write descriptive H2 headings for the actual questions and decisions covered. Do not force keywords into every heading.`,
-    `- Use topic terminology naturally. Never target a keyword density or repeat an exact phrase on a schedule.`,
-    `- Include semantically related terms only where they improve precision or comprehension.`,
-    `- Reference real entities only when they are relevant and supported by supplied evidence.`,
-    ``,
+    `<search_intent>`,
+    `- Answer the primary intent clearly near the beginning and use the query naturally only where it helps the reader.`,
+    `- Let descriptive headings reflect the article's actual questions, decisions, and steps. Do not manufacture query-pattern headings.`,
+    `- Use lists and tables only when they make the information easier to act on. Tables require supported, genuinely comparable data.`,
+    `- Do not create sections for keyword variants, featured snippets, AI Overviews, entity counts, or search-engine extraction patterns.`,
+    `- Make the page worth citing through original usefulness, transparent evidence, and clear first-party mechanics rather than formatting tricks.`,
+    `- A People Also Ask question is optional context, not a mandatory heading. Include one only when it is relevant, evidence-supported, and not already answered.`,
     serpPaaQuestions.length > 0
       ? [
-          `PEOPLE ALSO ASK (from real Google SERP):`,
-          `These are REAL questions people are asking on Google for this topic. Include ALL of them in your FAQ section (add more of your own too):`,
+          `OPTIONAL PEOPLE ALSO ASK CONTEXT:`,
+          `Use only questions that materially improve this article; do not include all of them by default:`,
           ...serpPaaQuestions.map((q, i) => `${i + 1}. ${q}`),
-          `Format each as: ### ${serpPaaQuestions[0] ?? "Question?"}\nDirect answer paragraph (40-60 words) followed by more detail.`,
         ].join("\n")
-      : `Include 8-10 FAQ questions. Start each with an H3 heading and a direct 40-60 word answer.`,
+      : `No People Also Ask data was supplied. Do not invent an FAQ quota.`,
     ``,
     serpDifficulty
-      ? `SERP DIFFICULTY: ${serpDifficulty}. ${serpDifficulty === "hard" || serpDifficulty === "very_hard" ? "This is a competitive keyword. Make the content exceptionally comprehensive, data-rich, and authoritative to compete." : "This keyword has reasonable competition. Focus on depth and unique value."}`
+      ? `SERP DIFFICULTY: ${serpDifficulty}. Treat this as planning context, not a reason to add length or unsupported claims.`
       : "",
-    `</serp_intelligence>`,
+    `</search_intent>`,
     ``,
     `GLOBAL RULES:`,
-    `- WORD COUNT: ${((topic as any)?.articleType === "ultimate-guide") ? "2800-4000" : "1800-2600"} words. Stop when the search intent is fully answered.`,
+    `- LENGTH: There is no target word count. Use at least 900 useful words only when the topic warrants a full article, stop when the intent is answered, and never exceed ${articleWordCeiling(effectiveArticleType)} measured prose words.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
     `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
+    `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence and carry the matching inline citation. Otherwise remove the number.`,
+    `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
+    `- ORIGINAL VALUE: Add first-party product mechanics, a decision framework, verification method, or useful synthesis that is not a paraphrase of generic search results.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
     `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
     `</article_structure>`,
@@ -2819,8 +2813,9 @@ async function handleArticle(
   await reportProgress(9, "Generating images...");
   let featuredImage: string | undefined;
 
-  // Every generated asset must pass independent visual review before storage.
-  if (enableImages) {
+  // Standard-mode sites retain the existing media path. Strict sites defer
+  // generation until the exact final prose clears its publication gates.
+  if (enableImages && !isStrictPublication) {
     for (let heroAttempt = 0; heroAttempt < 2; heroAttempt++) {
       try {
         featuredImage = await generateHeroImage(
@@ -2842,8 +2837,10 @@ async function handleArticle(
         }
       }
     }
-  } else {
+  } else if (!enableImages) {
     mediaQualityNotes.push("Hero image disabled for this run.");
+  } else {
+    mediaQualityNotes.push("Hero image generation deferred until the exact prose clears strict review.");
   }
 
   // ── Step 5: Content Score (graceful degradation) ──
@@ -3036,7 +3033,8 @@ async function handleArticle(
   // an earlier version of the article.
   if (isStrictPublication && editorialReviewCompleted) {
     try {
-      const finalAudit = await auditFinalArticle({
+      const maxWords = articleWordCeiling(effectiveArticleType);
+      const auditArgs = {
         markdown: finalMarkdown,
         articleType: effectiveArticleType,
         primaryKeyword: topic?.primaryKeyword ?? article.title,
@@ -3044,14 +3042,115 @@ async function handleArticle(
         productEvidence,
         researchEvidence: researchContext,
         sources: finalSources,
-        maxWords: articleWordCeiling(effectiveArticleType),
-      });
-      editorialQualityScore = finalAudit.score;
-      editorialQualityNotes.push(
-        `Final exact-prose editorial audit: ${finalAudit.score}/100.`,
-        ...finalAudit.notes,
+        maxWords,
+      };
+      const finalAudit = await auditFinalArticle(auditArgs);
+      const initialUncitedClaims = uncitedEvidenceRequiredParagraphs(finalMarkdown);
+      const initialAuditScore = initialUncitedClaims.length > 0
+        ? Math.min(finalAudit.score, 84)
+        : finalAudit.score;
+      const deterministicAuditNotes = initialUncitedClaims.map(
+        (claim, index) =>
+          `Deterministic evidence defect ${index + 1}: ${claim.slice(0, 320)}`,
       );
-      console.log(`Final exact-prose editorial audit: ${finalAudit.score}/100`);
+      editorialQualityScore = initialAuditScore;
+      editorialQualityNotes.push(
+        `Initial exact-prose editorial audit: ${initialAuditScore}/100` +
+          (initialAuditScore !== finalAudit.score
+            ? ` (model score ${finalAudit.score} capped by deterministic evidence defects).`
+            : "."),
+        ...finalAudit.notes,
+        ...deterministicAuditNotes,
+      );
+      console.log(
+        `Initial exact-prose editorial audit: ${initialAuditScore}/100 ` +
+          `(${initialUncitedClaims.length} deterministic evidence defect(s)).`,
+      );
+
+      if (initialAuditScore < 85 || initialUncitedClaims.length > 0) {
+        try {
+          console.log("Running one bounded remediation pass from the exact audit notes...");
+          const remediated = await remediateFinalArticle({
+            ...auditArgs,
+            auditNotes: [...finalAudit.notes, ...deterministicAuditNotes],
+          });
+          const remediatedStats = calculateArticleStats(remediated.markdown);
+          if (remediatedStats.wordCount < 900 || remediatedStats.wordCount > maxWords) {
+            throw new Error(
+              `Remediation missed the length contract (${remediatedStats.wordCount}/900-${maxWords} words)`,
+            );
+          }
+
+          const reviewed = await factCheckArticle(
+            remediated.markdown,
+            finalSources,
+            allBannedNames,
+            productName,
+            productEvidence,
+            researchContext,
+          );
+          const reviewedStats = calculateArticleStats(reviewed.markdown);
+          if (reviewedStats.wordCount < 900 || reviewedStats.wordCount > maxWords) {
+            throw new Error(
+              `Post-remediation fact check missed the length contract (${reviewedStats.wordCount}/900-${maxWords} words)`,
+            );
+          }
+          if (reviewed.confidenceScore === undefined) {
+            throw new Error("Post-remediation fact check returned no confidence score");
+          }
+
+          const remediationAudit = await auditFinalArticle({
+            ...auditArgs,
+            markdown: reviewed.markdown,
+          });
+          const remainingUncitedClaims = uncitedEvidenceRequiredParagraphs(reviewed.markdown);
+          const remediationAuditScore = remainingUncitedClaims.length > 0
+            ? Math.min(remediationAudit.score, 84)
+            : remediationAudit.score;
+          editorialQualityNotes.push(
+            ...remediated.notes.map((note) => `Remediation: ${note}`),
+            `Post-remediation factual review: ${reviewed.confidenceScore}/100.`,
+            `Final exact-prose editorial audit: ${remediationAuditScore}/100` +
+              (remediationAuditScore !== remediationAudit.score
+                ? ` (model score ${remediationAudit.score} capped by ${remainingUncitedClaims.length} deterministic evidence defect(s)).`
+                : "."),
+            ...remediationAudit.notes,
+            ...remainingUncitedClaims.map(
+              (claim, index) =>
+                `Remaining deterministic evidence defect ${index + 1}: ${claim.slice(0, 320)}`,
+            ),
+          );
+
+          const remediationImproved =
+            remediationAuditScore > initialAuditScore ||
+            remainingUncitedClaims.length < initialUncitedClaims.length;
+          if (remediationAuditScore >= initialAuditScore && remediationImproved) {
+            finalMarkdown = reviewed.markdown;
+            factCheckScore = reviewed.confidenceScore;
+            factCheckNotes = [
+              reviewed.notes,
+              remainingUncitedClaims.length > 0
+                ? `${remainingUncitedClaims.length} unsupported numeric claim(s) remain after bounded remediation.`
+                : "Deterministic numeric evidence scan passed after remediation.",
+            ].filter(Boolean).join(" ");
+            editorialQualityScore = remediationAuditScore;
+            console.log(
+              `Bounded remediation accepted: ${initialAuditScore} -> ${remediationAuditScore}/100.`,
+            );
+          } else {
+            editorialQualityNotes.push(
+              `Bounded remediation rejected because it did not improve the exact artifact (${initialAuditScore} -> ${remediationAuditScore}; evidence defects ${initialUncitedClaims.length} -> ${remainingUncitedClaims.length}).`,
+            );
+            console.log(
+              `Bounded remediation rejected: ${initialAuditScore} -> ${remediationAuditScore}/100.`,
+            );
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "unknown remediation error";
+          editorialQualityNotes.push(`Bounded remediation failed: ${message}`);
+          console.error(`Bounded remediation failed: ${message}`);
+        }
+      }
     } catch (error) {
       editorialQualityScore = undefined;
       const message = error instanceof Error ? error.message : "unknown final audit error";
@@ -3061,7 +3160,41 @@ async function handleArticle(
   }
 
   // ── Step 5c: Attach only reviewed, contextually relevant media ──
-  if (enableImages) {
+  const strictProsePassed =
+    !isStrictPublication ||
+    (
+      (editorialQualityScore ?? 0) >= 85 &&
+      (factCheckScore ?? 0) >= 85 &&
+      uncitedEvidenceRequiredParagraphs(finalMarkdown).length === 0
+    );
+
+  if (enableImages && isStrictPublication && strictProsePassed) {
+    for (let heroAttempt = 0; heroAttempt < 2; heroAttempt++) {
+      try {
+        featuredImage = await generateHeroImage(
+          ctx,
+          article.title,
+          site.niche ?? "",
+          site.imageBrandingPrompt ?? undefined,
+          site.brandPrimaryColor ?? undefined,
+        );
+        console.log(`Hero image generated after strict prose clearance: ${featuredImage}`);
+        mediaQualityNotes.push("Hero image passed visual review after strict prose clearance.");
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        console.error(`Hero image attempt ${heroAttempt + 1} failed: ${message}`);
+        if (heroAttempt === 1) {
+          featuredImage = undefined;
+          mediaQualityNotes.push(`Hero image omitted after visual review: ${message}`);
+        }
+      }
+    }
+  } else if (enableImages && isStrictPublication) {
+    mediaQualityNotes.push("Hero image omitted because the exact prose did not clear strict review.");
+  }
+
+  if (enableImages && strictProsePassed) {
     try {
       const visual = await selectSupportingVisual({
         articleTitle: article.title,
@@ -3105,11 +3238,13 @@ async function handleArticle(
       console.error(`Supporting illustration omitted: ${message}`);
       mediaQualityNotes.push(`Supporting illustration omitted: ${message}`);
     }
-  } else {
+  } else if (!enableImages) {
     mediaQualityNotes.push("Supporting illustration disabled for this run.");
+  } else {
+    mediaQualityNotes.push("Supporting illustration omitted because the exact prose did not clear strict review.");
   }
 
-  if (screenshotUrl) {
+  if (screenshotUrl && strictProsePassed) {
     const lines = finalMarkdown.split("\n");
     const productHeading = lines.findIndex(
       (line) =>
@@ -3125,8 +3260,8 @@ async function handleArticle(
         insertionLine,
         0,
         "",
-        `![${productName} website interface](${screenshotUrl})`,
-        `*${productName}'s current website experience.*`,
+        `![${productName} homepage showing its product workflow](${screenshotUrl})`,
+        `*${productName}'s current homepage shows the product workflow described in this section.*`,
         "",
       );
       finalMarkdown = lines.join("\n");
@@ -3134,9 +3269,11 @@ async function handleArticle(
     } else {
       mediaQualityNotes.push("Validated product screenshot omitted because the article had no relevant product section.");
     }
+  } else if (screenshotUrl) {
+    mediaQualityNotes.push("Validated product screenshot omitted because the exact prose did not clear strict review.");
   }
 
-  if (enableYouTube && youtubeVideos.length > 0) {
+  if (enableYouTube && youtubeVideos.length > 0 && strictProsePassed) {
     try {
       const placement = await selectYouTubePlacement({
         articleTitle: article.title,
@@ -3159,6 +3296,8 @@ async function handleArticle(
         `YouTube placement omitted: ${error instanceof Error ? error.message : "unknown review error"}`,
       );
     }
+  } else if (enableYouTube && youtubeVideos.length > 0) {
+    mediaQualityNotes.push("YouTube candidates omitted because the exact prose did not clear strict review.");
   }
 
   // Metadata is generated from the final edited prose. Earlier metadata may no

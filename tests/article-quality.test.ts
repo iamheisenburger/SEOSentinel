@@ -7,6 +7,7 @@ import {
   clampMetaTitle,
   evaluatePublicationQuality,
   normalizeSiteOrigin,
+  uncitedEvidenceRequiredParagraphs,
 } from "../convex/lib/articleQuality.ts";
 import {
   classifyEvidenceSource,
@@ -48,7 +49,25 @@ test("clamps meta descriptions cleanly without cutting through a word", () => {
   assert.match(description, /\.$/);
   assert.doesNotMatch(description, /\s\.$/);
   assert.doesNotMatch(description, /\b(?:and|or|to|with)\.$/i);
+  assert.equal(
+    clampMetaDescription(
+      "Lead generation chatbots answer buyer questions and hand qualified leads to sales with full.",
+    ),
+    "Lead generation chatbots answer buyer questions and hand qualified leads to sales.",
+  );
   assert.equal(clampMetaTitle("A useful title that is deliberately far too long to fit inside a clean search result"), "A useful title that is deliberately far too long to fit");
+});
+
+test("surfaces deterministic uncited numeric guidance for remediation", () => {
+  const paragraphs = uncitedEvidenceRequiredParagraphs([
+    "Use a documented qualification framework.",
+    "Ask 10–15 questions, award 5/3/1 points, and review results after 2 weeks.",
+    "A documented study reported a 12% change [1].",
+  ].join("\n\n"));
+
+  assert.deepEqual(paragraphs, [
+    "Ask 10–15 questions, award 5/3/1 points, and review results after 2 weeks.",
+  ]);
 });
 
 test("classifies and normalizes strict evidence sources", () => {
@@ -119,6 +138,31 @@ test("rejects unsupported marketing outcomes in strict metadata and body", () =>
   assert.equal(result.passed, false);
   assert.ok(result.issues.some((issue) => issue.includes("quantified outcome")));
   assert.ok(result.issues.some((issue) => issue.includes("promotional language")));
+  assert.ok(result.issues.some((issue) => issue.includes("inline citation")));
+});
+
+test("rejects unsupported operational thresholds in strict articles", () => {
+  const result = evaluatePublicationQuality(
+    {
+      title: "A practical chatbot optimization workflow",
+      metaTitle: "A practical chatbot optimization workflow",
+      metaDescription:
+        "Use this practical workflow to review chatbot conversations, identify repeated friction, and improve the path to a useful next step.",
+      markdown: `${body}\n\nWait for 50–100 conversations and 2,000 visitor messages before changing the qualification flow.`,
+      featuredImage: "https://example.com/hero.webp",
+      factCheckScore: 94,
+      editorialQualityScore: 91,
+      mediaQualityStatus: "passed",
+      sources: [
+        { url: "https://www.nber.org/papers/w12345", title: "Research" },
+        { url: "https://developers.google.com/search/docs", title: "Method" },
+      ],
+    },
+    "strict",
+  );
+
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((issue) => issue.includes("operational claim")));
   assert.ok(result.issues.some((issue) => issue.includes("inline citation")));
 });
 
