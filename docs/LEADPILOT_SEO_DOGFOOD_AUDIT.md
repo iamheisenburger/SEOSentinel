@@ -512,3 +512,41 @@ verified keyword data required, GitHub publishing configured, and the exact
 `sc-domain:leadpilot.chat` Search Console property connected. This schedules
 research and draft creation; it does not permit blind publication. No other
 Pentra customer's site, cadence, content, connection, or quota was changed.
+
+## July 16 Autonomous Daily Activation
+
+The one-draft-per-week manual pilot was intentionally superseded after its
+complete production path passed. LeadPilot now runs under this frozen contract:
+
+- cadence: seven articles per week, with a minimum 24-hour interval;
+- autopilot: enabled;
+- manual approval: disabled;
+- keyword evidence: DataForSEO measurements required;
+- publication: automatic GitHub delivery only after the strict publication
+  gate passes;
+- failure behavior: quality failures are quarantined in review and never
+  force-published;
+- delivery retries: transient publishing failures retry the exact approved
+  article without regenerating it or consuming another article quota slot;
+- measurement: exact-domain Search Console sync daily, with evidence reviews
+  at 7, 14, 28, and 56 days.
+
+The strict LeadPilot gate still requires valid intent-matched content, factual
+and editorial scores of at least 85, zero deterministic uncited evidence
+defects, valid metadata and citations, safe Markdown, and passed media review.
+Manual approval was removed; quality control was not.
+
+The production topic queue was replenished after activation. DataForSEO rejected
+eight unsupported ideas and accepted seven measured topics. Notable accepted
+opportunities included `website visitor tracking` (volume 880, difficulty 14),
+`how to improve website conversion rate` (volume 210, difficulty 4), and
+`automated lead qualification` (volume 30, difficulty 4). Together with the two
+existing measured topics, the queue contains enough verified work for the next
+nine daily attempts and will replenish automatically when fewer than three
+unused topics remain.
+
+A production scheduler check immediately after activation correctly created no
+duplicate job because the prior article had been published six hours earlier;
+the daily interval requires 24 hours. Existing Pentra customers remain on their
+own plans, cadences, connections, and publication policies. This activation
+changed only the LeadPilot dogfood site.

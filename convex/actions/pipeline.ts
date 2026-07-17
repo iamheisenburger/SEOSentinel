@@ -4414,7 +4414,44 @@ export const processSpecificJob = action({
       }
 
       const site = await ctx.runQuery(internal.sites.getFull, { siteId: job.siteId });
-      const payload = job.payload as { topicId?: string } | undefined;
+      const payload = job.payload as
+        | {
+            topicId?: string;
+            articleId?: Id<"articles">;
+            publishOnly?: boolean;
+          }
+        | undefined;
+
+      // A previous generation completed and only publication failed. Retry the
+      // exact approved draft; never regenerate or claim another quota slot.
+      if (payload?.publishOnly) {
+        if (!payload.articleId) {
+          await ctx.runMutation(api.jobs.markFailed, {
+            jobId: job._id,
+            error: "Publish retry is missing its articleId.",
+          });
+          return { processed: true, error: "Missing publish retry articleId" };
+        }
+        try {
+          await ctx.runAction(api.publisher.publishArticle, {
+            siteId: job.siteId,
+            articleId: payload.articleId,
+          });
+          await ctx.runMutation(api.jobs.markDone, {
+            jobId: job._id,
+            result: { articleId: payload.articleId, publishRetry: true },
+          });
+          return { processed: true };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "unknown";
+          await ctx.runMutation(api.jobs.markPublishFailed, {
+            jobId: job._id,
+            articleId: payload.articleId,
+            error: `Publish retry failed: ${msg}`,
+          });
+          return { processed: true, error: msg };
+        }
+      }
 
       // Enforce article limit atomically
       if (site?.userId) {
@@ -4498,8 +4535,9 @@ export const processSpecificJob = action({
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
         console.error(`Publish failed: ${msg}`);
-        await ctx.runMutation(api.jobs.markFailed, {
+        await ctx.runMutation(api.jobs.markPublishFailed, {
           jobId: job._id,
+          articleId: articleResult.articleId,
           error: `Article generated but publish failed: ${msg}`,
         });
         return { processed: true };
@@ -4544,6 +4582,7 @@ export const processNextJob = action({
       type JobPayload = {
         topicId?: Id<"topic_clusters">;
         articleId?: Id<"articles">;
+        publishOnly?: boolean;
       };
       const payload = job.payload as JobPayload | undefined;
 
@@ -4556,6 +4595,33 @@ export const processNextJob = action({
       } else if (job.type === "article") {
         if (!job.siteId) throw new Error("Missing siteId on article job");
         const site = await ctx.runQuery(internal.sites.getFull, { siteId: job.siteId });
+
+        // Retry delivery of an existing approved article without re-running
+        // research, generation, media work, or monthly quota accounting.
+        if (payload?.publishOnly) {
+          if (!payload.articleId) {
+            throw new Error("Publish retry is missing its articleId.");
+          }
+          try {
+            await ctx.runAction(api.publisher.publishArticle, {
+              siteId: job.siteId,
+              articleId: payload.articleId,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "unknown";
+            await ctx.runMutation(api.jobs.markPublishFailed, {
+              jobId: job._id,
+              articleId: payload.articleId,
+              error: `Publish retry failed: ${msg}`,
+            });
+            return { processed: true, jobId: job._id, error: msg };
+          }
+          await ctx.runMutation(api.jobs.markDone, {
+            jobId: job._id,
+            result: { articleId: payload.articleId, publishRetry: true },
+          });
+          return { processed: true, jobId: job._id };
+        }
 
         // Enforce article limit ATOMICALLY — claim a slot before generating
         // This prevents race conditions where two concurrent jobs both pass the check
@@ -4650,8 +4716,9 @@ export const processNextJob = action({
           } catch (err: unknown) {
             const pubError = err instanceof Error ? err.message : "unknown publish error";
             console.error(`Publish failed for article ${articleResult.articleId}: ${pubError}`);
-            await ctx.runMutation(api.jobs.markFailed, {
+            await ctx.runMutation(api.jobs.markPublishFailed, {
               jobId: job._id,
+              articleId: articleResult.articleId,
               error: `Article generated but publish failed: ${pubError}`,
             });
             return { processed: true, jobId: job._id, error: pubError };

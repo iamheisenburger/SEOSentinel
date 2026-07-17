@@ -66,7 +66,14 @@ export const resetStuckJobs = mutation({
       .collect();
 
     // Permanent errors that should NOT be retried
-    const permanentErrors = ["Topic not found", "Site not found", "Article limit reached", "Permanently killed", "Cleaned up"];
+    const permanentErrors = [
+      "Topic not found",
+      "Site not found",
+      "Article limit reached",
+      "Publication quality gate blocked",
+      "Permanently killed",
+      "Cleaned up",
+    ];
 
     for (const job of failedJobs) {
       const retries = (job.retries ?? 0) + 1;
@@ -134,6 +141,35 @@ export const markFailed = mutation({
     await ctx.db.patch(jobId, {
       status: "failed",
       error,
+      updatedAt: now(),
+    });
+  },
+});
+
+// Preserve the generated article when only delivery failed. The retry worker
+// can publish this exact approved draft instead of generating another article
+// for the same topic and consuming a second monthly quota slot.
+export const markPublishFailed = mutation({
+  args: {
+    jobId: v.id("jobs"),
+    articleId: v.id("articles"),
+    error: v.string(),
+  },
+  handler: async (ctx, { jobId, articleId, error }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job) throw new Error("Job not found");
+    const existingPayload =
+      job.payload && typeof job.payload === "object"
+        ? (job.payload as Record<string, unknown>)
+        : {};
+    await ctx.db.patch(jobId, {
+      status: "failed",
+      error,
+      payload: {
+        ...existingPayload,
+        articleId,
+        publishOnly: true,
+      },
       updatedAt: now(),
     });
   },
@@ -296,5 +332,3 @@ export const queueArticleNow = mutation({
     return jobId;
   },
 });
-
-
