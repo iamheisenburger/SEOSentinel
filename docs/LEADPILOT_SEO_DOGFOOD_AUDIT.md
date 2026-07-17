@@ -526,6 +526,10 @@ complete production path passed. LeadPilot now runs under this frozen contract:
   gate passes;
 - failure behavior: quality failures are quarantined in review and never
   force-published;
+- daily fallback: LeadPilot may make at most two generation attempts in a
+  rolling 24-hour window: one primary attempt and one automatic fallback only
+  when no article has published. One successful publication closes the window.
+  Other Pentra sites retain their existing one-attempt cadence behavior;
 - delivery retries: transient publishing failures retry the exact approved
   article without regenerating it or consuming another article quota slot;
 - measurement: exact-domain Search Console sync daily, with evidence reviews
@@ -541,8 +545,8 @@ eight unsupported ideas and accepted seven measured topics. Notable accepted
 opportunities included `website visitor tracking` (volume 880, difficulty 14),
 `how to improve website conversion rate` (volume 210, difficulty 4), and
 `automated lead qualification` (volume 30, difficulty 4). Together with the two
-existing measured topics, the queue contains enough verified work for the next
-nine daily attempts and will replenish automatically when fewer than three
+existing measured topics, the queue contains nine verified topics and will
+replenish automatically when fewer than three
 unused topics remain.
 
 A production scheduler check immediately after activation correctly created no

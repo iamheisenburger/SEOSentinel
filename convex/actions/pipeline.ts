@@ -20,6 +20,7 @@ import {
   normalizeSiteOrigin,
   uncitedEvidenceRequiredParagraphs,
 } from "../lib/articleQuality";
+import { evaluateCadenceWindow } from "../lib/autopilotCadence";
 import { strictEvidenceSources } from "../lib/sourceQuality";
 import {
   articleH2Headings,
@@ -4355,17 +4356,29 @@ export const autopilotTick = action({
       const nextJob = pending[0];
       // Cadence gate: only process CRON-scheduled article jobs when enough time has passed
       // Manual jobs (from Generate button) bypass the cadence gate
-      const isManualJob = !!(nextJob.payload as any)?.manual;
-      if (nextJob.type === "article" && !isManualJob) {
+      const jobPayload = nextJob.payload as
+        | { manual?: boolean; publishOnly?: boolean }
+        | undefined;
+      const isManualJob = !!jobPayload?.manual;
+      const isPublishRetry = !!jobPayload?.publishOnly;
+      if (nextJob.type === "article" && !isManualJob && !isPublishRetry) {
         const cadence = site.cadencePerWeek ?? 4;
         const hoursPerArticle = Math.floor((7 * 24) / cadence);
         const allArticles = await ctx.runQuery(api.articles.listBySite, { siteId });
-        const lastArticle = allArticles.length > 0 ? allArticles[0] : null;
-        const hoursSinceLast = lastArticle
-          ? (Date.now() - lastArticle.createdAt) / (1000 * 60 * 60)
-          : 999;
-        if (hoursSinceLast < hoursPerArticle) {
-          console.log(`Cadence gate: last article ${Math.floor(hoursSinceLast)}h ago, need ${hoursPerArticle}h. Holding.`);
+        const isLeadPilot =
+          new URL(normalizeSiteOrigin(site.domain)).hostname ===
+          "leadpilot.chat";
+        const cadenceWindow = evaluateCadenceWindow({
+          articles: allArticles,
+          now: Date.now(),
+          hoursPerArticle,
+          maxAttempts: isLeadPilot ? 2 : 1,
+        });
+        if (!cadenceWindow.canGenerate) {
+          const reason = cadenceWindow.hasRecentPublication
+            ? "a publication already satisfies the cadence window"
+            : `${cadenceWindow.recentAttempts} generation attempt(s) already used`;
+          console.log(`Cadence gate: ${reason}. Holding.`);
           return { processed: 0 };
         }
       }

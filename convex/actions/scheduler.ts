@@ -5,6 +5,8 @@ import { action } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 import { getLimitsFromFeatures, ALL_FEATURE_KEYS } from "../planLimits";
+import { normalizeSiteOrigin } from "../lib/articleQuality";
+import { evaluateCadenceWindow } from "../lib/autopilotCadence";
 
 export const scheduleCadence = action({
   args: { siteId: v.id("sites") },
@@ -53,22 +55,32 @@ export const scheduleCadence = action({
     const runningJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "running" });
     const existingArticles = [...pendingJobs, ...runningJobs].filter(j => j.siteId === siteId && j.type === "article");
 
-    // Get the most recent published article to check timing
+    // Count generation attempts inside the current cadence window. LeadPilot's
+    // dogfood site gets one fallback when the first draft fails quality; other
+    // customer sites keep their existing one-attempt behavior.
     const allArticles = await ctx.runQuery(api.articles.listBySite, { siteId });
-    const lastPublished = allArticles.length > 0 ? allArticles[0] : null;
     const now = Date.now();
-    const hoursSinceLastPublish = lastPublished
-      ? (now - lastPublished.createdAt) / (1000 * 60 * 60)
-      : 999;
+    const isLeadPilot =
+      new URL(normalizeSiteOrigin(site.domain)).hostname === "leadpilot.chat";
+    const cadenceWindow = evaluateCadenceWindow({
+      articles: allArticles,
+      now,
+      hoursPerArticle,
+      maxAttempts: isLeadPilot ? 2 : 1,
+    });
 
-    // If there are pending/running jobs OR we published recently, don't schedule more
+    // Never stack article jobs, and stop once this cadence window has either a
+    // successful publication or its allowed generation attempts are exhausted.
     if (existingArticles.length > 0) {
       console.log(`Jobs already queued: ${existingArticles.length} pending/running.`);
       return { scheduled: 0 };
     }
 
-    if (hoursSinceLastPublish < hoursPerArticle) {
-      console.log(`Too soon since last publish (${Math.floor(hoursSinceLastPublish)}h ago, need ${hoursPerArticle}h).`);
+    if (!cadenceWindow.canGenerate) {
+      const reason = cadenceWindow.hasRecentPublication
+        ? "a published article already satisfies this cadence window"
+        : `${cadenceWindow.recentAttempts} generation attempt(s) already used`;
+      console.log(`Cadence window closed: ${reason}.`);
       return { scheduled: 0 };
     }
 
@@ -153,4 +165,3 @@ export const scheduleCadence = action({
     return { scheduled: 1 };
   },
 });
-
