@@ -4137,22 +4137,8 @@ export const suggestInternalLinks = action({
 // Cron driver to run autopilot across all sites with autopilot enabled
 export const autopilotCron = action({
   args: {},
-  handler: async (ctx) => {
-    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot, {});
-    if (!sites?.length) return { processed: 0 };
-    let processed = 0;
-    for (const site of sites) {
-      // Only run autopilot for sites that have it enabled
-      if (!site.autopilotEnabled) {
-        continue;
-      }
-      const res = await ctx.runAction(api.actions.pipeline.autopilotTick as any, {
-        siteId: site._id,
-      });
-      processed += res?.processed ? 1 : 0;
-    }
-    return { processed };
-  },
+  handler: async (ctx): Promise<{ scheduled: number }> =>
+    await ctx.runMutation(internal.autopilot.dispatchActiveSites, {}),
 });
 
 // Monthly re-linking: update internal links on all published articles

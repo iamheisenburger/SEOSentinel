@@ -1,19 +1,19 @@
 import { cronJobs } from "convex/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const crons = cronJobs();
 
 // Autopilot runs 8x daily (every 3 hours) to support higher-tier cadences.
 // Scale plan needs ~2/day, Enterprise needs ~5/day. Each run processes 1 article
 // per eligible site. The scheduler enforces per-site cadence timing.
-crons.daily("autopilot-1", { hourUTC: 0, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-2", { hourUTC: 3, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-3", { hourUTC: 6, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-4", { hourUTC: 9, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-5", { hourUTC: 12, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-6", { hourUTC: 15, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-7", { hourUTC: 18, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
-crons.daily("autopilot-8", { hourUTC: 21, minuteUTC: 0 }, api.actions.pipeline.autopilotCron);
+crons.daily("autopilot-1", { hourUTC: 0, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-2", { hourUTC: 3, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-3", { hourUTC: 6, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-4", { hourUTC: 9, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-5", { hourUTC: 12, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-6", { hourUTC: 15, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-7", { hourUTC: 18, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
+crons.daily("autopilot-8", { hourUTC: 21, minuteUTC: 0 }, internal.autopilot.dispatchActiveSites);
 
 // Monthly re-linking: update internal links on all published articles (1st of each month at 6am UTC)
 crons.monthly("relink-articles", { day: 1, hourUTC: 6, minuteUTC: 0 }, api.actions.pipeline.relinkAllArticles);
@@ -28,4 +28,3 @@ crons.daily("decay-scan", { hourUTC: 3, minuteUTC: 0 }, api.actions.contentDecay
 crons.daily("auto-refresh", { hourUTC: 4, minuteUTC: 0 }, api.actions.contentDecay.autoRefreshAllSites);
 
 export default crons;
-

@@ -16,6 +16,7 @@ import type * as actions_scheduler from "../actions/scheduler.js";
 import type * as actions_seoData from "../actions/seoData.js";
 import type * as actions_syndication from "../actions/syndication.js";
 import type * as articles from "../articles.js";
+import type * as autopilot from "../autopilot.js";
 import type * as blog from "../blog.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
@@ -50,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   "actions/seoData": typeof actions_seoData;
   "actions/syndication": typeof actions_syndication;
   articles: typeof articles;
+  autopilot: typeof autopilot;
   blog: typeof blog;
   crons: typeof crons;
   http: typeof http;
