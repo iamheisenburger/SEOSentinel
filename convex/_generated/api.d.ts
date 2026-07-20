@@ -26,6 +26,7 @@ import type * as lib_autopilotCadence from "../lib/autopilotCadence.js";
 import type * as lib_internalLinks from "../lib/internalLinks.js";
 import type * as lib_markdownPublishing from "../lib/markdownPublishing.js";
 import type * as lib_mediaQuality from "../lib/mediaQuality.js";
+import type * as lib_searchPerformance from "../lib/searchPerformance.js";
 import type * as lib_siteSecurity from "../lib/siteSecurity.js";
 import type * as lib_sourceQuality from "../lib/sourceQuality.js";
 import type * as pages from "../pages.js";
@@ -61,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   "lib/internalLinks": typeof lib_internalLinks;
   "lib/markdownPublishing": typeof lib_markdownPublishing;
   "lib/mediaQuality": typeof lib_mediaQuality;
+  "lib/searchPerformance": typeof lib_searchPerformance;
   "lib/siteSecurity": typeof lib_siteSecurity;
   "lib/sourceQuality": typeof lib_sourceQuality;
   pages: typeof pages;
