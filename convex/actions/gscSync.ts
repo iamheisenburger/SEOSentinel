@@ -2,6 +2,8 @@
 
 import { action } from "../_generated/server";
 import { api, internal } from "../_generated/api";
+import type { Doc } from "../_generated/dataModel";
+import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 
 // ── Token Refresh ──
@@ -34,7 +36,7 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
 // ── GSC Search Analytics API ──
 
 interface GSCRow {
-  keys: string[]; // [query, page]
+  keys: string[]; // [date, query, page]
   clicks: number;
   impressions: number;
   ctr: number;
@@ -59,7 +61,7 @@ async function fetchSearchAnalytics(
       body: JSON.stringify({
         startDate,
         endDate,
-        dimensions: ["query", "page"],
+        dimensions: ["date", "query", "page"],
         rowLimit,
         dataState: "final",
       }),
@@ -111,8 +113,12 @@ export const syncSite = action({
   },
 });
 
-async function syncSiteGSC(ctx: any, site: any) {
+async function syncSiteGSC(ctx: ActionCtx, site: Doc<"sites">) {
+  if (!site.gscAccessToken || !site.gscProperty) {
+    throw new Error("GSC not connected for this site");
+  }
   let accessToken = site.gscAccessToken;
+  const gscProperty = site.gscProperty;
 
   // Try to refresh token if we have a refresh token
   if (site.gscRefreshToken) {
@@ -138,51 +144,68 @@ async function syncSiteGSC(ctx: any, site: any) {
 
   console.log(`Fetching GSC data for ${site.domain}: ${startStr} → ${endStr}`);
 
-  const rows = await fetchSearchAnalytics(accessToken, site.gscProperty, startStr, endStr, 500);
+  const rows = await fetchSearchAnalytics(accessToken, gscProperty, startStr, endStr, 25_000);
   console.log(`GSC returned ${rows.length} rows for ${site.domain}`);
 
   if (rows.length === 0) return { rows: 0, saved: 0 };
 
-  // Aggregate by query (sum clicks/impressions, avg position)
-  const queryMap = new Map<string, { clicks: number; impressions: number; ctr: number; position: number; page: string }>();
+  // GSC returns actual daily rows. Preserve date+query+page so a new article's
+  // impressions can be attributed without double-counting overlapping
+  // rolling windows.
+  const dailyMap = new Map<string, {
+    date: string;
+    query: string;
+    page: string;
+    clicks: number;
+    impressions: number;
+    weightedPosition: number;
+  }>();
   for (const row of rows) {
-    const query = row.keys[0];
-    const page = row.keys[1] || "";
-    const existing = queryMap.get(query);
+    const date = row.keys[0];
+    const query = row.keys[1];
+    const page = row.keys[2] || "";
+    if (!date || !query) continue;
+    const key = `${date}\u0000${query}\u0000${page}`;
+    const existing = dailyMap.get(key);
     if (existing) {
       existing.clicks += row.clicks;
       existing.impressions += row.impressions;
-      existing.position = (existing.position + row.position) / 2; // rolling avg
-      // Keep the page with more clicks
-      if (row.clicks > 0) existing.page = page;
+      existing.weightedPosition += row.position * row.impressions;
     } else {
-      queryMap.set(query, {
+      dailyMap.set(key, {
+        date,
+        query,
+        page,
         clicks: row.clicks,
         impressions: row.impressions,
-        ctr: row.ctr,
-        position: row.position,
-        page,
+        weightedPosition: row.position * row.impressions,
       });
     }
   }
 
-  // Save the complete response in one indexed mutation. This avoids hundreds
-  // of function calls and repeated same-date table scans per site.
-  const midDate = new Date((startDate.getTime() + endDate.getTime()) / 2).toISOString().split("T")[0];
-  const records = Array.from(queryMap, ([query, data]) => ({
-      query,
+  // Save the response in bounded indexed batches. Legacy aggregate rows remain
+  // intact but versioned daily reporting ignores them.
+  const records = Array.from(dailyMap.values(), (data) => ({
+      date: data.date,
+      query: data.query,
       page: data.page || undefined,
       clicks: data.clicks,
       impressions: data.impressions,
-      ctr: data.ctr,
-      position: Math.round(data.position * 10) / 10,
+      ctr: data.impressions > 0 ? data.clicks / data.impressions : 0,
+      position: data.impressions > 0
+        ? Math.round((data.weightedPosition / data.impressions) * 10) / 10
+        : 0,
   }));
-  const result = await ctx.runMutation(api.searchPerformance.upsertBatch, {
-    siteId: site._id,
-    date: midDate,
-    rows: records,
-  });
+  let saved = 0;
+  for (let index = 0; index < records.length; index += 500) {
+    const batch = records.slice(index, index + 500);
+    const result = await ctx.runMutation(api.searchPerformance.upsertBatch, {
+      siteId: site._id,
+      rows: batch,
+    });
+    saved += result.saved;
+  }
 
-  console.log(`Saved ${result.saved} query records for ${site.domain}`);
-  return { rows: rows.length, saved: result.saved };
+  console.log(`Saved ${saved} daily query/page records for ${site.domain}`);
+  return { rows: rows.length, saved };
 }

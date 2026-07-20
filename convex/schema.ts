@@ -267,6 +267,12 @@ export default defineSchema({
     date: v.string(), // ISO date "2026-03-12"
     query: v.string(), // search query
     page: v.optional(v.string()), // URL that appeared
+    // Version 1 stored one overlapping 28-day aggregate under the window's
+    // midpoint date. Version 2 stores actual daily GSC rows. Keeping the
+    // version optional preserves the legacy evidence without mixing it into
+    // daily/article-level reporting.
+    syncVersion: v.optional(v.number()),
+    syncedAt: v.optional(v.number()),
     clicks: v.number(),
     impressions: v.number(),
     ctr: v.number(), // 0-1
@@ -276,7 +282,15 @@ export default defineSchema({
     .index("by_site", ["siteId"])
     .index("by_site_date", ["siteId", "date"])
     .index("by_site_query", ["siteId", "query"])
-    .index("by_site_date_query", ["siteId", "date", "query"]),
+    .index("by_site_date_query", ["siteId", "date", "query"])
+    .index("by_site_version_date", ["siteId", "syncVersion", "date"])
+    .index("by_site_version_date_query_page", [
+      "siteId",
+      "syncVersion",
+      "date",
+      "query",
+      "page",
+    ]),
 
   // Immutable usage log — tracks article generations (never deleted)
   usage_log: defineTable({

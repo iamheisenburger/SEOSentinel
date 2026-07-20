@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+const DAILY_SYNC_VERSION = 2;
+
 // Upsert a search performance record (avoids duplicates for same site+date+query)
 export const upsert = mutation({
   args: {
@@ -47,13 +49,14 @@ export const upsert = mutation({
   },
 });
 
-// Save one GSC response in a single Convex mutation. The previous action made
-// one function call per query and scanned every row for that site/date again.
+// Save one daily GSC response in a single Convex mutation. Version 2 keeps
+// actual date+query+page rows separate from the legacy rolling-window
+// snapshots so article-level trends remain attributable.
 export const upsertBatch = mutation({
   args: {
     siteId: v.id("sites"),
-    date: v.string(),
     rows: v.array(v.object({
+      date: v.string(),
       query: v.string(),
       page: v.optional(v.string()),
       clicks: v.number(),
@@ -62,33 +65,40 @@ export const upsertBatch = mutation({
       position: v.number(),
     })),
   },
-  handler: async (ctx, { siteId, date, rows }) => {
+  handler: async (ctx, { siteId, rows }) => {
     let inserted = 0;
     let updated = 0;
+    const syncedAt = Date.now();
 
     for (const row of rows) {
       const existing = await ctx.db
         .query("search_performance")
-        .withIndex("by_site_date_query", (q) =>
-          q.eq("siteId", siteId).eq("date", date).eq("query", row.query),
+        .withIndex("by_site_version_date_query_page", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("syncVersion", DAILY_SYNC_VERSION)
+            .eq("date", row.date)
+            .eq("query", row.query)
+            .eq("page", row.page),
         )
         .first();
 
       if (existing) {
         await ctx.db.patch(existing._id, {
-          page: row.page,
           clicks: row.clicks,
           impressions: row.impressions,
           ctr: row.ctr,
           position: row.position,
+          syncedAt,
         });
         updated++;
       } else {
         await ctx.db.insert("search_performance", {
           siteId,
-          date,
           ...row,
-          createdAt: Date.now(),
+          syncVersion: DAILY_SYNC_VERSION,
+          syncedAt,
+          createdAt: syncedAt,
         });
         inserted++;
       }
@@ -102,19 +112,36 @@ export const upsertBatch = mutation({
 export const getTopQueries = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
-    const latest = await ctx.db
+    const latestDaily = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site_version_date", (q) =>
+        q.eq("siteId", siteId).eq("syncVersion", DAILY_SYNC_VERSION),
+      )
+      .order("desc")
+      .first();
+    const latest = latestDaily ?? await ctx.db
       .query("search_performance")
       .withIndex("by_site_date", (q) => q.eq("siteId", siteId))
       .order("desc")
       .first();
     if (!latest) return [];
 
-    const recent = await ctx.db
-      .query("search_performance")
-      .withIndex("by_site_date", (q) =>
-        q.eq("siteId", siteId).eq("date", latest.date),
-      )
-      .collect();
+    const recent = latestDaily
+      ? await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_version_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("syncVersion", DAILY_SYNC_VERSION)
+            .eq("date", latest.date),
+        )
+        .collect()
+      : await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_date", (q) =>
+          q.eq("siteId", siteId).eq("date", latest.date),
+        )
+        .collect();
 
     // Sort by clicks desc, then impressions desc
     recent.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
@@ -126,24 +153,44 @@ export const getTopQueries = query({
 export const getSummary = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const latest = await ctx.db
+    const latestDaily = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site_version_date", (q) =>
+        q.eq("siteId", siteId).eq("syncVersion", DAILY_SYNC_VERSION),
+      )
+      .order("desc")
+      .first();
+    const latest = latestDaily ?? await ctx.db
       .query("search_performance")
       .withIndex("by_site_date", (q) => q.eq("siteId", siteId))
       .order("desc")
       .first();
     if (!latest) return null;
 
-    const recent = await ctx.db
-      .query("search_performance")
-      .withIndex("by_site_date", (q) =>
-        q.eq("siteId", siteId).eq("date", latest.date),
-      )
-      .collect();
+    const recent = latestDaily
+      ? await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_version_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("syncVersion", DAILY_SYNC_VERSION)
+            .eq("date", latest.date),
+        )
+        .collect()
+      : await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_date", (q) =>
+          q.eq("siteId", siteId).eq("date", latest.date),
+        )
+        .collect();
 
     const totalClicks = recent.reduce((s, r) => s + r.clicks, 0);
     const totalImpressions = recent.reduce((s, r) => s + r.impressions, 0);
-    const avgPosition = recent.length > 0
-      ? Math.round((recent.reduce((s, r) => s + r.position, 0) / recent.length) * 10) / 10
+    const avgPosition = totalImpressions > 0
+      ? Math.round((
+        recent.reduce((s, r) => s + r.position * r.impressions, 0) /
+        totalImpressions
+      ) * 10) / 10
       : 0;
     const avgCtr = totalImpressions > 0 ? Math.round((totalClicks / totalImpressions) * 1000) / 10 : 0;
 
@@ -152,8 +199,13 @@ export const getSummary = query({
       totalImpressions,
       avgPosition,
       avgCtr,
-      queryCount: recent.length,
+      queryCount: new Set(recent.map((row) => row.query)).size,
       lastSync: latest.date,
+      dataThrough: latest.date,
+      syncedAt: latestDaily
+        ? Math.max(...recent.map((row) => row.syncedAt ?? row.createdAt))
+        : undefined,
+      syncVersion: latestDaily?.syncVersion ?? 1,
     };
   },
 });
@@ -165,7 +217,23 @@ export const getByPage = query({
     const cutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000)
       .toISOString()
       .split("T")[0];
-    const all = await ctx.db
+    const hasDailyRows = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site_version_date", (q) =>
+        q.eq("siteId", siteId).eq("syncVersion", DAILY_SYNC_VERSION),
+      )
+      .first();
+    const all = hasDailyRows
+      ? await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_version_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("syncVersion", DAILY_SYNC_VERSION)
+            .gte("date", cutoff),
+        )
+        .collect()
+      : await ctx.db
       .query("search_performance")
       .withIndex("by_site_date", (q) =>
         q.eq("siteId", siteId).gte("date", cutoff),
@@ -190,6 +258,23 @@ export const getHistory = query({
     const cutoff = new Date(Date.now() - boundedDays * 24 * 60 * 60 * 1000)
       .toISOString()
       .split("T")[0];
+    const hasDailyRows = await ctx.db
+      .query("search_performance")
+      .withIndex("by_site_version_date", (q) =>
+        q.eq("siteId", siteId).eq("syncVersion", DAILY_SYNC_VERSION),
+      )
+      .first();
+    if (hasDailyRows) {
+      return await ctx.db
+        .query("search_performance")
+        .withIndex("by_site_version_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("syncVersion", DAILY_SYNC_VERSION)
+            .gte("date", cutoff),
+        )
+        .collect();
+    }
     return await ctx.db
       .query("search_performance")
       .withIndex("by_site_date", (q) =>
