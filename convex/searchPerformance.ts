@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { isSameSearchConsolePage } from "./lib/searchPerformance";
 import { v } from "convex/values";
 
 const DAILY_SYNC_VERSION = 2;
@@ -240,12 +241,9 @@ export const getByPage = query({
       )
       .collect();
 
-    // Match by page URL (partial match for flexibility)
-    const pageClean = pageUrl.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase();
     return all.filter((r) => {
       if (!r.page) return false;
-      const rClean = r.page.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase();
-      return rClean.includes(pageClean) || pageClean.includes(rClean);
+      return isSameSearchConsolePage(r.page, pageUrl);
     });
   },
 });
