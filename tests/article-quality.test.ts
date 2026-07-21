@@ -165,6 +165,40 @@ test("reader-supplied ROI measurement instructions do not require external evide
   assert.deepEqual(result.issues, []);
 });
 
+test("ROI question framing, FAQ prompts, and input checklists are not factual claims", () => {
+  const productEvidence = "Name: LeadPilot\nDomain: leadpilot.chat";
+  const result = validateClaimEvidenceLedger({
+    markdown: [
+      "The practical question is whether an AI chatbot can convert enough of your existing demand to justify its cost.",
+      "- Current monthly inbound lead volume\n- Average deal value\n- What is the current close rate?",
+      "**Q: Can a chatbot convert every visitor?**",
+    ].join("\n\n"),
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [],
+  });
+
+  assert.equal(result.requiredClaimCount, 0);
+  assert.deepEqual(result.issues, ["Claim-to-evidence ledger is empty."]);
+});
+
+test("short factual bullet claims still require evidence", () => {
+  const productEvidence = "Name: LeadPilot\nDomain: leadpilot.chat";
+  const result = validateClaimEvidenceLedger({
+    markdown: "- Chatbots convert more website visitors.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [],
+  });
+
+  assert.equal(result.requiredClaimCount, 1);
+  assert.match(result.issues.join(" "), /absent from the claim ledger/i);
+});
+
 test("illustrative chatbot configurations are not treated as measured outcomes", () => {
   const productEvidence =
     "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot captures visitor contact details.";

@@ -192,9 +192,34 @@ function isReaderMeasurementInstruction(paragraph: string): boolean {
   const plain = paragraph
     .replace(/^\*\*([^*]+)\*\*\s*/i, "$1 ")
     .trim();
-  return /^(?:measure(?:\s+it)?|track|current state|post-deployment|the key measurement|multiply|calculate|record|document|write|fill in|assign|estimate|compare)\b/i.test(
-    plain,
-  );
+  if (
+    /^(?:measure(?:\s+it)?|track|current state|post-deployment|the key measurement|multiply|calculate|record|document|write|fill in|assign|estimate|compare)\b/i.test(
+      plain,
+    ) ||
+    /^Q:\s*/i.test(plain) ||
+    /\bquestion\b.{0,100}\bwhether\b/i.test(plain)
+  ) {
+    return true;
+  }
+
+  const lines = paragraph
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0 || !lines.every((line) => /^[-*]\s+/.test(line))) {
+    return false;
+  }
+  return lines.every((line) => {
+    const item = line
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\*\*([^*]+)\*\*$/, "$1")
+      .trim();
+    if (/[?:]$/.test(item)) return true;
+    if (/[.!]$/.test(item) || item.split(/\s+/).length > 12) return false;
+    return !/\b(?:is|are|was|were|has|have|had|can|could|will|would|improves?|increases?|reduces?|saves?|boosts?|drives?|generates?|converts?)\b/i.test(
+      item,
+    );
+  });
 }
 
 function referencesNamedProduct(value: string, productEvidence: string): boolean {
