@@ -9,6 +9,7 @@ import {
   evaluatePublicationQuality,
   inlineCitationNumbers,
   normalizeSiteOrigin,
+  removeUnverifiedInlineCitations,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../convex/lib/articleQuality.ts";
@@ -214,6 +215,48 @@ test("comma-list inline citations bind every ordinal to the exact claim ledger",
   });
   assert.equal(missingBinding.passed, false);
   assert.match(missingBinding.issues.join(" "), /cites \[2\] without a matching supported claim-ledger entry/);
+});
+
+test("removes citation ordinals that have no preserved source", () => {
+  assert.equal(
+    removeUnverifiedInlineCitations(
+      "LeadPilot captures contact context [1]. A study supports this [1, 2].",
+      0,
+    ),
+    "LeadPilot captures contact context. A study supports this.",
+  );
+  assert.equal(
+    removeUnverifiedInlineCitations(
+      "A preserved source supports this [1, 2].",
+      1,
+    ),
+    "A preserved source supports this [1].",
+  );
+});
+
+test("misnumbered first-party claims fall back only to the exact hashed product snapshot", () => {
+  const productEvidence =
+    "LeadPilot captures visitor contact details and sends conversation context to the sales team.";
+  const result = validateClaimEvidenceLedger({
+    markdown:
+      "LeadPilot captures visitor contact details and sends conversation context to the sales team.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim:
+          "LeadPilot captures visitor contact details and sends conversation context to the sales team.",
+        citationNumbers: [1],
+        supported: true,
+        reason:
+          "The exact hashed first-party product snapshot states this workflow directly.",
+      },
+    ],
+  });
+
+  assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
 test("claim ledger rejects unsupported citation-free product assertions", () => {

@@ -19,6 +19,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   evaluatePublicationQuality,
+  removeUnverifiedInlineCitations,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
@@ -1330,7 +1331,13 @@ async function factCheckArticle(
     }),
     maxTokens: 16384,
   });
-  return reviewed;
+  return {
+    ...reviewed,
+    markdown: removeUnverifiedInlineCitations(
+      reviewed.markdown,
+      sources?.length ?? 0,
+    ),
+  };
 }
 
 async function editorialReviewArticle(args: {
@@ -1474,6 +1481,7 @@ async function auditFinalArticle(args: {
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "Build a claim-to-evidence ledger for every externally verifiable factual or product-capability claim in the finished article, including claims without numbers. Mark a claim supported only when the supplied evidence directly supports it; citation presence alone is not evidence.",
+      "The first-party product evidence is a separate unnumbered snapshot. For a product claim supported only by that snapshot, return an empty citationNumbers array. Never invent a citation ordinal for product evidence or for a source absent from the supplied source array.",
       "Do not reward length, keyword repetition, entity coverage, or promotional language.",
       "Submit only the score and concise actionable notes through the audit_final_article tool.",
     ].join(" "),
@@ -1567,6 +1575,9 @@ async function remediateFinalArticle(args: {
       "- Use product-specific mechanics only when they appear in the first-party product evidence. Do not imply that the product exposes a metric, dashboard, workflow, or feature that the evidence does not show.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
+      args.sources.length === 0
+        ? "- The source array is empty: remove every numbered inline citation and every non-structural number, numeric scenario, benchmark, duration, threshold, volume, score, percentage, price, and quantified outcome. First-party product evidence is unnumbered and must never be labelled [1]."
+        : "- Every numbered citation must map to the exact supplied source array; first-party product evidence remains unnumbered.",
       "- Preserve the reader's core answer, useful framework, internal links, restrained CTA, and valid Markdown.",
       "- Keep the complete revision between 900 words and the hard maximum.",
       `- Do not use an earlier year as a present or future hypothetical. Historical years require explicit historical context; otherwise use ${currentYear} or no year.`,

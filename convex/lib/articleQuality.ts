@@ -134,6 +134,34 @@ export function inlineCitationNumbers(value: string): number[] {
 }
 
 /**
+ * Remove model-authored citation ordinals that are not backed by the exact
+ * preserved source array. First-party product evidence is a separate hashed
+ * snapshot and is intentionally not assigned a numbered bibliography slot.
+ */
+export function removeUnverifiedInlineCitations(
+  markdown: string,
+  sourceCount: number,
+): string {
+  const maximum = Math.max(0, Math.floor(sourceCount));
+  return markdown
+    .replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_match, raw: string) => {
+      const verified = raw
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter(
+          (value, index, values) =>
+            Number.isInteger(value) &&
+            value >= 1 &&
+            value <= maximum &&
+            values.indexOf(value) === index,
+        );
+      return verified.length > 0 ? `[${verified.join(", ")}]` : "";
+    })
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ");
+}
+
+/**
  * Deterministic coverage around the model-produced ledger.  The model may
  * identify claims, but it cannot certify its own empty answer or cite a source
  * that is absent from the preserved evidence snapshot.
@@ -147,6 +175,13 @@ export function validateClaimEvidenceLedger(args: {
   claimEvidence: ClaimEvidenceEntry[];
 }): { passed: boolean; issues: string[]; requiredClaimCount: number } {
   const issues: string[] = [];
+  const productSnapshotValid =
+    !!args.productEvidenceHash &&
+    sha256Hex(args.productEvidence) === args.productEvidenceHash;
+  const productSnapshotSupports = (claim: string) =>
+    productSnapshotValid &&
+    overlapRatio(claim, args.productEvidence) >= 0.3 &&
+    exactClaimDetailsPresent(claim, args.productEvidence);
   const paragraphs = args.markdown
     .replace(/```[\s\S]*?```/g, "")
     .split(/\n\s*\n/)
@@ -174,7 +209,9 @@ export function validateClaimEvidenceLedger(args: {
       for (const citation of entry.citationNumbers) {
         const source = args.sources[citation - 1];
         if (!source) {
-          issues.push(`Claim ledger entry ${index + 1} cites missing source [${citation}].`);
+          if (!productSnapshotSupports(entry.claim)) {
+            issues.push(`Claim ledger entry ${index + 1} cites missing source [${citation}].`);
+          }
           continue;
         }
         const sourceHost = safeHttpsUrl(source.url)?.hostname ?? "";
@@ -201,14 +238,7 @@ export function validateClaimEvidenceLedger(args: {
         }
       }
     } else {
-      const productSnapshotValid =
-        !!args.productEvidenceHash &&
-        sha256Hex(args.productEvidence) === args.productEvidenceHash;
-      if (
-        !productSnapshotValid ||
-        overlapRatio(entry.claim, args.productEvidence) < 0.3 ||
-        !exactClaimDetailsPresent(entry.claim, args.productEvidence)
-      ) {
+      if (!productSnapshotSupports(entry.claim)) {
         issues.push(
           `Supported claim ledger entry ${index + 1} has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
         );
@@ -249,7 +279,9 @@ export function validateClaimEvidenceLedger(args: {
     }
 
     const matchedLedgerCitations = new Set(
-      matchingEntries.flatMap((entry) => entry.citationNumbers),
+      matchingEntries.flatMap((entry) =>
+        entry.citationNumbers.filter((citation) => !!args.sources[citation - 1]),
+      ),
     );
     if (
       matchedLedgerCitations.size > 0 &&
