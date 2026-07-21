@@ -1580,6 +1580,8 @@ async function remediateFinalArticle(args: {
       "- Label invented scenarios explicitly as hypothetical examples. Never imply that an invented company, customer, result, quote, or product outcome actually occurred.",
       "- Use product-specific mechanics only when they appear in the first-party product evidence. Do not imply that the product exposes a metric, dashboard, workflow, or feature that the evidence does not show.",
       "- A claim-ledger defect names the exact unsupported or unmatched claim in quotes. Delete that claim from the article unless the supplied evidence states the same specific mechanic; a broad category such as workflow integration does not support invented channels, destinations, or integrations.",
+      "- An audit note labelled Unsupported claim names a proposition the evidence does not support. Delete that proposition completely; do not preserve it through a synonym, softer wording, or an uncited causal/comparative claim.",
+      "- When the unsupported proposition contained useful advice, preserve only a conditional diagnostic the reader can verify (for example, 'If your analytics show X, test Y'). Do not claim that the condition is common, that one approach converts better, or that user behaviour has a known cause without supplied evidence.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
       args.sources.length === 0
@@ -2775,6 +2777,9 @@ async function handleArticle(
     `- LENGTH: There is no target word count. Use at least 900 useful words only when the topic warrants a full article, stop when the intent is answered, and never exceed ${articleWordCeiling(effectiveArticleType)} measured prose words.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
     `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
+    researchSources.length === 0
+      ? `- EVIDENCE-SCARCE MODE: No external source survived verification. Do not state market patterns, typical user behaviour, causation, comparative effectiveness, conversion advantages, or industry prevalence as facts. Frame useful non-product guidance as a conditional diagnostic the reader must verify in their own analytics, or omit it.`
+      : "",
     `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence and carry the matching inline citation. Otherwise remove the number.`,
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     `- ORIGINAL VALUE: Add first-party product mechanics, a decision framework, verification method, or useful synthesis that is not a paraphrase of generic search results.`,
