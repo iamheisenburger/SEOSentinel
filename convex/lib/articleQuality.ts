@@ -197,14 +197,33 @@ function isReaderMeasurementInstruction(paragraph: string): boolean {
   );
 }
 
-function requiresClaimEvidence(value: string): boolean {
+function referencesNamedProduct(value: string, productEvidence: string): boolean {
+  const identities = [
+    ...productEvidence.matchAll(/^(?:Name|Domain):\s*([^\n]+)/gim),
+  ]
+    .flatMap((match) => {
+      const exact = match[1].trim().toLowerCase();
+      const hostname = exact
+        .replace(/^https?:\/\//, "")
+        .replace(/^www\./, "")
+        .split("/", 1)[0];
+      const brand = hostname.split(".", 1)[0];
+      return [exact, hostname, brand];
+    })
+    .filter((identity) => identity.length >= 4);
+  const normalized = value.toLowerCase();
+  return identities.some((identity) => normalized.includes(identity));
+}
+
+function requiresClaimEvidence(value: string, productEvidence: string): boolean {
   return (
     INLINE_CITATION_PATTERN.test(value) ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||
     FACTUAL_CLAIM_PATTERN.test(value) ||
-    /\b(?:automatically|guarantees?|proven|creates?|produces?|improves?|increases?|reduces?|saves?|automates?|captures?|qualifies?|books?|delivers?|integrates?|supports?|learns?|detects?)\b/i.test(
-      value,
-    )
+    HYPE_PATTERN.test(value) ||
+    QUANTIFIED_OUTCOME_PATTERN.test(value) ||
+    referencesNamedProduct(value, productEvidence) ||
+    /\b(?:chatbots?|platforms?|software|tools?|automation)\b[^\n.!?]{0,100}\b(?:improves?|increases?|reduces?|saves?|boosts?|drives?|generates?|converts?)\b/i.test(value)
   );
 }
 
@@ -239,7 +258,7 @@ export function validateClaimEvidenceLedger(args: {
         !paragraph.startsWith("#") &&
         !/^[-*]\s+https?:\/\//i.test(paragraph) &&
         !isReaderMeasurementInstruction(paragraph) &&
-        requiresClaimEvidence(paragraph),
+        requiresClaimEvidence(paragraph, args.productEvidence),
     );
 
   if (args.claimEvidence.length === 0) {
@@ -286,7 +305,7 @@ export function validateClaimEvidenceLedger(args: {
     } else {
       if (
         !productSnapshotSupports(entry.claim) &&
-        requiresClaimEvidence(entry.claim)
+        requiresClaimEvidence(entry.claim, args.productEvidence)
       ) {
         issues.push(
           `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
@@ -350,7 +369,7 @@ export function validateClaimEvidenceLedger(args: {
 }
 
 const HYPE_PATTERN =
-  /\b(?:guaranteed|proven(?:\s+results?)?|skyrocket|game[- ]changing|transformational|staggering|revolutionary)\b/i;
+  /\b(?:guarantee(?:d|s)?|proven(?:\s+results?)?|skyrocket|game[- ]changing|transformational|staggering|revolutionary)\b/i;
 const QUANTIFIED_OUTCOME_PATTERN =
   /(?:\b(?:increase|improve|boost|grow|lift|raise|reduce|decrease|cut|save|recover|free up)\w*\b[^\n.!?]{0,70}\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\b|minutes?\b|days?\b|\$))|(?:\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\s*(?:\/|per)\s*week)\b)/i;
 const EVIDENCE_REQUIRED_NUMBER_PATTERN =

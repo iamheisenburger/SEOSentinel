@@ -132,7 +132,7 @@ test("ordinary advice mentioning data does not become a sourced research claim",
 
 test("reader-supplied ROI measurement instructions do not require external evidence", () => {
   const productEvidence =
-    "LeadPilot learns website content, captures visitor contact details, and preserves conversation context.";
+    "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot learns website content, captures visitor contact details, and preserves conversation context.";
   const result = validateClaimEvidenceLedger({
     markdown: [
       "ROI compares the value your business records against what your business spends.",
@@ -163,6 +163,54 @@ test("reader-supplied ROI measurement instructions do not require external evide
 
   assert.equal(result.requiredClaimCount, 1);
   assert.deepEqual(result.issues, []);
+});
+
+test("illustrative chatbot configurations are not treated as measured outcomes", () => {
+  const productEvidence =
+    "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot captures visitor contact details.";
+  const result = validateClaimEvidenceLedger({
+    markdown: [
+      "**Sales Booking Automation**\nThe chatbot qualifies leads and directly books qualified calls into a sales calendar.",
+      "**Support and Presales Triage**\nThe chatbot answers product questions and routes complex inquiries to a team member.",
+      "LeadPilot captures visitor contact details.",
+    ].join("\n\n"),
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim: "LeadPilot captures visitor contact details.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The exact hashed first-party snapshot states this capability.",
+      },
+    ],
+  });
+  assert.equal(result.requiredClaimCount, 1);
+  assert.deepEqual(result.issues, []);
+});
+
+test("an unsupported named-product capability still fails without hype or numbers", () => {
+  const productEvidence =
+    "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot captures visitor contact details.";
+  const result = validateClaimEvidenceLedger({
+    markdown: "LeadPilot sends signed contracts and collects payments.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim: "LeadPilot sends signed contracts and collects payments.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The product snapshot supposedly supports this capability.",
+      },
+    ],
+  });
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join(" "), /first-party evidence snapshot/i);
 });
 
 test("plain-Markdown publication rejects multiline and component MDX", () => {
