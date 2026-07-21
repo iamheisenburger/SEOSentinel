@@ -19,6 +19,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   evaluatePublicationQuality,
+  removeUncitedQuantifiedSentences,
   removeUnverifiedInlineCitations,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
@@ -1331,12 +1332,16 @@ async function factCheckArticle(
     }),
     maxTokens: 16384,
   });
+  const citationSafeMarkdown = removeUnverifiedInlineCitations(
+    reviewed.markdown,
+    sources?.length ?? 0,
+  );
   return {
     ...reviewed,
-    markdown: removeUnverifiedInlineCitations(
-      reviewed.markdown,
-      sources?.length ?? 0,
-    ),
+    markdown:
+      (sources?.length ?? 0) === 0
+        ? removeUncitedQuantifiedSentences(citationSafeMarkdown)
+        : citationSafeMarkdown,
   };
 }
 

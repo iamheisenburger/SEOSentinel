@@ -9,6 +9,7 @@ import {
   evaluatePublicationQuality,
   inlineCitationNumbers,
   normalizeSiteOrigin,
+  removeUncitedQuantifiedSentences,
   removeUnverifiedInlineCitations,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
@@ -231,6 +232,21 @@ test("removes citation ordinals that have no preserved source", () => {
       1,
     ),
     "A preserved source supports this [1].",
+  );
+});
+
+test("source-less correction removes only the unsupported quantified sentence", () => {
+  assert.equal(
+    removeUncitedQuantifiedSentences(
+      "These are not dramatic gains. You will not 10x revenue. Focus on whether qualified conversations improve.",
+    ),
+    "These are not dramatic gains. Focus on whether qualified conversations improve.",
+  );
+  assert.equal(
+    removeUncitedQuantifiedSentences(
+      "A documented study reported a 12% change [1]. Keep the cited result.",
+    ),
+    "A documented study reported a 12% change [1]. Keep the cited result.",
   );
 });
 

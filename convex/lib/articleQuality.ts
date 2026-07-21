@@ -456,6 +456,29 @@ export function uncitedEvidenceRequiredParagraphs(markdown: string): string[] {
   );
 }
 
+/**
+ * Fail closed when a source-less model ignores the numeric-evidence contract:
+ * remove only the sentence containing an unsupported quantified claim while
+ * preserving the rest of the useful paragraph. This never manufactures or
+ * softens a number and runs only after unverified citation ordinals are gone.
+ */
+export function removeUncitedQuantifiedSentences(markdown: string): string {
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (!line.trim() || /^\s*(?:#|```|\|)/.test(line)) return line;
+      const sentences = line.split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/);
+      return sentences
+        .filter(
+          (sentence) =>
+            uncitedEvidenceRequiredParagraphs(sentence).length === 0,
+        )
+        .join(" ")
+        .trimEnd();
+    })
+    .join("\n");
+}
+
 function quantifiedOutcomeParagraphs(markdown: string): string[] {
   return markdown
     .replace(/```[\s\S]*?```/g, "")
