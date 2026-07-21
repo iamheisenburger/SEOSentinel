@@ -109,7 +109,7 @@ test("due publication outranks manual and replenishment jobs", () => {
       pendingJobPriority({ bufferFill: true }),
   );
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(pipeline, /processed\?\.buffered/);
+  assert.match(pipeline, /continueAutopilotAfterProcessedJob/);
   assert.match(pipeline, /newly_sealed_buffer_item_is_due/);
   assert.match(
     pipeline,

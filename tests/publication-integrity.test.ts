@@ -444,3 +444,17 @@ test("external publication retries are bounded and back off", () => {
   assert.match(jobs, /internal\.autopilot\.dispatchSiteFollowup/);
   assert.match(jobs, /publishOnly:\s*true/);
 });
+
+test("every quality terminal state immediately re-enters the bounded scheduler", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(
+    pipeline,
+    /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined/,
+  );
+  assert.match(pipeline, /quality_gate_authorized_bounded_revision/);
+  assert.match(pipeline, /sealed_buffer_below_target/);
+  assert.match(
+    pipeline,
+    /await continueAutopilotAfterProcessedJob\(ctx, args\.siteId, result\)/,
+  );
+});

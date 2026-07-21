@@ -4981,6 +4981,62 @@ function processedJobDetail(processed: ProcessedJobResult): string | undefined {
       : undefined);
 }
 
+async function continueAutopilotAfterProcessedJob(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+  processed: ProcessedJobResult,
+): Promise<void> {
+  if (
+    !processed.buffered &&
+    !processed.planCompleted &&
+    !processed.qualityQuarantined
+  ) {
+    return;
+  }
+
+  // Every quality-bearing terminal state must immediately re-enter the
+  // bounded scheduler. Otherwise a quarantined candidate, a completed topic
+  // plan, or a partially filled buffer waits for the next fleet cron even
+  // though the scheduler has already authorized one safe next step.
+  const schedule = await ctx.runAction(
+    internal.actions.scheduler.scheduleCadence,
+    { siteId },
+  );
+  const followups: Record<string, { trigger: string; reason: string }> = {
+    buffer_delivery: {
+      trigger: "buffer_delivery",
+      reason: "newly_sealed_buffer_item_is_due",
+    },
+    buffer_delivery_pending: {
+      trigger: "buffer_delivery",
+      reason: "newly_sealed_buffer_item_is_due",
+    },
+    quality_revision: {
+      trigger: "quality_revision",
+      reason: "quality_gate_authorized_bounded_revision",
+    },
+    buffer_fill: {
+      trigger: processed.planCompleted ? "plan_ready" : "buffer_fill",
+      reason: processed.planCompleted
+        ? "verified_topic_plan_ready_for_generation"
+        : "sealed_buffer_below_target",
+    },
+    cadence_generation: {
+      trigger: processed.planCompleted ? "plan_ready" : "cadence_generation",
+      reason: processed.planCompleted
+        ? "verified_topic_plan_ready_for_generation"
+        : "publication_due_candidate_authorized",
+    },
+  };
+  const followup = schedule.mode ? followups[schedule.mode] : undefined;
+  if (schedule.scheduled > 0 && followup) {
+    await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+      siteId,
+      ...followup,
+    });
+  }
+}
+
 export const autopilotTick = internalAction({
   args: {
     siteId: v.id("sites"),
@@ -5111,44 +5167,7 @@ export const autopilotTick = internalAction({
         internal.actions.pipeline.processNextJob as any,
         { siteId, jobId: nextJob._id },
       );
-      if (processed?.buffered) {
-        // If this passing candidate repaired an empty buffer after the cadence
-        // deadline, queue its independent delivery immediately instead of
-        // waiting up to three hours for the next fleet cron. When publication
-        // is not due, this call may only enqueue the next bounded replenishment
-        // job; that work remains deferred to a later tick.
-        const afterBuffer = await ctx.runAction(
-          internal.actions.scheduler.scheduleCadence,
-          { siteId },
-        );
-        if (
-          afterBuffer.mode === "buffer_delivery" ||
-          afterBuffer.mode === "buffer_delivery_pending"
-        ) {
-          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
-            siteId,
-            trigger: "buffer_delivery",
-            reason: "newly_sealed_buffer_item_is_due",
-          });
-        }
-      }
-      if (processed?.planCompleted) {
-        const afterPlan = await ctx.runAction(
-          internal.actions.scheduler.scheduleCadence,
-          { siteId },
-        );
-        if (
-          afterPlan.scheduled > 0 &&
-          (afterPlan.mode === "buffer_fill" ||
-            afterPlan.mode === "cadence_generation")
-        ) {
-          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
-            siteId,
-            trigger: "plan_ready",
-            reason: "verified_topic_plan_ready_for_generation",
-          });
-        }
-      }
+      await continueAutopilotAfterProcessedJob(ctx, siteId, processed);
       return finish(
         { processed: processed?.processed ? 1 : 0 },
         processedJobOutcome(processed),
@@ -5628,40 +5647,10 @@ export const processNextJob = internalAction({
 
     try {
       const result = await execute();
-      if (args.runId && result.buffered) {
-        // The parent tick has already returned, so this durable worker owns
-        // post-buffer replenishment and any immediately due delivery.
-        const afterBuffer = await ctx.runAction(
-          internal.actions.scheduler.scheduleCadence,
-          { siteId: args.siteId },
-        );
-        if (
-          afterBuffer.mode === "buffer_delivery" ||
-          afterBuffer.mode === "buffer_delivery_pending"
-        ) {
-          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
-            siteId: args.siteId,
-            trigger: "buffer_delivery",
-            reason: "newly_sealed_buffer_item_is_due",
-          });
-        }
-      }
-      if (args.runId && result.planCompleted) {
-        const afterPlan = await ctx.runAction(
-          internal.actions.scheduler.scheduleCadence,
-          { siteId: args.siteId },
-        );
-        if (
-          afterPlan.scheduled > 0 &&
-          (afterPlan.mode === "buffer_fill" ||
-            afterPlan.mode === "cadence_generation")
-        ) {
-          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
-            siteId: args.siteId,
-            trigger: "plan_ready",
-            reason: "verified_topic_plan_ready_for_generation",
-          });
-        }
+      if (args.runId) {
+        // The parent tick has already returned, so this durable worker owns the
+        // next bounded recovery, replenishment, or delivery step.
+        await continueAutopilotAfterProcessedJob(ctx, args.siteId, result);
       }
       if (args.runId) {
         await ctx.runMutation(internal.autopilot.markRunFinished, {
