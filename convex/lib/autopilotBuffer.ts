@@ -37,6 +37,32 @@ export type BufferArticle = {
   auditedContentHash?: string;
 };
 
+export type PublicationClockArticle = {
+  createdAt: number;
+  publishedAt?: number;
+  publicationAuditVersion?: number;
+  auditedContentHash?: string;
+};
+
+/**
+ * A mutable legacy row must not become a fresh publication merely because a
+ * maintenance migration touched it. Only the modern sealed publisher receipt
+ * is authoritative for a later publication timestamp; legacy rows use their
+ * immutable creation time as the conservative cadence clock.
+ */
+export function effectivePublishedAt(
+  article: PublicationClockArticle,
+): number {
+  const sealedModernPublication =
+    article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION &&
+    typeof article.auditedContentHash === "string" &&
+    article.auditedContentHash.length > 0 &&
+    Number.isFinite(article.publishedAt);
+  return sealedModernPublication
+    ? (article.publishedAt as number)
+    : article.createdAt;
+}
+
 export function isSealedReady(article: BufferArticle): boolean {
   return (
     article.status === "ready" &&

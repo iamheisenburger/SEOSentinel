@@ -32,7 +32,7 @@ test("tenant article and topic reads require owner checks while blog reads remai
 
 test("legacy migration backfills timestamps without resurrecting old delivery retries", () => {
   const articles = readFileSync("convex/articles.ts", "utf8");
-  assert.match(articles, /publishedAt:\s*article\.updatedAt/);
+  assert.match(articles, /publishedAt:\s*article\.createdAt/);
   assert.doesNotMatch(articles, /migratedFromLegacyPublishRetry:\s*true/);
   assert.match(articles, /jobs remain untouched/);
   assert.match(articles, /state\?\.status === "running"/);

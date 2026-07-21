@@ -1281,7 +1281,7 @@ export const resetUsageLog = internalMutation({
 });
 
 // Resumable, explicitly invoked compatibility migration. Published legacy
-// rows use updatedAt as the documented publication-time proxy and summaries
+// rows use immutable createdAt as the conservative publication-time proxy and summaries
 // are created in small pages. It never changes a job status: old delivery
 // failures require an explicit operator decision and cannot resurrect during
 // a deployment.
@@ -1384,7 +1384,9 @@ export const migrateLegacyArticles = internalMutation({
       let migrated = 0;
       for (const article of page.page) {
         if (article.status === "published" && !article.publishedAt) {
-          await ctx.db.patch(article._id, { publishedAt: article.updatedAt });
+          // Legacy rows have no sealed delivery receipt. Their mutable
+          // updatedAt may reflect this migration or an audit, not delivery.
+          await ctx.db.patch(article._id, { publishedAt: article.createdAt });
         }
         await syncSummary(ctx, article._id);
         migrated += 1;

@@ -7,6 +7,7 @@ import {
   MIN_APPROVED_BUFFER,
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
+  effectivePublishedAt,
   isSealedReady,
 } from "./lib/autopilotBuffer";
 
@@ -441,7 +442,12 @@ export const auditSla = internalMutation({
       const cadence = Math.max(1, site.cadencePerWeek ?? 4);
       const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
       const lastPublishedAt = latestPublished
-        ? latestPublished.publishedAt ?? latestPublished.articleUpdatedAt
+        ? effectivePublishedAt({
+            createdAt: latestPublished.articleCreatedAt,
+            publishedAt: latestPublished.publishedAt,
+            publicationAuditVersion: latestPublished.publicationAuditVersion,
+            auditedContentHash: latestPublished.auditedContentHash,
+          })
         : undefined;
       const nextPublicationDueAt =
         (lastPublishedAt ?? site.createdAt) + cadenceMs;

@@ -11,6 +11,7 @@ import {
   TARGET_APPROVED_BUFFER,
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
+  effectivePublishedAt,
   isSealedReady,
   selectNonCannibalizingTopic,
 } from "../lib/autopilotBuffer";
@@ -76,8 +77,9 @@ export const scheduleCadence = internalAction({
     const cadence = Math.max(1, site.cadencePerWeek ?? 4);
     const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
     const published = state.published as ArticleSummary[];
-    const lastPublishedAt =
-      state.latestPublished?.publishedAt ?? state.latestPublished?.updatedAt;
+    const lastPublishedAt = state.latestPublished
+      ? effectivePublishedAt(state.latestPublished)
+      : undefined;
     const publicationDue = !lastPublishedAt || now >= lastPublishedAt + cadenceMs;
     const buffer = (state.ready as ArticleSummary[])
       .filter(isSealedReady)

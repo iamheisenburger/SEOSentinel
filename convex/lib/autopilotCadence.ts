@@ -1,7 +1,11 @@
+import { effectivePublishedAt } from "./autopilotBuffer.ts";
+
 export type CadenceArticle = {
   _id?: string;
   createdAt: number;
   publishedAt?: number;
+  publicationAuditVersion?: number;
+  auditedContentHash?: string;
   status?: string;
   publicationGateStatus?: string;
   publicationGateIssues?: string[];
@@ -63,8 +67,8 @@ export function evaluateCadenceWindow({
   const hasRecentPublication = articles.some(
     (article) =>
       article.status === "published" &&
-      (article.publishedAt ?? article.createdAt) <= now &&
-      now - (article.publishedAt ?? article.createdAt) < windowMs,
+      effectivePublishedAt(article) <= now &&
+      now - effectivePublishedAt(article) < windowMs,
   );
   const recovery = hasRecentPublication
     ? undefined

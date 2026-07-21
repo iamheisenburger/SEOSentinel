@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { evaluateCadenceWindow } from "../convex/lib/autopilotCadence.ts";
+import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = 100 * HOUR;
@@ -115,6 +116,8 @@ test("publication time, not old draft creation time, closes the cadence window",
         createdAt: NOW - 48 * HOUR,
         publishedAt: NOW - HOUR,
         status: "published",
+        publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+        auditedContentHash: "sealed-content-hash",
       },
     ],
     now: NOW,
@@ -124,4 +127,22 @@ test("publication time, not old draft creation time, closes the cadence window",
 
   assert.equal(result.hasRecentPublication, true);
   assert.equal(result.canGenerate, false);
+});
+
+test("a maintenance timestamp cannot make a legacy publication look fresh", () => {
+  const result = evaluateCadenceWindow({
+    articles: [
+      {
+        createdAt: NOW - 48 * HOUR,
+        publishedAt: NOW - HOUR,
+        status: "published",
+      },
+    ],
+    now: NOW,
+    hoursPerArticle: 24,
+    maxAttempts: 2,
+  });
+
+  assert.equal(result.hasRecentPublication, false);
+  assert.equal(result.canGenerate, true);
 });

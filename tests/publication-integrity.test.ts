@@ -16,6 +16,7 @@ import {
   MAX_NEW_CANDIDATES_PER_24H,
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
+  effectivePublishedAt,
 } from "../convex/lib/autopilotBuffer.ts";
 import {
   acquirePublicationLease,
@@ -35,6 +36,27 @@ test("warm rollout ignores pre-rollout candidates and can fill its bounded buffe
     MAX_NEW_CANDIDATES_PER_24H,
   );
   assert.equal(autopilotCandidateBudget("live"), 2);
+});
+
+test("only a sealed modern receipt can advance the publication clock", () => {
+  const createdAt = Date.UTC(2026, 6, 16, 12);
+  const maintenanceTimestamp = Date.UTC(2026, 6, 20, 12);
+  assert.equal(
+    effectivePublishedAt({
+      createdAt,
+      publishedAt: maintenanceTimestamp,
+    }),
+    createdAt,
+  );
+  assert.equal(
+    effectivePublishedAt({
+      createdAt,
+      publishedAt: maintenanceTimestamp,
+      publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+      auditedContentHash: "sealed-content-hash",
+    }),
+    maintenanceTimestamp,
+  );
 });
 
 const artifact = {
