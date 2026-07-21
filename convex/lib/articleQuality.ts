@@ -261,7 +261,7 @@ export function validateClaimEvidenceLedger(args: {
     } else {
       if (!productSnapshotSupports(entry.claim)) {
         issues.push(
-          `Supported claim ledger entry ${index + 1} has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
+          `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
         );
       }
     }

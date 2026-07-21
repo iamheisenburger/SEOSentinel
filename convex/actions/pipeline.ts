@@ -1579,6 +1579,7 @@ async function remediateFinalArticle(args: {
       "- Do not disguise an unsupported number as a vague universal rule. Replace it with a decision principle the supplied evidence actually supports, or delete it.",
       "- Label invented scenarios explicitly as hypothetical examples. Never imply that an invented company, customer, result, quote, or product outcome actually occurred.",
       "- Use product-specific mechanics only when they appear in the first-party product evidence. Do not imply that the product exposes a metric, dashboard, workflow, or feature that the evidence does not show.",
+      "- A claim-ledger defect names the exact unsupported or unmatched claim in quotes. Delete that claim from the article unless the supplied evidence states the same specific mechanic; a broad category such as workflow integration does not support invented channels, destinations, or integrations.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
       args.sources.length === 0

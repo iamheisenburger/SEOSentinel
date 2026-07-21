@@ -346,6 +346,10 @@ test("claim ledger rejects unsupported citation-free product assertions", () => 
   });
   assert.equal(result.passed, false);
   assert.match(result.issues.join(" "), /first-party evidence snapshot/i);
+  assert.match(
+    result.issues.join(" "),
+    /automatically guarantees qualified pipeline growth/i,
+  );
 });
 
 test("classifies and normalizes strict evidence sources", () => {
