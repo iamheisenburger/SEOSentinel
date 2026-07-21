@@ -40,6 +40,11 @@ const STANDARDS_AND_OFFICIAL_HOSTS = [
   "w3.org",
 ];
 
+export const STRICT_EVIDENCE_SEARCH_DOMAINS = [
+  ...PRIMARY_HOSTS,
+  ...STANDARDS_AND_OFFICIAL_HOSTS,
+];
+
 const LOW_AUTHORITY_HOSTS = [
   "blogspot.com",
   "linkedin.com",

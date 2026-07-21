@@ -13,6 +13,7 @@ import {
   validateClaimEvidenceLedger,
 } from "../convex/lib/articleQuality.ts";
 import {
+  STRICT_EVIDENCE_SEARCH_DOMAINS,
   classifyEvidenceSource,
   normalizeEvidenceUrl,
   strictEvidenceSources,
@@ -202,6 +203,13 @@ test("claim ledger rejects unsupported citation-free product assertions", () => 
 });
 
 test("classifies and normalizes strict evidence sources", () => {
+  for (const domain of STRICT_EVIDENCE_SEARCH_DOMAINS) {
+    assert.equal(
+      classifyEvidenceSource(`https://${domain}/docs`).strictEligible,
+      true,
+      `${domain} must remain eligible before it is sent to the primary-source search filter`,
+    );
+  }
   assert.equal(
     normalizeEvidenceUrl("https://developers.google.com/search/docs?utm_source=test#section"),
     "https://developers.google.com/search/docs",

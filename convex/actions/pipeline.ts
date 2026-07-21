@@ -31,7 +31,10 @@ import {
 } from "../lib/publicationArtifact";
 import { evaluateCadenceWindow } from "../lib/autopilotCadence";
 import { pendingJobPriority } from "../lib/autopilotBuffer";
-import { strictEvidenceSources } from "../lib/sourceQuality";
+import {
+  STRICT_EVIDENCE_SEARCH_DOMAINS,
+  strictEvidenceSources,
+} from "../lib/sourceQuality";
 import {
   safeFetchPublicText as fetchPublicText,
   validatePublicHttpsUrl,
@@ -1652,8 +1655,10 @@ async function webResearch(
   },
   siteNiche?: string,
   competitorDomains?: string[],
+  primaryEvidenceOnly = false,
 ): Promise<{ researchSummary: string; sources: { url: string; title?: string }[] }> {
-  // Web research uses OpenAI's web_search_preview tool (Claude doesn't have built-in web search)
+  // Web research uses OpenAI's provider-attributed citations. Model-authored
+  // URL lists are never trusted as evidence.
   const client = openaiClient();
   const searchQuery = `${topic.primaryKeyword} ${topic.label} ${siteNiche ?? ""}`.trim();
 
@@ -1666,7 +1671,16 @@ async function webResearch(
 
   const completion = await client.responses.create({
     model: "gpt-4o-mini",
-    tools: [{ type: "web_search_preview" as any }],
+    tools: [
+      primaryEvidenceOnly
+        ? ({
+            type: "web_search",
+            search_context_size: "high",
+            filters: { allowed_domains: STRICT_EVIDENCE_SEARCH_DOMAINS },
+          } as any)
+        : ({ type: "web_search_preview", search_context_size: "high" } as any),
+    ],
+    max_output_tokens: 1600,
     input: [
       {
         role: "system",
@@ -1675,7 +1689,7 @@ async function webResearch(
           "Use primary evidence only: official documentation for mechanics, original research, public datasets, standards bodies, government or academic material, and first-party pages solely for that product's own facts. " +
           "Do not substitute vendor blogs, affiliate roundups, content farms, or secondary summaries when primary evidence is unavailable. Returning no sources is valid and preferable to weak evidence. " +
           "Do not manufacture a statistics or quotations section. Include a number or quotation only when the exact claim is visible in a primary source. " +
-          "Identify the reader's unresolved questions, supported mechanisms, and useful evidence gaps. Compile a concise research brief and include every source URL actually used. Output JSON only." +
+          "Identify the reader's unresolved questions, supported mechanisms, and useful evidence gaps. Compile a concise prose research brief with inline citations supplied by web search." +
           competitorExclusion,
       },
       {
@@ -1685,24 +1699,12 @@ async function webResearch(
           `Topic: ${topic.label}\n` +
           `Primary Keyword: ${topic.primaryKeyword}\n` +
           `Secondary Keywords: ${topic.secondaryKeywords?.join(", ") ?? "none"}\n` +
-          `Search Intent: ${topic.intent ?? "informational"}\n\n` +
-          `Return JSON: {"researchSummary": "supported findings, reader questions, mechanisms, and explicit evidence gaps", "sources": [{"url": "...", "title": "..."}]}. If no primary evidence supports the topic, return an empty sources array and say so plainly.`,
+          `Search Intent: ${topic.intent ?? "informational"}\n` +
+          `${primaryEvidenceOnly ? "Search only the allowed primary-research, government, standards, and official-documentation domains.\n" : ""}\n` +
+          `Return a concise prose research brief. Cite every web-derived claim through the web-search citation mechanism. If no primary evidence supports the topic, say so plainly.`,
       },
     ],
   });
-
-  const result = parseJson<{
-    researchSummary: string;
-    sources: { url: string; title?: string }[];
-  }>(
-    z.object({
-      researchSummary: z.string(),
-      sources: z
-        .array(z.object({ url: z.string(), title: z.string().optional() }))
-        .default([]),
-    }),
-    completion.output_text,
-  );
 
   // Treat only provider-attributed web citations as verified sources. URLs that
   // merely appear inside model-authored JSON can be plausible but fabricated.
@@ -1738,11 +1740,10 @@ async function webResearch(
   });
 
   console.log(
-    `Web research complete: ${verifiedSources.length} provider-attributed sources verified ` +
-      `(${result.sources.length} model-listed source(s) ignored).`,
+    `Web research complete: ${verifiedSources.length} provider-attributed sources verified.`,
   );
   return {
-    researchSummary: result.researchSummary,
+    researchSummary: completion.output_text.trim(),
     sources: verifiedSources,
   };
 }
@@ -2489,7 +2490,36 @@ async function handleArticle(
       }
 
       if (isStrictPublication) {
-        const strictSources = strictEvidenceSources(verifiedResearchSources);
+        let strictSources = strictEvidenceSources(verifiedResearchSources);
+        if (strictSources.accepted.length === 0) {
+          try {
+            const primaryResearch = await webResearch(
+              {
+                label: topic.label,
+                primaryKeyword: topic.primaryKeyword,
+                secondaryKeywords: topic.secondaryKeywords,
+                intent: topic.intent ?? undefined,
+              },
+              site.niche ?? undefined,
+              site.competitors ?? undefined,
+              true,
+            );
+            researchContext = [researchContext, primaryResearch.researchSummary]
+              .filter(Boolean)
+              .join("\n\n");
+            verifiedResearchSources = [
+              ...verifiedResearchSources,
+              ...primaryResearch.sources,
+            ];
+            strictSources = strictEvidenceSources(verifiedResearchSources);
+          } catch (error) {
+            researchQualityNotes.push(
+              `Primary-evidence fallback failed: ${
+                error instanceof Error ? error.message : "unknown error"
+              }`,
+            );
+          }
+        }
         const evidenceCapture = await captureSourceEvidence(strictSources.accepted);
         researchSources = evidenceCapture.captured;
         if (strictSources.rejected.length > 0) {
@@ -4675,6 +4705,48 @@ export const suggestBacklinks = action({
 });
 
 // Autopilot tick: runs onboarding/plan/scheduling and processes a few jobs
+type ProcessedJobResult = {
+  processed: boolean;
+  jobId?: Id<"jobs">;
+  error?: string;
+  qualityQuarantined?: boolean;
+  articleId?: Id<"articles">;
+  failureKind?: string;
+  publicationSucceeded?: boolean;
+  qualityRecovered?: boolean;
+  buffered?: boolean;
+};
+
+function processedJobOutcome(processed: ProcessedJobResult): string {
+  return !processed.processed && !processed.error
+    ? "claim_lost"
+    : processed.qualityQuarantined
+      ? "quality_quarantined"
+      : processed.failureKind === "publication_failed"
+        ? "publication_failed"
+        : processed.failureKind === "retry_scheduled"
+          ? "retry_scheduled"
+          : processed.publicationSucceeded
+            ? "publication_succeeded"
+            : processed.buffered
+              ? "buffer_ready"
+              : processed.qualityRecovered
+                ? "quality_recovered"
+                : processed.error
+                  ? "job_failed"
+                  : "job_processed";
+}
+
+function processedJobDetail(processed: ProcessedJobResult): string | undefined {
+  return processed.error ??
+    (!processed.processed
+      ? "Another worker already claimed the selected job."
+      : undefined) ??
+    (processed.qualityQuarantined
+      ? "The candidate was quarantined by the strict quality gate."
+      : undefined);
+}
+
 export const autopilotTick = internalAction({
   args: {
     siteId: v.id("sites"),
@@ -4791,17 +4863,17 @@ export const autopilotTick = internalAction({
         }
       }
       console.log(`Processing next job: ${nextJob.type} (${nextJob._id})`);
-      const processed: {
-        processed: boolean;
-        jobId?: Id<"jobs">;
-        error?: string;
-        qualityQuarantined?: boolean;
-        articleId?: Id<"articles">;
-        failureKind?: string;
-        publicationSucceeded?: boolean;
-        qualityRecovered?: boolean;
-        buffered?: boolean;
-      } = await ctx.runAction(
+      if (runId) {
+        // Article generation can exceed the nested-action wait boundary.
+        // Dispatch one durable worker and let it close this exact run.
+        await ctx.scheduler.runAfter(
+          0,
+          internal.actions.pipeline.processNextJob as any,
+          { siteId, jobId: nextJob._id, runId },
+        );
+        return { processed: 0 };
+      }
+      const processed: ProcessedJobResult = await ctx.runAction(
         internal.actions.pipeline.processNextJob as any,
         { siteId, jobId: nextJob._id },
       );
@@ -4828,28 +4900,8 @@ export const autopilotTick = internalAction({
       }
       return finish(
         { processed: processed?.processed ? 1 : 0 },
-        !processed?.processed && !processed?.error
-          ? "claim_lost"
-          : processed?.qualityQuarantined
-          ? "quality_quarantined"
-          : processed?.failureKind === "publication_failed"
-            ? "publication_failed"
-          : processed?.publicationSucceeded
-            ? "publication_succeeded"
-          : processed?.buffered
-            ? "buffer_ready"
-          : processed?.qualityRecovered
-            ? "quality_recovered"
-          : processed?.error
-            ? "job_failed"
-            : "job_processed",
-        processed?.error ??
-          (!processed?.processed
-            ? "Another worker already claimed the selected job."
-            : undefined) ??
-          (processed?.qualityQuarantined
-            ? "The candidate was quarantined by the strict quality gate."
-            : undefined),
+        processedJobOutcome(processed),
+        processedJobDetail(processed),
         nextJob._id,
         processed?.articleId,
       );
@@ -4912,21 +4964,17 @@ export const processNextJob = internalAction({
   args: {
     siteId: v.id("sites"),
     jobId: v.id("jobs"),
+    runId: v.optional(v.id("autopilot_runs")),
   },
   handler: async (
     ctx: ActionCtx,
-    args: { siteId: Id<"sites">; jobId: Id<"jobs"> },
-  ): Promise<{
-    processed: boolean;
-    jobId?: Id<"jobs">;
-    error?: string;
-    qualityQuarantined?: boolean;
-    articleId?: Id<"articles">;
-    failureKind?: string;
-    publicationSucceeded?: boolean;
-    qualityRecovered?: boolean;
-    buffered?: boolean;
-  }> => {
+    args: {
+      siteId: Id<"sites">;
+      jobId: Id<"jobs">;
+      runId?: Id<"autopilot_runs">;
+    },
+  ): Promise<ProcessedJobResult> => {
+    const execute = async (): Promise<ProcessedJobResult> => {
     const workerToken = randomUUID();
     const job = await ctx.runMutation(internal.jobs.claimPending, {
       jobId: args.jobId,
@@ -5324,6 +5372,49 @@ export const processNextJob = internalAction({
         error: message,
         failureKind: retry.willRetry ? "retry_scheduled" : "job_failed",
       };
+    }
+    };
+
+    try {
+      const result = await execute();
+      if (args.runId && result.buffered) {
+        // The parent tick has already returned, so this durable worker owns
+        // post-buffer replenishment and any immediately due delivery.
+        const afterBuffer = await ctx.runAction(
+          internal.actions.scheduler.scheduleCadence,
+          { siteId: args.siteId },
+        );
+        if (
+          afterBuffer.mode === "buffer_delivery" ||
+          afterBuffer.mode === "buffer_delivery_pending"
+        ) {
+          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+            siteId: args.siteId,
+            trigger: "buffer_delivery",
+            reason: "newly_sealed_buffer_item_is_due",
+          });
+        }
+      }
+      if (args.runId) {
+        await ctx.runMutation(internal.autopilot.markRunFinished, {
+          runId: args.runId,
+          outcome: processedJobOutcome(result),
+          detail: processedJobDetail(result),
+          jobId: result.jobId,
+          articleId: result.articleId,
+        });
+      }
+      return result;
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+      const message = rawMessage.trim() || "Autopilot job failed without an error message.";
+      if (args.runId) {
+        await ctx.runMutation(internal.autopilot.markRunFailed, {
+          runId: args.runId,
+          error: message,
+        });
+      }
+      throw error;
     }
   },
 });

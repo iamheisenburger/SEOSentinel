@@ -271,11 +271,17 @@ export const markRunFinished = internalMutation({
       detail: args.detail ?? args.outcome,
       ...(run.trigger === "natural" ? { lastNaturalCompletedAt: now } : {}),
     });
-    if (
-      run.trigger === "natural" &&
-      !blockedOutcomes.has(args.outcome)
-    ) {
-      await resolveAlert(ctx, run.siteId, "natural_run_failed");
+    // Completing the run proves the trigger itself worked. Blocked content
+    // outcomes have their own alerts and must not leave stale run errors.
+    await resolveAlert(
+      ctx,
+      run.siteId,
+      run.trigger === "natural"
+        ? "natural_run_failed"
+        : `${run.trigger}_run_failed`,
+    );
+    if (args.outcome !== "topic_replenishment_exhausted") {
+      await resolveAlert(ctx, run.siteId, "topic_replenishment_exhausted");
     }
     if (args.outcome === "quality_quarantined") {
       await setAlert(ctx, {

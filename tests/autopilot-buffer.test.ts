@@ -85,6 +85,11 @@ test("due publication outranks manual and replenishment jobs", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.match(pipeline, /processed\?\.buffered/);
   assert.match(pipeline, /newly_sealed_buffer_item_is_due/);
+  assert.match(
+    pipeline,
+    /ctx\.scheduler\.runAfter\(\s*0,\s*internal\.actions\.pipeline\.processNextJob/,
+  );
+  assert.match(pipeline, /runId: v\.optional\(v\.id\("autopilot_runs"\)\)/);
 });
 
 test("topic selection includes buffered coverage and can trigger fresh-plan recovery", () => {
