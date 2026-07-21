@@ -2,6 +2,7 @@ import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { isSameSearchConsolePage } from "./lib/searchPerformance";
+import { effectivePublishedAt } from "./lib/autopilotBuffer";
 import { v } from "convex/values";
 
 const DAILY_SYNC_VERSION = 2;
@@ -283,14 +284,15 @@ async function articleSeoScorecard(
 ) {
   const article = await ctx.db.get(articleId);
   if (!article) throw new Error("Article not found");
-  if (article.status !== "published" || !article.publishedAt) {
+  if (article.status !== "published") {
     throw new Error("SEO scorecards require a published article");
   }
   const site = await ctx.db.get(article.siteId);
   if (!site) throw new Error("Site not found");
 
-  const startDate = isoDate(article.publishedAt);
-  const maximumEndDate = isoDate(article.publishedAt + 56 * DAY_MS - 1);
+  const publicationTime = effectivePublishedAt(article);
+  const startDate = isoDate(publicationTime);
+  const maximumEndDate = isoDate(publicationTime + 56 * DAY_MS - 1);
   const [latest, rows] = await Promise.all([
     ctx.db
       .query("search_performance")
@@ -320,7 +322,7 @@ async function articleSeoScorecard(
   const dataThrough = latest?.date;
 
   const windows = SEO_WINDOWS_DAYS.map((days) => {
-    const expectedEndDate = isoDate(article.publishedAt! + days * DAY_MS - 1);
+    const expectedEndDate = isoDate(publicationTime + days * DAY_MS - 1);
     const available = pageRows.filter((row) => row.date <= expectedEndDate);
     const clicks = available.reduce((sum, row) => sum + row.clicks, 0);
     const impressions = available.reduce((sum, row) => sum + row.impressions, 0);
@@ -380,7 +382,8 @@ async function articleSeoScorecard(
     articleId,
     title: article.title,
     pageUrl,
-    publishedAt: article.publishedAt,
+    publishedAt: publicationTime,
+    recordedPublishedAt: article.publishedAt,
     startDate,
     dataThrough,
     syncVersion: DAILY_SYNC_VERSION,
