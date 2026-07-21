@@ -1,5 +1,8 @@
 import { query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+
+const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
 
 // Normalize stored domain (could be "https://example.com/" or "example.com") to bare hostname
 function normalizeDomain(raw: string): string {
@@ -16,28 +19,69 @@ function normalizeSlug(s: string): string {
   return s;
 }
 
+async function findSiteByDomain(ctx: QueryCtx, requested: string) {
+  const bare = normalizeDomain(requested.trim().toLowerCase());
+  const candidates = [
+    requested,
+    bare,
+    `www.${bare}`,
+    `https://${bare}`,
+    `https://${bare}/`,
+    `http://${bare}`,
+    `http://${bare}/`,
+  ];
+  for (const candidate of new Set(candidates)) {
+    const site = await ctx.db
+      .query("sites")
+      .withIndex("by_domain", (q) => q.eq("domain", candidate))
+      .first();
+    if (site) return site;
+  }
+  return null;
+}
+
+async function summariesAreComplete(ctx: QueryCtx): Promise<boolean> {
+  const state = await ctx.db
+    .query("maintenance_state")
+    .withIndex("by_key", (q) =>
+      q.eq("key", PUBLICATION_INTEGRITY_MIGRATION_KEY),
+    )
+    .first();
+  return state?.status === "completed";
+}
+
 export const listPublishedByDomain = query({
   args: { domain: v.string() },
   handler: async (ctx, { domain }) => {
-    const sites = await ctx.db.query("sites").collect();
-    const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
+    const site = await findSiteByDomain(ctx, domain);
     if (!site) return [];
 
-    const published = await ctx.db
-      .query("article_summaries")
-      .withIndex("by_site_status_created", (q) =>
-        q.eq("siteId", site._id).eq("status", "published"),
-      )
-      .order("desc")
-      .collect();
+    const useSummaries = await summariesAreComplete(ctx);
+    const published = useSummaries
+      ? await ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status_published", (q) =>
+            q.eq("siteId", site._id).eq("status", "published"),
+          )
+          .order("desc")
+          .collect()
+      : await ctx.db
+          .query("articles")
+          .withIndex("by_site_status_created", (q) =>
+            q.eq("siteId", site._id).eq("status", "published"),
+          )
+          .order("desc")
+          .collect();
     return published.map((a) => ({
-        _id: a.articleId,
+        _id: "articleId" in a ? a.articleId : a._id,
         title: a.title,
         slug: normalizeSlug(a.slug || ""),
         metaDescription: a.metaDescription,
         featuredImage: a.featuredImage,
         readingTime: a.readingTime,
-        createdAt: a.articleCreatedAt,
+        createdAt: "articleCreatedAt" in a
+          ? a.publishedAt ?? a.articleCreatedAt
+          : a.publishedAt ?? a.createdAt,
       }));
   },
 });
@@ -46,21 +90,30 @@ export const listPublishedByDomain = query({
 export const listPublishedSlugs = query({
   args: { domain: v.string() },
   handler: async (ctx, { domain }) => {
-    const sites = await ctx.db.query("sites").collect();
-    const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
+    const site = await findSiteByDomain(ctx, domain);
     if (!site) return { articles: [], urlStructure: "/blog/[slug]" };
 
     const urlStructure = site.urlStructure ?? "/blog/[slug]";
 
-    const published = await ctx.db
-      .query("article_summaries")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", site._id).eq("status", "published"),
-      )
-      .collect();
+    const useSummaries = await summariesAreComplete(ctx);
+    const published = useSummaries
+      ? await ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", site._id).eq("status", "published"),
+          )
+          .collect()
+      : await ctx.db
+          .query("articles")
+          .withIndex("by_site_status_created", (q) =>
+            q.eq("siteId", site._id).eq("status", "published"),
+          )
+          .collect();
     const articles = published.map((a) => ({
         slug: normalizeSlug(a.slug || ""),
-        updatedAt: a.articleUpdatedAt ?? a.articleCreatedAt,
+        updatedAt: "articleUpdatedAt" in a
+          ? a.publishedAt ?? a.articleUpdatedAt ?? a.articleCreatedAt
+          : a.publishedAt ?? a.updatedAt ?? a.createdAt,
       }));
     return { articles, urlStructure };
   },
@@ -69,28 +122,45 @@ export const listPublishedSlugs = query({
 export const getPublishedBySlug = query({
   args: { domain: v.string(), slug: v.string() },
   handler: async (ctx, { domain, slug }) => {
-    const sites = await ctx.db.query("sites").collect();
-    const site = sites.find((s) => normalizeDomain(s.domain || "") === domain);
+    const site = await findSiteByDomain(ctx, domain);
     if (!site) return null;
 
     const normalizedSlug = normalizeSlug(slug);
-    let summary = await ctx.db
-      .query("article_summaries")
-      .withIndex("by_site_slug", (q) =>
-        q.eq("siteId", site._id).eq("slug", normalizedSlug),
-      )
-      .first();
-    if (!summary) {
-      summary = await ctx.db
+    const useSummaries = await summariesAreComplete(ctx);
+    let article = null;
+    if (useSummaries) {
+      let summary = await ctx.db
         .query("article_summaries")
         .withIndex("by_site_slug", (q) =>
-          q.eq("siteId", site._id).eq("slug", `/${normalizedSlug}`),
+          q.eq("siteId", site._id).eq("slug", normalizedSlug),
         )
         .first();
+      if (!summary) {
+        summary = await ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_slug", (q) =>
+            q.eq("siteId", site._id).eq("slug", `/${normalizedSlug}`),
+          )
+          .first();
+      }
+      if (!summary || summary.status !== "published") return null;
+      article = await ctx.db.get(summary.articleId);
+    } else {
+      article = await ctx.db
+        .query("articles")
+        .withIndex("by_site_slug", (q) =>
+          q.eq("siteId", site._id).eq("slug", normalizedSlug),
+        )
+        .first();
+      if (!article) {
+        article = await ctx.db
+          .query("articles")
+          .withIndex("by_site_slug", (q) =>
+            q.eq("siteId", site._id).eq("slug", `/${normalizedSlug}`),
+          )
+          .first();
+      }
     }
-    if (!summary || summary.status !== "published") return null;
-
-    const article = await ctx.db.get(summary.articleId);
     if (!article || article.status !== "published") return null;
 
     return {
@@ -103,16 +173,21 @@ export const getPublishedBySlug = query({
       featuredImage: article.featuredImage,
       readingTime: article.readingTime,
       wordCount: article.wordCount,
-      sources: article.sources,
+      sources: (article.sources ?? []).map((source) => ({
+        url: source.url,
+        title: source.title,
+      })),
       internalLinks: article.internalLinks,
       factCheckScore: article.factCheckScore,
-      createdAt: article.createdAt,
+      createdAt: article.publishedAt ?? article.publicationDate ?? article.createdAt,
+      publishedAt: article.publishedAt ?? article.publicationDate,
       updatedAt: article.updatedAt,
       brandPrimaryColor: site.brandPrimaryColor,
       brandAccentColor: site.brandAccentColor,
       brandFontFamily: site.brandFontFamily,
       siteName: site.siteName,
       domain: site.domain,
+      urlStructure: site.urlStructure ?? "/blog/[slug]",
     };
   },
 });

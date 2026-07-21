@@ -60,6 +60,10 @@ export default function DashboardPage() {
     api.articles.listDecaying,
     site?._id ? { siteId: site._id } : "skip",
   );
+  const autopilotHealth = useQuery(
+    api.autopilot.getHealthForSite,
+    site?._id ? { siteId: site._id } : "skip",
+  );
   const generateNow = useAction(api.actions.pipeline.generateNow);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const [genBusy, setGenBusy] = useState(false);
@@ -92,6 +96,12 @@ export default function DashboardPage() {
   const recentJobs = jobs?.slice(0, 8) ?? [];
   const recentArticles = articles?.slice(0, 5) ?? [];
   const decayCount = decayingArticles?.length ?? 0;
+  const activeAutopilotAlerts = autopilotHealth?.alerts ?? [];
+  const autopilotBlocked =
+    activeAutopilotAlerts.length > 0 ||
+    (autopilotHealth?.health?.status &&
+      autopilotHealth.health.status !== "healthy" &&
+      autopilotHealth.health.status !== "recovering");
 
   const loading = sites === undefined;
 
@@ -183,6 +193,24 @@ export default function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      {autopilotBlocked && (
+        <div className="rounded-lg border border-[#EF4444]/[0.25] bg-[#EF4444]/[0.06] px-4 py-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#F87171]" />
+            <div>
+              <p className="text-[13px] font-semibold text-[#FCA5A5]">
+                Content automation needs attention
+              </p>
+              <p className="mt-1 text-[12px] text-[#F87171]">
+                {activeAutopilotAlerts[0]?.message ??
+                  autopilotHealth?.health?.detail ??
+                  "Automation is fail-closed."}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Plan usage banner */}
       {atArticleLimit && (
@@ -397,7 +425,7 @@ export default function DashboardPage() {
 
         {/* Content Health */}
         <div className={`rounded-xl border p-4 ${
-          decayCount > 0
+          autopilotBlocked || decayCount > 0
             ? "border-[#EF4444]/[0.2] bg-[#EF4444]/[0.03]"
             : reviewCount > 0
               ? "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.03]"
@@ -405,9 +433,9 @@ export default function DashboardPage() {
         }`}>
           <div className="flex items-center justify-between">
             <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E]">
-              {decayCount > 0 ? "Attention" : reviewCount > 0 ? "Needs Review" : "Health"}
+              {autopilotBlocked || decayCount > 0 ? "Attention" : reviewCount > 0 ? "Needs Review" : "Health"}
             </p>
-            {decayCount > 0 ? (
+            {autopilotBlocked || decayCount > 0 ? (
               <TrendingDown className="h-3.5 w-3.5 text-[#EF4444]" />
             ) : reviewCount > 0 ? (
               <CheckCircle2 className="h-3.5 w-3.5 text-[#F59E0B]" />
@@ -415,14 +443,16 @@ export default function DashboardPage() {
               <CheckCircle2 className="h-3.5 w-3.5 text-[#22C55E]" />
             )}
           </div>
-          {decayCount > 0 ? (
+          {autopilotBlocked || decayCount > 0 ? (
             <>
               <p className="mt-2 text-2xl font-bold tracking-tight text-[#F87171]">
-                {decayCount}
+                {autopilotBlocked ? "Blocked" : decayCount}
               </p>
-              <Link href="/articles" className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-[#EF4444] hover:text-[#F87171] transition">
-                Declining articles <ArrowRight className="h-2.5 w-2.5" />
-              </Link>
+              <p className="mt-2 text-[10px] text-[#F87171]">
+                {autopilotBlocked
+                  ? autopilotHealth?.health?.detail ?? "Automation is fail-closed"
+                  : "Ranking decline detected"}
+              </p>
             </>
           ) : reviewCount > 0 ? (
             <>

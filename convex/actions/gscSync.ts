@@ -1,7 +1,7 @@
 "use node";
 
-import { action } from "../_generated/server";
-import { api, internal } from "../_generated/api";
+import { action, internalAction } from "../_generated/server";
+import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
@@ -79,7 +79,7 @@ async function fetchSearchAnalytics(
 
 // ── Sync Action: Pull GSC data for all connected sites ──
 
-export const syncAllSites = action({
+export const syncAllSites = internalAction({
   handler: async (ctx): Promise<{ synced: number }> => {
     const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
     let synced = 0;
@@ -107,6 +107,10 @@ export const syncSite = action({
   handler: async (ctx, { siteId }): Promise<{ rows: number; saved: number }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!site.userId || !identity || identity.subject !== site.userId) {
+      throw new Error("Not authorized to sync this site");
+    }
     if (!site.gscAccessToken || !site.gscProperty) throw new Error("GSC not connected for this site");
 
     return syncSiteGSC(ctx, site);
@@ -199,7 +203,7 @@ async function syncSiteGSC(ctx: ActionCtx, site: Doc<"sites">) {
   let saved = 0;
   for (let index = 0; index < records.length; index += 500) {
     const batch = records.slice(index, index + 500);
-    const result = await ctx.runMutation(api.searchPerformance.upsertBatch, {
+    const result = await ctx.runMutation(internal.searchPerformance.upsertBatch, {
       siteId: site._id,
       rows: batch,
     });

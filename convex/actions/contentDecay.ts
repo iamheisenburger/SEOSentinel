@@ -1,7 +1,7 @@
 "use node";
 
-import { action } from "../_generated/server";
-import { api, internal } from "../_generated/api";
+import { action, internalAction } from "../_generated/server";
+import { internal } from "../_generated/api";
 import { v } from "convex/values";
 
 // ── Content Decay Detection (GSC-powered) ──
@@ -24,13 +24,13 @@ interface DecaySignal {
 }
 
 // Scan all published articles for a site and detect decay using GSC data
-export const scanForDecay = action({
+export const scanForDecay = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ scanned: number; flagged: number; signals: DecaySignal[] }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
-    const articles = await ctx.runQuery(api.articles.listBySite, { siteId });
+    const articles = await ctx.runQuery(internal.articles.listBySiteInternal, { siteId });
     const published = articles.filter((a: any) => a.status === "published" || a.status === "ready");
 
     if (published.length === 0) {
@@ -39,7 +39,7 @@ export const scanForDecay = action({
     }
 
     // Get all GSC history data
-    const gscHistory = await ctx.runQuery(api.searchPerformance.getHistory, { siteId });
+    const gscHistory = await ctx.runQuery(internal.searchPerformance.getHistory, { siteId });
 
     if (gscHistory.length === 0) {
       console.log(`No GSC data for ${site.domain} — falling back to heuristic decay detection.`);
@@ -148,7 +148,7 @@ export const scanForDecay = action({
 
     // Update article decay statuses in DB
     for (const signal of signals) {
-      await ctx.runMutation(api.articles.updateDecayStatus, {
+      await ctx.runMutation(internal.articles.updateDecayStatus, {
         articleId: signal.articleId as any,
         decayStatus: signal.severity,
         decayReason: signal.reason,
@@ -161,7 +161,7 @@ export const scanForDecay = action({
     const flaggedIds = new Set(signals.map((s) => s.articleId));
     for (const article of published) {
       if (!flaggedIds.has(article._id) && (article as any).decayStatus && (article as any).decayStatus !== "healthy" && (article as any).decayStatus !== "refreshed") {
-        await ctx.runMutation(api.articles.updateDecayStatus, {
+        await ctx.runMutation(internal.articles.updateDecayStatus, {
           articleId: article._id,
           decayStatus: "healthy",
           decayReason: "Rankings recovered — no longer flagged for decay",
@@ -218,7 +218,7 @@ async function heuristicDecayScan(ctx: any, published: any[], siteId: any) {
         positionHistory: [],
       });
 
-      await ctx.runMutation(api.articles.updateDecayStatus, {
+      await ctx.runMutation(internal.articles.updateDecayStatus, {
         articleId: article._id,
         decayStatus: severity,
         decayReason: reasons.join("; "),
@@ -232,14 +232,14 @@ async function heuristicDecayScan(ctx: any, published: any[], siteId: any) {
 
 // ── Scan all sites (cron entry point) ──
 
-export const scanAllSites = action({
+export const scanAllSites = internalAction({
   handler: async (ctx): Promise<{ totalFlagged: number }> => {
     const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
     let totalFlagged = 0;
 
     for (const site of sites) {
       try {
-        const result = await ctx.runAction(api.actions.contentDecay.scanForDecay, { siteId: site._id });
+        const result = await ctx.runAction(internal.actions.contentDecay.scanForDecay, { siteId: site._id });
         totalFlagged += result.flagged;
       } catch (err) {
         console.error(`Decay scan failed for ${site.domain}:`, err);
@@ -258,23 +258,32 @@ export const scanAllSites = action({
 export const refreshArticle = action({
   args: { articleId: v.id("articles") },
   handler: async (ctx, { articleId }): Promise<{ success: boolean; wordCount?: number; factCheckScore?: number; error?: string }> => {
-    const article = await ctx.runQuery(api.articles.get, { articleId });
+    const article = await ctx.runQuery(internal.articles.getInternal, { articleId });
     if (!article) throw new Error("Article not found");
 
     const site = await ctx.runQuery(internal.sites.getFull, { siteId: article.siteId });
     if (!site) throw new Error("Site not found");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!site.userId || !identity || identity.subject !== site.userId) {
+      throw new Error("Not authorized to refresh this article");
+    }
+    if (article.status === "published") {
+      throw new Error(
+        "Published refresh requires an audited revision workflow and is currently disabled",
+      );
+    }
 
     console.log(`Refreshing article: "${article.title}" (${article.slug})`);
 
     // Mark as refreshing (saves previous version)
-    await ctx.runMutation(api.articles.markRefreshing, { articleId });
+    await ctx.runMutation(internal.articles.markRefreshing, { articleId });
 
     try {
       // Get the topic for context
       let topicKeyword = "";
       let topicLabel = "";
       if (article.topicId) {
-        const topics = await ctx.runQuery(api.topics.listBySite, { siteId: article.siteId });
+        const topics = await ctx.runQuery(internal.topics.listBySiteInternal, { siteId: article.siteId });
         const topic = topics.find((t: any) => t._id === article.topicId);
         if (topic) {
           topicKeyword = topic.primaryKeyword;
@@ -396,7 +405,7 @@ NOTES: [brief assessment]`,
       }
 
       // Step 4: Save the refreshed article
-      await ctx.runMutation(api.articles.completeRefresh, {
+      await ctx.runMutation(internal.articles.completeRefresh, {
         articleId,
         markdown: newMarkdown,
         wordCount: newWordCount,
@@ -412,7 +421,7 @@ NOTES: [brief assessment]`,
     } catch (err: any) {
       // On failure, revert decay status but keep the flag
       console.error(`[Refresh] Failed for "${article.title}":`, err);
-      await ctx.runMutation(api.articles.updateDecayStatus, {
+      await ctx.runMutation(internal.articles.updateDecayStatus, {
         articleId,
         decayStatus: "declining",
         decayReason: `Refresh failed: ${err.message}. ${article.decayReason || ""}`.trim(),
@@ -478,7 +487,7 @@ Output ONLY the markdown content. No explanations or meta-commentary.`;
 // ── Auto-Refresh: Process the most critical declining article ──
 // Called by cron after decay scan. Refreshes 1 article per site per day max.
 
-export const autoRefreshTop = action({
+export const autoRefreshTop = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ refreshed: boolean; reason?: string; articleId?: string; title?: string }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
@@ -490,7 +499,7 @@ export const autoRefreshTop = action({
       return { refreshed: false, reason: "autopilot_disabled" };
     }
 
-    const articles = await ctx.runQuery(api.articles.listBySite, { siteId });
+    const articles = await ctx.runQuery(internal.articles.listBySiteInternal, { siteId });
     const declining = articles
       .filter((a: any) => a.decayStatus === "declining" && a.status === "published")
       .sort((a: any, b: any) => (a.decayDetectedAt || 0) - (b.decayDetectedAt || 0)); // oldest decay first
@@ -511,22 +520,20 @@ export const autoRefreshTop = action({
     }
 
     const target = declining[0];
-    console.log(`Auto-refreshing "${target.title}" for ${site.domain}`);
-
-    try {
-      const result = await ctx.runAction(api.actions.contentDecay.refreshArticle, { articleId: target._id });
-      return { refreshed: result.success, articleId: target._id, title: target.title };
-    } catch (err: any) {
-      console.error(`Auto-refresh failed for "${target.title}":`, err);
-      return { refreshed: false, reason: err.message };
-    }
+    console.log(`Refresh deferred for sealed article "${target.title}".`);
+    return {
+      refreshed: false,
+      reason: "published_revision_workflow_required",
+      articleId: target._id,
+      title: target.title,
+    };
   },
 });
 
 // ── Auto-refresh all sites (cron entry point) ──
 // Runs after decay scan. Refreshes the most critical declining article per site.
 
-export const autoRefreshAllSites = action({
+export const autoRefreshAllSites = internalAction({
   handler: async (ctx): Promise<{ refreshed: number }> => {
     const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
     let refreshed = 0;
@@ -534,7 +541,7 @@ export const autoRefreshAllSites = action({
     for (const site of sites) {
       if (!site.autopilotEnabled) continue;
       try {
-        const result = await ctx.runAction(api.actions.contentDecay.autoRefreshTop, { siteId: site._id });
+        const result = await ctx.runAction(internal.actions.contentDecay.autoRefreshTop, { siteId: site._id });
         if (result.refreshed) {
           refreshed++;
           console.log(`Auto-refreshed "${result.title}" for ${site.domain}`);

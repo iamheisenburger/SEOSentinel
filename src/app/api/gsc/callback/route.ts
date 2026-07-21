@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import {
   findMatchingGscProperty,
   hasGscReadonlyScope,
 } from "@/lib/gsc-oauth";
+import { getOwnedSite } from "@/lib/owned-site";
+import { verifyOAuthState } from "@/lib/oauth-state";
 import { callPentraInternal } from "@/lib/pentra-internal-api";
 
 export async function GET(req: NextRequest) {
@@ -17,8 +20,28 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const colonIdx = state.indexOf(":");
-  const siteId = colonIdx > -1 ? state.substring(colonIdx + 1) : "";
+  const { userId } = await auth();
+  let verifiedState: { siteId: string } | null = null;
+  try {
+    verifiedState = userId
+      ? verifyOAuthState(state, { provider: "gsc", userId })
+      : null;
+  } catch {
+    verifiedState = null;
+  }
+  if (!verifiedState) {
+    return new NextResponse(renderPage("Authorization state is invalid or expired.", false), {
+      status: 400,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+  const siteId = verifiedState.siteId;
+  if (!(await getOwnedSite(siteId))) {
+    return new NextResponse(renderPage("Site not found.", false), {
+      status: 404,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
 
   const clientId = process.env.GSC_CLIENT_ID;
   const clientSecret = process.env.GSC_CLIENT_SECRET;

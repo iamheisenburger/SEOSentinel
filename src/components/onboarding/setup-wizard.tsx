@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -249,7 +249,6 @@ export function SetupWizard() {
   const [publishMethod, setPublishMethod] = useState<string>("github");
   const [repoOwner, setRepoOwner] = useState("");
   const [repoName, setRepoName] = useState("");
-  const [githubToken, setGithubToken] = useState("");
   const [githubConnected, setGithubConnected] = useState(false);
   const [githubUsername, setGithubUsername] = useState("");
   const [wpUrl, setWpUrl] = useState("");
@@ -311,14 +310,31 @@ export function SetupWizard() {
 
   // After OAuth popup closes, server has saved token directly to Convex.
   // We just need to detect when the popup closes to update local UI state.
-  const startOAuthPopup = (popupSiteId: string) => {
-    const popup = window.open("/api/github/auth?siteId=" + popupSiteId, "github-oauth", "width=600,height=700,popup=yes");
+  const startOAuthPopup = async (popupSiteId: string) => {
+    if (!popupSiteId || !repoOwner.trim() || !repoName.trim()) {
+      setError("Save a GitHub owner and repository before connecting.");
+      return;
+    }
+    // Open synchronously so browser popup protection does not reject the OAuth
+    // window while the repository coordinates are persisted first.
+    const popup = window.open("about:blank", "github-oauth", "width=600,height=700,popup=yes");
     if (!popup) return;
+    try {
+      await upsert({
+        id: popupSiteId as Id<"sites">,
+        domain,
+        repoOwner: repoOwner.trim(),
+        repoName: repoName.trim(),
+      });
+      popup.location.href = "/api/github/auth?siteId=" + encodeURIComponent(popupSiteId);
+    } catch (e) {
+      popup.close();
+      setError(e instanceof Error ? e.message : "Failed to save the GitHub repository");
+      return;
+    }
     const timer = setInterval(() => {
       if (popup.closed) {
         clearInterval(timer);
-        // Popup closed — server saved the token, update local UI
-        setGithubConnected(true);
       }
     }, 500);
   };
@@ -338,6 +354,12 @@ export function SetupWizard() {
   );
   const gscConnected = !!connectedSite?.gscConnected;
   const gscEmail = connectedSite?.gscEmail ?? "";
+
+  useEffect(() => {
+    if (connectedSite !== undefined) {
+      setGithubConnected(Boolean(connectedSite?.githubConnected));
+    }
+  }, [connectedSite]);
 
   const currentIdx = STEPS.findIndex((s) => s.key === step);
 
@@ -678,7 +700,7 @@ export function SetupWizard() {
                   {publishMethod === "github" && (
                     <>
                       <GitBranch className="inline h-3 w-3 mr-1 text-[#0EA5E9]" />
-                      Articles are committed as MDX files to your GitHub repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator. You&apos;ll connect your repo in the <span className="text-[#EDEEF1]">Connect</span> step.
+                      Articles are committed as Markdown files to your GitHub repo. Works with Next.js, Astro, Hugo, Jekyll, and any static site generator. You&apos;ll connect your repo in the <span className="text-[#EDEEF1]">Connect</span> step.
                     </>
                   )}
                   {publishMethod === "wordpress" && (
@@ -1076,7 +1098,7 @@ export function SetupWizard() {
                   <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#0EA5E9]/[0.08] text-[#38BDF8]">Required</span>
                 </div>
                 <p className="text-[11px] text-[#565A6E] px-1 mb-3">
-                  Enter your repo details and connect your GitHub account so Pentra can commit articles as MDX files.
+                  Enter your repo details and connect your GitHub account so Pentra can commit articles as Markdown files.
                 </p>
 
                 <div className="flex flex-col gap-3">

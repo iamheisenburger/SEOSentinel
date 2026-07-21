@@ -434,12 +434,10 @@ export default function ArticleDetailPage() {
     }
   };
 
-  const isManualPublish = site?.publishMethod === "manual";
-
   const handlePublish = async () => {
     if (!site?._id) return;
     setActionBusy(true);
-    setLinkStatus(isManualPublish ? "Marking as published..." : "Publishing...");
+    setLinkStatus("Publishing...");
     try {
       await publishApproved({ siteId: site._id, articleId });
       setLinkStatus("Article published successfully.");
@@ -480,7 +478,7 @@ export default function ArticleDetailPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${article.slug.replace(/^\//, "")}.mdx`;
+    a.download = `${article.slug.replace(/^\//, "")}.md`;
     a.click();
     URL.revokeObjectURL(url);
     setLinkStatus("Article downloaded.");
@@ -523,14 +521,14 @@ export default function ArticleDetailPage() {
                   </Button>
                 </>
               )}
-              {article.status === "ready" && (
+              {article.status === "ready" && site?.publishMethod !== "manual" && (
                 <Button
                   size="sm"
                   onClick={handlePublish}
                   loading={actionBusy}
                   icon={<Upload className="h-3.5 w-3.5" />}
                 >
-                  {isManualPublish ? "Mark as Published" : "Publish Now"}
+                  Publish Now
                 </Button>
               )}
               <Button

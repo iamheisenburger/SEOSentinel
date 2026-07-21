@@ -1,11 +1,21 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { isSameSearchConsolePage } from "./lib/searchPerformance";
 import { v } from "convex/values";
 
 const DAILY_SYNC_VERSION = 2;
 
+async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
+  const site = await ctx.db.get(siteId);
+  const identity = await ctx.auth.getUserIdentity();
+  if (!site?.userId || !identity || identity.subject !== site.userId) {
+    throw new Error("Not authorized to access this site's search performance");
+  }
+}
+
 // Upsert a search performance record (avoids duplicates for same site+date+query)
-export const upsert = mutation({
+export const upsert = internalMutation({
   args: {
     siteId: v.id("sites"),
     date: v.string(),
@@ -53,7 +63,7 @@ export const upsert = mutation({
 // Save one daily GSC response in a single Convex mutation. Version 2 keeps
 // actual date+query+page rows separate from the legacy rolling-window
 // snapshots so article-level trends remain attributable.
-export const upsertBatch = mutation({
+export const upsertBatch = internalMutation({
   args: {
     siteId: v.id("sites"),
     rows: v.array(v.object({
@@ -113,6 +123,7 @@ export const upsertBatch = mutation({
 export const getTopQueries = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
+    await requireSiteOwner(ctx, siteId);
     const latestDaily = await ctx.db
       .query("search_performance")
       .withIndex("by_site_version_date", (q) =>
@@ -154,6 +165,7 @@ export const getTopQueries = query({
 export const getSummary = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
+    await requireSiteOwner(ctx, siteId);
     const latestDaily = await ctx.db
       .query("search_performance")
       .withIndex("by_site_version_date", (q) =>
@@ -215,6 +227,7 @@ export const getSummary = query({
 export const getByPage = query({
   args: { siteId: v.id("sites"), pageUrl: v.string() },
   handler: async (ctx, { siteId, pageUrl }) => {
+    await requireSiteOwner(ctx, siteId);
     const cutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000)
       .toISOString()
       .split("T")[0];
@@ -249,7 +262,7 @@ export const getByPage = query({
 });
 
 // Get all historical data for trend detection (content decay)
-export const getHistory = query({
+export const getHistory = internalQuery({
   args: { siteId: v.id("sites"), days: v.optional(v.number()) },
   handler: async (ctx, { siteId, days }) => {
     const boundedDays = Math.max(30, Math.min(days ?? 180, 365));

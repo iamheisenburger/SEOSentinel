@@ -8,6 +8,7 @@ test("site records never expose stored publishing or OAuth credentials", () => {
     _id: "site-1",
     domain: "example.com",
     githubToken: "github-secret",
+    repoDefaultBranch: "production",
     wpUrl: "https://example.com",
     wpUsername: "publisher",
     wpAppPassword: "wordpress-secret",
@@ -52,4 +53,13 @@ test("connection flags remain false when credentials are incomplete", () => {
   assert.equal(sanitized.githubConnected, false);
   assert.equal(sanitized.wordpressConfigured, false);
   assert.equal(sanitized.gscConnected, false);
+});
+
+test("a GitHub token without a discovered default branch is not connected", () => {
+  const sanitized = sanitizeSiteForClient({
+    domain: "example.com",
+    githubToken: "github-secret",
+  });
+
+  assert.equal(sanitized.githubConnected, false);
 });

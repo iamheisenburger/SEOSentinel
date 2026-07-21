@@ -12,11 +12,22 @@
  * Falls back to AI-based suggestions when DataForSEO is unavailable.
  */
 
-import { action } from "../_generated/server";
-import { api, internal } from "../_generated/api";
+import { action, internalAction } from "../_generated/server";
+import type { ActionCtx } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import { v } from "convex/values";
 
 // ── Types ──
+
+async function requireOwnedSite(ctx: ActionCtx, siteId: Id<"sites">) {
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+  const identity = await ctx.auth.getUserIdentity();
+  if (!site?.userId || !identity || identity.subject !== site.userId) {
+    throw new Error("Not authorized to access this site's backlink tools");
+  }
+  return site;
+}
 
 export interface BacklinkProfile {
   totalBacklinks: number;
@@ -286,8 +297,7 @@ async function findBrokenLinkOpportunities(
 export const analyzeBacklinks = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ profile: BacklinkProfile | null; mentions: UnlinkedMention[]; brokenLinks: BrokenLinkOpportunity[]; hasData: boolean }> => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-    if (!site) throw new Error("Site not found");
+    const site = await requireOwnedSite(ctx, siteId);
 
     const hasDataForSEO = !!getCredentials();
     if (!hasDataForSEO) {
@@ -320,7 +330,7 @@ export const analyzeBacklinks = action({
     let brokenLinks: BrokenLinkOpportunity[] = [];
     if (site.competitors && site.competitors.length > 0) {
       try {
-        const articles = await ctx.runQuery(api.articles.listBySite, { siteId });
+        const articles = await ctx.runQuery(internal.articles.listBySiteInternal, { siteId });
         const published = articles
           .filter((a: any) => a.status === "published" || a.status === "ready")
           .map((a: any) => ({ title: a.title, slug: a.slug, metaKeywords: a.metaKeywords }));
@@ -350,8 +360,7 @@ export const generateOutreach = action({
     })),
   },
   handler: async (ctx, { siteId, opportunities }): Promise<{ emails: { to: string; subject: string; body: string }[] }> => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-    if (!site) throw new Error("Site not found");
+    const site = await requireOwnedSite(ctx, siteId);
 
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -424,14 +433,14 @@ BODY: [email body]`;
 
 // Quick backlink scan — lighter version that just gets profile + suggestions
 // Used in the article pipeline for backlink suggestions per article
-export const quickBacklinkScan = action({
+export const quickBacklinkScan = internalAction({
   args: { siteId: v.id("sites"), articleId: v.id("articles") },
   handler: async (ctx, { siteId, articleId }): Promise<{ suggestions: { site: string; reason: string; anchor: string; targetUrl: string }[] }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
-    const article = await ctx.runQuery(api.articles.get, { articleId });
-    if (!article) throw new Error("Article not found");
+    const article = await ctx.runQuery(internal.articles.getInternal, { articleId });
+    if (!article || article.siteId !== siteId) throw new Error("Article not found for site");
 
     const hasDataForSEO = !!getCredentials();
 
@@ -497,7 +506,7 @@ Return ONLY valid JSON array.`,
 
     // Save to article
     if (suggestions.length > 0) {
-      await ctx.runMutation(api.articles.updateBacklinks, {
+      await ctx.runMutation(internal.articles.updateBacklinks, {
         articleId,
         backlinkSuggestions: suggestions.slice(0, 10),
       });

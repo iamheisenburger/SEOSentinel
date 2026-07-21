@@ -1,25 +1,58 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 const now = () => Date.now();
 
+async function requireSiteOwner(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Doc<"sites">["_id"],
+) {
+  const identity = await ctx.auth.getUserIdentity();
+  const site = await ctx.db.get(siteId);
+  if (!site?.userId || !identity || identity.subject !== site.userId) {
+    throw new Error("Not authorized to access this site's topics");
+  }
+}
+
+async function listBySiteHandler(ctx: QueryCtx, siteId: Doc<"sites">["_id"]) {
+  return ctx.db
+    .query("topic_clusters")
+    .withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .order("asc")
+    .collect();
+}
+
 export const listBySite = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    return await ctx.db
-      .query("topic_clusters")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .order("asc")
-      .collect();
+    await requireSiteOwner(ctx, siteId);
+    return listBySiteHandler(ctx, siteId);
   },
+});
+
+export const listBySiteInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => listBySiteHandler(ctx, siteId),
 });
 
 export const get = query({
   args: { topicId: v.id("topic_clusters") },
+  handler: async (ctx, { topicId }) => {
+    const topic = await ctx.db.get(topicId);
+    if (!topic) return null;
+    await requireSiteOwner(ctx, topic.siteId);
+    return topic;
+  },
+});
+
+export const getInternal = internalQuery({
+  args: { topicId: v.id("topic_clusters") },
   handler: async (ctx, { topicId }) => ctx.db.get(topicId),
 });
 
-export const upsertMany = mutation({
+export const upsertMany = internalMutation({
   args: {
     siteId: v.id("sites"),
     topics: v.array(
@@ -116,16 +149,30 @@ export const upsertMany = mutation({
 export const remove = mutation({
   args: { topicId: v.id("topic_clusters") },
   handler: async (ctx, { topicId }) => {
+    const topic = await ctx.db.get(topicId);
+    if (!topic) return;
+    await requireSiteOwner(ctx, topic.siteId);
     await ctx.db.delete(topicId);
   },
 });
 
-export const updateStatus = mutation({
+export const removeInternal = internalMutation({
+  args: { topicId: v.id("topic_clusters") },
+  handler: async (ctx, { topicId }) => {
+    await ctx.db.delete(topicId);
+  },
+});
+
+export const updateStatus = internalMutation({
   args: {
     topicId: v.id("topic_clusters"),
     status: v.string(),
   },
   handler: async (ctx, { topicId, status }) => {
+    const allowed = new Set([
+      "pending", "queued", "planned", "used", "cannibalizing",
+    ]);
+    if (!allowed.has(status)) throw new Error("Invalid topic status");
     await ctx.db.patch(topicId, { status, updatedAt: now() });
   },
 });
@@ -133,6 +180,7 @@ export const updateStatus = mutation({
 export const removeUsed = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
+    await requireSiteOwner(ctx, siteId);
     const all = await ctx.db
       .query("topic_clusters")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -148,7 +196,7 @@ export const removeUsed = mutation({
   },
 });
 
-export const updateSEOMetrics = mutation({
+export const updateSEOMetrics = internalMutation({
   args: {
     topicId: v.id("topic_clusters"),
     searchVolume: v.optional(v.number()),
@@ -175,6 +223,7 @@ export const updateSEOMetrics = mutation({
 export const removeUnused = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
+    await requireSiteOwner(ctx, siteId);
     const all = await ctx.db
       .query("topic_clusters")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -189,4 +238,3 @@ export const removeUnused = mutation({
     return { deleted };
   },
 });
-

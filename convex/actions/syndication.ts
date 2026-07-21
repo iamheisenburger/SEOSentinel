@@ -4,8 +4,29 @@ import { action } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { v } from "convex/values";
 import Anthropic from "@anthropic-ai/sdk";
+import type { ActionCtx } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
 
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+
+async function requireOwnedArticle(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+  articleId: Id<"articles">,
+) {
+  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+  const identity = await ctx.auth.getUserIdentity();
+  if (!site?.userId || !identity || identity.subject !== site.userId) {
+    throw new Error("Not authorized to syndicate this site");
+  }
+  const article = await ctx.runQuery(internal.articles.getInternal, {
+    articleId,
+  });
+  if (!article || article.siteId !== siteId) {
+    throw new Error("Article not found for site");
+  }
+  return { site, article };
+}
 
 // ────────────────────────────────────────────────────────────
 // Internal helper: Generate a LinkedIn post from article data
@@ -68,13 +89,15 @@ export const syndicateToMedium = action({
     articleId: v.id("articles"),
   },
   handler: async (ctx, { siteId, articleId }): Promise<{ success: boolean; error?: string; url?: string }> => {
+    await requireOwnedArticle(ctx, siteId, articleId);
+    throw new Error("Syndication is disabled pending an audited downstream delivery workflow");
     try {
       // Fetch site and article
-      const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-      if (!site) return { success: false, error: "Site not found" };
-
-      const article = await ctx.runQuery(api.articles.get, { articleId });
-      if (!article) return { success: false, error: "Article not found" };
+      const { site, article } = await requireOwnedArticle(
+        ctx,
+        siteId,
+        articleId,
+      );
 
       const mediumToken = (site as Record<string, unknown>).mediumToken as string | undefined;
       if (!mediumToken) return { success: false, error: "Medium integration token not configured" };
@@ -138,8 +161,8 @@ export const syndicateToMedium = action({
 
       console.log("[syndication] Medium draft created:", mediumUrl);
       return { success: true, url: mediumUrl };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+    } catch {
+      const message = "Syndication failed";
       console.error("[syndication] syndicateToMedium error:", message);
       return { success: false, error: message };
     }
@@ -156,13 +179,15 @@ export const syndicateToLinkedIn = action({
     articleId: v.id("articles"),
   },
   handler: async (ctx, { siteId, articleId }): Promise<{ success: boolean; error?: string }> => {
+    await requireOwnedArticle(ctx, siteId, articleId);
+    throw new Error("Syndication is disabled pending an audited downstream delivery workflow");
     try {
       // Fetch site and article
-      const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-      if (!site) return { success: false, error: "Site not found" };
-
-      const article = await ctx.runQuery(api.articles.get, { articleId });
-      if (!article) return { success: false, error: "Article not found" };
+      const { site, article } = await requireOwnedArticle(
+        ctx,
+        siteId,
+        articleId,
+      );
 
       const siteAny = site as Record<string, unknown>;
       const linkedinToken = siteAny.linkedinToken as string | undefined;
@@ -190,7 +215,7 @@ export const syndicateToLinkedIn = action({
         keywords,
         domain,
         slug,
-        anthropicApiKey,
+        anthropicApiKey: anthropicApiKey!,
       });
 
       // Post to LinkedIn UGC API
@@ -234,8 +259,8 @@ export const syndicateToLinkedIn = action({
 
       console.log("[syndication] LinkedIn post published for:", article.title);
       return { success: true };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+    } catch {
+      const message = "Syndication failed";
       console.error("[syndication] syndicateToLinkedIn error:", message);
       return { success: false, error: message };
     }
@@ -258,7 +283,8 @@ export const syndicateArticle = action({
     medium: { success: boolean; error?: string; url?: string };
     linkedin: { success: boolean; error?: string };
   }> => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    const { site } = await requireOwnedArticle(ctx, siteId, articleId);
+    throw new Error("Syndication is disabled pending an audited downstream delivery workflow");
 
     // Determine which platforms are configured
     const siteAny = (site ?? {}) as Record<string, unknown>;

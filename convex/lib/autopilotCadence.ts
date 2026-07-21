@@ -1,13 +1,48 @@
 export type CadenceArticle = {
+  _id?: string;
   createdAt: number;
+  publishedAt?: number;
   status?: string;
+  publicationGateStatus?: string;
+  publicationGateIssues?: string[];
+  qualityRevisionCount?: number;
 };
 
 export type CadenceWindow = {
   canGenerate: boolean;
   recentAttempts: number;
   hasRecentPublication: boolean;
+  recoveryArticleId?: string;
+  recoveryRevisionCount?: number;
 };
+
+export const MAX_CADENCE_CANDIDATES = 2;
+export const MAX_QUALITY_REVISIONS = 2;
+
+const NON_REWRITABLE_QUALITY_DEFECT =
+  /(?:hero image|media-quality|visual evidence|product-specific section|product evidence)/i;
+
+export function findRecoverableQualityArticle(
+  articles: CadenceArticle[],
+  now: number,
+  hoursPerArticle: number,
+): CadenceArticle | undefined {
+  const windowMs = Math.max(1, hoursPerArticle) * 60 * 60 * 1000;
+  return articles
+    .filter(
+      (article) =>
+        article._id &&
+        article.createdAt <= now &&
+        now - article.createdAt < windowMs &&
+        article.status === "review" &&
+        article.publicationGateStatus === "blocked" &&
+        (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS &&
+        !(article.publicationGateIssues ?? []).some((issue) =>
+          NON_REWRITABLE_QUALITY_DEFECT.test(issue),
+        ),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt)[0];
+}
 
 export function evaluateCadenceWindow({
   articles,
@@ -25,14 +60,24 @@ export function evaluateCadenceWindow({
     (article) =>
       article.createdAt <= now && now - article.createdAt < windowMs,
   );
-  const hasRecentPublication = recent.some(
-    (article) => article.status === "published",
+  const hasRecentPublication = articles.some(
+    (article) =>
+      article.status === "published" &&
+      (article.publishedAt ?? article.createdAt) <= now &&
+      now - (article.publishedAt ?? article.createdAt) < windowMs,
   );
+  const recovery = hasRecentPublication
+    ? undefined
+    : findRecoverableQualityArticle(articles, now, hoursPerArticle);
 
   return {
     canGenerate:
-      !hasRecentPublication && recent.length < Math.max(1, maxAttempts),
+      !hasRecentPublication &&
+      !recovery &&
+      recent.length < Math.max(1, maxAttempts),
     recentAttempts: recent.length,
     hasRecentPublication,
+    recoveryArticleId: recovery?._id,
+    recoveryRevisionCount: recovery?.qualityRevisionCount,
   };
 }

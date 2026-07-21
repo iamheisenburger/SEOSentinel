@@ -30,7 +30,6 @@ export default function ArticlesPage() {
   const queueArticle = useMutation(api.jobs.queueArticleNow);
 
   const deleteArticle = useMutation(api.articles.deleteArticle);
-  const updateStatus = useMutation(api.articles.updateStatus);
   const publishAction = useAction(api.actions.pipeline.publishApproved);
 
   const [status, setStatus] = useState<string | null>(null);
@@ -246,15 +245,18 @@ export default function ArticlesPage() {
                   {wc.toLocaleString()}
                 </span>
                 <div className="flex items-center gap-1.5">
-                  {(article.status !== "rejected") && (
+                  {article.status === "ready" && site?.publishMethod !== "manual" && (
                     <button
                       onClick={async () => {
                         if (!site?._id) return;
                         try {
                           await publishAction({ siteId: site._id, articleId: article._id });
                         } catch (err) {
-                          // If publish method is manual, just mark as published
-                          await updateStatus({ articleId: article._id, status: "published" });
+                          setStatus(
+                            err instanceof Error
+                              ? err.message
+                              : "Publication failed its delivery or quality gate.",
+                          );
                         }
                       }}
                       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E] hover:bg-[#22C55E]/[0.08] transition"

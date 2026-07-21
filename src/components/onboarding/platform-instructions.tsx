@@ -20,7 +20,7 @@ const platforms = [
     steps: [
       "Articles are committed as MDX files to your GitHub repository",
       "Set your repo owner and name in the onboarding wizard",
-      "Files land in content/posts/[slug].mdx with full frontmatter",
+      "Files land in content/posts/[slug].md with full frontmatter",
       "Your static site generator picks them up on the next build",
       "Works with Next.js, Astro, Hugo, Jekyll, Gatsby, and any SSG",
     ],

@@ -10,8 +10,113 @@ import { v } from "convex/values";
 import { ALL_FEATURE_KEYS, getLimitsFromFeatures } from "./planLimits";
 import type { Id } from "./_generated/dataModel";
 import { sanitizeSiteForClient } from "./lib/siteSecurity";
+import {
+  shouldCancelForEpochTransition,
+} from "./lib/jobRollout";
+import {
+  requireSafeGitHubDefaultBranch,
+  safeGitHubRepositoryPart,
+} from "./lib/publicationArtifact";
 
 const now = () => Date.now();
+const DELIVERY_CONFIG_KEYS = new Set([
+  "domain", "publishMethod", "repoOwner", "repoName", "repoDefaultBranch", "githubToken",
+  "wpUrl", "wpUsername", "wpAppPassword", "webhookUrl", "webhookSecret",
+  "urlStructure", "brandPrimaryColor", "brandAccentColor", "brandFontFamily",
+  "autopilotEnabled",
+]);
+
+function deliveryConfigChanged(
+  site: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): boolean {
+  return Object.entries(patch).some(
+    ([key, value]) => DELIVERY_CONFIG_KEYS.has(key) && site[key] !== value,
+  );
+}
+
+function githubRepositoryChanged(
+  site: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): boolean {
+  return ["repoOwner", "repoName"].some(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(patch, key) &&
+      patch[key] !== site[key],
+  );
+}
+
+function clearStaleGitHubBranch(
+  site: Record<string, unknown>,
+  patch: Record<string, unknown>,
+) {
+  if (githubRepositoryChanged(site, patch)) {
+    // Only the trusted OAuth connection path can restore this value after it
+    // verifies the repository metadata with GitHub.
+    patch.repoDefaultBranch = undefined;
+  }
+}
+
+function assertConfigUnlocked(site: { publicationLeaseOwner?: string; publicationLeaseExpiresAt?: number }) {
+  if (site.publicationLeaseOwner && (site.publicationLeaseExpiresAt ?? 0) > now()) {
+    throw new Error("Publishing settings are locked while a publication is in progress");
+  }
+}
+
+/** Atomically retire autonomous work from the previous rollout epoch. Manual
+ * owner-requested work is intentionally independent of the autonomous rollout. */
+async function cancelAutonomousJobsForEpochTransition(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  reason: string,
+): Promise<number> {
+  const [pending, running] = await Promise.all([
+    ctx.db
+      .query("jobs")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "pending"),
+      )
+      .collect(),
+    ctx.db
+      .query("jobs")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "running"),
+      )
+      .collect(),
+  ]);
+  let cancelled = 0;
+  for (const job of [...pending, ...running]) {
+    if (!shouldCancelForEpochTransition(job)) continue;
+    if (job.reservationId && !job.articleId) {
+      const reservation = await ctx.db.get(job.reservationId);
+      if (reservation?.state === "reserved" && reservation.jobId === job._id) {
+        await ctx.db.delete(reservation._id);
+      }
+    }
+    const payload = job.payload && typeof job.payload === "object"
+      ? (job.payload as Record<string, unknown>)
+      : {};
+    if (payload.topicId) {
+      const topicId = ctx.db.normalizeId("topic_clusters", String(payload.topicId));
+      const topic = topicId ? await ctx.db.get(topicId) : null;
+      if (topic?.siteId === siteId && topic.status === "queued") {
+        await ctx.db.patch(topic._id, { status: "pending", updatedAt: now() });
+      }
+    }
+    await ctx.db.patch(job._id, {
+      status: "failed",
+      error: `Cancelled by rollout epoch transition: ${reason}`,
+      reservationId: job.articleId ? job.reservationId : undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      nextAttemptAt: undefined,
+      updatedAt: now(),
+    });
+    cancelled += 1;
+  }
+  return cancelled;
+}
 
 async function requireSiteOwner(
   ctx: QueryCtx | MutationCtx,
@@ -72,7 +177,25 @@ export const patchInternal = internalMutation({
           !["_id", "_creationTime", "userId", "createdAt"].includes(key),
       ),
     );
-    await ctx.db.patch(siteId, { ...safePatch, updatedAt: now() });
+    const invalidatesRollout = deliveryConfigChanged(site, safePatch);
+    if (invalidatesRollout) assertConfigUnlocked(site);
+    if (invalidatesRollout) {
+      await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        siteId,
+        "publishing configuration changed",
+      );
+    }
+    await ctx.db.patch(siteId, {
+      ...safePatch,
+      ...(invalidatesRollout
+        ? {
+            autopilotRolloutMode: "observe",
+            autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+          }
+        : {}),
+      updatedAt: now(),
+    });
   },
 });
 
@@ -90,7 +213,6 @@ export const upsert = mutation({
     approvalRequired: v.optional(v.boolean()),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
-    githubToken: v.optional(v.string()),
     // Publishing platform
     publishMethod: v.optional(v.string()),
     wpUrl: v.optional(v.string()),
@@ -133,9 +255,7 @@ export const upsert = mutation({
     const userId = identity?.subject;
     if (!userId) throw new Error("Authentication required");
 
-    if (args.id) {
-      await requireSiteOwner(ctx, args.id);
-    }
+    const currentSite = args.id ? await requireSiteOwner(ctx, args.id) : null;
 
     // ── Site count limit (only on new site creation, not updates) ──
     if (!args.id && userId) {
@@ -145,7 +265,7 @@ export const upsert = mutation({
         .collect();
 
       // Check if any existing site has planFeatures to determine limits
-      const features = (existingSites[0] as any)?.planFeatures ?? [];
+      const features = existingSites[0]?.planFeatures ?? [];
       const limits = getLimitsFromFeatures(features);
 
       // Check if domain already exists (would be an update, not new)
@@ -220,7 +340,26 @@ export const upsert = mutation({
       const definedData = Object.fromEntries(
         Object.entries(data).filter(([, v]) => v !== undefined),
       ) as typeof data;
-      await ctx.db.patch(args.id, definedData);
+      clearStaleGitHubBranch(currentSite!, definedData);
+      const invalidatesRollout = deliveryConfigChanged(currentSite!, definedData);
+      if (invalidatesRollout) assertConfigUnlocked(currentSite!);
+      if (invalidatesRollout) {
+        await cancelAutonomousJobsForEpochTransition(
+          ctx,
+          args.id,
+          "site configuration changed",
+        );
+      }
+      await ctx.db.patch(args.id, {
+        ...definedData,
+        ...(invalidatesRollout
+          ? {
+              autopilotRolloutMode: "observe",
+              autopilotRolloutEpoch:
+                (currentSite!.autopilotRolloutEpoch ?? 0) + 1,
+            }
+          : {}),
+      });
       return args.id;
     }
 
@@ -239,7 +378,26 @@ export const upsert = mutation({
         if (key === "updatedAt") continue;
         merged[key] = value ?? (existing as Record<string, unknown>)[key];
       }
-      await ctx.db.patch(existing._id, merged);
+      clearStaleGitHubBranch(existing, merged);
+      const invalidatesRollout = deliveryConfigChanged(existing, merged);
+      if (invalidatesRollout) assertConfigUnlocked(existing);
+      if (invalidatesRollout) {
+        await cancelAutonomousJobsForEpochTransition(
+          ctx,
+          existing._id,
+          "site configuration changed",
+        );
+      }
+      await ctx.db.patch(existing._id, {
+        ...merged,
+        ...(invalidatesRollout
+          ? {
+              autopilotRolloutMode: "observe",
+              autopilotRolloutEpoch:
+                (existing.autopilotRolloutEpoch ?? 0) + 1,
+            }
+          : {}),
+      });
       return existing._id;
     }
 
@@ -253,6 +411,8 @@ export const upsert = mutation({
       sourceCitations: args.sourceCitations ?? true,
       youtubeEmbeds: args.youtubeEmbeds ?? false,
       urlStructure: args.urlStructure ?? "/blog/[slug]",
+      autopilotRolloutMode: "observe",
+      autopilotRolloutEpoch: 0,
       createdAt: now(),
     });
   },
@@ -288,7 +448,6 @@ export const updateSite = mutation({
     publishMethod: v.optional(v.string()),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
-    githubToken: v.optional(v.string()),
     wpUrl: v.optional(v.string()),
     wpUsername: v.optional(v.string()),
     wpAppPassword: v.optional(v.string()),
@@ -300,12 +459,30 @@ export const updateSite = mutation({
     syndicationEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, { siteId, ...fields }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     const patch: Record<string, unknown> = { updatedAt: now() };
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) patch[key] = value;
     }
-    await ctx.db.patch(siteId, patch);
+    clearStaleGitHubBranch(site, patch);
+    const invalidatesRollout = deliveryConfigChanged(site, patch);
+    if (invalidatesRollout) assertConfigUnlocked(site);
+    if (invalidatesRollout) {
+      await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        siteId,
+        "site settings changed",
+      );
+    }
+    await ctx.db.patch(siteId, {
+      ...patch,
+      ...(invalidatesRollout
+        ? {
+            autopilotRolloutMode: "observe",
+            autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+          }
+        : {}),
+    });
   },
 });
 
@@ -313,12 +490,18 @@ export const updateSite = mutation({
 export const deleteSite = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
+    if (site.publicationLeaseOwner) {
+      throw new Error("Cannot delete a site while a publication lease exists");
+    }
     // Delete articles
     const articles = await ctx.db
       .query("articles")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .collect();
+    if (articles.some((article) => article.publicationLeaseOwner)) {
+      throw new Error("Cannot delete a site while an article publication lease exists");
+    }
     for (const a of articles) await ctx.db.delete(a._id);
 
     const articleSummaries = await ctx.db
@@ -354,6 +537,22 @@ export const deleteSite = mutation({
       .collect();
     for (const row of searchPerformance) await ctx.db.delete(row._id);
 
+    const autopilotRuns = await ctx.db
+      .query("autopilot_runs")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const row of autopilotRuns) await ctx.db.delete(row._id);
+    const autopilotHealth = await ctx.db
+      .query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const row of autopilotHealth) await ctx.db.delete(row._id);
+    const autopilotAlerts = await ctx.db
+      .query("autopilot_alerts")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    for (const row of autopilotAlerts) await ctx.db.delete(row._id);
+
     // Delete the site itself
     await ctx.db.delete(siteId);
   },
@@ -362,7 +561,99 @@ export const deleteSite = mutation({
 // List ALL sites for trusted cron/actions only.
 export const listAllForAutopilot = internalQuery({
   handler: async (ctx) => {
-    return ctx.db.query("sites").collect();
+    return ctx.db
+      .query("sites")
+      .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .take(50);
+  },
+});
+
+export const countByUserBounded = internalQuery({
+  args: { userId: v.string(), maximum: v.number() },
+  handler: async (ctx, { userId, maximum }) => {
+    const safeMaximum = Math.max(0, Math.min(100, Math.floor(maximum)));
+    const sites = await ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .take(safeMaximum + 1);
+    return sites.length;
+  },
+});
+
+// This is deliberately internal-only: ordinary site settings cannot opt a
+// tenant into paid generation or external publication. Warm mode builds a
+// sealed buffer with delivery disabled; live mode is allowed only after that
+// buffer is present. Advancing the epoch invalidates every older queued job.
+export const setAutopilotRollout = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    mode: v.union(v.literal("observe"), v.literal("warm"), v.literal("live")),
+  },
+  handler: async (ctx, { siteId, mode }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+    assertConfigUnlocked(site);
+    if (!site.autopilotEnabled && mode !== "observe") {
+      throw new Error("Autopilot must be enabled before controlled rollout");
+    }
+
+    if (mode !== "observe") {
+      const [warm, live] = await Promise.all([
+        ctx.db
+          .query("sites")
+          .withIndex("by_rollout", (q) =>
+            q.eq("autopilotRolloutMode", "warm").eq("autopilotEnabled", true),
+          )
+          .take(2),
+        ctx.db
+          .query("sites")
+          .withIndex("by_rollout", (q) =>
+            q.eq("autopilotRolloutMode", "live").eq("autopilotEnabled", true),
+          )
+          .take(2),
+      ]);
+      const otherActive = [...warm, ...live].find(
+        (candidate) => candidate._id !== siteId,
+      );
+      if (otherActive) {
+        throw new Error(
+          `A different tenant is already in controlled rollout (${otherActive._id})`,
+        );
+      }
+    }
+
+    if (mode === "live") {
+      const ready = await ctx.db
+        .query("article_summaries")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "ready"),
+        )
+        .take(10);
+      const sealed = ready.filter(
+        (article) =>
+          article.publicationGateStatus === "passed" &&
+          article.publicationAuditVersion === 4 &&
+          !!article.auditedContentHash,
+      );
+      if (sealed.length < 2) {
+        throw new Error(
+          `Live rollout requires at least two sealed articles; found ${sealed.length}`,
+        );
+      }
+    }
+
+    const rolloutEpoch = (site.autopilotRolloutEpoch ?? 0) + 1;
+    const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
+      ctx,
+      siteId,
+      `${site.autopilotRolloutMode ?? "observe"} -> ${mode}`,
+    );
+    await ctx.db.patch(siteId, {
+      autopilotRolloutMode: mode,
+      autopilotRolloutEpoch: rolloutEpoch,
+      updatedAt: Date.now(),
+    });
+    return { mode, rolloutEpoch, cancelledJobs };
   },
 });
 
@@ -401,7 +692,7 @@ export const countByUser = internalQuery({
 export const setPlanFeatures = internalMutation({
   args: { siteId: v.id("sites"), planFeatures: v.array(v.string()) },
   handler: async (ctx, { siteId, planFeatures }) => {
-    await ctx.db.patch(siteId, { planFeatures } as any);
+    await ctx.db.patch(siteId, { planFeatures });
   },
 });
 
@@ -413,20 +704,29 @@ export const resetAll = mutation({
       .query("sites")
       .withIndex("by_user", (q) => q.eq("userId", identity.subject))
       .collect();
-    const tables = [
-      "pages",
-      "topic_clusters",
-      "articles",
-      "article_summaries",
-      "jobs",
-      "search_performance",
-    ] as const;
     for (const site of sites) {
-      for (const table of tables) {
-        const rows = await ctx.db
-          .query(table)
-          .withIndex("by_site", (q: any) => q.eq("siteId", site._id))
-          .collect();
+      if (site.publicationLeaseOwner) {
+        throw new Error("Cannot reset data while a publication lease exists");
+      }
+      const leasedArticles = await ctx.db
+        .query("articles")
+        .withIndex("by_site", (q) => q.eq("siteId", site._id))
+        .collect();
+      if (leasedArticles.some((article) => article.publicationLeaseOwner)) {
+        throw new Error("Cannot reset data while an article publication lease exists");
+      }
+      const rowsByTable = await Promise.all([
+        ctx.db.query("pages").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("topic_clusters").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("articles").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("article_summaries").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("jobs").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("search_performance").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("autopilot_runs").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("autopilot_health").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+        ctx.db.query("autopilot_alerts").withIndex("by_site", (q) => q.eq("siteId", site._id)).collect(),
+      ]);
+      for (const rows of rowsByTable) {
         for (const row of rows) {
           await ctx.db.delete(row._id);
         }
@@ -457,13 +757,51 @@ export const fixOrphanSites = internalMutation({
 // Set GitHub OAuth token via HTTP API (accepts string siteId)
 export const setGithubTokenInternal = internalMutation({
   args: {
-    siteId: v.string(),
+    siteId: v.id("sites"),
     githubToken: v.string(),
+    repoOwner: v.string(),
+    repoName: v.string(),
+    repoDefaultBranch: v.string(),
   },
-  handler: async (ctx, { siteId, githubToken }) => {
-    const site = await ctx.db.get(siteId as any);
+  handler: async (
+    ctx,
+    { siteId, githubToken, repoOwner, repoName, repoDefaultBranch },
+  ) => {
+    const site = await ctx.db.get(siteId);
     if (!site) throw new Error("Site not found");
-    await ctx.db.patch(site._id, { githubToken, updatedAt: now() });
+    const currentRepoOwner = safeGitHubRepositoryPart(site.repoOwner, "owner");
+    const currentRepoName = safeGitHubRepositoryPart(
+      site.repoName,
+      "repository name",
+    );
+    if (currentRepoOwner !== repoOwner || currentRepoName !== repoName) {
+      throw new Error(
+        "GitHub repository settings changed during connection; reconnect to verify the current repository",
+      );
+    }
+    const verifiedDefaultBranch = requireSafeGitHubDefaultBranch(repoDefaultBranch);
+    const invalidatesRollout =
+      site.githubToken !== githubToken ||
+      site.repoDefaultBranch !== verifiedDefaultBranch;
+    if (invalidatesRollout) {
+      assertConfigUnlocked(site);
+      await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        siteId,
+        "GitHub connection or verified default branch changed",
+      );
+    }
+    await ctx.db.patch(site._id, {
+      githubToken,
+      repoDefaultBranch: verifiedDefaultBranch,
+      ...(invalidatesRollout
+        ? {
+            autopilotRolloutMode: "observe" as const,
+            autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+          }
+        : {}),
+      updatedAt: now(),
+    });
   },
 });
 
@@ -482,12 +820,14 @@ export const setGscTokenInternal = internalMutation({
     if (!gscProperty && !site.gscProperty) {
       throw new Error("A matching Search Console property is required for the initial connection");
     }
-    const patch: Record<string, any> = { gscAccessToken, updatedAt: now() };
-    if (gscRefreshToken) patch.gscRefreshToken = gscRefreshToken;
-    if (gscProperty) patch.gscProperty = gscProperty;
-    if (gscEmail) patch.gscEmail = gscEmail;
-    if (!site.gscConnectedAt) patch.gscConnectedAt = now();
-    await ctx.db.patch(site._id, patch);
+    await ctx.db.patch(site._id, {
+      gscAccessToken,
+      ...(gscRefreshToken ? { gscRefreshToken } : {}),
+      ...(gscProperty ? { gscProperty } : {}),
+      ...(gscEmail ? { gscEmail } : {}),
+      ...(!site.gscConnectedAt ? { gscConnectedAt: now() } : {}),
+      updatedAt: now(),
+    });
   },
 });
 

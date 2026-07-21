@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
+import { getOwnedSite } from "@/lib/owned-site";
+import { verifyOAuthState } from "@/lib/oauth-state";
 import { callPentraInternal } from "@/lib/pentra-internal-api";
 
 export async function GET(req: NextRequest) {
@@ -13,8 +16,28 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const colonIdx = state.indexOf(":");
-  const siteId = colonIdx > -1 ? state.substring(colonIdx + 1) : "";
+  const { userId } = await auth();
+  let verifiedState: { siteId: string } | null = null;
+  try {
+    verifiedState = userId
+      ? verifyOAuthState(state, { provider: "github", userId })
+      : null;
+  } catch {
+    verifiedState = null;
+  }
+  if (!verifiedState) {
+    return new NextResponse(renderPage("Authorization state is invalid or expired.", false), {
+      status: 400,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+  const siteId = verifiedState.siteId;
+  if (!(await getOwnedSite(siteId))) {
+    return new NextResponse(renderPage("Site not found.", false), {
+      status: 404,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
 
   const clientId = process.env.GITHUB_CLIENT_ID;
   const clientSecret = process.env.GITHUB_CLIENT_SECRET;
@@ -61,6 +84,7 @@ export async function GET(req: NextRequest) {
   } catch { /* non-critical */ }
 
   let saved = false;
+  let saveError = "GitHub authorization succeeded, but the repository connection was not saved.";
   if (siteId) {
     try {
       await callPentraInternal("/internal/oauth/github", {
@@ -70,12 +94,16 @@ export async function GET(req: NextRequest) {
       saved = true;
     } catch (e) {
       console.error("Failed to save GitHub token to Convex:", e);
+      saveError = e instanceof Error ? e.message : saveError;
     }
+  } else {
+    saveError = "The GitHub connection is missing its Pentra site identifier.";
   }
 
-  const msg = saved ? "Connected to GitHub!" : "Connected to GitHub! You can close this window.";
+  const msg = saved ? "Connected to GitHub!" : saveError;
 
-  const response = new NextResponse(renderPage(msg, true, githubUsername, saved), {
+  const response = new NextResponse(renderPage(msg, saved, githubUsername, saved), {
+    status: saved ? 200 : 400,
     headers: { "Content-Type": "text/html" },
   });
   response.cookies.delete("github_oauth_state");

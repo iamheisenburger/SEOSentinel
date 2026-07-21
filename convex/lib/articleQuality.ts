@@ -1,10 +1,14 @@
 import { classifyEvidenceSource } from "./sourceQuality.ts";
+import { sha256Hex } from "./publicationArtifact.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
 export type PublicationSource = {
   url: string;
   title?: string;
+  excerpt?: string;
+  contentHash?: string;
+  capturedAt?: number;
 };
 
 export type PublicationArticle = {
@@ -14,12 +18,15 @@ export type PublicationArticle = {
   metaTitle?: string;
   metaDescription?: string;
   featuredImage?: string;
+  reviewedMediaUrls?: string[];
   wordCount?: number;
   factCheckScore?: number;
   editorialQualityScore?: number;
   editorialQualityNotes?: string[];
   mediaQualityStatus?: string;
   mediaQualityNotes?: string[];
+  productEvidenceStatus?: string;
+  claimEvidenceStatus?: string;
   sources?: PublicationSource[];
 };
 
@@ -37,6 +44,229 @@ export type PublicationQualityResult = {
     malformedTableCount: number;
   };
 };
+
+export type ClaimEvidenceEntry = {
+  claim: string;
+  citationNumbers: number[];
+  supported: boolean;
+  reason: string;
+};
+
+const FACTUAL_CLAIM_PATTERN =
+  /\b(?:according to|research|study|studies|survey|report|data|evidence|shows?|found|indicates?|average|majority)\b/i;
+
+/**
+ * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately
+ * fail-closed: braces and JSX/HTML-like constructs are not required by the
+ * supported Markdown contract, and accepting them would let a multiline MDX
+ * expression survive a line-oriented regular expression.
+ */
+export function containsExecutableMdx(markdown: string): boolean {
+  return (
+    /[{}]/.test(markdown) ||
+    /^\s*(?:import|export)\b/m.test(markdown) ||
+    /<\/?[A-Za-z!][\s\S]*?>/.test(markdown) ||
+    /<>|<\/>/.test(markdown)
+  );
+}
+
+function evidenceTokens(value: string): Set<string> {
+  const stop = new Set([
+    "about", "after", "also", "because", "before", "being", "between",
+    "could", "does", "from", "have", "into", "more", "most", "other",
+    "should", "than", "that", "their", "there", "these", "they", "this",
+    "through", "when", "where", "which", "with", "would", "your",
+  ]);
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/https?:\/\/\S+/g, " ")
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4 && !stop.has(token)),
+  );
+}
+
+function overlapRatio(left: string, right: string): number {
+  const a = evidenceTokens(left);
+  const b = evidenceTokens(right);
+  if (a.size === 0 || b.size === 0) return 0;
+  let overlap = 0;
+  for (const token of a) if (b.has(token)) overlap += 1;
+  return overlap / Math.min(a.size, b.size);
+}
+
+function normalizedEvidenceNumbers(value: string): Set<string> {
+  return new Set(
+    [...value.matchAll(/(?:\$\s*)?\b\d[\d,]*(?:\.\d+)?(?:\s*%)?/g)].map(
+      (match) => match[0].toLowerCase().replace(/[\s,]/g, ""),
+    ),
+  );
+}
+
+function namedEntities(value: string): string[] {
+  return [
+    ...value.matchAll(
+      /\b[A-Z][A-Za-z0-9&.-]+(?:\s+[A-Z][A-Za-z0-9&.-]+){1,3}\b/g,
+    ),
+  ].map((match) => match[0].toLowerCase());
+}
+
+function exactClaimDetailsPresent(claim: string, evidence: string): boolean {
+  const evidenceNumbers = normalizedEvidenceNumbers(evidence);
+  for (const number of normalizedEvidenceNumbers(claim)) {
+    if (!evidenceNumbers.has(number)) return false;
+  }
+  const normalizedEvidence = evidence.toLowerCase();
+  return namedEntities(claim).every((entity) => normalizedEvidence.includes(entity));
+}
+
+export function inlineCitationNumbers(value: string): number[] {
+  const numbers: number[] = [];
+  for (const match of value.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+    for (const raw of match[1].split(",")) {
+      const citation = Number(raw.trim());
+      if (Number.isInteger(citation) && citation > 0 && !numbers.includes(citation)) {
+        numbers.push(citation);
+      }
+    }
+  }
+  return numbers;
+}
+
+/**
+ * Deterministic coverage around the model-produced ledger.  The model may
+ * identify claims, but it cannot certify its own empty answer or cite a source
+ * that is absent from the preserved evidence snapshot.
+ */
+export function validateClaimEvidenceLedger(args: {
+  markdown: string;
+  sources: PublicationSource[];
+  researchEvidence: string;
+  productEvidence: string;
+  productEvidenceHash?: string;
+  claimEvidence: ClaimEvidenceEntry[];
+}): { passed: boolean; issues: string[]; requiredClaimCount: number } {
+  const issues: string[] = [];
+  const paragraphs = args.markdown
+    .replace(/```[\s\S]*?```/g, "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(
+      (paragraph) =>
+        paragraph.length >= 40 &&
+        !paragraph.startsWith("#") &&
+        !/^[-*]\s+https?:\/\//i.test(paragraph) &&
+        (INLINE_CITATION_PATTERN.test(paragraph) ||
+          EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
+          FACTUAL_CLAIM_PATTERN.test(paragraph)),
+    );
+
+  if (args.claimEvidence.length === 0) {
+    issues.push("Claim-to-evidence ledger is empty.");
+  }
+
+  for (const [index, entry] of args.claimEvidence.entries()) {
+    if (entry.claim.trim().length < 12 || entry.reason.trim().length < 12) {
+      issues.push(`Claim ledger entry ${index + 1} is not specific enough to audit.`);
+    }
+    if (!entry.supported) continue;
+    if (entry.citationNumbers.length > 0) {
+      for (const citation of entry.citationNumbers) {
+        const source = args.sources[citation - 1];
+        if (!source) {
+          issues.push(`Claim ledger entry ${index + 1} cites missing source [${citation}].`);
+          continue;
+        }
+        const sourceHost = safeHttpsUrl(source.url)?.hostname ?? "";
+        if (!source.excerpt || source.excerpt.trim().length < 160) {
+          issues.push(
+            `Claim ledger entry ${index + 1} cites [${citation}] without a preserved source excerpt.`,
+          );
+          continue;
+        }
+        if (!source.contentHash || sha256Hex(source.excerpt) !== source.contentHash) {
+          issues.push(
+            `Claim ledger entry ${index + 1} cites [${citation}] whose preserved content hash is missing or invalid.`,
+          );
+          continue;
+        }
+        const evidenceOverlap = overlapRatio(entry.claim, source.excerpt);
+        if (
+          evidenceOverlap < 0.3 ||
+          !exactClaimDetailsPresent(entry.claim, source.excerpt)
+        ) {
+          issues.push(
+            `Claim ledger entry ${index + 1} does not deterministically match preserved excerpt [${citation}] (${sourceHost || source.url}).`,
+          );
+        }
+      }
+    } else {
+      const productSnapshotValid =
+        !!args.productEvidenceHash &&
+        sha256Hex(args.productEvidence) === args.productEvidenceHash;
+      if (
+        !productSnapshotValid ||
+        overlapRatio(entry.claim, args.productEvidence) < 0.3 ||
+        !exactClaimDetailsPresent(entry.claim, args.productEvidence)
+      ) {
+        issues.push(
+          `Supported claim ledger entry ${index + 1} has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
+        );
+      }
+    }
+  }
+
+  for (const [index, paragraph] of paragraphs.entries()) {
+    const matchingEntries = args.claimEvidence.filter(
+      (entry) => entry.supported && overlapRatio(paragraph, entry.claim) >= 0.3,
+    );
+    if (matchingEntries.length === 0) {
+      issues.push(
+        `Evidence-required paragraph ${index + 1} is absent from the claim ledger: ${paragraph.slice(0, 180)}`,
+      );
+      continue;
+    }
+
+    const paragraphCitations = inlineCitationNumbers(paragraph);
+    for (const citation of paragraphCitations) {
+      const source = args.sources[citation - 1];
+      const snapshotIsValid =
+        !!source?.excerpt &&
+        source.excerpt.trim().length >= 160 &&
+        !!source.contentHash &&
+        sha256Hex(source.excerpt) === source.contentHash;
+      if (!snapshotIsValid) {
+        issues.push(
+          `Evidence-required paragraph ${index + 1} cites [${citation}] without an exact preserved source snapshot.`,
+        );
+        continue;
+      }
+      if (!matchingEntries.some((entry) => entry.citationNumbers.includes(citation))) {
+        issues.push(
+          `Evidence-required paragraph ${index + 1} cites [${citation}] without a matching supported claim-ledger entry.`,
+        );
+      }
+    }
+
+    const matchedLedgerCitations = new Set(
+      matchingEntries.flatMap((entry) => entry.citationNumbers),
+    );
+    if (
+      matchedLedgerCitations.size > 0 &&
+      paragraphCitations.length === 0
+    ) {
+      issues.push(
+        `Evidence-required paragraph ${index + 1} omits the inline citation bound by its claim-ledger entry.`,
+      );
+    }
+  }
+
+  return {
+    passed: issues.length === 0,
+    issues,
+    requiredClaimCount: paragraphs.length,
+  };
+}
 
 const HYPE_PATTERN =
   /\b(?:guaranteed|proven(?:\s+results?)?|skyrocket|game[- ]changing|transformational|staggering|revolutionary)\b/i;
@@ -294,6 +524,25 @@ export function evaluatePublicationQuality(
   if (/<script\b/i.test(markdown)) {
     issues.push("Article contains a script tag; structured data belongs in the renderer.");
   }
+  if (containsExecutableMdx(markdown)) {
+    issues.push("Raw HTML and executable MDX are disabled in publication content.");
+  }
+  const markdownImages = [
+    ...markdown.matchAll(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
+  ];
+  const reviewedMedia = new Set(article.reviewedMediaUrls ?? []);
+  if (markdownImages.length > 2) {
+    issues.push(`Article contains ${markdownImages.length} inline images; maximum is two reviewed assets.`);
+  }
+  for (const image of markdownImages) {
+    if (!image[1].trim()) issues.push("Every inline image requires meaningful alt text.");
+    if (!safeHttpsUrl(image[2]) || !reviewedMedia.has(image[2])) {
+      issues.push("Every inline image must match a persisted, reviewed HTTPS asset.");
+    }
+  }
+  if (article.featuredImage && !reviewedMedia.has(article.featuredImage)) {
+    issues.push("Featured image is absent from the persisted reviewed-media allowlist.");
+  }
   if (/javascript\s*:/i.test(markdown)) {
     issues.push("Article contains a javascript URL.");
   }
@@ -331,9 +580,7 @@ export function evaluatePublicationQuality(
     else warnings.push(message);
   }
 
-  const citationNumbers = [...markdown.matchAll(/\[(\d+)\]/g)].map((match) =>
-    Number(match[1]),
-  );
+  const citationNumbers = inlineCitationNumbers(markdown);
   const highestCitation = citationNumbers.length
     ? Math.max(...citationNumbers)
     : 0;
@@ -386,6 +633,19 @@ export function evaluatePublicationQuality(
     }
     if (article.mediaQualityStatus !== "passed") {
       issues.push("Strict publication requires a completed media-quality review.");
+    }
+    if (!article.featuredImage) {
+      issues.push("Strict publication requires a reviewed HTTPS hero image.");
+    }
+    if (article.productEvidenceStatus === "failed") {
+      issues.push(
+        "A product-specific section requires validated first-party visual evidence.",
+      );
+    }
+    if (article.claimEvidenceStatus !== "passed") {
+      issues.push(
+        "Strict publication requires a completed claim-to-evidence audit.",
+      );
     }
     const maxWords = articleWordCeiling(article.articleType);
     if (measuredWordCount > maxWords) {

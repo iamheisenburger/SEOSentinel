@@ -33,7 +33,10 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
 
   return {
     ...safe,
-    githubConnected: Boolean(site.githubToken),
+    // A token alone is not a publication-ready connection. The repository's
+    // actual default branch must have been discovered through the trusted
+    // GitHub connection flow and persisted with it.
+    githubConnected: Boolean(site.githubToken && site.repoDefaultBranch),
     wordpressConfigured: Boolean(
       site.wpUrl && site.wpUsername && site.wpAppPassword,
     ),

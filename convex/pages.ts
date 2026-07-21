@@ -1,19 +1,35 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 const now = () => Date.now();
 
+async function listBySiteHandler(ctx: QueryCtx, siteId: Id<"sites">) {
+  return ctx.db
+    .query("pages")
+    .withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .collect();
+}
+
 export const listBySite = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    return await ctx.db
-      .query("pages")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .collect();
+    const site = await ctx.db.get(siteId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!site?.userId || !identity || identity.subject !== site.userId) {
+      throw new Error("Not authorized to access this site's pages");
+    }
+    return listBySiteHandler(ctx, siteId);
   },
 });
 
-export const bulkUpsert = mutation({
+export const listBySiteInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => listBySiteHandler(ctx, siteId),
+});
+
+export const bulkUpsert = internalMutation({
   args: {
     siteId: v.id("sites"),
     pages: v.array(
@@ -54,4 +70,3 @@ export const bulkUpsert = mutation({
     }
   },
 });
-

@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import OpenAI from "openai";
+import { safeFetchPublicText } from "../lib/safeOutbound";
 
 // ── Types ──
 
@@ -653,21 +654,23 @@ export async function scoreContent(
   for (const result of serpResults.slice(0, 3)) {
     if (!result.url) continue;
     try {
-      const res = await fetch(result.url, {
-        headers: { "User-Agent": "Pentra/1.0 (content research)" },
-        signal: AbortSignal.timeout(5000),
+      const { text: html } = await safeFetchPublicText(result.url, {
+        timeoutMs: 5_000,
+        maxBytes: 500_000,
+        sameHostRedirects: true,
+        allowedContentTypes: [
+          /^text\/(?:html|plain)(?:;|$)/i,
+          /^application\/xhtml\+xml(?:;|$)/i,
+        ],
       });
-      if (res.ok) {
-        const html = await res.text();
-        const text = html
-          .replace(/<script[\s\S]*?<\/script>/gi, "")
-          .replace(/<style[\s\S]*?<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 3000);
-        competitorContent.push(`[${result.title}]: ${text}`);
-      }
+      const text = html
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 3000);
+      competitorContent.push(`[${result.title}]: ${text}`);
     } catch {
       // Skip inaccessible pages
     }

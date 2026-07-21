@@ -1,167 +1,350 @@
 "use node";
 
-import { api, internal } from "../_generated/api";
-import { action } from "../_generated/server";
+import { internal } from "../_generated/api";
+import { internalAction } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
+import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
-import { getLimitsFromFeatures, ALL_FEATURE_KEYS } from "../planLimits";
-import { normalizeSiteOrigin } from "../lib/articleQuality";
-import { evaluateCadenceWindow } from "../lib/autopilotCadence";
+import { getLimitsFromFeatures } from "../planLimits";
+import { MAX_QUALITY_REVISIONS } from "../lib/autopilotCadence";
+import {
+  MAX_NEW_CANDIDATES_PER_24H,
+  TARGET_APPROVED_BUFFER,
+  isSealedReady,
+  selectNonCannibalizingTopic,
+} from "../lib/autopilotBuffer";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_TOPIC_REPLENISHMENTS_PER_24H = 2;
 
-export const scheduleCadence = action({
+type ArticleSummary = {
+  _id: Id<"articles">;
+  status: string;
+  title: string;
+  slug: string;
+  createdAt: number;
+  updatedAt: number;
+  publishedAt?: number;
+  publicationGateStatus?: string;
+  publicationAuditVersion?: number;
+  auditedContentHash?: string;
+  qualityRevisionCount?: number;
+  metaKeywords?: string[];
+};
+
+export const scheduleCadence = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (
     ctx: ActionCtx,
     { siteId },
-  ): Promise<{ scheduled: number }> => {
+  ): Promise<{ scheduled: number; mode?: string; bufferCount?: number }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
 
-    // ── Article quota check ──
-    // If the site has an owner, enforce monthly article limit
-    if (site.userId) {
-      // We don't have Clerk session in cron context, so we check plan
-      // limits based on features stored on the user. For now, use the
-      // simple approach: count articles this month vs plan limit.
-      const articlesThisMonth = await ctx.runQuery(api.articles.countThisMonth, {
-        userId: site.userId,
+    const rolloutMode = site.autopilotRolloutMode ?? "observe";
+    if (rolloutMode === "observe") {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "rollout_observe",
+        message:
+          "Autopilot is in fail-closed observe mode; no generation or publication is authorized.",
       });
-      // Determine plan limits from the site's planFeatures (set during onboarding/sync)
-      const features = (site as any).planFeatures ?? [];
-      const limits = getLimitsFromFeatures(features);
-      if (articlesThisMonth >= limits.maxArticles) {
-        console.log(
-          `Article quota reached: ${articlesThisMonth}/${limits.maxArticles} this month. Skipping.`,
-        );
-        return { scheduled: 0 };
-      }
-
-      // ── Site over-limit check (downgrade protection) ──
-      const allUserSites = await ctx.runQuery(internal.sites.listAllForAutopilot);
-      const userSiteCount = allUserSites.filter((s) => s.userId === site.userId).length;
-      if (userSiteCount > limits.maxSites) {
-        console.log(
-          `Site limit exceeded: ${userSiteCount}/${limits.maxSites} sites. Skipping.`,
-        );
-        return { scheduled: 0 };
-      }
+      return { scheduled: 0, mode: "rollout_observe" };
     }
 
-    const cadence = site.cadencePerWeek ?? 4;
-    const hoursPerArticle = Math.floor((7 * 24) / cadence); // 42 hours for 4/week, 24 hours for 7/week
-
-    // Check how many articles are already in progress or scheduled
-    const pendingJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "pending" });
-    const runningJobs = await ctx.runQuery(api.jobs.listByStatus, { status: "running" });
-    const existingArticles = [...pendingJobs, ...runningJobs].filter(j => j.siteId === siteId && j.type === "article");
-
-    // Count generation attempts inside the current cadence window. LeadPilot's
-    // dogfood site gets one fallback when the first draft fails quality; other
-    // customer sites keep their existing one-attempt behavior.
-    const allArticles = await ctx.runQuery(api.articles.listBySite, { siteId });
     const now = Date.now();
-    const isLeadPilot =
-      new URL(normalizeSiteOrigin(site.domain)).hostname === "leadpilot.chat";
-    const cadenceWindow = evaluateCadenceWindow({
-      articles: allArticles,
-      now,
-      hoursPerArticle,
-      maxAttempts: isLeadPilot ? 2 : 1,
+    const state = await ctx.runQuery(internal.articles.getAutopilotState, {
+      siteId,
+      since: now - DAY_MS,
     });
+    if (state.migrationPending) {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "article_summary_migration_pending",
+        message:
+          "Legacy article summaries must be backfilled before cadence work is scheduled.",
+      });
+      return { scheduled: 0, mode: "migration_pending" };
+    }
+    const cadence = Math.max(1, site.cadencePerWeek ?? 4);
+    const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+    const published = state.published as ArticleSummary[];
+    const lastPublishedAt =
+      state.latestPublished?.publishedAt ?? state.latestPublished?.updatedAt;
+    const publicationDue = !lastPublishedAt || now >= lastPublishedAt + cadenceMs;
+    const buffer = (state.ready as ArticleSummary[])
+      .filter(isSealedReady)
+      .sort(
+        (a: ArticleSummary, b: ArticleSummary) => a.createdAt - b.createdAt,
+      );
+    const autonomousDelivery =
+      rolloutMode === "live" &&
+      !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
 
-    // Never stack article jobs, and stop once this cadence window has either a
-    // successful publication or its allowed generation attempts are exhausted.
-    if (existingArticles.length > 0) {
-      console.log(`Jobs already queued: ${existingArticles.length} pending/running.`);
-      return { scheduled: 0 };
+    if (rolloutMode === "warm" && buffer.length >= TARGET_APPROVED_BUFFER) {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "rollout_buffer_ready",
+        message:
+          "The canary buffer is warm. An explicit rollout transition is required before delivery.",
+        details: { bufferCount: buffer.length, target: TARGET_APPROVED_BUFFER },
+      });
+      return {
+        scheduled: 0,
+        mode: "rollout_buffer_ready",
+        bufferCount: buffer.length,
+      };
     }
 
-    if (!cadenceWindow.canGenerate) {
-      const reason = cadenceWindow.hasRecentPublication
-        ? "a published article already satisfies this cadence window"
-        : `${cadenceWindow.recentAttempts} generation attempt(s) already used`;
-      console.log(`Cadence window closed: ${reason}.`);
-      return { scheduled: 0 };
+    // Delivery consumes only an already audited and sealed artifact.  The
+    // deadline path never generates or relaxes quality to manufacture a post.
+    if (autonomousDelivery && publicationDue && buffer.length > 0) {
+      const delivery = await ctx.runMutation(
+        internal.jobs.queuePublicationIfAbsent,
+        {
+          siteId,
+          articleId: buffer[0]._id,
+        },
+      );
+      return {
+        scheduled: delivery.queued ? 1 : 0,
+        mode: delivery.queued ? "buffer_delivery" : "buffer_delivery_pending",
+        bufferCount: buffer.length,
+      };
     }
 
-    // Schedule exactly 1 article at a time, using strategic topic selection
-    const topics = await ctx.runQuery(api.topics.listBySite, { siteId });
-    const available = topics.filter(
-      (t: { status?: string }) => t.status !== "used" && t.status !== "queued",
+    if (autonomousDelivery && publicationDue && buffer.length === 0) {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "buffer_empty",
+        message:
+          "Publication is due but no strict-quality sealed article is buffered.",
+      });
+    }
+
+    // Replenishment and topic-plan work may be long-running, but they are
+    // checked only after the independent due-delivery path above.
+    const siteJobs = (await ctx.runQuery(internal.jobs.listActiveBySite, {
+      siteId,
+    })).filter(
+      (job: Doc<"jobs">) =>
+        job.siteId === siteId && (job.type === "article" || job.type === "plan"),
     );
-
-    if (available.length === 0) {
-      console.log("No available topics to schedule.");
-      return { scheduled: 0 };
+    if (siteJobs.length > 0) {
+      return {
+        scheduled: 0,
+        mode: "work_in_progress",
+        bufferCount: buffer.length,
+      };
     }
 
-    // Sort by priority (highest first)
+    // Approval/manual tenants get one candidate for the actual cadence window,
+    // then wait for the owner/delivery step. Three-hour fleet ticks must not
+    // manufacture five drafts for the same daily slot.
+    if (rolloutMode !== "warm" && !autonomousDelivery) {
+      const approvalWaiting = (state.review as ArticleSummary[]).some(
+        (article) => article.publicationGateStatus === "passed",
+      );
+      if (site.approvalRequired && approvalWaiting) {
+        return { scheduled: 0, mode: "approval_waiting", bufferCount: buffer.length };
+      }
+      if ((site.publishMethod ?? "github") === "manual" && buffer.length > 0) {
+        return { scheduled: 0, mode: "manual_delivery_waiting", bufferCount: buffer.length };
+      }
+      if (!publicationDue) {
+        return { scheduled: 0, mode: "cadence_not_due", bufferCount: buffer.length };
+      }
+    }
+
+    // A full buffer deliberately does no generation work.  This is the main
+    // protection against both deadline pressure and runaway provider spend.
+    if ((autonomousDelivery || rolloutMode === "warm") && buffer.length >= TARGET_APPROVED_BUFFER) {
+      return {
+        scheduled: 0,
+        mode: "buffer_full",
+        bufferCount: buffer.length,
+      };
+    }
+
+    const recentCandidates = state.recent as ArticleSummary[];
+    const recoverable = (state.review as ArticleSummary[])
+      .filter(
+        (article: ArticleSummary) =>
+          article.status === "review" &&
+          article.publicationGateStatus === "blocked" &&
+          (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS,
+      )
+      .sort(
+        (a: ArticleSummary, b: ArticleSummary) => b.createdAt - a.createdAt,
+      )[0];
+    if (recoverable) {
+      const recovery = await ctx.runMutation(internal.jobs.queueQualityRetryIfAbsent, {
+        siteId,
+        articleId: recoverable._id,
+        bufferFill: autonomousDelivery || rolloutMode === "warm",
+      });
+      return {
+        scheduled: recovery.queued ? 1 : 0,
+        mode: recovery.queued ? "quality_revision" : "work_in_progress",
+        bufferCount: buffer.length,
+      };
+    }
+
+    // Warm mode serially builds the initial safety buffer. Live canary mode
+    // permits one baseline candidate plus one bounded replacement in 24h.
+    const candidateBudget = rolloutMode === "warm"
+      ? 1
+      : autonomousDelivery
+        ? Math.min(2, MAX_NEW_CANDIDATES_PER_24H)
+        : Math.min(2, MAX_NEW_CANDIDATES_PER_24H);
+    if (recentCandidates.length >= candidateBudget) {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "quality_quarantined",
+        message:
+          "The bounded daily candidate budget was exhausted without filling the quality buffer.",
+        details: {
+          recentCandidates: recentCandidates.length,
+          candidateBudget,
+          bufferCount: buffer.length,
+        },
+      });
+      return {
+        scheduled: 0,
+        mode: "quality_budget_exhausted",
+        bufferCount: buffer.length,
+      };
+    }
+
+    if (site.userId) {
+      const limits = getLimitsFromFeatures((site as any).planFeatures ?? []);
+      const articlesThisMonth = await ctx.runQuery(
+        internal.articles.countThisMonthInternal,
+        { userId: site.userId },
+      );
+      if (articlesThisMonth >= limits.maxArticles) {
+        await ctx.runMutation(internal.autopilot.raiseAlert, {
+          siteId,
+          kind: "generation_quota_reached",
+          message: `Monthly generation quota reached (${articlesThisMonth}/${limits.maxArticles}).`,
+        });
+        return {
+          scheduled: 0,
+          mode: "quota_reached",
+          bufferCount: buffer.length,
+        };
+      }
+      const userSiteCount = await ctx.runQuery(
+        internal.sites.countByUserBounded,
+        { userId: site.userId, maximum: limits.maxSites },
+      );
+      if (userSiteCount > limits.maxSites) {
+        await ctx.runMutation(internal.autopilot.raiseAlert, {
+          siteId,
+          kind: "site_limit_reached",
+          message: `Site count exceeds the active plan limit (${limits.maxSites}).`,
+        });
+        return {
+          scheduled: 0,
+          mode: "site_limit_reached",
+          bufferCount: buffer.length,
+        };
+      }
+    }
+
+    const topics = await ctx.runQuery(internal.topics.listBySiteInternal, { siteId });
+    const available = topics.filter((topic: Doc<"topic_clusters">) => {
+      if (topic.status === "used" || topic.status === "queued" || topic.status === "cannibalizing") {
+        return false;
+      }
+      if (!site.verifiedKeywordDataRequired) return true;
+      return (
+        Number.isFinite(topic.searchVolume) &&
+        Number.isFinite(topic.keywordDifficulty) &&
+        typeof topic.serpIntent === "string" &&
+        topic.serpIntent.length > 0
+      );
+    });
     available.sort(
-      (a: { priority?: number }, b: { priority?: number }) =>
+      (a: Doc<"topic_clusters">, b: Doc<"topic_clusters">) =>
         (b.priority ?? 1) - (a.priority ?? 1),
     );
 
-    // Build a set of all keywords from existing articles to prevent cannibalization
-    // Use metaKeywords if available, fall back to slug words
-    const publishedKeywords = new Set<string>();
-    const stopWords = new Set(["the", "and", "for", "with", "how", "what", "why", "are", "can", "your", "that", "this", "from", "have", "will"]);
-    for (const art of allArticles) {
-      // Prefer metaKeywords (more accurate than slug-derived words)
-      if (art.metaKeywords && art.metaKeywords.length > 0) {
-        for (const kw of art.metaKeywords) {
-          for (const w of kw.toLowerCase().split(/\s+/)) {
-            if (w.length > 3 && !stopWords.has(w)) publishedKeywords.add(w);
-          }
-        }
-      } else {
-        // Fall back to slug words
-        for (const w of art.slug.replace(/^\//, "").split("-")) {
-          if (w.length > 3 && !stopWords.has(w)) publishedKeywords.add(w);
-        }
+    const coveredKeywords = [...published, ...buffer].flatMap((article) =>
+      article.metaKeywords?.length
+        ? article.metaKeywords
+        : [article.slug.replace(/^\//, "").replace(/-/g, " ")],
+    );
+    coveredKeywords.push(
+      ...topics
+        .filter((topic: Doc<"topic_clusters">) => topic.status === "used")
+        .map((topic: Doc<"topic_clusters">) => topic.primaryKeyword),
+    );
+    const selectedTopic: Doc<"topic_clusters"> | undefined =
+      selectNonCannibalizingTopic<Doc<"topic_clusters">>(
+      available,
+      coveredKeywords,
+      );
+
+    if (!selectedTopic) {
+      // Do not repeatedly reconsider the same cannibalizing set.  A plan job
+      // produces new verified candidates, breaking the old permanent deadlock.
+      const replenishment = await ctx.runMutation(
+        internal.jobs.queuePlanIfAbsent,
+        {
+          siteId,
+          reason: "topic_overlap_replenishment",
+          cannibalizingTopicIds: available.map(
+            (topic: Doc<"topic_clusters">) => topic._id,
+          ),
+          since: now - DAY_MS,
+          maximumRecent: MAX_TOPIC_REPLENISHMENTS_PER_24H,
+        },
+      );
+      if (!replenishment.queued && replenishment.reason === "recent_limit") {
+        await ctx.runMutation(internal.autopilot.raiseAlert, {
+          siteId,
+          kind: "topic_replenishment_exhausted",
+          message:
+            "Bounded topic-plan recovery was exhausted; human keyword review is required before more paid plan generation.",
+          details: {
+            replenishments: replenishment.recent,
+            maximum: MAX_TOPIC_REPLENISHMENTS_PER_24H,
+          },
+        });
+        return {
+          scheduled: 0,
+          mode: "topic_replenishment_exhausted",
+          bufferCount: buffer.length,
+        };
       }
-    }
-
-    // Pick the highest-priority topic that doesn't cannibalize existing content
-    let selectedTopic = available[0]; // fallback to highest priority
-    for (const topic of available) {
-      const kwWords = topic.primaryKeyword.toLowerCase().split(/\s+/).filter((w: string) => !stopWords.has(w));
-      const overlapCount = kwWords.filter((w: string) => w.length > 3 && publishedKeywords.has(w)).length;
-      const overlapRatio = kwWords.length > 0 ? overlapCount / kwWords.length : 0;
-
-      if (overlapRatio < 0.35) {
-        selectedTopic = topic;
-        if (overlapCount > 0) {
-          console.log(`Topic "${topic.primaryKeyword}" has ${overlapCount}/${kwWords.length} overlapping words — acceptable.`);
-        }
-        break;
+      if (!replenishment.queued) {
+        return { scheduled: 0, mode: "work_in_progress", bufferCount: buffer.length };
       }
-      console.log(`Skipping "${topic.primaryKeyword}": ${Math.round(overlapRatio * 100)}% overlap with existing articles (cannibalization risk).`);
-    }
-
-    // Final recheck: enforce article limit before creating job
-    if (site.userId) {
-      const finalCount = await ctx.runQuery(api.articles.countThisMonth, {
-        userId: site.userId,
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "topic_replenishment",
+        message:
+          "All available topics overlapped existing coverage; a fresh verified plan was queued.",
       });
-      const finalFeatures = (site as any).planFeatures ?? [];
-      const finalLimits = getLimitsFromFeatures(finalFeatures);
-      if (finalCount >= finalLimits.maxArticles) {
-        console.log(`Article limit reached at scheduling time (${finalCount}/${finalLimits.maxArticles}). Aborting.`);
-        return { scheduled: 0 };
-      }
+      return {
+        scheduled: 1,
+        mode: "topic_replenishment",
+        bufferCount: buffer.length,
+      };
     }
 
-    await ctx.runMutation(api.jobs.create, {
+    const queued = await ctx.runMutation(internal.jobs.queueTopicArticleIfAbsent, {
       siteId,
-      type: "article",
-      payload: { topicId: selectedTopic._id },
-    });
-    await ctx.runMutation(api.topics.updateStatus, {
       topicId: selectedTopic._id,
-      status: "queued",
+      bufferFill: autonomousDelivery || rolloutMode === "warm",
     });
 
-    console.log(`Scheduled topic: "${selectedTopic.primaryKeyword}" (priority ${selectedTopic.priority ?? "?"}). Next in ${hoursPerArticle}h.`);
-    return { scheduled: 1 };
+    return {
+      scheduled: queued.queued ? 1 : 0,
+      mode: queued.queued
+        ? autonomousDelivery || rolloutMode === "warm" ? "buffer_fill" : "cadence_generation"
+        : "work_in_progress",
+      bufferCount: buffer.length,
+    };
   },
 });

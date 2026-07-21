@@ -5,9 +5,12 @@ import {
   articleWordCeiling,
   clampMetaDescription,
   clampMetaTitle,
+  containsExecutableMdx,
   evaluatePublicationQuality,
+  inlineCitationNumbers,
   normalizeSiteOrigin,
   uncitedEvidenceRequiredParagraphs,
+  validateClaimEvidenceLedger,
 } from "../convex/lib/articleQuality.ts";
 import {
   classifyEvidenceSource,
@@ -24,6 +27,7 @@ import {
   insertImageUnderSection,
   insertYouTubeAfterSection,
 } from "../convex/lib/mediaQuality.ts";
+import { sha256Hex } from "../convex/lib/publicationArtifact.ts";
 
 const body = Array.from(
   { length: 950 },
@@ -58,6 +62,16 @@ test("clamps meta descriptions cleanly without cutting through a word", () => {
   assert.equal(clampMetaTitle("A useful title that is deliberately far too long to fit inside a clean search result"), "A useful title that is deliberately far too long to fit");
 });
 
+test("plain-Markdown publication rejects multiline and component MDX", () => {
+  assert.equal(containsExecutableMdx("Useful prose with **Markdown**."), false);
+  assert.equal(
+    containsExecutableMdx("Useful prose\n\n{\n  await fetch('/private')\n}"),
+    true,
+  );
+  assert.equal(containsExecutableMdx("<Dangerous\n value={secret}\n/>"), true);
+  assert.equal(containsExecutableMdx("<>hidden expression</>"), true);
+});
+
 test("surfaces deterministic uncited numeric guidance for remediation", () => {
   const paragraphs = uncitedEvidenceRequiredParagraphs([
     "Use a documented qualification framework.",
@@ -68,6 +82,123 @@ test("surfaces deterministic uncited numeric guidance for remediation", () => {
   assert.deepEqual(paragraphs, [
     "Ask 10–15 questions, award 5/3/1 points, and review results after 2 weeks.",
   ]);
+});
+
+test("claim ledger cannot empty-pass and must bind citations to a preserved snapshot", () => {
+  const markdown =
+    "Research found that faster responses improved follow-up consistency [1].";
+  const excerpt =
+    "The Response Study found that faster responses improved follow-up consistency across the documented workflow. " +
+    "The research describes response-time improvements and consistent follow-up behavior in sufficient detail for an exact evidence snapshot.";
+  const sources = [
+    {
+      url: "https://www.nber.org/papers/w12345",
+      title: "Response study",
+      excerpt,
+      contentHash: sha256Hex(excerpt),
+    },
+  ];
+  const researchEvidence =
+    "[1] Response study — https://www.nber.org/papers/w12345\nThe study reports more consistent follow-up after response-time improvements.";
+
+  const empty = validateClaimEvidenceLedger({
+    markdown,
+    sources,
+    researchEvidence,
+    productEvidence: "",
+    claimEvidence: [],
+  });
+  assert.equal(empty.passed, false);
+  assert.match(empty.issues.join(" "), /ledger is empty/i);
+
+  const grounded = validateClaimEvidenceLedger({
+    markdown,
+    sources,
+    researchEvidence,
+    productEvidence: "",
+    claimEvidence: [
+      {
+        claim: "Faster responses improved follow-up consistency.",
+        citationNumbers: [1],
+        supported: true,
+        reason: "The preserved Response study directly reports this relationship.",
+      },
+    ],
+  });
+  assert.deepEqual(grounded.issues, []);
+  assert.equal(grounded.passed, true);
+});
+
+test("comma-list inline citations bind every ordinal to the exact claim ledger", () => {
+  assert.deepEqual(inlineCitationNumbers("Supported result [1, 2] and method [3]."), [1, 2, 3]);
+  const claim = "Research found that faster responses improved follow-up consistency.";
+  const excerptOne =
+    "The Response Study research found that faster responses improved follow-up consistency across the documented workflow and describes the audited method in sufficient detail for preservation.";
+  const excerptTwo =
+    "A second research review found that faster responses improved follow-up consistency across the documented workflow and repeats the exact relationship with enough surrounding source detail.";
+  const sources = [
+    {
+      url: "https://www.nber.org/papers/w12345",
+      excerpt: excerptOne,
+      contentHash: sha256Hex(excerptOne),
+    },
+    {
+      url: "https://www.oecd.org/research/response-study",
+      excerpt: excerptTwo,
+      contentHash: sha256Hex(excerptTwo),
+    },
+  ];
+  const valid = validateClaimEvidenceLedger({
+    markdown: `${claim} [1, 2]`,
+    sources,
+    researchEvidence: "Preserved research evidence.",
+    productEvidence: "",
+    claimEvidence: [
+      {
+        claim,
+        citationNumbers: [1, 2],
+        supported: true,
+        reason: "Both preserved snapshots state the exact audited relationship.",
+      },
+    ],
+  });
+  assert.equal(valid.passed, true, valid.issues.join("\n"));
+
+  const missingBinding = validateClaimEvidenceLedger({
+    markdown: `${claim} [1, 2]`,
+    sources,
+    researchEvidence: "Preserved research evidence.",
+    productEvidence: "",
+    claimEvidence: [
+      {
+        claim,
+        citationNumbers: [1],
+        supported: true,
+        reason: "Only the first preserved source is bound by this ledger entry.",
+      },
+    ],
+  });
+  assert.equal(missingBinding.passed, false);
+  assert.match(missingBinding.issues.join(" "), /cites \[2\] without a matching supported claim-ledger entry/);
+});
+
+test("claim ledger rejects unsupported citation-free product assertions", () => {
+  const result = validateClaimEvidenceLedger({
+    markdown: "The product automatically guarantees qualified pipeline growth.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence: "LeadPilot displays a chat widget and records conversations.",
+    claimEvidence: [
+      {
+        claim: "The product automatically guarantees qualified pipeline growth.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The product evidence proves the claimed outcome.",
+      },
+    ],
+  });
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join(" "), /first-party evidence snapshot/i);
 });
 
 test("classifies and normalizes strict evidence sources", () => {
@@ -106,9 +237,12 @@ test("accepts a grounded strict article", () => {
         "Use this practical workflow to answer buyer questions, assess genuine interest, and route useful sales context to the right next step.",
       markdown: `${body}\n\nThe workflow reduced review time by 12% in the documented test [1].`,
       featuredImage: "https://example.com/hero.webp",
+      reviewedMediaUrls: ["https://example.com/hero.webp"],
       factCheckScore: 91,
       editorialQualityScore: 92,
       mediaQualityStatus: "passed",
+      productEvidenceStatus: "not_applicable",
+      claimEvidenceStatus: "passed",
       sources: [
         { url: "https://www.nber.org/papers/w12345", title: "Research" },
         { url: "https://developers.google.com/search/docs", title: "Method" },
