@@ -98,45 +98,21 @@ export const dispatchActiveSites = internalMutation({
     trigger: v.optional(v.string()),
     cronSlotUTC: v.optional(v.string()),
     scheduledAt: v.optional(v.number()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ scheduled: number }> => {
     const now = args.scheduledAt ?? Date.now();
     const trigger = args.trigger ?? "natural";
-    const warmSites = await ctx.db
+    const page = await ctx.db
       .query("sites")
-      .withIndex("by_rollout", (q) =>
-        q.eq("autopilotRolloutMode", "warm").eq("autopilotEnabled", true),
-      )
-      .take(2);
-    const liveSites = await ctx.db
-      .query("sites")
-      .withIndex("by_rollout", (q) =>
-        q.eq("autopilotRolloutMode", "live").eq("autopilotEnabled", true),
-      )
-      .take(2);
-    const activeSites = [...warmSites, ...liveSites];
-
-    // A default-off, single-tenant canary prevents fleet fan-out while the
-    // shared account is constrained. Configuration must be repaired before a
-    // second active tenant can do any work.
-    if (activeSites.length > 1) {
-      for (const site of activeSites) {
-        await setAlert(ctx, {
-          siteId: site._id,
-          kind: "rollout_conflict",
-          message:
-            "Multiple tenants are marked active in a single-tenant rollout; dispatch was blocked.",
-        });
-        await upsertHealth(ctx, site._id, {
-          heartbeatAt: now,
-          status: "rollout_conflict",
-          detail: "Fail-closed: more than one rollout tenant is active.",
-        });
-      }
-      return { scheduled: 0 };
-    }
+      .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .paginate({ cursor: args.cursor ?? null, numItems: 25 });
+    const activeSites = page.page.filter((site) =>
+      ["warm", "live"].includes(site.autopilotRolloutMode ?? "observe"),
+    );
 
     for (const [index, site] of activeSites.entries()) {
+      await resolveAlert(ctx, site._id, "rollout_conflict");
       const runId = await ctx.db.insert("autopilot_runs", {
         siteId: site._id,
         trigger,
@@ -156,6 +132,19 @@ export const dispatchActiveSites = internalMutation({
         index * SITE_STAGGER_MS,
         internal.actions.pipeline.autopilotTick,
         { siteId: site._id, runId, trigger },
+      );
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        Math.max(1, activeSites.length) * SITE_STAGGER_MS,
+        internal.autopilot.dispatchActiveSites,
+        {
+          trigger,
+          cronSlotUTC: args.cronSlotUTC,
+          scheduledAt: now,
+          cursor: page.continueCursor,
+        },
       );
     }
 

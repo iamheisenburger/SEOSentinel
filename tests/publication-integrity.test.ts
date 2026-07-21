@@ -35,7 +35,10 @@ test("warm rollout ignores pre-rollout candidates and can fill its bounded buffe
     autopilotCandidateBudget("warm"),
     MAX_NEW_CANDIDATES_PER_24H,
   );
-  assert.equal(autopilotCandidateBudget("live"), 2);
+  assert.equal(
+    autopilotCandidateBudget("live"),
+    MAX_NEW_CANDIDATES_PER_24H,
+  );
 });
 
 test("only a sealed modern receipt can advance the publication clock", () => {

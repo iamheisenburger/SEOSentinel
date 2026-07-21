@@ -25,6 +25,16 @@ test("candidate budget can still fill the target after two strict-gate rejection
   assert.ok(MAX_NEW_CANDIDATES_PER_24H - 2 >= MIN_APPROVED_BUFFER);
 });
 
+test("fleet dispatch is paginated and tenant-isolated", () => {
+  const autopilot = readFileSync("convex/autopilot.ts", "utf8");
+  const sites = readFileSync("convex/sites.ts", "utf8");
+  assert.match(autopilot, /withIndex\("by_autopilot"/);
+  assert.match(autopilot, /paginate\(\{ cursor: args\.cursor \?\? null, numItems: 25 \}\)/);
+  assert.match(autopilot, /internal\.actions\.pipeline\.autopilotTick/);
+  assert.doesNotMatch(autopilot, /single-tenant canary/);
+  assert.doesNotMatch(sites, /A different tenant is already in controlled rollout/);
+});
+
 test("topic coverage ignores broad article metadata and uses canonical primary keywords", () => {
   const covered = coveredPrimaryKeywords(
     [

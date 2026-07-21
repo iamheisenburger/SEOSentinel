@@ -10,9 +10,9 @@ export const MAX_NEW_CANDIDATES_PER_24H =
   TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H;
 
 export function autopilotCandidateBudget(rolloutMode: string): number {
-  return rolloutMode === "warm"
+  return ["warm", "live"].includes(rolloutMode)
     ? MAX_NEW_CANDIDATES_PER_24H
-    : Math.min(2, MAX_NEW_CANDIDATES_PER_24H);
+    : 1;
 }
 
 export function autopilotCandidateWindowStart(args: {

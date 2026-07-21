@@ -597,31 +597,6 @@ export const setAutopilotRollout = internalMutation({
       throw new Error("Autopilot must be enabled before controlled rollout");
     }
 
-    if (mode !== "observe") {
-      const [warm, live] = await Promise.all([
-        ctx.db
-          .query("sites")
-          .withIndex("by_rollout", (q) =>
-            q.eq("autopilotRolloutMode", "warm").eq("autopilotEnabled", true),
-          )
-          .take(2),
-        ctx.db
-          .query("sites")
-          .withIndex("by_rollout", (q) =>
-            q.eq("autopilotRolloutMode", "live").eq("autopilotEnabled", true),
-          )
-          .take(2),
-      ]);
-      const otherActive = [...warm, ...live].find(
-        (candidate) => candidate._id !== siteId,
-      );
-      if (otherActive) {
-        throw new Error(
-          `A different tenant is already in controlled rollout (${otherActive._id})`,
-        );
-      }
-    }
-
     if (mode === "live") {
       const ready = await ctx.db
         .query("article_summaries")
