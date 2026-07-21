@@ -4316,7 +4316,18 @@ async function reviewExistingArticleHandler(
       evidenceDefects.length === 0 &&
       unsupportedClaims.length === 0 &&
       deterministicClaimAudit.passed;
+    let reviewedProductImage = selectReviewedProductImage(
+      finalReviewMarkdown,
+      productName,
+      reviewedMedia,
+    );
     if (proseReadyForMedia) {
+      if (!featuredImage && reviewedProductImage) {
+        featuredImage = reviewedProductImage;
+        mediaQualityNotes.push(
+          "Existing reviewed first-party product screenshot reused as the hero; no generated-art call was needed.",
+        );
+      }
       if (!featuredImage || !reviewedMedia.has(featuredImage)) {
         featuredImage = undefined;
         for (let attempt = 1; attempt <= 2; attempt++) {
@@ -4398,7 +4409,7 @@ async function reviewExistingArticleHandler(
     // A reviewed first-party product capture is a truthful, useful hero when
     // optional generated artwork fails visual review. Prefer that real product
     // evidence over either publishing no hero or accepting AI slop.
-    const reviewedProductImage = selectReviewedProductImage(
+    reviewedProductImage = selectReviewedProductImage(
       finalReviewMarkdown,
       productName,
       reviewedMedia,
