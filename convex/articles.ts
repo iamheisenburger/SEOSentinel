@@ -20,7 +20,10 @@ import {
   ownsPublicationLease,
   PUBLICATION_LEASE_MS,
 } from "./lib/publicationLease";
-import { migrationBlocksAutopilot } from "./lib/autopilotBuffer";
+import {
+  effectivePublishedAt,
+  migrationBlocksAutopilot,
+} from "./lib/autopilotBuffer";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -221,11 +224,29 @@ export const listBySiteInternal = internalQuery({
 export const getAutopilotState = internalQuery({
   args: { siteId: v.id("sites"), since: v.number() },
   handler: async (ctx, { siteId, since }) => {
-    const [latestPublished, ready, review, recent, published, migrationState] =
+    const [
+      latestModernPublished,
+      latestPublishedByCreation,
+      ready,
+      review,
+      recent,
+      published,
+      migrationState,
+    ] =
       await Promise.all([
         ctx.db
           .query("article_summaries")
-          .withIndex("by_site_status_published", (q) =>
+          .withIndex("by_site_status_audit_published", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("status", "published")
+              .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
+          )
+          .order("desc")
+          .first(),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status_created", (q) =>
             q.eq("siteId", siteId).eq("status", "published"),
           )
           .order("desc")
@@ -263,6 +284,26 @@ export const getAutopilotState = internalQuery({
           )
           .first(),
       ]);
+    const latestPublished = [
+      latestModernPublished,
+      latestPublishedByCreation,
+    ]
+      .filter((article): article is Doc<"article_summaries"> => !!article)
+      .sort(
+        (a, b) =>
+          effectivePublishedAt({
+            createdAt: b.articleCreatedAt,
+            publishedAt: b.publishedAt,
+            publicationAuditVersion: b.publicationAuditVersion,
+            auditedContentHash: b.auditedContentHash,
+          }) -
+          effectivePublishedAt({
+            createdAt: a.articleCreatedAt,
+            publishedAt: a.publishedAt,
+            publicationAuditVersion: a.publicationAuditVersion,
+            auditedContentHash: a.auditedContentHash,
+          }),
+      )[0];
     // The explicit completion marker is the authority. Seeing one summary is
     // not enough: a crashed partial backfill may have many unsummarized legacy
     // rows, and cron must fail closed until the resumable migration completes.

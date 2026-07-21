@@ -3,6 +3,7 @@ import { internalMutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import {
   MIN_APPROVED_BUFFER,
   TARGET_APPROVED_BUFFER,
@@ -422,13 +423,46 @@ export const auditSla = internalMutation({
       }
       await resolveAlert(ctx, site._id, "article_summary_migration_pending");
 
-      const latestPublished = await ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status_published", (q) =>
-          q.eq("siteId", site._id).eq("status", "published"),
-        )
-        .order("desc")
-        .first();
+      const [latestModernPublished, latestPublishedByCreation] =
+        await Promise.all([
+          ctx.db
+            .query("article_summaries")
+            .withIndex("by_site_status_audit_published", (q) =>
+              q
+                .eq("siteId", site._id)
+                .eq("status", "published")
+                .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
+            )
+            .order("desc")
+            .first(),
+          ctx.db
+            .query("article_summaries")
+            .withIndex("by_site_status_created", (q) =>
+              q.eq("siteId", site._id).eq("status", "published"),
+            )
+            .order("desc")
+            .first(),
+        ]);
+      const latestPublished = [
+        latestModernPublished,
+        latestPublishedByCreation,
+      ]
+        .filter((article): article is Doc<"article_summaries"> => !!article)
+        .sort(
+          (a, b) =>
+            effectivePublishedAt({
+              createdAt: b.articleCreatedAt,
+              publishedAt: b.publishedAt,
+              publicationAuditVersion: b.publicationAuditVersion,
+              auditedContentHash: b.auditedContentHash,
+            }) -
+            effectivePublishedAt({
+              createdAt: a.articleCreatedAt,
+              publishedAt: a.publishedAt,
+              publicationAuditVersion: a.publicationAuditVersion,
+              auditedContentHash: a.auditedContentHash,
+            }),
+        )[0];
       const readySummaries = await ctx.db
         .query("article_summaries")
         .withIndex("by_site_status", (q) =>

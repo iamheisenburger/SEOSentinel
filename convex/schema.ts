@@ -307,6 +307,12 @@ export default defineSchema({
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_status_created", ["siteId", "status", "articleCreatedAt"])
     .index("by_site_status_published", ["siteId", "status", "publishedAt"])
+    .index("by_site_status_audit_published", [
+      "siteId",
+      "status",
+      "publicationAuditVersion",
+      "publishedAt",
+    ])
     .index("by_site_slug", ["siteId", "slug"]),
 
   jobs: defineTable({
