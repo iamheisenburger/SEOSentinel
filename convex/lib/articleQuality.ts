@@ -479,6 +479,28 @@ export function removeUncitedQuantifiedSentences(markdown: string): string {
     .join("\n");
 }
 
+export function selectReviewedProductImage(
+  markdown: string,
+  productName: string,
+  reviewedMediaUrls: Iterable<string>,
+): string | undefined {
+  const escapedProductName = productName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const productHeading = new RegExp(
+    `^##\\s+.*(?:${escapedProductName}|how\\s+.*helps?).*$`,
+    "im",
+  ).exec(markdown);
+  if (productHeading?.index === undefined) return undefined;
+  const remainder = markdown.slice(productHeading.index + productHeading[0].length);
+  const nextHeading = remainder.search(/^##\s+/m);
+  const section = nextHeading >= 0 ? remainder.slice(0, nextHeading) : remainder;
+  const reviewed = new Set(reviewedMediaUrls);
+  return [
+    ...section.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
+  ]
+    .map((match) => match[1])
+    .find((url) => reviewed.has(url));
+}
+
 function quantifiedOutcomeParagraphs(markdown: string): string[] {
   return markdown
     .replace(/```[\s\S]*?```/g, "")

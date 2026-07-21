@@ -21,6 +21,7 @@ import {
   evaluatePublicationQuality,
   removeUncitedQuantifiedSentences,
   removeUnverifiedInlineCitations,
+  selectReviewedProductImage,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
@@ -4394,6 +4395,21 @@ async function reviewExistingArticleHandler(
       );
     }
 
+    // A reviewed first-party product capture is a truthful, useful hero when
+    // optional generated artwork fails visual review. Prefer that real product
+    // evidence over either publishing no hero or accepting AI slop.
+    const reviewedProductImage = selectReviewedProductImage(
+      finalReviewMarkdown,
+      productName,
+      reviewedMedia,
+    );
+    if (!featuredImage && reviewedProductImage) {
+      featuredImage = reviewedProductImage;
+      mediaQualityNotes.push(
+        "Reviewed first-party product screenshot promoted to the hero fallback after generated artwork failed visual review.",
+      );
+    }
+
     const metadata = await generateFinalMetadata({
       title: article.title,
       markdown: finalReviewMarkdown,
@@ -4412,18 +4428,7 @@ async function reviewExistingArticleHandler(
     );
     let productEvidenceStatus = "not_applicable";
     if (productHeadingMatch?.index !== undefined) {
-      const sectionStart = productHeadingMatch.index;
-      const remainder = finalReviewMarkdown.slice(sectionStart + productHeadingMatch[0].length);
-      const nextHeading = remainder.search(/^##\s+/m);
-      const productSection = nextHeading >= 0
-        ? remainder.slice(0, nextHeading)
-        : remainder;
-      const productImages = [
-        ...productSection.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
-      ];
-      productEvidenceStatus = productImages.some((match) => reviewedMedia.has(match[1]))
-        ? "passed"
-        : "failed";
+      productEvidenceStatus = reviewedProductImage ? "passed" : "failed";
     }
     const mediaQualityStatus =
       !!featuredImage &&

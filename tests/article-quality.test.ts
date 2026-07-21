@@ -11,6 +11,7 @@ import {
   normalizeSiteOrigin,
   removeUncitedQuantifiedSentences,
   removeUnverifiedInlineCitations,
+  selectReviewedProductImage,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../convex/lib/articleQuality.ts";
@@ -247,6 +248,34 @@ test("source-less correction removes only the unsupported quantified sentence", 
       "A documented study reported a 12% change [1]. Keep the cited result.",
     ),
     "A documented study reported a 12% change [1]. Keep the cited result.",
+  );
+});
+
+test("uses only a reviewed image from the exact product section as a hero fallback", () => {
+  const reviewedProduct = "https://cdn.example/product.png";
+  const markdown = [
+    "# Guide",
+    "",
+    "![Decorative image](https://cdn.example/decorative.png)",
+    "",
+    "## How LeadPilot Helps",
+    "",
+    `![LeadPilot workflow](${reviewedProduct})`,
+    "",
+    "## Conclusion",
+    "",
+    "Useful conclusion.",
+  ].join("\n");
+
+  assert.equal(
+    selectReviewedProductImage(markdown, "LeadPilot", [reviewedProduct]),
+    reviewedProduct,
+  );
+  assert.equal(
+    selectReviewedProductImage(markdown, "LeadPilot", [
+      "https://cdn.example/decorative.png",
+    ]),
+    undefined,
   );
 });
 
