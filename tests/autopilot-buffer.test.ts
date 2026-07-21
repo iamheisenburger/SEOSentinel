@@ -107,6 +107,14 @@ test("health distinguishes scheduler, cadence, publication, quality, and buffer 
     autopilotHealthStatus({ schedulerStale: false, publicationMissed: false, bufferCount: MIN_APPROVED_BUFFER - 1 }),
     "buffer_low",
   );
+  assert.equal(
+    autopilotHealthStatus({ schedulerStale: false, publicationMissed: false, bufferCount: MIN_APPROVED_BUFFER - 1, lastOutcome: "quality_budget_exhausted" }),
+    "quality_budget_exhausted",
+  );
+  assert.equal(
+    autopilotHealthStatus({ schedulerStale: false, publicationMissed: false, bufferCount: MIN_APPROVED_BUFFER, lastOutcome: "quality_budget_exhausted" }),
+    "healthy",
+  );
 });
 
 test("due publication outranks manual and replenishment jobs", () => {

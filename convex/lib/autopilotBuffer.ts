@@ -125,9 +125,19 @@ export function autopilotHealthStatus(args: {
 }): string {
   if (args.schedulerStale) return "scheduler_stale";
   if (args.publicationMissed) return "missed";
+  // Exhausting today's bounded generation allowance is only an operational
+  // failure when the protected publication buffer is still below its minimum.
+  // A later strict review may legitimately seal an existing candidate without
+  // creating another candidate. In that case cadence is protected and the
+  // stale generation outcome must not keep fleet health red.
+  if (
+    args.lastOutcome === "quality_budget_exhausted" &&
+    args.bufferCount < MIN_APPROVED_BUFFER
+  ) {
+    return "quality_budget_exhausted";
+  }
   const failClosedOutcomes = new Set([
     "migration_pending",
-    "quality_budget_exhausted",
     "quota_reached",
     "site_limit_reached",
     "topic_replenishment_exhausted",
