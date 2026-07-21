@@ -20,6 +20,7 @@ import {
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
   publicationDeliveryKey,
+  safeGitHubRepositoryPart,
   type PublicationDeliveryConfig,
 } from "./lib/publicationArtifact";
 
@@ -305,6 +306,51 @@ async function getDefaultBranch({
   }
   return branch;
 }
+
+/**
+ * Re-verify an existing GitHub publication destination without returning or
+ * replacing its stored credential. This is internal-only so rollout operators
+ * can seal the repository's current default branch after a security upgrade;
+ * ordinary tenants must still use the authenticated OAuth connection flow.
+ */
+export const reverifyGithubConnectionInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = (await ctx.runQuery(internal.sites.getFull, {
+      siteId,
+    })) as SiteRecord | null;
+    if (!site) throw new Error("Site not found");
+    if (site.publishMethod !== "github") {
+      throw new Error("Site is not configured for GitHub publication");
+    }
+    if (!site.githubToken) {
+      throw new Error("GitHub must be connected before it can be re-verified");
+    }
+
+    const repoOwner = safeGitHubRepositoryPart(site.repoOwner, "owner");
+    const repoName = safeGitHubRepositoryPart(
+      site.repoName,
+      "repository name",
+    );
+    if (!repoOwner || !repoName) {
+      throw new Error("GitHub owner and repository are required");
+    }
+
+    const repoDefaultBranch = await getDefaultBranch({
+      token: site.githubToken,
+      owner: repoOwner,
+      repo: repoName,
+    });
+    await ctx.runMutation(internal.sites.setGithubTokenInternal, {
+      siteId,
+      githubToken: site.githubToken,
+      repoOwner,
+      repoName,
+      repoDefaultBranch,
+    });
+    return { ok: true, repoDefaultBranch };
+  },
+});
 
 async function commitToMain({
   token,

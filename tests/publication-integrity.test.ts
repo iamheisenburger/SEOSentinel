@@ -218,6 +218,19 @@ test("GitHub setup discovers and persists the repository's actual default branch
   assert.doesNotMatch(wizard, /setGithubConnected\(true\)/);
 });
 
+test("operators can re-verify a stored GitHub destination without exposing its token", () => {
+  const publisher = readFileSync("convex/publisher.ts", "utf8");
+  assert.match(publisher, /export const reverifyGithubConnectionInternal = internalAction/);
+  assert.match(
+    publisher,
+    /ctx\.runQuery\(internal\.sites\.getFull,[\s\S]{0,1200}getDefaultBranch\([\s\S]{0,700}internal\.sites\.setGithubTokenInternal/,
+  );
+  assert.doesNotMatch(
+    publisher,
+    /return \{ ok: true, repoDefaultBranch, githubToken/,
+  );
+});
+
 test("sealed delivery key is deterministic and rejects unsealed input", () => {
   const deliveryHash = "a".repeat(64);
   assert.equal(publicationDeliveryKey(deliveryHash), `pentra:${deliveryHash}`);
