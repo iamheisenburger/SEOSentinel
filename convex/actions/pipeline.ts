@@ -1488,6 +1488,7 @@ async function auditFinalArticle(args: {
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "Build a claim-to-evidence ledger for every externally verifiable factual or product-capability claim in the finished article, including claims without numbers. Mark a claim supported only when the supplied evidence directly supports it; citation presence alone is not evidence.",
+      "Do not put editorial summaries, descriptions of what the article says, or recommendations clearly framed as advice into claimEvidence. They are not externally verifiable evidence claims.",
       "The first-party product evidence is a separate unnumbered snapshot. For a product claim supported only by that snapshot, return an empty citationNumbers array. Never invent a citation ordinal for product evidence or for a source absent from the supplied source array.",
       "Do not reward length, keyword repetition, entity coverage, or promotional language.",
       "Submit only the score and concise actionable notes through the audit_final_article tool.",
@@ -1564,12 +1565,9 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
   let markdown = args.markdown;
   let audit = await auditFinalArticle(args);
   const unsupported = audit.claimEvidence.filter((claim) => !claim.supported);
-  if (unsupported.length === 0) {
-    return { markdown, audit, deterministicPruningApplied: false };
-  }
-
-  const pruned = removeUnsupportedClaimSentences(
-    markdown,
+  let pruned = removeUncitedQuantifiedSentences(markdown);
+  pruned = removeUnsupportedClaimSentences(
+    pruned,
     unsupported.map((claim) => claim.claim),
   );
   if (pruned === markdown) {
