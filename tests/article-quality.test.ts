@@ -10,6 +10,7 @@ import {
   inlineCitationNumbers,
   normalizeSiteOrigin,
   removeUncitedQuantifiedSentences,
+  removeUnsupportedClaimSentences,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
   uncitedEvidenceRequiredParagraphs,
@@ -37,6 +38,36 @@ const body = Array.from(
   { length: 950 },
   (_, index) => `useful${index}`,
 ).join(" ");
+
+test("removes only audit-identified unsupported prose claims", () => {
+  const markdown = [
+    "# Website conversion guide",
+    "",
+    "Long forms create friction and reduce conversion for every website visitor. A shorter form can be tested when completion appears weak.",
+    "",
+    "- https://example.com/research",
+    "- Keep the existing qualification step until evidence supports a change.",
+    "",
+    "| Signal | Action |",
+    "| --- | --- |",
+    "| Low completion | Test one fewer field |",
+  ].join("\n");
+
+  const result = removeUnsupportedClaimSentences(markdown, [
+    "Long website forms add friction and reduce visitor conversion.",
+  ]);
+
+  assert.doesNotMatch(result, /Long forms create friction/);
+  assert.match(result, /A shorter form can be tested/);
+  assert.match(result, /# Website conversion guide/);
+  assert.match(result, /https:\/\/example\.com\/research/);
+  assert.match(result, /Keep the existing qualification step/);
+  assert.match(result, /\| Low completion \| Test one fewer field \|/);
+  assert.equal(
+    removeUnsupportedClaimSentences(markdown, ["conversion issue"]),
+    markdown,
+  );
+});
 
 test("normalizes bare and fully-qualified site domains", () => {
   assert.equal(normalizeSiteOrigin("leadpilot.chat/"), "https://leadpilot.chat");

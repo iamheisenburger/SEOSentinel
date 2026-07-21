@@ -20,6 +20,7 @@ import {
   clampMetaTitle,
   evaluatePublicationQuality,
   removeUncitedQuantifiedSentences,
+  removeUnsupportedClaimSentences,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
   uncitedEvidenceRequiredParagraphs,
@@ -1544,6 +1545,48 @@ async function auditFinalArticle(args: {
     }),
     maxTokens: 2048,
   });
+}
+
+async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
+  markdown: string;
+  articleType: string;
+  primaryKeyword: string;
+  productName: string;
+  productEvidence: string;
+  researchEvidence: string;
+  sources: { url: string; title?: string }[];
+  maxWords: number;
+}): Promise<{
+  markdown: string;
+  audit: Awaited<ReturnType<typeof auditFinalArticle>>;
+  deterministicPruningApplied: boolean;
+}> {
+  let markdown = args.markdown;
+  let audit = await auditFinalArticle(args);
+  const unsupported = audit.claimEvidence.filter((claim) => !claim.supported);
+  if (unsupported.length === 0) {
+    return { markdown, audit, deterministicPruningApplied: false };
+  }
+
+  const pruned = removeUnsupportedClaimSentences(
+    markdown,
+    unsupported.map((claim) => claim.claim),
+  );
+  if (pruned === markdown) {
+    return { markdown, audit, deterministicPruningApplied: false };
+  }
+  const stats = calculateArticleStats(pruned);
+  if (stats.wordCount < 900 || stats.wordCount > args.maxWords) {
+    return { markdown, audit, deterministicPruningApplied: false };
+  }
+
+  markdown = pruned;
+  audit = await auditFinalArticle({ ...args, markdown });
+  return {
+    markdown,
+    audit,
+    deterministicPruningApplied: true,
+  };
 }
 
 async function remediateFinalArticle(args: {
@@ -3250,7 +3293,9 @@ async function handleArticle(
         sources: finalSources,
         maxWords,
       };
-      const finalAudit = await auditFinalArticle(auditArgs);
+      const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval(auditArgs);
+      finalMarkdown = exactAudit.markdown;
+      const finalAudit = exactAudit.audit;
       const initialUncitedClaims = uncitedEvidenceRequiredParagraphs(finalMarkdown);
       const auditEvidenceSnapshot = [
         finalSources
@@ -3293,6 +3338,11 @@ async function handleArticle(
       ];
       editorialQualityScore = initialAuditScore;
       editorialQualityNotes.push(
+        ...(exactAudit.deterministicPruningApplied
+          ? [
+              "Applied deterministic pruning to audit-identified unsupported prose before scoring the exact artifact.",
+            ]
+          : []),
         `Initial exact-prose editorial audit: ${initialAuditScore}/100` +
           (initialAuditScore !== finalAudit.score
             ? ` (model score ${finalAudit.score} capped by deterministic evidence defects).`
@@ -3337,13 +3387,17 @@ async function handleArticle(
             throw new Error("Post-remediation fact check returned no confidence score");
           }
 
-          const remediationAudit = await auditFinalArticle({
+          const exactRemediationAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
             ...auditArgs,
             markdown: reviewed.markdown,
           });
-          const remainingUncitedClaims = uncitedEvidenceRequiredParagraphs(reviewed.markdown);
+          const exactRemediationMarkdown = exactRemediationAudit.markdown;
+          const remediationAudit = exactRemediationAudit.audit;
+          const remainingUncitedClaims = uncitedEvidenceRequiredParagraphs(
+            exactRemediationMarkdown,
+          );
           const remediationClaimAudit = validateClaimEvidenceLedger({
-            markdown: reviewed.markdown,
+            markdown: exactRemediationMarkdown,
             sources: finalSources,
             researchEvidence: auditEvidenceSnapshot,
             productEvidence,
@@ -3362,6 +3416,11 @@ async function handleArticle(
             : remediationAudit.score;
           editorialQualityNotes.push(
             ...remediated.notes.map((note) => `Remediation: ${note}`),
+            ...(exactRemediationAudit.deterministicPruningApplied
+              ? [
+                  "Applied deterministic pruning to remaining audit-identified unsupported prose after remediation.",
+                ]
+              : []),
             `Post-remediation factual review: ${reviewed.confidenceScore}/100.`,
             `Final exact-prose editorial audit: ${remediationAuditScore}/100` +
               (remediationAuditScore !== remediationAudit.score
@@ -3386,7 +3445,7 @@ async function handleArticle(
             remediationAuditScore > initialAuditScore ||
             remainingEvidenceDefectCount < initialEvidenceDefectCount;
           if (remediationAuditScore >= initialAuditScore && remediationImproved) {
-            finalMarkdown = reviewed.markdown;
+            finalMarkdown = exactRemediationMarkdown;
             factCheckScore = reviewed.confidenceScore;
             factCheckNotes = [
               reviewed.notes,
@@ -4267,14 +4326,7 @@ async function reviewExistingArticleHandler(
     if (reviewed.confidenceScore === undefined) {
       throw new Error("Draft fact check returned no confidence score");
     }
-    const stats = calculateArticleStats(reviewed.markdown);
-    if (stats.wordCount < 900 || stats.wordCount > maxWords) {
-      throw new Error(
-        `Reviewed draft missed the length contract (${stats.wordCount}/900-${maxWords} words)`,
-      );
-    }
-
-    const audit = await auditFinalArticle({
+    const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
       markdown: reviewed.markdown,
       articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title,
@@ -4284,12 +4336,21 @@ async function reviewExistingArticleHandler(
       sources,
       maxWords,
     });
-    const evidenceDefects = uncitedEvidenceRequiredParagraphs(reviewed.markdown);
+    const exactReviewedMarkdown = exactAudit.markdown;
+    const audit = exactAudit.audit;
+    const stats = calculateArticleStats(exactReviewedMarkdown);
+    if (stats.wordCount < 900 || stats.wordCount > maxWords) {
+      throw new Error(
+        `Reviewed draft missed the length contract (${stats.wordCount}/900-${maxWords} words)`,
+      );
+    }
+
+    const evidenceDefects = uncitedEvidenceRequiredParagraphs(exactReviewedMarkdown);
     const unsupportedClaims = audit.claimEvidence.filter(
       (claim) => !claim.supported,
     );
     const deterministicClaimAudit = validateClaimEvidenceLedger({
-      markdown: reviewed.markdown,
+      markdown: exactReviewedMarkdown,
       sources,
       researchEvidence,
       productEvidence,
@@ -4302,7 +4363,7 @@ async function reviewExistingArticleHandler(
       !deterministicClaimAudit.passed
         ? Math.min(audit.score, 84)
         : audit.score;
-    let finalReviewMarkdown = reviewed.markdown;
+    let finalReviewMarkdown = exactReviewedMarkdown;
     let featuredImage = article.featuredImage;
     const reviewedMedia = new Set(article.reviewedMediaUrls ?? []);
     const mediaQualityNotes = [...(article.mediaQualityNotes ?? [])];

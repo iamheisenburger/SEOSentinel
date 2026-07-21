@@ -500,6 +500,65 @@ export function removeUncitedQuantifiedSentences(markdown: string): string {
     .join("\n");
 }
 
+/**
+ * Remove only prose sentences that materially match claims an independent
+ * audit marked unsupported. The audit supplies claim text, but it does not get
+ * to rewrite the article. This deterministic pass prevents a remediation model
+ * from preserving the same proposition through softer wording.
+ *
+ * Headings, tables, code, and source-list rows are never edited. A match needs
+ * at least three meaningful claim tokens and 60% claim-token coverage, which
+ * keeps short or generic audit labels from deleting unrelated prose.
+ */
+export function removeUnsupportedClaimSentences(
+  markdown: string,
+  unsupportedClaims: string[],
+): string {
+  const claims = unsupportedClaims
+    .map((claim) => ({ claim, tokens: evidenceTokens(claim) }))
+    .filter(({ claim, tokens }) => claim.trim().length >= 12 && tokens.size >= 3);
+  if (claims.length === 0) return markdown;
+
+  const matchesUnsupportedClaim = (sentence: string) => {
+    const sentenceTokens = evidenceTokens(sentence);
+    if (sentenceTokens.size === 0) return false;
+    return claims.some(({ tokens }) => {
+      let overlap = 0;
+      for (const token of tokens) if (sentenceTokens.has(token)) overlap += 1;
+      return overlap >= 3 && overlap / tokens.size >= 0.6;
+    });
+  };
+
+  let insideFence = false;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (/^\s*```/.test(line)) {
+        insideFence = !insideFence;
+        return line;
+      }
+      if (
+        insideFence ||
+        !line.trim() ||
+        /^\s*(?:#|\|)/.test(line) ||
+        /^\s*[-*]\s+https?:\/\//i.test(line)
+      ) {
+        return line;
+      }
+
+      const prefix = line.match(/^(\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
+      const body = line.slice(prefix.length);
+      const kept = body
+        .split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/)
+        .filter((sentence) => !matchesUnsupportedClaim(sentence))
+        .join(" ")
+        .trim();
+      return kept ? `${prefix}${kept}` : "";
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 export function selectReviewedProductImage(
   markdown: string,
   productName: string,
