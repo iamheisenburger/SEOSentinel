@@ -44,6 +44,43 @@ export type PublicationClockArticle = {
   auditedContentHash?: string;
 };
 
+export type TopicCoverageArticle = {
+  topicId?: string;
+  slug: string;
+};
+
+export type TopicCoverageTopic = {
+  _id: string;
+  status: string;
+  primaryKeyword: string;
+};
+
+/**
+ * Build the cannibalization corpus from the canonical primary keywords that
+ * actually produced articles. Broad article meta-keywords are deliberately
+ * excluded: they contain category synonyms and previously caused mature sites
+ * to reject every genuinely distinct topic in the same product category.
+ */
+export function coveredPrimaryKeywords(
+  topics: TopicCoverageTopic[],
+  articles: TopicCoverageArticle[],
+): string[] {
+  const usedTopicIds = new Set(
+    articles
+      .map((article) => article.topicId)
+      .filter((topicId): topicId is string => Boolean(topicId)),
+  );
+  const canonical = topics
+    .filter(
+      (topic) => topic.status === "used" || usedTopicIds.has(topic._id),
+    )
+    .map((topic) => topic.primaryKeyword);
+  const legacy = articles
+    .filter((article) => !article.topicId)
+    .map((article) => article.slug.replace(/^\//, "").replace(/-/g, " "));
+  return [...new Set([...canonical, ...legacy].filter(Boolean))];
+}
+
 /**
  * A mutable legacy row must not become a fresh publication merely because a
  * maintenance migration touched it. Only the modern sealed publisher receipt
@@ -135,6 +172,11 @@ export function selectNonCannibalizingTopic<T extends { primaryKeyword: string }
     if (tokens.length === 0) return false;
     return coveredTokenSets.every((coveredTokens) => {
       const overlap = tokens.filter((token) => coveredTokens.has(token)).length;
+      // One shared category word (for example "chatbot") is not evidence of
+      // cannibalization. Requiring two shared meaningful tokens preserves
+      // distinct long-tail intents while still blocking near-duplicates such
+      // as "lead scoring model" and "automated lead scoring".
+      if (overlap < 2) return true;
       return overlap / tokens.length < maximumOverlap;
     });
   });

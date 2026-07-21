@@ -88,7 +88,7 @@ test("a quarantined prose candidate is revised before a fallback is generated", 
   assert.equal(result.recoveryArticleId, "article-1");
 });
 
-test("non-rewritable media failures skip paid prose retries", () => {
+test("deferred media failures recover on the same draft instead of generating a duplicate", () => {
   const result = evaluateCadenceWindow({
     articles: [
       {
@@ -105,8 +105,8 @@ test("non-rewritable media failures skip paid prose retries", () => {
     maxAttempts: 2,
   });
 
-  assert.equal(result.recoveryArticleId, undefined);
-  assert.equal(result.canGenerate, true);
+  assert.equal(result.recoveryArticleId, "article-1");
+  assert.equal(result.canGenerate, false);
 });
 
 test("publication time, not old draft creation time, closes the cadence window", () => {

@@ -372,7 +372,24 @@ export function clampMetaDescription(
     complete = complete.replace(/\s+\S+$/, "").replace(/[\s,;:.!?–—-]+$/g, "");
   }
   if (!complete) return undefined;
-  return `${complete}.`.slice(0, maxLength);
+
+  // Reserve room for terminal punctuation. Appending a period and then slicing
+  // could remove that same period when the prose landed exactly on maxLength,
+  // producing metadata that the strict publication gate could never accept.
+  if (complete.length >= maxLength) {
+    const punctuationBudget = Math.max(1, maxLength - 1);
+    const bounded = complete.slice(0, punctuationBudget + 1);
+    const boundedSpace = bounded.lastIndexOf(" ");
+    complete = complete
+      .slice(
+        0,
+        boundedSpace >= Math.floor(punctuationBudget * 0.7)
+          ? boundedSpace
+          : punctuationBudget,
+      )
+      .replace(/[\s,;:.!?–—-]+$/g, "");
+  }
+  return `${complete}.`;
 }
 
 export function clampMetaTitle(value: string | undefined, maxLength = 60): string | undefined {

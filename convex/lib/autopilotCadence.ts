@@ -23,9 +23,6 @@ export type CadenceWindow = {
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
 
-const NON_REWRITABLE_QUALITY_DEFECT =
-  /(?:hero image|media-quality|visual evidence|product-specific section|product evidence)/i;
-
 export function findRecoverableQualityArticle(
   articles: CadenceArticle[],
   now: number,
@@ -40,10 +37,7 @@ export function findRecoverableQualityArticle(
         now - article.createdAt < windowMs &&
         article.status === "review" &&
         article.publicationGateStatus === "blocked" &&
-        (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS &&
-        !(article.publicationGateIssues ?? []).some((issue) =>
-          NON_REWRITABLE_QUALITY_DEFECT.test(issue),
-        ),
+        (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS,
     )
     .sort((a, b) => b.createdAt - a.createdAt)[0];
 }

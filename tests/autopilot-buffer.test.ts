@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  coveredPrimaryKeywords,
   MAX_NEW_CANDIDATES_PER_24H,
   MAX_QUALITY_REPLACEMENTS_PER_24H,
   MIN_APPROVED_BUFFER,
@@ -22,6 +23,31 @@ test("candidate budget can still fill the target after two strict-gate rejection
     TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H,
   );
   assert.ok(MAX_NEW_CANDIDATES_PER_24H - 2 >= MIN_APPROVED_BUFFER);
+});
+
+test("topic coverage ignores broad article metadata and uses canonical primary keywords", () => {
+  const covered = coveredPrimaryKeywords(
+    [
+      { _id: "used-topic", status: "used", primaryKeyword: "chatbot for lead generation" },
+      { _id: "planned-topic", status: "planned", primaryKeyword: "AI chatbot for sales" },
+    ],
+    [
+      { topicId: "used-topic", slug: "/chatbot-for-lead-generation" },
+      { slug: "/legacy-website-conversion-guide" },
+    ],
+  );
+
+  assert.deepEqual(covered, [
+    "chatbot for lead generation",
+    "legacy website conversion guide",
+  ]);
+  assert.equal(
+    selectNonCannibalizingTopic(
+      [{ primaryKeyword: "AI chatbot for sales" }],
+      covered,
+    )?.primaryKeyword,
+    "AI chatbot for sales",
+  );
 });
 
 test("a partial summary backfill cannot authorize autopilot", () => {

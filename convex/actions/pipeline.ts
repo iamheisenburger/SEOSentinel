@@ -4275,32 +4275,125 @@ async function reviewExistingArticleHandler(
       !deterministicClaimAudit.passed
         ? Math.min(audit.score, 84)
         : audit.score;
-    const metadata = await generateFinalMetadata({
-      title: article.title,
-      markdown: reviewed.markdown,
-      primaryKeyword: topic?.primaryKeyword ?? article.title,
-      sources,
-    });
-
-    const nextTitle = metadata.title.trim();
-    const nextMetaTitle = clampMetaTitle(metadata.metaTitle);
-    const nextMetaDescription = clampMetaDescription(metadata.metaDescription);
+    let finalReviewMarkdown = reviewed.markdown;
+    let featuredImage = article.featuredImage;
     const reviewedMedia = new Set(article.reviewedMediaUrls ?? []);
-    const imageMatches = [
-      ...reviewed.markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
-    ];
-    const allInlineMediaReviewed = imageMatches.every((match) =>
-      reviewedMedia.has(match[1]),
-    );
+    const mediaQualityNotes = [...(article.mediaQualityNotes ?? [])];
     const productHeadingPattern = new RegExp(
       `^##\\s+.*(?:${productName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|how\\s+.*helps?).*$`,
       "im",
     );
-    const productHeadingMatch = productHeadingPattern.exec(reviewed.markdown);
+    let productHeadingMatch = productHeadingPattern.exec(finalReviewMarkdown);
+
+    // The first strict pass deliberately avoids media spend until the prose is
+    // sound. The retry path must then be capable of completing those deferred
+    // assets; otherwise every initially quarantined article is permanently
+    // blocked by its missing hero/product evidence even after the prose passes.
+    const proseReadyForMedia =
+      reviewed.confidenceScore >= 85 &&
+      editorialQualityScore >= 85 &&
+      evidenceDefects.length === 0 &&
+      unsupportedClaims.length === 0 &&
+      deterministicClaimAudit.passed;
+    if (proseReadyForMedia) {
+      if (!featuredImage || !reviewedMedia.has(featuredImage)) {
+        featuredImage = undefined;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            featuredImage = await generateHeroImage(
+              ctx,
+              article.title,
+              site.niche ?? "",
+              site.imageBrandingPrompt ?? undefined,
+              site.brandPrimaryColor ?? undefined,
+            );
+            reviewedMedia.add(featuredImage);
+            mediaQualityNotes.push(
+              "Deferred hero image generated and passed visual review during quality recovery.",
+            );
+            break;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "unknown";
+            mediaQualityNotes.push(
+              `Deferred hero image attempt ${attempt} failed visual review: ${message}`,
+            );
+          }
+        }
+      }
+
+      if (productHeadingMatch?.index !== undefined) {
+        const sectionStart = productHeadingMatch.index;
+        const headingEnd = sectionStart + productHeadingMatch[0].length;
+        const remainder = finalReviewMarkdown.slice(headingEnd);
+        const nextHeading = remainder.search(/^##\s+/m);
+        const productSection = nextHeading >= 0
+          ? remainder.slice(0, nextHeading)
+          : remainder;
+        const hasReviewedProductImage = [
+          ...productSection.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
+        ].some((match) => reviewedMedia.has(match[1]));
+        if (!hasReviewedProductImage) {
+          try {
+            const screenshotUrl = await captureScreenshot(ctx, site.domain, productName);
+            reviewedMedia.add(screenshotUrl);
+            const lines = finalReviewMarkdown.split("\n");
+            const headingLine = finalReviewMarkdown
+              .slice(0, sectionStart)
+              .split("\n").length - 1;
+            let insertionLine = headingLine + 1;
+            while (insertionLine < lines.length && lines[insertionLine].trim() === "") {
+              insertionLine++;
+            }
+            while (insertionLine < lines.length && lines[insertionLine].trim() !== "") {
+              insertionLine++;
+            }
+            lines.splice(
+              insertionLine,
+              0,
+              "",
+              `![${productName} product workflow](${screenshotUrl})`,
+              `*A reviewed first-party view of ${productName}'s current product experience.*`,
+              "",
+            );
+            finalReviewMarkdown = lines.join("\n");
+            mediaQualityNotes.push(
+              "Deferred first-party product screenshot passed review and was added during quality recovery.",
+            );
+            productHeadingMatch = productHeadingPattern.exec(finalReviewMarkdown);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "unknown";
+            mediaQualityNotes.push(
+              `Deferred product screenshot failed visual review: ${message}`,
+            );
+          }
+        }
+      }
+    } else {
+      mediaQualityNotes.push(
+        "Deferred media remained blocked because the revised prose did not clear the strict evidence and editorial gates.",
+      );
+    }
+
+    const metadata = await generateFinalMetadata({
+      title: article.title,
+      markdown: finalReviewMarkdown,
+      primaryKeyword: topic?.primaryKeyword ?? article.title,
+      sources,
+    });
+    const nextTitle = metadata.title.trim();
+    const nextMetaTitle = clampMetaTitle(metadata.metaTitle);
+    const nextMetaDescription = clampMetaDescription(metadata.metaDescription);
+    const finalStats = calculateArticleStats(finalReviewMarkdown);
+    const imageMatches = [
+      ...finalReviewMarkdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
+    ];
+    const allInlineMediaReviewed = imageMatches.every((match) =>
+      reviewedMedia.has(match[1]),
+    );
     let productEvidenceStatus = "not_applicable";
     if (productHeadingMatch?.index !== undefined) {
       const sectionStart = productHeadingMatch.index;
-      const remainder = reviewed.markdown.slice(sectionStart + productHeadingMatch[0].length);
+      const remainder = finalReviewMarkdown.slice(sectionStart + productHeadingMatch[0].length);
       const nextHeading = remainder.search(/^##\s+/m);
       const productSection = nextHeading >= 0
         ? remainder.slice(0, nextHeading)
@@ -4313,9 +4406,10 @@ async function reviewExistingArticleHandler(
         : "failed";
     }
     const mediaQualityStatus =
-      !!article.featuredImage &&
-      reviewedMedia.has(article.featuredImage) &&
-      allInlineMediaReviewed
+      !!featuredImage &&
+      reviewedMedia.has(featuredImage) &&
+      allInlineMediaReviewed &&
+      productEvidenceStatus !== "failed"
         ? "passed"
         : "failed";
     const deliveryConfig = publicationDeliveryConfig(site);
@@ -4323,11 +4417,11 @@ async function reviewExistingArticleHandler(
     const qualityCandidate: Doc<"articles"> = {
       ...article,
       title: nextTitle,
-      markdown: reviewed.markdown,
+      markdown: finalReviewMarkdown,
       metaTitle: nextMetaTitle,
       metaDescription: nextMetaDescription,
-      wordCount: stats.wordCount,
-      readingTime: stats.readingTime,
+      wordCount: finalStats.wordCount,
+      readingTime: finalStats.readingTime,
       factCheckScore: reviewed.confidenceScore,
       editorialQualityScore,
       claimEvidence: audit.claimEvidence,
@@ -4339,6 +4433,8 @@ async function reviewExistingArticleHandler(
       mediaQualityStatus,
       productEvidenceSnapshot: productEvidence || undefined,
       productEvidenceHash,
+      featuredImage,
+      reviewedMediaUrls: [...reviewedMedia],
       publicationConfigHash: deliveryConfigHash,
     };
     const quality = evaluatePublicationQuality(qualityCandidate, "strict");
@@ -4352,11 +4448,11 @@ async function reviewExistingArticleHandler(
     await ctx.runMutation(internal.articles.applyQualityReview, {
       articleId,
       title: nextTitle,
-      markdown: reviewed.markdown,
+      markdown: finalReviewMarkdown,
       metaTitle: nextMetaTitle,
       metaDescription: nextMetaDescription,
-      wordCount: stats.wordCount,
-      readingTime: stats.readingTime,
+      wordCount: finalStats.wordCount,
+      readingTime: finalStats.readingTime,
       factCheckScore: reviewed.confidenceScore,
       factCheckNotes: [
         reviewed.notes,
@@ -4383,7 +4479,10 @@ async function reviewExistingArticleHandler(
             `Deterministic claim-ledger defect ${index + 1}: ${issue}`,
         ),
       ],
+      featuredImage,
+      reviewedMediaUrls: [...reviewedMedia],
       mediaQualityStatus,
+      mediaQualityNotes,
       productEvidenceStatus,
       productEvidenceSnapshot: productEvidence || undefined,
       productEvidenceHash,
@@ -4417,7 +4516,7 @@ async function reviewExistingArticleHandler(
       factCheckScore: reviewed.confidenceScore,
       editorialQualityScore,
       evidenceDefectCount: evidenceDefects.length,
-      wordCount: stats.wordCount,
+      wordCount: finalStats.wordCount,
       readyForPublication,
       contentHash,
       qualityRevisionCount,

@@ -12,6 +12,7 @@ import {
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
   effectivePublishedAt,
+  coveredPrimaryKeywords,
   isSealedReady,
   selectNonCannibalizingTopic,
 } from "../lib/autopilotBuffer";
@@ -20,6 +21,7 @@ const MAX_TOPIC_REPLENISHMENTS_PER_24H = 2;
 
 type ArticleSummary = {
   _id: Id<"articles">;
+  topicId?: Id<"topic_clusters">;
   status: string;
   title: string;
   slug: string;
@@ -276,15 +278,16 @@ export const scheduleCadence = internalAction({
         (b.priority ?? 1) - (a.priority ?? 1),
     );
 
-    const coveredKeywords = [...published, ...buffer].flatMap((article) =>
-      article.metaKeywords?.length
-        ? article.metaKeywords
-        : [article.slug.replace(/^\//, "").replace(/-/g, " ")],
-    );
-    coveredKeywords.push(
-      ...topics
-        .filter((topic: Doc<"topic_clusters">) => topic.status === "used")
-        .map((topic: Doc<"topic_clusters">) => topic.primaryKeyword),
+    const coveredKeywords = coveredPrimaryKeywords(
+      topics.map((topic: Doc<"topic_clusters">) => ({
+        _id: String(topic._id),
+        status: topic.status ?? "planned",
+        primaryKeyword: topic.primaryKeyword,
+      })),
+      [...published, ...buffer].map((article) => ({
+        topicId: article.topicId ? String(article.topicId) : undefined,
+        slug: article.slug,
+      })),
     );
     const selectedTopic: Doc<"topic_clusters"> | undefined =
       selectNonCannibalizingTopic<Doc<"topic_clusters">>(

@@ -61,6 +61,11 @@ test("clamps meta descriptions cleanly without cutting through a word", () => {
     "Lead generation chatbots answer buyer questions and hand qualified leads to sales.",
   );
   assert.equal(clampMetaTitle("A useful title that is deliberately far too long to fit inside a clean search result"), "A useful title that is deliberately far too long to fit");
+
+  const exactBoundary = clampMetaDescription("x".repeat(155), 155);
+  assert.ok(exactBoundary);
+  assert.ok(exactBoundary.length <= 155);
+  assert.match(exactBoundary, /\.$/);
 });
 
 test("plain-Markdown publication rejects multiline and component MDX", () => {
