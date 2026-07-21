@@ -393,6 +393,44 @@ export function validateClaimEvidenceLedger(args: {
   };
 }
 
+/**
+ * Fail closed when the independent auditor omits an evidence-required
+ * paragraph from its claim ledger. A model retry is not a reliable repair for
+ * that omission: it can keep returning the same unsupported prose forever.
+ * Remove only the uncovered paragraph, then require a fresh audit of the exact
+ * remaining artifact. Paragraphs already bound to a supported ledger entry are
+ * preserved unchanged.
+ */
+export function removeUnledgeredEvidenceParagraphs(args: {
+  markdown: string;
+  productEvidence: string;
+  claimEvidence: ClaimEvidenceEntry[];
+}): string {
+  const supportedClaims = args.claimEvidence.filter((entry) => entry.supported);
+  return args.markdown
+    .split(/(\n\s*\n)/)
+    .map((chunk, index) => {
+      if (index % 2 === 1) return chunk;
+      const paragraph = chunk.trim();
+      if (
+        paragraph.length < 40 ||
+        paragraph.startsWith("#") ||
+        /^[-*]\s+https?:\/\//i.test(paragraph) ||
+        isReaderMeasurementInstruction(paragraph) ||
+        !requiresClaimEvidence(paragraph, args.productEvidence)
+      ) {
+        return chunk;
+      }
+      const covered = supportedClaims.some(
+        (entry) => overlapRatio(paragraph, entry.claim) >= 0.3,
+      );
+      return covered ? chunk : "";
+    })
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const HYPE_PATTERN =
   /\b(?:guarantee(?:d|s)?|proven(?:\s+results?)?|skyrocket|game[- ]changing|transformational|staggering|revolutionary)\b/i;
 const QUANTIFIED_OUTCOME_PATTERN =

@@ -20,6 +20,7 @@ import {
   clampMetaTitle,
   evaluatePublicationQuality,
   removeUncitedQuantifiedSentences,
+  removeUnledgeredEvidenceParagraphs,
   removeUnsupportedClaimSentences,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
@@ -1564,26 +1565,55 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
 }> {
   let markdown = args.markdown;
   let audit = await auditFinalArticle(args);
+  let deterministicPruningApplied = false;
   const unsupported = audit.claimEvidence.filter((claim) => !claim.supported);
   let pruned = removeUncitedQuantifiedSentences(markdown);
   pruned = removeUnsupportedClaimSentences(
     pruned,
     unsupported.map((claim) => claim.claim),
   );
-  if (pruned === markdown) {
-    return { markdown, audit, deterministicPruningApplied: false };
-  }
-  const stats = calculateArticleStats(pruned);
-  if (stats.wordCount < 900 || stats.wordCount > args.maxWords) {
-    return { markdown, audit, deterministicPruningApplied: false };
+  if (pruned !== markdown) {
+    const stats = calculateArticleStats(pruned);
+    if (stats.wordCount >= 900 && stats.wordCount <= args.maxWords) {
+      markdown = pruned;
+      audit = await auditFinalArticle({ ...args, markdown });
+      deterministicPruningApplied = true;
+    }
   }
 
-  markdown = pruned;
-  audit = await auditFinalArticle({ ...args, markdown });
+  const productEvidenceHash = args.productEvidence
+    ? sha256Hex(args.productEvidence)
+    : undefined;
+  const claimAudit = validateClaimEvidenceLedger({
+    markdown,
+    sources: args.sources,
+    researchEvidence: args.researchEvidence,
+    productEvidence: args.productEvidence,
+    productEvidenceHash,
+    claimEvidence: audit.claimEvidence,
+  });
+  if (!claimAudit.passed) {
+    const ledgerPruned = removeUnledgeredEvidenceParagraphs({
+      markdown,
+      productEvidence: args.productEvidence,
+      claimEvidence: audit.claimEvidence,
+    });
+    const stats = calculateArticleStats(ledgerPruned);
+    if (
+      ledgerPruned !== markdown &&
+      stats.wordCount >= 900 &&
+      stats.wordCount <= args.maxWords
+    ) {
+      markdown = ledgerPruned;
+      audit = await auditFinalArticle({ ...args, markdown });
+      deterministicPruningApplied = true;
+    }
+  }
+
   return {
     markdown,
     audit,
-    deterministicPruningApplied: true,
+    deterministicPruningApplied,
   };
 }
 

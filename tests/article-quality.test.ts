@@ -10,6 +10,7 @@ import {
   inlineCitationNumbers,
   normalizeSiteOrigin,
   removeUncitedQuantifiedSentences,
+  removeUnledgeredEvidenceParagraphs,
   removeUnsupportedClaimSentences,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
@@ -67,6 +68,34 @@ test("removes only audit-identified unsupported prose claims", () => {
     removeUnsupportedClaimSentences(markdown, ["conversion issue"]),
     markdown,
   );
+});
+
+test("removes evidence-required paragraphs omitted from the supported claim ledger", () => {
+  const markdown = [
+    "# Practical comparison",
+    "This recommendation is framed as advice and does not assert a measured external outcome.",
+    "Automation tools reduce qualification time for every sales team by moving discovery before handoff.",
+    "LeadPilot answers buyer questions using the website content approved by the owner.",
+  ].join("\n\n");
+  const productEvidence =
+    "Name: LeadPilot\nLeadPilot answers buyer questions using approved website content.";
+
+  const result = removeUnledgeredEvidenceParagraphs({
+    markdown,
+    productEvidence,
+    claimEvidence: [
+      {
+        claim: "LeadPilot answers buyer questions using approved website content.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The first-party product snapshot directly supports this capability.",
+      },
+    ],
+  });
+
+  assert.doesNotMatch(result, /reduce qualification time/);
+  assert.match(result, /recommendation is framed as advice/);
+  assert.match(result, /LeadPilot answers buyer questions/);
 });
 
 test("normalizes bare and fully-qualified site domains", () => {
