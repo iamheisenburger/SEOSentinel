@@ -4948,6 +4948,7 @@ type ProcessedJobResult = {
   publicationSucceeded?: boolean;
   qualityRecovered?: boolean;
   buffered?: boolean;
+  planCompleted?: boolean;
 };
 
 function processedJobOutcome(processed: ProcessedJobResult): string {
@@ -5131,6 +5132,23 @@ export const autopilotTick = internalAction({
           });
         }
       }
+      if (processed?.planCompleted) {
+        const afterPlan = await ctx.runAction(
+          internal.actions.scheduler.scheduleCadence,
+          { siteId },
+        );
+        if (
+          afterPlan.scheduled > 0 &&
+          (afterPlan.mode === "buffer_fill" ||
+            afterPlan.mode === "cadence_generation")
+        ) {
+          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+            siteId,
+            trigger: "plan_ready",
+            reason: "verified_topic_plan_ready_for_generation",
+          });
+        }
+      }
       return finish(
         { processed: processed?.processed ? 1 : 0 },
         processedJobOutcome(processed),
@@ -5268,7 +5286,7 @@ export const processNextJob = internalAction({
           workerToken,
         );
         await complete(result);
-        return { processed: true, jobId: job._id };
+        return { processed: true, jobId: job._id, planCompleted: true };
       }
 
       if (job.type === "links") {
@@ -5625,6 +5643,23 @@ export const processNextJob = internalAction({
             siteId: args.siteId,
             trigger: "buffer_delivery",
             reason: "newly_sealed_buffer_item_is_due",
+          });
+        }
+      }
+      if (args.runId && result.planCompleted) {
+        const afterPlan = await ctx.runAction(
+          internal.actions.scheduler.scheduleCadence,
+          { siteId: args.siteId },
+        );
+        if (
+          afterPlan.scheduled > 0 &&
+          (afterPlan.mode === "buffer_fill" ||
+            afterPlan.mode === "cadence_generation")
+        ) {
+          await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+            siteId: args.siteId,
+            trigger: "plan_ready",
+            reason: "verified_topic_plan_ready_for_generation",
           });
         }
       }
