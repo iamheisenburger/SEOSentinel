@@ -13,10 +13,29 @@ import {
   requireSafeGitHubDefaultBranch,
 } from "../convex/lib/publicationArtifact.ts";
 import {
+  MAX_NEW_CANDIDATES_PER_24H,
+  autopilotCandidateBudget,
+  autopilotCandidateWindowStart,
+} from "../convex/lib/autopilotBuffer.ts";
+import {
   acquirePublicationLease,
   nextPublicationRetry,
   ownsPublicationLease,
 } from "../convex/lib/publicationLease.ts";
+
+test("warm rollout ignores pre-rollout candidates and can fill its bounded buffer", () => {
+  const now = Date.UTC(2026, 6, 21, 12);
+  const rolloutStartedAt = now - 60_000;
+  assert.equal(
+    autopilotCandidateWindowStart({ now, rolloutMode: "warm", rolloutStartedAt }),
+    rolloutStartedAt,
+  );
+  assert.equal(
+    autopilotCandidateBudget("warm"),
+    MAX_NEW_CANDIDATES_PER_24H,
+  );
+  assert.equal(autopilotCandidateBudget("live"), 2);
+});
 
 const artifact = {
   title: "Grounded workflow",

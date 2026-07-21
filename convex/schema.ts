@@ -15,6 +15,7 @@ export default defineSchema({
     // is under constrained rollout.
     autopilotRolloutMode: v.optional(v.string()), // observe | warm | live
     autopilotRolloutEpoch: v.optional(v.number()),
+    autopilotRolloutStartedAt: v.optional(v.number()),
     publicationLeaseOwner: v.optional(v.string()),
     publicationLeaseExpiresAt: v.optional(v.number()),
     inferToneNiche: v.optional(v.boolean()),

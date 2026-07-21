@@ -9,6 +9,27 @@ export const MAX_QUALITY_REPLACEMENTS_PER_24H = 2;
 export const MAX_NEW_CANDIDATES_PER_24H =
   TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H;
 
+export function autopilotCandidateBudget(rolloutMode: string): number {
+  return rolloutMode === "warm"
+    ? MAX_NEW_CANDIDATES_PER_24H
+    : Math.min(2, MAX_NEW_CANDIDATES_PER_24H);
+}
+
+export function autopilotCandidateWindowStart(args: {
+  now: number;
+  rolloutMode: string;
+  rolloutStartedAt?: number;
+}): number {
+  const dayStart = args.now - 24 * 60 * 60 * 1000;
+  if (
+    args.rolloutMode === "warm" &&
+    Number.isFinite(args.rolloutStartedAt)
+  ) {
+    return Math.max(dayStart, args.rolloutStartedAt as number);
+  }
+  return dayStart;
+}
+
 export type BufferArticle = {
   status: string;
   publicationGateStatus?: string;

@@ -8,8 +8,9 @@ import { v } from "convex/values";
 import { getLimitsFromFeatures } from "../planLimits";
 import { MAX_QUALITY_REVISIONS } from "../lib/autopilotCadence";
 import {
-  MAX_NEW_CANDIDATES_PER_24H,
   TARGET_APPROVED_BUFFER,
+  autopilotCandidateBudget,
+  autopilotCandidateWindowStart,
   isSealedReady,
   selectNonCannibalizingTopic,
 } from "../lib/autopilotBuffer";
@@ -52,9 +53,16 @@ export const scheduleCadence = internalAction({
     }
 
     const now = Date.now();
+    const candidateWindowStart = autopilotCandidateWindowStart({
+      now,
+      rolloutMode,
+      rolloutStartedAt:
+        site.autopilotRolloutStartedAt ??
+        (rolloutMode === "warm" ? site.updatedAt : undefined),
+    });
     const state = await ctx.runQuery(internal.articles.getAutopilotState, {
       siteId,
-      since: now - DAY_MS,
+      since: candidateWindowStart,
     });
     if (state.migrationPending) {
       await ctx.runMutation(internal.autopilot.raiseAlert, {
@@ -169,6 +177,7 @@ export const scheduleCadence = internalAction({
     const recoverable = (state.review as ArticleSummary[])
       .filter(
         (article: ArticleSummary) =>
+          article.createdAt >= candidateWindowStart &&
           article.status === "review" &&
           article.publicationGateStatus === "blocked" &&
           (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS,
@@ -191,11 +200,7 @@ export const scheduleCadence = internalAction({
 
     // Warm mode serially builds the initial safety buffer. Live canary mode
     // permits one baseline candidate plus one bounded replacement in 24h.
-    const candidateBudget = rolloutMode === "warm"
-      ? 1
-      : autonomousDelivery
-        ? Math.min(2, MAX_NEW_CANDIDATES_PER_24H)
-        : Math.min(2, MAX_NEW_CANDIDATES_PER_24H);
+    const candidateBudget = autopilotCandidateBudget(rolloutMode);
     if (recentCandidates.length >= candidateBudget) {
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,

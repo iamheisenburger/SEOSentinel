@@ -643,6 +643,7 @@ export const setAutopilotRollout = internalMutation({
     }
 
     const rolloutEpoch = (site.autopilotRolloutEpoch ?? 0) + 1;
+    const rolloutStartedAt = Date.now();
     const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
       ctx,
       siteId,
@@ -651,7 +652,8 @@ export const setAutopilotRollout = internalMutation({
     await ctx.db.patch(siteId, {
       autopilotRolloutMode: mode,
       autopilotRolloutEpoch: rolloutEpoch,
-      updatedAt: Date.now(),
+      autopilotRolloutStartedAt: rolloutStartedAt,
+      updatedAt: rolloutStartedAt,
     });
     return { mode, rolloutEpoch, cancelledJobs };
   },
