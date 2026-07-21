@@ -182,6 +182,32 @@ export function removeUnverifiedInlineCitations(
     .replace(/[ \t]{2,}/g, " ");
 }
 
+function isReaderMeasurementInstruction(paragraph: string): boolean {
+  if (
+    INLINE_CITATION_PATTERN.test(paragraph) ||
+    EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph)
+  ) {
+    return false;
+  }
+  const plain = paragraph
+    .replace(/^\*\*([^*]+)\*\*\s*/i, "$1 ")
+    .trim();
+  return /^(?:measure(?:\s+it)?|track|current state|post-deployment|the key measurement|multiply|calculate|record|document|write|fill in|assign|estimate|compare)\b/i.test(
+    plain,
+  );
+}
+
+function requiresClaimEvidence(value: string): boolean {
+  return (
+    INLINE_CITATION_PATTERN.test(value) ||
+    EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||
+    FACTUAL_CLAIM_PATTERN.test(value) ||
+    /\b(?:automatically|guarantees?|proven|creates?|produces?|improves?|increases?|reduces?|saves?|automates?|captures?|qualifies?|books?|delivers?|integrates?|supports?|learns?|detects?)\b/i.test(
+      value,
+    )
+  );
+}
+
 /**
  * Deterministic coverage around the model-produced ledger.  The model may
  * identify claims, but it cannot certify its own empty answer or cite a source
@@ -212,9 +238,8 @@ export function validateClaimEvidenceLedger(args: {
         paragraph.length >= 40 &&
         !paragraph.startsWith("#") &&
         !/^[-*]\s+https?:\/\//i.test(paragraph) &&
-        (INLINE_CITATION_PATTERN.test(paragraph) ||
-          EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
-          FACTUAL_CLAIM_PATTERN.test(paragraph)),
+        !isReaderMeasurementInstruction(paragraph) &&
+        requiresClaimEvidence(paragraph),
     );
 
   if (args.claimEvidence.length === 0) {
@@ -259,7 +284,10 @@ export function validateClaimEvidenceLedger(args: {
         }
       }
     } else {
-      if (!productSnapshotSupports(entry.claim)) {
+      if (
+        !productSnapshotSupports(entry.claim) &&
+        requiresClaimEvidence(entry.claim)
+      ) {
         issues.push(
           `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
         );

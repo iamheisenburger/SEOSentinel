@@ -130,6 +130,41 @@ test("ordinary advice mentioning data does not become a sourced research claim",
   assert.deepEqual(result.issues, []);
 });
 
+test("reader-supplied ROI measurement instructions do not require external evidence", () => {
+  const productEvidence =
+    "LeadPilot learns website content, captures visitor contact details, and preserves conversation context.";
+  const result = validateClaimEvidenceLedger({
+    markdown: [
+      "ROI compares the value your business records against what your business spends.",
+      "**The key measurement:** Track close rate separately for chatbot-sourced leads versus other lead sources. If your own analytics show a different close rate, keep those cohorts separate.",
+      "**Current state (pre-deployment):**\n- Average screening time per lead\n- Close rate on inbound leads\n- Average deal value",
+      "LeadPilot learns website content and captures visitor contact details with conversation context.",
+    ].join("\n\n"),
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim: "ROI compares recorded value against recorded cost.",
+        citationNumbers: [],
+        supported: true,
+        reason: "This is a calculation definition using the reader's own inputs.",
+      },
+      {
+        claim:
+          "LeadPilot learns website content and captures visitor contact details with conversation context.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The hashed first-party product snapshot states this workflow.",
+      },
+    ],
+  });
+
+  assert.equal(result.requiredClaimCount, 1);
+  assert.deepEqual(result.issues, []);
+});
+
 test("plain-Markdown publication rejects multiline and component MDX", () => {
   assert.equal(containsExecutableMdx("Useful prose with **Markdown**."), false);
   assert.equal(
