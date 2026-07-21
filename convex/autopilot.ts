@@ -1,5 +1,5 @@
 import { internal } from "./_generated/api";
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -637,6 +637,106 @@ export const pruneLifecycle = internalMutation({
       }
     }
     return { deletedRuns, deletedAlerts };
+  },
+});
+
+// Bounded, credential-free operations view for scheduled audits and incident
+// response. This avoids reading complete article bodies, source snapshots, or
+// tenant publishing configuration merely to verify rollout health.
+export const getOperatorSnapshot = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+    const [health, runs, ready, review, pending, running] = await Promise.all([
+      ctx.db
+        .query("autopilot_health")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .first(),
+      ctx.db
+        .query("autopilot_runs")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .order("desc")
+        .take(8),
+      ctx.db
+        .query("article_summaries")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "ready"),
+        )
+        .take(10),
+      ctx.db
+        .query("article_summaries")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "review"),
+        )
+        .order("desc")
+        .take(8),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "pending"),
+        )
+        .take(10),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "running"),
+        )
+        .take(10),
+    ]);
+    const articleView = (article: Doc<"article_summaries">) => ({
+      articleId: article.articleId,
+      title: article.title,
+      status: article.status,
+      editorialQualityScore: article.editorialQualityScore,
+      factCheckScore: article.factCheckScore,
+      mediaQualityStatus: article.mediaQualityStatus,
+      publicationGateStatus: article.publicationGateStatus,
+      publicationAuditVersion: article.publicationAuditVersion,
+      sealed: isSealedReady(article),
+      qualityRevisionCount: article.qualityRevisionCount,
+      createdAt: article.articleCreatedAt,
+      updatedAt: article.articleUpdatedAt,
+    });
+    const jobView = (job: Doc<"jobs">) => ({
+      jobId: job._id,
+      type: job.type,
+      status: job.status,
+      retries: job.retries,
+      workerAttempts: job.workerAttempts,
+      publicationAttempts: job.publicationAttempts,
+      stepProgress: job.stepProgress,
+      error: job.error,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    });
+    return {
+      site: {
+        siteId: site._id,
+        domain: site.domain,
+        autopilotEnabled: site.autopilotEnabled,
+        rolloutMode: site.autopilotRolloutMode ?? "observe",
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        rolloutStartedAt: site.autopilotRolloutStartedAt,
+      },
+      health,
+      runs: runs.map((run) => ({
+        runId: run._id,
+        trigger: run.trigger,
+        status: run.status,
+        outcome: run.outcome,
+        detail: run.detail,
+        jobId: run.jobId,
+        articleId: run.articleId,
+        scheduledAt: run.scheduledAt,
+        startedAt: run.startedAt,
+        heartbeatAt: run.heartbeatAt,
+        completedAt: run.completedAt,
+      })),
+      ready: ready.map(articleView),
+      review: review.map(articleView),
+      activeJobs: [...pending, ...running].map(jobView),
+    };
   },
 });
 
