@@ -304,6 +304,31 @@ test("misnumbered first-party claims fall back only to the exact hashed product 
   assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
+test("sentence-opening lead-ins do not become phantom named entities", () => {
+  const productEvidence =
+    "LeadPilot answers from approved content. If the answer is missing, LeadPilot says so instead of inventing it.";
+  const result = validateClaimEvidenceLedger({
+    markdown:
+      "When LeadPilot cannot find an answer, it says so instead of inventing it.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim:
+          "When LeadPilot cannot find an answer, it says so instead of inventing it.",
+        citationNumbers: [],
+        supported: true,
+        reason:
+          "The exact hashed first-party snapshot states this fallback behavior.",
+      },
+    ],
+  });
+
+  assert.equal(result.passed, true, result.issues.join("\n"));
+});
+
 test("claim ledger rejects unsupported citation-free product assertions", () => {
   const result = validateClaimEvidenceLedger({
     markdown: "The product automatically guarantees qualified pipeline growth.",

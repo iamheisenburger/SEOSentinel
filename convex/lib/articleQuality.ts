@@ -104,11 +104,32 @@ function normalizedEvidenceNumbers(value: string): Set<string> {
 }
 
 function namedEntities(value: string): string[] {
+  const sentenceLeadIns = new Set([
+    "after",
+    "as",
+    "because",
+    "before",
+    "if",
+    "once",
+    "the",
+    "using",
+    "when",
+    "where",
+    "while",
+    "with",
+    "without",
+  ]);
   return [
     ...value.matchAll(
       /\b[A-Z][A-Za-z0-9&.-]+(?:\s+[A-Z][A-Za-z0-9&.-]+){1,3}\b/g,
     ),
-  ].map((match) => match[0].toLowerCase());
+  ]
+    .map((match) => match[0].toLowerCase().split(/\s+/))
+    .map((tokens) =>
+      sentenceLeadIns.has(tokens[0]) ? tokens.slice(1) : tokens,
+    )
+    .filter((tokens) => tokens.length >= 2)
+    .map((tokens) => tokens.join(" "));
 }
 
 function exactClaimDetailsPresent(claim: string, evidence: string): boolean {
