@@ -1566,48 +1566,41 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
   let markdown = args.markdown;
   let audit = await auditFinalArticle(args);
   let deterministicPruningApplied = false;
-  const unsupported = audit.claimEvidence.filter((claim) => !claim.supported);
-  let pruned = removeUncitedQuantifiedSentences(markdown);
-  pruned = removeUnsupportedClaimSentences(
-    pruned,
-    unsupported.map((claim) => claim.claim),
-  );
-  if (pruned !== markdown) {
-    const stats = calculateArticleStats(pruned);
-    if (stats.wordCount >= 900 && stats.wordCount <= args.maxWords) {
-      markdown = pruned;
-      audit = await auditFinalArticle({ ...args, markdown });
-      deterministicPruningApplied = true;
-    }
-  }
-
   const productEvidenceHash = args.productEvidence
     ? sha256Hex(args.productEvidence)
     : undefined;
-  const claimAudit = validateClaimEvidenceLedger({
-    markdown,
-    sources: args.sources,
-    researchEvidence: args.researchEvidence,
-    productEvidence: args.productEvidence,
-    productEvidenceHash,
-    claimEvidence: audit.claimEvidence,
-  });
-  if (!claimAudit.passed) {
-    const ledgerPruned = removeUnledgeredEvidenceParagraphs({
-      markdown,
+
+  // A fresh audit can expose another unsupported proposition after the first
+  // one is removed. Converge through at most three fail-closed passes instead
+  // of returning the same candidate to an unproductive model retry loop.
+  for (let pass = 0; pass < 3; pass++) {
+    const unsupported = audit.claimEvidence.filter((claim) => !claim.supported);
+    let pruned = removeUncitedQuantifiedSentences(markdown);
+    pruned = removeUnsupportedClaimSentences(
+      pruned,
+      unsupported.map((claim) => claim.claim),
+    );
+    const claimAudit = validateClaimEvidenceLedger({
+      markdown: pruned,
+      sources: args.sources,
+      researchEvidence: args.researchEvidence,
       productEvidence: args.productEvidence,
+      productEvidenceHash,
       claimEvidence: audit.claimEvidence,
     });
-    const stats = calculateArticleStats(ledgerPruned);
-    if (
-      ledgerPruned !== markdown &&
-      stats.wordCount >= 900 &&
-      stats.wordCount <= args.maxWords
-    ) {
-      markdown = ledgerPruned;
-      audit = await auditFinalArticle({ ...args, markdown });
-      deterministicPruningApplied = true;
+    if (!claimAudit.passed) {
+      pruned = removeUnledgeredEvidenceParagraphs({
+        markdown: pruned,
+        productEvidence: args.productEvidence,
+        claimEvidence: audit.claimEvidence,
+      });
     }
+    if (pruned === markdown) break;
+    const stats = calculateArticleStats(pruned);
+    if (stats.wordCount < 900 || stats.wordCount > args.maxWords) break;
+    markdown = pruned;
+    audit = await auditFinalArticle({ ...args, markdown });
+    deterministicPruningApplied = true;
   }
 
   return {
