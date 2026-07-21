@@ -127,11 +127,16 @@ export function selectNonCannibalizingTopic<T extends { primaryKeyword: string }
   coveredKeywords: string[],
   maximumOverlap = 0.35,
 ): T | undefined {
-  const coveredTokens = new Set(coveredKeywords.flatMap(keywordTokens));
+  const coveredTokenSets = coveredKeywords
+    .map((keyword) => new Set(keywordTokens(keyword)))
+    .filter((tokens) => tokens.size > 0);
   return topics.find((topic) => {
     const tokens = keywordTokens(topic.primaryKeyword);
-    const overlap = tokens.filter((token) => coveredTokens.has(token)).length;
-    return tokens.length > 0 && overlap / tokens.length < maximumOverlap;
+    if (tokens.length === 0) return false;
+    return coveredTokenSets.every((coveredTokens) => {
+      const overlap = tokens.filter((token) => coveredTokens.has(token)).length;
+      return overlap / tokens.length < maximumOverlap;
+    });
   });
 }
 

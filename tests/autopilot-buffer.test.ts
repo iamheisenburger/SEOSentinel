@@ -115,3 +115,21 @@ test("topic selection includes buffered coverage and can trigger fresh-plan reco
   assert.match(scheduler, /topic_replenishment_exhausted/);
   assert.match(scheduler, /queuePlanIfAbsent/);
 });
+
+test("topic selection compares against each existing phrase instead of the whole corpus", () => {
+  const topics = [{ primaryKeyword: "sales qualification questions" }];
+
+  assert.equal(
+    selectNonCannibalizingTopic(topics, [
+      "sales automation guide",
+      "lead qualification chatbot",
+      "discovery questions template",
+    ])?.primaryKeyword,
+    "sales qualification questions",
+  );
+
+  assert.equal(
+    selectNonCannibalizingTopic(topics, ["sales qualification framework"]),
+    undefined,
+  );
+});
