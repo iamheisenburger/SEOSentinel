@@ -1,7 +1,10 @@
 import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { isSameSearchConsolePage } from "./lib/searchPerformance";
+import {
+  isSameSearchConsolePage,
+  publishedArticlePageUrl,
+} from "./lib/searchPerformance";
 import { effectivePublishedAt } from "./lib/autopilotBuffer";
 import { v } from "convex/values";
 
@@ -313,9 +316,11 @@ async function articleSeoScorecard(
       .collect(),
   ]);
 
-  const pageUrl = `https://${site.domain}${
-    article.slug.startsWith("/") ? article.slug : `/${article.slug}`
-  }`;
+  const pageUrl = publishedArticlePageUrl(
+    site.domain,
+    site.urlStructure,
+    article.slug,
+  );
   const pageRows = rows.filter(
     (row) => !!row.page && isSameSearchConsolePage(row.page, pageUrl),
   );

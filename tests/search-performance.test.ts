@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   isSameSearchConsolePage,
   normalizeSearchConsolePage,
+  publishedArticlePageUrl,
 } from "../convex/lib/searchPerformance.ts";
 
 test("normalizes protocol, www, query strings, and trailing slashes", () => {
@@ -30,5 +31,24 @@ test("does not treat the homepage as every article", () => {
       "https://leadpilot.chat/blog/example",
     ),
     false,
+  );
+});
+
+test("builds the measured page from each tenant's configured publication path", () => {
+  assert.equal(
+    publishedArticlePageUrl(
+      "leadpilot.chat",
+      "/blog/[slug]",
+      "/ai-chatbot-for-sales-effectiveness",
+    ),
+    "https://leadpilot.chat/blog/ai-chatbot-for-sales-effectiveness",
+  );
+  assert.equal(
+    publishedArticlePageUrl(
+      "https://www.estiflow.com.au/",
+      "/resources/[slug]",
+      "estimate-guide",
+    ),
+    "https://www.estiflow.com.au/resources/estimate-guide",
   );
 });
