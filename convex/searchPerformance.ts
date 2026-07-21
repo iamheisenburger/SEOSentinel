@@ -5,6 +5,8 @@ import { isSameSearchConsolePage } from "./lib/searchPerformance";
 import { v } from "convex/values";
 
 const DAILY_SYNC_VERSION = 2;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SEO_WINDOWS_DAYS = [7, 14, 28, 56] as const;
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId);
@@ -259,6 +261,148 @@ export const getByPage = query({
       return isSameSearchConsolePage(r.page, pageUrl);
     });
   },
+});
+
+function isoDate(timestamp: number): string {
+  return new Date(timestamp).toISOString().split("T")[0];
+}
+
+function isBrandedQuery(queryText: string, domain: string): boolean {
+  const normalized = queryText.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const brand = domain.toLowerCase().replace(/^www\./, "").split(".")[0]
+    .replace(/[^a-z0-9]+/g, " ").trim();
+  return !!brand && (
+    normalized.includes(brand) ||
+    normalized.includes(domain.toLowerCase().replace(/^www\./, ""))
+  );
+}
+
+async function articleSeoScorecard(
+  ctx: QueryCtx,
+  articleId: Id<"articles">,
+) {
+  const article = await ctx.db.get(articleId);
+  if (!article) throw new Error("Article not found");
+  if (article.status !== "published" || !article.publishedAt) {
+    throw new Error("SEO scorecards require a published article");
+  }
+  const site = await ctx.db.get(article.siteId);
+  if (!site) throw new Error("Site not found");
+
+  const startDate = isoDate(article.publishedAt);
+  const maximumEndDate = isoDate(article.publishedAt + 56 * DAY_MS - 1);
+  const [latest, rows] = await Promise.all([
+    ctx.db
+      .query("search_performance")
+      .withIndex("by_site_version_date", (q) =>
+        q.eq("siteId", article.siteId).eq("syncVersion", DAILY_SYNC_VERSION),
+      )
+      .order("desc")
+      .first(),
+    ctx.db
+      .query("search_performance")
+      .withIndex("by_site_version_date", (q) =>
+        q
+          .eq("siteId", article.siteId)
+          .eq("syncVersion", DAILY_SYNC_VERSION)
+          .gte("date", startDate)
+          .lte("date", maximumEndDate),
+      )
+      .collect(),
+  ]);
+
+  const pageUrl = `https://${site.domain}${
+    article.slug.startsWith("/") ? article.slug : `/${article.slug}`
+  }`;
+  const pageRows = rows.filter(
+    (row) => !!row.page && isSameSearchConsolePage(row.page, pageUrl),
+  );
+  const dataThrough = latest?.date;
+
+  const windows = SEO_WINDOWS_DAYS.map((days) => {
+    const expectedEndDate = isoDate(article.publishedAt! + days * DAY_MS - 1);
+    const available = pageRows.filter((row) => row.date <= expectedEndDate);
+    const clicks = available.reduce((sum, row) => sum + row.clicks, 0);
+    const impressions = available.reduce((sum, row) => sum + row.impressions, 0);
+    const nonBranded = available.filter(
+      (row) => !isBrandedQuery(row.query, site.domain),
+    );
+    const nonBrandedClicks = nonBranded.reduce((sum, row) => sum + row.clicks, 0);
+    const nonBrandedImpressions = nonBranded.reduce(
+      (sum, row) => sum + row.impressions,
+      0,
+    );
+    const position = impressions > 0
+      ? available.reduce(
+        (sum, row) => sum + row.position * row.impressions,
+        0,
+      ) / impressions
+      : null;
+    const nonBrandedPosition = nonBrandedImpressions > 0
+      ? nonBranded.reduce(
+        (sum, row) => sum + row.position * row.impressions,
+        0,
+      ) / nonBrandedImpressions
+      : null;
+    const topQueries = [...available]
+      .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
+      .slice(0, 10)
+      .map((row) => ({
+        query: row.query,
+        clicks: row.clicks,
+        impressions: row.impressions,
+        ctr: row.ctr,
+        position: row.position,
+        branded: isBrandedQuery(row.query, site.domain),
+      }));
+    return {
+      days,
+      expectedEndDate,
+      complete: !!dataThrough && dataThrough >= expectedEndDate,
+      clicks,
+      impressions,
+      ctr: impressions > 0 ? clicks / impressions : 0,
+      position: position === null ? null : Math.round(position * 10) / 10,
+      nonBrandedClicks,
+      nonBrandedImpressions,
+      nonBrandedCtr: nonBrandedImpressions > 0
+        ? nonBrandedClicks / nonBrandedImpressions
+        : 0,
+      nonBrandedPosition: nonBrandedPosition === null
+        ? null
+        : Math.round(nonBrandedPosition * 10) / 10,
+      queryCount: new Set(available.map((row) => row.query)).size,
+      topQueries,
+    };
+  });
+
+  return {
+    articleId,
+    title: article.title,
+    pageUrl,
+    publishedAt: article.publishedAt,
+    startDate,
+    dataThrough,
+    syncVersion: DAILY_SYNC_VERSION,
+    windows,
+  };
+}
+
+// Traffic is the outcome metric. These fixed post-publication windows prevent
+// a young article from being compared with an older article's longer exposure.
+export const getArticleSeoScorecard = query({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    await requireSiteOwner(ctx, article.siteId);
+    return articleSeoScorecard(ctx, articleId);
+  },
+});
+
+export const getArticleSeoScorecardInternal = internalQuery({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => articleSeoScorecard(ctx, articleId),
 });
 
 // Get all historical data for trend detection (content decay)
