@@ -3,6 +3,7 @@
 import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
+import type { LookupFunction } from "node:net";
 
 const DEFAULT_MAX_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -12,6 +13,21 @@ const DEFAULT_ALLOWED_CONTENT_TYPES = [
 ];
 
 type ResolvedAddress = { address: string; family: number };
+
+/** Return only the DNS-pinned public address while honoring both Node lookup
+ * callback shapes. Newer Node releases request `all: true` during automatic
+ * family selection; returning the legacy scalar shape in that case produces
+ * `Invalid IP address: undefined` and silently defeats every caller that
+ * treats crawl failure as optional. */
+export function createPinnedLookup(address: ResolvedAddress): LookupFunction {
+  return (_hostname, options, callback) => {
+    if (options.all === true) {
+      callback(null, [address]);
+      return;
+    }
+    callback(null, address.address, address.family);
+  };
+}
 
 export type SafePublicTextOptions = {
   expectedHost?: string;
@@ -177,9 +193,7 @@ function requestPinnedText(
           "Accept-Encoding": "identity",
           ...options.headers,
         },
-        lookup: (_hostname, _lookupOptions, callback) => {
-          callback(null, target.address.address, target.address.family);
-        },
+        lookup: createPinnedLookup(target.address),
       },
       (response) => {
         const status = response.statusCode ?? 0;

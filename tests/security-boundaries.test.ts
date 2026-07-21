@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { isPrivateOrReservedAddress } from "../convex/lib/safeOutbound.ts";
+import {
+  createPinnedLookup,
+  isPrivateOrReservedAddress,
+} from "../convex/lib/safeOutbound.ts";
 
 test("privileged job lifecycle and cron fleet entrypoints are internal", () => {
   const jobs = readFileSync("convex/jobs.ts", "utf8");
@@ -57,9 +60,24 @@ test("untrusted SERP fetches use DNS-pinned bounded HTTPS transport", () => {
   assert.equal(isPrivateOrReservedAddress("2606:4700:4700::1111"), false);
   assert.equal(isPrivateOrReservedAddress("2001:4860:4860::8888"), false);
 
+  const pinned = { address: "203.0.114.9", family: 4 };
+  const pinnedLookup = createPinnedLookup(pinned);
+  let scalarResult: unknown;
+  pinnedLookup("example.com", { all: false }, (error, address, family) => {
+    assert.equal(error, null);
+    scalarResult = { address, family };
+  });
+  assert.deepEqual(scalarResult, pinned);
+  let allResult: unknown;
+  pinnedLookup("example.com", { all: true }, (error, addresses) => {
+    assert.equal(error, null);
+    allResult = addresses;
+  });
+  assert.deepEqual(allResult, [pinned]);
+
   const safeOutbound = readFileSync("convex/lib/safeOutbound.ts", "utf8");
   const seoData = readFileSync("convex/actions/seoData.ts", "utf8");
-  assert.match(safeOutbound, /lookup:\s*\([^)]*\)\s*=>[\s\S]*target\.address\.address/);
+  assert.match(safeOutbound, /lookup:\s*createPinnedLookup\(target\.address\)/);
   assert.match(safeOutbound, /sameHostRedirects/);
   assert.match(safeOutbound, /Outbound response exceeded the size limit/);
   assert.match(safeOutbound, /Unsupported outbound content type/);
