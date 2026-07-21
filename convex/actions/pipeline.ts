@@ -1543,6 +1543,7 @@ async function remediateFinalArticle(args: {
   maxWords: number;
   auditNotes: string[];
 }): Promise<{ markdown: string; notes: string[] }> {
+  const currentYear = new Date().getUTCFullYear();
   return callClaudeStructured({
     system: [
       UNTRUSTED_EVIDENCE_INSTRUCTION,
@@ -1556,6 +1557,7 @@ async function remediateFinalArticle(args: {
       `PRIMARY KEYWORD: ${args.primaryKeyword}`,
       `PRODUCT: ${args.productName}`,
       `HARD MAXIMUM: ${args.maxWords} measured prose words.`,
+      `CURRENT YEAR: ${currentYear}`,
       "",
       "BINDING REMEDIATION RULES:",
       "- Address every audit note directly; do not make unrelated stylistic changes.",
@@ -1567,6 +1569,7 @@ async function remediateFinalArticle(args: {
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
       "- Preserve the reader's core answer, useful framework, internal links, restrained CTA, and valid Markdown.",
       "- Keep the complete revision between 900 words and the hard maximum.",
+      `- Do not use an earlier year as a present or future hypothetical. Historical years require explicit historical context; otherwise use ${currentYear} or no year.`,
       "- Before returning, scan every digit and currency symbol in the complete article. Apart from step labels and citation markers, each factual number must have direct supplied evidence and a matching citation or be removed.",
       "",
       `INDEPENDENT AUDIT NOTES:\n${args.auditNotes.map((note) => `- ${note}`).join("\n")}`,
@@ -2695,6 +2698,7 @@ async function handleArticle(
     `</target_audience>`,
     ``,
     `<content_settings>`,
+    `Current date: ${new Date().toISOString().slice(0, 10)}. Never present an earlier year as current or future context.`,
     `Tone: ${site.tone ?? "professional"} — maintain this tone throughout the entire article.`,
     site.language && site.language !== "en" ? `Language: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ, key takeaways, and meta fields must be in ${site.language}.` : `Language: English`,
     (() => {

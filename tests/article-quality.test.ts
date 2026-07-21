@@ -61,11 +61,39 @@ test("clamps meta descriptions cleanly without cutting through a word", () => {
     "Lead generation chatbots answer buyer questions and hand qualified leads to sales.",
   );
   assert.equal(clampMetaTitle("A useful title that is deliberately far too long to fit inside a clean search result"), "A useful title that is deliberately far too long to fit");
+  assert.equal(
+    clampMetaDescription("Learn how qualification turns website conversations into"),
+    "Learn how qualification turns website conversations.",
+  );
 
   const exactBoundary = clampMetaDescription("x".repeat(155), 155);
   assert.ok(exactBoundary);
   assert.ok(exactBoundary.length <= 155);
   assert.match(exactBoundary, /\.$/);
+});
+
+test("ordinary advice mentioning data does not become a sourced research claim", () => {
+  const productEvidence =
+    "LeadPilot captures visitor contact details and sends the conversation context to the sales team.";
+  const result = validateClaimEvidenceLedger({
+    markdown:
+      "Understand what the product solves before asking questions. Otherwise the chatbot collects data without useful context.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim: "LeadPilot captures visitor contact details and sends conversation context to the sales team.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The first-party product snapshot states this workflow directly.",
+      },
+    ],
+  });
+
+  assert.equal(result.requiredClaimCount, 0);
+  assert.deepEqual(result.issues, []);
 });
 
 test("plain-Markdown publication rejects multiline and component MDX", () => {

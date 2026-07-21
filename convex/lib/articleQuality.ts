@@ -53,7 +53,7 @@ export type ClaimEvidenceEntry = {
 };
 
 const FACTUAL_CLAIM_PATTERN =
-  /\b(?:according to|research|study|studies|survey|report|data|evidence|shows?|found|indicates?|average|majority)\b/i;
+  /\b(?:according to|research|stud(?:y|ies)|survey|dataset|evidence|findings?|average|majority)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
 
 /**
  * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately
@@ -277,7 +277,7 @@ const EVIDENCE_REQUIRED_NUMBER_PATTERN =
 const INLINE_CITATION_PATTERN = /\[\d+(?:\s*,\s*\d+)*\]/;
 const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
 const DANGLING_META_END_PATTERN =
-  /\b(?:a|an|and|at|by|for|from|in|of|on|or|the|to|with|which|that)$/i;
+  /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that)$/i;
 const INCOMPLETE_META_PHRASE_END_PATTERN =
   /\b(?:with|for|to|of)\s+(?:full|complete|detailed|relevant|useful|better|clear|strong)$/i;
 
