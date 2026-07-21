@@ -4328,31 +4328,6 @@ async function reviewExistingArticleHandler(
           "Existing reviewed first-party product screenshot reused as the hero; no generated-art call was needed.",
         );
       }
-      if (!featuredImage || !reviewedMedia.has(featuredImage)) {
-        featuredImage = undefined;
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            featuredImage = await generateHeroImage(
-              ctx,
-              article.title,
-              site.niche ?? "",
-              site.imageBrandingPrompt ?? undefined,
-              site.brandPrimaryColor ?? undefined,
-            );
-            reviewedMedia.add(featuredImage);
-            mediaQualityNotes.push(
-              "Deferred hero image generated and passed visual review during quality recovery.",
-            );
-            break;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "unknown";
-            mediaQualityNotes.push(
-              `Deferred hero image attempt ${attempt} failed visual review: ${message}`,
-            );
-          }
-        }
-      }
-
       if (productHeadingMatch?.index !== undefined) {
         const sectionStart = productHeadingMatch.index;
         const headingEnd = sectionStart + productHeadingMatch[0].length;
@@ -4396,6 +4371,64 @@ async function reviewExistingArticleHandler(
             const message = error instanceof Error ? error.message : "unknown";
             mediaQualityNotes.push(
               `Deferred product screenshot failed visual review: ${message}`,
+            );
+          }
+        }
+      }
+
+      reviewedProductImage = selectReviewedProductImage(
+        finalReviewMarkdown,
+        productName,
+        reviewedMedia,
+      );
+      if (!featuredImage && reviewedProductImage) {
+        featuredImage = reviewedProductImage;
+        mediaQualityNotes.push(
+          "Reviewed first-party product screenshot reused as the hero instead of generating decorative artwork.",
+        );
+      }
+
+      if (!featuredImage && productHeadingMatch?.index === undefined) {
+        try {
+          const firstPartyHero = await captureScreenshot(
+            ctx,
+            site.domain,
+            productName,
+          );
+          reviewedMedia.add(firstPartyHero);
+          featuredImage = firstPartyHero;
+          mediaQualityNotes.push(
+            "Reviewed first-party site capture used as the hero instead of generating decorative artwork.",
+          );
+        } catch (error) {
+          mediaQualityNotes.push(
+            `First-party hero capture failed visual review: ${
+              error instanceof Error ? error.message : "unknown"
+            }`,
+          );
+        }
+      }
+
+      if (!featuredImage || !reviewedMedia.has(featuredImage)) {
+        featuredImage = undefined;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            featuredImage = await generateHeroImage(
+              ctx,
+              article.title,
+              site.niche ?? "",
+              site.imageBrandingPrompt ?? undefined,
+              site.brandPrimaryColor ?? undefined,
+            );
+            reviewedMedia.add(featuredImage);
+            mediaQualityNotes.push(
+              "Deferred hero image generated and passed visual review during quality recovery.",
+            );
+            break;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "unknown";
+            mediaQualityNotes.push(
+              `Deferred hero image attempt ${attempt} failed visual review: ${message}`,
             );
           }
         }
