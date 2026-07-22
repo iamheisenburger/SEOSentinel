@@ -12,6 +12,7 @@ import {
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
   effectivePublishedAt,
+  exactCadenceWakeupAt,
   coveredPrimaryKeywords,
   isSealedReady,
   selectNonCannibalizingTopic,
@@ -43,6 +44,9 @@ export const scheduleCadence = internalAction({
   ): Promise<{ scheduled: number; mode?: string; bufferCount?: number }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
+    if (!site.autopilotEnabled) {
+      return { scheduled: 0, mode: "autopilot_disabled" };
+    }
 
     const rolloutMode = site.autopilotRolloutMode ?? "observe";
     if (rolloutMode === "observe") {
@@ -91,6 +95,20 @@ export const scheduleCadence = internalAction({
     const autonomousDelivery =
       rolloutMode === "live" &&
       !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
+
+    const exactWakeupAt = exactCadenceWakeupAt({
+      autonomousDelivery,
+      sealedBufferCount: buffer.length,
+      lastPublishedAt,
+      cadenceMs,
+      now,
+    });
+    if (exactWakeupAt !== undefined) {
+      await ctx.runMutation(internal.autopilot.scheduleCadenceDeadline, {
+        siteId,
+        dueAt: exactWakeupAt,
+      });
+    }
 
     if (rolloutMode === "warm" && buffer.length >= TARGET_APPROVED_BUFFER) {
       await ctx.runMutation(internal.autopilot.raiseAlert, {

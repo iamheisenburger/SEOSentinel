@@ -135,6 +135,117 @@ test("clamps meta descriptions cleanly without cutting through a word", () => {
   assert.match(exactBoundary, /\.$/);
 });
 
+test("strict publication rejects a promised metric list that was removed", () => {
+  const markdown = [
+    "# ROI measurement guide",
+    "",
+    "## Establish your baseline",
+    "",
+    "Document these current-state metrics:",
+    "",
+    "Write these down before deployment so the comparison remains honest.",
+    "",
+    body,
+  ].join("\n");
+  const result = evaluatePublicationQuality(
+    {
+      title: "ROI measurement guide",
+      markdown,
+      metaTitle: "ROI Measurement Guide for Website Chatbots",
+      metaDescription:
+        "Build an honest chatbot ROI baseline, compare qualified-lead outcomes, and measure the commercial result using your own business data.",
+      wordCount: 980,
+      factCheckScore: 90,
+      editorialQualityScore: 90,
+      mediaQualityStatus: "passed",
+      featuredImage: "https://example.com/reviewed.jpg",
+      reviewedMediaUrls: ["https://example.com/reviewed.jpg"],
+      claimEvidenceStatus: "passed",
+    },
+    "strict",
+  );
+  assert.equal(result.passed, false);
+  assert.ok(
+    result.issues.some((issue) =>
+      issue.includes("promises a list or table but none follows")
+    ),
+  );
+});
+
+test("strict publication accepts a promised metric list when it is present", () => {
+  const markdown = [
+    "# ROI measurement guide",
+    "",
+    "## Establish your baseline",
+    "",
+    "Document these current-state metrics:",
+    "",
+    "- Monthly unique website visitors",
+    "- Qualified inbound leads per month",
+    "- Median first-response time",
+    "",
+    body,
+  ].join("\n");
+  const result = evaluatePublicationQuality(
+    {
+      title: "ROI measurement guide",
+      markdown,
+      metaTitle: "ROI Measurement Guide for Website Chatbots",
+      metaDescription:
+        "Build an honest chatbot ROI baseline, compare qualified-lead outcomes, and measure the commercial result using your own business data.",
+      wordCount: 980,
+      factCheckScore: 90,
+      editorialQualityScore: 90,
+      mediaQualityStatus: "passed",
+      featuredImage: "https://example.com/reviewed.jpg",
+      reviewedMediaUrls: ["https://example.com/reviewed.jpg"],
+      claimEvidenceStatus: "passed",
+    },
+    "strict",
+  );
+  assert.equal(
+    result.issues.some((issue) =>
+      issue.includes("promises a list or table but none follows")
+    ),
+    false,
+  );
+});
+
+test("strict publication rejects metadata cut off after a transitive verb", () => {
+  const result = evaluatePublicationQuality(
+    {
+      title: "Chatbot vs contact forms",
+      markdown: `# Chatbot vs contact forms\n\n${body}`,
+      metaTitle: "Chatbot vs Contact Forms for Lead Capture",
+      metaDescription:
+        "Chatbots qualify intent before asking for contact details, while forms collect information upfront. Learn which tool captures.",
+      wordCount: 960,
+      factCheckScore: 90,
+      editorialQualityScore: 90,
+      mediaQualityStatus: "passed",
+      featuredImage: "https://example.com/reviewed.jpg",
+      reviewedMediaUrls: ["https://example.com/reviewed.jpg"],
+      claimEvidenceStatus: "passed",
+    },
+    "strict",
+  );
+  assert.equal(result.passed, false);
+  assert.ok(
+    result.issues.some((issue) =>
+      issue.includes("dangling or incomplete phrase")
+    ),
+  );
+});
+
+test("metadata clamping drops an incomplete generated final sentence", () => {
+  assert.equal(
+    clampMetaDescription(
+      "Chatbots qualify visitors before asking for contact information, while forms collect data upfront. Learn which approach captures.",
+    ),
+    "Chatbots qualify visitors before asking for contact information, while forms collect data upfront.",
+  );
+});
+
 test("ordinary advice mentioning data does not become a sourced research claim", () => {
   const productEvidence =
     "LeadPilot captures visitor contact details and sends the conversation context to the sales team.";

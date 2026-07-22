@@ -5092,6 +5092,13 @@ export const autopilotTick = internalAction({
     try {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
+    if (!site.autopilotEnabled) {
+      return finish(
+        { processed: 0 },
+        "autopilot_disabled",
+        "Autopilot was disabled before this durable tenant wake-up executed.",
+      );
+    }
 
     // 1. Reset expired leases and reap bounded orphan reservations first.
     await ctx.runMutation(internal.jobs.resetStuckJobs, { siteId });
@@ -5215,6 +5222,7 @@ export const autopilotTick = internalAction({
       manual_delivery_waiting: "A quality-gated draft is waiting for manual delivery.",
       cadence_not_due: "The next cadence window is not due yet.",
       buffer_full: "The strict-quality future buffer is full.",
+      autopilot_disabled: "Autopilot is disabled for this tenant.",
       idle: "No eligible work was pending.",
     };
     return finish(

@@ -443,6 +443,8 @@ const DANGLING_META_END_PATTERN =
   /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that)$/i;
 const INCOMPLETE_META_PHRASE_END_PATTERN =
   /\b(?:with|for|to|of)\s+(?:full|complete|detailed|relevant|useful|better|clear|strong)$/i;
+const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
+  /\b(?:captures?|compares?|covers?|delivers?|explains?|includes?|offers?|provides?|reveals?|requires?|shows?)$/i;
 
 export function articleWordCeiling(articleType?: string): number {
   switch (articleType) {
@@ -526,6 +528,17 @@ export function clampMetaDescription(
   let complete = normalized
     .slice(0, cutAt)
     .replace(/[\s,;:.!?–—-]+$/g, "");
+  while (INCOMPLETE_TRANSITIVE_META_END_PATTERN.test(complete)) {
+    const lastSentenceBoundary = Math.max(
+      complete.lastIndexOf("."),
+      complete.lastIndexOf("!"),
+      complete.lastIndexOf("?"),
+    );
+    complete = (lastSentenceBoundary >= 60
+      ? complete.slice(0, lastSentenceBoundary)
+      : complete.replace(/\s+\S+$/, "")
+    ).replace(/[\s,;:.!?–—-]+$/g, "");
+  }
   while (INCOMPLETE_META_PHRASE_END_PATTERN.test(complete)) {
     complete = complete
       .replace(/\s+\S+\s+\S+$/, "")
@@ -741,6 +754,26 @@ function markdownTableProblems(markdown: string): string[] {
   return problems;
 }
 
+function danglingStructuredIntroductions(markdown: string): string[] {
+  const lines = markdown.replace(/```[\s\S]*?```/g, "").split("\n");
+  const problems: string[] = [];
+  const promisesStructuredContent =
+    /\b(?:metrics?|measure|track|include|includes|included|following|sources?|costs?|value sources?)\s*:\s*\**$/i;
+  const beginsStructuredContent = /^(?:[-*+]\s+|\d+[.)]\s+|\||>\s+)/;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index].trim();
+    if (!line || !promisesStructuredContent.test(line)) continue;
+    const next = lines.slice(index + 1).find((candidate) => candidate.trim());
+    if (!next || !beginsStructuredContent.test(next.trim())) {
+      problems.push(
+        `Structured introduction near line ${index + 1} promises a list or table but none follows.`,
+      );
+    }
+  }
+  return problems;
+}
+
 export function evaluatePublicationQuality(
   article: PublicationArticle,
   mode: PublicationQualityMode = "standard",
@@ -750,6 +783,7 @@ export function evaluatePublicationQuality(
   const markdown = article.markdown.trim();
   const measuredWordCount = countWords(markdown);
   const tableProblems = markdownTableProblems(markdown);
+  const danglingIntroductions = danglingStructuredIntroductions(markdown);
   const sources = article.sources ?? [];
   const validSources: URL[] = [];
   let strictEvidenceSourceCount = 0;
@@ -769,6 +803,9 @@ export function evaluatePublicationQuality(
   }
   if (tableProblems.length > 0) {
     issues.push(...tableProblems);
+  }
+  if (mode === "strict" && danglingIntroductions.length > 0) {
+    issues.push(...danglingIntroductions);
   }
 
   if (!article.metaDescription?.trim()) {
@@ -792,6 +829,9 @@ export function evaluatePublicationQuality(
         article.metaDescription!.trim().replace(/[.!?]+$/, "").trim(),
       ) ||
       INCOMPLETE_META_PHRASE_END_PATTERN.test(
+        article.metaDescription!.trim().replace(/[.!?]+$/, "").trim(),
+      ) ||
+      INCOMPLETE_TRANSITIVE_META_END_PATTERN.test(
         article.metaDescription!.trim().replace(/[.!?]+$/, "").trim(),
       )
     ) {

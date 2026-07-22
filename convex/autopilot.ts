@@ -190,6 +190,57 @@ export const dispatchSiteFollowup = internalMutation({
   },
 });
 
+// The fleet cron is intentionally coarse. A sealed article gets a separate,
+// idempotent tenant wake-up at its exact cadence deadline so publication does
+// not drift until the next three-hour fleet slot.
+export const scheduleCadenceDeadline = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    dueAt: v.number(),
+  },
+  handler: async (ctx, { siteId, dueAt }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !site?.autopilotEnabled ||
+      site.autopilotRolloutMode !== "live" ||
+      site.approvalRequired ||
+      (site.publishMethod ?? "github") === "manual"
+    ) {
+      return { scheduled: false, reason: "autonomous_delivery_disabled" };
+    }
+    const now = Date.now();
+    if (!Number.isFinite(dueAt) || dueAt <= now) {
+      return { scheduled: false, reason: "deadline_not_future" };
+    }
+
+    const existing = await ctx.db
+      .query("autopilot_runs")
+      .withIndex("by_site_scheduled", (q) =>
+        q.eq("siteId", siteId).eq("scheduledAt", dueAt),
+      )
+      .filter((q) => q.eq(q.field("trigger"), "cadence_deadline"))
+      .first();
+    if (existing) {
+      return { scheduled: false, reason: "already_armed", runId: existing._id };
+    }
+
+    const runId = await ctx.db.insert("autopilot_runs", {
+      siteId,
+      trigger: "cadence_deadline",
+      scheduledAt: dueAt,
+      heartbeatAt: now,
+      status: "scheduled",
+      detail: "Exact cadence deadline armed from a sealed publication buffer.",
+    });
+    await ctx.scheduler.runAt(
+      dueAt,
+      internal.actions.pipeline.autopilotTick,
+      { siteId, runId, trigger: "cadence_deadline" },
+    );
+    return { scheduled: true, runId };
+  },
+});
+
 export const markRunStarted = internalMutation({
   args: { runId: v.id("autopilot_runs") },
   handler: async (ctx, { runId }) => {

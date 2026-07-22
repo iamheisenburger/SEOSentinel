@@ -110,6 +110,32 @@ export function isSealedReady(article: BufferArticle): boolean {
   );
 }
 
+/**
+ * A coarse fleet cron is allowed to discover work, but it must not define a
+ * tenant's publication time. Once an autonomous tenant has a sealed artifact,
+ * arm one durable wake-up for the exact cadence deadline. This keeps a daily
+ * tenant from drifting up to the three-hour fleet interval after every post.
+ */
+export function exactCadenceWakeupAt(args: {
+  autonomousDelivery: boolean;
+  sealedBufferCount: number;
+  lastPublishedAt?: number;
+  cadenceMs: number;
+  now: number;
+}): number | undefined {
+  if (
+    !args.autonomousDelivery ||
+    args.sealedBufferCount < 1 ||
+    !Number.isFinite(args.lastPublishedAt) ||
+    !Number.isFinite(args.cadenceMs) ||
+    args.cadenceMs <= 0
+  ) {
+    return undefined;
+  }
+  const dueAt = (args.lastPublishedAt as number) + args.cadenceMs;
+  return dueAt > args.now ? dueAt : undefined;
+}
+
 export function migrationBlocksAutopilot(
   migrationStatus: string | undefined,
   hasAnyArticle: boolean,

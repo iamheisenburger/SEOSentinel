@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   coveredPrimaryKeywords,
+  exactCadenceWakeupAt,
   MAX_NEW_CANDIDATES_PER_24H,
   MAX_QUALITY_REPLACEMENTS_PER_24H,
   MIN_APPROVED_BUFFER,
@@ -134,6 +135,61 @@ test("due publication outranks manual and replenishment jobs", () => {
     /ctx\.scheduler\.runAfter\(\s*0,\s*internal\.actions\.pipeline\.processNextJob/,
   );
   assert.match(pipeline, /runId: v\.optional\(v\.id\("autopilot_runs"\)\)/);
+});
+
+test("a sealed autonomous buffer arms the exact cadence deadline", () => {
+  const now = Date.UTC(2026, 6, 22, 18, 0, 0);
+  const cadenceMs = 24 * 60 * 60 * 1000;
+  const lastPublishedAt = Date.UTC(2026, 6, 21, 23, 15, 1);
+  assert.equal(
+    exactCadenceWakeupAt({
+      autonomousDelivery: true,
+      sealedBufferCount: 2,
+      lastPublishedAt,
+      cadenceMs,
+      now,
+    }),
+    lastPublishedAt + cadenceMs,
+  );
+  assert.equal(
+    exactCadenceWakeupAt({
+      autonomousDelivery: true,
+      sealedBufferCount: 0,
+      lastPublishedAt,
+      cadenceMs,
+      now,
+    }),
+    undefined,
+  );
+  assert.equal(
+    exactCadenceWakeupAt({
+      autonomousDelivery: false,
+      sealedBufferCount: 2,
+      lastPublishedAt,
+      cadenceMs,
+      now,
+    }),
+    undefined,
+  );
+  assert.equal(
+    exactCadenceWakeupAt({
+      autonomousDelivery: true,
+      sealedBufferCount: 2,
+      lastPublishedAt: now - cadenceMs,
+      cadenceMs,
+      now,
+    }),
+    undefined,
+  );
+
+  const autopilot = readFileSync("convex/autopilot.ts", "utf8");
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(autopilot, /export const scheduleCadenceDeadline/);
+  assert.match(autopilot, /withIndex\("by_site_scheduled"/);
+  assert.match(autopilot, /ctx\.scheduler\.runAt/);
+  assert.match(pipeline, /if \(!site\.autopilotEnabled\)/);
+  assert.match(scheduler, /mode: "autopilot_disabled"/);
 });
 
 test("topic selection includes buffered coverage and can trigger fresh-plan recovery", () => {
