@@ -249,15 +249,50 @@ export const markRunFinished = internalMutation({
       "manual_delivery_waiting",
       "retry_scheduled",
     ]);
+    let completionStatus = blockedOutcomes.has(args.outcome)
+      ? args.outcome
+      : waitingOutcomes.has(args.outcome)
+        ? "recovering"
+        : "healthy";
+    let completionDetail = args.detail ?? args.outcome;
+    let approvedBufferCount: number | undefined;
+    if (args.outcome === "quality_budget_exhausted") {
+      const [currentHealth, ready] = await Promise.all([
+        ctx.db
+          .query("autopilot_health")
+          .withIndex("by_site", (q) => q.eq("siteId", run.siteId))
+          .first(),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", run.siteId).eq("status", "ready"),
+          )
+          .take(10),
+      ]);
+      approvedBufferCount = ready.filter(isSealedReady).length;
+      completionStatus = autopilotHealthStatus({
+        schedulerStale:
+          run.trigger === "natural"
+            ? false
+            : !!currentHealth?.lastNaturalScheduledAt &&
+              now - currentHealth.lastNaturalScheduledAt > NATURAL_RUN_STALE_MS,
+        publicationMissed:
+          !!currentHealth?.nextPublicationDueAt &&
+          now > currentHealth.nextPublicationDueAt,
+        bufferCount: approvedBufferCount,
+        lastOutcome: args.outcome,
+      });
+      if (completionStatus === "healthy") {
+        completionDetail =
+          "Scheduler, cadence, and strict-quality publication buffer are healthy.";
+      }
+    }
     await upsertHealth(ctx, run.siteId, {
       lastRunId: args.runId,
       heartbeatAt: now,
-      status: blockedOutcomes.has(args.outcome)
-        ? args.outcome
-        : waitingOutcomes.has(args.outcome)
-          ? "recovering"
-          : "healthy",
-      detail: args.detail ?? args.outcome,
+      status: completionStatus,
+      detail: completionDetail,
+      ...(approvedBufferCount === undefined ? {} : { approvedBufferCount }),
       ...(run.trigger === "natural" ? { lastNaturalCompletedAt: now } : {}),
     });
     // Completing the run proves the trigger itself worked. Blocked content
