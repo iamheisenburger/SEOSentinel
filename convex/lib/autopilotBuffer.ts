@@ -2,6 +2,11 @@ import { PUBLICATION_AUDIT_VERSION } from "./publicationArtifact.ts";
 
 export const MIN_APPROVED_BUFFER = 2;
 export const TARGET_APPROVED_BUFFER = 3;
+// Keep at least one week of verified, non-overlapping topics ahead of a daily
+// tenant. Topic planning is comparatively slow and paid, so waiting until the
+// final topic is consumed makes an otherwise healthy publication buffer
+// unnecessarily fragile.
+export const MIN_VERIFIED_TOPIC_HORIZON = 7;
 // Three passing candidates fill the target. Two additional candidates are the
 // bounded replacement allowance when the strict gate quarantines work; this
 // prevents two rejections from forcing a 24-hour empty-buffer dead zone.
@@ -216,6 +221,116 @@ export function selectNonCannibalizingTopic<T extends { primaryKeyword: string }
       return overlap / tokens.length < maximumOverlap;
     });
   });
+}
+
+/**
+ * Apply the exact scheduler cannibalization rule to a whole candidate plan.
+ * Accepted candidates become coverage for the remainder of the batch, so a
+ * replenishment cannot save ten mutually overlapping variations and then
+ * discover the problem only after paying to plan them.
+ */
+export function filterNonCannibalizingTopics<
+  T extends { primaryKeyword: string },
+>(
+  topics: T[],
+  coveredKeywords: string[],
+  maximumOverlap = 0.35,
+  limit = Number.POSITIVE_INFINITY,
+): T[] {
+  const accepted: T[] = [];
+  const coverage = [...coveredKeywords];
+  for (const topic of topics) {
+    if (
+      !selectNonCannibalizingTopic(
+        [topic],
+        coverage,
+        maximumOverlap,
+      )
+    ) {
+      continue;
+    }
+    accepted.push(topic);
+    coverage.push(topic.primaryKeyword);
+    if (accepted.length >= limit) break;
+  }
+  return accepted;
+}
+
+function circularTake<T>(values: T[], start: number, count: number): T[] {
+  if (values.length === 0 || count <= 0) return [];
+  const result: T[] = [];
+  for (let index = 0; index < Math.min(count, values.length); index += 1) {
+    result.push(values[(start + index) % values.length]);
+  }
+  return result;
+}
+
+/**
+ * DataForSEO accepts twenty seeds in one economical discovery request. The
+ * former planner always sent the same first twenty, so every replenishment
+ * rediscovered the same exhausted cluster. Preserve core business anchors,
+ * then rotate a balanced set of intent variants on every plan generation.
+ */
+export function topicDiscoverySeedWindow(
+  baseSeeds: string[],
+  cycle: number,
+  limit = 20,
+): string[] {
+  const normalized = [...new Set(
+    baseSeeds
+      .map((seed) => seed.trim().toLowerCase().replace(/\s+/g, " "))
+      .filter((seed) => seed.length > 3 && seed.split(" ").length <= 6),
+  )];
+  if (normalized.length === 0 || limit <= 0) return [];
+
+  const anchorCount = Math.min(normalized.length, limit, 8);
+  const anchors = circularTake(
+    normalized,
+    Math.max(0, cycle) % normalized.length,
+    anchorCount,
+  );
+  const suffixes = [
+    "software",
+    "tool",
+    "automation",
+    "strategy",
+    "guide",
+    "best practices",
+    "examples",
+    "checklist",
+    "template",
+    "mistakes",
+    "for small business",
+    "for agencies",
+  ];
+  const prefixes = [
+    "how to improve",
+    "how to automate",
+    "how to measure",
+    "how to choose",
+  ];
+  const variants: string[] = [];
+  for (const suffix of suffixes) {
+    for (const seed of normalized) variants.push(`${seed} ${suffix}`);
+  }
+  for (const prefix of prefixes) {
+    for (const seed of normalized) variants.push(`${prefix} ${seed}`);
+  }
+
+  const selected = [...anchors];
+  const seen = new Set(selected);
+  const rotated = circularTake(
+    variants,
+    (Math.max(0, cycle) * 13) % variants.length,
+    variants.length,
+  );
+  for (const variant of rotated) {
+    if (seen.has(variant) || variant.split(" ").length > 8) continue;
+    seen.add(variant);
+    selected.push(variant);
+    if (selected.length >= limit) break;
+  }
+  return selected;
 }
 
 export function pendingJobPriority(payload: unknown): number {

@@ -143,6 +143,7 @@ export const upsertMany = internalMutation({
     if (skipped > 0) {
       console.log(`Topics upsert: ${inserted} inserted, ${skipped} duplicates skipped.`);
     }
+    return { inserted, skipped };
   },
 });
 

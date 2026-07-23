@@ -5,15 +5,18 @@ import test from "node:test";
 import {
   coveredPrimaryKeywords,
   exactCadenceWakeupAt,
+  filterNonCannibalizingTopics,
   MAX_NEW_CANDIDATES_PER_24H,
   MAX_QUALITY_REPLACEMENTS_PER_24H,
   MIN_APPROVED_BUFFER,
+  MIN_VERIFIED_TOPIC_HORIZON,
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
   isSealedReady,
   migrationBlocksAutopilot,
   pendingJobPriority,
   selectNonCannibalizingTopic,
+  topicDiscoverySeedWindow,
 } from "../convex/lib/autopilotBuffer.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
@@ -237,4 +240,41 @@ test("topic selection compares against each existing phrase instead of the whole
     selectNonCannibalizingTopic(topics, ["sales qualification framework"]),
     undefined,
   );
+});
+
+test("a replenished plan is filtered with the scheduler's exact overlap rule", () => {
+  const accepted = filterNonCannibalizingTopics(
+    [
+      { primaryKeyword: "lead scoring automation" },
+      { primaryKeyword: "lead scoring software" },
+      { primaryKeyword: "website conversion checklist" },
+      { primaryKeyword: "customer onboarding workflow" },
+    ],
+    ["automated lead scoring"],
+  );
+  assert.deepEqual(
+    accepted.map((topic) => topic.primaryKeyword),
+    ["website conversion checklist", "customer onboarding workflow"],
+  );
+});
+
+test("topic discovery rotates intent seeds instead of replaying one exhausted request", () => {
+  const base = [
+    "lead qualification",
+    "website conversion",
+    "sales chatbot",
+    "visitor engagement",
+  ];
+  const first = topicDiscoverySeedWindow(base, 0);
+  const second = topicDiscoverySeedWindow(base, 1);
+  assert.equal(first.length, 20);
+  assert.equal(second.length, 20);
+  assert.notDeepEqual(first, second);
+  assert.ok(first.some((seed) => seed.includes("software")));
+  assert.ok(second.some((seed) => !base.includes(seed)));
+  assert.equal(MIN_VERIFIED_TOPIC_HORIZON, 7);
+
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(scheduler, /topic_horizon_replenishment/);
+  assert.match(scheduler, /MIN_VERIFIED_TOPIC_HORIZON/);
 });

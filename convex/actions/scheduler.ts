@@ -9,11 +9,13 @@ import { getLimitsFromFeatures } from "../planLimits";
 import { MAX_QUALITY_REVISIONS } from "../lib/autopilotCadence";
 import {
   TARGET_APPROVED_BUFFER,
+  MIN_VERIFIED_TOPIC_HORIZON,
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
   effectivePublishedAt,
   exactCadenceWakeupAt,
   coveredPrimaryKeywords,
+  filterNonCannibalizingTopics,
   isSealedReady,
   selectNonCannibalizingTopic,
 } from "../lib/autopilotBuffer";
@@ -307,11 +309,14 @@ export const scheduleCadence = internalAction({
         slug: article.slug,
       })),
     );
-    const selectedTopic: Doc<"topic_clusters"> | undefined =
-      selectNonCannibalizingTopic<Doc<"topic_clusters">>(
+    const schedulableTopics = filterNonCannibalizingTopics<
+      Doc<"topic_clusters">
+    >(
       available,
       coveredKeywords,
-      );
+    );
+    const selectedTopic: Doc<"topic_clusters"> | undefined =
+      schedulableTopics[0];
 
     if (!selectedTopic) {
       // Do not repeatedly reconsider the same cannibalizing set.  A plan job
@@ -366,6 +371,31 @@ export const scheduleCadence = internalAction({
       topicId: selectedTopic._id,
       bufferFill: autonomousDelivery || rolloutMode === "warm",
     });
+
+    // Replenish before the final topic is consumed. The queued article has a
+    // higher worker priority, so horizon planning cannot delay the immediate
+    // quality-buffer fill, and the one-per-day bound prevents paid loops.
+    const remainingTopicHorizon = Math.max(0, schedulableTopics.length - 1);
+    if (queued.queued && remainingTopicHorizon < MIN_VERIFIED_TOPIC_HORIZON) {
+      const horizon = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
+        siteId,
+        reason: "topic_horizon_replenishment",
+        since: now - DAY_MS,
+        maximumRecent: 1,
+      });
+      if (horizon.queued) {
+        await ctx.runMutation(internal.autopilot.raiseAlert, {
+          siteId,
+          kind: "topic_horizon_replenishment",
+          message:
+            "The verified topic horizon fell below one week; a rotated non-overlapping plan was queued behind the current article.",
+          details: {
+            remainingTopicHorizon,
+            target: MIN_VERIFIED_TOPIC_HORIZON,
+          },
+        });
+      }
+    }
 
     return {
       scheduled: queued.queued ? 1 : 0,

@@ -502,6 +502,7 @@ export const queuePlanIfAbsent = internalMutation({
     const duplicate = active.find((job) => job.type === "plan");
     if (duplicate) return { queued: false, jobId: duplicate._id, reason: "active" as const };
 
+    let recentCount = 0;
     if (args.reason && args.since !== undefined && args.maximumRecent !== undefined) {
       const recent = await ctx.db
         .query("jobs")
@@ -515,8 +516,9 @@ export const queuePlanIfAbsent = internalMutation({
           : {};
         return payload.reason === args.reason;
       }).length;
-      if (count >= args.maximumRecent) {
-        return { queued: false, reason: "recent_limit" as const, recent: count };
+      recentCount = count;
+      if (recentCount >= args.maximumRecent) {
+        return { queued: false, reason: "recent_limit" as const, recent: recentCount };
       }
     }
 
@@ -527,20 +529,27 @@ export const queuePlanIfAbsent = internalMutation({
       }
     }
     const timestamp = now();
+    const payload = args.reason || args.manual
+      ? {
+          ...(args.reason ? {
+            reason: args.reason,
+            replenishmentSequence: recentCount + 1,
+          } : {}),
+          ...(args.manual === true ? { manual: true } : {}),
+        }
+      : undefined;
     const jobId = await ctx.db.insert("jobs", {
       siteId: args.siteId,
       type: "plan",
       status: "pending",
-      payload: args.reason || args.manual
-        ? { reason: args.reason, manual: args.manual === true }
-        : undefined,
+      payload,
       ...rolloutFields(site, args.manual === true),
       workerAttempts: 0,
       publicationAttempts: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    return { queued: true, jobId, recent: 0 };
+    return { queued: true, jobId, recent: recentCount };
   },
 });
 

@@ -35,7 +35,12 @@ import {
   sha256Hex,
 } from "../lib/publicationArtifact";
 import { evaluateCadenceWindow } from "../lib/autopilotCadence";
-import { pendingJobPriority } from "../lib/autopilotBuffer";
+import {
+  coveredPrimaryKeywords,
+  filterNonCannibalizingTopics,
+  pendingJobPriority,
+  topicDiscoverySeedWindow,
+} from "../lib/autopilotBuffer";
 import {
   STRICT_EVIDENCE_SEARCH_DOMAINS,
   strictEvidenceSources,
@@ -1901,6 +1906,7 @@ async function handlePlan(
   siteId: Id<"sites">,
   jobId?: Id<"jobs">,
   workerToken?: string,
+  replenishmentSequence = 0,
 ): Promise<{ count: number }> {
   const PLAN_STEPS = 6;
   const reportProgress = async (step: number, label: string) => {
@@ -1986,30 +1992,31 @@ async function handlePlan(
   try {
     const { discoverKeywords, findKeywordGaps } = await import("./seoData");
 
-    // Build seed keywords from the full site profile
-    const seeds: string[] = [];
+    // Build base keywords from the full site profile. The final twenty-seed
+    // request is balanced and rotated below; repeated replenishments must not
+    // keep asking DataForSEO the same exhausted question.
+    const baseSeeds: string[] = [];
     const addSeed = (text: string) => {
       const clean = text.trim().toLowerCase();
-      if (clean.length > 3 && clean.split(/\s+/).length <= 4 && !seeds.includes(clean)) seeds.push(clean);
+      if (
+        clean.length > 3 &&
+        clean.split(/\s+/).length <= 6 &&
+        !baseSeeds.includes(clean)
+      ) {
+        baseSeeds.push(clean);
+      }
     };
     if (site.niche) for (const p of site.niche.split(/[,;]/)) addSeed(p);
     if (site.anchorKeywords?.length) for (const kw of site.anchorKeywords.slice(0, 5)) addSeed(kw);
     if (site.keyFeatures?.length) for (const f of site.keyFeatures.slice(0, 5)) addSeed(f.split(/[,.:;]/)[0]);
     if (site.painPoints?.length) for (const p of site.painPoints.slice(0, 5)) addSeed(p.split(/[,.:;]/)[0]);
     if (site.blogTheme) for (const p of site.blogTheme.split(/[,;.]/)) addSeed(p);
-    if (seeds.length === 0) seeds.push(site.domain.replace(/\.\w+$/, ""));
-
-    // Expand seeds with modifiers for long-tail discovery — cast a WIDE net
-    const baseSeedCount = seeds.length;
-    const modifiers = ["how to","best","tool","software","guide","strategy","automation","platform","for business","for startups","tips","examples","vs","alternatives","free","services","agency","checklist","template","mistakes"];
-    for (const core of seeds.slice(0, 5)) {
-      for (const mod of modifiers) {
-        const combo = `${core} ${mod}`;
-        if (combo.split(/\s+/).length <= 5 && !seeds.includes(combo)) seeds.push(combo);
-      }
-      if (seeds.length >= 30) break;
-    }
-    console.log(`Seeds: ${baseSeedCount} base + ${seeds.length - baseSeedCount} expanded = ${seeds.length} total`);
+    if (baseSeeds.length === 0) baseSeeds.push(site.domain.replace(/\.\w+$/, ""));
+    const seedCycle = existingTopics.length + replenishmentSequence * 11;
+    const seeds = topicDiscoverySeedWindow(baseSeeds, seedCycle, 20);
+    console.log(
+      `Seeds: ${baseSeeds.length} business anchors → ${seeds.length} balanced discovery seeds (cycle ${seedCycle})`,
+    );
 
     // Request 300 keywords — enough volume for 10+ to survive filters without burning DataForSEO credits
     discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 300))
@@ -2338,7 +2345,7 @@ async function handlePlan(
     };
 
     // 5c. Quality gate — single pass, clean logic
-    const enrichedPlan: (typeof plan[0] & {
+    let enrichedPlan: (typeof plan[0] & {
       searchVolume?: number; keywordDifficulty?: number; cpc?: number;
       serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string; paaQuestions?: string[];
     })[] = [];
@@ -2418,6 +2425,24 @@ async function handlePlan(
       console.log(`⚠ Only ${enrichedPlan.length} topics survived. Need more volume or looser filters.`);
     }
 
+    const coveredKeywords = coveredPrimaryKeywords(
+      existingTopics.map((topic) => ({
+        _id: String(topic._id),
+        status: topic.status ?? "planned",
+        primaryKeyword: topic.primaryKeyword,
+      })),
+      [],
+    );
+    enrichedPlan = filterNonCannibalizingTopics(
+      enrichedPlan,
+      coveredKeywords,
+      0.35,
+      10,
+    );
+    console.log(
+      `Scheduler-aligned topic gate: ${enrichedPlan.length} verified, non-overlapping topics remain`,
+    );
+
     // 5d. SERP analysis — determine optimal article format for each surviving topic
     await reportProgress(5, "Analyzing SERPs for article format optimization...");
     for (const topic of enrichedPlan) {
@@ -2435,8 +2460,19 @@ async function handlePlan(
     // ══════════════════════════════════════════════════════════════════════
 
     plan = enrichedPlan.slice(0, 10);
-    await ctx.runMutation(internal.topics.upsertMany, { siteId, topics: plan });
-    console.log(`Saved ${plan.length} fully-enriched topics`);
+    const saved = await ctx.runMutation(internal.topics.upsertMany, {
+      siteId,
+      topics: plan,
+    });
+    if (saved.inserted === 0 && requireVerifiedKeywordData) {
+      throw new Error(
+        "Verified planning produced no new scheduler-eligible topics; refusing to report a false replenishment success.",
+      );
+    }
+    plan = plan.slice(0, saved.inserted);
+    console.log(
+      `Saved ${saved.inserted} fully-enriched topics (${saved.skipped} duplicate rows skipped)`,
+    );
   } catch (err) {
     if (requireVerifiedKeywordData) {
       throw new Error(
@@ -2447,7 +2483,11 @@ async function handlePlan(
     }
     console.error(`SEO enrichment failed, saving raw topics:`, err instanceof Error ? err.message : err);
     plan = plan.slice(0, 10);
-    await ctx.runMutation(internal.topics.upsertMany, { siteId, topics: plan });
+    const saved = await ctx.runMutation(internal.topics.upsertMany, {
+      siteId,
+      topics: plan,
+    });
+    plan = plan.slice(0, saved.inserted);
   }
 
   await reportProgress(6, "Content strategy ready!");
@@ -4136,7 +4176,16 @@ async function generatePlanHandler(
     });
     if (!claimed) throw new Error("Plan job is not pending or its retry is not due");
     try {
-      const result = await handlePlan(ctx, siteId, jobId, workerToken);
+      const payload = claimed.payload && typeof claimed.payload === "object"
+        ? (claimed.payload as { replenishmentSequence?: number })
+        : undefined;
+      const result = await handlePlan(
+        ctx,
+        siteId,
+        jobId,
+        workerToken,
+        payload?.replenishmentSequence ?? 0,
+      );
       const completed = await ctx.runMutation(internal.jobs.markDone, {
         jobId,
         workerToken,
@@ -5293,6 +5342,8 @@ export const processNextJob = internalAction({
       bufferFill?: boolean;
       bufferDelivery?: boolean;
       manual?: boolean;
+      reason?: string;
+      replenishmentSequence?: number;
       options?: RichMediaOptions;
     };
     const payload = job.payload as JobPayload | undefined;
@@ -5334,6 +5385,7 @@ export const processNextJob = internalAction({
           args.siteId,
           job._id,
           workerToken,
+          payload?.replenishmentSequence ?? 0,
         );
         await complete(result);
         return { processed: true, jobId: job._id, planCompleted: true };
