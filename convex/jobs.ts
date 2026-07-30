@@ -259,6 +259,45 @@ export const resetStuckJobs = internalMutation({
   },
 });
 
+// A manually invoked parent action can hit Convex's request deadline while a
+// nested worker is between heartbeats. Recover only the exact observed lease,
+// only after it has been stale for five minutes, so an operator cannot reset a
+// worker that has since made progress.
+export const recoverParentTimeoutJob = internalMutation({
+  args: {
+    jobId: v.id("jobs"),
+    expectedHeartbeatAt: v.number(),
+  },
+  handler: async (ctx, { jobId, expectedHeartbeatAt }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job || job.status !== "running") {
+      return { recovered: false, reason: "not_running" as const };
+    }
+    if (job.heartbeatAt !== expectedHeartbeatAt) {
+      return { recovered: false, reason: "lease_changed" as const };
+    }
+    const currentTime = now();
+    if (currentTime - expectedHeartbeatAt < 5 * 60 * 1000) {
+      return { recovered: false, reason: "heartbeat_too_fresh" as const };
+    }
+    await releaseReservedUsage(ctx, job);
+    const attempts = (job.workerAttempts ?? 0) + 1;
+    await ctx.db.patch(jobId, {
+      status: "pending",
+      workerAttempts: attempts,
+      error:
+        "Recovered an abandoned nested worker after its parent action exceeded the request deadline.",
+      nextAttemptAt: currentTime,
+      reservationId: job.articleId ? job.reservationId : undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: currentTime,
+    });
+    return { recovered: true, attempts };
+  },
+});
+
 export const cleanupExpiredGenerationReservations = internalMutation({
   args: {},
   handler: async (ctx) => {
