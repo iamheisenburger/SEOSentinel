@@ -178,6 +178,23 @@ export const updateStatus = internalMutation({
   },
 });
 
+export const updateLabel = internalMutation({
+  args: {
+    topicId: v.id("topic_clusters"),
+    label: v.string(),
+  },
+  handler: async (ctx, { topicId, label }) => {
+    const topic = await ctx.db.get(topicId);
+    if (!topic) throw new Error("Topic not found");
+    const normalizedLabel = label.trim();
+    if (!normalizedLabel) throw new Error("Topic label cannot be empty");
+    await ctx.db.patch(topicId, {
+      label: normalizedLabel,
+      updatedAt: now(),
+    });
+  },
+});
+
 export const removeUsed = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
