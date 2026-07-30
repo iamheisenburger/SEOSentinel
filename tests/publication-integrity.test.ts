@@ -450,12 +450,21 @@ test("external publication retries are bounded and back off", () => {
 
 test("every quality terminal state immediately re-enters the bounded scheduler", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const articles = readFileSync("convex/articles.ts", "utf8");
   assert.match(
     pipeline,
     /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined/,
   );
   assert.match(pipeline, /quality_gate_authorized_bounded_revision/);
   assert.match(pipeline, /strict_gate_authorized_deterministic_metadata_repair/);
+  assert.match(
+    pipeline,
+    /payload\.metadataOnlyRepair[\s\S]{0,180}applyDeterministicMetadataRepair/,
+  );
+  assert.match(
+    articles,
+    /applyDeterministicMetadataRepair[\s\S]{0,1800}evaluatePublicationQuality\(candidate, "strict"\)/,
+  );
   assert.match(pipeline, /sealed_buffer_below_target/);
   assert.match(
     pipeline,

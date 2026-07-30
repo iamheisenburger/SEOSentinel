@@ -5442,11 +5442,16 @@ export const processNextJob = internalAction({
 
       if (payload?.qualityRetry) {
         if (!payload.articleId) throw new Error("Quality retry is missing its articleId");
-        const review = await reviewExistingArticleHandler(ctx, {
-          siteId: args.siteId,
-          articleId: payload.articleId,
-          incrementRevision: !payload.metadataOnlyRepair,
-        });
+        const review = payload.metadataOnlyRepair
+          ? await ctx.runMutation(
+              internal.articles.applyDeterministicMetadataRepair,
+              { articleId: payload.articleId },
+            )
+          : await reviewExistingArticleHandler(ctx, {
+              siteId: args.siteId,
+              articleId: payload.articleId,
+              incrementRevision: true,
+            });
         let publicationSucceeded = false;
         let buffered = false;
         if (review.readyForPublication) {

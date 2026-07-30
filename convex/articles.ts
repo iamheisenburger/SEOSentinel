@@ -24,6 +24,11 @@ import {
   effectivePublishedAt,
   migrationBlocksAutopilot,
 } from "./lib/autopilotBuffer";
+import {
+  clampMetaDescription,
+  evaluatePublicationQuality,
+} from "./lib/articleQuality";
+import { needsDeterministicMetadataRepair } from "./lib/autopilotCadence";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -990,6 +995,74 @@ export const applyQualityReview = internalMutation({
       updatedAt: now(),
     });
     await syncSummary(ctx, args.articleId);
+  },
+});
+
+export const applyDeterministicMetadataRepair = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+  },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    assertNotPublishing(article);
+    if (article.status === "published") {
+      throw new Error("Published articles must use the refresh workflow");
+    }
+    if (!needsDeterministicMetadataRepair({
+      createdAt: article.createdAt,
+      status: article.status,
+      publicationGateStatus: article.publicationGateStatus,
+      publicationGateIssues: article.publicationGateIssues,
+      qualityRevisionCount: article.qualityRevisionCount,
+    })) {
+      throw new Error(
+        "Article is not eligible for deterministic metadata-only repair",
+      );
+    }
+    const site = await ctx.db.get(article.siteId);
+    if (!site) throw new Error("Site not found");
+    const metaDescription = clampMetaDescription(article.metaDescription);
+    const candidate = { ...article, metaDescription };
+    const quality = evaluatePublicationQuality(candidate, "strict");
+    const readyForPublication = quality.passed;
+    const deliveryConfig = publicationDeliveryConfig(site);
+    const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
+    const contentHash = readyForPublication
+      ? publicationArtifactHash(candidate)
+      : undefined;
+    const checkedAt = now();
+
+    await ctx.db.patch(articleId, {
+      metaDescription,
+      publicationGateStatus: readyForPublication ? "passed" : "blocked",
+      publicationGateIssues: quality.issues,
+      publicationGateWarnings: quality.warnings,
+      publicationCheckedAt: checkedAt,
+      publicationAuditVersion: readyForPublication
+        ? PUBLICATION_AUDIT_VERSION
+        : undefined,
+      publicationConfigHash: readyForPublication
+        ? deliveryConfigHash
+        : undefined,
+      publicationConfigSnapshot: readyForPublication
+        ? deliveryConfig
+        : undefined,
+      auditedContentHash: contentHash,
+      auditedAt: readyForPublication ? checkedAt : undefined,
+      updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, articleId);
+
+    return {
+      articleId,
+      factCheckScore: article.factCheckScore ?? 0,
+      editorialQualityScore: article.editorialQualityScore ?? 0,
+      readyForPublication,
+      contentHash,
+      qualityRevisionCount: article.qualityRevisionCount ?? 0,
+      issues: quality.issues,
+    };
   },
 });
 
