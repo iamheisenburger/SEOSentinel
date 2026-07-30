@@ -9,6 +9,7 @@ import {
   evaluatePublicationQuality,
   inlineCitationNumbers,
   normalizeSiteOrigin,
+  repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnledgeredEvidenceParagraphs,
   removeUnsupportedClaimSentences,
@@ -221,6 +222,34 @@ test("strict publication accepts a promised metric list when it is present", () 
     ),
     false,
   );
+});
+
+test("mechanically closes only structured introductions whose promised block is missing", () => {
+  const dangling = [
+    "## Measure performance",
+    "",
+    "Document these current-state metrics:",
+    "",
+    "Write them down before deployment.",
+  ].join("\n");
+  assert.equal(
+    repairDanglingStructuredIntroductions(dangling),
+    [
+      "## Measure performance",
+      "",
+      "Document these current-state metrics.",
+      "",
+      "Write them down before deployment.",
+    ].join("\n"),
+  );
+
+  const valid = [
+    "Document these current-state metrics:",
+    "",
+    "- Qualified leads",
+    "- Sales handoffs",
+  ].join("\n");
+  assert.equal(repairDanglingStructuredIntroductions(valid), valid);
 });
 
 test("strict publication rejects metadata cut off after a transitive verb", () => {

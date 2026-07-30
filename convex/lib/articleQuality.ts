@@ -764,24 +764,48 @@ function markdownTableProblems(markdown: string): string[] {
   return problems;
 }
 
+const STRUCTURED_CONTENT_PROMISE_PATTERN =
+  /\b(?:metrics?|measure|track|include|includes|included|following|sources?|costs?|value sources?)\s*:\s*\**$/i;
+const STRUCTURED_CONTENT_START_PATTERN = /^(?:[-*+]\s+|\d+[.)]\s+|\||>\s+)/;
+
 function danglingStructuredIntroductions(markdown: string): string[] {
   const lines = markdown.replace(/```[\s\S]*?```/g, "").split("\n");
   const problems: string[] = [];
-  const promisesStructuredContent =
-    /\b(?:metrics?|measure|track|include|includes|included|following|sources?|costs?|value sources?)\s*:\s*\**$/i;
-  const beginsStructuredContent = /^(?:[-*+]\s+|\d+[.)]\s+|\||>\s+)/;
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index].trim();
-    if (!line || !promisesStructuredContent.test(line)) continue;
+    if (!line || !STRUCTURED_CONTENT_PROMISE_PATTERN.test(line)) continue;
     const next = lines.slice(index + 1).find((candidate) => candidate.trim());
-    if (!next || !beginsStructuredContent.test(next.trim())) {
+    if (!next || !STRUCTURED_CONTENT_START_PATTERN.test(next.trim())) {
       problems.push(
         `Structured introduction near line ${index + 1} promises a list or table but none follows.`,
       );
     }
   }
   return problems;
+}
+
+export function repairDanglingStructuredIntroductions(markdown: string): string {
+  const lines = markdown.split("\n");
+  let inFence = false;
+  for (let index = 0; index < lines.length; index++) {
+    if (/^\s*```/.test(lines[index])) {
+      inFence = !inFence;
+      continue;
+    }
+    const line = lines[index].trim();
+    if (
+      inFence ||
+      !line ||
+      !STRUCTURED_CONTENT_PROMISE_PATTERN.test(line)
+    ) {
+      continue;
+    }
+    const next = lines.slice(index + 1).find((candidate) => candidate.trim());
+    if (next && STRUCTURED_CONTENT_START_PATTERN.test(next.trim())) continue;
+    lines[index] = lines[index].replace(/:\s*(\**)\s*$/, ".$1");
+  }
+  return lines.join("\n");
 }
 
 export function evaluatePublicationQuality(

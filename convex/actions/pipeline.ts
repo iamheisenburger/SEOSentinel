@@ -19,6 +19,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   evaluatePublicationQuality,
+  repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnledgeredEvidenceParagraphs,
   removeUnsupportedClaimSentences,
@@ -4428,7 +4429,9 @@ async function reviewExistingArticleHandler(
       sources,
       maxWords,
     });
-    const exactReviewedMarkdown = exactAudit.markdown;
+    const exactReviewedMarkdown = repairDanglingStructuredIntroductions(
+      exactAudit.markdown,
+    );
     const audit = exactAudit.audit;
     const stats = calculateArticleStats(exactReviewedMarkdown);
     if (stats.wordCount < 900 || stats.wordCount > maxWords) {
