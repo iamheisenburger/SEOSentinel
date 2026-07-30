@@ -491,10 +491,17 @@ export const queueQualityRetryIfAbsent = internalMutation({
     articleId: v.id("articles"),
     bufferFill: v.boolean(),
     metadataOnlyRepair: v.optional(v.boolean()),
+    deterministicRepair: v.optional(v.boolean()),
   },
   handler: async (
     ctx,
-    { siteId, articleId, bufferFill, metadataOnlyRepair },
+    {
+      siteId,
+      articleId,
+      bufferFill,
+      metadataOnlyRepair,
+      deterministicRepair,
+    },
   ) => {
     const [article, site] = await Promise.all([
       ctx.db.get(articleId),
@@ -512,7 +519,7 @@ export const queueQualityRetryIfAbsent = internalMutation({
       return payload.qualityRetry === true && payload.articleId === articleId;
     });
     if (duplicate) return { queued: false, jobId: duplicate._id };
-    if (metadataOnlyRepair) {
+    if (metadataOnlyRepair || deterministicRepair) {
       const priorAttempts = await ctx.db
         .query("jobs")
         .withIndex("by_site_type_created", (q) =>
@@ -525,7 +532,8 @@ export const queueQualityRetryIfAbsent = internalMutation({
           ? (job.payload as Record<string, unknown>)
           : {};
         return (
-          payload.metadataOnlyRepair === true &&
+          (payload.metadataOnlyRepair === true ||
+            payload.deterministicRepair === true) &&
           payload.articleId === articleId
         );
       });
@@ -543,6 +551,7 @@ export const queueQualityRetryIfAbsent = internalMutation({
         qualityRetry: true,
         bufferFill,
         ...(metadataOnlyRepair ? { metadataOnlyRepair: true } : {}),
+        ...(deterministicRepair ? { deterministicRepair: true } : {}),
       },
       articleId,
       ...rolloutFields(site),

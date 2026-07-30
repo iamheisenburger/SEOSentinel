@@ -5112,9 +5112,9 @@ async function continueAutopilotAfterProcessedJob(
       trigger: "quality_revision",
       reason: "quality_gate_authorized_bounded_revision",
     },
-    metadata_repair: {
-      trigger: "metadata_repair",
-      reason: "strict_gate_authorized_deterministic_metadata_repair",
+    deterministic_repair: {
+      trigger: "deterministic_repair",
+      reason: "strict_gate_authorized_deterministic_mechanical_repair",
     },
     buffer_fill: {
       trigger: processed.planCompleted ? "plan_ready" : "buffer_fill",
@@ -5230,6 +5230,7 @@ export const autopilotTick = internalAction({
             publishOnly?: boolean;
             qualityRetry?: boolean;
             metadataOnlyRepair?: boolean;
+            deterministicRepair?: boolean;
             bufferFill?: boolean;
           }
         | undefined;
@@ -5369,6 +5370,7 @@ export const processNextJob = internalAction({
       publishOnly?: boolean;
       qualityRetry?: boolean;
       metadataOnlyRepair?: boolean;
+      deterministicRepair?: boolean;
       slaRecovery?: boolean;
       bufferFill?: boolean;
       bufferDelivery?: boolean;
@@ -5445,9 +5447,11 @@ export const processNextJob = internalAction({
 
       if (payload?.qualityRetry) {
         if (!payload.articleId) throw new Error("Quality retry is missing its articleId");
-        const review = payload.metadataOnlyRepair
+        const deterministicRepair =
+          payload.metadataOnlyRepair || payload.deterministicRepair;
+        const review = deterministicRepair
           ? await ctx.runMutation(
-              internal.articles.applyDeterministicMetadataRepair,
+              internal.articles.applyDeterministicQualityRepair,
               { articleId: payload.articleId },
             )
           : await reviewExistingArticleHandler(ctx, {
@@ -5511,7 +5515,7 @@ export const processNextJob = internalAction({
         await complete({
           articleId: payload.articleId,
           qualityRetry: true,
-          metadataOnlyRepair: payload.metadataOnlyRepair === true,
+          deterministicRepair: deterministicRepair === true,
           readyForPublication: review.readyForPublication,
           revision: review.qualityRevisionCount,
           issues: review.issues,

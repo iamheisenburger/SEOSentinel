@@ -27,8 +27,10 @@ const DETERMINISTIC_METADATA_ISSUES = new Set([
   "Meta description must end as a complete sentence.",
   "Meta description ends with a dangling or incomplete phrase.",
 ]);
+const DETERMINISTIC_STRUCTURE_ISSUE_PATTERN =
+  /^Structured introduction near line \d+ promises a list or table but none follows\.$/;
 
-export function needsDeterministicMetadataRepair(
+export function needsDeterministicMechanicalRepair(
   article: CadenceArticle,
 ): boolean {
   const issues = article.publicationGateIssues ?? [];
@@ -37,7 +39,11 @@ export function needsDeterministicMetadataRepair(
     article.publicationGateStatus === "blocked" &&
     (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
     issues.length > 0 &&
-    issues.every((issue) => DETERMINISTIC_METADATA_ISSUES.has(issue))
+    issues.every(
+      (issue) =>
+        DETERMINISTIC_METADATA_ISSUES.has(issue) ||
+        DETERMINISTIC_STRUCTURE_ISSUE_PATTERN.test(issue),
+    )
   );
 }
 

@@ -27,8 +27,9 @@ import {
 import {
   clampMetaDescription,
   evaluatePublicationQuality,
+  repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
-import { needsDeterministicMetadataRepair } from "./lib/autopilotCadence";
+import { needsDeterministicMechanicalRepair } from "./lib/autopilotCadence";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -998,7 +999,7 @@ export const applyQualityReview = internalMutation({
   },
 });
 
-export const applyDeterministicMetadataRepair = internalMutation({
+export const applyDeterministicQualityRepair = internalMutation({
   args: {
     articleId: v.id("articles"),
   },
@@ -1009,7 +1010,7 @@ export const applyDeterministicMetadataRepair = internalMutation({
     if (article.status === "published") {
       throw new Error("Published articles must use the refresh workflow");
     }
-    if (!needsDeterministicMetadataRepair({
+    if (!needsDeterministicMechanicalRepair({
       createdAt: article.createdAt,
       status: article.status,
       publicationGateStatus: article.publicationGateStatus,
@@ -1017,13 +1018,14 @@ export const applyDeterministicMetadataRepair = internalMutation({
       qualityRevisionCount: article.qualityRevisionCount,
     })) {
       throw new Error(
-        "Article is not eligible for deterministic metadata-only repair",
+        "Article is not eligible for deterministic mechanical repair",
       );
     }
     const site = await ctx.db.get(article.siteId);
     if (!site) throw new Error("Site not found");
     const metaDescription = clampMetaDescription(article.metaDescription);
-    const candidate = { ...article, metaDescription };
+    const markdown = repairDanglingStructuredIntroductions(article.markdown);
+    const candidate = { ...article, markdown, metaDescription };
     const quality = evaluatePublicationQuality(candidate, "strict");
     const readyForPublication = quality.passed;
     const deliveryConfig = publicationDeliveryConfig(site);
@@ -1034,6 +1036,7 @@ export const applyDeterministicMetadataRepair = internalMutation({
     const checkedAt = now();
 
     await ctx.db.patch(articleId, {
+      markdown,
       metaDescription,
       publicationGateStatus: readyForPublication ? "passed" : "blocked",
       publicationGateIssues: quality.issues,

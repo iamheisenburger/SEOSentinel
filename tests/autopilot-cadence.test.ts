@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   evaluateCadenceWindow,
-  needsDeterministicMetadataRepair,
+  needsDeterministicMechanicalRepair,
 } from "../convex/lib/autopilotCadence.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
@@ -112,9 +112,9 @@ test("deferred media failures recover on the same draft instead of generating a 
   assert.equal(result.canGenerate, false);
 });
 
-test("a max-revision draft gets deterministic repair only for mechanical metadata defects", () => {
+test("a max-revision draft gets deterministic repair only for mechanical defects", () => {
   assert.equal(
-    needsDeterministicMetadataRepair({
+    needsDeterministicMechanicalRepair({
       createdAt: NOW - HOUR,
       status: "review",
       publicationGateStatus: "blocked",
@@ -126,7 +126,7 @@ test("a max-revision draft gets deterministic repair only for mechanical metadat
     true,
   );
   assert.equal(
-    needsDeterministicMetadataRepair({
+    needsDeterministicMechanicalRepair({
       createdAt: NOW - HOUR,
       status: "review",
       publicationGateStatus: "blocked",
@@ -136,6 +136,18 @@ test("a max-revision draft gets deterministic repair only for mechanical metadat
       qualityRevisionCount: 2,
     }),
     false,
+  );
+  assert.equal(
+    needsDeterministicMechanicalRepair({
+      createdAt: NOW - HOUR,
+      status: "review",
+      publicationGateStatus: "blocked",
+      publicationGateIssues: [
+        "Structured introduction near line 93 promises a list or table but none follows.",
+      ],
+      qualityRevisionCount: 2,
+    }),
+    true,
   );
 });
 

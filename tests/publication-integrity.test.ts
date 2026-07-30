@@ -456,14 +456,14 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
     /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined/,
   );
   assert.match(pipeline, /quality_gate_authorized_bounded_revision/);
-  assert.match(pipeline, /strict_gate_authorized_deterministic_metadata_repair/);
+  assert.match(pipeline, /strict_gate_authorized_deterministic_mechanical_repair/);
   assert.match(
     pipeline,
-    /payload\.metadataOnlyRepair[\s\S]{0,180}applyDeterministicMetadataRepair/,
+    /payload\.metadataOnlyRepair \|\| payload\.deterministicRepair[\s\S]{0,180}applyDeterministicQualityRepair/,
   );
   assert.match(
     articles,
-    /applyDeterministicMetadataRepair[\s\S]{0,1800}evaluatePublicationQuality\(candidate, "strict"\)/,
+    /applyDeterministicQualityRepair[\s\S]{0,1800}evaluatePublicationQuality\(candidate, "strict"\)/,
   );
   assert.match(pipeline, /sealed_buffer_below_target/);
   assert.match(

@@ -8,7 +8,7 @@ import { v } from "convex/values";
 import { getLimitsFromFeatures } from "../planLimits";
 import {
   MAX_QUALITY_REVISIONS,
-  needsDeterministicMetadataRepair,
+  needsDeterministicMechanicalRepair,
 } from "../lib/autopilotCadence";
 import {
   TARGET_APPROVED_BUFFER,
@@ -227,29 +227,29 @@ export const scheduleCadence = internalAction({
     }
 
     // A candidate that cleared prose, evidence, and media can still be blocked
-    // by a mechanically incomplete search snippet. Give that exact draft one
-    // guarded metadata-only re-audit without spending another prose revision.
-    // The job mutation remembers the attempt so a provider that keeps returning
-    // broken metadata cannot create an infinite scheduler loop.
-    const metadataRecoverable = (state.review as ArticleSummary[])
-      .filter(needsDeterministicMetadataRepair)
+    // by a mechanically incomplete search snippet or list introduction. Give
+    // that exact draft one guarded deterministic repair without spending
+    // another prose revision. The job mutation remembers the attempt so the
+    // scheduler cannot create an infinite loop.
+    const mechanicallyRecoverable = (state.review as ArticleSummary[])
+      .filter(needsDeterministicMechanicalRepair)
       .sort(
         (a: ArticleSummary, b: ArticleSummary) => b.createdAt - a.createdAt,
       )[0];
-    if (metadataRecoverable) {
+    if (mechanicallyRecoverable) {
       const recovery = await ctx.runMutation(
         internal.jobs.queueQualityRetryIfAbsent,
         {
           siteId,
-          articleId: metadataRecoverable._id,
+          articleId: mechanicallyRecoverable._id,
           bufferFill: autonomousDelivery || rolloutMode === "warm",
-          metadataOnlyRepair: true,
+          deterministicRepair: true,
         },
       );
       if (recovery.queued) {
         return {
           scheduled: 1,
-          mode: "metadata_repair",
+          mode: "deterministic_repair",
           bufferCount: buffer.length,
         };
       }
