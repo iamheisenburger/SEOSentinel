@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   coveredPrimaryKeywords,
+  evergreenTopicLabel,
   exactCadenceWakeupAt,
   filterNonCannibalizingTopics,
   MAX_NEW_CANDIDATES_PER_24H,
@@ -348,5 +349,19 @@ test("generic-only profiles require two matching signals", () => {
   assert.equal(
     keywordMatchesBusinessSignals("free AI websites", ["AI sales agent"]),
     false,
+  );
+});
+
+test("evergreen topic labels cannot retain a stale generated year", () => {
+  assert.equal(
+    evergreenTopicLabel(
+      "Sales Automation: The Complete 2024 Guide",
+      2026,
+    ),
+    "Sales Automation: The Complete Guide",
+  );
+  assert.equal(
+    evergreenTopicLabel("Sales Automation Guide 2026", 2026),
+    "Sales Automation Guide 2026",
   );
 });

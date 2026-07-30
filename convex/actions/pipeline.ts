@@ -37,6 +37,7 @@ import {
 import { evaluateCadenceWindow } from "../lib/autopilotCadence";
 import {
   coveredPrimaryKeywords,
+  evergreenTopicLabel,
   filterNonCannibalizingTopics,
   keywordMatchesBusinessSignals,
   pendingJobPriority,
@@ -2307,6 +2308,10 @@ async function handlePlan(
     deduped.push(topic);
   }
   plan = deduped;
+  plan = plan.map((topic) => ({
+    ...topic,
+    label: evergreenTopicLabel(topic.label),
+  }));
   console.log(`After dedup: ${plan.length} topics (${plan.length} from AI's ${plan.length + (deduped.length < plan.length ? 0 : 0)})`);
 
   // 5b. Build metrics from candidates (which already have real data) + fetch fresh for any unknowns

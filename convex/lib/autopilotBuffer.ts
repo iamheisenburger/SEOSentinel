@@ -471,6 +471,18 @@ export function keywordMatchesBusinessSignals(
   return overlap >= 2;
 }
 
+export function evergreenTopicLabel(
+  label: string,
+  currentYear = new Date().getUTCFullYear(),
+): string {
+  return label
+    .replace(/\b20\d{2}\b/g, (year) =>
+      Number(year) === currentYear ? year : "")
+    .replace(/\s+([:;,.!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function pendingJobPriority(payload: unknown): number {
   const record = payload && typeof payload === "object"
     ? (payload as Record<string, unknown>)
