@@ -1023,13 +1023,18 @@ export const applyDeterministicQualityRepair = internalMutation({
     }
     const site = await ctx.db.get(article.siteId);
     if (!site) throw new Error("Site not found");
-    const metaDescription = clampMetaDescription(article.metaDescription);
-    const markdown = repairDanglingStructuredIntroductions(article.markdown);
-    const candidate = { ...article, markdown, metaDescription };
-    const quality = evaluatePublicationQuality(candidate, "strict");
-    const readyForPublication = quality.passed;
     const deliveryConfig = publicationDeliveryConfig(site);
     const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
+    const metaDescription = clampMetaDescription(article.metaDescription);
+    const markdown = repairDanglingStructuredIntroductions(article.markdown);
+    const candidate = {
+      ...article,
+      markdown,
+      metaDescription,
+      publicationConfigHash: deliveryConfigHash,
+    };
+    const quality = evaluatePublicationQuality(candidate, "strict");
+    const readyForPublication = quality.passed;
     const contentHash = readyForPublication
       ? publicationArtifactHash(candidate)
       : undefined;
