@@ -481,6 +481,10 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
     /args\.outcome === "publication_succeeded"[\s\S]{0,1500}lastPublishedAt[\s\S]{0,1000}nextPublicationDueAt/,
   );
   assert.match(
+    autopilot,
+    /refreshSiteCadenceHealth[\s\S]{0,3500}lastPublishedAt[\s\S]{0,1400}nextPublicationDueAt[\s\S]{0,1600}approvedBufferCount/,
+  );
+  assert.match(
     pipeline,
     /await continueAutopilotAfterProcessedJob\(ctx, args\.siteId, result\)/,
   );

@@ -718,6 +718,123 @@ export const auditSla = internalMutation({
   },
 });
 
+export const refreshSiteCadenceHealth = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const [site, health, latestModernPublished, latestPublishedByCreation, ready] =
+      await Promise.all([
+        ctx.db.get(siteId),
+        ctx.db
+          .query("autopilot_health")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .first(),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status_audit_published", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("status", "published")
+              .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
+          )
+          .order("desc")
+          .first(),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status_created", (q) =>
+            q.eq("siteId", siteId).eq("status", "published"),
+          )
+          .order("desc")
+          .first(),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", "ready"),
+          )
+          .take(10),
+      ]);
+    if (!site) throw new Error("Site not found");
+    const latestPublished = [
+      latestModernPublished,
+      latestPublishedByCreation,
+    ]
+      .filter((article): article is Doc<"article_summaries"> => !!article)
+      .sort(
+        (a, b) =>
+          effectivePublishedAt({
+            createdAt: b.articleCreatedAt,
+            publishedAt: b.publishedAt,
+            publicationAuditVersion: b.publicationAuditVersion,
+            auditedContentHash: b.auditedContentHash,
+          }) -
+          effectivePublishedAt({
+            createdAt: a.articleCreatedAt,
+            publishedAt: a.publishedAt,
+            publicationAuditVersion: a.publicationAuditVersion,
+            auditedContentHash: a.auditedContentHash,
+          }),
+      )[0];
+    const lastPublishedAt = latestPublished
+      ? effectivePublishedAt({
+          createdAt: latestPublished.articleCreatedAt,
+          publishedAt: latestPublished.publishedAt,
+          publicationAuditVersion: latestPublished.publicationAuditVersion,
+          auditedContentHash: latestPublished.auditedContentHash,
+        })
+      : undefined;
+    const cadence = Math.max(1, site.cadencePerWeek ?? 4);
+    const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+    const nextPublicationDueAt =
+      (lastPublishedAt ?? site.createdAt) + cadenceMs;
+    const approvedBufferCount = ready.filter(isSealedReady).length;
+    const now = Date.now();
+    const schedulerStale = health
+      ? health.lastNaturalScheduledAt
+        ? now - health.lastNaturalScheduledAt > NATURAL_RUN_STALE_MS
+        : now - health.heartbeatAt > NATURAL_RUN_STALE_MS
+      : false;
+    const lastRun = health?.lastRunId
+      ? await ctx.db.get(health.lastRunId)
+      : null;
+    const status =
+      lastRun?.status === "running"
+        ? "recovering"
+        : autopilotHealthStatus({
+            schedulerStale,
+            publicationMissed: now > nextPublicationDueAt,
+            bufferCount: approvedBufferCount,
+            lastOutcome: lastRun?.outcome,
+          });
+    const detail =
+      status === "recovering"
+        ? "Autopilot is actively replenishing the strict-quality buffer."
+        : status === "buffer_empty"
+          ? "No strict-quality sealed article is buffered."
+          : status === "buffer_low"
+            ? "Strict-quality future buffer is below minimum."
+            : status === "missed"
+              ? "Publication cadence deadline missed."
+              : status === "scheduler_stale"
+                ? "Natural dispatcher heartbeat is stale."
+                : "Scheduler, quality buffer, and cadence are healthy.";
+    await upsertHealth(ctx, siteId, {
+      lastPublishedAt,
+      nextPublicationDueAt,
+      approvedBufferCount,
+      bufferMinimum: MIN_APPROVED_BUFFER,
+      bufferTarget: TARGET_APPROVED_BUFFER,
+      status,
+      detail,
+    });
+    return {
+      siteId,
+      lastPublishedAt,
+      nextPublicationDueAt,
+      approvedBufferCount,
+      status,
+    };
+  },
+});
+
 export const pruneLifecycle = internalMutation({
   args: {},
   handler: async (ctx) => {
