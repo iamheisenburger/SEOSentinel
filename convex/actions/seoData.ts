@@ -74,6 +74,7 @@ export interface KeywordDiscoveryOptions {
   minimumResults?: number;
   maxGoogleAdsBatches?: number;
   maxLabsSeeds?: number;
+  useKeywordIdeas?: boolean;
   request?: KeywordDiscoveryRequest;
 }
 
@@ -482,6 +483,43 @@ export async function discoverKeywords(
     }
   }
 
+  // Keyword Ideas is category-based rather than literal phrase matching. It
+  // expands several product/problem anchors in one bounded request and is a
+  // better recovery source than broad domain suggestions for young sites.
+  let keywordIdeasCount = 0;
+  if (
+    resultsByKeyword.size < minimumResults &&
+    options.useKeywordIdeas !== false
+  ) {
+    try {
+      const data = await request(
+        "dataforseo_labs/google/keyword_ideas/live",
+        [{
+          keywords: seeds,
+          location_code: locationCode,
+          language_code: languageCode,
+          closely_variants: false,
+          include_serp_info: false,
+          filters: ["keyword_info.search_volume", ">=", 10],
+          order_by: [
+            "relevance,desc",
+            "keyword_info.search_volume,desc",
+          ],
+          limit: Math.min(limit, 200),
+        }],
+      );
+      const parsed = labsResults(data);
+      keywordIdeasCount += parsed.length;
+      parsed.forEach(mergeResult);
+    } catch (error) {
+      sourceErrors.push(
+        `Labs keyword ideas: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      );
+    }
+  }
+
   // A site-based request is the final bounded fallback. It remains tied to the
   // tenant's actual business rather than inventing unverified AI keywords.
   let siteCount = 0;
@@ -523,7 +561,7 @@ export async function discoverKeywords(
     .sort((a, b) => b.searchVolume - a.searchVolume)
     .slice(0, limit);
   console.log(
-    `Keyword discovery sources: Google Ads=${googleAdsCount}, Labs=${labsCount}, site=${siteCount}, unique=${topResults.length}` +
+    `Keyword discovery sources: Google Ads=${googleAdsCount}, Labs=${labsCount}, ideas=${keywordIdeasCount}, site=${siteCount}, unique=${topResults.length}` +
       (sourceErrors.length > 0 ? `, recoverable errors=${sourceErrors.length}` : ""),
   );
 

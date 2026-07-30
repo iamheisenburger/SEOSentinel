@@ -2113,7 +2113,12 @@ async function handlePlan(
 
   if (discoveredKeywords.length > 0) {
     // Data-first: rank real keywords
-    const businessSignals = [...nicheTerms];
+    const businessSignals = [
+      site.niche,
+      site.blogTheme,
+      ...(site.anchorKeywords ?? []),
+      ...(site.painPoints ?? []),
+    ].filter((signal): signal is string => Boolean(signal));
     const raw = discoveredKeywords
       .filter(k => !existingSet.has(k.keyword.toLowerCase()))
       .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
