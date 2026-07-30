@@ -311,6 +311,10 @@ test("verified volume still requires a specific business relevance signal", () =
     "lead capture",
     "conversion",
     "embedded chat widget",
+    "lead generation strategies",
+    "sales qualification techniques",
+    "outside business hours",
+    "sales development costs",
   ];
 
   assert.equal(
@@ -325,6 +329,15 @@ test("verified volume still requires a specific business relevance signal", () =
   assert.equal(keywordMatchesBusinessSignals("website page", signals), false);
   assert.equal(keywordMatchesBusinessSignals("free ai website", signals), false);
   assert.equal(keywordMatchesBusinessSignals("agent works", signals), false);
+  assert.equal(keywordMatchesBusinessSignals("outside sales", signals), false);
+  assert.equal(keywordMatchesBusinessSignals("sales strategy", signals), false);
+  assert.equal(
+    keywordMatchesBusinessSignals(
+      "sales development representative",
+      signals,
+    ),
+    false,
+  );
 });
 
 test("generic-only profiles require two matching signals", () => {
