@@ -5109,6 +5109,10 @@ async function continueAutopilotAfterProcessedJob(
       trigger: "quality_revision",
       reason: "quality_gate_authorized_bounded_revision",
     },
+    metadata_repair: {
+      trigger: "metadata_repair",
+      reason: "strict_gate_authorized_deterministic_metadata_repair",
+    },
     buffer_fill: {
       trigger: processed.planCompleted ? "plan_ready" : "buffer_fill",
       reason: processed.planCompleted

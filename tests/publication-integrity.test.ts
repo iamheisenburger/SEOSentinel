@@ -455,6 +455,7 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
     /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined/,
   );
   assert.match(pipeline, /quality_gate_authorized_bounded_revision/);
+  assert.match(pipeline, /strict_gate_authorized_deterministic_metadata_repair/);
   assert.match(pipeline, /sealed_buffer_below_target/);
   assert.match(
     pipeline,
