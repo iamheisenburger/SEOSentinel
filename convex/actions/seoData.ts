@@ -12,7 +12,8 @@
 
 import { z } from "zod";
 import OpenAI from "openai";
-import { safeFetchPublicText } from "../lib/safeOutbound";
+import { topicDiscoverySeedBatches } from "../lib/autopilotBuffer.ts";
+import { safeFetchPublicText } from "../lib/safeOutbound.ts";
 
 // ── Types ──
 
@@ -61,6 +62,19 @@ export interface KeywordGap {
   competitorUrl: string; // which competitor ranks for this
   competitorPosition: number;
   opportunity: string; // high | medium | low
+}
+
+export type KeywordDiscoveryRequest = (
+  endpoint: string,
+  body: any[],
+) => Promise<any>;
+
+export interface KeywordDiscoveryOptions {
+  targetDomain?: string;
+  minimumResults?: number;
+  maxGoogleAdsBatches?: number;
+  maxLabsSeeds?: number;
+  request?: KeywordDiscoveryRequest;
 }
 
 // ── DataForSEO API Client ──
@@ -290,62 +304,221 @@ export async function discoverKeywords(
   locationCode: number = 2840,
   languageCode: string = "en",
   limit: number = 50,
+  options: KeywordDiscoveryOptions = {},
 ): Promise<KeywordMetrics[]> {
   const creds = getDataForSEOCredentials();
-  if (!creds) return []; // No DataForSEO = no discovery
+  if (!creds && !options.request) return []; // No DataForSEO = no discovery
 
-  const allResults: KeywordMetrics[] = [];
+  const request = options.request ?? dataForSEORequest;
+  const resultsByKeyword = new Map<string, KeywordMetrics>();
+  const sourceErrors: string[] = [];
+  const minimumResults = Math.max(
+    1,
+    Math.min(limit, options.minimumResults ?? 20),
+  );
+  const targetResults = Math.max(minimumResults, Math.min(limit, 40));
 
-  // Google Ads accepts up to 20 seeds in one live request. Batching prevents
-  // the previous 15x request amplification while preserving a broad seed set.
+  const mergeResult = (candidate: KeywordMetrics) => {
+    const key = candidate.keyword.trim().toLowerCase();
+    if (!key || candidate.searchVolume <= 0) return;
+    const existing = resultsByKeyword.get(key);
+    if (!existing) {
+      resultsByKeyword.set(key, candidate);
+      return;
+    }
+    resultsByKeyword.set(key, {
+      ...existing,
+      searchVolume: Math.max(existing.searchVolume, candidate.searchVolume),
+      difficulty: candidate.difficulty > 0
+        ? candidate.difficulty
+        : existing.difficulty,
+      cpc: Math.max(existing.cpc, candidate.cpc),
+      competition: Math.max(existing.competition, candidate.competition),
+      intent: candidate.intent || existing.intent,
+      trend: candidate.trend.length > 0 ? candidate.trend : existing.trend,
+    });
+  };
+
+  const googleAdsResults = (data: any): KeywordMetrics[] => {
+    const parsed: KeywordMetrics[] = [];
+    for (const task of data.tasks ?? []) {
+      for (const item of task.result ?? []) {
+        if (!item.keyword || !item.search_volume) continue;
+        const monthlySearches = (item.monthly_searches ?? [])
+          .slice(0, 12)
+          .map((month: any) => month.search_volume ?? 0);
+        const competition = typeof item.competition_index === "number"
+          ? item.competition_index / 100
+          : typeof item.competition === "number"
+            ? item.competition
+            : 0;
+        parsed.push({
+          keyword: item.keyword,
+          searchVolume: item.search_volume,
+          difficulty: 0,
+          cpc: item.cpc ?? 0,
+          competition,
+          intent: mapCompetitionToIntent(competition),
+          trend: monthlySearches,
+        });
+      }
+    }
+    return parsed;
+  };
+
+  const labsResults = (data: any): KeywordMetrics[] => {
+    const parsed: KeywordMetrics[] = [];
+    for (const task of data.tasks ?? []) {
+      for (const resultGroup of task.result ?? []) {
+        for (const item of resultGroup.items ?? []) {
+          const info = item.keyword_info ?? {};
+          if (!item.keyword || !info.search_volume) continue;
+          const competition = typeof info.competition_level === "number"
+            ? info.competition_level
+            : typeof info.competition === "number"
+              ? info.competition
+              : 0;
+          parsed.push({
+            keyword: item.keyword,
+            searchVolume: info.search_volume,
+            difficulty: item.keyword_properties?.keyword_difficulty ?? 0,
+            cpc: info.cpc ?? 0,
+            competition,
+            intent:
+              item.search_intent_info?.main_intent ??
+              mapCompetitionToIntent(competition),
+            trend: (info.monthly_searches ?? [])
+              .slice(0, 12)
+              .map((month: any) => month.search_volume ?? 0),
+          });
+        }
+      }
+    }
+    return parsed;
+  };
+
+  // Google Ads accepts up to twenty seeds, but a single heterogeneous request
+  // can collapse to one suggestion. Use a bounded set of smaller requests so
+  // one weak seed cluster does not starve the strict planner.
   const seeds = [...new Set(seedKeywords.map((seed) => seed.trim()).filter(Boolean))].slice(0, 20);
   if (seeds.length === 0) return [];
 
-  const data = await dataForSEORequest(
-    "keywords_data/google_ads/keywords_for_keywords/live",
-    [{
-      keywords: seeds,
-      location_code: locationCode,
-      language_code: languageCode,
-      sort_by: "search_volume",
-    }],
+  const batches = topicDiscoverySeedBatches(
+    seeds,
+    5,
+    options.maxGoogleAdsBatches ?? 3,
   );
+  let googleAdsCount = 0;
+  for (const batch of batches) {
+    try {
+      const data = await request(
+        "keywords_data/google_ads/keywords_for_keywords/live",
+        [{
+          keywords: batch,
+          location_code: locationCode,
+          language_code: languageCode,
+          sort_by: "search_volume",
+        }],
+      );
+      const parsed = googleAdsResults(data);
+      googleAdsCount += parsed.length;
+      parsed.forEach(mergeResult);
+    } catch (error) {
+      sourceErrors.push(
+        `Google Ads suggestions: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      );
+    }
+    if (resultsByKeyword.size >= targetResults) break;
+  }
 
-  for (const task of data.tasks ?? []) {
-    for (const item of task.result ?? []) {
-      if (!item.keyword || !item.search_volume) continue;
-      if (allResults.some(r => r.keyword.toLowerCase() === item.keyword.toLowerCase())) continue;
-
-      const monthlySearches = (item.monthly_searches ?? [])
-        .slice(0, 12)
-        .map((m: any) => m.search_volume ?? 0);
-
-      const competition = typeof item.competition_index === "number"
-        ? item.competition_index / 100
-        : typeof item.competition === "number"
-          ? item.competition
-          : 0;
-
-      allResults.push({
-        keyword: item.keyword,
-        searchVolume: item.search_volume ?? 0,
-        difficulty: 0, // Enriched below.
-        cpc: item.cpc ?? 0,
-        competition,
-        intent: mapCompetitionToIntent(competition),
-        trend: monthlySearches,
-      });
+  // When Google Ads is sparse, DataForSEO Labs expands individual business
+  // anchors into long-tail suggestions and includes difficulty in the result.
+  let labsCount = 0;
+  if (resultsByKeyword.size < minimumResults) {
+    const labsSeeds = seeds
+      .filter((seed) => !/^how to\b/i.test(seed))
+      .sort((a, b) => a.split(/\s+/).length - b.split(/\s+/).length)
+      .slice(0, options.maxLabsSeeds ?? 2);
+    for (const seed of labsSeeds) {
+      try {
+        const data = await request(
+          "dataforseo_labs/google/keyword_suggestions/live",
+          [{
+            keyword: seed,
+            location_code: locationCode,
+            language_code: languageCode,
+            include_seed_keyword: true,
+            include_serp_info: false,
+            filters: ["keyword_info.search_volume", ">=", 10],
+            order_by: ["keyword_info.search_volume,desc"],
+            limit: Math.min(limit, 100),
+          }],
+        );
+        const parsed = labsResults(data);
+        labsCount += parsed.length;
+        parsed.forEach(mergeResult);
+      } catch (error) {
+        sourceErrors.push(
+          `Labs suggestions for "${seed}": ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
+      if (resultsByKeyword.size >= targetResults) break;
     }
   }
 
-  // Sort by volume descending and take top results
-  allResults.sort((a, b) => b.searchVolume - a.searchVolume);
-  const topResults = allResults.slice(0, limit);
+  // A site-based request is the final bounded fallback. It remains tied to the
+  // tenant's actual business rather than inventing unverified AI keywords.
+  let siteCount = 0;
+  if (resultsByKeyword.size < minimumResults && options.targetDomain) {
+    const target = options.targetDomain
+      .replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .replace(/\/.*$/, "");
+    if (target) {
+      try {
+        const data = await request(
+          "keywords_data/google_ads/keywords_for_site/live",
+          [{
+            target,
+            target_type: "site",
+            location_code: locationCode,
+            language_code: languageCode,
+            sort_by: "search_volume",
+          }],
+        );
+        const parsed = googleAdsResults(data);
+        siteCount += parsed.length;
+        parsed.forEach(mergeResult);
+      } catch (error) {
+        sourceErrors.push(
+          `Site suggestions for "${target}": ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
+    }
+  }
+
+  if (resultsByKeyword.size === 0 && sourceErrors.length > 0) {
+    throw new Error(sourceErrors.join(" | "));
+  }
+
+  const topResults = [...resultsByKeyword.values()]
+    .sort((a, b) => b.searchVolume - a.searchVolume)
+    .slice(0, limit);
+  console.log(
+    `Keyword discovery sources: Google Ads=${googleAdsCount}, Labs=${labsCount}, site=${siteCount}, unique=${topResults.length}` +
+      (sourceErrors.length > 0 ? `, recoverable errors=${sourceErrors.length}` : ""),
+  );
 
   // Enrich with real keyword difficulty
   if (topResults.length > 0) {
     try {
-      const difficultyData = await dataForSEORequest(
+      const difficultyData = await request(
         "dataforseo_labs/google/bulk_keyword_difficulty/live",
         [{
           keywords: topResults.map(r => r.keyword),

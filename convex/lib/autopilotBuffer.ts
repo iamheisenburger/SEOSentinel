@@ -333,6 +333,34 @@ export function topicDiscoverySeedWindow(
   return selected;
 }
 
+/**
+ * Smaller keyword-suggestion requests are materially more reliable than one
+ * heterogeneous twenty-seed request. Keep the request count bounded while
+ * ensuring every batch contains a distinct portion of the already-rotated
+ * discovery window.
+ */
+export function topicDiscoverySeedBatches(
+  seeds: string[],
+  batchSize = 5,
+  maximumBatches = 3,
+): string[][] {
+  if (batchSize <= 0 || maximumBatches <= 0) return [];
+  const normalized = [...new Set(
+    seeds
+      .map((seed) => seed.trim().toLowerCase().replace(/\s+/g, " "))
+      .filter(Boolean),
+  )];
+  const batches: string[][] = [];
+  for (
+    let start = 0;
+    start < normalized.length && batches.length < maximumBatches;
+    start += batchSize
+  ) {
+    batches.push(normalized.slice(start, start + batchSize));
+  }
+  return batches;
+}
+
 export function pendingJobPriority(payload: unknown): number {
   const record = payload && typeof payload === "object"
     ? (payload as Record<string, unknown>)

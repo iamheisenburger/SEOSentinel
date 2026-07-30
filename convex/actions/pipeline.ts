@@ -2019,7 +2019,16 @@ async function handlePlan(
     );
 
     // Request 300 keywords — enough volume for 10+ to survive filters without burning DataForSEO credits
-    discoveredKeywords = (await discoverKeywords(seeds, locationCode, site.language ?? "en", 300))
+    discoveredKeywords = (await discoverKeywords(
+      seeds,
+      locationCode,
+      site.language ?? "en",
+      300,
+      {
+        targetDomain: site.domain,
+        minimumResults: 20,
+      },
+    ))
       .filter(k => k.searchVolume >= 10)
       .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
     console.log(`Discovered ${discoveredKeywords.length} keywords with volume`);
@@ -2101,7 +2110,7 @@ async function handlePlan(
 
   let candidates: { keyword: string; searchVolume: number; difficulty: number; cpc: number; opportunity: number }[] = [];
 
-  if (discoveredKeywords.length >= 10) {
+  if (discoveredKeywords.length > 0) {
     // Data-first: rank real keywords
     const raw = discoveredKeywords
       .filter(k => !existingSet.has(k.keyword.toLowerCase()))
@@ -2161,7 +2170,7 @@ async function handlePlan(
 
   let plan: z.infer<typeof PlanSchema>;
 
-  if (candidates.length >= 10) {
+  if (candidates.length > 0) {
     // ── DATA-FIRST: real keywords drive selection ──
     const prompt = [
       `You are an SEO strategist. Your job: select the best keywords from the list below to create a content plan for ${productName}.`,
@@ -2169,7 +2178,7 @@ async function handlePlan(
       siteContext,
       ``,
       `<your_task>`,
-      `From the keyword list below, select 20-25 that are MOST STRATEGIC for ${productName}. For each, create an article topic. Select MORE than you think we need — our quality filters will narrow it down to the best 10.`,
+      `From the keyword list below, select every strategically eligible keyword, up to 25. For each, create an article topic. Our quality filters will narrow the result to the best 10.`,
       ``,
       `SELECTION CRITERIA (in order of importance):`,
       `1. RELEVANCE — Would someone searching this keyword be a potential ${productName} user? If not, SKIP IT.`,
@@ -2201,7 +2210,7 @@ async function handlePlan(
       site.anchorKeywords?.length ? `Priority keywords to incorporate: ${site.anchorKeywords.join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
-    const text = await callClaude(prompt, `Select 20-25 strategic keywords and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`, 12000);
+    const text = await callClaude(prompt, `Select every strategically eligible keyword, up to 25, and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`, 12000);
     plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 25);
     console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates:`);
     for (const t of plan) console.log(`  → "${t.primaryKeyword}" (${t.label})`);
@@ -4184,7 +4193,7 @@ async function generatePlanHandler(
         siteId,
         jobId,
         workerToken,
-        payload?.replenishmentSequence ?? 0,
+        (payload?.replenishmentSequence ?? 0) + (claimed.workerAttempts ?? 0),
       );
       const completed = await ctx.runMutation(internal.jobs.markDone, {
         jobId,
@@ -5264,7 +5273,7 @@ export const autopilotTick = internalAction({
       quality_budget_exhausted: "The bounded quality candidate budget is exhausted.",
       quota_reached: "The monthly generation quota is reached.",
       site_limit_reached: "The tenant exceeds its active site limit.",
-      topic_replenishment_exhausted: "Topic recovery is exhausted and needs review.",
+      topic_replenishment_exhausted: "Topic recovery is cooling down and will retry automatically.",
       work_in_progress: "Another leased worker is still processing tenant work.",
       buffer_delivery_pending: "A sealed delivery job exists but is not currently claimable.",
       approval_waiting: "A quality-gated draft is waiting for owner approval.",
@@ -5385,7 +5394,7 @@ export const processNextJob = internalAction({
           args.siteId,
           job._id,
           workerToken,
-          payload?.replenishmentSequence ?? 0,
+          (payload?.replenishmentSequence ?? 0) + (job.workerAttempts ?? 0),
         );
         await complete(result);
         return { processed: true, jobId: job._id, planCompleted: true };

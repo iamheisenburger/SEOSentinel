@@ -338,7 +338,7 @@ export const scheduleCadence = internalAction({
           siteId,
           kind: "topic_replenishment_exhausted",
           message:
-            "Bounded topic-plan recovery was exhausted; human keyword review is required before more paid plan generation.",
+            "Bounded topic-plan recovery is cooling down; the scheduler will retry automatically when the 24-hour request window resets.",
           details: {
             replenishments: replenishment.recent,
             maximum: MAX_TOPIC_REPLENISHMENTS_PER_24H,

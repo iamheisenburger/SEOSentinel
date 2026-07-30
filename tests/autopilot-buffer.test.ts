@@ -16,6 +16,7 @@ import {
   migrationBlocksAutopilot,
   pendingJobPriority,
   selectNonCannibalizingTopic,
+  topicDiscoverySeedBatches,
   topicDiscoverySeedWindow,
 } from "../convex/lib/autopilotBuffer.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
@@ -277,4 +278,27 @@ test("topic discovery rotates intent seeds instead of replaying one exhausted re
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   assert.match(scheduler, /topic_horizon_replenishment/);
   assert.match(scheduler, /MIN_VERIFIED_TOPIC_HORIZON/);
+});
+
+test("topic discovery splits a rotated window into bounded distinct requests", () => {
+  const seeds = Array.from({ length: 20 }, (_, index) => `Business Seed ${index}`);
+  const batches = topicDiscoverySeedBatches(seeds, 5, 3);
+
+  assert.equal(batches.length, 3);
+  assert.deepEqual(batches.map((batch) => batch.length), [5, 5, 5]);
+  assert.equal(new Set(batches.flat()).size, 15);
+  assert.equal(batches[0][0], "business seed 0");
+  assert.equal(batches[2][4], "business seed 14");
+});
+
+test("plan retries rotate discovery using the durable worker attempt count", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(
+    pipeline,
+    /\(payload\?\.replenishmentSequence \?\? 0\) \+ \(job\.workerAttempts \?\? 0\)/,
+  );
+  assert.match(pipeline, /minimumResults: 20/);
+  assert.match(pipeline, /targetDomain: site\.domain/);
+  assert.match(pipeline, /if \(discoveredKeywords\.length > 0\)/);
+  assert.match(pipeline, /if \(candidates\.length > 0\)/);
 });
