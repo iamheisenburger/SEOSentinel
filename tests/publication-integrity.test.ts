@@ -469,6 +469,10 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
     articles,
     /applyDeterministicQualityRepair[\s\S]{0,1800}candidate = \{[\s\S]{0,300}publicationConfigHash: deliveryConfigHash[\s\S]{0,500}publicationArtifactHash\(candidate\)/,
   );
+  assert.match(
+    articles,
+    /recoverLegacyDeterministicSeal[\s\S]{0,1000}publicationConfigHash: undefined[\s\S]{0,900}article\.auditedContentHash !== legacyContentHash[\s\S]{0,600}evaluatePublicationQuality\(article, "strict"\)/,
+  );
   assert.match(pipeline, /sealed_buffer_below_target/);
   assert.match(
     pipeline,

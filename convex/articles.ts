@@ -1074,6 +1074,55 @@ export const applyDeterministicQualityRepair = internalMutation({
   },
 });
 
+export const recoverLegacyDeterministicSeal = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+  },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    assertNotPublishing(article);
+    const site = await ctx.db.get(article.siteId);
+    if (!site) throw new Error("Site not found");
+    const deliveryConfig = publicationDeliveryConfig(site);
+    const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
+    const legacyContentHash = publicationArtifactHash({
+      ...article,
+      publicationConfigHash: undefined,
+    });
+    if (
+      article.status !== "ready" ||
+      article.publicationGateStatus !== "passed" ||
+      article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
+      article.publicationConfigHash !== deliveryConfigHash ||
+      !article.auditedContentHash ||
+      article.auditedContentHash !== legacyContentHash
+    ) {
+      throw new Error(
+        "Article does not match the legacy deterministic-seal defect",
+      );
+    }
+    const quality = evaluatePublicationQuality(article, "strict");
+    if (!quality.passed) {
+      throw new Error(
+        `Legacy deterministic seal recovery failed strict quality: ${quality.issues.join(" ")}`,
+      );
+    }
+    const contentHash = publicationArtifactHash(article);
+    const checkedAt = now();
+    await ctx.db.patch(articleId, {
+      publicationGateIssues: quality.issues,
+      publicationGateWarnings: quality.warnings,
+      publicationCheckedAt: checkedAt,
+      auditedContentHash: contentHash,
+      auditedAt: checkedAt,
+      updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, articleId);
+    return { articleId, contentHash, recovered: true };
+  },
+});
+
 export const updateLinks = internalMutation({
   args: {
     articleId: v.id("articles"),
