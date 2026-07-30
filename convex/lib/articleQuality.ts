@@ -528,24 +528,34 @@ export function clampMetaDescription(
   let complete = normalized
     .slice(0, cutAt)
     .replace(/[\s,;:.!?–—-]+$/g, "");
-  while (INCOMPLETE_TRANSITIVE_META_END_PATTERN.test(complete)) {
-    const lastSentenceBoundary = Math.max(
-      complete.lastIndexOf("."),
-      complete.lastIndexOf("!"),
-      complete.lastIndexOf("?"),
-    );
-    complete = (lastSentenceBoundary >= 60
-      ? complete.slice(0, lastSentenceBoundary)
-      : complete.replace(/\s+\S+$/, "")
-    ).replace(/[\s,;:.!?–—-]+$/g, "");
-  }
-  while (INCOMPLETE_META_PHRASE_END_PATTERN.test(complete)) {
-    complete = complete
-      .replace(/\s+\S+\s+\S+$/, "")
-      .replace(/[\s,;:.!?–—-]+$/g, "");
-  }
-  while (DANGLING_META_END_PATTERN.test(complete)) {
-    complete = complete.replace(/\s+\S+$/, "").replace(/[\s,;:.!?–—-]+$/g, "");
+  // Removing one incomplete ending can expose another (for example
+  // "provides details and" -> "provides"). Converge all three checks rather
+  // than running them in a single fixed order and accidentally sealing another
+  // dangling phrase.
+  for (let pass = 0; pass < 12; pass += 1) {
+    const previous = complete;
+    if (INCOMPLETE_TRANSITIVE_META_END_PATTERN.test(complete)) {
+      const lastSentenceBoundary = Math.max(
+        complete.lastIndexOf("."),
+        complete.lastIndexOf("!"),
+        complete.lastIndexOf("?"),
+      );
+      complete = (lastSentenceBoundary >= 60
+        ? complete.slice(0, lastSentenceBoundary)
+        : complete.replace(/\s+\S+$/, "")
+      ).replace(/[\s,;:.!?–—-]+$/g, "");
+    }
+    if (INCOMPLETE_META_PHRASE_END_PATTERN.test(complete)) {
+      complete = complete
+        .replace(/\s+\S+\s+\S+$/, "")
+        .replace(/[\s,;:.!?–—-]+$/g, "");
+    }
+    if (DANGLING_META_END_PATTERN.test(complete)) {
+      complete = complete
+        .replace(/\s+\S+$/, "")
+        .replace(/[\s,;:.!?–—-]+$/g, "");
+    }
+    if (complete === previous) break;
   }
   if (!complete) return undefined;
 

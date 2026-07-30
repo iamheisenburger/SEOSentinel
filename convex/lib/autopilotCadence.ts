@@ -23,6 +23,24 @@ export type CadenceWindow = {
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
 
+const DETERMINISTIC_METADATA_ISSUES = new Set([
+  "Meta description must end as a complete sentence.",
+  "Meta description ends with a dangling or incomplete phrase.",
+]);
+
+export function needsDeterministicMetadataRepair(
+  article: CadenceArticle,
+): boolean {
+  const issues = article.publicationGateIssues ?? [];
+  return (
+    article.status === "review" &&
+    article.publicationGateStatus === "blocked" &&
+    (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
+    issues.length > 0 &&
+    issues.every((issue) => DETERMINISTIC_METADATA_ISSUES.has(issue))
+  );
+}
+
 export function findRecoverableQualityArticle(
   articles: CadenceArticle[],
   now: number,

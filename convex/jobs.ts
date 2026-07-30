@@ -490,8 +490,12 @@ export const queueQualityRetryIfAbsent = internalMutation({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
     bufferFill: v.boolean(),
+    metadataOnlyRepair: v.optional(v.boolean()),
   },
-  handler: async (ctx, { siteId, articleId, bufferFill }) => {
+  handler: async (
+    ctx,
+    { siteId, articleId, bufferFill, metadataOnlyRepair },
+  ) => {
     const [article, site] = await Promise.all([
       ctx.db.get(articleId),
       ctx.db.get(siteId),
@@ -508,12 +512,38 @@ export const queueQualityRetryIfAbsent = internalMutation({
       return payload.qualityRetry === true && payload.articleId === articleId;
     });
     if (duplicate) return { queued: false, jobId: duplicate._id };
+    if (metadataOnlyRepair) {
+      const priorAttempts = await ctx.db
+        .query("jobs")
+        .withIndex("by_site_type_created", (q) =>
+          q.eq("siteId", siteId).eq("type", "article"),
+        )
+        .order("desc")
+        .take(100);
+      const alreadyAttempted = priorAttempts.some((job) => {
+        const payload = job.payload && typeof job.payload === "object"
+          ? (job.payload as Record<string, unknown>)
+          : {};
+        return (
+          payload.metadataOnlyRepair === true &&
+          payload.articleId === articleId
+        );
+      });
+      if (alreadyAttempted) {
+        return { queued: false, reason: "already_attempted" as const };
+      }
+    }
     const timestamp = now();
     const jobId = await ctx.db.insert("jobs", {
       siteId,
       type: "article",
       status: "pending",
-      payload: { articleId, qualityRetry: true, bufferFill },
+      payload: {
+        articleId,
+        qualityRetry: true,
+        bufferFill,
+        ...(metadataOnlyRepair ? { metadataOnlyRepair: true } : {}),
+      },
       articleId,
       ...rolloutFields(site),
       workerAttempts: 0,

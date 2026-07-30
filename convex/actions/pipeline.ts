@@ -5222,6 +5222,7 @@ export const autopilotTick = internalAction({
             manual?: boolean;
             publishOnly?: boolean;
             qualityRetry?: boolean;
+            metadataOnlyRepair?: boolean;
             bufferFill?: boolean;
           }
         | undefined;
@@ -5360,6 +5361,7 @@ export const processNextJob = internalAction({
       articleId?: Id<"articles">;
       publishOnly?: boolean;
       qualityRetry?: boolean;
+      metadataOnlyRepair?: boolean;
       slaRecovery?: boolean;
       bufferFill?: boolean;
       bufferDelivery?: boolean;
@@ -5439,7 +5441,7 @@ export const processNextJob = internalAction({
         const review = await reviewExistingArticleHandler(ctx, {
           siteId: args.siteId,
           articleId: payload.articleId,
-          incrementRevision: true,
+          incrementRevision: !payload.metadataOnlyRepair,
         });
         let publicationSucceeded = false;
         let buffered = false;
@@ -5497,6 +5499,7 @@ export const processNextJob = internalAction({
         await complete({
           articleId: payload.articleId,
           qualityRetry: true,
+          metadataOnlyRepair: payload.metadataOnlyRepair === true,
           readyForPublication: review.readyForPublication,
           revision: review.qualityRevisionCount,
           issues: review.issues,

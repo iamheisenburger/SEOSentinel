@@ -128,6 +128,18 @@ test("clamps meta descriptions cleanly without cutting through a word", () => {
     clampMetaDescription("Learn how qualification turns website conversations into"),
     "Learn how qualification turns website conversations.",
   );
+  assert.equal(
+    clampMetaDescription(
+      "Learn how sales engagement platforms use AI chatbots to qualify leads through natural conversation instead of forms, improving website conversion and.",
+    ),
+    "Learn how sales engagement platforms use AI chatbots to qualify leads through natural conversation instead of forms, improving website conversion.",
+  );
+  assert.equal(
+    clampMetaDescription(
+      "Learn how website chat captures qualified demand, provides details and.",
+    ),
+    "Learn how website chat captures qualified demand, provides details.",
+  );
 
   const exactBoundary = clampMetaDescription("x".repeat(155), 155);
   assert.ok(exactBoundary);

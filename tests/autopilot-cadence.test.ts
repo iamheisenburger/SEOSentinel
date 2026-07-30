@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluateCadenceWindow } from "../convex/lib/autopilotCadence.ts";
+import {
+  evaluateCadenceWindow,
+  needsDeterministicMetadataRepair,
+} from "../convex/lib/autopilotCadence.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -107,6 +110,33 @@ test("deferred media failures recover on the same draft instead of generating a 
 
   assert.equal(result.recoveryArticleId, "article-1");
   assert.equal(result.canGenerate, false);
+});
+
+test("a max-revision draft gets deterministic repair only for mechanical metadata defects", () => {
+  assert.equal(
+    needsDeterministicMetadataRepair({
+      createdAt: NOW - HOUR,
+      status: "review",
+      publicationGateStatus: "blocked",
+      publicationGateIssues: [
+        "Meta description ends with a dangling or incomplete phrase.",
+      ],
+      qualityRevisionCount: 2,
+    }),
+    true,
+  );
+  assert.equal(
+    needsDeterministicMetadataRepair({
+      createdAt: NOW - HOUR,
+      status: "review",
+      publicationGateStatus: "blocked",
+      publicationGateIssues: [
+        "Editorial quality score is 78; strict minimum is 85.",
+      ],
+      qualityRevisionCount: 2,
+    }),
+    false,
+  );
 });
 
 test("publication time, not old draft creation time, closes the cadence window", () => {

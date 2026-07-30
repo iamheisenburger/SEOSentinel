@@ -6,7 +6,10 @@ import type { ActionCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
 import { getLimitsFromFeatures } from "../planLimits";
-import { MAX_QUALITY_REVISIONS } from "../lib/autopilotCadence";
+import {
+  MAX_QUALITY_REVISIONS,
+  needsDeterministicMetadataRepair,
+} from "../lib/autopilotCadence";
 import {
   TARGET_APPROVED_BUFFER,
   MIN_VERIFIED_TOPIC_HORIZON,
@@ -32,6 +35,7 @@ type ArticleSummary = {
   updatedAt: number;
   publishedAt?: number;
   publicationGateStatus?: string;
+  publicationGateIssues?: string[];
   publicationAuditVersion?: number;
   auditedContentHash?: string;
   qualityRevisionCount?: number;
@@ -220,6 +224,35 @@ export const scheduleCadence = internalAction({
         mode: recovery.queued ? "quality_revision" : "work_in_progress",
         bufferCount: buffer.length,
       };
+    }
+
+    // A candidate that cleared prose, evidence, and media can still be blocked
+    // by a mechanically incomplete search snippet. Give that exact draft one
+    // guarded metadata-only re-audit without spending another prose revision.
+    // The job mutation remembers the attempt so a provider that keeps returning
+    // broken metadata cannot create an infinite scheduler loop.
+    const metadataRecoverable = (state.review as ArticleSummary[])
+      .filter(needsDeterministicMetadataRepair)
+      .sort(
+        (a: ArticleSummary, b: ArticleSummary) => b.createdAt - a.createdAt,
+      )[0];
+    if (metadataRecoverable) {
+      const recovery = await ctx.runMutation(
+        internal.jobs.queueQualityRetryIfAbsent,
+        {
+          siteId,
+          articleId: metadataRecoverable._id,
+          bufferFill: autonomousDelivery || rolloutMode === "warm",
+          metadataOnlyRepair: true,
+        },
+      );
+      if (recovery.queued) {
+        return {
+          scheduled: 1,
+          mode: "metadata_repair",
+          bufferCount: buffer.length,
+        };
+      }
     }
 
     // Warm mode serially builds the initial safety buffer. Live canary mode
