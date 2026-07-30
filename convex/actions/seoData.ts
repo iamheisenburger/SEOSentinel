@@ -437,10 +437,22 @@ export async function discoverKeywords(
   // anchors into long-tail suggestions and includes difficulty in the result.
   let labsCount = 0;
   if (resultsByKeyword.size < minimumResults) {
-    const labsSeeds = seeds
-      .filter((seed) => !/^how to\b/i.test(seed))
-      .sort((a, b) => a.split(/\s+/).length - b.split(/\s+/).length)
-      .slice(0, options.maxLabsSeeds ?? 2);
+    const genericSeedWords = new Set([
+      "agent", "ai", "business", "marketing", "online", "page", "sales",
+      "site", "software", "tool", "website",
+    ]);
+    const eligibleLabsSeeds = seeds.filter((seed) => {
+      if (/^how to\b/i.test(seed)) return false;
+      const words = seed.toLowerCase().split(/\s+/).filter(Boolean);
+      return (
+        words.length >= 2 &&
+        words.length <= 6 &&
+        words.some((word) => !genericSeedWords.has(word))
+      );
+    });
+    const labsSeeds = (
+      eligibleLabsSeeds.length > 0 ? eligibleLabsSeeds : seeds
+    ).slice(0, options.maxLabsSeeds ?? 2);
     for (const seed of labsSeeds) {
       try {
         const data = await request(

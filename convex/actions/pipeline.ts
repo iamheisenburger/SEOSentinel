@@ -38,6 +38,7 @@ import { evaluateCadenceWindow } from "../lib/autopilotCadence";
 import {
   coveredPrimaryKeywords,
   filterNonCannibalizingTopics,
+  keywordMatchesBusinessSignals,
   pendingJobPriority,
   topicDiscoverySeedWindow,
 } from "../lib/autopilotBuffer";
@@ -2112,10 +2113,12 @@ async function handlePlan(
 
   if (discoveredKeywords.length > 0) {
     // Data-first: rank real keywords
+    const businessSignals = [...nicheTerms];
     const raw = discoveredKeywords
       .filter(k => !existingSet.has(k.keyword.toLowerCase()))
       .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
       .filter(k => !isKeywordBlocked(k.keyword))
+      .filter(k => keywordMatchesBusinessSignals(k.keyword, businessSignals))
       .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
       .sort((a, b) => b.opportunity - a.opportunity);
 

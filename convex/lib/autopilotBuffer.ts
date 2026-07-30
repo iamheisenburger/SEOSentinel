@@ -361,6 +361,103 @@ export function topicDiscoverySeedBatches(
   return batches;
 }
 
+const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
+  "agent",
+  "ai",
+  "best",
+  "business",
+  "businesses",
+  "companies",
+  "company",
+  "customer",
+  "customers",
+  "digital",
+  "guide",
+  "marketing",
+  "online",
+  "page",
+  "pages",
+  "platform",
+  "platforms",
+  "product",
+  "products",
+  "sales",
+  "service",
+  "services",
+  "site",
+  "sites",
+  "software",
+  "solution",
+  "solutions",
+  "tool",
+  "tools",
+  "user",
+  "users",
+  "website",
+  "websites",
+]);
+
+function relevanceRoot(word: string): string {
+  let normalized = word
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  const suffixes = [
+    "izations", "ization", "ations", "ation", "itions", "ition", "ments",
+    "ment", "ness", "ingly", "ing", "edly", "ies", "ers", "ed", "er", "s",
+  ];
+  for (const suffix of suffixes) {
+    if (
+      normalized.endsWith(suffix) &&
+      normalized.length - suffix.length >= 4
+    ) {
+      normalized = normalized.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return normalized.length >= 5 ? normalized.slice(0, 5) : normalized;
+}
+
+function relevanceTokens(value: string): string[] {
+  return value
+    .split(/[^a-z0-9]+/i)
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length >= 3);
+}
+
+/**
+ * Search volume alone is not business relevance. Require each discovered
+ * keyword to share a specific product/problem signal with the site profile.
+ * If a profile contains only generic terms (for example "AI sales agent"),
+ * require two of those terms instead of allowing any single broad word.
+ */
+export function keywordMatchesBusinessSignals(
+  keyword: string,
+  businessSignals: string[],
+): boolean {
+  const keywordWords = relevanceTokens(keyword);
+  if (keywordWords.length === 0) return false;
+
+  const signalWords = businessSignals.flatMap(relevanceTokens);
+  if (signalWords.length === 0) return true;
+
+  const keywordRoots = new Set(keywordWords.map(relevanceRoot));
+  const specificSignalRoots = new Set(
+    signalWords
+      .filter((word) => !GENERIC_BUSINESS_SIGNAL_WORDS.has(word))
+      .map(relevanceRoot),
+  );
+  if (specificSignalRoots.size > 0) {
+    return [...specificSignalRoots].some((root) => keywordRoots.has(root));
+  }
+
+  const genericSignalRoots = new Set(signalWords.map(relevanceRoot));
+  let overlap = 0;
+  for (const root of keywordRoots) {
+    if (genericSignalRoots.has(root)) overlap += 1;
+  }
+  return overlap >= 2;
+}
+
 export function pendingJobPriority(payload: unknown): number {
   const record = payload && typeof payload === "object"
     ? (payload as Record<string, unknown>)

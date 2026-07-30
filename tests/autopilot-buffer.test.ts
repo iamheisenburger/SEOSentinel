@@ -13,6 +13,7 @@ import {
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
   isSealedReady,
+  keywordMatchesBusinessSignals,
   migrationBlocksAutopilot,
   pendingJobPriority,
   selectNonCannibalizingTopic,
@@ -301,4 +302,38 @@ test("plan retries rotate discovery using the durable worker attempt count", () 
   assert.match(pipeline, /targetDomain: site\.domain/);
   assert.match(pipeline, /if \(discoveredKeywords\.length > 0\)/);
   assert.match(pipeline, /if \(candidates\.length > 0\)/);
+});
+
+test("verified volume still requires a specific business relevance signal", () => {
+  const signals = [
+    "AI website agent",
+    "visitor qualification",
+    "lead capture",
+    "conversion",
+    "embedded chat widget",
+  ];
+
+  assert.equal(
+    keywordMatchesBusinessSignals("website visitor engagement", signals),
+    true,
+  );
+  assert.equal(
+    keywordMatchesBusinessSignals("lead capture software", signals),
+    true,
+  );
+  assert.equal(keywordMatchesBusinessSignals("embed link", signals), true);
+  assert.equal(keywordMatchesBusinessSignals("website page", signals), false);
+  assert.equal(keywordMatchesBusinessSignals("free ai website", signals), false);
+  assert.equal(keywordMatchesBusinessSignals("agent works", signals), false);
+});
+
+test("generic-only profiles require two matching signals", () => {
+  assert.equal(
+    keywordMatchesBusinessSignals("AI sales agent tools", ["AI sales agent"]),
+    true,
+  );
+  assert.equal(
+    keywordMatchesBusinessSignals("free AI websites", ["AI sales agent"]),
+    false,
+  );
 });
