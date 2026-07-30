@@ -5086,15 +5086,17 @@ async function continueAutopilotAfterProcessedJob(
   if (
     !processed.buffered &&
     !processed.planCompleted &&
-    !processed.qualityQuarantined
+    !processed.qualityQuarantined &&
+    !processed.publicationSucceeded
   ) {
     return;
   }
 
-  // Every quality-bearing terminal state must immediately re-enter the
-  // bounded scheduler. Otherwise a quarantined candidate, a completed topic
-  // plan, or a partially filled buffer waits for the next fleet cron even
-  // though the scheduler has already authorized one safe next step.
+  // Every quality-bearing terminal state and successful delivery must
+  // immediately re-enter the bounded scheduler. Otherwise a quarantined
+  // candidate, a completed topic plan, a partially filled buffer, or a newly
+  // emptied post-publication buffer waits for the next fleet cron even though
+  // the scheduler has already authorized one safe next step.
   const schedule = await ctx.runAction(
     internal.actions.scheduler.scheduleCadence,
     { siteId },
@@ -5120,7 +5122,9 @@ async function continueAutopilotAfterProcessedJob(
       trigger: processed.planCompleted ? "plan_ready" : "buffer_fill",
       reason: processed.planCompleted
         ? "verified_topic_plan_ready_for_generation"
-        : "sealed_buffer_below_target",
+        : processed.publicationSucceeded
+          ? "publication_succeeded_buffer_replenishment"
+          : "sealed_buffer_below_target",
     },
     cadence_generation: {
       trigger: processed.planCompleted ? "plan_ready" : "cadence_generation",

@@ -307,6 +307,45 @@ export const markRunFinished = internalMutation({
         : "healthy";
     let completionDetail = args.detail ?? args.outcome;
     let approvedBufferCount: number | undefined;
+    let lastPublishedAt: number | undefined;
+    let nextPublicationDueAt: number | undefined;
+    if (args.outcome === "publication_succeeded" && args.articleId) {
+      const [article, site, ready] = await Promise.all([
+        ctx.db.get(args.articleId),
+        ctx.db.get(run.siteId),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", run.siteId).eq("status", "ready"),
+          )
+          .take(10),
+      ]);
+      if (article?.siteId === run.siteId && site) {
+        lastPublishedAt = effectivePublishedAt({
+          createdAt: article.createdAt,
+          publishedAt: article.publishedAt,
+          publicationAuditVersion: article.publicationAuditVersion,
+          auditedContentHash: article.auditedContentHash,
+        });
+        const cadence = Math.max(1, site.cadencePerWeek ?? 4);
+        const cadenceMs =
+          Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+        nextPublicationDueAt = lastPublishedAt + cadenceMs;
+        approvedBufferCount = ready.filter(isSealedReady).length;
+        completionStatus =
+          approvedBufferCount === 0
+            ? "buffer_empty"
+            : approvedBufferCount < MIN_APPROVED_BUFFER
+              ? "buffer_low"
+              : "healthy";
+        completionDetail =
+          approvedBufferCount === 0
+            ? "Publication succeeded; replenishing the strict-quality future buffer."
+            : approvedBufferCount < MIN_APPROVED_BUFFER
+              ? "Publication succeeded; the strict-quality future buffer is being replenished."
+              : "Publication succeeded and the strict-quality future buffer is healthy.";
+      }
+    }
     if (args.outcome === "quality_budget_exhausted") {
       const [currentHealth, ready] = await Promise.all([
         ctx.db
@@ -344,6 +383,9 @@ export const markRunFinished = internalMutation({
       status: completionStatus,
       detail: completionDetail,
       ...(approvedBufferCount === undefined ? {} : { approvedBufferCount }),
+      ...(lastPublishedAt === undefined
+        ? {}
+        : { lastPublishedAt, nextPublicationDueAt }),
       ...(run.trigger === "natural" ? { lastNaturalCompletedAt: now } : {}),
     });
     // Completing the run proves the trigger itself worked. Blocked content

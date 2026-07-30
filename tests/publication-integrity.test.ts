@@ -451,9 +451,10 @@ test("external publication retries are bounded and back off", () => {
 test("every quality terminal state immediately re-enters the bounded scheduler", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   const articles = readFileSync("convex/articles.ts", "utf8");
+  const autopilot = readFileSync("convex/autopilot.ts", "utf8");
   assert.match(
     pipeline,
-    /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined/,
+    /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined[\s\S]{0,120}!processed\.publicationSucceeded/,
   );
   assert.match(pipeline, /quality_gate_authorized_bounded_revision/);
   assert.match(pipeline, /strict_gate_authorized_deterministic_mechanical_repair/);
@@ -474,6 +475,11 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
     /recoverLegacyDeterministicSeal[\s\S]{0,1000}publicationConfigHash: undefined[\s\S]{0,900}article\.auditedContentHash !== legacyContentHash[\s\S]{0,600}evaluatePublicationQuality\(article, "strict"\)/,
   );
   assert.match(pipeline, /sealed_buffer_below_target/);
+  assert.match(pipeline, /publication_succeeded_buffer_replenishment/);
+  assert.match(
+    autopilot,
+    /args\.outcome === "publication_succeeded"[\s\S]{0,1500}lastPublishedAt[\s\S]{0,1000}nextPublicationDueAt/,
+  );
   assert.match(
     pipeline,
     /await continueAutopilotAfterProcessedJob\(ctx, args\.siteId, result\)/,
