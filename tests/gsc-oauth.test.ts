@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  GSC_GROWTH_SCOPE,
   GSC_READONLY_SCOPE,
   findMatchingGscProperty,
+  hasGscGrowthScope,
   hasGscReadonlyScope,
   normalizeGscDomain,
 } from "../src/lib/gsc-oauth.ts";
@@ -12,6 +14,13 @@ test("requires the exact Search Console readonly scope", () => {
   assert.equal(hasGscReadonlyScope(`openid email ${GSC_READONLY_SCOPE}`), true);
   assert.equal(hasGscReadonlyScope("openid email"), false);
   assert.equal(hasGscReadonlyScope(undefined), false);
+  assert.equal(hasGscReadonlyScope(GSC_GROWTH_SCOPE), true);
+});
+
+test("requires write-capable Search Console scope for the growth loop", () => {
+  assert.equal(hasGscGrowthScope(`openid email ${GSC_GROWTH_SCOPE}`), true);
+  assert.equal(hasGscGrowthScope(GSC_READONLY_SCOPE), false);
+  assert.equal(hasGscGrowthScope(undefined), false);
 });
 
 test("normalizes domain and URL-prefix properties", () => {

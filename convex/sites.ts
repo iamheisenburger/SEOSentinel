@@ -1033,8 +1033,9 @@ export const setGscTokenInternal = internalMutation({
     gscRefreshToken: v.optional(v.string()),
     gscProperty: v.optional(v.string()),
     gscEmail: v.optional(v.string()),
+    gscScopes: v.optional(v.string()),
   },
-  handler: async (ctx, { siteId, gscAccessToken, gscRefreshToken, gscProperty, gscEmail }) => {
+  handler: async (ctx, { siteId, gscAccessToken, gscRefreshToken, gscProperty, gscEmail, gscScopes }) => {
     const site = await ctx.db.get(siteId);
     if (!site) throw new Error("Site not found");
     if (!gscProperty && !site.gscProperty) {
@@ -1045,6 +1046,7 @@ export const setGscTokenInternal = internalMutation({
       ...(gscRefreshToken ? { gscRefreshToken } : {}),
       ...(gscProperty ? { gscProperty } : {}),
       ...(gscEmail ? { gscEmail } : {}),
+      ...(gscScopes ? { gscScopes } : {}),
       ...(!site.gscConnectedAt ? { gscConnectedAt: now() } : {}),
       updatedAt: now(),
     });
@@ -1067,6 +1069,7 @@ export const disconnectGsc = mutation({
       gscRefreshToken: undefined,
       gscProperty: undefined,
       gscEmail: undefined,
+      gscScopes: undefined,
       gscConnectedAt: undefined,
       autopilotRolloutMode: "observe",
       autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,

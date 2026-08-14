@@ -1234,6 +1234,7 @@ function GSCSection({ site }: { site: any }) {
   const [disconnecting, setDisconnecting] = useState(false);
 
   const isConnected = !!site.gscConnected;
+  const isGrowthEnabled = !!site.gscGrowthEnabled;
 
   const handleConnect = () => {
     window.open(
@@ -1290,9 +1291,13 @@ function GSCSection({ site }: { site: any }) {
                 </p>
               )}
 
-              <div className="flex items-center gap-3 rounded-lg px-4 py-3 bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]">
-                <Check className="h-4 w-4 text-[#22C55E]" />
-                <span className="flex-1 text-[12px] text-[#4ADE80]">Syncing daily at 2am UTC — rank tracking & decay detection active</span>
+              <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${isGrowthEnabled ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]"}`}>
+                {isGrowthEnabled ? <Check className="h-4 w-4 text-[#22C55E]" /> : <RefreshCw className="h-4 w-4 text-[#F59E0B]" />}
+                <span className={`flex-1 text-[12px] ${isGrowthEnabled ? "text-[#4ADE80]" : "text-[#FBBF24]"}`}>
+                  {isGrowthEnabled
+                    ? "Daily rank measurement and verified sitemap repair are active"
+                    : "Reconnect once to let Pentra submit your sitemap when indexing stalls"}
+                </span>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1335,7 +1340,7 @@ function GSCSection({ site }: { site: any }) {
 
               <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
                 <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
-                <p className="text-[10px] text-[#565A6E]">Read-only access. We only fetch search analytics — no changes are made to your site.</p>
+                <p className="text-[10px] text-[#565A6E]">Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.</p>
               </div>
             </>
           )}

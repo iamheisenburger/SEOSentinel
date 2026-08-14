@@ -17,6 +17,7 @@ test("site records never expose stored publishing or OAuth credentials", () => {
     gscAccessToken: "gsc-access",
     gscRefreshToken: "gsc-refresh",
     gscProperty: "sc-domain:example.com",
+    gscScopes: "https://www.googleapis.com/auth/webmasters",
     mediumToken: "medium-secret",
     linkedinAccessToken: "linkedin-secret",
   }) as Record<string, unknown>;
@@ -38,6 +39,7 @@ test("site records never expose stored publishing or OAuth credentials", () => {
   assert.equal(sanitized.webhookConfigured, true);
   assert.equal(sanitized.webhookSecretConfigured, true);
   assert.equal(sanitized.gscConnected, true);
+  assert.equal(sanitized.gscGrowthEnabled, true);
   assert.equal(sanitized.mediumConnected, true);
   assert.equal(sanitized.linkedinConnected, true);
 });
@@ -53,6 +55,7 @@ test("connection flags remain false when credentials are incomplete", () => {
   assert.equal(sanitized.githubConnected, false);
   assert.equal(sanitized.wordpressConfigured, false);
   assert.equal(sanitized.gscConnected, false);
+  assert.equal(sanitized.gscGrowthEnabled, false);
 });
 
 test("a GitHub token without a discovered default branch is not connected", () => {

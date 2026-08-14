@@ -717,7 +717,7 @@ const faqs = [
   },
   {
     q: "How does the rank tracking and content decay detection work?",
-    a: "Pentra connects to your Google Search Console account (read-only access). It syncs daily, tracking clicks, impressions, CTR, and position for every keyword. When an article drops 3+ positions or loses 30%+ of clicks, it gets flagged. You can one-click refresh it, or enable auto-refresh for fully autonomous maintenance.",
+    a: "Pentra connects to Google Search Console with scoped access to read performance and indexing data and submit your sitemap. It syncs daily, tracking clicks, impressions, CTR, and position so measured pages can enter the appropriate recovery workflow. This does not let Pentra edit your website.",
   },
   {
     q: "What publishing platforms do you support?",

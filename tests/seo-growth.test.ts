@@ -251,3 +251,16 @@ test("authority opportunities require a fetched public page before outreach draf
     /You are a backlink strategist/,
   );
 });
+
+test("index discovery repair uses the tenant sitemap before support escalation", () => {
+  const growth = readFileSync("convex/seoGrowth.ts", "utf8");
+  const action = readFileSync("convex/actions/seoGrowth.ts", "utf8");
+  const gsc = readFileSync("convex/actions/gscSync.ts", "utf8");
+  assert.match(growth, /awaiting_discovery_repair/);
+  assert.match(growth, /discoveryRepairVerifiedAt <= now - 7/);
+  assert.match(action, /submitSitemapInternal/);
+  assert.match(action, /discovery_repair_verified/);
+  assert.match(gsc, /method: "PUT"/);
+  assert.match(gsc, /GSC returned a different sitemap path/);
+  assert.doesNotMatch(gsc, /indexing\/v3\/urlNotifications/);
+});

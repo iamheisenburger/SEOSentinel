@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import {
   findMatchingGscProperty,
-  hasGscReadonlyScope,
+  hasGscGrowthScope,
 } from "@/lib/gsc-oauth";
 import { getOwnedSite } from "@/lib/owned-site";
 import { verifyOAuthState } from "@/lib/oauth-state";
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
   }
 
   let grantedScopes = typeof tokenData.scope === "string" ? tokenData.scope : "";
-  if (!hasGscReadonlyScope(grantedScopes)) {
+  if (!hasGscGrowthScope(grantedScopes)) {
     try {
       const tokenInfoRes = await fetch(
         `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
@@ -102,10 +102,10 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  if (!hasGscReadonlyScope(grantedScopes)) {
+  if (!hasGscGrowthScope(grantedScopes)) {
     return new NextResponse(
       renderPage(
-        "Search Console permission was not granted. Reconnect and allow read-only Search Console access.",
+        "Search Console growth permission was not granted. Reconnect and allow Pentra to read performance data and submit your sitemap.",
         false,
       ),
       { status: 403, headers: { "Content-Type": "text/html" } },
@@ -155,7 +155,7 @@ export async function GET(req: NextRequest) {
       const errorText = await sitesRes.text();
       console.error("GSC property listing failed:", errorText);
       return new NextResponse(
-        renderPage("Pentra could not verify Search Console access. Reconnect and allow read-only access.", false),
+        renderPage("Pentra could not verify Search Console access. Reconnect and allow performance reading and sitemap submission.", false),
         { status: 403, headers: { "Content-Type": "text/html" } },
       );
     }
@@ -190,6 +190,7 @@ export async function GET(req: NextRequest) {
         gscRefreshToken: refreshToken || undefined,
         gscProperty,
         gscEmail: email || undefined,
+        gscScopes: grantedScopes,
       });
       saved = true;
     } catch (e) {

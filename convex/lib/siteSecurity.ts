@@ -21,6 +21,7 @@ type SiteConnectionFlags = {
   webhookConfigured: boolean;
   webhookSecretConfigured: boolean;
   gscConnected: boolean;
+  gscGrowthEnabled: boolean;
   mediumConnected: boolean;
   linkedinConnected: boolean;
   publicationAdapterVerified: boolean;
@@ -45,6 +46,12 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
     webhookConfigured: Boolean(site.webhookUrl),
     webhookSecretConfigured: Boolean(site.webhookSecret),
     gscConnected: Boolean(site.gscAccessToken && site.gscProperty),
+    gscGrowthEnabled: Boolean(
+      typeof site.gscScopes === "string" &&
+      site.gscScopes
+        .split(/\s+/)
+        .includes("https://www.googleapis.com/auth/webmasters"),
+    ),
     mediumConnected: Boolean(site.mediumToken),
     linkedinConnected: Boolean(site.linkedinAccessToken),
     publicationAdapterVerified: Boolean(

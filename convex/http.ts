@@ -171,6 +171,8 @@ http.route({
       gscProperty: body.gscProperty,
       gscEmail:
         typeof body.gscEmail === "string" ? body.gscEmail : undefined,
+      gscScopes:
+        typeof body.gscScopes === "string" ? body.gscScopes : undefined,
     });
     return json({ ok: true });
   }),

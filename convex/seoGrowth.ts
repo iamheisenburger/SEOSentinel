@@ -18,6 +18,7 @@ const RETRYABLE_SUPPORT_AUTOMATION = new Set([
   "queued_growth_plan",
   "bounded_wait",
   "support_failed",
+  "discovery_repair_verified",
 ]);
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
@@ -301,6 +302,10 @@ export const reconcileSite = internalMutation({
       growthSeed: string;
       priority: number;
     }> = [];
+    const discoveryRepairRequests: Array<{
+      fingerprint: string;
+      priority: number;
+    }> = [];
     for (const classification of classifications) {
       const article = await ctx.db.get(classification.articleId);
       if (!article || article.siteId !== siteId || article.status !== "published") {
@@ -342,8 +347,22 @@ export const reconcileSite = internalMutation({
         let automation: GrowthAutomationResult | undefined;
         if (
           desiredStatus === "open" &&
-          (classification.actionKind === "repair_discovery" ||
-            classification.actionKind === "strengthen_cluster") &&
+          classification.actionKind === "repair_discovery" &&
+          !existing.discoveryRepairVerifiedAt
+        ) {
+          discoveryRepairRequests.push({
+            fingerprint,
+            priority: classification.priority,
+          });
+        }
+        if (
+          desiredStatus === "open" &&
+          (classification.actionKind === "strengthen_cluster" ||
+            (
+              classification.actionKind === "repair_discovery" &&
+              existing.discoveryRepairVerifiedAt !== undefined &&
+              existing.discoveryRepairVerifiedAt <= now - 7 * 24 * 60 * 60 * 1000
+            )) &&
           RETRYABLE_SUPPORT_AUTOMATION.has(
             existing.automationStatus ?? "no_safe_candidate",
           )
@@ -385,10 +404,17 @@ export const reconcileSite = internalMutation({
           status: "not_applicable",
           detail: "This measured stage has no safe automatic mutation.",
         };
-        if (
-          classification.actionKind === "repair_discovery" ||
-          classification.actionKind === "strengthen_cluster"
-        ) {
+        if (classification.actionKind === "repair_discovery") {
+          automation = {
+            status: "awaiting_discovery_repair",
+            detail:
+              "Pentra will resubmit and verify the tenant sitemap in Search Console before producing more support content.",
+          };
+          discoveryRepairRequests.push({
+            fingerprint,
+            priority: classification.priority,
+          });
+        } else if (classification.actionKind === "strengthen_cluster") {
           automation = await prioritizeVerifiedSupportingTopic(
             ctx,
             siteId,
@@ -501,7 +527,49 @@ export const reconcileSite = internalMutation({
       openActions,
       stageCounts,
       replenishmentRequests,
+      discoveryRepairRequests,
     };
+  },
+});
+
+export const recordDiscoveryRepair = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    fingerprint: v.string(),
+    status: v.string(),
+    detail: v.string(),
+    attemptedAt: v.number(),
+    verifiedAt: v.optional(v.number()),
+    sitemapUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const action = await ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", args.fingerprint))
+      .unique();
+    if (
+      !action ||
+      action.siteId !== args.siteId ||
+      action.status !== "open" ||
+      action.actionKind !== "repair_discovery"
+    ) {
+      throw new Error("Discovery repair does not match an open tenant action");
+    }
+    const preserveCompletedSupport = action.automationStatus === "executed";
+    await ctx.db.patch(action._id, {
+      discoveryRepairAttemptedAt: args.attemptedAt,
+      discoveryRepairVerifiedAt: args.verifiedAt,
+      discoveryRepairSitemapUrl: args.sitemapUrl,
+      discoveryRepairDetail: args.detail,
+      ...(preserveCompletedSupport
+        ? {}
+        : {
+            automationStatus: args.status,
+            automationDetail: args.detail,
+          }),
+      updatedAt: Date.now(),
+    });
+    return { updated: true };
   },
 });
 
@@ -706,6 +774,10 @@ export const getOperatorSnapshot = internalQuery({
         reason: action.reason,
         automationStatus: action.automationStatus,
         automationDetail: action.automationDetail,
+        discoveryRepairAttemptedAt: action.discoveryRepairAttemptedAt,
+        discoveryRepairVerifiedAt: action.discoveryRepairVerifiedAt,
+        discoveryRepairSitemapUrl: action.discoveryRepairSitemapUrl,
+        discoveryRepairDetail: action.discoveryRepairDetail,
         evidence: action.evidence,
         firstObservedAt: action.firstObservedAt,
         lastObservedAt: action.lastObservedAt,

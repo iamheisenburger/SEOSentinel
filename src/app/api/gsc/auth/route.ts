@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { GSC_READONLY_SCOPE } from "@/lib/gsc-oauth";
+import { GSC_GROWTH_SCOPE } from "@/lib/gsc-oauth";
 import { getOwnedSite } from "@/lib/owned-site";
 import { createOAuthState } from "@/lib/oauth-state";
 
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     client_id: clientId,
     redirect_uri: callbackUrl,
     response_type: "code",
-    scope: `${GSC_READONLY_SCOPE} openid email`,
+    scope: `${GSC_GROWTH_SCOPE} openid email`,
     access_type: "offline",
     prompt: "consent", // Force consent to get refresh token
     include_granted_scopes: "true",

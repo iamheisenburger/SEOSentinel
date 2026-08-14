@@ -34,6 +34,7 @@ import {
   Palette,
   Eye,
   BarChart3,
+  RefreshCw,
   Share2,
 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -378,6 +379,7 @@ export function SetupWizard() {
     siteId ? { siteId } : "skip",
   );
   const gscConnected = !!connectedSite?.gscConnected;
+  const gscGrowthEnabled = !!connectedSite?.gscGrowthEnabled;
   const gscEmail = connectedSite?.gscEmail ?? "";
 
   useEffect(() => {
@@ -1305,12 +1307,14 @@ export function SetupWizard() {
               </p>
 
               {gscConnected ? (
-                <div className="flex items-center gap-3 rounded-lg bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15] px-4 py-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#22C55E]/[0.12]">
-                    <Check className="h-4 w-4 text-[#22C55E]" />
+                <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${gscGrowthEnabled ? "bg-[#22C55E]/[0.06] border border-[#22C55E]/[0.15]" : "bg-[#F59E0B]/[0.06] border border-[#F59E0B]/[0.15]"}`}>
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-full ${gscGrowthEnabled ? "bg-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.12]"}`}>
+                    {gscGrowthEnabled ? <Check className="h-4 w-4 text-[#22C55E]" /> : <RefreshCw className="h-4 w-4 text-[#F59E0B]" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium text-[#22C55E]">Search Console connected</p>
+                    <p className={`text-[13px] font-medium ${gscGrowthEnabled ? "text-[#22C55E]" : "text-[#FBBF24]"}`}>
+                      {gscGrowthEnabled ? "Search Console growth loop connected" : "Reconnect to enable indexing repair"}
+                    </p>
                     {gscEmail && <p className="text-[11px] text-[#565A6E]">{gscEmail}</p>}
                   </div>
                   <button onClick={startGscOAuth} className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition">
@@ -1331,7 +1335,7 @@ export function SetupWizard() {
                       <strong className="text-[#8B8FA3]">Which account?</strong> Sign in with the Google account that owns your site&apos;s Search Console property.
                       This is usually the account you used to verify your site in{" "}
                       <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
-                      We only request <strong className="text-[#8B8FA3]">read-only</strong> access — we never modify your site.
+                      Pentra requests Search Console access to read performance/indexing data and submit your sitemap. It cannot edit your website.
                     </p>
                   </div>
                 </div>

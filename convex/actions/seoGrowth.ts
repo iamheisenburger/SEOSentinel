@@ -58,6 +58,10 @@ type GrowthScanResult = {
     status: string;
     detail: string;
   };
+  discoveryRepair?: {
+    status: string;
+    detail: string;
+  };
 };
 
 export const scanAllSites = internalAction({
@@ -260,11 +264,49 @@ export const scanSite = internalAction({
       replenishment = { status, detail };
     }
 
+    const discoveryRequest = [...reconciliation.discoveryRepairRequests]
+      .sort((a, b) => b.priority - a.priority)[0];
+    let discoveryRepair: GrowthScanResult["discoveryRepair"];
+    if (discoveryRequest) {
+      const attemptedAt = Date.now();
+      try {
+        const result = await ctx.runAction(
+          internal.actions.gscSync.submitSitemapInternal,
+          { siteId },
+        );
+        const detail = result.isPending
+          ? "Search Console accepted and exactly verified the tenant sitemap; Google reports processing is pending."
+          : `Search Console accepted and exactly verified the tenant sitemap with ${result.errors ?? 0} error(s) and ${result.warnings ?? 0} warning(s).`;
+        await ctx.runMutation(internal.seoGrowth.recordDiscoveryRepair, {
+          siteId,
+          fingerprint: discoveryRequest.fingerprint,
+          status: "discovery_repair_verified",
+          detail,
+          attemptedAt,
+          verifiedAt: result.verifiedAt,
+          sitemapUrl: result.sitemapUrl,
+        });
+        discoveryRepair = { status: "discovery_repair_verified", detail };
+      } catch {
+        const detail =
+          "Search Console did not confirm the tenant sitemap submission; the action remains fail-closed and will retry on the next measured scan.";
+        await ctx.runMutation(internal.seoGrowth.recordDiscoveryRepair, {
+          siteId,
+          fingerprint: discoveryRequest.fingerprint,
+          status: "discovery_repair_failed",
+          detail,
+          attemptedAt,
+        });
+        discoveryRepair = { status: "discovery_repair_failed", detail };
+      }
+    }
+
     return {
       articlesEvaluated: reconciliation.articlesEvaluated,
       openActions: reconciliation.openActions,
       stageCounts: reconciliation.stageCounts,
       replenishment,
+      discoveryRepair,
     };
   },
 });

@@ -43,7 +43,8 @@ export default function AnalyticsPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
 
-  const gscConnected = !!site?.gscAccessToken && !!site?.gscProperty;
+  const gscConnected = !!site?.gscConnected;
+  const gscGrowthEnabled = !!site?.gscGrowthEnabled;
   const hasGSC = !!gscSummary;
 
   // Segment queries by position
@@ -101,7 +102,7 @@ export default function AnalyticsPage() {
           <p className="mt-3 text-[11px] text-[#565A6E] max-w-sm text-center">
             Sign in with the Google account that owns your site in{" "}
             <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
-            We only request read-only access.
+            Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.
           </p>
         </div>
       ) : !hasGSC ? (
@@ -144,6 +145,19 @@ export default function AnalyticsPage() {
         </div>
       ) : (
         <>
+          {!gscGrowthEnabled && (
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-[#F59E0B]/[0.18] bg-[#F59E0B]/[0.04] px-5 py-4">
+              <p className="text-[12px] text-[#FBBF24]">
+                Reconnect Search Console once to enable verified sitemap repair when Google leaves a page unindexed.
+              </p>
+              <button
+                onClick={() => site?._id && window.open(`/api/gsc/auth?siteId=${site._id}`, "gsc-oauth", "width=600,height=700,popup=yes")}
+                className="shrink-0 rounded-lg bg-[#F59E0B] px-3 py-2 text-[11px] font-medium text-black"
+              >
+                Reconnect
+              </button>
+            </div>
+          )}
           {/* Summary Cards */}
           <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
             <SummaryCard

@@ -1,5 +1,7 @@
 export const GSC_READONLY_SCOPE =
   "https://www.googleapis.com/auth/webmasters.readonly";
+export const GSC_GROWTH_SCOPE =
+  "https://www.googleapis.com/auth/webmasters";
 
 export type GscSiteEntry = {
   siteUrl?: string;
@@ -8,7 +10,13 @@ export type GscSiteEntry = {
 
 export function hasGscReadonlyScope(scopes: unknown): boolean {
   if (typeof scopes !== "string") return false;
-  return new Set(scopes.split(/\s+/).filter(Boolean)).has(GSC_READONLY_SCOPE);
+  const granted = new Set(scopes.split(/\s+/).filter(Boolean));
+  return granted.has(GSC_READONLY_SCOPE) || granted.has(GSC_GROWTH_SCOPE);
+}
+
+export function hasGscGrowthScope(scopes: unknown): boolean {
+  if (typeof scopes !== "string") return false;
+  return new Set(scopes.split(/\s+/).filter(Boolean)).has(GSC_GROWTH_SCOPE);
 }
 
 export function normalizeGscDomain(value: string): string {

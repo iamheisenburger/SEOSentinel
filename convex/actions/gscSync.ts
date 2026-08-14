@@ -65,6 +65,69 @@ type GscSyncResult = {
   };
 };
 
+type SitemapSubmissionResult = {
+  sitemapUrl: string;
+  verifiedAt: number;
+  lastSubmitted?: string;
+  isPending?: boolean;
+  errors?: number;
+  warnings?: number;
+};
+
+function sitemapUrlForDomain(domain: string): string {
+  const origin = new URL(
+    /^https?:\/\//i.test(domain) ? domain : `https://${domain}`,
+  ).origin;
+  return new URL("/sitemap.xml", origin).href;
+}
+
+async function submitAndVerifySitemap(
+  accessToken: string,
+  property: string,
+  sitemapUrl: string,
+): Promise<SitemapSubmissionResult> {
+  const endpoint =
+    `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(property)}` +
+    `/sitemaps/${encodeURIComponent(sitemapUrl)}`;
+  const submitted = await fetch(endpoint, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!submitted.ok) {
+    const text = await submitted.text();
+    throw new Error(
+      `GSC sitemap submission failed (${submitted.status}): ${text.slice(0, 300)}`,
+    );
+  }
+  const verified = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!verified.ok) {
+    const text = await verified.text();
+    throw new Error(
+      `GSC sitemap verification failed (${verified.status}): ${text.slice(0, 300)}`,
+    );
+  }
+  const data = await verified.json() as {
+    path?: string;
+    lastSubmitted?: string;
+    isPending?: boolean;
+    errors?: string | number;
+    warnings?: string | number;
+  };
+  if (data.path !== sitemapUrl) {
+    throw new Error("GSC returned a different sitemap path than Pentra submitted");
+  }
+  return {
+    sitemapUrl,
+    verifiedAt: Date.now(),
+    lastSubmitted: data.lastSubmitted,
+    isPending: data.isPending,
+    errors: Number(data.errors ?? 0),
+    warnings: Number(data.warnings ?? 0),
+  };
+}
+
 async function fetchSearchAnalytics(
   accessToken: string,
   property: string,
@@ -270,6 +333,45 @@ export const syncSiteInternal = internalAction({
       throw new Error("GSC not connected for this site");
     }
     return syncSiteGSC(ctx, site);
+  },
+});
+
+// Search Console's Sitemap API is the correct general-purpose discovery path
+// for ordinary web pages. It is tenant-scoped, refreshes only that tenant's
+// OAuth token, and verifies the exact submitted sitemap before reporting
+// success. The restricted Indexing API is intentionally not used here.
+export const submitSitemapInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<SitemapSubmissionResult> => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (!site) throw new Error("Site not found");
+    if (!site.gscAccessToken || !site.gscProperty) {
+      throw new Error("GSC not connected for this site");
+    }
+    if (
+      !site.gscScopes
+        ?.split(/\s+/)
+        .includes("https://www.googleapis.com/auth/webmasters")
+    ) {
+      throw new Error(
+        "Search Console must be reconnected with sitemap-submission permission",
+      );
+    }
+    let accessToken = site.gscAccessToken;
+    if (site.gscRefreshToken) {
+      const refreshed = await refreshAccessToken(site.gscRefreshToken);
+      if (!refreshed) throw new Error("GSC access-token refresh failed");
+      accessToken = refreshed.accessToken;
+      await ctx.runMutation(internal.sites.setGscTokenInternal, {
+        siteId,
+        gscAccessToken: accessToken,
+      });
+    }
+    return submitAndVerifySitemap(
+      accessToken,
+      site.gscProperty,
+      sitemapUrlForDomain(site.domain),
+    );
   },
 });
 

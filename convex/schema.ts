@@ -74,6 +74,7 @@ export default defineSchema({
     gscRefreshToken: v.optional(v.string()),
     gscProperty: v.optional(v.string()), // e.g. "sc-domain:example.com"
     gscEmail: v.optional(v.string()),
+    gscScopes: v.optional(v.string()),
     gscConnectedAt: v.optional(v.number()),
 
     // ── Content Syndication ──
@@ -467,6 +468,10 @@ export default defineSchema({
     automationStatus: v.optional(v.string()), // support lifecycle + executed/no_safe_candidate/bounded_wait/not_applicable
     automationDetail: v.optional(v.string()),
     automatedAt: v.optional(v.number()),
+    discoveryRepairAttemptedAt: v.optional(v.number()),
+    discoveryRepairVerifiedAt: v.optional(v.number()),
+    discoveryRepairSitemapUrl: v.optional(v.string()),
+    discoveryRepairDetail: v.optional(v.string()),
     firstObservedAt: v.number(),
     lastObservedAt: v.number(),
     nextReviewAt: v.optional(v.number()),
