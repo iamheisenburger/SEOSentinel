@@ -2,6 +2,7 @@ import { internalMutation, internalQuery, mutation, query } from "./_generated/s
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { serpFingerprintOverlap } from "./lib/autopilotBuffer";
 
 const now = () => Date.now();
 
@@ -52,6 +53,70 @@ export const getInternal = internalQuery({
   handler: async (ctx, { topicId }) => ctx.db.get(topicId),
 });
 
+export const getSerpFingerprintAudit = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const topics = await ctx.db
+      .query("topic_clusters")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    const missing = topics
+      .filter((topic) => (topic.serpTopUrls?.length ?? 0) < 5)
+      .map((topic) => ({
+        topicId: topic._id,
+        primaryKeyword: topic.primaryKeyword,
+        status: topic.status,
+      }));
+    return {
+      total: topics.length,
+      fingerprinted: topics.length - missing.length,
+      missing,
+    };
+  },
+});
+
+export const getSerpCorpusAudit = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const topics = await ctx.db
+      .query("topic_clusters")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .collect();
+    const overlaps = [];
+    for (let leftIndex = 0; leftIndex < topics.length; leftIndex += 1) {
+      for (
+        let rightIndex = leftIndex + 1;
+        rightIndex < topics.length;
+        rightIndex += 1
+      ) {
+        const left = topics[leftIndex];
+        const right = topics[rightIndex];
+        const evidence = serpFingerprintOverlap(
+          left.serpTopUrls,
+          right.serpTopUrls,
+        );
+        if (evidence.shared < 3 || evidence.coefficient < 0.4) continue;
+        overlaps.push({
+          leftTopicId: left._id,
+          rightTopicId: right._id,
+          leftKeyword: left.primaryKeyword,
+          rightKeyword: right.primaryKeyword,
+          leftStatus: left.status,
+          rightStatus: right.status,
+          ...evidence,
+        });
+      }
+    }
+    return {
+      total: topics.length,
+      fingerprinted: topics.filter(
+        (topic) => (topic.serpTopUrls?.length ?? 0) >= 5,
+      ).length,
+      overlaps,
+    };
+  },
+});
+
 export const upsertMany = internalMutation({
   args: {
     siteId: v.id("sites"),
@@ -72,6 +137,7 @@ export const upsertMany = internalMutation({
         serpIntent: v.optional(v.string()),
         recommendedArticleType: v.optional(v.string()),
         paaQuestions: v.optional(v.array(v.string())),
+        serpTopUrls: v.optional(v.array(v.string())),
         volumeTrend: v.optional(v.array(v.number())),
       }),
     ),
@@ -130,6 +196,7 @@ export const upsertMany = internalMutation({
         ...(topic.serpIntent ? { serpIntent: topic.serpIntent } : {}),
         ...(topic.recommendedArticleType ? { recommendedArticleType: topic.recommendedArticleType } : {}),
         ...(topic.paaQuestions ? { paaQuestions: topic.paaQuestions } : {}),
+        ...(topic.serpTopUrls ? { serpTopUrls: topic.serpTopUrls } : {}),
         ...(topic.volumeTrend ? { volumeTrend: topic.volumeTrend } : {}),
         createdAt: now(),
         updatedAt: now(),
@@ -223,6 +290,7 @@ export const updateSEOMetrics = internalMutation({
     serpIntent: v.optional(v.string()),
     recommendedArticleType: v.optional(v.string()),
     paaQuestions: v.optional(v.array(v.string())),
+    serpTopUrls: v.optional(v.array(v.string())),
     volumeTrend: v.optional(v.array(v.number())),
     priority: v.optional(v.number()),
     articleType: v.optional(v.string()),

@@ -5,6 +5,10 @@ import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
 import type { ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
+import {
+  isBrandedSearchQuery,
+  publishedArticlePageUrl,
+} from "../lib/searchPerformance";
 
 // ── Token Refresh ──
 
@@ -43,6 +47,24 @@ interface GSCRow {
   position: number;
 }
 
+interface GSCIndexStatusResult {
+  verdict?: string;
+  coverageState?: string;
+  robotsTxtState?: string;
+  indexingState?: string;
+  lastCrawlTime?: string;
+  pageFetchState?: string;
+}
+
+type GscSyncResult = {
+  rows: number;
+  saved: number;
+  inspections: {
+    checked: number;
+    failed: number;
+  };
+};
+
 async function fetchSearchAnalytics(
   accessToken: string,
   property: string,
@@ -77,26 +99,145 @@ async function fetchSearchAnalytics(
   return data.rows || [];
 }
 
+async function fetchUrlInspection(
+  accessToken: string,
+  property: string,
+  inspectionUrl: string,
+): Promise<GSCIndexStatusResult> {
+  const res = await fetch(
+    "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        inspectionUrl,
+        siteUrl: property,
+        languageCode: "en-US",
+      }),
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(
+      `GSC URL Inspection error (${res.status}): ${text.slice(0, 300)}`,
+    );
+  }
+  const data = await res.json();
+  return data.inspectionResult?.indexStatusResult ?? {};
+}
+
+async function syncPublishedInspections(
+  ctx: ActionCtx,
+  site: Doc<"sites">,
+  accessToken: string,
+  gscProperty: string,
+): Promise<{ checked: number; failed: number }> {
+  const now = Date.now();
+  const recent = await ctx.runQuery(
+    internal.searchPerformance.listPublishedForInspection,
+    {
+      siteId: site._id,
+      publishedAfter: now - 56 * 24 * 60 * 60 * 1000,
+      limit: 20,
+    },
+  );
+  let checked = 0;
+  let failed = 0;
+  for (const article of recent) {
+    // Once daily is sufficient for index-state progression and avoids spending
+    // inspection quota on unchanged URLs.
+    if (
+      article.gscInspectedAt &&
+      article.gscInspectedAt >= now - 20 * 60 * 60 * 1000
+    ) {
+      continue;
+    }
+    const inspectionUrl = publishedArticlePageUrl(
+      site.domain,
+      site.urlStructure,
+      article.slug,
+    );
+    try {
+      const result = await fetchUrlInspection(
+        accessToken,
+        gscProperty,
+        inspectionUrl,
+      );
+      await ctx.runMutation(
+        internal.searchPerformance.recordUrlInspection,
+        {
+          articleId: article.articleId,
+          verdict: result.verdict,
+          coverageState: result.coverageState,
+          pageFetchState: result.pageFetchState,
+          robotsTxtState: result.robotsTxtState,
+          lastCrawlTime: result.lastCrawlTime,
+          inspectedAt: now,
+        },
+      );
+      checked++;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(
+        internal.searchPerformance.recordUrlInspection,
+        {
+          articleId: article.articleId,
+          inspectedAt: now,
+          error: message.slice(0, 500),
+        },
+      );
+      failed++;
+    }
+  }
+  return { checked, failed };
+}
+
 // ── Sync Action: Pull GSC data for all connected sites ──
 
 export const syncAllSites = internalAction({
-  handler: async (ctx): Promise<{ synced: number }> => {
-    const sites = await ctx.runQuery(internal.sites.listAllForAutopilot);
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }): Promise<{
+    synced: number;
+    failed: number;
+    scheduledNext: boolean;
+  }> => {
+    const page = await ctx.runQuery(internal.sites.listGrowthPage, {
+      cursor,
+    });
     let synced = 0;
+    let failed = 0;
 
-    for (const site of sites) {
-      if (!site.gscAccessToken || !site.gscProperty) continue;
+    for (const summary of page.page) {
+      if (!summary.gscConnected) continue;
+      const site = await ctx.runQuery(internal.sites.getFull, {
+        siteId: summary.siteId,
+      });
+      if (!site?.gscAccessToken || !site.gscProperty) continue;
 
       try {
         await syncSiteGSC(ctx, site);
         synced++;
       } catch (err) {
+        failed++;
         console.error(`GSC sync failed for ${site.domain}:`, err);
       }
     }
 
-    console.log(`GSC sync complete: ${synced} sites synced.`);
-    return { synced };
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        1_000,
+        internal.actions.gscSync.syncAllSites,
+        { cursor: page.continueCursor },
+      );
+    }
+
+    console.log(
+      `GSC page sync complete: ${synced} synced, ${failed} failed, next=${!page.isDone}.`,
+    );
+    return { synced, failed, scheduledNext: !page.isDone };
   },
 });
 
@@ -104,7 +245,7 @@ export const syncAllSites = internalAction({
 
 export const syncSite = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }): Promise<{ rows: number; saved: number }> => {
+  handler: async (ctx, { siteId }): Promise<GscSyncResult> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     const identity = await ctx.auth.getUserIdentity();
@@ -117,7 +258,25 @@ export const syncSite = action({
   },
 });
 
-async function syncSiteGSC(ctx: ActionCtx, site: Doc<"sites">) {
+// Credential-free, operator-only entry point for one explicitly selected
+// tenant. This keeps scheduled and incident-response syncs bounded instead of
+// reading or mutating every connected tenant.
+export const syncSiteInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<GscSyncResult> => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (!site) throw new Error("Site not found");
+    if (!site.gscAccessToken || !site.gscProperty) {
+      throw new Error("GSC not connected for this site");
+    }
+    return syncSiteGSC(ctx, site);
+  },
+});
+
+async function syncSiteGSC(
+  ctx: ActionCtx,
+  site: Doc<"sites">,
+): Promise<GscSyncResult> {
   if (!site.gscAccessToken || !site.gscProperty) {
     throw new Error("GSC not connected for this site");
   }
@@ -151,7 +310,15 @@ async function syncSiteGSC(ctx: ActionCtx, site: Doc<"sites">) {
   const rows = await fetchSearchAnalytics(accessToken, gscProperty, startStr, endStr, 25_000);
   console.log(`GSC returned ${rows.length} rows for ${site.domain}`);
 
-  if (rows.length === 0) return { rows: 0, saved: 0 };
+  const inspections = await syncPublishedInspections(
+    ctx,
+    site,
+    accessToken,
+    gscProperty,
+  );
+  if (rows.length === 0) {
+    return { rows: 0, saved: 0, inspections };
+  }
 
   // GSC returns actual daily rows. Preserve date+query+page so a new article's
   // impressions can be attributed without double-counting overlapping
@@ -200,6 +367,42 @@ async function syncSiteGSC(ctx: ActionCtx, site: Doc<"sites">) {
         ? Math.round((data.weightedPosition / data.impressions) * 10) / 10
         : 0,
   }));
+  const pageMap = new Map<string, {
+    date: string;
+    page: string;
+    clicks: number;
+    impressions: number;
+    weightedPosition: number;
+    nonBrandedClicks: number;
+    nonBrandedImpressions: number;
+    nonBrandedWeightedPosition: number;
+  }>();
+  for (const row of rows) {
+    const date = row.keys[0];
+    const query = row.keys[1];
+    const page = row.keys[2];
+    if (!date || !query || !page) continue;
+    const key = `${date}\u0000${page}`;
+    const aggregate = pageMap.get(key) ?? {
+      date,
+      page,
+      clicks: 0,
+      impressions: 0,
+      weightedPosition: 0,
+      nonBrandedClicks: 0,
+      nonBrandedImpressions: 0,
+      nonBrandedWeightedPosition: 0,
+    };
+    aggregate.clicks += row.clicks;
+    aggregate.impressions += row.impressions;
+    aggregate.weightedPosition += row.position * row.impressions;
+    if (!isBrandedSearchQuery(query, site.domain)) {
+      aggregate.nonBrandedClicks += row.clicks;
+      aggregate.nonBrandedImpressions += row.impressions;
+      aggregate.nonBrandedWeightedPosition += row.position * row.impressions;
+    }
+    pageMap.set(key, aggregate);
+  }
   let saved = 0;
   for (let index = 0; index < records.length; index += 500) {
     const batch = records.slice(index, index + 500);
@@ -209,7 +412,16 @@ async function syncSiteGSC(ctx: ActionCtx, site: Doc<"sites">) {
     });
     saved += result.saved;
   }
+  const pageRecords = [...pageMap.values()];
+  for (let index = 0; index < pageRecords.length; index += 500) {
+    await ctx.runMutation(internal.searchPerformance.upsertPageBatch, {
+      siteId: site._id,
+      rows: pageRecords.slice(index, index + 500),
+    });
+  }
 
-  console.log(`Saved ${saved} daily query/page records for ${site.domain}`);
-  return { rows: rows.length, saved };
+  console.log(
+    `Saved ${saved} daily query rows and ${pageRecords.length} page rollups for ${site.domain}`,
+  );
+  return { rows: rows.length, saved, inspections };
 }

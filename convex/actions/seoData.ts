@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import OpenAI from "openai";
+import { dataForSeoLanguageCode } from "../lib/dataForSeoLocale.ts";
 import { topicDiscoverySeedBatches } from "../lib/autopilotBuffer.ts";
 import { safeFetchPublicText } from "../lib/safeOutbound.ts";
 
@@ -222,6 +223,7 @@ async function getKeywordMetricsFromAPI(
   locationCode: number,
   languageCode: string,
 ): Promise<KeywordMetrics[]> {
+  languageCode = dataForSeoLanguageCode(languageCode);
   // Use Keywords Data API - Google Ads Search Volume
   const data = await dataForSEORequest(
     "keywords_data/google_ads/search_volume/live",
@@ -307,6 +309,7 @@ export async function discoverKeywords(
   limit: number = 50,
   options: KeywordDiscoveryOptions = {},
 ): Promise<KeywordMetrics[]> {
+  languageCode = dataForSeoLanguageCode(languageCode);
   const creds = getDataForSEOCredentials();
   if (!creds && !options.request) return []; // No DataForSEO = no discovery
 
@@ -698,6 +701,7 @@ async function analyzeSERPFromAPI(
   locationCode: number,
   languageCode: string,
 ): Promise<SerpAnalysis> {
+  languageCode = dataForSeoLanguageCode(languageCode);
   const data = await dataForSEORequest(
     "serp/google/organic/live/regular",
     [{
@@ -987,6 +991,7 @@ async function findKeywordGapsFromAPI(
   locationCode: number,
   languageCode: string,
 ): Promise<KeywordGap[]> {
+  languageCode = dataForSeoLanguageCode(languageCode);
   const gaps: KeywordGap[] = [];
 
   // For each competitor, get their ranked keywords

@@ -7,15 +7,27 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { createHmac, randomUUID } from "crypto";
 import {
-  containsExecutableMdx,
   evaluatePublicationQuality,
   normalizeSiteOrigin,
   type PublicationQualityMode,
 } from "./lib/articleQuality";
+import {
+  assertSafePublishableMarkdown,
+  PUBLISHER_RENDERER_VERSION,
+  renderSafePublicationHtml,
+} from "./lib/safeMarkdownHtml";
+import { safeRequestPublicHttps, validatePublicHttpsUrl } from "./lib/safeOutbound";
+import {
+  PUBLICATION_ADAPTER_VERSION,
+  type PublicationReceipt,
+  webhookReceiptFromResponse,
+  wordpressReceiptFromResponse,
+} from "./lib/publicationReceipts";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import {
   PUBLICATION_AUDIT_VERSION,
   classifyPentraMarkdownDestination,
+  publicationAdapterConfigHash,
   publicationArtifactHash,
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
@@ -62,6 +74,7 @@ type ArticleRecord = {
 
 type SiteRecord = {
   _id: Id<"sites">;
+  userId?: string;
   domain: string;
   publishMethod?: string;
   approvalRequired?: boolean;
@@ -74,6 +87,9 @@ type SiteRecord = {
   wpAppPassword?: string;
   webhookUrl?: string;
   webhookSecret?: string;
+  publicationAdapterVerifiedAt?: number;
+  publicationAdapterVersion?: string;
+  publicationAdapterConfigHash?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
   brandFontFamily?: string;
@@ -86,36 +102,16 @@ type SiteRecord = {
 
 // ── Shared Utilities ────────────────────────────────────
 
-/**
- * Build the canonical Pentra MDX contract consumed by GitHub-backed sites.
- */
-function assertSafePublishableMarkdown(markdown: string): void {
-  if (containsExecutableMdx(markdown)) {
-    throw new Error("Raw HTML and executable MDX are disabled in publication content");
-  }
-  for (const match of markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)) {
-    let url: URL;
-    try {
-      url = new URL(match[1]);
-    } catch {
-      throw new Error("Article images must use absolute HTTPS URLs");
-    }
-    if (url.protocol !== "https:") {
-      throw new Error("Article images must use absolute HTTPS URLs");
-    }
-  }
-  for (const match of markdown.matchAll(/(?<!!)\[[^\]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)) {
-    const target = match[1];
-    if (target.startsWith("/")) continue;
-    let url: URL;
-    try {
-      url = new URL(target);
-    } catch {
-      throw new Error("Article links must be relative paths or absolute HTTPS URLs");
-    }
-    if (url.protocol !== "https:") {
-      throw new Error("Article links must be relative paths or absolute HTTPS URLs");
-    }
+function assertProductionAdapterVerified(site: SiteRecord): void {
+  if (site.publishMethod !== "wordpress" && site.publishMethod !== "webhook") return;
+  const expectedHash = publicationAdapterConfigHash(site);
+  if (
+    !expectedHash ||
+    site.publicationAdapterVersion !== PUBLICATION_ADAPTER_VERSION ||
+    site.publicationAdapterConfigHash !== expectedHash ||
+    (site.publicationAdapterVerifiedAt ?? 0) <= 0
+  ) {
+    throw new Error("Publishing destination has not passed its signed production preflight");
   }
 }
 
@@ -188,92 +184,6 @@ function buildMdx(
 
   return `${frontmatter}\n\n${body}\n`;
 }
-
-type BrandStyle = {
-  primaryColor?: string;
-  accentColor?: string;
-  fontFamily?: string;
-};
-
-/**
- * Convert markdown to styled HTML for WordPress/Webhook.
- * Injects brand colors as inline styles when available.
- */
-function markdownToHtml(md: string, brand?: BrandStyle): string {
-  let html = md;
-
-  const primary = brand?.primaryColor || "#0EA5E9";
-  const accent = brand?.accentColor || "#22D3EE";
-  const font = brand?.fontFamily || "system-ui, -apple-system, sans-serif";
-
-  // Images (before headings to avoid conflicts)
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;height:auto;border-radius:8px;margin:1.5em 0">');
-
-  // Headings (must come before bold processing)
-  html = html.replace(/^######\s+(.+)$/gm, `<h6 style="font-family:${font};color:${primary};margin:1em 0 0.5em">$1</h6>`);
-  html = html.replace(/^#####\s+(.+)$/gm, `<h5 style="font-family:${font};color:${primary};margin:1em 0 0.5em">$1</h5>`);
-  html = html.replace(/^####\s+(.+)$/gm, `<h4 style="font-family:${font};color:${primary};margin:1.2em 0 0.5em">$1</h4>`);
-  html = html.replace(/^###\s+(.+)$/gm, `<h3 style="font-family:${font};font-size:1.15em;margin:1.5em 0 0.5em">$1</h3>`);
-  html = html.replace(/^##\s+(.+)$/gm, `<h2 style="font-family:${font};color:${primary};font-size:1.4em;margin:1.8em 0 0.6em;padding-bottom:0.3em;border-bottom:2px solid ${primary}20">$1</h2>`);
-  html = html.replace(/^#\s+(.+)$/gm, `<h1 style="font-family:${font};color:${primary};font-size:1.8em;margin:0 0 0.8em">$1</h1>`);
-
-  // Bold and italic
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-
-  // Links — styled with brand accent color
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, `<a href="$2" style="color:${accent};text-decoration:underline">$1</a>`);
-
-  // Blockquotes — styled with brand primary border
-  html = html.replace(/^>\s+(.+)$/gm, `<blockquote style="border-left:4px solid ${primary};padding:0.5em 1em;margin:1em 0;color:#555;background:#f9f9f9">$1</blockquote>`);
-
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background:#f3f4f6;padding:0.15em 0.4em;border-radius:4px;font-size:0.9em">$1</code>');
-
-  // Horizontal rules
-  html = html.replace(/^---$/gm, `<hr style="border:none;border-top:2px solid ${primary}20;margin:2em 0">`);
-
-  // Unordered lists (simple — handles single-level)
-  html = html.replace(
-    /(?:^[-*]\s+.+\n?)+/gm,
-    (block) => {
-      const items = block
-        .trim()
-        .split("\n")
-        .map((line) => `<li style="margin:0.3em 0">${line.replace(/^[-*]\s+/, "")}</li>`)
-        .join("\n");
-      return `<ul style="padding-left:1.5em;margin:1em 0">\n${items}\n</ul>\n`;
-    },
-  );
-
-  // Ordered lists
-  html = html.replace(
-    /(?:^\d+\.\s+.+\n?)+/gm,
-    (block) => {
-      const items = block
-        .trim()
-        .split("\n")
-        .map((line) => `<li style="margin:0.3em 0">${line.replace(/^\d+\.\s+/, "")}</li>`)
-        .join("\n");
-      return `<ol style="padding-left:1.5em;margin:1em 0">\n${items}\n</ol>\n`;
-    },
-  );
-
-  // Paragraphs — wrap remaining lines that aren't already tags
-  html = html
-    .split("\n\n")
-    .map((block) => {
-      const trimmed = block.trim();
-      if (!trimmed) return "";
-      if (/^<[a-z]/.test(trimmed)) return trimmed;
-      return `<p style="font-family:${font};line-height:1.7;margin:1em 0;color:#1a1a1a">${trimmed.replace(/\n/g, "<br>")}</p>`;
-    })
-    .join("\n\n");
-
-  return html;
-}
-
 
 // ── GitHub Adapter ──────────────────────────────────────
 
@@ -697,7 +607,8 @@ async function publishToGitHub(
   article: ArticleRecord,
   publicationDate: number,
   deliveryKey: string,
-): Promise<{ method: "github"; commitUrl: string; filePath: string }> {
+  contentHash: string,
+): Promise<{ method: "github"; commitUrl: string; filePath: string; receipt: PublicationReceipt }> {
   const token = site.githubToken;
   if (!token) throw new Error("GitHub token not configured. Go to Settings → Publishing to add your GitHub personal access token.");
 
@@ -737,7 +648,7 @@ async function publishToGitHub(
   }
   const mdx = buildMdx(article, site, publicationDate, deliveryKey);
 
-  const { commitUrl } = await commitToMain({
+  const { commitUrl, sha } = await commitToMain({
     token,
     owner: repoOwner,
     repo: repoName,
@@ -747,51 +658,198 @@ async function publishToGitHub(
     deliveryKey,
   });
 
-  return { method: "github", commitUrl, filePath };
+  const receipt: PublicationReceipt = {
+    method: "github",
+    deliveryKey,
+    contentHash,
+    externalId: sha || filePath,
+    url: commitUrl,
+    status: "committed",
+    receivedAt: Date.now(),
+  };
+  return { method: "github", commitUrl, filePath, receipt };
 }
 
 // ── WordPress Adapter ───────────────────────────────────
+
+async function verifyPublicationDestinationHandler(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<{ ok: true; method: "wordpress" | "webhook"; verifiedAt: number }> {
+  const site = (await ctx.runQuery(internal.sites.getFull, { siteId })) as SiteRecord | null;
+  if (!site) throw new Error("Site not found");
+  const configHash = publicationAdapterConfigHash(site);
+  if (!configHash) throw new Error("Publishing connection is incomplete");
+  const verifiedAt = Date.now();
+
+  if (site.publishMethod === "wordpress") {
+    if (!site.wpUrl || !site.wpUsername || !site.wpAppPassword) {
+      throw new Error("WordPress credentials are incomplete");
+    }
+    const wpRoot = await validatePublicHttpsUrl(site.wpUrl);
+    const credentials = Buffer.from(
+      `${site.wpUsername}:${site.wpAppPassword}`,
+      "utf8",
+    ).toString("base64");
+    const response = await safeRequestPublicHttps(
+      `${wpRoot.href.replace(/\/+$/, "")}/wp-json/wp/v2/users/me?context=edit`,
+      {
+        method: "GET",
+        expectedHost: wpRoot.hostname,
+        headers: { Authorization: `Basic ${credentials}` },
+        allowedContentTypes: [/^application\/json(?:;|$)/i],
+      },
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`WordPress connection check failed (${response.status})`);
+    }
+    const user = JSON.parse(response.text) as Record<string, unknown>;
+    const capabilities = user.capabilities as Record<string, unknown> | undefined;
+    if (!Number.isInteger(user.id) || capabilities?.publish_posts !== true) {
+      throw new Error("WordPress account cannot publish posts");
+    }
+  } else if (site.publishMethod === "webhook") {
+    if (!site.webhookUrl || !site.webhookSecret) {
+      throw new Error("Webhook URL and signing secret are required");
+    }
+    if (Buffer.byteLength(site.webhookSecret, "utf8") < 32) {
+      throw new Error("Webhook signing secret must contain at least 32 bytes");
+    }
+    const endpoint = await validatePublicHttpsUrl(site.webhookUrl);
+    const nonce = randomUUID();
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const payload = JSON.stringify({
+      event: "pentra.preflight.v1",
+      adapterVersion: PUBLICATION_ADAPTER_VERSION,
+      nonce,
+    });
+    const signature = createHmac("sha256", site.webhookSecret)
+      .update(`${timestamp}.${payload}`)
+      .digest("hex");
+    const response = await safeRequestPublicHttps(endpoint.href, {
+      method: "POST",
+      expectedHost: endpoint.hostname,
+      body: payload,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Pentra-Timestamp": timestamp,
+        "X-Pentra-Signature-256": `sha256=${signature}`,
+      },
+      allowedContentTypes: [/^application\/json(?:;|$)/i],
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Webhook connection check failed (${response.status})`);
+    }
+    const acknowledgement = JSON.parse(response.text) as Record<string, unknown>;
+    if (
+      acknowledgement.accepted !== true ||
+      acknowledgement.event !== "pentra.preflight.v1" ||
+      acknowledgement.nonce !== nonce
+    ) {
+      throw new Error("Webhook did not acknowledge the signed preflight nonce");
+    }
+  } else {
+    throw new Error("Only WordPress and webhook destinations require this verification");
+  }
+
+  await ctx.runMutation(internal.sites.setPublicationAdapterVerificationInternal, {
+    siteId,
+    configHash,
+    adapterVersion: PUBLICATION_ADAPTER_VERSION,
+    verifiedAt,
+  });
+  return { ok: true, method: site.publishMethod, verifiedAt };
+}
+
+export const verifyPublicationDestinationInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => verifyPublicationDestinationHandler(ctx, siteId),
+});
+
+export const verifyPublicationDestination = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    const identity = await ctx.auth.getUserIdentity();
+    if (!site?.userId || !identity || identity.subject !== site.userId) {
+      throw new Error("Not authorized to verify this site");
+    }
+    return verifyPublicationDestinationHandler(ctx, siteId);
+  },
+});
 
 async function publishToWordPress(
   site: SiteRecord,
   article: ArticleRecord,
   deliveryKey: string,
-): Promise<{ method: "wordpress"; postUrl: string; postId: number }> {
-  throw new Error(
-    "WordPress publication is disabled until the sanitized renderer completes security review",
-  );
+  contentHash: string,
+): Promise<{ method: "wordpress"; postUrl: string; postId: number; receipt: PublicationReceipt }> {
   if (!site.wpUrl || !site.wpUsername || !site.wpAppPassword) {
     throw new Error("WordPress credentials not configured (wpUrl, wpUsername, wpAppPassword)");
   }
 
-  const wpApiUrl = site.wpUrl!.replace(/\/+$/, "");
+  const wpRoot = await validatePublicHttpsUrl(site.wpUrl);
+  const wpApiUrl = wpRoot.href.replace(/\/+$/, "");
   const credentials = Buffer.from(`${site.wpUsername}:${site.wpAppPassword}`).toString("base64");
-  const brand: BrandStyle = {
-    primaryColor: site.brandPrimaryColor,
-    accentColor: site.brandAccentColor,
-    fontFamily: site.brandFontFamily,
-  };
-  const htmlContent = markdownToHtml(article.markdown, brand);
+  const htmlContent = renderSafePublicationHtml(article.markdown);
   const slug = article.slug.replace(/^\//, "").replace(/\//g, "-");
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error("Article slug is unsafe for WordPress publication");
+  }
+  const siteHost = new URL(normalizeSiteOrigin(site.domain)).hostname;
+  const authHeaders = { Authorization: `Basic ${credentials}` };
 
   // Resolve by the stable slug before writing.  Retrying after a lost Convex
-  // acknowledgement updates the same post instead of creating a duplicate.
-  const lookup = await fetch(
-    `${wpApiUrl}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&status=any&context=edit&per_page=1`,
-    { headers: { Authorization: `Basic ${credentials}` } },
+  // acknowledgement confirms the exact stored bytes instead of creating a
+  // duplicate. An unrelated post with the same slug is never overwritten.
+  const lookup = await safeRequestPublicHttps(
+    `${wpApiUrl}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&status=any&context=edit&per_page=2`,
+    {
+      method: "GET",
+      expectedHost: wpRoot.hostname,
+      headers: authHeaders,
+      allowedContentTypes: [/^application\/json(?:;|$)/i],
+    },
   );
-  if (!lookup.ok) {
+  if (lookup.status < 200 || lookup.status >= 300) {
     throw new Error(`WordPress idempotency lookup failed (${lookup.status})`);
   }
-  const matches = (await lookup.json()) as Array<{ id: number }>;
-  const existingPostId = matches[0]?.id;
-  const endpoint = existingPostId
-    ? `${wpApiUrl}/wp-json/wp/v2/posts/${existingPostId}`
-    : `${wpApiUrl}/wp-json/wp/v2/posts`;
-  const res = await fetch(endpoint, {
+  const matches = JSON.parse(lookup.text) as unknown;
+  if (!Array.isArray(matches) || matches.length > 1) {
+    throw new Error("WordPress returned an ambiguous slug lookup");
+  }
+  if (matches.length === 1) {
+    const existing = matches[0] as Record<string, unknown>;
+    const existingTitle = existing.title as Record<string, unknown> | undefined;
+    const existingContent = existing.content as Record<string, unknown> | undefined;
+    if (
+      existingTitle?.raw !== article.title ||
+      existingContent?.raw !== htmlContent ||
+      existing.status !== "publish"
+    ) {
+      throw new Error("WordPress slug already belongs to a different publication");
+    }
+    const receipt = wordpressReceiptFromResponse({
+      response: existing,
+      expectedSlug: slug,
+      expectedHost: siteHost,
+      deliveryKey,
+      contentHash,
+      receivedAt: Date.now(),
+    });
+    return {
+      method: "wordpress",
+      postUrl: receipt.url,
+      postId: Number(receipt.externalId),
+      receipt,
+    };
+  }
+
+  const response = await safeRequestPublicHttps(`${wpApiUrl}/wp-json/wp/v2/posts`, {
     method: "POST",
+    expectedHost: wpRoot.hostname,
     headers: {
-      Authorization: `Basic ${credentials}`,
+      ...authHeaders,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -800,21 +858,27 @@ async function publishToWordPress(
       slug,
       status: "publish",
       excerpt: article.metaDescription ?? "",
-      meta: { pentra_delivery_key: deliveryKey },
     }),
+    allowedContentTypes: [/^application\/json(?:;|$)/i],
   });
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`WordPress API error (${res.status}): ${body.slice(0, 300)}`);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`WordPress API error (${response.status}): ${response.text.slice(0, 300)}`);
   }
-
-  const post = await res.json();
+  const receipt = wordpressReceiptFromResponse({
+    response: JSON.parse(response.text),
+    expectedSlug: slug,
+    expectedHost: siteHost,
+    deliveryKey,
+    contentHash,
+    receivedAt: Date.now(),
+  });
 
   return {
     method: "wordpress",
-    postUrl: post.link ?? `${wpApiUrl}/?p=${post.id}`,
-    postId: post.id,
+    postUrl: receipt.url,
+    postId: Number(receipt.externalId),
+    receipt,
   };
 }
 
@@ -824,35 +888,41 @@ async function publishToWebhook(
   site: SiteRecord,
   article: ArticleRecord,
   deliveryKey: string,
-): Promise<{ method: "webhook"; status: number; response: string }> {
-  throw new Error(
-    "Webhook publication is disabled until the sanitized renderer completes security review",
-  );
-  if (!site.webhookUrl) {
-    throw new Error("Webhook URL not configured");
+  contentHash: string,
+  publicationDate: number,
+): Promise<{ method: "webhook"; status: number; response: string; receipt: PublicationReceipt }> {
+  if (!site.webhookUrl || !site.webhookSecret) {
+    throw new Error("Webhook URL and signing secret are required");
+  }
+  if (Buffer.byteLength(site.webhookSecret, "utf8") < 32) {
+    throw new Error("Webhook signing secret must contain at least 32 bytes");
   }
 
+  const webhookEndpoint = await validatePublicHttpsUrl(site.webhookUrl);
   const rawSlug = article.slug.replace(/^\//, "");
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rawSlug)) {
+    throw new Error("Article slug is unsafe for webhook publication");
+  }
   // Build full URL path from urlStructure (e.g. "/blog/[slug]" -> "/blog/my-article")
   const urlPath = site.urlStructure
     ? site.urlStructure!.replace(/\[slug\]/i, rawSlug)
     : "/blog/" + rawSlug;
 
   const payload = JSON.stringify({
+    event: "pentra.article.publish.v1",
+    rendererVersion: PUBLISHER_RENDERER_VERSION,
+    deliveryKey,
+    contentHash,
     title: article.title,
     slug: rawSlug,
     urlPath,
     urlStructure: site.urlStructure ?? "/blog/[slug]",
     markdown: article.markdown,
-    html: markdownToHtml(article.markdown, {
-      primaryColor: site.brandPrimaryColor,
-      accentColor: site.brandAccentColor,
-      fontFamily: site.brandFontFamily,
-    }),
+    html: renderSafePublicationHtml(article.markdown),
     metaDescription: article.metaDescription ?? "",
     featuredImage: article.featuredImage ?? "",
     language: article.language ?? "en",
-    date: new Date(article.createdAt).toISOString(),
+    date: new Date(publicationDate).toISOString(),
     sources: (article.sources ?? []).map((source) => ({
       url: source.url,
       title: source.title,
@@ -866,27 +936,38 @@ async function publishToWebhook(
     "X-Pentra-Delivery-Key": deliveryKey,
   };
 
-  // HMAC signature if secret is configured
-  if (site.webhookSecret) {
-    const signature = createHmac("sha256", site.webhookSecret!)
-      .update(payload)
-      .digest("hex");
-    headers["X-Signature-256"] = `sha256=${signature}`;
-  }
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  headers["X-Pentra-Timestamp"] = timestamp;
+  const signature = createHmac("sha256", site.webhookSecret)
+    .update(`${timestamp}.${payload}`)
+    .digest("hex");
+  headers["X-Pentra-Signature-256"] = `sha256=${signature}`;
 
-  const res = await fetch(site.webhookUrl!, {
+  const response = await safeRequestPublicHttps(webhookEndpoint.href, {
     method: "POST",
+    expectedHost: webhookEndpoint.hostname,
     headers,
     body: payload,
+    allowedContentTypes: [/^application\/json(?:;|$)/i],
   });
 
-  const responseText = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`Webhook failed (${res.status}): ${responseText.slice(0, 300)}`);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Webhook failed (${response.status}): ${response.text.slice(0, 300)}`);
   }
+  const receipt = webhookReceiptFromResponse({
+    response: JSON.parse(response.text),
+    expectedDeliveryKey: deliveryKey,
+    expectedContentHash: contentHash,
+    expectedSiteHost: new URL(normalizeSiteOrigin(site.domain)).hostname,
+    receivedAt: Date.now(),
+  });
 
-  return { method: "webhook", status: res.status, response: responseText.slice(0, 200) };
+  return {
+    method: "webhook",
+    status: response.status,
+    response: response.text.slice(0, 200),
+    receipt,
+  };
 }
 
 // ── Main Publisher (Router) ─────────────────────────────
@@ -899,6 +980,7 @@ type PublishResult = {
   postId?: number;
   status?: number;
   response?: string;
+  receipt?: PublicationReceipt;
 };
 
 const publishArgs = {
@@ -951,12 +1033,7 @@ async function publishArticleHandler(
     ) {
       throw new Error("Publication destination changed after quality audit");
     }
-    if (currentConfig.method !== "github") {
-      throw new Error(
-        `${currentConfig.method} publication is disabled during the security-reviewed canary`,
-      );
-    }
-
+    assertProductionAdapterVerified(site as SiteRecord);
     if (site.publishMethod === "manual") {
       throw new Error(
         "Manual delivery cannot be marked published without an external publication receipt.",
@@ -1044,6 +1121,7 @@ async function publishArticleHandler(
       });
       throw new Error("Rollout or publication configuration changed before delivery");
     }
+    assertProductionAdapterVerified(lockedSite as SiteRecord);
 
     const deliverySite: SiteRecord = {
       ...(lockedSite as SiteRecord),
@@ -1054,14 +1132,36 @@ async function publishArticleHandler(
       let result: PublishResult;
       switch (method) {
         case "github":
-        default:
           result = await publishToGitHub(
             deliverySite,
             article as ArticleRecord,
             lease.publicationDate,
             deliveryKey,
+            contentHash,
           );
           break;
+        case "wordpress":
+          result = await publishToWordPress(
+            deliverySite,
+            article as ArticleRecord,
+            deliveryKey,
+            contentHash,
+          );
+          break;
+        case "webhook":
+          result = await publishToWebhook(
+            deliverySite,
+            article as ArticleRecord,
+            deliveryKey,
+            contentHash,
+            lease.publicationDate,
+          );
+          break;
+        default:
+          throw new Error(`Unsupported automatic publication method: ${method}`);
+      }
+      if (!result.receipt) {
+        throw new Error("Publisher did not return a verified external receipt");
       }
       await ctx.runMutation(internal.articles.completePublication, {
         articleId: article._id,
@@ -1070,6 +1170,7 @@ async function publishArticleHandler(
         expectedConfigHash: article.publicationConfigHash,
         expectedRolloutEpoch: rolloutEpoch,
         leaseOwner,
+        receipt: result.receipt,
       });
       return result;
     } catch (error) {

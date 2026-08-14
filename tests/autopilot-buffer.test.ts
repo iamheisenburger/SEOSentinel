@@ -6,18 +6,24 @@ import {
   coveredPrimaryKeywords,
   evergreenTopicLabel,
   exactCadenceWakeupAt,
+  filterNonCannibalizingIntentTopics,
   filterNonCannibalizingTopics,
+  filterNonCannibalizingSerpTopics,
+  hasReliableSerpFingerprint,
   MAX_NEW_CANDIDATES_PER_24H,
   MAX_QUALITY_REPLACEMENTS_PER_24H,
   MIN_APPROVED_BUFFER,
   MIN_VERIFIED_TOPIC_HORIZON,
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
+  contentWorkBlocksQualityRecovery,
   isSealedReady,
   keywordMatchesBusinessSignals,
   migrationBlocksAutopilot,
+  normalizedSerpQuestions,
   pendingJobPriority,
   selectNonCannibalizingTopic,
+  serpFingerprintOverlap,
   topicDiscoverySeedBatches,
   topicDiscoverySeedWindow,
 } from "../convex/lib/autopilotBuffer.ts";
@@ -30,6 +36,37 @@ test("candidate budget can still fill the target after two strict-gate rejection
     TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H,
   );
   assert.ok(MAX_NEW_CANDIDATES_PER_24H - 2 >= MIN_APPROVED_BUFFER);
+});
+
+test("cached SERP records without a People Also Ask block stay array-shaped", () => {
+  assert.deepEqual(normalizedSerpQuestions(undefined), []);
+  assert.deepEqual(normalizedSerpQuestions(null), []);
+  assert.deepEqual(
+    normalizedSerpQuestions(["How does it work?", "", 42, "Who is it for?"]),
+    ["How does it work?", "Who is it for?"],
+  );
+});
+
+test("pending plan work yields to bounded quality recovery", () => {
+  assert.equal(
+    contentWorkBlocksQualityRecovery([{ type: "plan" }], true),
+    false,
+  );
+  assert.equal(
+    contentWorkBlocksQualityRecovery([{ type: "plan" }], false),
+    true,
+  );
+  assert.equal(
+    contentWorkBlocksQualityRecovery(
+      [{ type: "plan" }, { type: "article" }],
+      true,
+    ),
+    true,
+  );
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(pipeline, /pending_plan:[\s\S]*pending_topic_plan_ready_for_processing/);
+  assert.match(scheduler, /mode: "pending_plan"/);
 });
 
 test("fleet dispatch is paginated and tenant-isolated", () => {
@@ -87,6 +124,23 @@ test("only a current strict-gate sealed ready article enters the buffer", () => 
   assert.equal(isSealedReady({ ...valid, status: "review" }), false);
   assert.equal(isSealedReady({ ...valid, publicationGateStatus: "blocked" }), false);
   assert.equal(isSealedReady({ ...valid, auditedContentHash: undefined }), false);
+});
+
+test("every completed run reconciles the current sealed buffer count", () => {
+  const autopilot = readFileSync("convex/autopilot.ts", "utf8");
+  const finishRun = autopilot.slice(
+    autopilot.indexOf("export const markRunFinished"),
+    autopilot.indexOf("export const markRunFailed"),
+  );
+  assert.match(
+    finishRun,
+    /const currentReady = await ctx\.db[\s\S]*const approvedBufferCount = currentReady\.filter\(isSealedReady\)\.length/,
+  );
+  assert.match(finishRun, /approvedBufferCount,/);
+  assert.doesNotMatch(
+    finishRun,
+    /approvedBufferCount === undefined/,
+  );
 });
 
 test("health distinguishes scheduler, cadence, publication, quality, and buffer failures", () => {
@@ -245,6 +299,44 @@ test("topic selection compares against each existing phrase instead of the whole
   );
 });
 
+test("topic selection normalizes close SEO synonyms without collapsing distinct intent", () => {
+  assert.equal(
+    selectNonCannibalizingTopic(
+      [{ primaryKeyword: "when to use conversational AI for sales" }],
+      ["AI chatbot for sales"],
+    ),
+    undefined,
+  );
+  assert.equal(
+    selectNonCannibalizingTopic(
+      [{ primaryKeyword: "how to engage website visitors in real time" }],
+      ["website visitor engagement"],
+    ),
+    undefined,
+  );
+  assert.equal(
+    selectNonCannibalizingTopic(
+      [{ primaryKeyword: "chatbot vs contact forms" }],
+      ["AI chatbot for sales"],
+    )?.primaryKeyword,
+    "chatbot vs contact forms",
+  );
+  assert.equal(
+    selectNonCannibalizingTopic(
+      [{ primaryKeyword: "sales leads" }],
+      ["lead sales software"],
+    )?.primaryKeyword,
+    "sales leads",
+  );
+  assert.equal(
+    selectNonCannibalizingTopic(
+      [{ primaryKeyword: "sales leads software" }],
+      ["sales leads"],
+    ),
+    undefined,
+  );
+});
+
 test("a replenished plan is filtered with the scheduler's exact overlap rule", () => {
   const accepted = filterNonCannibalizingTopics(
     [
@@ -259,6 +351,86 @@ test("a replenished plan is filtered with the scheduler's exact overlap rule", (
     accepted.map((topic) => topic.primaryKeyword),
     ["website conversion checklist", "customer onboarding workflow"],
   );
+});
+
+test("live SERP fingerprints block same-intent topics with different wording", () => {
+  const common = [
+    "https://example.com/a",
+    "https://example.com/b",
+    "https://example.com/c",
+    "https://example.com/d",
+  ];
+  const covered = [{
+    primaryKeyword: "website visitor engagement",
+    serpTopUrls: [...common, "https://one.test/e", "https://one.test/f"],
+  }];
+  const accepted = filterNonCannibalizingSerpTopics(
+    [
+      {
+        primaryKeyword: "improve website conversations",
+        serpTopUrls: [...common, "https://two.test/e", "https://two.test/f"],
+      },
+      {
+        primaryKeyword: "sales discovery checklist",
+        serpTopUrls: [
+          "https://example.com/a?ref=serp",
+          "https://distinct.test/b",
+          "https://distinct.test/c",
+          "https://distinct.test/d",
+          "https://distinct.test/e",
+          "https://distinct.test/f",
+        ],
+      },
+    ],
+    covered,
+  );
+  assert.deepEqual(
+    accepted.map((topic) => topic.primaryKeyword),
+    ["sales discovery checklist"],
+  );
+  assert.deepEqual(
+    serpFingerprintOverlap(
+      covered[0].serpTopUrls,
+      [...common, "https://two.test/e", "https://two.test/f"],
+    ),
+    { shared: 4, coefficient: 4 / 6 },
+  );
+  assert.equal(hasReliableSerpFingerprint(common), false);
+  assert.equal(
+    hasReliableSerpFingerprint([...common, "https://example.com/e"]),
+    true,
+  );
+});
+
+test("live SERP evidence overrides lexical similarity while legacy rows fail closed", () => {
+  const distinctA = [1, 2, 3, 4, 5, 6].map((n) =>
+    `https://sales-a.test/${n}`
+  );
+  const distinctB = [1, 2, 3, 4, 5, 6].map((n) =>
+    `https://sales-b.test/${n}`
+  );
+  assert.deepEqual(
+    filterNonCannibalizingIntentTopics(
+      [{
+        primaryKeyword: "conversational AI for sales",
+        serpTopUrls: distinctB,
+      }],
+      [{ primaryKeyword: "AI chatbot for sales", serpTopUrls: distinctA }],
+    ).map((topic) => topic.primaryKeyword),
+    ["conversational AI for sales"],
+  );
+  assert.deepEqual(
+    filterNonCannibalizingIntentTopics(
+      [{ primaryKeyword: "conversational AI for sales" }],
+      [{ primaryKeyword: "AI chatbot for sales" }],
+    ),
+    [],
+  );
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /export const backfillTopicSerpFingerprints = internalAction/);
+  assert.match(pipeline, /DataForSEO returned fewer than five organic URLs/);
+  assert.match(pipeline, /Math\.min\(5, Math\.floor\(limit \?\? 5\)\)/);
+  assert.match(pipeline, /internal\.actions\.pipeline\.backfillTopicSerpFingerprints/);
 });
 
 test("topic discovery rotates intent seeds instead of replaying one exhausted request", () => {
@@ -350,6 +522,40 @@ test("generic-only profiles require two matching signals", () => {
     keywordMatchesBusinessSignals("free AI websites", ["AI sales agent"]),
     false,
   );
+});
+
+test("broad cost language cannot smuggle an unrelated audience into a niche plan", () => {
+  const constructionSignals = [
+    "construction cost estimating",
+    "builder ready cost estimate report",
+    "residential builders",
+  ];
+  assert.equal(
+    keywordMatchesBusinessSignals(
+      "cost benefit analysis for students",
+      constructionSignals,
+    ),
+    false,
+  );
+  assert.equal(
+    keywordMatchesBusinessSignals(
+      "DA stage construction cost estimation",
+      constructionSignals,
+    ),
+    true,
+  );
+  assert.equal(
+    keywordMatchesBusinessSignals(
+      "DA Stage Cost Estimation for Residential Projects",
+      ["cost benefit analysis for students"],
+    ),
+    false,
+  );
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /Business\/title relevance gate/);
+  assert.match(pipeline, /quality\.passed && targetAlignmentPassed/);
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(scheduler, /hasTerminalTargetAlignmentFailure/);
 });
 
 test("evergreen topic labels cannot retain a stale generated year", () => {

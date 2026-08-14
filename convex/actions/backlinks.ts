@@ -17,6 +17,11 @@ import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
+import { createHash } from "node:crypto";
+import {
+  safeFetchPublicText,
+  validatePublicHttpsUrl,
+} from "../lib/safeOutbound";
 
 // ── Types ──
 
@@ -43,6 +48,8 @@ export interface UnlinkedMention {
   mentionText: string; // the context where brand was mentioned
   domainRank: number;
   suggestedOutreach: string;
+  evidenceHash: string;
+  verifiedAt: number;
 }
 
 export interface BrokenLinkOpportunity {
@@ -52,7 +59,49 @@ export interface BrokenLinkOpportunity {
   anchorText: string;
   domainRank: number;
   suggestedReplacement: string; // our article URL that could replace it
+  evidenceHash: string;
+  verifiedAt: number;
 }
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function plainText(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function excerptAround(text: string, needles: string[]): string {
+  const lower = text.toLowerCase();
+  const indexes = needles
+    .map((needle) => lower.indexOf(needle.toLowerCase()))
+    .filter((index) => index >= 0);
+  const index = indexes.length > 0 ? Math.min(...indexes) : 0;
+  return text.slice(Math.max(0, index - 120), index + 280).trim();
+}
+
+type DataForSeoItem = {
+  domain?: string;
+  backlinks?: number;
+  referring_domains?: number;
+  rank?: number;
+  anchor?: string;
+  url_from?: string;
+  url_to?: string;
+};
+
+type DataForSeoResponse = {
+  tasks?: Array<{
+    result?: Array<DataForSeoItem & { items?: DataForSeoItem[] }>;
+  }>;
+};
 
 // ── DataForSEO API helpers ──
 
@@ -63,7 +112,10 @@ function getCredentials(): { login: string; password: string } | null {
   return { login, password };
 }
 
-async function dataForSEORequest(endpoint: string, body: any[]): Promise<any> {
+async function dataForSEORequest(
+  endpoint: string,
+  body: Array<Record<string, unknown>>,
+): Promise<DataForSeoResponse> {
   const creds = getCredentials();
   if (!creds) throw new Error("DataForSEO credentials not configured");
 
@@ -82,7 +134,7 @@ async function dataForSEORequest(endpoint: string, body: any[]): Promise<any> {
     throw new Error(`DataForSEO API error (${response.status}): ${text.slice(0, 500)}`);
   }
 
-  return response.json();
+  return await response.json() as DataForSeoResponse;
 }
 
 // ── 1. Backlink Profile Analysis ──
@@ -189,7 +241,7 @@ Return ONLY valid JSON array, no other text.`;
 
     const res = await openai.responses.create({
       model: "gpt-4o-mini",
-      tools: [{ type: "web_search_preview" as any }],
+      tools: [{ type: "web_search_preview" }],
       input: searchPrompt,
     });
 
@@ -197,15 +249,40 @@ Return ONLY valid JSON array, no other text.`;
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
-      for (const item of parsed) {
-        if (item.sourceDomain && !linkingDomains.has(item.sourceDomain.toLowerCase())) {
-          mentions.push({
-            sourceDomain: item.sourceDomain,
-            sourceUrl: item.sourceUrl || `https://${item.sourceDomain}`,
-            mentionText: item.mentionText || "Brand mentioned",
-            domainRank: item.domainRank || 0,
-            suggestedOutreach: `Hi! I noticed you mentioned ${brandName} on ${item.sourceDomain}. Would you consider adding a link to ${cleanDomain}? We'd be happy to share your article with our audience in return.`,
+      for (const item of parsed.slice(0, 15)) {
+        if (!item.sourceUrl) continue;
+        try {
+          const candidate = await validatePublicHttpsUrl(item.sourceUrl);
+          const sourceDomain = candidate.hostname.toLowerCase().replace(/^www\./, "");
+          if (linkingDomains.has(sourceDomain)) continue;
+          const fetched = await safeFetchPublicText(candidate.href, {
+            maxBytes: 400_000,
+            timeoutMs: 8_000,
           });
+          const text = plainText(fetched.text);
+          const mentionsBrand = [brandName, cleanDomain].some((needle) =>
+            text.toLowerCase().includes(needle.toLowerCase())
+          );
+          const escapedDomain = cleanDomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const alreadyLinks = new RegExp(
+            `href=["'][^"']*${escapedDomain}`,
+            "i",
+          ).test(fetched.text);
+          if (!mentionsBrand || alreadyLinks) continue;
+          const verifiedAt = Date.now();
+          mentions.push({
+            sourceDomain,
+            sourceUrl: fetched.url,
+            mentionText: excerptAround(text, [brandName, cleanDomain]),
+            // An AI estimate is not authority evidence. Unknown stays zero.
+            domainRank: 0,
+            suggestedOutreach: `The public page was verified to mention ${brandName} without a link to ${cleanDomain}.`,
+            evidenceHash: sha256(fetched.text),
+            verifiedAt,
+          });
+        } catch {
+          // Search suggestions are candidates, not evidence. Unreachable,
+          // private, or mismatched pages are discarded without persistence.
         }
       }
     }
@@ -270,14 +347,32 @@ async function findBrokenLinkOpportunities(
           }
 
           if (bestScore > 0) {
-            opportunities.push({
-              sourceDomain: item.domain_from || "",
-              sourceUrl: item.url_from,
-              brokenUrl,
-              anchorText: item.anchor || "",
-              domainRank: item.rank || 0,
-              suggestedReplacement: `/${bestMatch.slug}`,
-            });
+            try {
+              const source = await validatePublicHttpsUrl(item.url_from);
+              const fetched = await safeFetchPublicText(source.href, {
+                maxBytes: 400_000,
+                timeoutMs: 8_000,
+              });
+              if (
+                !fetched.text.includes(brokenUrl) &&
+                !(item.anchor && plainText(fetched.text).includes(item.anchor))
+              ) {
+                continue;
+              }
+              opportunities.push({
+                sourceDomain: source.hostname.toLowerCase().replace(/^www\./, ""),
+                sourceUrl: fetched.url,
+                brokenUrl,
+                anchorText: item.anchor || "",
+                domainRank: item.rank || 0,
+                suggestedReplacement: `/${bestMatch.slug.replace(/^\/+/, "")}`,
+                evidenceHash: sha256(fetched.text),
+                verifiedAt: Date.now(),
+              });
+            } catch {
+              // Data-provider candidates must also survive an exact public-page
+              // fetch before Pentra can call them verified opportunities.
+            }
           }
         }
       }
@@ -332,8 +427,12 @@ export const analyzeBacklinks = action({
       try {
         const articles = await ctx.runQuery(internal.articles.listBySiteInternal, { siteId });
         const published = articles
-          .filter((a: any) => a.status === "published" || a.status === "ready")
-          .map((a: any) => ({ title: a.title, slug: a.slug, metaKeywords: a.metaKeywords }));
+          .filter((article) => article.status === "published" || article.status === "ready")
+          .map((article) => ({
+            title: article.title,
+            slug: article.slug,
+            metaKeywords: article.metaKeywords,
+          }));
 
         if (published.length > 0) {
           brokenLinks = await findBrokenLinkOpportunities(site.competitors, published);
@@ -342,6 +441,40 @@ export const analyzeBacklinks = action({
       } catch (err) {
         console.error("Broken link scan failed:", err);
       }
+    }
+
+    const origin = new URL(
+      /^https?:\/\//i.test(site.domain) ? site.domain : `https://${site.domain}`,
+    ).origin;
+    const verified = [
+      ...mentions.map((mention) => ({
+        fingerprint: sha256(`${siteId}:unlinked_mention:${mention.sourceUrl}:${origin}`),
+        type: "unlinked_mention",
+        sourceDomain: mention.sourceDomain,
+        sourceUrl: mention.sourceUrl,
+        targetUrl: origin,
+        context: mention.mentionText,
+        domainRank: mention.domainRank,
+        evidenceHash: mention.evidenceHash,
+        verifiedAt: mention.verifiedAt,
+      })),
+      ...brokenLinks.map((opportunity) => ({
+        fingerprint: sha256(`${siteId}:broken_link:${opportunity.sourceUrl}:${opportunity.suggestedReplacement}`),
+        type: "broken_link",
+        sourceDomain: opportunity.sourceDomain,
+        sourceUrl: opportunity.sourceUrl,
+        targetUrl: new URL(opportunity.suggestedReplacement, origin).href,
+        context: opportunity.brokenUrl,
+        domainRank: opportunity.domainRank,
+        evidenceHash: opportunity.evidenceHash,
+        verifiedAt: opportunity.verifiedAt,
+      })),
+    ];
+    if (verified.length > 0) {
+      await ctx.runMutation(internal.seoAuthority.upsertVerifiedBatch, {
+        siteId,
+        opportunities: verified,
+      });
     }
 
     return { profile, mentions, brokenLinks, hasData: true };
@@ -370,7 +503,12 @@ export const generateOutreach = action({
     const emails: { to: string; subject: string; body: string }[] = [];
 
     for (const opp of opportunities.slice(0, 5)) {
-      const prompt = opp.type === "mention"
+      const verified = await ctx.runQuery(
+        internal.seoAuthority.getVerifiedBySource,
+        { siteId, sourceUrl: opp.sourceUrl },
+      );
+      if (!verified) continue;
+      const prompt = verified.type === "unlinked_mention"
         ? `Write a short, professional outreach email to the webmaster of ${opp.sourceDomain}.
 
 Context: They mentioned "${brandName}" on their page (${opp.sourceUrl}) but didn't include a link. The mention context: "${opp.context}"
@@ -411,7 +549,9 @@ BODY: [email body]`;
           messages: [{ role: "user", content: prompt }],
         });
 
-        const text = res.content.map((b: any) => b.type === "text" ? b.text : "").join("");
+        const text = res.content
+          .map((block) => block.type === "text" ? block.text : "")
+          .join("");
         const subjectMatch = text.match(/SUBJECT:\s*(.+)/);
         const bodyMatch = text.match(/BODY:\s*([\s\S]+)/);
 
@@ -420,6 +560,10 @@ BODY: [email body]`;
             to: opp.sourceDomain,
             subject: subjectMatch[1].trim(),
             body: bodyMatch[1].trim(),
+          });
+          await ctx.runMutation(internal.seoAuthority.markOutreachPrepared, {
+            siteId,
+            opportunityId: verified._id,
           });
         }
       } catch (err) {
@@ -436,82 +580,10 @@ BODY: [email body]`;
 export const quickBacklinkScan = internalAction({
   args: { siteId: v.id("sites"), articleId: v.id("articles") },
   handler: async (ctx, { siteId, articleId }): Promise<{ suggestions: { site: string; reason: string; anchor: string; targetUrl: string }[] }> => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-    if (!site) throw new Error("Site not found");
-
     const article = await ctx.runQuery(internal.articles.getInternal, { articleId });
     if (!article || article.siteId !== siteId) throw new Error("Article not found for site");
-
-    const hasDataForSEO = !!getCredentials();
-
-    // Get referring domains for competitive analysis
-    let referringDomains: string[] = [];
-    if (hasDataForSEO) {
-      try {
-        const profile = await getBacklinkProfile(site.domain);
-        referringDomains = profile.topReferrers.map((r) => r.domain);
-      } catch (err) {
-        console.error("Quick backlink profile failed:", err);
-      }
-    }
-
-    // Use AI to generate targeted backlink suggestions for this specific article
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-    const res = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2000,
-      messages: [{
-        role: "user",
-        content: `You are a backlink strategist. Given this article, suggest 5-10 high-quality websites that would be good backlink targets.
-
-Article Title: ${article.title}
-Article Keywords: ${(article.metaKeywords || []).join(", ")}
-Site Domain: ${site.domain}
-Site Niche: ${site.niche || "general"}
-${referringDomains.length > 0 ? `Already linking to us: ${referringDomains.slice(0, 10).join(", ")}` : ""}
-
-For each suggestion, provide:
-1. The target site domain
-2. Why they'd link to this content (be specific)
-3. A suggested anchor text
-4. The target URL on their site where our link fits
-
-Output as a JSON array:
-[{"site":"domain.com","reason":"specific reason","anchor":"anchor text","targetUrl":"https://domain.com/relevant-page"}]
-
-Focus on:
-- Resource pages that curate links on this topic
-- Blog posts that reference similar content
-- Industry directories or roundup posts
-- Competitor comparison pages
-- Educational .edu or .org pages on this topic
-
-Return ONLY valid JSON array.`,
-      }],
-    });
-
-    const text = res.content.map((b: any) => b.type === "text" ? b.text : "").join("");
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    let suggestions: { site: string; reason: string; anchor: string; targetUrl: string }[] = [];
-
-    if (jsonMatch) {
-      try {
-        suggestions = JSON.parse(jsonMatch[0]);
-      } catch {
-        console.error("Failed to parse backlink suggestions JSON");
-      }
-    }
-
-    // Save to article
-    if (suggestions.length > 0) {
-      await ctx.runMutation(internal.articles.updateBacklinks, {
-        articleId,
-        backlinkSuggestions: suggestions.slice(0, 10),
-      });
-    }
-
-    return { suggestions: suggestions.slice(0, 10) };
+    // Kept as a compatibility no-op for already queued jobs. Inventing target
+    // sites or URLs is not backlink automation and must never create evidence.
+    return { suggestions: [] };
   },
 });

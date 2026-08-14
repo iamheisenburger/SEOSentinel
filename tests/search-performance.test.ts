@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  addSearchConsoleDays,
   isSameSearchConsolePage,
   normalizeSearchConsolePage,
   publishedArticlePageUrl,
+  searchConsoleDate,
 } from "../convex/lib/searchPerformance.ts";
 
 test("normalizes protocol, www, query strings, and trailing slashes", () => {
@@ -51,4 +53,11 @@ test("builds the measured page from each tenant's configured publication path", 
     ),
     "https://www.estiflow.com.au/resources/estimate-guide",
   );
+});
+
+test("uses Search Console Pacific dates for evening publications", () => {
+  const publishedAt = Date.parse("2026-07-28T00:10:17.546Z");
+  assert.equal(searchConsoleDate(publishedAt), "2026-07-27");
+  assert.equal(addSearchConsoleDays("2026-07-27", 6), "2026-08-02");
+  assert.equal(addSearchConsoleDays("2026-07-27", 55), "2026-09-20");
 });

@@ -30,6 +30,7 @@ import {
 import Link from "next/link";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
+import { cadenceLabel } from "../../../../convex/planLimits";
 
 /** Format search volume with K/M suffixes */
 function formatVolume(vol: number): string {
@@ -387,7 +388,7 @@ export default function PlanPage() {
         <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
           <Clock className="h-3 w-3" />
           <span>
-            {site.cadencePerWeek} articles/week · ~{Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining
+            {cadenceLabel(site.cadencePerWeek)} · ~{Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining
           </span>
         </div>
       )}
@@ -401,7 +402,7 @@ export default function PlanPage() {
             <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
               <Calendar className="h-3 w-3 text-[#0EA5E9]" />
               <span>
-                Publishing ~{site.cadencePerWeek} articles/week · {availableCount} topics queued
+                Publishing at {cadenceLabel(site.cadencePerWeek)} · {availableCount} topics queued
               </span>
             </div>
           )}

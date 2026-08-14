@@ -12,6 +12,7 @@ import { z } from "zod";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   injectInternalLinks,
+  publishedArticleInternalHref,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
 import {
@@ -37,13 +38,17 @@ import {
 } from "../lib/publicationArtifact";
 import { evaluateCadenceWindow } from "../lib/autopilotCadence";
 import {
-  coveredPrimaryKeywords,
+  cadenceIntervalMs,
   evergreenTopicLabel,
-  filterNonCannibalizingTopics,
+  filterNonCannibalizingIntentTopics,
+  hasReliableSerpFingerprint,
   keywordMatchesBusinessSignals,
+  normalizedSerpQuestions,
   pendingJobPriority,
+  serpFingerprintOverlap,
   topicDiscoverySeedWindow,
 } from "../lib/autopilotBuffer";
+import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
 import {
   STRICT_EVIDENCE_SEARCH_DOMAINS,
   strictEvidenceSources,
@@ -453,7 +458,12 @@ async function captureScreenshot(
   // Clean URL: strip trailing slashes, ensure https
   const targetUrl = (await validatePublicHttpsUrl(url.replace(/\/+$/, "").trim())).href;
 
-  const screenshotApiUrl = `https://image.thum.io/get/width/${width}/crop/${cropHeight}/wait/5/${targetUrl}`;
+  // Thum's default response streams an animated GIF whose first frames are a
+  // loading spinner. A visual reviewer can therefore reject a healthy page
+  // before the final frame arrives. `noanimate/png` makes the provider block
+  // for the completed render and return one reviewable artifact.
+  const screenshotApiUrl =
+    `https://image.thum.io/get/noanimate/png/width/${width}/crop/${cropHeight}/wait/5/${targetUrl}`;
   let lastError = "unknown screenshot error";
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -2112,15 +2122,15 @@ async function handlePlan(
   };
 
   let candidates: { keyword: string; searchVolume: number; difficulty: number; cpc: number; opportunity: number }[] = [];
+  const businessSignals = [
+    site.niche,
+    site.blogTheme,
+    ...(site.anchorKeywords ?? []),
+    ...(site.painPoints ?? []),
+  ].filter((signal): signal is string => Boolean(signal));
 
   if (discoveredKeywords.length > 0) {
     // Data-first: rank real keywords
-    const businessSignals = [
-      site.niche,
-      site.blogTheme,
-      ...(site.anchorKeywords ?? []),
-      ...(site.painPoints ?? []),
-    ].filter((signal): signal is string => Boolean(signal));
     const raw = discoveredKeywords
       .filter(k => !existingSet.has(k.keyword.toLowerCase()))
       .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
@@ -2313,6 +2323,26 @@ async function handlePlan(
     ...topic,
     label: evergreenTopicLabel(topic.label),
   }));
+  const beforeRelevanceGate = plan.length;
+  plan = plan.filter((topic) => {
+    const keywordMatchesSite = keywordMatchesBusinessSignals(
+      topic.primaryKeyword,
+      businessSignals,
+    );
+    const titleMatchesKeyword = keywordMatchesBusinessSignals(
+      topic.label,
+      [topic.primaryKeyword],
+    );
+    if (!keywordMatchesSite || !titleMatchesKeyword) {
+      console.log(
+        `Blocked: "${topic.primaryKeyword}" (business/title relevance mismatch)`,
+      );
+    }
+    return keywordMatchesSite && titleMatchesKeyword;
+  });
+  console.log(
+    `Business/title relevance gate: ${plan.length}/${beforeRelevanceGate} topics remain`,
+  );
   console.log(`After dedup: ${plan.length} topics (${plan.length} from AI's ${plan.length + (deduped.length < plan.length ? 0 : 0)})`);
 
   // 5b. Build metrics from candidates (which already have real data) + fetch fresh for any unknowns
@@ -2370,7 +2400,8 @@ async function handlePlan(
     // 5c. Quality gate — single pass, clean logic
     let enrichedPlan: (typeof plan[0] & {
       searchVolume?: number; keywordDifficulty?: number; cpc?: number;
-      serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string; paaQuestions?: string[];
+      serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string;
+      paaQuestions?: string[]; serpTopUrls?: string[];
     })[] = [];
     let kd0Count = 0;
     let noDataCount = 0;
@@ -2448,24 +2479,6 @@ async function handlePlan(
       console.log(`⚠ Only ${enrichedPlan.length} topics survived. Need more volume or looser filters.`);
     }
 
-    const coveredKeywords = coveredPrimaryKeywords(
-      existingTopics.map((topic) => ({
-        _id: String(topic._id),
-        status: topic.status ?? "planned",
-        primaryKeyword: topic.primaryKeyword,
-      })),
-      [],
-    );
-    enrichedPlan = filterNonCannibalizingTopics(
-      enrichedPlan,
-      coveredKeywords,
-      0.35,
-      10,
-    );
-    console.log(
-      `Scheduler-aligned topic gate: ${enrichedPlan.length} verified, non-overlapping topics remain`,
-    );
-
     // 5d. SERP analysis — determine optimal article format for each surviving topic
     await reportProgress(5, "Analyzing SERPs for article format optimization...");
     for (const topic of enrichedPlan) {
@@ -2474,9 +2487,39 @@ async function handlePlan(
         topic.recommendedArticleType = serp.recommendedArticleType;
         topic.articleType = serp.recommendedArticleType as any;
         topic.paaQuestions = serp.paaQuestions.length > 0 ? serp.paaQuestions : undefined;
+        topic.serpTopUrls = [...new Set(
+          serp.results.map((result) => result.url).filter(Boolean),
+        )].slice(0, 10);
         console.log(`SERP: "${topic.primaryKeyword}" → ${serp.recommendedArticleType} (${serp.paaQuestions.length} PAA)`);
       } catch (e) { console.error(`SERP failed for "${topic.primaryKeyword}":`, e); }
     }
+
+    if (requireVerifiedKeywordData) {
+      const beforeEvidenceGate = enrichedPlan.length;
+      enrichedPlan = enrichedPlan.filter((topic) =>
+        hasReliableSerpFingerprint(topic.serpTopUrls)
+      );
+      console.log(
+        `SERP evidence gate: ${enrichedPlan.length}/${beforeEvidenceGate} topics have a reliable live top-ten fingerprint`,
+      );
+    }
+    const beforeIntentGate = enrichedPlan.length;
+    enrichedPlan = filterNonCannibalizingIntentTopics(
+      enrichedPlan,
+      existingTopics.map((topic: {
+        primaryKeyword: string;
+        serpTopUrls?: string[];
+      }) => ({
+        primaryKeyword: topic.primaryKeyword,
+        serpTopUrls: topic.serpTopUrls,
+      })),
+      0.4,
+      0.35,
+      10,
+    );
+    console.log(
+      `Combined SERP/keyword intent gate: ${enrichedPlan.length}/${beforeIntentGate} non-cannibalizing topics remain`,
+    );
 
     // ══════════════════════════════════════════════════════════════════════
     // STEP 6: Save fully enriched topics to DB (ONE atomic save — no half-baked topics)
@@ -2561,15 +2604,22 @@ async function handleArticle(
     await reportProgress(1, "Analyzing search results...");
     try {
       // Use cached PAA questions from topic if available, otherwise run fresh analysis
-      if ((topic as any).paaQuestions?.length > 0) {
-        serpPaaQuestions = (topic as any).paaQuestions;
+      if (
+        (topic as any).recommendedArticleType &&
+        hasReliableSerpFingerprint((topic as any).serpTopUrls)
+      ) {
+        // SERP fingerprints and article-type recommendations can exist even
+        // when the provider returned no People Also Ask block. Keep the
+        // downstream prompt contract array-shaped instead of leaking an
+        // optional database field into `.length` and `.map` calls.
+        serpPaaQuestions = normalizedSerpQuestions((topic as any).paaQuestions);
         serpRecommendedType = (topic as any).recommendedArticleType;
         console.log(`Using cached SERP data: type=${serpRecommendedType}, PAA=${serpPaaQuestions.length}`);
       } else {
         const { analyzeSERP } = await import("./seoData");
         const locationCode = mapCountryToLocation(site.targetCountry);
         const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
-        serpPaaQuestions = serpAnalysis.paaQuestions;
+        serpPaaQuestions = normalizedSerpQuestions(serpAnalysis.paaQuestions);
         serpDifficulty = serpAnalysis.difficulty;
         serpRecommendedType = serpAnalysis.recommendedArticleType;
         console.log(`SERP analysis: format=${serpAnalysis.dominantFormat}, type=${serpRecommendedType}, PAA=${serpPaaQuestions.length}, difficulty=${serpDifficulty}`);
@@ -2581,6 +2631,9 @@ async function handleArticle(
               topicId,
               recommendedArticleType: serpRecommendedType,
               paaQuestions: serpPaaQuestions.length > 0 ? serpPaaQuestions : undefined,
+              serpTopUrls: [...new Set(
+                serpAnalysis.results.map((result) => result.url).filter(Boolean),
+              )].slice(0, 10),
             });
           } catch { /* non-critical */ }
         }
@@ -2641,7 +2694,10 @@ async function handleArticle(
 
       if (isStrictPublication) {
         let strictSources = strictEvidenceSources(verifiedResearchSources);
-        if (strictSources.accepted.length === 0) {
+        // One authoritative source is still a fragile evidence base. Make one
+        // bounded primary-evidence attempt to improve source diversity, but
+        // keep zero sources valid when the topic has no defensible evidence.
+        if (strictSources.accepted.length < 2) {
           try {
             const primaryResearch = await webResearch(
               {
@@ -2688,7 +2744,7 @@ async function handleArticle(
             `Excluded ${evidenceCapture.rejected.length} source(s) whose content could not be preserved for deterministic claim matching.`,
           );
         }
-        if (strictSources.rejected.length > 0 || researchSources.length === 0) {
+        if (researchSources.length === 0) {
           researchContext = [
             "Strict evidence mode is active.",
             "Secondary and vendor-authored sources were excluded from the article evidence set.",
@@ -2697,7 +2753,12 @@ async function handleArticle(
           ].join(" ");
         } else {
           researchContext = [
-            researchContext,
+            "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
+            // A mixed search brief can contain facts from a rejected secondary
+            // URL. Preserve the prose summary only when every cited source
+            // survived the strict filter; otherwise expose only exact captured
+            // excerpts from accepted sources.
+            strictSources.rejected.length === 0 ? researchContext : "",
             "PRESERVED SOURCE EXCERPTS (citation order):",
             ...researchSources.map(
               (source, index) =>
@@ -2901,7 +2962,7 @@ async function handleArticle(
     `</search_intent>`,
     ``,
     `GLOBAL RULES:`,
-    `- LENGTH: There is no target word count. Use at least 900 useful words only when the topic warrants a full article, stop when the intent is answered, and never exceed ${articleWordCeiling(effectiveArticleType)} measured prose words.`,
+    `- LENGTH: There is no target word count. Use at least 1200 useful words only when the topic warrants a full article, stop when the intent is answered, and never exceed ${articleWordCeiling(effectiveArticleType)} measured prose words. Thin pages lose to comprehensive ones on the same query, but padding to reach a number is worse than stopping early.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
     `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
     researchSources.length === 0
@@ -2909,7 +2970,8 @@ async function handleArticle(
       : "",
     `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence and carry the matching inline citation. Otherwise remove the number.`,
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
-    `- ORIGINAL VALUE: Add first-party product mechanics, a decision framework, verification method, or useful synthesis that is not a paraphrase of generic search results.`,
+    `- ORIGINAL VALUE (REQUIRED): The article must contain at least one element a competitor could not have written by reading the same search results: verified first-party mechanics of how ${productName} actually behaves, a decision framework with explicit trade-offs, or a verification method the reader can run themselves. Accurate-but-interchangeable pages do not earn organic traffic, so a page that only restates common knowledge has failed even when every sentence is true.`,
+    `- ORIGINAL VALUE IS NOT INVENTED EXPERIENCE: Never manufacture first-hand framing. Do not write that anyone analysed, measured, tested, tracked, or observed anything unless that measurement appears in the supplied evidence. Differentiation must come from verified mechanics and reasoning, never from fabricated experience.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
     `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
     `</article_structure>`,
@@ -3894,13 +3956,68 @@ async function handleLinks(
   ctx: ActionCtx,
   siteId: Id<"sites">,
   articleId: Id<"articles">,
-): Promise<{ count: number }> {
+  expectedSealedContentHash?: string,
+): Promise<{
+  count: number;
+  readyForPublication?: boolean;
+  contentHash?: string;
+  issues?: string[];
+}> {
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   const article = await ctx.runQuery(internal.articles.getInternal, { articleId });
   if (!site || !article) throw new Error("Missing site or article");
   const pages = await ctx.runQuery(internal.pages.listBySiteInternal, { siteId });
+  const siteArticles = await ctx.runQuery(
+    internal.articles.listBySiteInternal,
+    { siteId },
+  );
+  const relatedArticles = siteArticles
+    .filter(
+      (candidate: Doc<"articles">) =>
+        candidate._id !== article._id &&
+        candidate.status === "published" &&
+        Boolean(candidate.slug),
+    )
+    .map((candidate: Doc<"articles">) => ({
+      href: publishedArticleInternalHref(site.urlStructure, candidate.slug),
+      title: candidate.title,
+      summary: candidate.metaDescription ?? "",
+      keywords: candidate.metaKeywords ?? [],
+      kind: "published article",
+    }));
+  const destinations = [
+    ...pages.map(
+      (page: {
+        slug: string;
+        title?: string;
+        summary?: string;
+        keywords?: string[];
+      }) => ({
+        href: page.slug,
+        title: page.title ?? "",
+        summary: page.summary ?? "",
+        keywords: page.keywords ?? [],
+        kind: "site page",
+      }),
+    ),
+    ...relatedArticles,
+  ].filter(
+    (destination, index, all) =>
+      all.findIndex((candidate) => candidate.href === destination.href) === index,
+  );
 
-  if (!article.markdown || pages.length === 0) {
+  if (!article.markdown || destinations.length === 0) {
+    if (expectedSealedContentHash) {
+      return await ctx.runMutation(
+        internal.articles.applyInternalLinksToSealedArtifact,
+        {
+          articleId,
+          expectedContentHash: expectedSealedContentHash,
+          markdown: article.markdown,
+          internalLinks: [],
+        },
+      );
+    }
     await ctx.runMutation(internal.articles.updateLinks, {
       articleId,
       internalLinks: [],
@@ -3916,17 +4033,15 @@ async function handleLinks(
       "Never use navigation labels or generic anchors such as Blog, Pricing, Features, FAQ, Home, Get Started, Sign Up, Here, or Learn More.",
       "Use only an allowed destination exactly as supplied. Never link the article to itself.",
       "Do not select text from headings, the table of contents, code, existing links, or the Sources section.",
+      "Prefer three to six genuinely useful links when exact contextual anchors exist. Topical authority comes from clusters, so an article that links to no sibling article is an orphan competing on its own thin authority.",
+      "Always prefer a related published article over a generic navigation page: sibling articles are what build the cluster.",
+      "Do not force a quota: relevance and a natural exact anchor are mandatory, and inventing an anchor that is not in the prose is worse than returning fewer links.",
       "Return at most 6 links. Return [] when no natural contextual match exists.",
     ].join(" "),
     [
       `Article title: ${article.title}`,
       `Article slug: ${article.slug}`,
-      `Allowed destinations: ${JSON.stringify(
-        pages.map((p: { slug: string; title?: string }) => ({
-          href: p.slug,
-          title: p.title ?? "",
-        })),
-      )}`,
+      `Allowed destinations: ${JSON.stringify(destinations)}`,
       `Article markdown:\n${article.markdown.slice(0, 24000)}`,
     ].join("\n\n"),
     2048,
@@ -3935,10 +4050,22 @@ async function handleLinks(
   const suggestions = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, linkText);
   const links = validateInternalLinkSuggestions(
     suggestions,
-    pages.map((p: { slug: string }) => p.slug),
-    article.slug,
+    destinations.map((destination) => destination.href),
+    publishedArticleInternalHref(site.urlStructure, article.slug),
   );
   const result = injectInternalLinks(article.markdown, links);
+
+  if (expectedSealedContentHash) {
+    return await ctx.runMutation(
+      internal.articles.applyInternalLinksToSealedArtifact,
+      {
+        articleId,
+        expectedContentHash: expectedSealedContentHash,
+        markdown: result.markdown,
+        internalLinks: result.inserted,
+      },
+    );
+  }
 
   await ctx.runMutation(internal.articles.updateLinks, {
     articleId,
@@ -4182,6 +4309,38 @@ export const crawlAndAnalyze = action({
         fontFamily: brand.fontFamily,
         logoUrl: brand.logoUrl,
       },
+    };
+  },
+});
+
+// Bounded operator/fleet repair for a legacy tenant whose initial crawl never
+// completed. It is internal-only, tenant-scoped, and does not generate or
+// publish content; after the crawl, ordinary readiness decides what may run.
+export const repairOnboardingInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (
+    ctx,
+    { siteId },
+  ): Promise<{ repaired: boolean; reason: string; pages: number }> => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (!site?.autopilotEnabled) {
+      return { repaired: false, reason: "autopilot_disabled", pages: 0 };
+    }
+    const existingPages = await ctx.runQuery(internal.pages.listBySiteInternal, {
+      siteId,
+    });
+    if (existingPages.length > 0) {
+      return {
+        repaired: false,
+        reason: "crawl_already_present",
+        pages: existingPages.length,
+      };
+    }
+    const result = await handleOnboarding(ctx, siteId);
+    return {
+      repaired: result.pages.length > 0,
+      reason: result.pages.length > 0 ? "crawl_repaired" : "crawl_empty",
+      pages: result.pages.length,
     };
   },
 });
@@ -4669,7 +4828,22 @@ async function reviewExistingArticleHandler(
       publicationConfigHash: deliveryConfigHash,
     };
     const quality = evaluatePublicationQuality(qualityCandidate, "strict");
-    const readyForPublication = quality.passed;
+    const reviewBusinessSignals = [
+      site.niche,
+      site.blogTheme,
+      ...(site.anchorKeywords ?? []),
+      ...(site.painPoints ?? []),
+    ].filter((signal): signal is string => Boolean(signal));
+    const targetAlignmentPassed = !topic || (
+      keywordMatchesBusinessSignals(topic.primaryKeyword, reviewBusinessSignals) &&
+      keywordMatchesBusinessSignals(nextTitle, [topic.primaryKeyword])
+    );
+    const targetAlignmentIssues = targetAlignmentPassed
+      ? []
+      : [
+          `The primary keyword "${topic?.primaryKeyword ?? "unknown"}" does not align with both the configured business and the final article title.`,
+        ];
+    const readyForPublication = quality.passed && targetAlignmentPassed;
     const contentHash: string | undefined = readyForPublication
       ? publicationArtifactHash(qualityCandidate)
       : undefined;
@@ -4738,7 +4912,7 @@ async function reviewExistingArticleHandler(
     await ctx.runMutation(internal.articles.recordPublicationCheck, {
       articleId,
       status: readyForPublication ? "passed" : "blocked",
-      issues: quality.issues,
+      issues: [...quality.issues, ...targetAlignmentIssues],
       warnings: quality.warnings,
     });
 
@@ -5118,6 +5292,10 @@ async function continueAutopilotAfterProcessedJob(
       trigger: "deterministic_repair",
       reason: "strict_gate_authorized_deterministic_mechanical_repair",
     },
+    pending_plan: {
+      trigger: "plan_ready",
+      reason: "pending_topic_plan_ready_for_processing",
+    },
     buffer_fill: {
       trigger: processed.planCompleted ? "plan_ready" : "buffer_fill",
       reason: processed.planCompleted
@@ -5250,7 +5428,7 @@ export const autopilotTick = internalAction({
         !isBufferFill
       ) {
         const cadence = site.cadencePerWeek ?? 4;
-        const hoursPerArticle = Math.floor((7 * 24) / cadence);
+        const hoursPerArticle = cadenceIntervalMs(cadence) / (60 * 60 * 1000);
         const allArticles = await ctx.runQuery(internal.articles.listBySiteInternal, { siteId });
         const cadenceWindow = evaluateCadenceWindow({
           articles: allArticles,
@@ -5294,6 +5472,12 @@ export const autopilotTick = internalAction({
     // No pending job: preserve the scheduler's actual state. In particular,
     // quota/migration/quality blocks must never be rewritten as healthy idle.
     const mode = cadenceSchedule.mode ?? "idle";
+    const rolloutBlockers =
+      "blockers" in cadenceSchedule && Array.isArray(cadenceSchedule.blockers)
+        ? cadenceSchedule.blockers.filter(
+            (blocker: unknown): blocker is string => typeof blocker === "string",
+          )
+        : [];
     const detailByMode: Record<string, string> = {
       migration_pending: "Publication-integrity migration is incomplete.",
       quality_budget_exhausted: "The bounded quality candidate budget is exhausted.",
@@ -5301,11 +5485,16 @@ export const autopilotTick = internalAction({
       site_limit_reached: "The tenant exceeds its active site limit.",
       topic_replenishment_exhausted: "Topic recovery is cooling down and will retry automatically.",
       work_in_progress: "Another leased worker is still processing tenant work.",
+      pending_plan: "A pending topic plan is ready for immediate processing.",
       buffer_delivery_pending: "A sealed delivery job exists but is not currently claimable.",
       approval_waiting: "A quality-gated draft is waiting for owner approval.",
       manual_delivery_waiting: "A quality-gated draft is waiting for manual delivery.",
       cadence_not_due: "The next cadence window is not due yet.",
       buffer_full: "The strict-quality future buffer is full.",
+      rollout_buffer_ready:
+        rolloutBlockers.length > 0
+          ? `The strict-quality buffer is ready, but live publication is blocked: ${describeAutopilotBlockers(rolloutBlockers)}.`
+          : "The strict-quality buffer is ready, but live publication prerequisites are incomplete.",
       autopilot_disabled: "Autopilot is disabled for this tenant.",
       idle: "No eligible work was pending.",
     };
@@ -5463,6 +5652,27 @@ export const processNextJob = internalAction({
               articleId: payload.articleId,
               incrementRevision: true,
             });
+        if (review.readyForPublication && review.contentHash) {
+          const linked = await handleLinks(
+            ctx,
+            args.siteId,
+            payload.articleId,
+            review.contentHash,
+          );
+          if (!linked.readyForPublication) {
+            await complete({
+              articleId: payload.articleId,
+              qualityQuarantined: true,
+              issues: linked.issues ?? ["Post-review internal-link seal failed"],
+            });
+            return {
+              processed: true,
+              jobId: job._id,
+              articleId: payload.articleId,
+              qualityQuarantined: true,
+            };
+          }
+        }
         let publicationSucceeded = false;
         let buffered = false;
         if (review.readyForPublication) {
@@ -5653,29 +5863,8 @@ export const processNextJob = internalAction({
         total: 9,
         stepLabel: checkpointId
           ? "Resuming review from saved draft..."
-          : "Adding internal links...",
+          : "Running final quality review...",
       });
-      try {
-        await handleLinks(ctx, args.siteId, articleId);
-      } catch (error) {
-        console.error(
-          "Internal linking failed:",
-          error instanceof Error ? error.message : "unknown",
-        );
-      }
-
-      try {
-        await heartbeat();
-        await ctx.runAction(internal.actions.backlinks.quickBacklinkScan, {
-          siteId: args.siteId,
-          articleId,
-        });
-      } catch (error) {
-        console.error(
-          "Backlink suggestions failed:",
-          error instanceof Error ? error.message : "unknown",
-        );
-      }
 
       const finalReview = await reviewExistingArticleHandler(ctx, {
         siteId: args.siteId,
@@ -5694,6 +5883,42 @@ export const processNextJob = internalAction({
           articleId,
           qualityQuarantined: true,
         };
+      }
+
+      // The generative editor is allowed to rewrite prose, so internal links
+      // must be selected from its final text and then deterministically resealed.
+      // AI-invented backlink targets are intentionally not generated here;
+      // authority opportunities require independently verified source URLs.
+      try {
+        if (!finalReview.contentHash) {
+          throw new Error("Final quality review passed without an artifact seal");
+        }
+        const linked = await handleLinks(
+          ctx,
+          args.siteId,
+          articleId,
+          finalReview.contentHash,
+        );
+        if (!linked.readyForPublication) {
+          await complete({
+            articleId,
+            qualityQuarantined: true,
+            issues: linked.issues ?? ["Post-review internal-link seal failed"],
+          });
+          return {
+            processed: true,
+            jobId: job._id,
+            articleId,
+            qualityQuarantined: true,
+          };
+        }
+      } catch (error) {
+        // Link selection is useful but not grounds for corrupting a healthy
+        // sealed artifact. A failed selector leaves the original seal intact.
+        console.error(
+          "Post-review internal linking skipped:",
+          error instanceof Error ? error.message : "unknown",
+        );
       }
 
       let publicationSucceeded = false;
@@ -5916,6 +6141,149 @@ export const detectContentDecay = action({
   },
 });
 
+// ── Backfill live SERP fingerprints for the whole tenant corpus ──
+// This is an operator migration, not part of the cadence-critical path. It
+// gives legacy/used topics the same DataForSEO intent evidence as new topics,
+// then reports actual top-ten overlap without deleting or deindexing content.
+export const backfillTopicSerpFingerprints = internalAction({
+  args: {
+    siteId: v.id("sites"),
+    force: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { siteId, force, limit }): Promise<{
+    updated: number;
+    skipped: number;
+    remaining: number;
+    scheduledNext: boolean;
+    failed: Array<{ topicId: string; keyword: string; error: string }>;
+    overlaps: Array<{
+      leftTopicId: string;
+      rightTopicId: string;
+      leftKeyword: string;
+      rightKeyword: string;
+      shared: number;
+      coefficient: number;
+    }>;
+  }> => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (!site) throw new Error("Site not found");
+    const topics: Doc<"topic_clusters">[] = await ctx.runQuery(
+      internal.topics.listBySiteInternal,
+      {
+      siteId,
+      },
+    );
+    const { analyzeSERP } = await import("./seoData");
+    const locationCode = mapCountryToLocation(site.targetCountry);
+    const batchLimit = Math.max(1, Math.min(5, Math.floor(limit ?? 5)));
+    const pendingTopicIds = new Set(
+      topics
+        .filter((topic) =>
+          force || !hasReliableSerpFingerprint(topic.serpTopUrls)
+        )
+        .slice(0, batchLimit)
+        .map((topic) => String(topic._id)),
+    );
+    let updated = 0;
+    let skipped = 0;
+    const failed: Array<{ topicId: string; keyword: string; error: string }> = [];
+    const audited = [] as Array<{
+      topicId: string;
+      primaryKeyword: string;
+      serpTopUrls?: string[];
+    }>;
+
+    for (const topic of topics) {
+      let serpTopUrls = topic.serpTopUrls;
+      if (!pendingTopicIds.has(String(topic._id))) {
+        skipped += 1;
+      } else {
+        try {
+          const analysis = await analyzeSERP(
+            topic.primaryKeyword,
+            locationCode,
+            site.language ?? "en",
+          );
+          serpTopUrls = [...new Set(
+            analysis.results.map((result) => result.url).filter(Boolean),
+          )].slice(0, 10);
+          if (!hasReliableSerpFingerprint(serpTopUrls)) {
+            throw new Error("DataForSEO returned fewer than five organic URLs");
+          }
+          await ctx.runMutation(internal.topics.updateSEOMetrics, {
+            topicId: topic._id,
+            serpTopUrls,
+            recommendedArticleType: analysis.recommendedArticleType,
+            paaQuestions: analysis.paaQuestions.length > 0
+              ? analysis.paaQuestions
+              : undefined,
+          });
+          updated += 1;
+        } catch (error) {
+          failed.push({
+            topicId: String(topic._id),
+            keyword: topic.primaryKeyword,
+            error: error instanceof Error ? error.message : "unknown error",
+          });
+        }
+      }
+      audited.push({
+        topicId: String(topic._id),
+        primaryKeyword: topic.primaryKeyword,
+        serpTopUrls,
+      });
+    }
+
+    const overlaps = [] as Array<{
+      leftTopicId: string;
+      rightTopicId: string;
+      leftKeyword: string;
+      rightKeyword: string;
+      shared: number;
+      coefficient: number;
+    }>;
+    for (let leftIndex = 0; leftIndex < audited.length; leftIndex += 1) {
+      for (
+        let rightIndex = leftIndex + 1;
+        rightIndex < audited.length;
+        rightIndex += 1
+      ) {
+        const left = audited[leftIndex];
+        const right = audited[rightIndex];
+        const evidence = serpFingerprintOverlap(
+          left.serpTopUrls,
+          right.serpTopUrls,
+        );
+        if (evidence.shared < 3 || evidence.coefficient < 0.4) continue;
+        overlaps.push({
+          leftTopicId: left.topicId,
+          rightTopicId: right.topicId,
+          leftKeyword: left.primaryKeyword,
+          rightKeyword: right.primaryKeyword,
+          ...evidence,
+        });
+      }
+    }
+
+    const remaining = Math.max(
+      0,
+      topics.filter((topic) =>
+        force || !hasReliableSerpFingerprint(topic.serpTopUrls)
+      ).length - updated,
+    );
+    const scheduledNext = !force && remaining > 0;
+    if (scheduledNext) {
+      await ctx.scheduler.runAfter(
+        5_000,
+        internal.actions.pipeline.backfillTopicSerpFingerprints,
+        { siteId, force: false, limit: batchLimit },
+      );
+    }
+    return { updated, skipped, remaining, scheduledNext, failed, overlaps };
+  },
+});
+
 // ── Backfill SEO Metrics for Existing Topics ──
 // Enriches topics that were created before the SEO intelligence system was added.
 // Fetches keyword metrics + SERP analysis, applies quality gate, removes bad topics.
@@ -5992,6 +6360,9 @@ export const backfillTopicMetrics = action({
           recommendedArticleType: serpAnalysis.recommendedArticleType,
           articleType: serpAnalysis.recommendedArticleType,
           paaQuestions: serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined,
+          serpTopUrls: [...new Set(
+            serpAnalysis.results.map((result) => result.url).filter(Boolean),
+          )].slice(0, 10),
         });
       } catch (serpErr) {
         console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);

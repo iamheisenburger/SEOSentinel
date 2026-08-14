@@ -14,7 +14,9 @@ import {
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
   publicationDeliveryEnvelopeHash,
+  publicationDeliveryKey,
 } from "./lib/publicationArtifact";
+import { validatePublicationReceipt } from "./lib/publicationReceipts";
 import {
   acquirePublicationLease,
   ownsPublicationLease,
@@ -651,6 +653,47 @@ export const recordPublicationCheck = internalMutation({
   },
 });
 
+// Operator-safe migration path for artifacts created before the deterministic
+// business/title target-alignment gate existed. This invalidates every seal in
+// the same atomic write and quarantines the source topic so a fleet tick cannot
+// immediately recreate the same targeting mistake.
+export const quarantineTargetMismatch = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    issue: v.string(),
+  },
+  handler: async (ctx, { articleId, issue }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    assertNotPublishing(article);
+    if (article.status === "published") {
+      throw new Error("Published articles must use the refresh workflow");
+    }
+    const currentTime = now();
+    await ctx.db.patch(articleId, {
+      status: "review",
+      publicationGateStatus: "blocked",
+      publicationGateIssues: [issue],
+      publicationGateWarnings: [],
+      publicationCheckedAt: currentTime,
+      publicationAuditVersion: undefined,
+      publicationConfigHash: undefined,
+      publicationConfigSnapshot: undefined,
+      auditedContentHash: undefined,
+      auditedAt: undefined,
+      updatedAt: currentTime,
+    });
+    if (article.topicId) {
+      await ctx.db.patch(article.topicId, {
+        status: "cannibalizing",
+        updatedAt: currentTime,
+      });
+    }
+    await syncSummary(ctx, articleId);
+    return { quarantined: true, topicId: article.topicId };
+  },
+});
+
 export const beginPublication = internalMutation({
   args: {
     articleId: v.id("articles"),
@@ -738,6 +781,15 @@ export const completePublication = internalMutation({
     expectedConfigHash: v.string(),
     expectedRolloutEpoch: v.number(),
     leaseOwner: v.string(),
+    receipt: v.object({
+      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+      deliveryKey: v.string(),
+      contentHash: v.string(),
+      externalId: v.string(),
+      url: v.string(),
+      status: v.string(),
+      receivedAt: v.number(),
+    }),
   },
   handler: async (
     ctx,
@@ -748,6 +800,7 @@ export const completePublication = internalMutation({
       expectedConfigHash,
       expectedRolloutEpoch,
       leaseOwner,
+      receipt,
     },
   ) => {
     const article = await ctx.db.get(articleId);
@@ -768,6 +821,7 @@ export const completePublication = internalMutation({
     }
     const site = await ctx.db.get(article.siteId);
     const completedAt = now();
+    validatePublicationReceipt(receipt);
     const currentConfigHash = site
       ? publicationDeliveryConfigHash(publicationDeliveryConfig(site))
       : undefined;
@@ -787,6 +841,11 @@ export const completePublication = internalMutation({
       currentConfigHash !== expectedConfigHash ||
       article.publicationConfigHash !== expectedConfigHash ||
       expectedEnvelope !== expectedDeliveryHash ||
+      receipt.method !== (site.publishMethod ?? "github") ||
+      receipt.deliveryKey !== publicationDeliveryKey(expectedDeliveryHash) ||
+      receipt.contentHash !== publishedContentHash ||
+      receipt.receivedAt < (article.publicationLeaseStartedAt ?? 0) ||
+      receipt.receivedAt > completedAt + 60_000 ||
       site.publicationLeaseOwner !== leaseOwner ||
       (site.publicationLeaseExpiresAt ?? 0) <= completedAt ||
       !article.publicationLeaseStartedAt ||
@@ -798,6 +857,7 @@ export const completePublication = internalMutation({
       status: "published",
       publishedContentHash,
       publishedAt: completedAt,
+      publicationReceipt: receipt,
       publicationLeaseHash: undefined,
       publicationLeaseOwner: undefined,
       publicationLeaseStartedAt: undefined,
@@ -946,6 +1006,7 @@ export const applyQualityReview = internalMutation({
         brandPrimaryColor: v.optional(v.string()),
         brandAccentColor: v.optional(v.string()),
         brandFontFamily: v.optional(v.string()),
+        rendererVersion: v.optional(v.string()),
       }),
     ),
     qualityRevisionCount: v.number(),
@@ -1154,6 +1215,90 @@ export const updateLinks = internalMutation({
       updatedAt: now(),
     });
     await syncSummary(ctx, articleId);
+  },
+});
+
+// Internal links are injected after the generative review so that the exact
+// Markdown which reaches the destination contains the links Pentra recorded.
+// The mutation is atomic and only accepts a currently sealed artifact: a stale
+// worker cannot modify or reseal a newer review.
+export const applyInternalLinksToSealedArtifact = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    expectedContentHash: v.string(),
+    markdown: v.string(),
+    internalLinks: v.array(
+      v.object({
+        anchor: v.string(),
+        href: v.string(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const article = await ctx.db.get(args.articleId);
+    if (!article) throw new Error("Article not found");
+    assertNotPublishing(article);
+    if (article.status === "published") {
+      throw new Error("Published artifacts require an audited revision");
+    }
+    if (
+      article.auditedContentHash !== args.expectedContentHash ||
+      article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
+      article.publicationGateStatus !== "passed" ||
+      publicationArtifactHash(article) !== args.expectedContentHash
+    ) {
+      throw new Error("Internal links can only be applied to the exact sealed review");
+    }
+
+    const site = await ctx.db.get(article.siteId);
+    if (!site) throw new Error("Site not found");
+    const deliveryConfig = publicationDeliveryConfig(site);
+    const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
+    if (article.publicationConfigHash !== deliveryConfigHash) {
+      throw new Error("Publication destination changed after the article review");
+    }
+
+    const candidate = {
+      ...article,
+      markdown: args.markdown,
+      internalLinks: args.internalLinks,
+      publicationConfigHash: deliveryConfigHash,
+    };
+    const quality = evaluatePublicationQuality(candidate, "strict");
+    const readyForPublication = quality.passed;
+    const contentHash = readyForPublication
+      ? publicationArtifactHash(candidate)
+      : undefined;
+    const checkedAt = now();
+
+    await ctx.db.patch(args.articleId, {
+      markdown: args.markdown,
+      internalLinks: args.internalLinks,
+      publicationGateStatus: readyForPublication ? "passed" : "blocked",
+      publicationGateIssues: quality.issues,
+      publicationGateWarnings: quality.warnings,
+      publicationCheckedAt: checkedAt,
+      publicationAuditVersion: readyForPublication
+        ? PUBLICATION_AUDIT_VERSION
+        : undefined,
+      publicationConfigHash: readyForPublication
+        ? deliveryConfigHash
+        : undefined,
+      publicationConfigSnapshot: readyForPublication
+        ? deliveryConfig
+        : undefined,
+      auditedContentHash: contentHash,
+      auditedAt: readyForPublication ? checkedAt : undefined,
+      updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, args.articleId);
+
+    return {
+      count: args.internalLinks.length,
+      readyForPublication,
+      contentHash,
+      issues: quality.issues,
+    };
   },
 });
 

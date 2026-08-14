@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useAction, useQuery, useMutation } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { PageHeader } from "@/components/layout/page-header";
@@ -40,10 +40,16 @@ import {
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { formatDistanceToNow } from "date-fns";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
+import {
+  cadenceLabel,
+  cadenceOptionsForMonthlyLimit,
+} from "../../../../../convex/planLimits";
 
 type Tab = "overview" | "articles" | "settings";
 
 export default function SiteDetailPage() {
+  const { maxArticles } = usePlanLimits();
   const params = useParams();
   const router = useRouter();
   const siteId = params.siteId as Id<"sites">;
@@ -62,6 +68,7 @@ export default function SiteDetailPage() {
   const [settingsInitialized, setSettingsInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Editable fields
   const [siteName, setSiteName] = useState("");
@@ -163,6 +170,7 @@ export default function SiteDetailPage() {
   const handleSaveSettings = async () => {
     setSaving(true);
     setSaved(false);
+    setSaveError(null);
     try {
       await updateSite({
         siteId,
@@ -193,8 +201,10 @@ export default function SiteDetailPage() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch {
-      // ignore
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : "Settings could not be saved.",
+      );
     } finally {
       setSaving(false);
     }
@@ -345,6 +355,8 @@ export default function SiteDetailPage() {
           syndicationEnabled={syndicationEnabled} setSyndicationEnabled={setSyndicationEnabled}
           saving={saving}
           saved={saved}
+          saveError={saveError}
+          cadenceOptions={cadenceOptionsForMonthlyLimit(maxArticles)}
           onSave={handleSaveSettings}
         />
       )}
@@ -479,7 +491,7 @@ function OverviewTab({
           {site.language ? <DetailRow label="Language" value={site.language} /> : null}
           <DetailRow
             label="Cadence"
-            value={`${site.cadencePerWeek ?? 4} articles/week`}
+            value={cadenceLabel(site.cadencePerWeek ?? 4)}
           />
           <DetailRow
             label="Mode"
@@ -744,6 +756,8 @@ function SettingsTab({
   syndicationEnabled, setSyndicationEnabled,
   saving,
   saved,
+  saveError,
+  cadenceOptions,
   onSave,
 }: {
   site: any;
@@ -773,6 +787,8 @@ function SettingsTab({
   syndicationEnabled: boolean; setSyndicationEnabled: (v: boolean) => void;
   saving: boolean;
   saved: boolean;
+  saveError: string | null;
+  cadenceOptions: Array<{ value: number; label: string }>;
   onSave: () => void;
 }) {
   return (
@@ -791,6 +807,11 @@ function SettingsTab({
           {saved ? "Saved" : "Save Changes"}
         </Button>
       </div>
+      {saveError && (
+        <div className="rounded-lg border border-[#EF4444]/[0.25] bg-[#EF4444]/[0.06] px-4 py-3 text-[12px] text-[#F87171]">
+          {saveError}
+        </div>
+      )}
 
       {/* Connection */}
       <ConnectionSection site={site} />
@@ -866,20 +887,18 @@ function SettingsTab({
 
       {/* Publishing */}
       <SettingsSection title="Publishing" icon={Zap}>
-        <FieldRow label="Articles per week" description="How many articles to generate weekly">
-          <div className="flex items-center gap-3">
-            <input
-              type="range"
-              min={1}
-              max={14}
-              value={cadence}
-              onChange={(e) => setCadence(Number(e.target.value))}
-              className="flex-1 accent-[#0EA5E9]"
-            />
-            <span className="text-[14px] font-bold text-[#EDEEF1] w-8 text-center tabular-nums">
-              {cadence}
-            </span>
-          </div>
+        <FieldRow label="Publishing cadence" description="Only cadences sustainable within the active monthly plan are available">
+          <select
+            className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            value={cadence}
+            onChange={(event) => setCadence(Number(event.target.value))}
+          >
+            {cadenceOptions.map((option) => (
+              <option key={option.label} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </FieldRow>
         <ToggleRow
           label="Autopilot"
@@ -1018,6 +1037,7 @@ function SettingsTab({
 
 function ConnectionSection({ site }: { site: any }) {
   const updateSite = useMutation(api.sites.upsert);
+  const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [repoOwner, setRepoOwner] = useState(site.repoOwner || "");
@@ -1027,6 +1047,7 @@ function ConnectionSection({ site }: { site: any }) {
   const [wpAppPassword, setWpAppPassword] = useState("");
   const [webhookUrl, setWebhookUrl] = useState(site.webhookUrl || "");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const method = site.publishMethod || "github";
   const labels = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" } as Record<string, string>;
@@ -1042,14 +1063,22 @@ function ConnectionSection({ site }: { site: any }) {
 
   const handleSave = async () => {
     setSaving(true);
+    setConnectionError(null);
     try {
       const updates: any = { id: site._id, domain: site.domain };
       if (isGithub) { updates.repoOwner = repoOwner.trim() || undefined; updates.repoName = repoName.trim() || undefined; }
       if (isWp) { updates.wpUrl = wpUrl.trim() || undefined; updates.wpUsername = wpUsername.trim() || undefined; updates.wpAppPassword = wpAppPassword.trim() || undefined; }
       if (isWebhook) { updates.webhookUrl = webhookUrl.trim() || undefined; updates.webhookSecret = webhookSecret.trim() || undefined; }
       await updateSite(updates);
+      if (isWp || isWebhook) {
+        await verifyPublicationDestination({ siteId: site._id });
+      }
       setEditing(false);
-    } catch (e) { console.error("Failed to save:", e); }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Connection verification failed";
+      setConnectionError(message);
+      console.error("Failed to save or verify:", e);
+    }
     finally { setSaving(false); }
   };
 
@@ -1124,7 +1153,7 @@ function ConnectionSection({ site }: { site: any }) {
                     <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://api.yoursite.com/articles" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Secret (optional)</label>
+                    <label className="text-[12px] font-medium text-[#8B8FA3]">Signing secret (32+ characters)</label>
                     <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={site.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
                 </>
@@ -1136,6 +1165,9 @@ function ConnectionSection({ site }: { site: any }) {
                 </button>
                 <button onClick={() => setEditing(false)} className="text-[12px] text-[#8B8FA3] hover:text-[#EDEEF1] transition px-3 py-2">Cancel</button>
               </div>
+              {connectionError && (
+                <p className="text-[11px] text-[#F87171]">{connectionError}</p>
+              )}
             </div>
           )}
 
@@ -1158,19 +1190,19 @@ function ConnectionSection({ site }: { site: any }) {
           )}
 
           {isWp && (() => {
-            const ok = !!site.wordpressConfigured;
+            const ok = !!site.publicationAdapterVerified;
             return (
               <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
-                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">WordPress configured</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">WordPress credentials missing</span></>)}
+                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">WordPress verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">WordPress connection not verified</span></>)}
               </div>
             );
           })()}
 
           {isWebhook && (() => {
-            const ok = !!site.webhookUrl;
+            const ok = !!site.publicationAdapterVerified;
             return (
               <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
-                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">Webhook configured</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">Webhook URL not set</span></>)}
+                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">Webhook signature and receipt verified</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">Webhook connection not verified</span></>)}
               </div>
             );
           })()}

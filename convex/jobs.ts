@@ -915,6 +915,9 @@ export const markDone = internalMutation({
     await ctx.db.patch(jobId, {
       status: "done",
       result,
+      // A successful retry must not keep surfacing the previous transient
+      // failure as if the completed job were still unhealthy.
+      error: undefined,
       workerToken: undefined,
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,

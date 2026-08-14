@@ -70,6 +70,38 @@ function normalizeInternalHref(value: string): string | null {
   }
 }
 
+/**
+ * Resolve a published article to the same tenant-configured path used by the
+ * renderer and publisher. Keeping this in the internal-link layer prevents a
+ * draft from inventing `/blog/...` links when a tenant publishes under a
+ * different safe path such as `/resources/[slug]`.
+ */
+export function publishedArticleInternalHref(
+  urlStructure: string | undefined,
+  slug: string,
+): string {
+  const template = urlStructure?.trim() || "/blog/[slug]";
+  const placeholderCount = template.match(/\[slug\]/gi)?.length ?? 0;
+  if (
+    !template.startsWith("/") ||
+    placeholderCount !== 1 ||
+    /[?#\\\u0000-\u001f]/.test(template)
+  ) {
+    throw new Error("Article URL structure must contain one safe [slug] path segment");
+  }
+
+  const cleanSlug = slug.trim().replace(/^\/+|\/+$/g, "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(cleanSlug)) {
+    throw new Error("Article slug must be one safe path segment");
+  }
+
+  const href = normalizeInternalHref(
+    template.replace(/\[slug\]/i, cleanSlug),
+  );
+  if (!href) throw new Error("Article URL structure produced an unsafe path");
+  return href;
+}
+
 function normalizeAnchor(value: string): string | null {
   const anchor = value.trim().replace(/\s+/g, " ");
   const words = anchor.split(" ").filter(Boolean);

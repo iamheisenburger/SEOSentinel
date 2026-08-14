@@ -33,7 +33,83 @@ export type PlanLimits = {
 };
 
 // Default (no plan / free fallback)
-const FREE_LIMITS: PlanLimits = { maxSites: 1, maxArticles: 3 };
+export const FREE_LIMITS: PlanLimits = { maxSites: 1, maxArticles: 3 };
+export const LONGEST_MONTH_DAYS = 31;
+export const WEEK_DAYS = 7;
+
+const STANDARD_WEEKLY_CADENCES = [1, 2, 4, 7, 14, 21] as const;
+
+export function requiredMonthlyArticlesForCadence(
+  cadencePerWeek: number | undefined,
+): number {
+  if (!Number.isFinite(cadencePerWeek) || (cadencePerWeek ?? 0) <= 0) return 0;
+  const raw = ((cadencePerWeek as number) * LONGEST_MONTH_DAYS) / WEEK_DAYS;
+  return Math.ceil(raw - 1e-9);
+}
+
+export function maximumSustainableCadencePerWeek(
+  maxArticlesPerMonth: number,
+): number {
+  if (!Number.isFinite(maxArticlesPerMonth) || maxArticlesPerMonth <= 0) return 0;
+  return (Math.floor(maxArticlesPerMonth) * WEEK_DAYS) / LONGEST_MONTH_DAYS;
+}
+
+export function cadenceFitsMonthlyLimit(
+  cadencePerWeek: number,
+  maxArticlesPerMonth: number,
+): boolean {
+  return (
+    Number.isFinite(cadencePerWeek) &&
+    cadencePerWeek > 0 &&
+    cadencePerWeek <= 21 &&
+    requiredMonthlyArticlesForCadence(cadencePerWeek) <= maxArticlesPerMonth
+  );
+}
+
+export type CadenceOption = { value: number; label: string };
+
+/** Every plan gets at least one honest cadence. A three-article free plan is
+ * represented as 3/month rather than the impossible 1/week (5 in a 31-day
+ * month). Higher plans use the familiar weekly choices that fit their quota. */
+export function cadenceOptionsForMonthlyLimit(
+  maxArticlesPerMonth: number,
+): CadenceOption[] {
+  const weekly = STANDARD_WEEKLY_CADENCES
+    .filter((value) => cadenceFitsMonthlyLimit(value, maxArticlesPerMonth))
+    .map((value) => ({ value, label: `${value}/week` }));
+  if (weekly.length > 0) return weekly;
+  const monthly = Math.max(1, Math.floor(maxArticlesPerMonth));
+  return [
+    {
+      value: maximumSustainableCadencePerWeek(monthly),
+      label: `${monthly}/month`,
+    },
+  ];
+}
+
+export function defaultCadenceForMonthlyLimit(
+  maxArticlesPerMonth: number,
+): number {
+  const options = cadenceOptionsForMonthlyLimit(maxArticlesPerMonth);
+  return (
+    [...options].reverse().find((option) => option.value <= 4)?.value ??
+    options[0].value
+  );
+}
+
+export function maximumSelectableCadenceForMonthlyLimit(
+  maxArticlesPerMonth: number,
+): number {
+  const options = cadenceOptionsForMonthlyLimit(maxArticlesPerMonth);
+  return options[options.length - 1].value;
+}
+
+export function cadenceLabel(cadencePerWeek: number): string {
+  if (cadencePerWeek < 1) {
+    return `${requiredMonthlyArticlesForCadence(cadencePerWeek)}/month`;
+  }
+  return `${Number.isInteger(cadencePerWeek) ? cadencePerWeek : cadencePerWeek.toFixed(2)}/week`;
+}
 
 /**
  * Extract numeric limits from a list of Clerk feature keys.

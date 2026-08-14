@@ -13,6 +13,18 @@ export const MIN_VERIFIED_TOPIC_HORIZON = 7;
 export const MAX_QUALITY_REPLACEMENTS_PER_24H = 2;
 export const MAX_NEW_CANDIDATES_PER_24H =
   TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function cadenceIntervalMs(cadencePerWeek: number): number {
+  if (
+    !Number.isFinite(cadencePerWeek) ||
+    cadencePerWeek <= 0 ||
+    cadencePerWeek > 21
+  ) {
+    throw new Error("Cadence must be greater than zero and no higher than 21 articles per week");
+  }
+  return Math.floor(WEEK_MS / cadencePerWeek);
+}
 
 export function autopilotCandidateBudget(rolloutMode: string): number {
   return ["warm", "live"].includes(rolloutMode)
@@ -176,6 +188,7 @@ export function autopilotHealthStatus(args: {
     "rollout_observe",
     "rollout_conflict",
     "rollout_buffer_ready",
+    "readiness_blocked",
   ]);
   if (args.lastOutcome && failClosedOutcomes.has(args.lastOutcome)) {
     return args.lastOutcome;
@@ -192,12 +205,65 @@ export function autopilotHealthStatus(args: {
 function keywordTokens(value: string): string[] {
   const stopWords = new Set([
     "the", "and", "for", "with", "how", "what", "why", "are", "can",
-    "your", "that", "this", "from", "have", "will",
+    "your", "that", "this", "from", "have", "will", "when", "use", "using",
+    "guide", "tips",
   ]);
-  return value
+  const aliases = new Map([
+    ["automated", "automate"],
+    ["automation", "automate"],
+    ["automating", "automate"],
+    ["conversion", "convert"],
+    ["converting", "convert"],
+    ["engagement", "engage"],
+    ["engaging", "engage"],
+    ["generation", "generate"],
+    ["generating", "generate"],
+    ["qualification", "qualify"],
+    ["qualifying", "qualify"],
+    ["management", "manage"],
+    ["managing", "manage"],
+    ["alignment", "align"],
+    ["nurturing", "nurture"],
+    ["forms", "form"],
+    ["leads", "lead"],
+    ["prospects", "prospect"],
+    ["visitors", "visitor"],
+    ["websites", "website"],
+  ]);
+  const normalized = value
     .toLowerCase()
+    .replace(/\b(?:conversational[ -]+ai|artificial[ -]+intelligence[ -]+chatbots?|ai[ -]+chatbots?|chat[ -]+bots?)\b/g, "chatbot")
+    .replace(/\bvirtual[ -]+assistants?\b/g, "chatbot");
+  return normalized
     .split(/[^a-z0-9]+/)
-    .filter((word) => word.length >= 3 && !stopWords.has(word));
+    .filter((word) => word.length >= 3 && !stopWords.has(word))
+    .map((word) => aliases.get(word) ?? word);
+}
+
+function sharedTokensPreserveOrder(
+  tokens: string[],
+  shared: Set<string>,
+): string[] {
+  return tokens.filter((token) => shared.has(token));
+}
+
+/**
+ * Word order is meaningful in short commercial phrases. "Sales leads" and
+ * "lead sales software" share the same bag of words but describe different
+ * intents. For two-token intersections, only treat them as the same intent
+ * when the shared concepts occur in the same order. Three or more shared
+ * concepts remain strong enough evidence even when a question-style keyword
+ * rearranges them (for example "website visitor engagement" versus "how to
+ * engage website visitors").
+ */
+function sharedIntentOrderMatches(
+  candidateTokens: string[],
+  coveredTokens: string[],
+  shared: Set<string>,
+): boolean {
+  if (shared.size >= 3) return true;
+  return sharedTokensPreserveOrder(candidateTokens, shared).join("\u0000") ===
+    sharedTokensPreserveOrder(coveredTokens, shared).join("\u0000");
 }
 
 export function selectNonCannibalizingTopic<T extends { primaryKeyword: string }>(
@@ -205,20 +271,31 @@ export function selectNonCannibalizingTopic<T extends { primaryKeyword: string }
   coveredKeywords: string[],
   maximumOverlap = 0.35,
 ): T | undefined {
-  const coveredTokenSets = coveredKeywords
-    .map((keyword) => new Set(keywordTokens(keyword)))
-    .filter((tokens) => tokens.size > 0);
+  const coveredTokenSequences = coveredKeywords
+    .map(keywordTokens)
+    .filter((tokens) => tokens.length > 0);
   return topics.find((topic) => {
-    const tokens = keywordTokens(topic.primaryKeyword);
-    if (tokens.length === 0) return false;
-    return coveredTokenSets.every((coveredTokens) => {
-      const overlap = tokens.filter((token) => coveredTokens.has(token)).length;
+    const candidateTokens = [...new Set(keywordTokens(topic.primaryKeyword))];
+    if (candidateTokens.length === 0) return false;
+    return coveredTokenSequences.every((coveredSequence) => {
+      const coveredTokens = [...new Set(coveredSequence)];
+      const coveredSet = new Set(coveredTokens);
+      const shared = new Set(
+        candidateTokens.filter((token) => coveredSet.has(token)),
+      );
       // One shared category word (for example "chatbot") is not evidence of
       // cannibalization. Requiring two shared meaningful tokens preserves
       // distinct long-tail intents while still blocking near-duplicates such
       // as "lead scoring model" and "automated lead scoring".
-      if (overlap < 2) return true;
-      return overlap / tokens.length < maximumOverlap;
+      if (shared.size < 2) return true;
+      if (
+        !sharedIntentOrderMatches(candidateTokens, coveredTokens, shared)
+      ) {
+        return true;
+      }
+      const candidateCoverage = shared.size / candidateTokens.length;
+      const coveredCoverage = shared.size / coveredTokens.length;
+      return Math.max(candidateCoverage, coveredCoverage) < maximumOverlap;
     });
   });
 }
@@ -251,6 +328,143 @@ export function filterNonCannibalizingTopics<
     }
     accepted.push(topic);
     coverage.push(topic.primaryKeyword);
+    if (accepted.length >= limit) break;
+  }
+  return accepted;
+}
+
+export type SerpCoverageTopic = {
+  primaryKeyword: string;
+  serpTopUrls?: string[];
+};
+
+function normalizeSerpUrl(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (!/^https?:$/.test(parsed.protocol)) return undefined;
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    const path = parsed.pathname.replace(/\/+$/, "") || "/";
+    return `${host}${path}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export function reliableSerpFingerprint(urls: string[] | undefined): string[] {
+  return [...new Set(
+    (urls ?? [])
+      .map(normalizeSerpUrl)
+      .filter((url): url is string => Boolean(url)),
+  )].slice(0, 10);
+}
+
+export function hasReliableSerpFingerprint(
+  urls: string[] | undefined,
+): boolean {
+  return reliableSerpFingerprint(urls).length >= 5;
+}
+
+export function normalizedSerpQuestions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (question): question is string =>
+      typeof question === "string" && question.trim().length > 0,
+  );
+}
+
+export function serpFingerprintOverlap(
+  left: string[] | undefined,
+  right: string[] | undefined,
+): { shared: number; coefficient: number } {
+  const leftFingerprint = reliableSerpFingerprint(left);
+  const rightFingerprint = reliableSerpFingerprint(right);
+  if (leftFingerprint.length < 5 || rightFingerprint.length < 5) {
+    return { shared: 0, coefficient: 0 };
+  }
+  const rightSet = new Set(rightFingerprint);
+  const shared = leftFingerprint.filter((url) => rightSet.has(url)).length;
+  return {
+    shared,
+    coefficient: shared /
+      Math.min(leftFingerprint.length, rightFingerprint.length),
+  };
+}
+
+/**
+ * Lexical matching cannot prove that differently-worded keywords have distinct
+ * search intent. DataForSEO's live top-ten URLs provide the stronger signal:
+ * three shared pages covering at least 40% of the smaller result set means the
+ * two keywords compete in materially the same SERP and must not both enter the
+ * publication plan.
+ */
+export function filterNonCannibalizingSerpTopics<
+  T extends SerpCoverageTopic,
+>(
+  topics: T[],
+  coveredTopics: SerpCoverageTopic[],
+  maximumOverlap = 0.4,
+  limit = Number.POSITIVE_INFINITY,
+): T[] {
+  const accepted: T[] = [];
+  const coverage = coveredTopics.filter((topic) =>
+    hasReliableSerpFingerprint(topic.serpTopUrls)
+  );
+  for (const topic of topics) {
+    const overlaps = coverage.some((covered) => {
+      const evidence = serpFingerprintOverlap(
+        topic.serpTopUrls,
+        covered.serpTopUrls,
+      );
+      return evidence.shared >= 3 && evidence.coefficient >= maximumOverlap;
+    });
+    if (overlaps) continue;
+    accepted.push(topic);
+    if (hasReliableSerpFingerprint(topic.serpTopUrls)) coverage.push(topic);
+    if (accepted.length >= limit) break;
+  }
+  return accepted;
+}
+
+/**
+ * Use live SERP evidence when both topics have it, with the normalized keyword
+ * rule as a fail-closed fallback for legacy rows awaiting fingerprint
+ * backfill. This prevents both failure modes: publishing two differently-worded
+ * keywords into the same SERP, and rejecting distinct intents merely because
+ * their wording is similar.
+ */
+export function filterNonCannibalizingIntentTopics<
+  T extends SerpCoverageTopic,
+>(
+  topics: T[],
+  coveredTopics: SerpCoverageTopic[],
+  maximumSerpOverlap = 0.4,
+  maximumKeywordOverlap = 0.35,
+  limit = Number.POSITIVE_INFINITY,
+): T[] {
+  const accepted: T[] = [];
+  const coverage = [...coveredTopics];
+  for (const topic of topics) {
+    const conflicts = coverage.some((covered) => {
+      if (
+        hasReliableSerpFingerprint(topic.serpTopUrls) &&
+        hasReliableSerpFingerprint(covered.serpTopUrls)
+      ) {
+        const evidence = serpFingerprintOverlap(
+          topic.serpTopUrls,
+          covered.serpTopUrls,
+        );
+        return evidence.shared >= 3 &&
+          evidence.coefficient >= maximumSerpOverlap;
+      }
+      return !selectNonCannibalizingTopic(
+        [topic],
+        [covered.primaryKeyword],
+        maximumKeywordOverlap,
+      );
+    });
+    if (conflicts) continue;
+    accepted.push(topic);
+    coverage.push(topic);
     if (accepted.length >= limit) break;
   }
   return accepted;
@@ -369,6 +583,8 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "businesses",
   "companies",
   "company",
+  "cost",
+  "costs",
   "customer",
   "customers",
   "development",
@@ -377,6 +593,11 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "guide",
   "implementation",
   "marketing",
+  "analysis",
+  "budget",
+  "planning",
+  "project",
+  "projects",
   "online",
   "outside",
   "page",
@@ -388,6 +609,8 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "product",
   "products",
   "representative",
+  "report",
+  "reports",
   "sales",
   "service",
   "services",
@@ -430,11 +653,17 @@ function relevanceRoot(word: string): string {
   return normalized.length >= 5 ? normalized.slice(0, 5) : normalized;
 }
 
+const RELEVANCE_STOP_WORDS = new Set([
+  "about", "and", "are", "can", "for", "from", "have", "how", "into",
+  "more", "that", "the", "this", "using", "what", "why", "will", "with",
+  "your",
+]);
+
 function relevanceTokens(value: string): string[] {
   return value
     .split(/[^a-z0-9]+/i)
     .map((word) => word.toLowerCase())
-    .filter((word) => word.length >= 3);
+    .filter((word) => word.length >= 3 && !RELEVANCE_STOP_WORDS.has(word));
 }
 
 /**
@@ -491,4 +720,16 @@ export function pendingJobPriority(payload: unknown): number {
   if (record?.manual === true) return 2;
   if (record?.qualityRetry === true || record?.bufferFill === true) return 1;
   return 0;
+}
+
+/** A pending topic-plan must not strand an already-created article that needs
+ * its bounded quality repair. Active article work still serializes all prose
+ * mutations for the tenant. */
+export function contentWorkBlocksQualityRecovery(
+  jobs: Array<{ type: string }>,
+  qualityRecoveryAvailable: boolean,
+): boolean {
+  if (jobs.length === 0) return false;
+  if (jobs.some((job) => job.type === "article")) return true;
+  return !qualityRecoveryAvailable;
 }

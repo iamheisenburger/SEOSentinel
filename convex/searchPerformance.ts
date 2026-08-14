@@ -2,14 +2,18 @@ import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
+  addSearchConsoleDays,
+  aggregateSearchQueries,
+  isBrandedSearchQuery,
   isSameSearchConsolePage,
   publishedArticlePageUrl,
+  searchConsoleDate,
+  summarizeSearchPerformance,
 } from "./lib/searchPerformance";
 import { effectivePublishedAt } from "./lib/autopilotBuffer";
 import { v } from "convex/values";
 
 const DAILY_SYNC_VERSION = 2;
-const DAY_MS = 24 * 60 * 60 * 1000;
 const SEO_WINDOWS_DAYS = [7, 14, 28, 56] as const;
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
@@ -18,6 +22,7 @@ async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   if (!site?.userId || !identity || identity.subject !== site.userId) {
     throw new Error("Not authorized to access this site's search performance");
   }
+  return site;
 }
 
 // Upsert a search performance record (avoids duplicates for same site+date+query)
@@ -125,7 +130,49 @@ export const upsertBatch = internalMutation({
   },
 });
 
-// Get top queries for a site (last sync)
+export const upsertPageBatch = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    rows: v.array(v.object({
+      date: v.string(),
+      page: v.string(),
+      clicks: v.number(),
+      impressions: v.number(),
+      weightedPosition: v.number(),
+      nonBrandedClicks: v.number(),
+      nonBrandedImpressions: v.number(),
+      nonBrandedWeightedPosition: v.number(),
+    })),
+  },
+  handler: async (ctx, { siteId, rows }) => {
+    const syncedAt = Date.now();
+    let inserted = 0;
+    let updated = 0;
+    for (const row of rows) {
+      const existing = await ctx.db
+        .query("search_page_daily")
+        .withIndex("by_site_date_page", (q) =>
+          q.eq("siteId", siteId).eq("date", row.date).eq("page", row.page),
+        )
+        .unique();
+      if (existing) {
+        await ctx.db.patch(existing._id, { ...row, syncedAt });
+        updated++;
+      } else {
+        await ctx.db.insert("search_page_daily", {
+          siteId,
+          ...row,
+          syncedAt,
+          createdAt: syncedAt,
+        });
+        inserted++;
+      }
+    }
+    return { inserted, updated, saved: rows.length };
+  },
+});
+
+// Get top queries over the same honest 28-day window as the summary.
 export const getTopQueries = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
@@ -144,6 +191,7 @@ export const getTopQueries = query({
       .first();
     if (!latest) return [];
 
+    const windowStart = addSearchConsoleDays(latest.date, -27);
     const recent = latestDaily
       ? await ctx.db
         .query("search_performance")
@@ -151,7 +199,8 @@ export const getTopQueries = query({
           q
             .eq("siteId", siteId)
             .eq("syncVersion", DAILY_SYNC_VERSION)
-            .eq("date", latest.date),
+            .gte("date", windowStart)
+            .lte("date", latest.date),
         )
         .collect()
       : await ctx.db
@@ -161,9 +210,11 @@ export const getTopQueries = query({
         )
         .collect();
 
-    // Sort by clicks desc, then impressions desc
-    recent.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
-    return recent.slice(0, limit ?? 20);
+    return latestDaily
+      ? aggregateSearchQueries(recent).slice(0, limit ?? 20)
+      : recent
+        .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
+        .slice(0, limit ?? 20);
   },
 });
 
@@ -171,7 +222,7 @@ export const getTopQueries = query({
 export const getSummary = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     const latestDaily = await ctx.db
       .query("search_performance")
       .withIndex("by_site_version_date", (q) =>
@@ -186,6 +237,7 @@ export const getSummary = query({
       .first();
     if (!latest) return null;
 
+    const windowStart = addSearchConsoleDays(latest.date, -27);
     const recent = latestDaily
       ? await ctx.db
         .query("search_performance")
@@ -193,7 +245,8 @@ export const getSummary = query({
           q
             .eq("siteId", siteId)
             .eq("syncVersion", DAILY_SYNC_VERSION)
-            .eq("date", latest.date),
+            .gte("date", windowStart)
+            .lte("date", latest.date),
         )
         .collect()
       : await ctx.db
@@ -203,27 +256,14 @@ export const getSummary = query({
         )
         .collect();
 
-    const totalClicks = recent.reduce((s, r) => s + r.clicks, 0);
-    const totalImpressions = recent.reduce((s, r) => s + r.impressions, 0);
-    const avgPosition = totalImpressions > 0
-      ? Math.round((
-        recent.reduce((s, r) => s + r.position * r.impressions, 0) /
-        totalImpressions
-      ) * 10) / 10
-      : 0;
-    const avgCtr = totalImpressions > 0 ? Math.round((totalClicks / totalImpressions) * 1000) / 10 : 0;
+    const summary = summarizeSearchPerformance(recent, site.domain);
 
     return {
-      totalClicks,
-      totalImpressions,
-      avgPosition,
-      avgCtr,
-      queryCount: new Set(recent.map((row) => row.query)).size,
+      ...summary,
       lastSync: latest.date,
       dataThrough: latest.date,
-      syncedAt: latestDaily
-        ? Math.max(...recent.map((row) => row.syncedAt ?? row.createdAt))
-        : undefined,
+      windowStart: latestDaily ? windowStart : undefined,
+      windowDays: latestDaily ? 28 : undefined,
       syncVersion: latestDaily?.syncVersion ?? 1,
     };
   },
@@ -267,20 +307,6 @@ export const getByPage = query({
   },
 });
 
-function isoDate(timestamp: number): string {
-  return new Date(timestamp).toISOString().split("T")[0];
-}
-
-function isBrandedQuery(queryText: string, domain: string): boolean {
-  const normalized = queryText.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const brand = domain.toLowerCase().replace(/^www\./, "").split(".")[0]
-    .replace(/[^a-z0-9]+/g, " ").trim();
-  return !!brand && (
-    normalized.includes(brand) ||
-    normalized.includes(domain.toLowerCase().replace(/^www\./, ""))
-  );
-}
-
 async function articleSeoScorecard(
   ctx: QueryCtx,
   articleId: Id<"articles">,
@@ -294,8 +320,8 @@ async function articleSeoScorecard(
   if (!site) throw new Error("Site not found");
 
   const publicationTime = effectivePublishedAt(article);
-  const startDate = isoDate(publicationTime);
-  const maximumEndDate = isoDate(publicationTime + 56 * DAY_MS - 1);
+  const startDate = searchConsoleDate(publicationTime);
+  const maximumEndDate = addSearchConsoleDays(startDate, 55);
   const [latest, rows] = await Promise.all([
     ctx.db
       .query("search_performance")
@@ -327,12 +353,12 @@ async function articleSeoScorecard(
   const dataThrough = latest?.date;
 
   const windows = SEO_WINDOWS_DAYS.map((days) => {
-    const expectedEndDate = isoDate(publicationTime + days * DAY_MS - 1);
+    const expectedEndDate = addSearchConsoleDays(startDate, days - 1);
     const available = pageRows.filter((row) => row.date <= expectedEndDate);
     const clicks = available.reduce((sum, row) => sum + row.clicks, 0);
     const impressions = available.reduce((sum, row) => sum + row.impressions, 0);
     const nonBranded = available.filter(
-      (row) => !isBrandedQuery(row.query, site.domain),
+      (row) => !isBrandedSearchQuery(row.query, site.domain),
     );
     const nonBrandedClicks = nonBranded.reduce((sum, row) => sum + row.clicks, 0);
     const nonBrandedImpressions = nonBranded.reduce(
@@ -360,12 +386,19 @@ async function articleSeoScorecard(
         impressions: row.impressions,
         ctr: row.ctr,
         position: row.position,
-        branded: isBrandedQuery(row.query, site.domain),
+        branded: isBrandedSearchQuery(row.query, site.domain),
       }));
     return {
       days,
       expectedEndDate,
       complete: !!dataThrough && dataThrough >= expectedEndDate,
+      status: !dataThrough || dataThrough < startDate
+        ? "awaiting_data"
+        : dataThrough < expectedEndDate
+          ? "collecting"
+          : impressions > 0
+            ? "measured"
+            : "no_search_visibility",
       clicks,
       impressions,
       ctr: impressions > 0 ? clicks / impressions : 0,
@@ -392,6 +425,15 @@ async function articleSeoScorecard(
     startDate,
     dataThrough,
     syncVersion: DAILY_SYNC_VERSION,
+    indexInspection: {
+      verdict: article.gscIndexVerdict,
+      coverageState: article.gscCoverageState,
+      pageFetchState: article.gscPageFetchState,
+      robotsTxtState: article.gscRobotsTxtState,
+      lastCrawlTime: article.gscLastCrawlTime,
+      inspectedAt: article.gscInspectedAt,
+      error: article.gscInspectionError,
+    },
     windows,
   };
 }
@@ -411,6 +453,74 @@ export const getArticleSeoScorecard = query({
 export const getArticleSeoScorecardInternal = internalQuery({
   args: { articleId: v.id("articles") },
   handler: async (ctx, { articleId }) => articleSeoScorecard(ctx, articleId),
+});
+
+export const listPublishedForInspection = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    publishedAfter: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { siteId, publishedAfter, limit }) => {
+    const articles = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status_published", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("status", "published")
+          .gte("publishedAt", publishedAfter),
+      )
+      .order("desc")
+      .take(Math.max(1, Math.min(limit ?? 20, 50)));
+    return articles.map((article) => ({
+      articleId: article.articleId,
+      slug: article.slug,
+      publishedAt: article.publishedAt ?? article.articleCreatedAt,
+      gscInspectedAt: article.gscInspectedAt,
+    }));
+  },
+});
+
+export const recordUrlInspection = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    verdict: v.optional(v.string()),
+    coverageState: v.optional(v.string()),
+    pageFetchState: v.optional(v.string()),
+    robotsTxtState: v.optional(v.string()),
+    lastCrawlTime: v.optional(v.string()),
+    inspectedAt: v.number(),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const article = await ctx.db.get(args.articleId);
+    if (!article) throw new Error("Article not found");
+    const patch = args.error
+      ? {
+        gscInspectedAt: args.inspectedAt,
+        gscInspectionError: args.error,
+      }
+      : {
+        gscIndexVerdict: args.verdict,
+        gscCoverageState: args.coverageState,
+        gscPageFetchState: args.pageFetchState,
+        gscRobotsTxtState: args.robotsTxtState,
+        gscLastCrawlTime: args.lastCrawlTime,
+        gscInspectedAt: args.inspectedAt,
+        gscInspectionError: undefined,
+      };
+    await ctx.db.patch(args.articleId, patch);
+    const summary = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_article", (q) => q.eq("articleId", args.articleId))
+      .unique();
+    if (summary) {
+      await ctx.db.patch(summary._id, {
+        ...patch,
+        articleUpdatedAt: Date.now(),
+      });
+    }
+  },
 });
 
 // Get all historical data for trend detection (content decay)

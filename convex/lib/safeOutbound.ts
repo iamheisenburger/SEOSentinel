@@ -39,6 +39,24 @@ export type SafePublicTextOptions = {
   headers?: Record<string, string>;
 };
 
+export type SafePublicRequestOptions = {
+  method?: "GET" | "POST";
+  expectedHost?: string;
+  maxBytes?: number;
+  maxRequestBytes?: number;
+  timeoutMs?: number;
+  allowedContentTypes?: RegExp[];
+  headers?: Record<string, string>;
+  body?: string | Buffer;
+};
+
+export type SafePublicResponse = {
+  url: string;
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  text: string;
+};
+
 function normalizedHost(hostname: string): string {
   return hostname.toLowerCase().replace(/^www\./, "");
 }
@@ -176,22 +194,31 @@ export async function validatePublicHttpsUrl(
 function requestPinnedText(
   target: { url: URL; address: ResolvedAddress },
   options: Required<Pick<SafePublicTextOptions, "maxBytes" | "timeoutMs">> &
-    SafePublicTextOptions,
+    SafePublicTextOptions & {
+      method?: "GET" | "POST";
+      body?: string | Buffer;
+    },
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; text: string }> {
   return new Promise((resolve, reject) => {
+    const body = options.body === undefined
+      ? undefined
+      : Buffer.isBuffer(options.body)
+        ? options.body
+        : Buffer.from(options.body, "utf8");
     const req = request(
       {
         protocol: "https:",
         hostname: target.url.hostname,
         servername: target.url.hostname,
         port: 443,
-        method: "GET",
+        method: options.method ?? "GET",
         path: `${target.url.pathname}${target.url.search}`,
         headers: {
           "User-Agent": "Pentra/1.0 (content research)",
           Accept: "text/html,text/plain,application/xhtml+xml,application/json,text/css",
           "Accept-Encoding": "identity",
           ...options.headers,
+          ...(body ? { "Content-Length": String(body.byteLength) } : {}),
         },
         lookup: createPinnedLookup(target.address),
       },
@@ -240,8 +267,53 @@ function requestPinnedText(
       req.destroy(new Error("Outbound request timed out"));
     });
     req.on("error", reject);
-    req.end();
+    req.end(body);
   });
+}
+
+/**
+ * Send a request to an untrusted customer-supplied public HTTPS endpoint.
+ * DNS is resolved and checked before the socket is opened, then the approved
+ * address is pinned to that TLS connection. Redirects are deliberately not
+ * followed: a publisher must never accept a public URL that redirects into a
+ * private network or silently changes the sealed delivery destination.
+ */
+export async function safeRequestPublicHttps(
+  input: string,
+  options: SafePublicRequestOptions = {},
+): Promise<SafePublicResponse> {
+  const body = options.body === undefined
+    ? undefined
+    : Buffer.isBuffer(options.body)
+      ? options.body
+      : Buffer.from(options.body, "utf8");
+  const maxRequestBytes = options.maxRequestBytes ?? 2_000_000;
+  if (body && body.byteLength > maxRequestBytes) {
+    throw new Error("Outbound request body is too large");
+  }
+  const target = await resolvePinnedPublicUrl(input, options.expectedHost);
+  const response = await requestPinnedText(target, {
+    method: options.method ?? "GET",
+    body,
+    expectedHost: options.expectedHost,
+    maxRedirects: 0,
+    maxBytes: options.maxBytes ?? 256_000,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    allowedContentTypes: options.allowedContentTypes ?? [
+      /^application\/(?:json|problem\+json)(?:;|$)/i,
+      /^text\/plain(?:;|$)/i,
+    ],
+    headers: {
+      "User-Agent": "Pentra/1.0 (verified publisher)",
+      Accept: "application/json",
+      "Accept-Encoding": "identity",
+      ...options.headers,
+    },
+  });
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("Publisher endpoints must not redirect");
+  }
+  return { url: target.url.href, ...response };
 }
 
 /**

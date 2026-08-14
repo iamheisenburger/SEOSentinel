@@ -1,3 +1,8 @@
+import {
+  PUBLICATION_ADAPTER_VERSION,
+  PUBLISHER_RENDERER_VERSION,
+} from "./publicationReceipts.ts";
+
 export const PUBLICATION_AUDIT_VERSION = 4;
 
 // Convex mutations run in the default V8 runtime, where Node's `crypto`
@@ -136,6 +141,7 @@ export type PublicationDeliveryConfig = {
   contentDir?: string;
   wpUrl?: string;
   webhookUrl?: string;
+  rendererVersion?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
   brandFontFamily?: string;
@@ -143,6 +149,7 @@ export type PublicationDeliveryConfig = {
 
 export type PublicationSiteConfig = {
   domain: string;
+  method?: string;
   publishMethod?: string;
   urlStructure?: string;
   repoOwner?: string;
@@ -154,6 +161,43 @@ export type PublicationSiteConfig = {
   brandAccentColor?: string;
   brandFontFamily?: string;
 };
+
+export type PublicationAdapterSiteConfig = PublicationSiteConfig & {
+  wpUsername?: string;
+  wpAppPassword?: string;
+  webhookSecret?: string;
+};
+
+export function publicationAdapterConfigHash(
+  site: Partial<PublicationAdapterSiteConfig>,
+): string | undefined {
+  const method = site.publishMethod ?? site.method ?? "github";
+  if (method === "wordpress") {
+    const wpUrl = normalizedEndpoint(site.wpUrl);
+    const wpUsername = site.wpUsername?.trim();
+    const wpAppPassword = site.wpAppPassword?.trim();
+    if (!wpUrl || !wpUsername || !wpAppPassword) return undefined;
+    return sha256Hex(JSON.stringify({
+      version: PUBLICATION_ADAPTER_VERSION,
+      method,
+      wpUrl,
+      wpUsername,
+      credentialHash: sha256Hex(wpAppPassword),
+    }));
+  }
+  if (method === "webhook") {
+    const webhookUrl = normalizedEndpoint(site.webhookUrl);
+    const webhookSecret = site.webhookSecret?.trim();
+    if (!webhookUrl || !webhookSecret) return undefined;
+    return sha256Hex(JSON.stringify({
+      version: PUBLICATION_ADAPTER_VERSION,
+      method,
+      webhookUrl,
+      credentialHash: sha256Hex(webhookSecret),
+    }));
+  }
+  return undefined;
+}
 
 function normalizedEndpoint(value?: string): string | undefined {
   const normalized = value?.trim().replace(/\/+$/, "");
@@ -243,7 +287,10 @@ export function requireSafeGitHubDefaultBranch(value?: string): string {
 export function publicationDeliveryConfig(
   site: PublicationSiteConfig,
 ): PublicationDeliveryConfig {
-  const method = site.publishMethod ?? "github";
+  // Accept both the live site shape (`publishMethod`) and the immutable seal
+  // shape (`method`). Re-normalizing a stored snapshot must be idempotent;
+  // defaulting a webhook/WordPress snapshot back to GitHub corrupts the seal.
+  const method = site.publishMethod ?? site.method ?? "github";
   if (!["github", "wordpress", "webhook", "manual"].includes(method)) {
     throw new Error(`Unsupported publication method: ${method}`);
   }
@@ -267,6 +314,10 @@ export function publicationDeliveryConfig(
     contentDir: method === "github" ? contentDir : undefined,
     wpUrl: normalizedEndpoint(site.wpUrl),
     webhookUrl: normalizedEndpoint(site.webhookUrl),
+    rendererVersion:
+      method === "wordpress" || method === "webhook"
+        ? PUBLISHER_RENDERER_VERSION
+        : undefined,
     brandPrimaryColor: site.brandPrimaryColor?.trim() || undefined,
     brandAccentColor: site.brandAccentColor?.trim() || undefined,
     brandFontFamily: site.brandFontFamily?.trim() || undefined,

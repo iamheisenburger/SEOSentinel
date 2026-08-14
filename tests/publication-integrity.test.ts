@@ -167,9 +167,10 @@ test("external delivery completes before the internal published transition", () 
 
 test("GitHub delivery commits non-executable plain Markdown", () => {
   const publisher = readFileSync("convex/publisher.ts", "utf8");
+  const renderer = readFileSync("convex/lib/safeMarkdownHtml.ts", "utf8");
   assert.match(publisher, /filePath = `\$\{contentDir\}\/\$\{slug\}\.md`/);
   assert.doesNotMatch(publisher, /filePath = `\$\{contentDir\}\/\$\{slug\}\.mdx`/);
-  assert.match(publisher, /containsExecutableMdx\(markdown\)/);
+  assert.match(renderer, /containsExecutableMdx\(markdown\)/);
   assert.match(publisher, /pentraDeliveryKey:/);
 });
 
@@ -205,6 +206,20 @@ test("GitHub default branch is part of the sealed publication config", () => {
         repoDefaultBranch: "../unsafe",
       }),
     /Invalid GitHub default branch/,
+  );
+});
+
+test("non-GitHub publication seals survive normalization without method drift", () => {
+  const webhook = publicationDeliveryConfig({
+    domain: "https://example.com",
+    publishMethod: "webhook",
+    webhookUrl: "https://example.com/api/pentra",
+  });
+  assert.equal(webhook.method, "webhook");
+  assert.deepEqual(publicationDeliveryConfig(webhook), webhook);
+  assert.equal(
+    publicationDeliveryConfigHash(publicationDeliveryConfig(webhook)),
+    publicationDeliveryConfigHash(webhook),
   );
 });
 

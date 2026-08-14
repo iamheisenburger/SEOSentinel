@@ -6,17 +6,31 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { ALL_FEATURE_KEYS, getLimitsFromFeatures } from "./planLimits";
+import {
+  ALL_FEATURE_KEYS,
+  cadenceFitsMonthlyLimit,
+  defaultCadenceForMonthlyLimit,
+  getLimitsFromFeatures,
+  maximumSelectableCadenceForMonthlyLimit,
+  requiredMonthlyArticlesForCadence,
+} from "./planLimits";
 import type { Id } from "./_generated/dataModel";
 import { sanitizeSiteForClient } from "./lib/siteSecurity";
 import {
   shouldCancelForEpochTransition,
 } from "./lib/jobRollout";
 import {
+  publicationAdapterConfigHash,
   requireSafeGitHubDefaultBranch,
   safeGitHubRepositoryPart,
 } from "./lib/publicationArtifact";
+import { PUBLICATION_ADAPTER_VERSION } from "./lib/publicationReceipts";
+import {
+  liveAutopilotReadiness,
+  warmAutopilotReadiness,
+} from "./lib/autopilotReadiness";
 
 const now = () => Date.now();
 const DELIVERY_CONFIG_KEYS = new Set([
@@ -25,6 +39,19 @@ const DELIVERY_CONFIG_KEYS = new Set([
   "urlStructure", "brandPrimaryColor", "brandAccentColor", "brandFontFamily",
   "autopilotEnabled",
 ]);
+
+function assertCadenceFitsPlan(
+  cadencePerWeek: number,
+  planFeatures: string[],
+) {
+  const limits = getLimitsFromFeatures(planFeatures);
+  if (!cadenceFitsMonthlyLimit(cadencePerWeek, limits.maxArticles)) {
+    const requested = requiredMonthlyArticlesForCadence(cadencePerWeek);
+    throw new Error(
+      `This cadence requires ${requested} articles in a 31-day month, but the active plan allows ${limits.maxArticles}. Choose a cadence shown for this plan or upgrade first.`,
+    );
+  }
+}
 
 function deliveryConfigChanged(
   site: Record<string, unknown>,
@@ -164,6 +191,38 @@ export const getFull = internalQuery({
   handler: async (ctx, { siteId }) => ctx.db.get(siteId),
 });
 
+export const setPublicationAdapterVerificationInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    configHash: v.string(),
+    adapterVersion: v.string(),
+    verifiedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (!site) throw new Error("Site not found");
+    assertConfigUnlocked(site);
+    if (site.publishMethod !== "wordpress" && site.publishMethod !== "webhook") {
+      throw new Error("This publication method does not use adapter verification");
+    }
+    const currentHash = publicationAdapterConfigHash(site);
+    if (
+      !currentHash ||
+      currentHash !== args.configHash ||
+      args.adapterVersion !== PUBLICATION_ADAPTER_VERSION
+    ) {
+      throw new Error("Publishing configuration changed during verification");
+    }
+    await ctx.db.patch(site._id, {
+      publicationAdapterVerifiedAt: args.verifiedAt,
+      publicationAdapterVersion: args.adapterVersion,
+      publicationAdapterConfigHash: args.configHash,
+      updatedAt: now(),
+    });
+    return { ok: true };
+  },
+});
+
 export const patchInternal = internalMutation({
   args: { siteId: v.id("sites"), patch: v.any() },
   handler: async (ctx, { siteId, patch }) => {
@@ -192,6 +251,9 @@ export const patchInternal = internalMutation({
         ? {
             autopilotRolloutMode: "observe",
             autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+            publicationAdapterVerifiedAt: undefined,
+            publicationAdapterVersion: undefined,
+            publicationAdapterConfigHash: undefined,
           }
         : {}),
       updatedAt: now(),
@@ -256,17 +318,20 @@ export const upsert = mutation({
     if (!userId) throw new Error("Authentication required");
 
     const currentSite = args.id ? await requireSiteOwner(ctx, args.id) : null;
+    const existingSites = await ctx.db
+      .query("sites")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    const planFeatures =
+      currentSite?.planFeatures ?? existingSites[0]?.planFeatures ?? [];
+    if (args.cadencePerWeek !== undefined) {
+      assertCadenceFitsPlan(args.cadencePerWeek, planFeatures);
+    }
 
     // ── Site count limit (only on new site creation, not updates) ──
     if (!args.id && userId) {
-      const existingSites = await ctx.db
-        .query("sites")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .collect();
-
       // Check if any existing site has planFeatures to determine limits
-      const features = existingSites[0]?.planFeatures ?? [];
-      const limits = getLimitsFromFeatures(features);
+      const limits = getLimitsFromFeatures(planFeatures);
 
       // Check if domain already exists (would be an update, not new)
       const domainNorm = args.domain.trim().toLowerCase();
@@ -357,6 +422,9 @@ export const upsert = mutation({
               autopilotRolloutMode: "observe",
               autopilotRolloutEpoch:
                 (currentSite!.autopilotRolloutEpoch ?? 0) + 1,
+              publicationAdapterVerifiedAt: undefined,
+              publicationAdapterVersion: undefined,
+              publicationAdapterConfigHash: undefined,
             }
           : {}),
       });
@@ -395,6 +463,9 @@ export const upsert = mutation({
               autopilotRolloutMode: "observe",
               autopilotRolloutEpoch:
                 (existing.autopilotRolloutEpoch ?? 0) + 1,
+              publicationAdapterVerifiedAt: undefined,
+              publicationAdapterVersion: undefined,
+              publicationAdapterConfigHash: undefined,
             }
           : {}),
       });
@@ -405,7 +476,11 @@ export const upsert = mutation({
       ...data,
       userId,
       language: args.language ?? "en",
-      cadencePerWeek: args.cadencePerWeek ?? 4,
+      cadencePerWeek:
+        args.cadencePerWeek ??
+        defaultCadenceForMonthlyLimit(
+          getLimitsFromFeatures(planFeatures).maxArticles,
+        ),
       publishMethod: args.publishMethod ?? "github",
       externalLinking: args.externalLinking ?? true,
       sourceCitations: args.sourceCitations ?? true,
@@ -460,6 +535,12 @@ export const updateSite = mutation({
   },
   handler: async (ctx, { siteId, ...fields }) => {
     const site = await requireSiteOwner(ctx, siteId);
+    if (fields.cadencePerWeek !== undefined) {
+      assertCadenceFitsPlan(
+        fields.cadencePerWeek,
+        site.planFeatures ?? [],
+      );
+    }
     const patch: Record<string, unknown> = { updatedAt: now() };
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) patch[key] = value;
@@ -480,6 +561,9 @@ export const updateSite = mutation({
         ? {
             autopilotRolloutMode: "observe",
             autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+            publicationAdapterVerifiedAt: undefined,
+            publicationAdapterVersion: undefined,
+            publicationAdapterConfigHash: undefined,
           }
         : {}),
     });
@@ -568,6 +652,36 @@ export const listAllForAutopilot = internalQuery({
   },
 });
 
+export const listAutopilotPage = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) =>
+    ctx.db
+      .query("sites")
+      .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .paginate({ cursor: cursor ?? null, numItems: 25 }),
+});
+
+// Growth measurement is intentionally independent of publishing state. A
+// tenant can pause article generation while Pentra continues to measure and
+// diagnose already-published URLs.
+export const listGrowthPage = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) => {
+    const result = await ctx.db
+      .query("sites")
+      .paginate({ cursor: cursor ?? null, numItems: 25 });
+    return {
+      ...result,
+      page: result.page.map((site) => ({
+        siteId: site._id,
+        gscConnected: Boolean(
+          site.gscProperty && (site.gscRefreshToken || site.gscAccessToken),
+        ),
+      })),
+    };
+  },
+});
+
 export const countByUserBounded = internalQuery({
   args: { userId: v.string(), maximum: v.number() },
   handler: async (ctx, { userId, maximum }) => {
@@ -598,6 +712,21 @@ export const setAutopilotRollout = internalMutation({
     }
 
     if (mode === "live") {
+      const hasCrawledPage = Boolean(await ctx.db
+        .query("pages")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .first());
+      const limits = getLimitsFromFeatures(site.planFeatures ?? []);
+      const readiness = liveAutopilotReadiness(
+        site,
+        hasCrawledPage,
+        limits.maxArticles,
+      );
+      if (!readiness.ready) {
+        throw new Error(
+          `Live rollout prerequisites are incomplete: ${readiness.blockers.join(", ")}`,
+        );
+      }
       const ready = await ctx.db
         .query("article_summaries")
         .withIndex("by_site_status", (q) =>
@@ -634,6 +763,66 @@ export const setAutopilotRollout = internalMutation({
   },
 });
 
+// Re-check every live tenant against the same readiness contract used for
+// promotion. Any regression retires the old rollout epoch and cancels its
+// autonomous work before another delivery can be queued.
+export const enforceLiveReadiness = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+    if (site.autopilotRolloutMode !== "live") {
+      return { ready: false, changed: false, mode: site.autopilotRolloutMode ?? "observe", blockers: [] as string[] };
+    }
+    const hasCrawledPage = Boolean(await ctx.db
+      .query("pages")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .first());
+    const limits = getLimitsFromFeatures(site.planFeatures ?? []);
+    const live = liveAutopilotReadiness(
+      site,
+      hasCrawledPage,
+      limits.maxArticles,
+    );
+    if (live.ready) {
+      return { ready: true, changed: false, mode: "live", blockers: [] as string[] };
+    }
+    const warm = warmAutopilotReadiness(site, hasCrawledPage);
+    const mode = warm.ready ? "warm" as const : "observe" as const;
+    const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
+      ctx,
+      siteId,
+      `live readiness regressed: ${live.blockers.join(", ")}`,
+    );
+    const changedAt = now();
+    await ctx.db.patch(siteId, {
+      autopilotRolloutMode: mode,
+      autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+      autopilotRolloutStartedAt: changedAt,
+      updatedAt: changedAt,
+    });
+    const health = await ctx.db
+      .query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .first();
+    if (health) {
+      await ctx.db.patch(health._id, {
+        status: mode === "observe" ? "rollout_observe" : "recovering",
+        detail: `Live readiness regressed: ${live.blockers.join(", ")}. Delivery stopped and rollout moved to ${mode}.`,
+        heartbeatAt: changedAt,
+        updatedAt: changedAt,
+      });
+    }
+    return {
+      ready: false,
+      changed: true,
+      mode,
+      blockers: live.blockers,
+      cancelledJobs,
+    };
+  },
+});
+
 // Plan features are accepted only from the authenticated Next.js billing bridge.
 export const syncPlanFeaturesInternal = internalMutation({
   args: { userId: v.string(), planFeatures: v.array(v.string()) },
@@ -647,8 +836,59 @@ export const syncPlanFeaturesInternal = internalMutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
     for (const site of sites) {
-      await ctx.db.patch(site._id, { planFeatures: verifiedFeatures });
+      const limits = getLimitsFromFeatures(verifiedFeatures);
+      const currentCadence = site.cadencePerWeek ??
+        defaultCadenceForMonthlyLimit(limits.maxArticles);
+      const cadencePerWeek = cadenceFitsMonthlyLimit(
+        currentCadence,
+        limits.maxArticles,
+      )
+        ? currentCadence
+        : maximumSelectableCadenceForMonthlyLimit(limits.maxArticles);
+      await ctx.db.patch(site._id, {
+        planFeatures: verifiedFeatures,
+        cadencePerWeek,
+        updatedAt: now(),
+      });
     }
+  },
+});
+
+// One bounded, resumable migration repairs legacy tenants that were assigned
+// an impossible weekly cadence before plan-aware cadence options existed.
+export const reconcileUnsustainableCadences = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) => {
+    const page = await ctx.db.query("sites").paginate({
+      cursor: cursor ?? null,
+      numItems: 25,
+    });
+    let adjusted = 0;
+    for (const site of page.page) {
+      const limits = getLimitsFromFeatures(site.planFeatures ?? []);
+      const currentCadence = site.cadencePerWeek ?? 4;
+      if (cadenceFitsMonthlyLimit(currentCadence, limits.maxArticles)) continue;
+      await ctx.db.patch(site._id, {
+        cadencePerWeek: maximumSelectableCadenceForMonthlyLimit(
+          limits.maxArticles,
+        ),
+        updatedAt: now(),
+      });
+      adjusted += 1;
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.sites.reconcileUnsustainableCadences,
+        { cursor: page.continueCursor },
+      );
+    }
+    return {
+      adjusted,
+      scanned: page.page.length,
+      done: page.isDone,
+      nextCursor: page.isDone ? undefined : page.continueCursor,
+    };
   },
 });
 
@@ -775,6 +1015,9 @@ export const setGithubTokenInternal = internalMutation({
         ? {
             autopilotRolloutMode: "observe" as const,
             autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+            publicationAdapterVerifiedAt: undefined,
+            publicationAdapterVersion: undefined,
+            publicationAdapterConfigHash: undefined,
           }
         : {}),
       updatedAt: now(),
@@ -812,14 +1055,23 @@ export const setGscTokenInternal = internalMutation({
 export const disconnectGsc = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
+    assertConfigUnlocked(site);
+    const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
+      ctx,
+      siteId,
+      "Google Search Console disconnected",
+    );
     await ctx.db.patch(siteId, {
       gscAccessToken: undefined,
       gscRefreshToken: undefined,
       gscProperty: undefined,
       gscEmail: undefined,
       gscConnectedAt: undefined,
+      autopilotRolloutMode: "observe",
+      autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
       updatedAt: now(),
     });
+    return { disconnected: true, cancelledJobs };
   },
 });

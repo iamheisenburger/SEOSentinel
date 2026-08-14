@@ -34,6 +34,7 @@ import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
+import { cadenceLabel } from "../../../../convex/planLimits";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
@@ -294,14 +295,14 @@ export default function DashboardPage() {
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <MousePointerClick className="h-3 w-3 text-[#0EA5E9]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Clicks</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Clicks (28d)</span>
               </div>
               <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.totalClicks.toLocaleString()}</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <Eye className="h-3 w-3 text-[#22D3EE]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Impressions</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Impressions (28d)</span>
               </div>
               <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.totalImpressions.toLocaleString()}</p>
             </div>
@@ -416,7 +417,7 @@ export default function DashboardPage() {
             <Clock className="h-3.5 w-3.5 text-[#565A6E]" />
           </div>
           <p className="mt-2 text-2xl font-bold tracking-tight text-[#EDEEF1]">
-            {site.cadencePerWeek ?? 4}<span className="text-sm font-normal text-[#565A6E]">/wk</span>
+            {cadenceLabel(site.cadencePerWeek ?? 4)}
           </p>
           <p className="mt-2 text-[10px] text-[#565A6E]">
             {site.approvalRequired ? "Approval required" : "Auto-publish"}

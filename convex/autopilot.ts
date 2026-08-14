@@ -8,9 +8,17 @@ import {
   MIN_APPROVED_BUFFER,
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
+  cadenceIntervalMs,
   effectivePublishedAt,
   isSealedReady,
 } from "./lib/autopilotBuffer";
+import {
+  describeAutopilotBlockers,
+  liveAutopilotReadiness,
+  requiredMonthlyArticlesForCadence,
+  warmAutopilotReadiness,
+} from "./lib/autopilotReadiness";
+import { getLimitsFromFeatures } from "./planLimits";
 
 const SITE_STAGGER_MS = 5_000;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
@@ -107,9 +115,49 @@ export const dispatchActiveSites = internalMutation({
       .query("sites")
       .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
       .paginate({ cursor: args.cursor ?? null, numItems: 25 });
-    const activeSites = page.page.filter((site) =>
-      ["warm", "live"].includes(site.autopilotRolloutMode ?? "observe"),
-    );
+    const activeSites: typeof page.page = [];
+    for (const site of page.page) {
+      const currentMode = site.autopilotRolloutMode ?? "observe";
+      if (["warm", "live"].includes(currentMode)) {
+        activeSites.push(site);
+        continue;
+      }
+      const hasCrawledPage = !!(await ctx.db
+        .query("pages")
+        .withIndex("by_site", (q) => q.eq("siteId", site._id))
+        .first());
+      const readiness = warmAutopilotReadiness(site, hasCrawledPage);
+      if (!readiness.ready) {
+        const blockerDetail = describeAutopilotBlockers(readiness.blockers);
+        await setAlert(ctx, {
+          siteId: site._id,
+          kind: "autopilot_readiness_blocked",
+          message: `Autopilot setup is incomplete: ${blockerDetail}.`,
+          details: { blockers: readiness.blockers },
+        });
+        await upsertHealth(ctx, site._id, {
+          heartbeatAt: now,
+          status: "readiness_blocked",
+          detail: `Autopilot setup is incomplete: ${blockerDetail}.`,
+        });
+        continue;
+      }
+      const promotedAt = Date.now();
+      await ctx.db.patch(site._id, {
+        autopilotRolloutMode: "warm",
+        autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+        autopilotRolloutStartedAt: promotedAt,
+        updatedAt: promotedAt,
+      });
+      await resolveAlert(ctx, site._id, "autopilot_readiness_blocked");
+      activeSites.push({
+        ...site,
+        autopilotRolloutMode: "warm",
+        autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+        autopilotRolloutStartedAt: promotedAt,
+        updatedAt: promotedAt,
+      });
+    }
 
     for (const [index, site] of activeSites.entries()) {
       await resolveAlert(ctx, site._id, "rollout_conflict");
@@ -187,6 +235,77 @@ export const dispatchSiteFollowup = internalMutation({
       trigger,
     });
     return { scheduled: true, runId };
+  },
+});
+
+export const promoteWarmSiteIfReady = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+    if (site.autopilotRolloutMode !== "warm") {
+      return { promoted: false, blockers: ["site_not_warm"] };
+    }
+    const hasCrawledPage = !!(await ctx.db
+      .query("pages")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .first());
+    const limits = getLimitsFromFeatures(site.planFeatures ?? []);
+    const readiness = liveAutopilotReadiness(
+      site,
+      hasCrawledPage,
+      limits.maxArticles,
+    );
+    const ready = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "ready"),
+      )
+      .take(10);
+    const sealedCount = ready.filter(isSealedReady).length;
+    const blockers = [...readiness.blockers];
+    if (sealedCount < MIN_APPROVED_BUFFER) blockers.push("sealed_buffer_incomplete");
+    if (blockers.length > 0) {
+      const blockerDetail = describeAutopilotBlockers(blockers);
+      await setAlert(ctx, {
+        siteId,
+        kind: "autopilot_readiness_blocked",
+        message: `Autonomous publication is blocked: ${blockerDetail}.`,
+        details: { blockers, sealedCount },
+      });
+      return { promoted: false, blockers, sealedCount };
+    }
+
+    const promotedAt = Date.now();
+    const rolloutEpoch = (site.autopilotRolloutEpoch ?? 0) + 1;
+    await ctx.db.patch(siteId, {
+      autopilotRolloutMode: "live",
+      autopilotRolloutEpoch: rolloutEpoch,
+      autopilotRolloutStartedAt: promotedAt,
+      updatedAt: promotedAt,
+    });
+    await resolveAlert(ctx, siteId, "autopilot_readiness_blocked");
+    await resolveAlert(ctx, siteId, "rollout_buffer_ready");
+    const runId = await ctx.db.insert("autopilot_runs", {
+      siteId,
+      trigger: "automatic_live_promotion",
+      scheduledAt: promotedAt,
+      heartbeatAt: promotedAt,
+      status: "scheduled",
+      detail: "Readiness and strict-quality buffer verified; live delivery enabled.",
+    });
+    await upsertHealth(ctx, siteId, {
+      lastRunId: runId,
+      heartbeatAt: promotedAt,
+      status: "recovering",
+      detail: "Autopilot promoted to live; scheduling the first due delivery.",
+    });
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.autopilotTick, {
+      siteId,
+      runId,
+      trigger: "automatic_live_promotion",
+    });
+    return { promoted: true, blockers: [], sealedCount, rolloutEpoch };
   },
 });
 
@@ -306,19 +425,25 @@ export const markRunFinished = internalMutation({
         ? "recovering"
         : "healthy";
     let completionDetail = args.detail ?? args.outcome;
-    let approvedBufferCount: number | undefined;
+    const currentReady = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", run.siteId).eq("status", "ready"),
+      )
+      .take(10);
+    const approvedBufferCount = currentReady.filter(isSealedReady).length;
     let lastPublishedAt: number | undefined;
     let nextPublicationDueAt: number | undefined;
+    if (args.outcome === "rollout_buffer_ready") {
+      completionStatus = "readiness_blocked";
+      completionDetail =
+        args.detail ??
+        "The quality buffer is ready, but live publication prerequisites are incomplete.";
+    }
     if (args.outcome === "publication_succeeded" && args.articleId) {
-      const [article, site, ready] = await Promise.all([
+      const [article, site] = await Promise.all([
         ctx.db.get(args.articleId),
         ctx.db.get(run.siteId),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", run.siteId).eq("status", "ready"),
-          )
-          .take(10),
       ]);
       if (article?.siteId === run.siteId && site) {
         lastPublishedAt = effectivePublishedAt({
@@ -327,11 +452,9 @@ export const markRunFinished = internalMutation({
           publicationAuditVersion: article.publicationAuditVersion,
           auditedContentHash: article.auditedContentHash,
         });
-        const cadence = Math.max(1, site.cadencePerWeek ?? 4);
-        const cadenceMs =
-          Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+        const cadence = site.cadencePerWeek ?? 4;
+        const cadenceMs = cadenceIntervalMs(cadence);
         nextPublicationDueAt = lastPublishedAt + cadenceMs;
-        approvedBufferCount = ready.filter(isSealedReady).length;
         completionStatus =
           approvedBufferCount === 0
             ? "buffer_empty"
@@ -347,19 +470,10 @@ export const markRunFinished = internalMutation({
       }
     }
     if (args.outcome === "quality_budget_exhausted") {
-      const [currentHealth, ready] = await Promise.all([
-        ctx.db
-          .query("autopilot_health")
-          .withIndex("by_site", (q) => q.eq("siteId", run.siteId))
-          .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", run.siteId).eq("status", "ready"),
-          )
-          .take(10),
-      ]);
-      approvedBufferCount = ready.filter(isSealedReady).length;
+      const currentHealth = await ctx.db
+        .query("autopilot_health")
+        .withIndex("by_site", (q) => q.eq("siteId", run.siteId))
+        .first();
       completionStatus = autopilotHealthStatus({
         schedulerStale:
           run.trigger === "natural"
@@ -382,7 +496,7 @@ export const markRunFinished = internalMutation({
       heartbeatAt: now,
       status: completionStatus,
       detail: completionDetail,
-      ...(approvedBufferCount === undefined ? {} : { approvedBufferCount }),
+      approvedBufferCount,
       ...(lastPublishedAt === undefined
         ? {}
         : { lastPublishedAt, nextPublicationDueAt }),
@@ -596,8 +710,8 @@ export const auditSla = internalMutation({
       const approvedBufferCount = readySummaries.filter(isSealedReady).length;
       const autonomousDelivery =
         !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
-      const cadence = Math.max(1, site.cadencePerWeek ?? 4);
-      const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+      const cadence = site.cadencePerWeek ?? 4;
+      const cadenceMs = cadenceIntervalMs(cadence);
       const lastPublishedAt = latestPublished
         ? effectivePublishedAt({
             createdAt: latestPublished.articleCreatedAt,
@@ -781,8 +895,8 @@ export const refreshSiteCadenceHealth = internalMutation({
           auditedContentHash: latestPublished.auditedContentHash,
         })
       : undefined;
-    const cadence = Math.max(1, site.cadencePerWeek ?? 4);
-    const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+    const cadence = site.cadencePerWeek ?? 4;
+    const cadenceMs = cadenceIntervalMs(cadence);
     const nextPublicationDueAt =
       (lastPublishedAt ?? site.createdAt) + cadenceMs;
     const approvedBufferCount = ready.filter(isSealedReady).length;
@@ -971,6 +1085,72 @@ export const getOperatorSnapshot = internalQuery({
       review: review.map(articleView),
       activeJobs: [...pending, ...running].map(jobView),
     };
+  },
+});
+
+export const getFleetReadiness = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const sites = await ctx.db
+      .query("sites")
+      .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .take(50);
+    const rows = [];
+    for (const site of sites) {
+      const [page, health, ready] = await Promise.all([
+        ctx.db
+          .query("pages")
+          .withIndex("by_site", (q) => q.eq("siteId", site._id))
+          .first(),
+        ctx.db
+          .query("autopilot_health")
+          .withIndex("by_site", (q) => q.eq("siteId", site._id))
+          .first(),
+        ctx.db
+          .query("article_summaries")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", site._id).eq("status", "ready"),
+          )
+          .take(10),
+      ]);
+      const hasCrawledPage = Boolean(page);
+      const warm = warmAutopilotReadiness(site, hasCrawledPage);
+      const limits = getLimitsFromFeatures(site.planFeatures ?? []);
+      const requiredMonthlyArticles = requiredMonthlyArticlesForCadence(
+        site.cadencePerWeek ?? 4,
+      );
+      const live = liveAutopilotReadiness(
+        site,
+        hasCrawledPage,
+        limits.maxArticles,
+      );
+      rows.push({
+        siteId: site._id,
+        domain: site.domain,
+        cadencePerWeek: site.cadencePerWeek ?? 4,
+        maxArticlesPerMonth: limits.maxArticles,
+        requiredMonthlyArticles,
+        rolloutMode: site.autopilotRolloutMode ?? "observe",
+        publishMethod: site.publishMethod ?? "github",
+        hasCrawledPage,
+        gscConnected: Boolean(site.gscAccessToken && site.gscProperty),
+        warmReady: warm.ready,
+        warmBlockers: warm.blockers,
+        liveReady: live.ready,
+        liveBlockers: live.blockers,
+        sealedBufferCount: ready.filter(isSealedReady).length,
+        health: health
+          ? {
+              status: health.status,
+              detail: health.detail,
+              heartbeatAt: health.heartbeatAt,
+              lastPublishedAt: health.lastPublishedAt,
+              nextPublicationDueAt: health.nextPublicationDueAt,
+            }
+          : undefined,
+      });
+    }
+    return rows;
   },
 });
 

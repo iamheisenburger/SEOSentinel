@@ -59,18 +59,7 @@ export default function RootLayout({
       >
         <ClerkProvider
           appearance={{
-            baseTheme: dark,
-            variables: {
-              colorPrimary: "#0EA5E9",
-              colorBackground: "#111318",
-              colorInputBackground: "#1E2130",
-              colorInputText: "#F1F5F9",
-              colorText: "#F1F5F9",
-              colorTextOnPrimaryBackground: "#FFFFFF",
-              colorTextSecondary: "#CBD5E1",
-              colorNeutral: "#E2E8F0",
-              borderRadius: "0.5rem",
-            },
+            theme: dark,
             elements: {
               card: {
                 backgroundColor: "#111318",

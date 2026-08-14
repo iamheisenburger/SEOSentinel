@@ -23,9 +23,24 @@ crons.interval("autopilot-sla-watchdog", { hours: 1 }, internal.autopilot.auditS
 // migration once and verify its completion marker before enabling a canary.
 crons.daily("autopilot-lifecycle-prune", { hourUTC: 1, minuteUTC: 30 }, internal.autopilot.pruneLifecycle);
 
-// Non-canary fleet scans remain disabled while the shared account is over its
-// database-I/O allowance. GSC sync is owner-triggered only; decay, refresh,
-// and relinking require a separately reviewed bounded rollout before any cron
-// may be restored.
+// Search outcomes are a tenant capability, not a LeadPilot-only canary. The
+// action paginates enabled sites and isolates per-site failures so one expired
+// credential cannot suppress every other customer's measurement loop.
+crons.daily(
+  "all-sites-gsc-sync",
+  { hourUTC: 12, minuteUTC: 30 },
+  internal.actions.gscSync.syncAllSites,
+  {},
+);
+
+// Classification starts after the daily GSC sync window. It is deliberately
+// independent of publishing: paused tenants still get measured, while one
+// broken tenant is isolated in its own scheduled action.
+crons.daily(
+  "all-sites-seo-growth",
+  { hourUTC: 13, minuteUTC: 30 },
+  internal.actions.seoGrowth.scanAllSites,
+  {},
+);
 
 export default crons;

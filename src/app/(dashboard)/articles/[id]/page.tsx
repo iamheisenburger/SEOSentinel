@@ -28,9 +28,6 @@ import {
   TrendingDown,
   RefreshCw,
   BarChart3,
-  MousePointerClick,
-  Search,
-  TrendingUp,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -320,12 +317,10 @@ export default function ArticleDetailPage() {
     api.sites.get,
     article?.siteId ? { siteId: article.siteId } : "skip",
   );
-  // Per-article GSC performance
-  const articleSlug = article?.slug ?? "";
-  const articlePageUrl = site?.domain && articleSlug ? `${site.domain}/${articleSlug}` : "";
-  const articleGSC = useQuery(
-    api.searchPerformance.getByPage,
-    site?._id && articlePageUrl ? { siteId: site._id, pageUrl: articlePageUrl } : "skip",
+  // Fixed-window SEO outcome measurement for published articles.
+  const articleSeoScorecard = useQuery(
+    api.searchPerformance.getArticleSeoScorecard,
+    article?.status === "published" ? { articleId } : "skip",
   );
   const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
@@ -678,54 +673,103 @@ export default function ArticleDetailPage() {
         )}
       </div>
 
-      {/* Per-Article GSC Performance */}
-      {articleGSC && articleGSC.length > 0 && (() => {
-        const totalClicks = articleGSC.reduce((s, r) => s + r.clicks, 0);
-        const totalImpressions = articleGSC.reduce((s, r) => s + r.impressions, 0);
-        const avgPos = articleGSC.length > 0
-          ? Math.round((articleGSC.reduce((s, r) => s + r.position, 0) / articleGSC.length) * 10) / 10
-          : 0;
-        const avgCtr = totalImpressions > 0 ? Math.round((totalClicks / totalImpressions) * 1000) / 10 : 0;
-        const topKeywords = [...articleGSC].sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions).slice(0, 5);
+      {/* Fixed-window SEO Outcome Scorecard */}
+      {article?.status === "published" && articleSeoScorecard && (() => {
+        const measuredWindow = [...articleSeoScorecard.windows]
+          .reverse()
+          .find((window) => window.impressions > 0);
+        const topKeywords = measuredWindow?.topQueries.slice(0, 5) ?? [];
         return (
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
-              <h3 className="text-[13px] font-semibold text-[#EDEEF1]">Search Performance</h3>
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
+                <h3 className="text-[13px] font-semibold text-[#EDEEF1]">SEO Outcome Scorecard</h3>
+              </div>
+              <p className="text-[10px] text-[#565A6E]">
+                GSC data through {articleSeoScorecard.dataThrough ?? "not yet available"}
+              </p>
             </div>
-            <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-4">
-              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <MousePointerClick className="h-3 w-3 text-[#0EA5E9]" />
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Clicks</span>
-                </div>
-                <p className="text-lg font-bold text-[#EDEEF1]">{totalClicks}</p>
+            <p className="text-[11px] text-[#565A6E] mb-4">
+              Each article is measured at equal 7, 14, 28, and 56-day exposure windows. Non-brand visibility is separated from searches for LeadPilot itself.
+            </p>
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+                <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Google index</p>
+                <p className={`mt-1 text-sm font-semibold ${
+                  articleSeoScorecard.indexInspection.verdict === "PASS"
+                    ? "text-[#4ADE80]"
+                    : articleSeoScorecard.indexInspection.verdict
+                      ? "text-[#FBBF24]"
+                      : "text-[#8B8FA3]"
+                }`}>
+                  {articleSeoScorecard.indexInspection.verdict ?? "Awaiting inspection"}
+                </p>
               </div>
-              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <Eye className="h-3 w-3 text-[#22D3EE]" />
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Impressions</span>
-                </div>
-                <p className="text-lg font-bold text-[#EDEEF1]">{totalImpressions.toLocaleString()}</p>
+              <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+                <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Coverage</p>
+                <p className="mt-1 text-sm font-semibold text-[#EDEEF1]">
+                  {articleSeoScorecard.indexInspection.coverageState ?? "Not reported"}
+                </p>
               </div>
-              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <TrendingUp className="h-3 w-3 text-[#22C55E]" />
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">CTR</span>
-                </div>
-                <p className="text-lg font-bold text-[#EDEEF1]">{avgCtr}%</p>
+              <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+                <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Page fetch</p>
+                <p className="mt-1 text-sm font-semibold text-[#EDEEF1]">
+                  {articleSeoScorecard.indexInspection.pageFetchState ?? "Not reported"}
+                </p>
               </div>
-              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <Search className="h-3 w-3 text-[#F59E0B]" />
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Avg Position</span>
+            </div>
+            {articleSeoScorecard.indexInspection.error && (
+              <p className="mb-4 rounded-lg border border-[#EF4444]/15 bg-[#EF4444]/5 px-3 py-2 text-[10px] text-[#F87171]">
+                Index inspection failed: {articleSeoScorecard.indexInspection.error}
+              </p>
+            )}
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 mb-4">
+              {articleSeoScorecard.windows.map((window) => (
+                <div key={window.days} className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-[11px] font-semibold text-[#EDEEF1]">Day {window.days}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-medium ${
+                      window.status === "measured"
+                        ? "bg-[#22C55E]/10 text-[#4ADE80]"
+                        : window.status === "no_search_visibility"
+                          ? "bg-[#EF4444]/10 text-[#F87171]"
+                          : "bg-[#F59E0B]/10 text-[#FBBF24]"
+                    }`}>
+                      {window.status === "measured"
+                        ? "Measured"
+                        : window.status === "no_search_visibility"
+                          ? "No visibility"
+                          : window.status === "collecting"
+                            ? "Collecting"
+                            : "Awaiting data"}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-[#565A6E] mb-2">Due {window.expectedEndDate}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Non-brand imp.</p>
+                      <p className="text-base font-bold text-[#EDEEF1]">{window.nonBrandedImpressions.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Queries</p>
+                      <p className="text-base font-bold text-[#EDEEF1]">{window.queryCount}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Clicks</p>
+                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.clicks}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Avg position</p>
+                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.position ?? "—"}</p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-lg font-bold text-[#EDEEF1]">{avgPos}</p>
-              </div>
+              ))}
             </div>
             {topKeywords.length > 0 && (
               <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Top Keywords for this Article</p>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Top measured queries</p>
                 <div className="flex flex-col gap-1">
                   {topKeywords.map((q, i) => (
                     <div key={i} className="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-1.5">
@@ -741,6 +785,11 @@ export default function ArticleDetailPage() {
                   ))}
                 </div>
               </div>
+            )}
+            {topKeywords.length === 0 && (
+              <p className="rounded-lg bg-white/[0.02] px-3 py-2 text-[11px] text-[#565A6E]">
+                No article-level Search Console impressions have been recorded yet. This is expected before the first checkpoint and will become a failure signal only when a completed window still has no visibility.
+              </p>
             )}
           </div>
         );

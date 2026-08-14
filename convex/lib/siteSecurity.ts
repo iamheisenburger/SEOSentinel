@@ -8,6 +8,7 @@ const SECRET_FIELD_NAMES = [
   "gscRefreshToken",
   "mediumToken",
   "linkedinAccessToken",
+  "publicationAdapterConfigHash",
 ] as const;
 
 type SecretField = (typeof SECRET_FIELD_NAMES)[number];
@@ -22,6 +23,7 @@ type SiteConnectionFlags = {
   gscConnected: boolean;
   mediumConnected: boolean;
   linkedinConnected: boolean;
+  publicationAdapterVerified: boolean;
 };
 
 export function sanitizeSiteForClient<T extends SiteRecord>(
@@ -45,5 +47,8 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
     gscConnected: Boolean(site.gscAccessToken && site.gscProperty),
     mediumConnected: Boolean(site.mediumToken),
     linkedinConnected: Boolean(site.linkedinAccessToken),
+    publicationAdapterVerified: Boolean(
+      site.publicationAdapterVerifiedAt && site.publicationAdapterVersion,
+    ),
   };
 }

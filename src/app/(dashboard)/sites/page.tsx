@@ -21,6 +21,7 @@ import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { cadenceLabel } from "../../../../convex/planLimits";
 
 export default function WebsitesPage() {
   const { userId: _clerkId } = useAuth();
@@ -228,7 +229,7 @@ function SiteCard({
         <div className="mt-3 flex items-center gap-3 text-[10px] text-[#565A6E]">
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            {site.cadencePerWeek ?? 4} articles/week
+            {cadenceLabel(site.cadencePerWeek ?? 4)}
           </span>
           <span>·</span>
           <span>

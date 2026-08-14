@@ -42,6 +42,16 @@ export type PublicationQualityResult = {
     quantifiedClaimCount: number;
     youtubeEmbedCount: number;
     malformedTableCount: number;
+    /** Topical-authority signals: a page with no internal links joins no cluster. */
+    internalLinkCount: number;
+    /** Answer-shaped headings that make a page eligible for FAQ structured data. */
+    questionHeadingCount: number;
+    /**
+     * Counts what makes the page irreplaceable rather than merely accurate:
+     * first-party evidence, original measurement, and named lived experience.
+     * Factual safety alone produces interchangeable content that cannot rank.
+     */
+    differentiationSignalCount: number;
   };
 };
 
@@ -51,6 +61,60 @@ export type ClaimEvidenceEntry = {
   supported: boolean;
   reason: string;
 };
+
+/**
+ * Topic clusters, not isolated pages, are what carry topical authority. A page
+ * that links to none of its tenant's other pages is an orphan and competes on
+ * its own thin authority. Counts site-relative Markdown links only, so an
+ * outbound citation is never mistaken for a cluster edge.
+ */
+export function countInternalLinks(markdown: string): number {
+  let count = 0;
+  for (const match of markdown.matchAll(/\[[^\]]+\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    const href = match[1].trim();
+    if (href.startsWith("/") && !href.startsWith("//")) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Question-shaped headings are what makes a page eligible for FAQ structured
+ * data, which in turn is a strong driver of AI Overview citation now that most
+ * searches end without a click.
+ */
+export function countQuestionHeadings(markdown: string): number {
+  let count = 0;
+  for (const match of markdown.matchAll(/^#{2,4}\s+(.+)$/gm)) {
+    const heading = match[1].trim();
+    if (heading.endsWith("?")) count += 1;
+  }
+  return count;
+}
+
+/** Original measurement stated by the author rather than attributed elsewhere. */
+const ORIGINAL_MEASUREMENT_PATTERN =
+  /\b(?:we|our)\b[^.!?\n]{0,80}\b(?:analy[sz]ed|measured|tested|tracked|reviewed|audited|surveyed|benchmarked|observed|sampled|compared)\b/i;
+
+/** Named lived experience: the thing an aggregator cannot reproduce. */
+const LIVED_EXPERIENCE_PATTERN =
+  /\b(?:in our (?:own )?(?:testing|deployment|experience|data|logs)|we (?:found|learned|shipped|built|ran|migrated)|when we|after we)\b/i;
+
+/**
+ * Score how irreplaceable a page is. Pentra's gates already prove a page is not
+ * lying; nothing previously asked whether it said anything only this tenant
+ * could say. Generic-but-accurate pages are exactly the cohort that loses
+ * organic traffic, so this is measured for every tenant.
+ */
+export function countDifferentiationSignals(
+  markdown: string,
+  article: Pick<PublicationArticle, "productEvidenceStatus">,
+): number {
+  let signals = 0;
+  if (article.productEvidenceStatus === "passed") signals += 1;
+  if (ORIGINAL_MEASUREMENT_PATTERN.test(markdown)) signals += 1;
+  if (LIVED_EXPERIENCE_PATTERN.test(markdown)) signals += 1;
+  return signals;
+}
 
 const FACTUAL_CLAIM_PATTERN =
   /\b(?:according to|research|stud(?:y|ies)|survey|dataset|evidence|findings?|average|majority)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
@@ -825,9 +889,14 @@ export function evaluatePublicationQuality(
 
   if (!article.title.trim()) issues.push("Article title is missing.");
   if (!markdown) issues.push("Article body is missing.");
-  if (measuredWordCount < (mode === "strict" ? 900 : 500)) {
+  // Thin pages lose to comprehensive ones on the same query. Raised from 900 as
+  // a measured step: the format ceiling in articleWordCeiling() still bounds the
+  // top end, so short formats stay publishable while genuine guides must be
+  // substantive.
+  const minimumWordCount = mode === "strict" ? 1200 : 500;
+  if (measuredWordCount < minimumWordCount) {
     issues.push(
-      `Article is too thin (${measuredWordCount} words; minimum ${mode === "strict" ? 900 : 500}).`,
+      `Article is too thin (${measuredWordCount} words; minimum ${minimumWordCount}).`,
     );
   }
   if (article.wordCount && Math.abs(article.wordCount - measuredWordCount) > 150) {
@@ -971,7 +1040,40 @@ export function evaluatePublicationQuality(
     issues.push(`Article contains ${youtubeEmbeds.length} YouTube embeds; maximum is one relevant video.`);
   }
 
+  // --- Ranking signals every tenant needs, not just factual safety ---------
+  const internalLinkCount = countInternalLinks(markdown);
+  const questionHeadingCount = countQuestionHeadings(markdown);
+  const differentiationSignalCount = countDifferentiationSignals(markdown, article);
+
+  if (internalLinkCount === 0) {
+    warnings.push(
+      "Article has no internal links, so it joins no topic cluster and carries only its own thin authority.",
+    );
+  } else if (internalLinkCount < 3) {
+    warnings.push(
+      `Article has only ${internalLinkCount} internal link(s); topic clusters need denser interlinking to build topical authority.`,
+    );
+  }
+  if (questionHeadingCount === 0) {
+    warnings.push(
+      "Article has no question-shaped headings, so it is not eligible for FAQ structured data or the AI-answer citations that follow from it.",
+    );
+  }
+  if (differentiationSignalCount === 0) {
+    warnings.push(
+      "Article contains no first-party evidence, original measurement, or lived experience; accurate but interchangeable pages do not earn organic traffic.",
+    );
+  }
+
   if (mode === "strict") {
+    // A strictly published page must at minimum belong to a cluster. This is
+    // deliberately a low floor (not the recommended 3) so that tightening the
+    // gate cannot suddenly halt an existing tenant's eligible queue.
+    if (internalLinkCount < 1) {
+      issues.push(
+        "Strict publication requires at least one internal link so the page joins a topic cluster.",
+      );
+    }
     if (article.featuredImage && !safeHttpsUrl(article.featuredImage)) {
       issues.push("Featured image must use a valid HTTPS URL.");
     } else if (!article.featuredImage) {
@@ -1045,6 +1147,9 @@ export function evaluatePublicationQuality(
       quantifiedClaimCount: paragraphsWithClaims.length,
       youtubeEmbedCount: youtubeEmbeds.length,
       malformedTableCount: tableProblems.length,
+      internalLinkCount,
+      questionHeadingCount,
+      differentiationSignalCount,
     },
   };
 }

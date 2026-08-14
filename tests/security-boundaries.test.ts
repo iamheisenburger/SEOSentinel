@@ -15,11 +15,16 @@ test("privileged job lifecycle and cron fleet entrypoints are internal", () => {
   assert.match(jobs, /job\.status !== "pending"/);
   assert.match(jobs, /export const markDone = internalMutation/);
   assert.match(jobs, /export const markFailed = internalMutation/);
+  const articles = readFileSync("convex/articles.ts", "utf8");
+  assert.match(articles, /export const quarantineTargetMismatch = internalMutation/);
+  assert.match(articles, /publicationAuditVersion: undefined/);
+  assert.match(articles, /auditedContentHash: undefined/);
   assert.doesNotMatch(
     crons,
-    /internal\.actions\.(?:pipeline\.relinkAllArticles|contentDecay\.(?:scanAllSites|autoRefreshAllSites)|gscSync\.syncAllSites)/,
+    /internal\.actions\.(?:pipeline\.relinkAllArticles|contentDecay\.(?:scanAllSites|autoRefreshAllSites))/,
   );
-  assert.doesNotMatch(crons, /["'](?:gsc-sync|decay-scan|auto-refresh|relink-articles)["']/);
+  assert.doesNotMatch(crons, /["'](?:decay-scan|auto-refresh|relink-articles)["']/);
+  assert.match(crons, /internal\.actions\.gscSync\.syncAllSites/);
 });
 
 test("tenant article and topic reads require owner checks while blog reads remain public", () => {

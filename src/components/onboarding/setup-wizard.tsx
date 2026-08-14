@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,13 @@ import {
   Share2,
 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import {
+  cadenceFitsMonthlyLimit,
+  cadenceLabel,
+  cadenceOptionsForMonthlyLimit,
+  defaultCadenceForMonthlyLimit,
+} from "../../../convex/planLimits";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 type Step = "domain" | "profile" | "audience" | "strategy" | "integrations" | "preview" | "generate" | "done";
 
@@ -239,6 +246,7 @@ function SectionHeader({
 // ── Main Wizard ─────────────────────────────────────────
 
 export function SetupWizard() {
+  const { maxArticles } = usePlanLimits();
   const [step, setStep] = useState<Step>("domain");
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -281,6 +289,7 @@ export function SetupWizard() {
   const [ctaUrl, setCtaUrl] = useState("");
   const [anchorKeywords, setAnchorKeywords] = useState<string[]>([]);
   const [cadencePerWeek, setCadencePerWeek] = useState(4);
+  const lastAutomaticCadence = useRef(4);
   const [externalLinking, setExternalLinking] = useState(true);
   const [sourceCitations, setSourceCitations] = useState(true);
   const [youtubeEmbeds, setYoutubeEmbeds] = useState(false);
@@ -307,6 +316,22 @@ export function SetupWizard() {
   const upsert = useMutation(api.sites.upsert);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
+  const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
+  const cadenceOptions = cadenceOptionsForMonthlyLimit(maxArticles);
+
+  useEffect(() => {
+    const nextDefault = defaultCadenceForMonthlyLimit(maxArticles);
+    setCadencePerWeek((current) => {
+      if (
+        current === lastAutomaticCadence.current ||
+        !cadenceFitsMonthlyLimit(current, maxArticles)
+      ) {
+        return nextDefault;
+      }
+      return current;
+    });
+    lastAutomaticCadence.current = nextDefault;
+  }, [maxArticles]);
 
   // After OAuth popup closes, server has saved token directly to Convex.
   // We just need to detect when the popup closes to update local UI state.
@@ -380,13 +405,19 @@ export function SetupWizard() {
         domain: domain.trim(),
         ...(clerkUserId ? { clerkUserId } : {}),
         publishMethod,
-        cadencePerWeek: 4,
         approvalRequired: true,
         autopilotEnabled: true,
         inferToneNiche: true,
         language: "en",
       });
       setSiteId(id);
+
+      const planSync = await fetch("/api/billing/sync-plan", {
+        method: "POST",
+      });
+      if (!planSync.ok) {
+        throw new Error("The site was created, but its plan limits could not be verified. Please retry setup.");
+      }
 
       // Crawl + AI analysis in one shot
       setStatusMsg("Crawling your website and running AI analysis — this takes 30-60 seconds...");
@@ -507,6 +538,11 @@ export function SetupWizard() {
         linkedinAccessToken: linkedinToken.trim() || undefined,
         syndicationEnabled: syndicationEnabled || undefined,
       });
+      if (publishMethod === "wordpress" || publishMethod === "webhook") {
+        setStatusMsg("Verifying the publishing destination...");
+        await verifyPublicationDestination({ siteId });
+        setStatusMsg(null);
+      }
       setStep("preview");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save integrations");
@@ -1004,17 +1040,17 @@ export function SetupWizard() {
                   Articles per week
                 </label>
                 <div className="flex items-center gap-3">
-                  {[1, 2, 4, 7, 14, 21].map((n) => (
+                  {cadenceOptions.map((option) => (
                     <button
-                      key={n}
-                      onClick={() => setCadencePerWeek(n)}
+                      key={option.label}
+                      onClick={() => setCadencePerWeek(option.value)}
                       className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all ${
-                        cadencePerWeek === n
+                        cadencePerWeek === option.value
                           ? "bg-[#0EA5E9] text-white shadow-[0_0_12px_rgba(14,165,233,0.2)]"
                           : "bg-white/[0.04] text-[#8B8FA3] hover:bg-white/[0.06]"
                       }`}
                     >
-                      {n}/wk
+                      {option.label}
                     </button>
                   ))}
                 </div>
@@ -1228,7 +1264,7 @@ export function SetupWizard() {
                     onChange={(e) => setWebhookUrl(e.target.value)}
                   />
                   <Input
-                    label="Secret (optional)"
+                    label="Signing secret (required, 32+ characters)"
                     type="password"
                     placeholder="your-webhook-secret"
                     value={webhookSecret}
@@ -1637,7 +1673,7 @@ export function SetupWizard() {
                     {topics.length} topics planned
                   </p>
                   <p className="text-[11px] text-[#565A6E]">
-                    {cadencePerWeek} articles/week
+                    {cadenceLabel(cadencePerWeek)}
                   </p>
                 </div>
               </div>
@@ -1689,10 +1725,10 @@ export function SetupWizard() {
                 <Zap className="h-3.5 w-3.5 text-[#4ADE80] mt-0.5 shrink-0" />
                 <div>
                   <p className="text-[12px] font-medium text-[#4ADE80]">
-                    Autopilot is ready
+                    Setup saved for readiness verification
                   </p>
                   <p className="text-[11px] text-[#565A6E] mt-0.5">
-                    Hit &ldquo;Generate Now&rdquo; from the dashboard to write your first article, or let autopilot pick it up on its next run.
+                    Pentra will verify the destination, Search Console, plan capacity, strict-quality buffer, and topic coverage before unattended publishing begins.
                   </p>
                 </div>
               </div>
@@ -1723,7 +1759,7 @@ export function SetupWizard() {
               {topics && topics.length > 0
                 ? `${topics.length} topics planned`
                 : "Topics planned"}{" "}
-              &middot; Autopilot will generate {cadencePerWeek} articles per week.
+              &middot; Autopilot cadence: {cadenceLabel(cadencePerWeek)}.
               Hit &ldquo;Generate Now&rdquo; from the dashboard to start your first one.
             </p>
 
@@ -1740,7 +1776,7 @@ export function SetupWizard() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#8B8FA3]">Cadence</span>
-                  <span className="text-[#EDEEF1]">{cadencePerWeek} articles/week</span>
+                  <span className="text-[#EDEEF1]">{cadenceLabel(cadencePerWeek)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#8B8FA3]">Mode</span>

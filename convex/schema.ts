@@ -10,9 +10,8 @@ export default defineSchema({
     language: v.optional(v.string()),
     cadencePerWeek: v.optional(v.number()),
     autopilotEnabled: v.optional(v.boolean()),
-    // Internal release control. Undefined is fail-closed (observe only).
-    // Only a single site may be warm/live at a time while the shared account
-    // is under constrained rollout.
+    // Per-tenant lifecycle. Undefined is fail-closed (observe only); ready
+    // tenants advance observe -> warm -> live without a shared fleet canary.
     autopilotRolloutMode: v.optional(v.string()), // observe | warm | live
     autopilotRolloutEpoch: v.optional(v.number()),
     autopilotRolloutStartedAt: v.optional(v.number()),
@@ -32,6 +31,9 @@ export default defineSchema({
     wpAppPassword: v.optional(v.string()),
     webhookUrl: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
+    publicationAdapterVerifiedAt: v.optional(v.number()),
+    publicationAdapterVersion: v.optional(v.string()),
+    publicationAdapterConfigHash: v.optional(v.string()),
 
     // ── AI-analyzed site profile (populated after crawl) ──
     siteName: v.optional(v.string()),
@@ -118,6 +120,7 @@ export default defineSchema({
     serpIntent: v.optional(v.string()), // SERP-analyzed intent
     recommendedArticleType: v.optional(v.string()), // SERP-based recommendation
     paaQuestions: v.optional(v.array(v.string())), // People Also Ask questions
+    serpTopUrls: v.optional(v.array(v.string())), // normalized by the overlap gate
     volumeTrend: v.optional(v.array(v.number())), // last 12 months search volume
 
     createdAt: v.number(),
@@ -197,6 +200,7 @@ export default defineSchema({
         contentDir: v.optional(v.string()),
         wpUrl: v.optional(v.string()),
         webhookUrl: v.optional(v.string()),
+        rendererVersion: v.optional(v.string()),
         brandPrimaryColor: v.optional(v.string()),
         brandAccentColor: v.optional(v.string()),
         brandFontFamily: v.optional(v.string()),
@@ -206,7 +210,25 @@ export default defineSchema({
     auditedAt: v.optional(v.number()),
     publishedContentHash: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
+    publicationReceipt: v.optional(
+      v.object({
+        method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+        deliveryKey: v.string(),
+        contentHash: v.string(),
+        externalId: v.string(),
+        url: v.string(),
+        status: v.string(),
+        receivedAt: v.number(),
+      }),
+    ),
     publicationDate: v.optional(v.number()),
+    gscIndexVerdict: v.optional(v.string()),
+    gscCoverageState: v.optional(v.string()),
+    gscPageFetchState: v.optional(v.string()),
+    gscRobotsTxtState: v.optional(v.string()),
+    gscLastCrawlTime: v.optional(v.string()),
+    gscInspectedAt: v.optional(v.number()),
+    gscInspectionError: v.optional(v.string()),
     publicationDeliveryHash: v.optional(v.string()),
     publicationLeaseHash: v.optional(v.string()),
     publicationLeaseOwner: v.optional(v.string()),
@@ -289,6 +311,13 @@ export default defineSchema({
     auditedAt: v.optional(v.number()),
     publishedContentHash: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
+    gscIndexVerdict: v.optional(v.string()),
+    gscCoverageState: v.optional(v.string()),
+    gscPageFetchState: v.optional(v.string()),
+    gscRobotsTxtState: v.optional(v.string()),
+    gscLastCrawlTime: v.optional(v.string()),
+    gscInspectedAt: v.optional(v.number()),
+    gscInspectionError: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
     entityCoverage: v.optional(v.number()),
     topicCompleteness: v.optional(v.number()),
@@ -399,6 +428,118 @@ export default defineSchema({
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_kind_status", ["siteId", "kind", "status"]),
 
+  // Search growth is a separate lifecycle from content generation. Each page
+  // has at most one current measured action, with old actions retained as an
+  // auditable history instead of being overwritten by the next cron run.
+  seo_growth_actions: defineTable({
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+    fingerprint: v.string(),
+    stage: v.string(),
+    actionKind: v.string(),
+    status: v.string(), // monitoring | open | resolved | dismissed
+    priority: v.number(),
+    reason: v.string(),
+    indexState: v.string(),
+    evidence: v.object({
+      dataThrough: v.optional(v.string()),
+      windowDays: v.optional(v.number()),
+      clicks: v.number(),
+      impressions: v.number(),
+      ctr: v.number(),
+      position: v.union(v.number(), v.null()),
+      nonBrandedClicks: v.number(),
+      nonBrandedImpressions: v.number(),
+      nonBrandedCtr: v.number(),
+      nonBrandedPosition: v.union(v.number(), v.null()),
+      indexVerdict: v.optional(v.string()),
+      coverageState: v.optional(v.string()),
+      pageFetchState: v.optional(v.string()),
+      robotsTxtState: v.optional(v.string()),
+    }),
+    automationStatus: v.optional(v.string()), // executed | no_safe_candidate | not_applicable
+    automationDetail: v.optional(v.string()),
+    automatedAt: v.optional(v.number()),
+    firstObservedAt: v.number(),
+    lastObservedAt: v.number(),
+    nextReviewAt: v.optional(v.number()),
+    resolvedAt: v.optional(v.number()),
+    resolution: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_fingerprint", ["fingerprint"])
+    .index("by_site_status", ["siteId", "status"])
+    .index("by_site_priority", ["siteId", "status", "priority"])
+    .index("by_article_status", ["articleId", "status"]),
+
+  seo_growth_health: defineTable({
+    siteId: v.id("sites"),
+    dataThrough: v.optional(v.string()),
+    windowStart: v.optional(v.string()),
+    windowDays: v.number(),
+    dataDays: v.number(),
+    organicClicks: v.number(),
+    organicImpressions: v.number(),
+    nonBrandedClicks: v.number(),
+    nonBrandedImpressions: v.number(),
+    averagePosition: v.number(),
+    monthlyOrganicClicksGoal: v.number(),
+    goalProgress: v.number(),
+    outcomeStatus: v.string(), // awaiting_data | below_goal | goal_met
+    articlesEvaluated: v.number(),
+    indexedArticles: v.number(),
+    stageCounts: v.object({
+      awaitingData: v.number(),
+      indexingPending: v.number(),
+      indexingStalled: v.number(),
+      noVisibility: v.number(),
+      lowVisibility: v.number(),
+      strikingDistance: v.number(),
+      lowCtr: v.number(),
+      performing: v.number(),
+    }),
+    openActions: v.number(),
+    lastEvaluatedAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_site", ["siteId"]),
+
+  seo_growth_goals: defineTable({
+    siteId: v.id("sites"),
+    monthlyOrganicClicksGoal: v.number(),
+    qualifiedActionsGoal: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_site", ["siteId"]),
+
+  // Authority work is evidence-bearing and human-authorized. Pentra may
+  // discover and verify a public opportunity autonomously, but it cannot mark
+  // outreach as sent or a link as acquired without an exact receipt.
+  seo_authority_opportunities: defineTable({
+    siteId: v.id("sites"),
+    articleId: v.optional(v.id("articles")),
+    fingerprint: v.string(),
+    type: v.string(), // unlinked_mention | broken_link
+    sourceDomain: v.string(),
+    sourceUrl: v.string(),
+    targetUrl: v.string(),
+    context: v.string(),
+    domainRank: v.optional(v.number()),
+    status: v.string(), // verified | outreach_prepared | contacted | acquired | rejected
+    evidenceHash: v.string(),
+    verifiedAt: v.number(),
+    lastCheckedAt: v.number(),
+    outreachPreparedAt: v.optional(v.number()),
+    contactedAt: v.optional(v.number()),
+    acquiredAt: v.optional(v.number()),
+    acquiredLinkUrl: v.optional(v.string()),
+    rejectedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_fingerprint", ["fingerprint"])
+    .index("by_site_status", ["siteId", "status"])
+    .index("by_article_status", ["articleId", "status"]),
+
   maintenance_state: defineTable({
     key: v.string(),
     status: v.string(),
@@ -444,6 +585,25 @@ export default defineSchema({
       "query",
       "page",
     ]),
+
+  // Bounded page-level rollup used by the autonomous growth controller. GSC
+  // can return tens of thousands of query rows; growth decisions should not
+  // reread that entire corpus once per article.
+  search_page_daily: defineTable({
+    siteId: v.id("sites"),
+    date: v.string(),
+    page: v.string(),
+    clicks: v.number(),
+    impressions: v.number(),
+    weightedPosition: v.number(),
+    nonBrandedClicks: v.number(),
+    nonBrandedImpressions: v.number(),
+    nonBrandedWeightedPosition: v.number(),
+    syncedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_site_date", ["siteId", "date"])
+    .index("by_site_date_page", ["siteId", "date", "page"]),
 
   // Immutable usage log — tracks article generations (never deleted)
   usage_log: defineTable({

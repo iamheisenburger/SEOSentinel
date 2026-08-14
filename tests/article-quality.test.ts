@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -26,6 +27,7 @@ import {
 } from "../convex/lib/sourceQuality.ts";
 import {
   injectInternalLinks,
+  publishedArticleInternalHref,
   validateInternalLinkSuggestions,
 } from "../convex/lib/internalLinks.ts";
 import {
@@ -608,6 +610,11 @@ test("uses only a reviewed image from the exact product section as a hero fallba
   );
 });
 
+test("website captures request a completed still image instead of a loading frame", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /image\.thum\.io\/get\/noanimate\/png\//);
+});
+
 test("misnumbered first-party claims fall back only to the exact hashed product snapshot", () => {
   const productEvidence =
     "LeadPilot captures visitor contact details and sends conversation context to the sales team.";
@@ -716,13 +723,20 @@ test("uses format-specific people-first word ceilings", () => {
 });
 
 test("accepts a grounded strict article", () => {
+  // A strict article must now also clear the substance floor and join a topic
+  // cluster, so this canonical fixture carries the extra length and one
+  // site-relative link.
+  const clusterDepth = Array.from({ length: 300 }, (_, index) => `context${index}`).join(" ");
   const result = evaluatePublicationQuality(
     {
       title: "A practical website lead qualification workflow",
       metaTitle: "A practical website lead qualification workflow",
       metaDescription:
         "Use this practical workflow to answer buyer questions, assess genuine interest, and route useful sales context to the right next step.",
-      markdown: `${body}\n\nThe workflow reduced review time by 12% in the documented test [1].`,
+      markdown:
+        `${body}\n\n${clusterDepth}\n\n` +
+        `Related reading: [how qualification routing works](/blog/qualification-routing).\n\n` +
+        `The workflow reduced review time by 12% in the documented test [1].`,
       featuredImage: "https://example.com/hero.webp",
       reviewedMediaUrls: ["https://example.com/hero.webp"],
       factCheckScore: 91,
@@ -844,6 +858,24 @@ test("validates contextual internal-link suggestions against crawled pages", () 
     { anchor: "lead qualification workflow", href: "/#features" },
     { anchor: "LeadPilot pricing options", href: "/#pricing" },
   ]);
+});
+
+test("builds safe related-article links from each tenant publication path", () => {
+  assert.equal(
+    publishedArticleInternalHref(
+      "/resources/[slug]",
+      "lead-qualification-workflow",
+    ),
+    "/resources/lead-qualification-workflow",
+  );
+  assert.throws(
+    () => publishedArticleInternalHref("/blog/[slug]", "../admin"),
+    /safe path segment/,
+  );
+  assert.throws(
+    () => publishedArticleInternalHref("/blog/[slug]?preview=1", "article"),
+    /safe \[slug\]/,
+  );
 });
 
 test("injects links only into eligible article prose", () => {

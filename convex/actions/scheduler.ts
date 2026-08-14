@@ -6,15 +6,19 @@ import type { ActionCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
 import { getLimitsFromFeatures } from "../planLimits";
+import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
 import {
   MAX_QUALITY_REVISIONS,
   needsDeterministicMechanicalRepair,
 } from "../lib/autopilotCadence";
 import {
   TARGET_APPROVED_BUFFER,
+  MIN_APPROVED_BUFFER,
   MIN_VERIFIED_TOPIC_HORIZON,
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
+  cadenceIntervalMs,
+  contentWorkBlocksQualityRecovery,
   effectivePublishedAt,
   exactCadenceWakeupAt,
   coveredPrimaryKeywords,
@@ -42,12 +46,23 @@ type ArticleSummary = {
   metaKeywords?: string[];
 };
 
+function hasTerminalTargetAlignmentFailure(article: ArticleSummary): boolean {
+  return (article.publicationGateIssues ?? []).some((issue) =>
+    issue.includes("does not align with both the configured business and the final article title")
+  );
+}
+
 export const scheduleCadence = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (
     ctx: ActionCtx,
     { siteId },
-  ): Promise<{ scheduled: number; mode?: string; bufferCount?: number }> => {
+  ): Promise<{
+    scheduled: number;
+    mode?: string;
+    bufferCount?: number;
+    blockers?: string[];
+  }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     if (!site.autopilotEnabled) {
@@ -63,6 +78,30 @@ export const scheduleCadence = internalAction({
           "Autopilot is in fail-closed observe mode; no generation or publication is authorized.",
       });
       return { scheduled: 0, mode: "rollout_observe" };
+    }
+
+    if (rolloutMode === "live") {
+      const readiness = await ctx.runMutation(
+        internal.sites.enforceLiveReadiness,
+        { siteId },
+      );
+      if (!readiness.ready) {
+        await ctx.runMutation(internal.autopilot.raiseAlert, {
+          siteId,
+          kind: "autopilot_readiness_regressed",
+          message:
+            `Live delivery was stopped because readiness regressed: ${describeAutopilotBlockers(readiness.blockers)}.`,
+          details: {
+            blockers: readiness.blockers,
+            demotedTo: readiness.mode,
+          },
+        });
+        return {
+          scheduled: 0,
+          mode: "readiness_regressed",
+          blockers: readiness.blockers,
+        };
+      }
     }
 
     const now = Date.now();
@@ -86,8 +125,8 @@ export const scheduleCadence = internalAction({
       });
       return { scheduled: 0, mode: "migration_pending" };
     }
-    const cadence = Math.max(1, site.cadencePerWeek ?? 4);
-    const cadenceMs = Math.floor((7 * 24) / cadence) * 60 * 60 * 1000;
+    const cadence = site.cadencePerWeek ?? 4;
+    const cadenceMs = cadenceIntervalMs(cadence);
     const published = state.published as ArticleSummary[];
     const lastPublishedAt = state.latestPublished
       ? effectivePublishedAt(state.latestPublished)
@@ -116,18 +155,37 @@ export const scheduleCadence = internalAction({
       });
     }
 
-    if (rolloutMode === "warm" && buffer.length >= TARGET_APPROVED_BUFFER) {
+    // Two sealed artifacts are the launch safety minimum. The scheduler still
+    // replenishes toward three, but a strict-gate rejection must not make a
+    // three-article free plan permanently incapable of going live.
+    if (rolloutMode === "warm" && buffer.length >= MIN_APPROVED_BUFFER) {
+      const promotion = await ctx.runMutation(
+        internal.autopilot.promoteWarmSiteIfReady,
+        { siteId },
+      );
+      if (promotion.promoted) {
+        return {
+          scheduled: 1,
+          mode: "automatic_live_promotion",
+          bufferCount: buffer.length,
+        };
+      }
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
         kind: "rollout_buffer_ready",
         message:
-          "The canary buffer is warm. An explicit rollout transition is required before delivery.",
-        details: { bufferCount: buffer.length, target: TARGET_APPROVED_BUFFER },
+          `The strict-quality buffer is warm, but live publication is blocked: ${describeAutopilotBlockers(promotion.blockers)}.`,
+        details: {
+          bufferCount: buffer.length,
+          target: TARGET_APPROVED_BUFFER,
+          blockers: promotion.blockers,
+        },
       });
       return {
         scheduled: 0,
         mode: "rollout_buffer_ready",
         bufferCount: buffer.length,
+        blockers: promotion.blockers,
       };
     }
 
@@ -165,7 +223,28 @@ export const scheduleCadence = internalAction({
       (job: Doc<"jobs">) =>
         job.siteId === siteId && (job.type === "article" || job.type === "plan"),
     );
-    if (siteJobs.length > 0) {
+    const qualityRecoveryAvailable = (state.review as ArticleSummary[]).some(
+      (article: ArticleSummary) =>
+        (article.createdAt >= candidateWindowStart &&
+          article.status === "review" &&
+          article.publicationGateStatus === "blocked" &&
+          !hasTerminalTargetAlignmentFailure(article) &&
+          (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
+        needsDeterministicMechanicalRepair(article),
+    );
+    if (
+      contentWorkBlocksQualityRecovery(siteJobs, qualityRecoveryAvailable)
+    ) {
+      const pendingPlanReady = siteJobs.every(
+        (job: Doc<"jobs">) => job.type === "plan" && job.status === "pending",
+      );
+      if (pendingPlanReady) {
+        return {
+          scheduled: 1,
+          mode: "pending_plan",
+          bufferCount: buffer.length,
+        };
+      }
       return {
         scheduled: 0,
         mode: "work_in_progress",
@@ -208,6 +287,7 @@ export const scheduleCadence = internalAction({
           article.createdAt >= candidateWindowStart &&
           article.status === "review" &&
           article.publicationGateStatus === "blocked" &&
+          !hasTerminalTargetAlignmentFailure(article) &&
           (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS,
       )
       .sort(

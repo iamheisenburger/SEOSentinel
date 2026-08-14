@@ -16,6 +16,8 @@ import {
   ExternalLink,
   TrendingDown,
   ArrowRight,
+  Target,
+  Workflow,
 } from "lucide-react";
 
 export default function AnalyticsPage() {
@@ -36,8 +38,11 @@ export default function AnalyticsPage() {
     api.articles.listDecaying,
     site?._id ? { siteId: site._id } : "skip",
   );
+  const growthSummary = useQuery(
+    api.seoGrowth.getSummary,
+    site?._id ? { siteId: site._id } : "skip",
+  );
 
-  const loading = gscSummary === undefined && site?._id;
   const gscConnected = !!site?.gscAccessToken && !!site?.gscProperty;
   const hasGSC = !!gscSummary;
 
@@ -143,12 +148,12 @@ export default function AnalyticsPage() {
           <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
             <SummaryCard
               icon={<MousePointerClick className="h-3.5 w-3.5 text-[#0EA5E9]" />}
-              label="Total Clicks"
+              label="Organic Clicks (28d)"
               value={gscSummary.totalClicks.toLocaleString()}
             />
             <SummaryCard
               icon={<Eye className="h-3.5 w-3.5 text-[#22D3EE]" />}
-              label="Impressions"
+              label="Impressions (28d)"
               value={gscSummary.totalImpressions.toLocaleString()}
             />
             <SummaryCard
@@ -166,6 +171,68 @@ export default function AnalyticsPage() {
               label="Keywords"
               value={gscSummary.queryCount.toString()}
             />
+          </div>
+
+          {/* Measured SEO growth loop */}
+          <div className="rounded-xl border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.02] p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Workflow className="h-4 w-4 text-[#0EA5E9]" />
+                  <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Measured Growth Loop</h2>
+                </div>
+                <p className="mt-1 text-[11px] text-[#565A6E]">
+                  Pentra classifies each published URL from indexing and Search Console evidence, then records one deduplicated next action.
+                </p>
+              </div>
+              {growthSummary?.health && (
+                <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
+                  <Target className="h-3.5 w-3.5 text-[#22C55E]" />
+                  {growthSummary.health.organicClicks.toLocaleString()} / {growthSummary.health.monthlyOrganicClicksGoal.toLocaleString()} clicks
+                </div>
+              )}
+            </div>
+
+            {growthSummary?.health ? (
+              <>
+                <div className="h-2 rounded-full bg-white/[0.04] overflow-hidden mb-4">
+                  <div
+                    className="h-full rounded-full bg-[#22C55E]/70 transition-all"
+                    style={{ width: `${Math.min(100, Math.round(growthSummary.health.goalProgress * 100))}%` }}
+                  />
+                </div>
+                <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-4">
+                  <GrowthMetric label="Performing" value={growthSummary.health.stageCounts.performing} color="#22C55E" />
+                  <GrowthMetric label="Striking Distance" value={growthSummary.health.stageCounts.strikingDistance} color="#F59E0B" />
+                  <GrowthMetric label="No Visibility" value={growthSummary.health.stageCounts.noVisibility} color="#F87171" />
+                  <GrowthMetric label="Open Actions" value={growthSummary.health.openActions} color="#0EA5E9" />
+                </div>
+                {growthSummary.actions.filter((action) => action.status === "open").length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    {growthSummary.actions
+                      .filter((action) => action.status === "open")
+                      .slice(0, 5)
+                      .map((action) => (
+                        <Link
+                          key={action._id}
+                          href={`/articles/${action.articleId}`}
+                          className="flex items-start gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2.5 transition hover:bg-white/[0.04]"
+                        >
+                          <span className="mt-0.5 rounded-full bg-[#0EA5E9]/[0.1] px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[#38BDF8]">
+                            {action.actionKind.replaceAll("_", " ")}
+                          </span>
+                          <span className="flex-1 text-[11px] leading-relaxed text-[#8B8FA3]">{action.reason}</span>
+                          <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-[#565A6E]" />
+                        </Link>
+                      ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[11px] text-[#565A6E]">
+                The first growth classification will run after the next completed Search Console sync.
+              </p>
+            )}
           </div>
 
           {/* Position Distribution */}
@@ -344,6 +411,15 @@ function PositionBucket({ label, count, color, total }: { label: string; count: 
       <div className="h-1 w-full rounded-full bg-white/[0.04]">
         <div className="h-1 rounded-full transition-all" style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color + "80" }} />
       </div>
+    </div>
+  );
+}
+
+function GrowthMetric({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+      <p className="text-[10px] uppercase tracking-wider text-[#565A6E]">{label}</p>
+      <p className="mt-1 text-lg font-bold" style={{ color }}>{value}</p>
     </div>
   );
 }
