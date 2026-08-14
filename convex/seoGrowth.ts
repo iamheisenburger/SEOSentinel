@@ -7,8 +7,18 @@ import {
   DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
   growthActionFingerprint,
 } from "./lib/seoGrowth";
+import {
+  keywordMatchesBusinessModel,
+  keywordMatchesBusinessSignals,
+} from "./lib/autopilotBuffer";
 
 const ACTIVE_ACTION_STATUSES = ["open", "monitoring"] as const;
+const RETRYABLE_SUPPORT_AUTOMATION = new Set([
+  "no_safe_candidate",
+  "queued_growth_plan",
+  "bounded_wait",
+  "support_failed",
+]);
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -112,13 +122,67 @@ const classificationValidator = v.object({
   evidence: evidenceValidator,
 });
 
+type GrowthAutomationResult = {
+  status: string;
+  detail: string;
+  growthSeed?: string;
+};
+
+function isVerifiedUnusedTopic(topic: {
+  status?: string;
+  searchVolume?: number;
+  keywordDifficulty?: number;
+  serpTopUrls?: string[];
+  serpIntent?: string;
+}): boolean {
+  return (
+    (topic.status === "planned" || topic.status === "pending") &&
+    (topic.searchVolume ?? 0) > 0 &&
+    topic.keywordDifficulty !== undefined &&
+    (topic.serpTopUrls?.length ?? 0) >= 5 &&
+    Boolean(topic.serpIntent)
+  );
+}
+
+function isTopicallyRelated(
+  source: {
+    primaryKeyword: string;
+    secondaryKeywords: string[];
+    label: string;
+  },
+  candidate: {
+    primaryKeyword: string;
+    secondaryKeywords: string[];
+    label: string;
+  },
+): boolean {
+  const sourceSignals = [
+    source.primaryKeyword,
+    ...source.secondaryKeywords,
+    source.label,
+  ];
+  const candidateSignals = [
+    candidate.primaryKeyword,
+    ...candidate.secondaryKeywords,
+    candidate.label,
+  ];
+  return (
+    keywordMatchesBusinessSignals(candidate.primaryKeyword, sourceSignals) &&
+    keywordMatchesBusinessSignals(source.primaryKeyword, candidateSignals)
+  );
+}
+
 async function prioritizeVerifiedSupportingTopic(
   ctx: MutationCtx,
   siteId: Id<"sites">,
   articleId: Id<"articles">,
-) {
-  const article = await ctx.db.get(articleId);
-  if (!article || article.siteId !== siteId || !article.topicId) {
+  actionFingerprint: string,
+): Promise<GrowthAutomationResult> {
+  const [article, site] = await Promise.all([
+    ctx.db.get(articleId),
+    ctx.db.get(siteId),
+  ]);
+  if (!site || !article || article.siteId !== siteId || !article.topicId) {
     return { status: "no_safe_candidate", detail: "The article has no source topic." };
   }
   const sourceTopic = await ctx.db.get(article.topicId);
@@ -132,14 +196,20 @@ async function prioritizeVerifiedSupportingTopic(
   const candidates = topics
     .filter((topic) =>
       topic._id !== sourceTopic._id &&
-      topic.label === sourceTopic.label &&
-      (topic.status === "planned" || topic.status === "pending") &&
-      (topic.searchVolume ?? 0) > 0 &&
-      topic.keywordDifficulty !== undefined &&
-      (topic.serpTopUrls?.length ?? 0) >= 3 &&
-      Boolean(topic.serpIntent)
+      isVerifiedUnusedTopic(topic) &&
+      keywordMatchesBusinessModel(topic.primaryKeyword, [
+        site.siteType ?? "",
+        site.niche ?? "",
+        site.siteSummary ?? "",
+      ]) &&
+      (
+        topic.growthParentArticleId === articleId ||
+        (!topic.growthParentArticleId && isTopicallyRelated(sourceTopic, topic))
+      )
     )
     .sort((a, b) =>
+      Number(b.growthParentArticleId === articleId) -
+        Number(a.growthParentArticleId === articleId) ||
       (b.priority ?? 0) - (a.priority ?? 0) ||
       (b.searchVolume ?? 0) - (a.searchVolume ?? 0)
     );
@@ -147,15 +217,18 @@ async function prioritizeVerifiedSupportingTopic(
   if (!candidate) {
     return {
       status: "no_safe_candidate",
-      detail: "No unused, measured, same-cluster topic passed the SERP evidence gate.",
+      detail: "No unused, measured, topically related topic passed the live SERP evidence gate.",
+      growthSeed: sourceTopic.primaryKeyword,
     };
   }
   await ctx.db.patch(candidate._id, {
     priority: Math.min(100, Math.max(candidate.priority ?? 0, 90)),
+    growthParentArticleId: articleId,
+    growthActionFingerprint: actionFingerprint,
     updatedAt: Date.now(),
   });
   return {
-    status: "executed",
+    status: "support_topic_prioritized",
     detail: `Prioritized verified supporting topic ${candidate._id}.`,
   };
 }
@@ -179,7 +252,10 @@ async function deprioritizeFailedOpportunityCluster(
     .collect();
   const candidates = topics.filter((topic) =>
     topic._id !== sourceTopic._id &&
-    topic.label === sourceTopic.label &&
+    (
+      topic.growthParentArticleId === articleId ||
+      (!topic.growthParentArticleId && isTopicallyRelated(sourceTopic, topic))
+    ) &&
     (topic.status === "planned" || topic.status === "pending")
   );
   for (const candidate of candidates) {
@@ -191,11 +267,11 @@ async function deprioritizeFailedOpportunityCluster(
   return candidates.length > 0
     ? {
         status: "executed",
-        detail: `Deprioritized ${candidates.length} unused topic(s) in the non-performing cluster pending new evidence.`,
+        detail: `Deprioritized ${candidates.length} unused related topic(s) pending new evidence.`,
       }
     : {
         status: "no_safe_candidate",
-        detail: "No unused same-cluster topics remained to deprioritize.",
+        detail: "No unused related topics remained to deprioritize.",
       };
 }
 
@@ -219,6 +295,12 @@ export const reconcileSite = internalMutation({
   handler: async (ctx, { siteId, classifications, health }) => {
     const now = Date.now();
     let openActions = 0;
+    const replenishmentRequests: Array<{
+      articleId: Id<"articles">;
+      fingerprint: string;
+      growthSeed: string;
+      priority: number;
+    }> = [];
     for (const classification of classifications) {
       const article = await ctx.db.get(classification.articleId);
       if (!article || article.siteId !== siteId || article.status !== "published") {
@@ -257,6 +339,30 @@ export const reconcileSite = internalMutation({
         ? Date.parse(`${classification.nextReviewDate}T12:00:00.000Z`)
         : undefined;
       if (existing) {
+        let automation: GrowthAutomationResult | undefined;
+        if (
+          desiredStatus === "open" &&
+          (classification.actionKind === "repair_discovery" ||
+            classification.actionKind === "strengthen_cluster") &&
+          RETRYABLE_SUPPORT_AUTOMATION.has(
+            existing.automationStatus ?? "no_safe_candidate",
+          )
+        ) {
+          automation = await prioritizeVerifiedSupportingTopic(
+            ctx,
+            siteId,
+            classification.articleId,
+            fingerprint,
+          );
+          if (automation.status === "no_safe_candidate" && automation.growthSeed) {
+            replenishmentRequests.push({
+              articleId: classification.articleId,
+              fingerprint,
+              growthSeed: automation.growthSeed,
+              priority: classification.priority,
+            });
+          }
+        }
         await ctx.db.patch(existing._id, {
           status: desiredStatus,
           priority: classification.priority,
@@ -267,10 +373,15 @@ export const reconcileSite = internalMutation({
           nextReviewAt,
           resolvedAt: undefined,
           resolution: undefined,
+          ...(automation ? {
+            automationStatus: automation.status,
+            automationDetail: automation.detail,
+            automatedAt: automation.status === "executed" ? now : undefined,
+          } : {}),
           updatedAt: now,
         });
       } else {
-        let automation = {
+        let automation: GrowthAutomationResult = {
           status: "not_applicable",
           detail: "This measured stage has no safe automatic mutation.",
         };
@@ -282,6 +393,7 @@ export const reconcileSite = internalMutation({
             ctx,
             siteId,
             classification.articleId,
+            fingerprint,
           );
         } else if (classification.actionKind === "reassess_opportunity") {
           automation = await deprioritizeFailedOpportunityCluster(
@@ -289,6 +401,14 @@ export const reconcileSite = internalMutation({
             siteId,
             classification.articleId,
           );
+        }
+        if (automation.status === "no_safe_candidate" && automation.growthSeed) {
+          replenishmentRequests.push({
+            articleId: classification.articleId,
+            fingerprint,
+            growthSeed: automation.growthSeed,
+            priority: classification.priority,
+          });
         }
         await ctx.db.insert("seo_growth_actions", {
           siteId,
@@ -376,7 +496,87 @@ export const reconcileSite = internalMutation({
     } else {
       await ctx.db.insert("seo_growth_health", healthPatch);
     }
-    return { articlesEvaluated: classifications.length, openActions, stageCounts };
+    return {
+      articlesEvaluated: classifications.length,
+      openActions,
+      stageCounts,
+      replenishmentRequests,
+    };
+  },
+});
+
+export const recordAutomationResult = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    fingerprint: v.string(),
+    status: v.string(),
+    detail: v.string(),
+  },
+  handler: async (ctx, { siteId, fingerprint, status, detail }) => {
+    const action = await ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", fingerprint))
+      .unique();
+    if (!action || action.siteId !== siteId || action.status !== "open") {
+      throw new Error("Growth automation result does not match an open tenant action");
+    }
+    await ctx.db.patch(action._id, {
+      automationStatus: status,
+      automationDetail: detail,
+      automatedAt: status === "executed" ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    });
+    return { updated: true };
+  },
+});
+
+export const recordSupportArticleOutcome = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    status: v.string(),
+    detail: v.string(),
+  },
+  handler: async (ctx, { articleId, status, detail }) => {
+    const allowed = new Set([
+      "support_quarantined",
+      "support_failed",
+      "support_ready",
+      "executed",
+    ]);
+    if (!allowed.has(status)) throw new Error("Invalid growth support outcome");
+    const article = await ctx.db.get(articleId);
+    if (!article?.topicId) return { updated: false, reason: "not_growth_support" };
+    const topic = await ctx.db.get(article.topicId);
+    if (
+      !topic ||
+      topic.siteId !== article.siteId ||
+      !topic.growthActionFingerprint ||
+      topic.growthParentArticleId === undefined
+    ) {
+      return { updated: false, reason: "not_growth_support" };
+    }
+    const action = await ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_fingerprint", (q) =>
+        q.eq("fingerprint", topic.growthActionFingerprint!)
+      )
+      .unique();
+    if (
+      !action ||
+      action.siteId !== article.siteId ||
+      action.articleId !== topic.growthParentArticleId ||
+      action.status !== "open"
+    ) {
+      return { updated: false, reason: "action_not_open" };
+    }
+    const timestamp = Date.now();
+    await ctx.db.patch(action._id, {
+      automationStatus: status,
+      automationDetail: detail,
+      automatedAt: status === "executed" ? timestamp : undefined,
+      updatedAt: timestamp,
+    });
+    return { updated: true };
   },
 });
 

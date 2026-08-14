@@ -202,6 +202,8 @@ test("the final editor runs before internal-link injection and exact resealing",
   const articles = readFileSync("convex/articles.ts", "utf8");
   assert.match(articles, /applyInternalLinksToSealedArtifact/);
   assert.match(articles, /Internal links can only be applied to the exact sealed review/);
+  assert.match(articles, /quarantineLinkSealFailure/);
+  assert.match(articles, /publicationAuditVersion: undefined/);
 });
 
 test("growth allocation learns from measured clusters without inventing new evidence", () => {
@@ -211,6 +213,25 @@ test("growth allocation learns from measured clusters without inventing new evid
   assert.match(controller, /serpTopUrls\?\.length/);
   assert.match(controller, /searchVolume/);
   assert.match(controller, /keywordDifficulty/);
+  assert.doesNotMatch(controller, /topic\.label === sourceTopic\.label/);
+  assert.match(controller, /growthParentArticleId: articleId/);
+  assert.match(controller, /recordSupportArticleOutcome/);
+  assert.match(controller, /support_failed/);
+
+  const runner = readFileSync("convex/actions/seoGrowth.ts", "utf8");
+  assert.match(runner, /seo_growth_support_replenishment/);
+  assert.match(runner, /maximumRecent: 1/);
+  assert.match(runner, /24 \* 60 \* 60 \* 1000/);
+
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /growthContext \? 3 : 10/);
+  assert.match(pipeline, /preferredGrowthTarget/);
+  assert.match(pipeline, /Measured growth support article did not contain/);
+  assert.match(pipeline, /support_ready/);
+
+  const articles = readFileSync("convex/articles.ts", "utf8");
+  assert.match(articles, /exact external publication receipt/);
+  assert.match(articles, /automationStatus: "executed"/);
 });
 
 test("an uninitialized page rollup cannot be mistaken for zero visibility", () => {

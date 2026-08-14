@@ -21,10 +21,9 @@ import {
   contentWorkBlocksQualityRecovery,
   effectivePublishedAt,
   exactCadenceWakeupAt,
-  coveredPrimaryKeywords,
-  filterNonCannibalizingTopics,
+  coveredIntentTopics,
+  filterNonCannibalizingIntentTopics,
   isSealedReady,
-  selectNonCannibalizingTopic,
 } from "../lib/autopilotBuffer";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TOPIC_REPLENISHMENTS_PER_24H = 2;
@@ -358,7 +357,7 @@ export const scheduleCadence = internalAction({
     }
 
     if (site.userId) {
-      const limits = getLimitsFromFeatures((site as any).planFeatures ?? []);
+      const limits = getLimitsFromFeatures(site.planFeatures ?? []);
       const articlesThisMonth = await ctx.runQuery(
         internal.articles.countThisMonthInternal,
         { userId: site.userId },
@@ -411,22 +410,23 @@ export const scheduleCadence = internalAction({
         (b.priority ?? 1) - (a.priority ?? 1),
     );
 
-    const coveredKeywords = coveredPrimaryKeywords(
+    const coveredTopics = coveredIntentTopics(
       topics.map((topic: Doc<"topic_clusters">) => ({
         _id: String(topic._id),
         status: topic.status ?? "planned",
         primaryKeyword: topic.primaryKeyword,
+        serpTopUrls: topic.serpTopUrls,
       })),
       [...published, ...buffer].map((article) => ({
         topicId: article.topicId ? String(article.topicId) : undefined,
         slug: article.slug,
       })),
     );
-    const schedulableTopics = filterNonCannibalizingTopics<
+    const schedulableTopics = filterNonCannibalizingIntentTopics<
       Doc<"topic_clusters">
     >(
       available,
-      coveredKeywords,
+      coveredTopics,
     );
     const selectedTopic: Doc<"topic_clusters"> | undefined =
       schedulableTopics[0];

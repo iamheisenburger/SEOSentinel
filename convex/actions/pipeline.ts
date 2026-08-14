@@ -12,6 +12,7 @@ import { z } from "zod";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   injectInternalLinks,
+  preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
@@ -20,6 +21,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   evaluatePublicationQuality,
+  issuesBlockingPreLinkReview,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnledgeredEvidenceParagraphs,
@@ -36,12 +38,16 @@ import {
   publicationDeliveryConfigHash,
   sha256Hex,
 } from "../lib/publicationArtifact";
-import { evaluateCadenceWindow } from "../lib/autopilotCadence";
+import {
+  evaluateCadenceWindow,
+  MAX_QUALITY_REVISIONS,
+} from "../lib/autopilotCadence";
 import {
   cadenceIntervalMs,
   evergreenTopicLabel,
   filterNonCannibalizingIntentTopics,
   hasReliableSerpFingerprint,
+  keywordMatchesBusinessModel,
   keywordMatchesBusinessSignals,
   normalizedSerpQuestions,
   pendingJobPriority,
@@ -76,6 +82,12 @@ type RichMediaOptions = {
   includeLists?: boolean;
   includeImages?: boolean;
   includeYouTube?: boolean;
+};
+
+type GrowthPlanContext = {
+  parentArticleId: Id<"articles">;
+  seed: string;
+  actionFingerprint: string;
 };
 
 const TopicSchema = z.object({
@@ -1920,6 +1932,7 @@ async function handlePlan(
   jobId?: Id<"jobs">,
   workerToken?: string,
   replenishmentSequence = 0,
+  growthContext?: GrowthPlanContext,
 ): Promise<{ count: number }> {
   const PLAN_STEPS = 6;
   const reportProgress = async (step: number, label: string) => {
@@ -2026,7 +2039,13 @@ async function handlePlan(
     if (site.blogTheme) for (const p of site.blogTheme.split(/[,;.]/)) addSeed(p);
     if (baseSeeds.length === 0) baseSeeds.push(site.domain.replace(/\.\w+$/, ""));
     const seedCycle = existingTopics.length + replenishmentSequence * 11;
-    const seeds = topicDiscoverySeedWindow(baseSeeds, seedCycle, 20);
+    const rotatingSeeds = topicDiscoverySeedWindow(baseSeeds, seedCycle, 20);
+    const seeds = growthContext
+      ? [
+          growthContext.seed.trim().toLowerCase(),
+          ...rotatingSeeds,
+        ].filter((seed, index, all) => seed && all.indexOf(seed) === index).slice(0, 20)
+      : rotatingSeeds;
     console.log(
       `Seeds: ${baseSeeds.length} business anchors → ${seeds.length} balanced discovery seeds (cycle ${seedCycle})`,
     );
@@ -2127,6 +2146,7 @@ async function handlePlan(
     site.blogTheme,
     ...(site.anchorKeywords ?? []),
     ...(site.painPoints ?? []),
+    growthContext?.seed,
   ].filter((signal): signal is string => Boolean(signal));
 
   if (discoveredKeywords.length > 0) {
@@ -2136,6 +2156,15 @@ async function handlePlan(
       .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
       .filter(k => !isKeywordBlocked(k.keyword))
       .filter(k => keywordMatchesBusinessSignals(k.keyword, businessSignals))
+      .filter(k => keywordMatchesBusinessModel(k.keyword, [
+        site.siteType ?? "",
+        site.niche ?? "",
+        site.siteSummary ?? "",
+      ]))
+      .filter(k =>
+        !growthContext ||
+        keywordMatchesBusinessSignals(k.keyword, [growthContext.seed])
+      )
       .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
       .sort((a, b) => b.opportunity - a.opportunity);
 
@@ -2198,7 +2227,9 @@ async function handlePlan(
       siteContext,
       ``,
       `<your_task>`,
-      `From the keyword list below, select every strategically eligible keyword, up to 25. For each, create an article topic. Our quality filters will narrow the result to the best 10.`,
+      growthContext
+        ? `This is a measured recovery plan for an existing published page targeting "${growthContext.seed}". Select up to 12 distinct supporting intents that deepen that exact subject without competing for the same query. Our evidence gates will retain at most 3.`
+        : `From the keyword list below, select every strategically eligible keyword, up to 25. For each, create an article topic. Our quality filters will narrow the result to the best 10.`,
       ``,
       `SELECTION CRITERIA (in order of importance):`,
       `1. RELEVANCE — Would someone searching this keyword be a potential ${productName} user? If not, SKIP IT.`,
@@ -2206,6 +2237,9 @@ async function handlePlan(
       `3. DIFFICULTY — Lower KD = easier to rank (this site's ceiling is KD ${maxKD})`,
       `4. COMMERCIAL VALUE — Higher CPC signals buyer intent`,
       `5. FUNNEL COVERAGE — Mix TOFU (awareness), MOFU (consideration), BOFU (decision)`,
+      growthContext
+        ? `6. CLUSTER SUPPORT — Every selected keyword must answer a narrower, adjacent question that gives a reader a natural reason to visit the existing page about "${growthContext.seed}".`
+        : "",
       ``,
       `HARD RULES:`,
       `- SKIP keywords about other products/brands (ChatGPT, Jasper, Semrush, etc.)`,
@@ -2230,8 +2264,17 @@ async function handlePlan(
       site.anchorKeywords?.length ? `Priority keywords to incorporate: ${site.anchorKeywords.join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
-    const text = await callClaude(prompt, `Select every strategically eligible keyword, up to 25, and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`, 12000);
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(0, 25);
+    const text = await callClaude(
+      prompt,
+      growthContext
+        ? `Select up to 12 measured supporting intents for "${growthContext.seed}". Use exact keyword strings from the list.`
+        : `Select every strategically eligible keyword, up to 25, and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`,
+      12000,
+    );
+    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(
+      0,
+      growthContext ? 12 : 25,
+    );
     console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates:`);
     for (const t of plan) console.log(`  → "${t.primaryKeyword}" (${t.label})`);
 
@@ -2328,7 +2371,11 @@ async function handlePlan(
     const keywordMatchesSite = keywordMatchesBusinessSignals(
       topic.primaryKeyword,
       businessSignals,
-    );
+    ) && keywordMatchesBusinessModel(topic.primaryKeyword, [
+      site.siteType ?? "",
+      site.niche ?? "",
+      site.siteSummary ?? "",
+    ]);
     const titleMatchesKeyword = keywordMatchesBusinessSignals(
       topic.label,
       [topic.primaryKeyword],
@@ -2479,6 +2526,18 @@ async function handlePlan(
       console.log(`⚠ Only ${enrichedPlan.length} topics survived. Need more volume or looser filters.`);
     }
 
+    // Growth remediation is deliberately narrow. Validate no more than five
+    // candidates and save no more than three, which bounds both provider cost
+    // and the amount of support content one underperforming page can create.
+    if (growthContext) {
+      enrichedPlan = enrichedPlan
+        .sort((a, b) =>
+          (b.priority ?? 0) - (a.priority ?? 0) ||
+          (b.searchVolume ?? 0) - (a.searchVolume ?? 0)
+        )
+        .slice(0, 5);
+    }
+
     // 5d. SERP analysis — determine optimal article format for each surviving topic
     await reportProgress(5, "Analyzing SERPs for article format optimization...");
     for (const topic of enrichedPlan) {
@@ -2525,10 +2584,19 @@ async function handlePlan(
     // STEP 6: Save fully enriched topics to DB (ONE atomic save — no half-baked topics)
     // ══════════════════════════════════════════════════════════════════════
 
-    plan = enrichedPlan.slice(0, 10);
+    plan = enrichedPlan.slice(0, growthContext ? 3 : 10).map((topic) => ({
+      ...topic,
+      priority: growthContext
+        ? Math.max(90, topic.priority ?? 0)
+        : topic.priority,
+    }));
     const saved = await ctx.runMutation(internal.topics.upsertMany, {
       siteId,
       topics: plan,
+      ...(growthContext ? {
+        growthParentArticleId: growthContext.parentArticleId,
+        growthActionFingerprint: growthContext.actionFingerprint,
+      } : {}),
     });
     if (saved.inserted === 0 && requireVerifiedKeywordData) {
       throw new Error(
@@ -2588,6 +2656,25 @@ async function handleArticle(
   };
   if (!site) throw new Error("Site not found");
   if (topicId && !topic) throw new Error("Topic not found");
+  const growthParent = topic?.growthParentArticleId
+    ? await ctx.runQuery(internal.articles.getInternal, {
+        articleId: topic.growthParentArticleId,
+      })
+    : null;
+  if (
+    topic?.growthParentArticleId &&
+    (!growthParent ||
+      growthParent.siteId !== siteId ||
+      growthParent.status !== "published")
+  ) {
+    throw new Error("Growth support parent is missing, unpublished, or cross-tenant");
+  }
+  const requiredGrowthAnchor = growthParent
+    ? preferredInternalLinkAnchorCandidates(
+        growthParent.title,
+        growthParent.metaKeywords ?? [],
+      )[0]
+    : undefined;
   const productName = site.siteName ?? site.domain;
   // Autonomous publication uses one universal, versioned quality policy.
   // Tenant hostnames must never decide whether weak content may publish.
@@ -2940,6 +3027,17 @@ async function handleArticle(
     })(),
     ``,
     existingKwSummary ? `<anti_cannibalization>\nThese keywords are already targeted by existing articles on this blog. Your article MUST target DIFFERENT keywords and angles:\n${existingKwSummary}\nDo NOT repeat these keywords in your metaKeywords output. Focus on unique long-tail variations.\n</anti_cannibalization>` : "",
+    ``,
+    growthParent && requiredGrowthAnchor
+      ? [
+          `<growth_support>`,
+          `This topic was commissioned by a measured SEO recovery action for the existing page "${growthParent.title}".`,
+          `Answer the new primary keyword as a distinct, narrower intent; do not restate or compete with the parent page.`,
+          `Include the exact phrase "${requiredGrowthAnchor}" once in natural body prose where a reader would genuinely benefit from the parent page. Do not put it only in a heading, table, CTA, or Sources section.`,
+          `The system will add the verified internal link after editorial review. Do not add the link yourself.`,
+          `</growth_support>`,
+        ].join("\n")
+      : "",
     ``,
     `<search_intent>`,
     `- Answer the primary intent clearly near the beginning and use the query naturally only where it helps the reader.`,
@@ -3971,6 +4069,22 @@ async function handleLinks(
     internal.articles.listBySiteInternal,
     { siteId },
   );
+  const articleTopic = article.topicId
+    ? await ctx.runQuery(internal.topics.getInternal, { topicId: article.topicId })
+    : null;
+  if (articleTopic && articleTopic.siteId !== siteId) {
+    throw new Error("Article topic crossed a tenant boundary");
+  }
+  const growthParentArticle = articleTopic?.growthParentArticleId
+    ? siteArticles.find(
+        (candidate: Doc<"articles">) =>
+          candidate._id === articleTopic.growthParentArticleId &&
+          candidate.status === "published",
+      )
+    : undefined;
+  if (articleTopic?.growthParentArticleId && !growthParentArticle) {
+    throw new Error("Growth support target is not a published same-tenant article");
+  }
   const relatedArticles = siteArticles
     .filter(
       (candidate: Doc<"articles">) =>
@@ -3984,6 +4098,7 @@ async function handleLinks(
       summary: candidate.metaDescription ?? "",
       keywords: candidate.metaKeywords ?? [],
       kind: "published article",
+      preferredGrowthTarget: candidate._id === growthParentArticle?._id,
     }));
   const destinations = [
     ...pages.map(
@@ -3998,6 +4113,7 @@ async function handleLinks(
         summary: page.summary ?? "",
         keywords: page.keywords ?? [],
         kind: "site page",
+        preferredGrowthTarget: false,
       }),
     ),
     ...relatedArticles,
@@ -4035,6 +4151,9 @@ async function handleLinks(
       "Do not select text from headings, the table of contents, code, existing links, or the Sources section.",
       "Prefer three to six genuinely useful links when exact contextual anchors exist. Topical authority comes from clusters, so an article that links to no sibling article is an orphan competing on its own thin authority.",
       "Always prefer a related published article over a generic navigation page: sibling articles are what build the cluster.",
+      growthParentArticle
+        ? "One allowed destination is marked preferredGrowthTarget. This measured support article must link to it when a natural exact anchor exists."
+        : "",
       "Do not force a quota: relevance and a natural exact anchor are mandatory, and inventing an anchor that is not in the prose is worse than returning fewer links.",
       "Return at most 6 links. Return [] when no natural contextual match exists.",
     ].join(" "),
@@ -4048,12 +4167,42 @@ async function handleLinks(
   );
 
   const suggestions = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, linkText);
+  const preferredDestination = destinations.find(
+    (destination) => destination.preferredGrowthTarget,
+  );
+  const deterministicPreferred = preferredDestination
+    ? preferredInternalLinkAnchorCandidates(
+        preferredDestination.title,
+        preferredDestination.keywords,
+      )
+        .map((anchor) => ({ anchor, href: preferredDestination.href }))
+        .find((link) =>
+          injectInternalLinks(article.markdown, [link]).inserted.length > 0
+        )
+    : undefined;
   const links = validateInternalLinkSuggestions(
-    suggestions,
+    [
+      ...(deterministicPreferred ? [deterministicPreferred] : []),
+      ...suggestions,
+    ],
     destinations.map((destination) => destination.href),
     publishedArticleInternalHref(site.urlStructure, article.slug),
   );
   const result = injectInternalLinks(article.markdown, links);
+
+  if (
+    expectedSealedContentHash &&
+    preferredDestination &&
+    !result.inserted.some((link) => link.href === preferredDestination.href)
+  ) {
+    return {
+      count: result.inserted.length,
+      readyForPublication: false,
+      issues: [
+        "Measured growth support article did not contain a natural prose anchor to its exact parent page.",
+      ],
+    };
+  }
 
   if (expectedSealedContentHash) {
     return await ctx.runMutation(
@@ -4359,7 +4508,21 @@ async function generatePlanHandler(
     if (!claimed) throw new Error("Plan job is not pending or its retry is not due");
     try {
       const payload = claimed.payload && typeof claimed.payload === "object"
-        ? (claimed.payload as { replenishmentSequence?: number })
+        ? (claimed.payload as {
+            replenishmentSequence?: number;
+            growthParentArticleId?: Id<"articles">;
+            growthSeed?: string;
+            growthActionFingerprint?: string;
+          })
+        : undefined;
+      const growthContext = payload?.growthParentArticleId &&
+        payload.growthSeed &&
+        payload.growthActionFingerprint
+        ? {
+            parentArticleId: payload.growthParentArticleId,
+            seed: payload.growthSeed,
+            actionFingerprint: payload.growthActionFingerprint,
+          }
         : undefined;
       const result = await handlePlan(
         ctx,
@@ -4367,6 +4530,7 @@ async function generatePlanHandler(
         jobId,
         workerToken,
         (payload?.replenishmentSequence ?? 0) + (claimed.workerAttempts ?? 0),
+        growthContext,
       );
       const completed = await ctx.runMutation(internal.jobs.markDone, {
         jobId,
@@ -4843,7 +5007,9 @@ async function reviewExistingArticleHandler(
       : [
           `The primary keyword "${topic?.primaryKeyword ?? "unknown"}" does not align with both the configured business and the final article title.`,
         ];
-    const readyForPublication = quality.passed && targetAlignmentPassed;
+    const preLinkIssues = issuesBlockingPreLinkReview(quality.issues);
+    const readyForPublication =
+      preLinkIssues.length === 0 && targetAlignmentPassed;
     const contentHash: string | undefined = readyForPublication
       ? publicationArtifactHash(qualityCandidate)
       : undefined;
@@ -4912,7 +5078,7 @@ async function reviewExistingArticleHandler(
     await ctx.runMutation(internal.articles.recordPublicationCheck, {
       articleId,
       status: readyForPublication ? "passed" : "blocked",
-      issues: [...quality.issues, ...targetAlignmentIssues],
+      issues: [...preLinkIssues, ...targetAlignmentIssues],
       warnings: quality.warnings,
     });
 
@@ -4925,7 +5091,7 @@ async function reviewExistingArticleHandler(
       readyForPublication,
       contentHash,
       qualityRevisionCount,
-      issues: quality.issues,
+      issues: preLinkIssues,
     };
 }
 
@@ -5570,6 +5736,9 @@ export const processNextJob = internalAction({
       manual?: boolean;
       reason?: string;
       replenishmentSequence?: number;
+      growthParentArticleId?: Id<"articles">;
+      growthSeed?: string;
+      growthActionFingerprint?: string;
       options?: RichMediaOptions;
     };
     const payload = job.payload as JobPayload | undefined;
@@ -5606,12 +5775,22 @@ export const processNextJob = internalAction({
       }
 
       if (job.type === "plan") {
+        const growthContext = payload?.growthParentArticleId &&
+          payload.growthSeed &&
+          payload.growthActionFingerprint
+          ? {
+              parentArticleId: payload.growthParentArticleId,
+              seed: payload.growthSeed,
+              actionFingerprint: payload.growthActionFingerprint,
+            }
+          : undefined;
         const result = await handlePlan(
           ctx,
           args.siteId,
           job._id,
           workerToken,
           (payload?.replenishmentSequence ?? 0) + (job.workerAttempts ?? 0),
+          growthContext,
         );
         await complete(result);
         return { processed: true, jobId: job._id, planCompleted: true };
@@ -5653,17 +5832,34 @@ export const processNextJob = internalAction({
               incrementRevision: true,
             });
         if (review.readyForPublication && review.contentHash) {
-          const linked = await handleLinks(
-            ctx,
-            args.siteId,
-            payload.articleId,
-            review.contentHash,
-          );
-          if (!linked.readyForPublication) {
+          let linked: Awaited<ReturnType<typeof handleLinks>>;
+          try {
+            linked = await handleLinks(
+              ctx,
+              args.siteId,
+              payload.articleId,
+              review.contentHash,
+            );
+          } catch (error) {
+            const issues = [`Post-review internal-link sealing failed: ${
+              error instanceof Error ? error.message : "unknown"
+            }`];
+            await ctx.runMutation(
+              internal.articles.quarantineLinkSealFailure,
+              { articleId: payload.articleId, issues },
+            );
+            await ctx.runMutation(
+              internal.seoGrowth.recordSupportArticleOutcome,
+              {
+                articleId: payload.articleId,
+                status: "support_failed",
+                detail: issues.join(" "),
+              },
+            );
             await complete({
               articleId: payload.articleId,
               qualityQuarantined: true,
-              issues: linked.issues ?? ["Post-review internal-link seal failed"],
+              issues,
             });
             return {
               processed: true,
@@ -5672,6 +5868,54 @@ export const processNextJob = internalAction({
               qualityQuarantined: true,
             };
           }
+          if (!linked.readyForPublication) {
+            const issues = linked.issues ?? ["Post-review internal-link seal failed"];
+            await ctx.runMutation(
+              internal.articles.quarantineLinkSealFailure,
+              { articleId: payload.articleId, issues },
+            );
+            await ctx.runMutation(
+              internal.seoGrowth.recordSupportArticleOutcome,
+              {
+                articleId: payload.articleId,
+                status: "support_failed",
+                detail: issues.join(" "),
+              },
+            );
+            await complete({
+              articleId: payload.articleId,
+              qualityQuarantined: true,
+              issues,
+            });
+            return {
+              processed: true,
+              jobId: job._id,
+              articleId: payload.articleId,
+              qualityQuarantined: true,
+            };
+          }
+          await ctx.runMutation(
+            internal.seoGrowth.recordSupportArticleOutcome,
+            {
+              articleId: payload.articleId,
+              status: "support_ready",
+              detail: "The support article passed strict review and exact parent-link resealing.",
+            },
+          );
+        }
+        if (!review.readyForPublication) {
+          const terminal =
+            review.qualityRevisionCount >= MAX_QUALITY_REVISIONS;
+          await ctx.runMutation(
+            internal.seoGrowth.recordSupportArticleOutcome,
+            {
+              articleId: payload.articleId,
+              status: terminal ? "support_failed" : "support_quarantined",
+              detail: terminal
+                ? "The support article exhausted its bounded quality revisions without passing publication gates."
+                : "The support article is undergoing bounded quality recovery.",
+            },
+          );
         }
         let publicationSucceeded = false;
         let buffered = false;
@@ -5872,6 +6116,14 @@ export const processNextJob = internalAction({
         incrementRevision: false,
       });
       if (!finalReview.readyForPublication) {
+        await ctx.runMutation(
+          internal.seoGrowth.recordSupportArticleOutcome,
+          {
+            articleId,
+            status: "support_quarantined",
+            detail: "The initial support draft was quarantined for bounded quality recovery.",
+          },
+        );
         await complete({
           articleId,
           qualityQuarantined: true,
@@ -5900,10 +6152,23 @@ export const processNextJob = internalAction({
           finalReview.contentHash,
         );
         if (!linked.readyForPublication) {
+          const issues = linked.issues ?? ["Post-review internal-link seal failed"];
+          await ctx.runMutation(
+            internal.articles.quarantineLinkSealFailure,
+            { articleId, issues },
+          );
+          await ctx.runMutation(
+            internal.seoGrowth.recordSupportArticleOutcome,
+            {
+              articleId,
+              status: "support_failed",
+              detail: issues.join(" "),
+            },
+          );
           await complete({
             articleId,
             qualityQuarantined: true,
-            issues: linked.issues ?? ["Post-review internal-link seal failed"],
+            issues,
           });
           return {
             processed: true,
@@ -5912,13 +6177,37 @@ export const processNextJob = internalAction({
             qualityQuarantined: true,
           };
         }
-      } catch (error) {
-        // Link selection is useful but not grounds for corrupting a healthy
-        // sealed artifact. A failed selector leaves the original seal intact.
-        console.error(
-          "Post-review internal linking skipped:",
-          error instanceof Error ? error.message : "unknown",
+        await ctx.runMutation(
+          internal.seoGrowth.recordSupportArticleOutcome,
+          {
+            articleId,
+            status: "support_ready",
+            detail: "The support article passed strict review and exact parent-link resealing.",
+          },
         );
+      } catch (error) {
+        const issue = `Post-review internal-link sealing failed: ${
+          error instanceof Error ? error.message : "unknown"
+        }`;
+        await ctx.runMutation(
+          internal.articles.quarantineLinkSealFailure,
+          { articleId, issues: [issue] },
+        );
+        await ctx.runMutation(
+          internal.seoGrowth.recordSupportArticleOutcome,
+          { articleId, status: "support_failed", detail: issue },
+        );
+        await complete({
+          articleId,
+          qualityQuarantined: true,
+          issues: [issue],
+        });
+        return {
+          processed: true,
+          jobId: job._id,
+          articleId,
+          qualityQuarantined: true,
+        };
       }
 
       let publicationSucceeded = false;

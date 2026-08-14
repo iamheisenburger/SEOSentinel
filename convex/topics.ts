@@ -38,6 +38,26 @@ export const listBySiteInternal = internalQuery({
   handler: async (ctx, { siteId }) => listBySiteHandler(ctx, siteId),
 });
 
+export const listGrowthSupportInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const topics = await listBySiteHandler(ctx, siteId);
+    return topics
+      .filter((topic) => Boolean(topic.growthActionFingerprint))
+      .map((topic) => ({
+        topicId: topic._id,
+        primaryKeyword: topic.primaryKeyword,
+        status: topic.status,
+        priority: topic.priority,
+        searchVolume: topic.searchVolume,
+        keywordDifficulty: topic.keywordDifficulty,
+        serpCount: topic.serpTopUrls?.length ?? 0,
+        growthParentArticleId: topic.growthParentArticleId,
+        growthActionFingerprint: topic.growthActionFingerprint,
+      }));
+  },
+});
+
 export const get = query({
   args: { topicId: v.id("topic_clusters") },
   handler: async (ctx, { topicId }) => {
@@ -120,6 +140,8 @@ export const getSerpCorpusAudit = internalQuery({
 export const upsertMany = internalMutation({
   args: {
     siteId: v.id("sites"),
+    growthParentArticleId: v.optional(v.id("articles")),
+    growthActionFingerprint: v.optional(v.string()),
     topics: v.array(
       v.object({
         label: v.string(),
@@ -142,7 +164,39 @@ export const upsertMany = internalMutation({
       }),
     ),
   },
-  handler: async (ctx, { siteId, topics }) => {
+  handler: async (
+    ctx,
+    { siteId, topics, growthParentArticleId, growthActionFingerprint },
+  ) => {
+    if (growthParentArticleId) {
+      const parent = await ctx.db.get(growthParentArticleId);
+      if (
+        !parent ||
+        parent.siteId !== siteId ||
+        parent.status !== "published" ||
+        !growthActionFingerprint
+      ) {
+        throw new Error(
+          "Growth support topics require a published same-tenant parent and action fingerprint",
+        );
+      }
+      const action = await ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_fingerprint", (q) =>
+          q.eq("fingerprint", growthActionFingerprint)
+        )
+        .unique();
+      if (
+        !action ||
+        action.siteId !== siteId ||
+        action.articleId !== growthParentArticleId ||
+        action.status !== "open"
+      ) {
+        throw new Error("Growth support topic does not match its measured action");
+      }
+    } else if (growthActionFingerprint) {
+      throw new Error("Growth action fingerprint requires a parent article");
+    }
     // Fetch existing topics to prevent duplicates
     const existing = await ctx.db
       .query("topic_clusters")
@@ -198,6 +252,8 @@ export const upsertMany = internalMutation({
         ...(topic.paaQuestions ? { paaQuestions: topic.paaQuestions } : {}),
         ...(topic.serpTopUrls ? { serpTopUrls: topic.serpTopUrls } : {}),
         ...(topic.volumeTrend ? { volumeTrend: topic.volumeTrend } : {}),
+        ...(growthParentArticleId ? { growthParentArticleId } : {}),
+        ...(growthActionFingerprint ? { growthActionFingerprint } : {}),
         createdAt: now(),
         updatedAt: now(),
       });

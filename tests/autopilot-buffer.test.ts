@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  coveredIntentTopics,
   coveredPrimaryKeywords,
   evergreenTopicLabel,
   exactCadenceWakeupAt,
@@ -18,6 +19,7 @@ import {
   autopilotHealthStatus,
   contentWorkBlocksQualityRecovery,
   isSealedReady,
+  keywordMatchesBusinessModel,
   keywordMatchesBusinessSignals,
   migrationBlocksAutopilot,
   normalizedSerpQuestions,
@@ -426,6 +428,28 @@ test("live SERP evidence overrides lexical similarity while legacy rows fail clo
     ),
     [],
   );
+  const covered = coveredIntentTopics(
+    [{
+      _id: "parent-topic",
+      status: "used",
+      primaryKeyword: "AI chatbot for sales",
+      serpTopUrls: distinctA,
+    }],
+    [{ topicId: "parent-topic", slug: "ai-chatbot-for-sales" }],
+  );
+  assert.deepEqual(
+    filterNonCannibalizingIntentTopics(
+      [{
+        primaryKeyword: "conversational AI for sales",
+        serpTopUrls: distinctB,
+      }],
+      covered,
+    ).map((topic) => topic.primaryKeyword),
+    ["conversational AI for sales"],
+  );
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(scheduler, /coveredIntentTopics/);
+  assert.match(scheduler, /filterNonCannibalizingIntentTopics/);
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.match(pipeline, /export const backfillTopicSerpFingerprints = internalAction/);
   assert.match(pipeline, /DataForSEO returned fewer than five organic URLs/);
@@ -524,6 +548,28 @@ test("generic-only profiles require two matching signals", () => {
   );
 });
 
+test("service-provider intent must match the tenant business model", () => {
+  assert.equal(
+    keywordMatchesBusinessModel("conversion optimization consulting", [
+      "AI sales software",
+      "website chatbot SaaS",
+    ]),
+    false,
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("agency lead generation software", [
+      "AI sales software",
+    ]),
+    true,
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("conversion optimization consulting", [
+      "conversion consulting agency",
+    ]),
+    true,
+  );
+});
+
 test("broad cost language cannot smuggle an unrelated audience into a niche plan", () => {
   const constructionSignals = [
     "construction cost estimating",
@@ -553,7 +599,10 @@ test("broad cost language cannot smuggle an unrelated audience into a niche plan
   );
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.match(pipeline, /Business\/title relevance gate/);
-  assert.match(pipeline, /quality\.passed && targetAlignmentPassed/);
+  assert.match(
+    pipeline,
+    /preLinkIssues\.length === 0 && targetAlignmentPassed/,
+  );
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   assert.match(scheduler, /hasTerminalTargetAlignmentFailure/);
 });

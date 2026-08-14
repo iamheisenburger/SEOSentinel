@@ -54,6 +54,10 @@ type GrowthScanResult = {
     lowCtr: number;
     performing: number;
   };
+  replenishment?: {
+    status: string;
+    detail: string;
+  };
 };
 
 export const scanAllSites = internalAction({
@@ -189,7 +193,9 @@ export const scanSite = internalAction({
         0,
       ) / totalImpressions) * 10) / 10
       : 0;
-    return await ctx.runMutation(internal.seoGrowth.reconcileSite, {
+    const reconciliation = await ctx.runMutation(
+      internal.seoGrowth.reconcileSite,
+      {
       siteId,
       classifications: classifications.map((classification) => ({
         ...classification,
@@ -207,6 +213,58 @@ export const scanSite = internalAction({
         averagePosition,
         monthlyOrganicClicksGoal: input.monthlyOrganicClicksGoal,
       },
-    });
+      },
+    );
+
+    // A growth scan may request many remediations, but planning is deliberately
+    // serialized and capped at one measured recovery plan per tenant per day.
+    // This prevents a bad cohort from multiplying DataForSEO and model spend.
+    const request = [...reconciliation.replenishmentRequests]
+      .sort((a, b) => b.priority - a.priority)[0];
+    let replenishment: GrowthScanResult["replenishment"];
+    if (request) {
+      const queued = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
+        siteId,
+        reason: "seo_growth_support_replenishment",
+        since: Date.now() - 24 * 60 * 60 * 1000,
+        maximumRecent: 1,
+        growthParentArticleId: request.articleId,
+        growthSeed: request.growthSeed,
+        growthActionFingerprint: request.fingerprint,
+      });
+      const status = queued.queued
+        ? "queued_growth_plan"
+        : queued.reason === "autopilot_disabled"
+          ? "not_applicable"
+          : "bounded_wait";
+      const detail = queued.queued
+        ? "Queued one bounded, measured support-topic plan for the highest-priority page."
+        : queued.reason === "recent_limit"
+          ? "A growth support plan has already been attempted for this tenant in the last 24 hours."
+          : queued.reason === "active"
+            ? "Another topic plan is already active for this tenant; the growth request will retry on the next scan."
+            : "Autopilot is not eligible to execute this growth request.";
+      await ctx.runMutation(internal.seoGrowth.recordAutomationResult, {
+        siteId,
+        fingerprint: request.fingerprint,
+        status,
+        detail,
+      });
+      if (queued.queued) {
+        await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+          siteId,
+          trigger: "seo_growth_support",
+          reason: "measured_growth_action",
+        });
+      }
+      replenishment = { status, detail };
+    }
+
+    return {
+      articlesEvaluated: reconciliation.articlesEvaluated,
+      openActions: reconciliation.openActions,
+      stageCounts: reconciliation.stageCounts,
+      replenishment,
+    };
   },
 });

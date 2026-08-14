@@ -70,6 +70,7 @@ export type TopicCoverageTopic = {
   _id: string;
   status: string;
   primaryKeyword: string;
+  serpTopUrls?: string[];
 };
 
 /**
@@ -96,6 +97,44 @@ export function coveredPrimaryKeywords(
     .filter((article) => !article.topicId)
     .map((article) => article.slug.replace(/^\//, "").replace(/-/g, " "));
   return [...new Set([...canonical, ...legacy].filter(Boolean))];
+}
+
+/**
+ * Preserve each covered page's live SERP fingerprint for the scheduler. Plan
+ * creation already uses this evidence to distinguish adjacent cluster support
+ * from duplicate intent; discarding it at scheduling time creates a false
+ * deadlock where a verified support topic is saved and then rejected by a
+ * weaker lexical-only rule.
+ */
+export function coveredIntentTopics(
+  topics: TopicCoverageTopic[],
+  articles: TopicCoverageArticle[],
+): SerpCoverageTopic[] {
+  const usedTopicIds = new Set(
+    articles
+      .map((article) => article.topicId)
+      .filter((topicId): topicId is string => Boolean(topicId)),
+  );
+  const canonical = topics
+    .filter(
+      (topic) => topic.status === "used" || usedTopicIds.has(topic._id),
+    )
+    .map((topic) => ({
+      primaryKeyword: topic.primaryKeyword,
+      serpTopUrls: topic.serpTopUrls,
+    }));
+  const legacy = articles
+    .filter((article) => !article.topicId)
+    .map((article) => ({
+      primaryKeyword: article.slug.replace(/^\//, "").replace(/-/g, " "),
+    }));
+  const seen = new Set<string>();
+  return [...canonical, ...legacy].filter((topic) => {
+    const key = topic.primaryKeyword.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
@@ -698,6 +737,24 @@ export function keywordMatchesBusinessSignals(
     if (genericSignalRoots.has(root)) overlap += 1;
   }
   return overlap >= 2;
+}
+
+const PROFESSIONAL_SERVICE_TERM = /\b(?:consulting|consultant|agency|firm)\b/i;
+const PROFESSIONAL_SERVICE_QUERY =
+  /(?:\b(?:hire|hiring|find|choose|best|top)\b.*\b(?:consultant|agency|firm|expert)\b|\b(?:consulting|consultant|agency|firm)\b\s*$)/i;
+
+/**
+ * A SaaS may serve consultants without being a consultancy. Keep product
+ * queries such as "agency lead generation software", but reject queries whose
+ * primary intent is to hire a service provider unless the tenant actually
+ * describes itself as that kind of provider.
+ */
+export function keywordMatchesBusinessModel(
+  keyword: string,
+  siteSignals: string[],
+): boolean {
+  if (!PROFESSIONAL_SERVICE_QUERY.test(keyword.trim())) return true;
+  return siteSignals.some((signal) => PROFESSIONAL_SERVICE_TERM.test(signal));
 }
 
 export function evergreenTopicLabel(

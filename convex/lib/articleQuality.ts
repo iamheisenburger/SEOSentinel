@@ -3,6 +3,18 @@ import { sha256Hex } from "./publicationArtifact.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
+export const PENDING_INTERNAL_LINK_ISSUE =
+  "Strict publication requires at least one internal link so the page joins a topic cluster.";
+
+/**
+ * Internal links are selected from the final edited prose, so this one gate is
+ * intentionally deferred until the exact artifact is resealed. Every other
+ * strict quality defect remains blocking before link selection begins.
+ */
+export function issuesBlockingPreLinkReview(issues: string[]): string[] {
+  return issues.filter((issue) => issue !== PENDING_INTERNAL_LINK_ISSUE);
+}
+
 export type PublicationSource = {
   url: string;
   title?: string;
@@ -1071,7 +1083,7 @@ export function evaluatePublicationQuality(
     // gate cannot suddenly halt an existing tenant's eligible queue.
     if (internalLinkCount < 1) {
       issues.push(
-        "Strict publication requires at least one internal link so the page joins a topic cluster.",
+      PENDING_INTERNAL_LINK_ISSUE,
       );
     }
     if (article.featuredImage && !safeHttpsUrl(article.featuredImage)) {

@@ -112,6 +112,41 @@ function normalizeAnchor(value: string): string | null {
   return anchor;
 }
 
+/**
+ * Produce deterministic, human-readable anchor candidates from an exact
+ * destination title/keyword set. The injector still proves that the selected
+ * phrase exists in eligible prose; this helper never writes or invents copy.
+ */
+export function preferredInternalLinkAnchorCandidates(
+  title: string,
+  keywords: string[] = [],
+): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const seed of [title, ...keywords]) {
+    const words = seed.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+    for (let length = Math.min(8, words.length); length >= 2; length -= 1) {
+      for (let start = 0; start + length <= words.length; start += 1) {
+        for (const phrase of [
+          words.slice(start, start + length).join(" "),
+          words
+            .slice(start, start + length)
+            .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+            .filter(Boolean)
+            .join(" "),
+        ]) {
+          const anchor = normalizeAnchor(phrase);
+          const key = anchor?.toLowerCase();
+          if (!anchor || !key || seen.has(key)) continue;
+          seen.add(key);
+          candidates.push(anchor);
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
 export function validateInternalLinkSuggestions(
   suggestions: InternalLink[],
   allowedHrefs: string[],

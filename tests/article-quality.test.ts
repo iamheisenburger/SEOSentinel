@@ -9,6 +9,8 @@ import {
   containsExecutableMdx,
   evaluatePublicationQuality,
   inlineCitationNumbers,
+  issuesBlockingPreLinkReview,
+  PENDING_INTERNAL_LINK_ISSUE,
   normalizeSiteOrigin,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
@@ -27,6 +29,7 @@ import {
 } from "../convex/lib/sourceQuality.ts";
 import {
   injectInternalLinks,
+  preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
   validateInternalLinkSuggestions,
 } from "../convex/lib/internalLinks.ts";
@@ -860,6 +863,20 @@ test("validates contextual internal-link suggestions against crawled pages", () 
   ]);
 });
 
+test("defers only the exact internal-link gate until final prose resealing", () => {
+  assert.deepEqual(
+    issuesBlockingPreLinkReview([
+      PENDING_INTERNAL_LINK_ISSUE,
+      "Fact-check score is below the strict minimum.",
+    ]),
+    ["Fact-check score is below the strict minimum."],
+  );
+  assert.deepEqual(
+    issuesBlockingPreLinkReview(["Article has only one internal link."]),
+    ["Article has only one internal link."],
+  );
+});
+
 test("builds safe related-article links from each tenant publication path", () => {
   assert.equal(
     publishedArticleInternalHref(
@@ -876,6 +893,21 @@ test("builds safe related-article links from each tenant publication path", () =
     () => publishedArticleInternalHref("/blog/[slug]?preview=1", "article"),
     /safe \[slug\]/,
   );
+});
+
+test("derives bounded exact anchors for a measured parent article", () => {
+  const anchors = preferredInternalLinkAnchorCandidates(
+    "How to Build a Website Lead Qualification Workflow That Converts",
+    ["website lead qualification"],
+  );
+  assert.equal(
+    anchors[0],
+    "How to Build a Website Lead Qualification Workflow",
+  );
+  assert.ok(
+    anchors.some((anchor) => anchor.toLowerCase() === "website lead qualification"),
+  );
+  assert.ok(anchors.every((anchor) => anchor.split(/\s+/).length <= 8));
 });
 
 test("injects links only into eligible article prose", () => {

@@ -653,6 +653,37 @@ export const recordPublicationCheck = internalMutation({
   },
 });
 
+export const quarantineLinkSealFailure = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    issues: v.array(v.string()),
+  },
+  handler: async (ctx, { articleId, issues }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    assertNotPublishing(article);
+    if (article.status === "published") {
+      throw new Error("Published articles require an audited revision");
+    }
+    const checkedAt = now();
+    await ctx.db.patch(articleId, {
+      status: "review",
+      publicationGateStatus: "blocked",
+      publicationGateIssues: issues,
+      publicationGateWarnings: [],
+      publicationCheckedAt: checkedAt,
+      publicationAuditVersion: undefined,
+      publicationConfigHash: undefined,
+      publicationConfigSnapshot: undefined,
+      auditedContentHash: undefined,
+      auditedAt: undefined,
+      updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, articleId);
+    return { quarantined: true };
+  },
+});
+
 // Operator-safe migration path for artifacts created before the deterministic
 // business/title target-alignment gate existed. This invalidates every seal in
 // the same atomic write and quarantines the source topic so a fleet tick cannot
@@ -868,6 +899,34 @@ export const completePublication = internalMutation({
       publicationLeaseExpiresAt: undefined,
       updatedAt: completedAt,
     });
+    if (article.topicId) {
+      const topic = await ctx.db.get(article.topicId);
+      if (
+        topic?.siteId === article.siteId &&
+        topic.growthActionFingerprint &&
+        topic.growthParentArticleId
+      ) {
+        const growthAction = await ctx.db
+          .query("seo_growth_actions")
+          .withIndex("by_fingerprint", (q) =>
+            q.eq("fingerprint", topic.growthActionFingerprint!)
+          )
+          .unique();
+        if (
+          growthAction?.siteId === article.siteId &&
+          growthAction.articleId === topic.growthParentArticleId &&
+          growthAction.status === "open"
+        ) {
+          await ctx.db.patch(growthAction._id, {
+            automationStatus: "executed",
+            automationDetail:
+              "The verified support article was delivered and confirmed by an exact external publication receipt.",
+            automatedAt: completedAt,
+            updatedAt: completedAt,
+          });
+        }
+      }
+    }
     await syncSummary(ctx, articleId);
   },
 });
@@ -1434,7 +1493,7 @@ export const updateContentScore = internalMutation({
     if (article.status === "published") {
       throw new Error("Published artifacts are immutable; score a new revision instead");
     }
-    const patch: Record<string, any> = {
+    const patch: Partial<Doc<"articles">> = {
       auditedContentHash: undefined,
       auditedAt: undefined,
       publicationAuditVersion: undefined,
@@ -1444,11 +1503,26 @@ export const updateContentScore = internalMutation({
       publicationGateIssues: undefined,
       publicationGateWarnings: undefined,
       publicationCheckedAt: undefined,
+      ...(scores.contentScore !== undefined
+        ? { contentScore: scores.contentScore }
+        : {}),
+      ...(scores.entityCoverage !== undefined
+        ? { entityCoverage: scores.entityCoverage }
+        : {}),
+      ...(scores.topicCompleteness !== undefined
+        ? { topicCompleteness: scores.topicCompleteness }
+        : {}),
+      ...(scores.missingEntities !== undefined
+        ? { missingEntities: scores.missingEntities }
+        : {}),
+      ...(scores.missingTopics !== undefined
+        ? { missingTopics: scores.missingTopics }
+        : {}),
+      ...(scores.serpDifficulty !== undefined
+        ? { serpDifficulty: scores.serpDifficulty }
+        : {}),
       updatedAt: Date.now(),
     };
-    for (const [k, val] of Object.entries(scores)) {
-      if (val !== undefined) patch[k] = val;
-    }
     await ctx.db.patch(articleId, patch);
     await syncSummary(ctx, articleId);
   },
@@ -1488,7 +1562,10 @@ export const updateDecayStatus = internalMutation({
     }))),
   },
   handler: async (ctx, { articleId, decayStatus, decayReason, decayDetectedAt, positionHistory }) => {
-    const patch: Record<string, any> = { decayStatus, updatedAt: Date.now() };
+    const patch: Partial<Doc<"articles">> = {
+      decayStatus,
+      updatedAt: Date.now(),
+    };
     if (decayReason !== undefined) patch.decayReason = decayReason;
     if (decayDetectedAt !== undefined) patch.decayDetectedAt = decayDetectedAt;
     if (positionHistory !== undefined) patch.positionHistory = positionHistory;
@@ -1532,7 +1609,7 @@ export const completeRefresh = internalMutation({
     if (article.status === "published") {
       throw new Error("Published artifacts are immutable; autonomous refresh is disabled");
     }
-    const patch: Record<string, any> = {
+    const patch: Partial<Doc<"articles">> = {
       markdown,
       decayStatus: "refreshed",
       lastRefreshedAt: Date.now(),

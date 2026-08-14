@@ -135,6 +135,36 @@ export const listActiveBySite = internalQuery({
   },
 });
 
+// Operator-safe view of growth planning. Never return the worker lease token,
+// provider error body, or arbitrary payload fields from a live job.
+export const listGrowthPlanStatus = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_site_type_created", (q) =>
+        q.eq("siteId", siteId).eq("type", "plan")
+      )
+      .order("desc")
+      .take(20);
+    return jobs
+      .filter((job) => {
+        const payload = job.payload && typeof job.payload === "object"
+          ? (job.payload as Record<string, unknown>)
+          : {};
+        return payload.reason === "seo_growth_support_replenishment";
+      })
+      .map((job) => ({
+        jobId: job._id,
+        status: job.status,
+        progress: job.stepProgress,
+        result: job.status === "done" ? job.result : undefined,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      }));
+  },
+});
+
 export const countRecentTopicReplenishments = internalQuery({
   args: { siteId: v.id("sites"), since: v.number() },
   handler: async (ctx, { siteId, since }) => {
@@ -572,10 +602,51 @@ export const queuePlanIfAbsent = internalMutation({
     since: v.optional(v.number()),
     maximumRecent: v.optional(v.number()),
     manual: v.optional(v.boolean()),
+    growthParentArticleId: v.optional(v.id("articles")),
+    growthSeed: v.optional(v.string()),
+    growthActionFingerprint: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
     if (!site) throw new Error("Site not found");
+    const normalizedGrowthSeed = args.growthSeed?.trim();
+    if (args.growthParentArticleId) {
+      const parent = await ctx.db.get(args.growthParentArticleId);
+      if (
+        !parent ||
+        parent.siteId !== args.siteId ||
+        parent.status !== "published" ||
+        !normalizedGrowthSeed ||
+        normalizedGrowthSeed.length > 200 ||
+        !args.growthActionFingerprint
+      ) {
+        throw new Error(
+          "Growth planning requires a published same-tenant parent, seed, and action fingerprint",
+        );
+      }
+      const action = await ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_fingerprint", (q) =>
+          q.eq("fingerprint", args.growthActionFingerprint!)
+        )
+        .unique();
+      if (
+        !action ||
+        action.siteId !== args.siteId ||
+        action.articleId !== args.growthParentArticleId ||
+        action.status !== "open"
+      ) {
+        throw new Error("Growth plan does not match an open measured action");
+      }
+      if (
+        !site.autopilotEnabled ||
+        !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
+      ) {
+        return { queued: false, reason: "autopilot_disabled" as const };
+      }
+    } else if (args.growthSeed || args.growthActionFingerprint) {
+      throw new Error("Incomplete growth planning context");
+    }
     const active = await activeJobsForSite(ctx, args.siteId);
     const duplicate = active.find((job) => job.type === "plan");
     if (duplicate) return { queued: false, jobId: duplicate._id, reason: "active" as const };
@@ -607,13 +678,18 @@ export const queuePlanIfAbsent = internalMutation({
       }
     }
     const timestamp = now();
-    const payload = args.reason || args.manual
+    const payload = args.reason || args.manual || args.growthParentArticleId
       ? {
           ...(args.reason ? {
             reason: args.reason,
             replenishmentSequence: recentCount + 1,
           } : {}),
           ...(args.manual === true ? { manual: true } : {}),
+          ...(args.growthParentArticleId ? {
+            growthParentArticleId: args.growthParentArticleId,
+            growthSeed: normalizedGrowthSeed!,
+            growthActionFingerprint: args.growthActionFingerprint!,
+          } : {}),
         }
       : undefined;
     const jobId = await ctx.db.insert("jobs", {

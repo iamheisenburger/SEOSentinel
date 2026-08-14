@@ -123,6 +123,13 @@ export default defineSchema({
     serpTopUrls: v.optional(v.array(v.string())), // normalized by the overlap gate
     volumeTrend: v.optional(v.array(v.number())), // last 12 months search volume
 
+    // A measured growth action may commission a support topic for one exact
+    // published page. These fields are tenant-scoped routing metadata, not an
+    // inferred cluster label. They let article generation and final linking
+    // carry the recovery intent all the way to the published artifact.
+    growthParentArticleId: v.optional(v.id("articles")),
+    growthActionFingerprint: v.optional(v.string()),
+
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_site", ["siteId"]),
@@ -457,7 +464,7 @@ export default defineSchema({
       pageFetchState: v.optional(v.string()),
       robotsTxtState: v.optional(v.string()),
     }),
-    automationStatus: v.optional(v.string()), // executed | no_safe_candidate | not_applicable
+    automationStatus: v.optional(v.string()), // support lifecycle + executed/no_safe_candidate/bounded_wait/not_applicable
     automationDetail: v.optional(v.string()),
     automatedAt: v.optional(v.number()),
     firstObservedAt: v.number(),
