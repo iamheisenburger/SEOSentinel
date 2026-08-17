@@ -631,12 +631,20 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "generation",
   "guide",
   "implementation",
+  "job",
+  "jobs",
+  "lead",
+  "leads",
   "marketing",
+  "market",
+  "markets",
   "analysis",
   "budget",
   "planning",
   "project",
   "projects",
+  "program",
+  "programs",
   "online",
   "outside",
   "page",
@@ -662,6 +670,8 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "strategy",
   "technique",
   "techniques",
+  "time",
+  "times",
   "tool",
   "tools",
   "user",
@@ -670,6 +680,44 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "websites",
   "workflow",
   "workflows",
+]);
+
+const BUSINESS_QUERY_MODIFIER_WORDS = new Set([
+  "course",
+  "courses",
+  "definition",
+  "example",
+  "examples",
+  "framework",
+  "frameworks",
+  "meaning",
+  "template",
+  "templates",
+  "train",
+  "training",
+  "tutorial",
+  "tutorials",
+]);
+
+const PRODUCT_OFFERING_WORDS = new Set([
+  "agency",
+  "agent",
+  "app",
+  "application",
+  "assistant",
+  "company",
+  "consultant",
+  "consulting",
+  "firm",
+  "platform",
+  "plugin",
+  "product",
+  "service",
+  "software",
+  "solution",
+  "system",
+  "tool",
+  "widget",
 ]);
 
 function relevanceRoot(word: string): string {
@@ -694,7 +742,7 @@ function relevanceRoot(word: string): string {
 
 const RELEVANCE_STOP_WORDS = new Set([
   "about", "and", "are", "can", "for", "from", "have", "how", "into",
-  "more", "that", "the", "this", "using", "what", "why", "will", "with",
+  "more", "per", "that", "the", "this", "using", "what", "why", "will", "with",
   "your",
 ]);
 
@@ -703,6 +751,94 @@ function relevanceTokens(value: string): string[] {
     .split(/[^a-z0-9]+/i)
     .map((word) => word.toLowerCase())
     .filter((word) => word.length >= 3 && !RELEVANCE_STOP_WORDS.has(word));
+}
+
+function distinctiveRelevanceRoots(words: string[]): Set<string> {
+  return new Set(
+    words
+      .filter((word) =>
+        !GENERIC_BUSINESS_SIGNAL_WORDS.has(word) &&
+        !BUSINESS_QUERY_MODIFIER_WORDS.has(word)
+      )
+      .map(relevanceRoot),
+  );
+}
+
+function genericOfferingAlignment(
+  keywordWords: string[],
+  signalWords: string[],
+): boolean {
+  const keywordRoots = new Set(keywordWords.map(relevanceRoot));
+  const signalRoots = new Set(signalWords.map(relevanceRoot));
+  let sharedRoots = 0;
+  for (const root of keywordRoots) {
+    if (signalRoots.has(root)) sharedRoots += 1;
+  }
+  const sharedOffering = keywordWords.some((word) =>
+    PRODUCT_OFFERING_WORDS.has(word) && signalWords.includes(word)
+  );
+  return sharedOffering && sharedRoots >= 2;
+}
+
+export type BusinessSignalMatch = {
+  eligible: boolean;
+  matchedDistinctiveRoots: string[];
+  unmatchedDistinctiveRoots: string[];
+  score: number;
+};
+
+export function businessSignalMatch(
+  keyword: string,
+  businessSignals: string[],
+): BusinessSignalMatch {
+  const keywordWords = relevanceTokens(keyword);
+  if (keywordWords.length === 0) {
+    return {
+      eligible: false,
+      matchedDistinctiveRoots: [],
+      unmatchedDistinctiveRoots: [],
+      score: 0,
+    };
+  }
+
+  const signalWords = businessSignals.flatMap(relevanceTokens);
+  if (signalWords.length === 0) {
+    return {
+      eligible: false,
+      matchedDistinctiveRoots: [],
+      unmatchedDistinctiveRoots: [],
+      score: 0,
+    };
+  }
+
+  const keywordRoots = distinctiveRelevanceRoots(keywordWords);
+  const signalRoots = distinctiveRelevanceRoots(signalWords);
+  const matched = [...keywordRoots].filter((root) => signalRoots.has(root));
+  const unmatched = [...keywordRoots].filter((root) => !signalRoots.has(root));
+
+  if (keywordRoots.size === 0) {
+    const aligned = genericOfferingAlignment(keywordWords, signalWords);
+    return {
+      eligible: aligned,
+      matchedDistinctiveRoots: [],
+      unmatchedDistinctiveRoots: [],
+      score: aligned ? 70 : 0,
+    };
+  }
+
+  const ratio = matched.length / keywordRoots.size;
+  const eligible = keywordRoots.size === 1
+    ? matched.length === 1
+    : matched.length >= 2 || ratio > 0.5;
+  const score = eligible
+    ? Math.min(100, 55 + matched.length * 15 + Math.round(ratio * 15))
+    : Math.min(49, matched.length * 20 + Math.round(ratio * 10));
+  return {
+    eligible,
+    matchedDistinctiveRoots: matched,
+    unmatchedDistinctiveRoots: unmatched,
+    score,
+  };
 }
 
 /**
@@ -715,33 +851,12 @@ export function keywordMatchesBusinessSignals(
   keyword: string,
   businessSignals: string[],
 ): boolean {
-  const keywordWords = relevanceTokens(keyword);
-  if (keywordWords.length === 0) return false;
-
-  const signalWords = businessSignals.flatMap(relevanceTokens);
-  if (signalWords.length === 0) return true;
-
-  const keywordRoots = new Set(keywordWords.map(relevanceRoot));
-  const specificSignalRoots = new Set(
-    signalWords
-      .filter((word) => !GENERIC_BUSINESS_SIGNAL_WORDS.has(word))
-      .map(relevanceRoot),
-  );
-  if (specificSignalRoots.size > 0) {
-    return [...specificSignalRoots].some((root) => keywordRoots.has(root));
-  }
-
-  const genericSignalRoots = new Set(signalWords.map(relevanceRoot));
-  let overlap = 0;
-  for (const root of keywordRoots) {
-    if (genericSignalRoots.has(root)) overlap += 1;
-  }
-  return overlap >= 2;
+  return businessSignalMatch(keyword, businessSignals).eligible;
 }
 
 const PROFESSIONAL_SERVICE_TERM = /\b(?:consulting|consultant|agency|firm)\b/i;
 const PROFESSIONAL_SERVICE_QUERY =
-  /(?:\b(?:hire|hiring|find|choose|best|top)\b.*\b(?:consultant|agency|firm|expert)\b|\b(?:consulting|consultant|agency|firm)\b\s*$)/i;
+  /(?:\b(?:hire|hiring|find|choose|best|top)\b.*\b(?:consultant|agency|firm|expert)\b|\b(?:consulting|consultant|agency|firm)\b\s*$|\b(?:consulting|consultant|agency|firm)\b.*\b(?:career|careers|course|courses|definition|job|jobs|meaning|role|roles|salary|training|what)\b)/i;
 
 /**
  * A SaaS may serve consultants without being a consultancy. Keep product
@@ -755,6 +870,57 @@ export function keywordMatchesBusinessModel(
 ): boolean {
   if (!PROFESSIONAL_SERVICE_QUERY.test(keyword.trim())) return true;
   return siteSignals.some((signal) => PROFESSIONAL_SERVICE_TERM.test(signal));
+}
+
+export const TOPIC_BUSINESS_FIT_VERSION = 2;
+
+export type TopicBusinessFitEvaluation = {
+  eligible: boolean;
+  score: number;
+  reasons: string[];
+  version: number;
+};
+
+export function evaluateTopicBusinessFit(args: {
+  keyword: string;
+  label?: string;
+  coreBusinessSignals: string[];
+  businessModelSignals: string[];
+  growthSeed?: string;
+}): TopicBusinessFitEvaluation {
+  const core = businessSignalMatch(args.keyword, args.coreBusinessSignals);
+  const modelAligned = keywordMatchesBusinessModel(
+    args.keyword,
+    args.businessModelSignals,
+  );
+  // Titles naturally add framing words ("how to choose", "complete guide").
+  // Validate that the measured query survives in the title, rather than
+  // treating every editorial modifier in the title as a new business subject.
+  const titleAligned = !args.label || keywordMatchesBusinessSignals(
+    args.keyword,
+    [args.label],
+  );
+  const growthAligned = !args.growthSeed || keywordMatchesBusinessSignals(
+    args.keyword,
+    [args.growthSeed],
+  );
+  const reasons: string[] = [];
+  if (!core.eligible) {
+    reasons.push(
+      core.unmatchedDistinctiveRoots.length > 0
+        ? `keyword introduces unsupported subject signals: ${core.unmatchedDistinctiveRoots.join(", ")}`
+        : "keyword lacks a product-specific tenant signal",
+    );
+  }
+  if (!modelAligned) reasons.push("search intent targets a different business model");
+  if (!titleAligned) reasons.push("article title does not preserve the measured keyword intent");
+  if (!growthAligned) reasons.push("support topic is not adjacent to its measured parent query");
+  return {
+    eligible: core.eligible && modelAligned && titleAligned && growthAligned,
+    score: core.score,
+    reasons,
+    version: TOPIC_BUSINESS_FIT_VERSION,
+  };
 }
 
 export function evergreenTopicLabel(

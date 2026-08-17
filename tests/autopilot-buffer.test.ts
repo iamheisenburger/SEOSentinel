@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  businessSignalMatch,
   coveredIntentTopics,
   coveredPrimaryKeywords,
+  evaluateTopicBusinessFit,
   evergreenTopicLabel,
   exactCadenceWakeupAt,
   filterNonCannibalizingIntentTopics,
@@ -508,6 +510,7 @@ test("verified volume still requires a specific business relevance signal", () =
     "lead capture",
     "conversion",
     "embedded chat widget",
+    "website visitor engagement",
     "lead generation strategies",
     "sales qualification techniques",
     "outside business hours",
@@ -522,7 +525,7 @@ test("verified volume still requires a specific business relevance signal", () =
     keywordMatchesBusinessSignals("lead capture software", signals),
     true,
   );
-  assert.equal(keywordMatchesBusinessSignals("embed link", signals), true);
+  assert.equal(keywordMatchesBusinessSignals("embed link", signals), false);
   assert.equal(keywordMatchesBusinessSignals("website page", signals), false);
   assert.equal(keywordMatchesBusinessSignals("free ai website", signals), false);
   assert.equal(keywordMatchesBusinessSignals("agent works", signals), false);
@@ -535,6 +538,140 @@ test("verified volume still requires a specific business relevance signal", () =
     ),
     false,
   );
+});
+
+test("LeadPilot topic fit rejects measured keywords that do not describe its product or buyer problem", () => {
+  const coreBusinessSignals = [
+    "B2B SaaS AI lead generation and sales automation",
+    "AI sales agent for websites",
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "AI chatbot for lead capture",
+    "automated lead qualification software",
+    "website visitor engagement AI",
+  ];
+  const businessModelSignals = [
+    "SaaS Product",
+    "AI lead generation software for business websites",
+  ];
+
+  for (const keyword of [
+    "customer lead time",
+    "lead connector crm",
+    "lead generation program",
+    "lead generation job",
+    "real estate lead generation platforms",
+    "best lead generation for realtors",
+    "employee chatbot",
+    "consultative selling training",
+  ]) {
+    assert.equal(
+      evaluateTopicBusinessFit({
+        keyword,
+        coreBusinessSignals,
+        businessModelSignals,
+      }).eligible,
+      false,
+      `expected ${keyword} to fail tenant product fit`,
+    );
+  }
+
+  assert.equal(
+    evaluateTopicBusinessFit({
+      keyword: "lead capture software",
+      label: "How to Choose Lead Capture Software for Your Website",
+      coreBusinessSignals,
+      businessModelSignals,
+    }).eligible,
+    true,
+  );
+});
+
+test("LeadPilot topic fit preserves specific product and buyer-problem queries", () => {
+  const coreBusinessSignals = [
+    "B2B SaaS AI lead generation and sales automation",
+    "AI sales agent for websites",
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "AI chatbot for lead capture",
+    "automated lead qualification software",
+    "website visitor engagement AI",
+    "sales qualification techniques",
+  ];
+  const businessModelSignals = [
+    "SaaS Product",
+    "AI lead generation software for business websites",
+  ];
+
+  for (const keyword of [
+    "website visitor engagement",
+    "lead capture software",
+    "website chatbot",
+    "sales qualification frameworks",
+    "automated lead qualification",
+    "cost per sales qualified lead",
+  ]) {
+    assert.equal(
+      evaluateTopicBusinessFit({
+        keyword,
+        coreBusinessSignals,
+        businessModelSignals,
+      }).eligible,
+      true,
+      `expected ${keyword} to pass tenant product fit`,
+    );
+  }
+});
+
+test("a measured growth seed cannot substitute for core tenant relevance", () => {
+  const fit = evaluateTopicBusinessFit({
+    keyword: "consultative selling examples",
+    label: "Consultative Selling Examples and Real-World Applications",
+    coreBusinessSignals: [
+      "website chatbot",
+      "automated lead qualification software",
+      "website visitor engagement",
+    ],
+    businessModelSignals: ["SaaS Product", "AI sales software"],
+    growthSeed: "consultative selling training",
+  });
+
+  assert.equal(fit.eligible, false);
+  assert.match(fit.reasons.join("; "), /unsupported subject signals/);
+});
+
+test("business-fit evidence stays tenant-specific and auditable", () => {
+  const construction = businessSignalMatch(
+    "residential construction cost estimation",
+    [
+      "construction cost estimating",
+      "builder ready cost estimate report",
+      "residential builders",
+    ],
+  );
+  const chatbot = businessSignalMatch(
+    "residential construction cost estimation",
+    ["website chatbot", "lead qualification software"],
+  );
+
+  assert.equal(construction.eligible, true);
+  assert.ok(construction.score >= 70);
+  assert.ok(construction.matchedDistinctiveRoots.length >= 2);
+  assert.equal(chatbot.eligible, false);
+  assert.ok(chatbot.unmatchedDistinctiveRoots.length >= 2);
+});
+
+test("the scheduler revalidates stale topics and the queue fails closed", () => {
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+
+  assert.match(scheduler, /export const auditTopicBusinessFit = internalAction/);
+  assert.match(scheduler, /recordBusinessFitAuditsInternal/);
+  assert.match(scheduler, /topic_business_fit_replenishment/);
+  assert.match(jobs, /topic_business_fit_failed/);
+  assert.match(pipeline, /disqualifyQueuedTopicInternal/);
+  assert.match(pipeline, /failureKind: "topic_business_fit_failed"/);
 });
 
 test("generic-only profiles require two matching signals", () => {

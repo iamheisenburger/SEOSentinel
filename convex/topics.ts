@@ -161,6 +161,10 @@ export const upsertMany = internalMutation({
         paaQuestions: v.optional(v.array(v.string())),
         serpTopUrls: v.optional(v.array(v.string())),
         volumeTrend: v.optional(v.array(v.number())),
+        businessFitEligible: v.optional(v.boolean()),
+        businessFitScore: v.optional(v.number()),
+        businessFitVersion: v.optional(v.number()),
+        businessFitReasons: v.optional(v.array(v.string())),
       }),
     ),
   },
@@ -252,6 +256,21 @@ export const upsertMany = internalMutation({
         ...(topic.paaQuestions ? { paaQuestions: topic.paaQuestions } : {}),
         ...(topic.serpTopUrls ? { serpTopUrls: topic.serpTopUrls } : {}),
         ...(topic.volumeTrend ? { volumeTrend: topic.volumeTrend } : {}),
+        ...(topic.businessFitEligible !== undefined
+          ? {
+              businessFitEligible: topic.businessFitEligible,
+              businessFitCheckedAt: now(),
+            }
+          : {}),
+        ...(topic.businessFitScore !== undefined
+          ? { businessFitScore: topic.businessFitScore }
+          : {}),
+        ...(topic.businessFitVersion !== undefined
+          ? { businessFitVersion: topic.businessFitVersion }
+          : {}),
+        ...(topic.businessFitReasons
+          ? { businessFitReasons: topic.businessFitReasons }
+          : {}),
         ...(growthParentArticleId ? { growthParentArticleId } : {}),
         ...(growthActionFingerprint ? { growthActionFingerprint } : {}),
         createdAt: now(),
@@ -294,10 +313,94 @@ export const updateStatus = internalMutation({
   },
   handler: async (ctx, { topicId, status }) => {
     const allowed = new Set([
-      "pending", "queued", "planned", "used", "cannibalizing",
+      "pending", "queued", "planned", "used", "cannibalizing", "disqualified",
     ]);
     if (!allowed.has(status)) throw new Error("Invalid topic status");
     await ctx.db.patch(topicId, { status, updatedAt: now() });
+  },
+});
+
+export const recordBusinessFitAuditsInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    audits: v.array(v.object({
+      topicId: v.id("topic_clusters"),
+      eligible: v.boolean(),
+      score: v.number(),
+      version: v.number(),
+      reasons: v.array(v.string()),
+    })),
+  },
+  handler: async (ctx, { siteId, audits }) => {
+    let disqualified = 0;
+    let requalified = 0;
+    let updated = 0;
+    const checkedAt = now();
+    for (const audit of audits) {
+      const topic = await ctx.db.get(audit.topicId);
+      if (!topic || topic.siteId !== siteId) continue;
+      if (["used", "queued", "cannibalizing"].includes(topic.status ?? "")) {
+        continue;
+      }
+      const nextStatus = audit.eligible
+        ? topic.status === "disqualified" ? "planned" : topic.status ?? "planned"
+        : "disqualified";
+      if (!audit.eligible && topic.status !== "disqualified") disqualified += 1;
+      if (audit.eligible && topic.status === "disqualified") requalified += 1;
+      const reason = audit.reasons.join("; ");
+      const changed =
+        topic.businessFitEligible !== audit.eligible ||
+        topic.businessFitScore !== audit.score ||
+        topic.businessFitVersion !== audit.version ||
+        JSON.stringify(topic.businessFitReasons ?? []) !==
+          JSON.stringify(audit.reasons) ||
+        topic.status !== nextStatus;
+      if (!changed) continue;
+      await ctx.db.patch(audit.topicId, {
+        businessFitEligible: audit.eligible,
+        businessFitScore: audit.score,
+        businessFitVersion: audit.version,
+        businessFitReasons: audit.reasons,
+        businessFitCheckedAt: checkedAt,
+        status: nextStatus,
+        disqualifiedReason: audit.eligible ? undefined : reason,
+        updatedAt: checkedAt,
+      });
+      updated += 1;
+    }
+    return { disqualified, requalified, updated };
+  },
+});
+
+// A topic can already be queued when a newer product-fit policy is deployed or
+// a tenant profile changes. The worker calls this mutation immediately before
+// incurring research or model spend, so only that exact queued topic can be
+// quarantined while unrelated tenant work remains untouched.
+export const disqualifyQueuedTopicInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    topicId: v.id("topic_clusters"),
+    score: v.number(),
+    version: v.number(),
+    reasons: v.array(v.string()),
+  },
+  handler: async (ctx, { siteId, topicId, score, version, reasons }) => {
+    const topic = await ctx.db.get(topicId);
+    if (!topic || topic.siteId !== siteId || topic.status !== "queued") {
+      return { updated: false };
+    }
+    const checkedAt = now();
+    await ctx.db.patch(topicId, {
+      status: "disqualified",
+      businessFitEligible: false,
+      businessFitScore: score,
+      businessFitVersion: version,
+      businessFitReasons: reasons,
+      businessFitCheckedAt: checkedAt,
+      disqualifiedReason: reasons.join("; "),
+      updatedAt: checkedAt,
+    });
+    return { updated: true };
   },
 });
 

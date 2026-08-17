@@ -20,6 +20,7 @@ import {
   cadenceIntervalMs,
   contentWorkBlocksQualityRecovery,
   effectivePublishedAt,
+  evaluateTopicBusinessFit,
   exactCadenceWakeupAt,
   coveredIntentTopics,
   filterNonCannibalizingIntentTopics,
@@ -48,11 +49,110 @@ type ArticleSummary = {
   metaKeywords?: string[];
 };
 
+type TopicBusinessFitAudit = {
+  topicId: Id<"topic_clusters">;
+  keyword: string;
+  eligible: boolean;
+  score: number;
+  reasons: string[];
+  version: number;
+};
+
+type TopicBusinessFitAuditReport = {
+  totalTopics: number;
+  audited: number;
+  eligible: number;
+  ineligible: number;
+  disqualified: number;
+  requalified: number;
+  updated: number;
+  topics: Array<Omit<TopicBusinessFitAudit, "version">>;
+};
+
 function hasTerminalTargetAlignmentFailure(article: ArticleSummary): boolean {
   return (article.publicationGateIssues ?? []).some((issue) =>
     issue.includes("does not align with both the configured business and the final article title")
   );
 }
+
+// Operator-safe inventory audit. It changes only topic eligibility metadata
+// and status for one explicit tenant; it cannot queue generation or delivery.
+export const auditTopicBusinessFit = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (
+    ctx: ActionCtx,
+    { siteId },
+  ): Promise<TopicBusinessFitAuditReport> => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (!site) throw new Error("Site not found");
+    const topics: Doc<"topic_clusters">[] = await ctx.runQuery(
+      internal.topics.listBySiteInternal,
+      { siteId },
+    );
+    const coreBusinessSignals = [
+      site.niche,
+      site.blogTheme,
+      site.siteSummary,
+      site.targetAudienceSummary,
+      site.productUsage,
+      ...(site.anchorKeywords ?? []),
+      ...(site.keyFeatures ?? []),
+      ...(site.painPoints ?? []),
+    ].filter((signal): signal is string => Boolean(signal));
+    const businessModelSignals = [
+      site.siteType ?? "",
+      site.niche ?? "",
+      site.siteSummary ?? "",
+    ];
+    const audits: TopicBusinessFitAudit[] = topics
+      .filter((topic: Doc<"topic_clusters">) =>
+        !["used", "queued", "cannibalizing"].includes(topic.status ?? "")
+      )
+      .map((topic: Doc<"topic_clusters">) => ({
+        topicId: topic._id,
+        keyword: topic.primaryKeyword,
+        ...evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: topic.label,
+          coreBusinessSignals,
+          businessModelSignals,
+        }),
+      }));
+    const result: {
+      disqualified: number;
+      requalified: number;
+      updated: number;
+    } = await ctx.runMutation(
+      internal.topics.recordBusinessFitAuditsInternal,
+      {
+        siteId,
+        audits: audits.map(
+          ({ topicId, eligible, score, version, reasons }) => ({
+            topicId,
+            eligible,
+            score,
+            version,
+            reasons,
+          }),
+        ),
+      },
+    );
+    return {
+      totalTopics: topics.length,
+      audited: audits.length,
+      eligible: audits.filter((audit) => audit.eligible).length,
+      ineligible: audits.filter((audit) => !audit.eligible).length,
+      ...result,
+      topics: audits.map((audit) => ({
+        topicId: audit.topicId,
+        keyword: audit.keyword,
+        eligible: audit.eligible,
+        score: audit.score,
+        reasons: audit.reasons,
+      })),
+    };
+  },
+});
 
 export const scheduleCadence = internalAction({
   args: { siteId: v.id("sites") },
@@ -431,10 +531,52 @@ export const scheduleCadence = internalAction({
     }
 
     const topics = await ctx.runQuery(internal.topics.listBySiteInternal, { siteId });
-    const available = topics.filter((topic: Doc<"topic_clusters">) => {
-      if (topic.status === "used" || topic.status === "queued" || topic.status === "cannibalizing") {
-        return false;
-      }
+    const coreBusinessSignals = [
+      site.niche,
+      site.blogTheme,
+      site.siteSummary,
+      site.targetAudienceSummary,
+      site.productUsage,
+      ...(site.anchorKeywords ?? []),
+      ...(site.keyFeatures ?? []),
+      ...(site.painPoints ?? []),
+    ].filter((signal): signal is string => Boolean(signal));
+    const businessModelSignals = [
+      site.siteType ?? "",
+      site.niche ?? "",
+      site.siteSummary ?? "",
+    ];
+    const revalidatable = topics.filter((topic: Doc<"topic_clusters">) =>
+      !["used", "queued", "cannibalizing"].includes(topic.status ?? "")
+    );
+    const businessFitAudits = revalidatable.map(
+      (topic: Doc<"topic_clusters">) => ({
+        topicId: topic._id,
+        ...evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: topic.label,
+          coreBusinessSignals,
+          businessModelSignals,
+        }),
+      }),
+    );
+    const businessFitResult = await ctx.runMutation(
+      internal.topics.recordBusinessFitAuditsInternal,
+      { siteId, audits: businessFitAudits },
+    );
+    if (businessFitResult.disqualified > 0 || businessFitResult.requalified > 0) {
+      console.log(
+        `Topic business-fit audit: ${businessFitResult.disqualified} disqualified, ${businessFitResult.requalified} requalified.`,
+      );
+    }
+    const fitByTopic = new Map(
+      businessFitAudits.map((audit) => [String(audit.topicId), audit]),
+    );
+    const fitEligible = revalidatable.filter(
+      (topic: Doc<"topic_clusters">) =>
+        fitByTopic.get(String(topic._id))?.eligible === true,
+    );
+    const available = fitEligible.filter((topic: Doc<"topic_clusters">) => {
       if (!site.verifiedKeywordDataRequired) return true;
       return (
         Number.isFinite(topic.searchVolume) &&
@@ -470,16 +612,25 @@ export const scheduleCadence = internalAction({
       schedulableTopics[0];
 
     if (!selectedTopic) {
-      // Do not repeatedly reconsider the same cannibalizing set.  A plan job
-      // produces new verified candidates, breaking the old permanent deadlock.
+      const replenishmentReason = fitEligible.length === 0
+        ? "topic_business_fit_replenishment"
+        : available.length === 0
+          ? "topic_evidence_replenishment"
+          : "topic_overlap_replenishment";
+      // Do not repeatedly reconsider the same rejected set. A new plan must
+      // pass current product-fit, keyword-evidence, and intent-overlap gates.
       const replenishment = await ctx.runMutation(
         internal.jobs.queuePlanIfAbsent,
         {
           siteId,
-          reason: "topic_overlap_replenishment",
-          cannibalizingTopicIds: available.map(
-            (topic: Doc<"topic_clusters">) => topic._id,
-          ),
+          reason: replenishmentReason,
+          ...(replenishmentReason === "topic_overlap_replenishment"
+            ? {
+                cannibalizingTopicIds: available.map(
+                  (topic: Doc<"topic_clusters">) => topic._id,
+                ),
+              }
+            : {}),
           since: now - DAY_MS,
           maximumRecent: MAX_TOPIC_REPLENISHMENTS_PER_24H,
         },
@@ -507,8 +658,11 @@ export const scheduleCadence = internalAction({
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
         kind: "topic_replenishment",
-        message:
-          "All available topics overlapped existing coverage; a fresh verified plan was queued.",
+        message: replenishmentReason === "topic_business_fit_replenishment"
+          ? "No available topic still matched the tenant's product and audience; a fresh verified plan was queued."
+          : replenishmentReason === "topic_evidence_replenishment"
+            ? "No product-aligned topic retained complete keyword evidence; a fresh verified plan was queued."
+            : "All available topics overlapped existing coverage; a fresh verified plan was queued.",
       });
       return {
         scheduled: 1,

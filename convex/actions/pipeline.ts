@@ -44,11 +44,10 @@ import {
 } from "../lib/autopilotCadence";
 import {
   cadenceIntervalMs,
+  evaluateTopicBusinessFit,
   evergreenTopicLabel,
   filterNonCannibalizingIntentTopics,
   hasReliableSerpFingerprint,
-  keywordMatchesBusinessModel,
-  keywordMatchesBusinessSignals,
   normalizedSerpQuestions,
   pendingJobPriority,
   serpFingerprintOverlap,
@@ -2144,10 +2143,18 @@ async function handlePlan(
   const businessSignals = [
     site.niche,
     site.blogTheme,
+    site.siteSummary,
+    site.targetAudienceSummary,
+    site.productUsage,
     ...(site.anchorKeywords ?? []),
+    ...(site.keyFeatures ?? []),
     ...(site.painPoints ?? []),
-    growthContext?.seed,
   ].filter((signal): signal is string => Boolean(signal));
+  const businessModelSignals = [
+    site.siteType ?? "",
+    site.niche ?? "",
+    site.siteSummary ?? "",
+  ];
 
   if (discoveredKeywords.length > 0) {
     // Data-first: rank real keywords
@@ -2155,16 +2162,12 @@ async function handlePlan(
       .filter(k => !existingSet.has(k.keyword.toLowerCase()))
       .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
       .filter(k => !isKeywordBlocked(k.keyword))
-      .filter(k => keywordMatchesBusinessSignals(k.keyword, businessSignals))
-      .filter(k => keywordMatchesBusinessModel(k.keyword, [
-        site.siteType ?? "",
-        site.niche ?? "",
-        site.siteSummary ?? "",
-      ]))
-      .filter(k =>
-        !growthContext ||
-        keywordMatchesBusinessSignals(k.keyword, [growthContext.seed])
-      )
+      .filter(k => evaluateTopicBusinessFit({
+        keyword: k.keyword,
+        coreBusinessSignals: businessSignals,
+        businessModelSignals,
+        growthSeed: growthContext?.seed,
+      }).eligible)
       .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
       .sort((a, b) => b.opportunity - a.opportunity);
 
@@ -2368,24 +2371,19 @@ async function handlePlan(
   }));
   const beforeRelevanceGate = plan.length;
   plan = plan.filter((topic) => {
-    const keywordMatchesSite = keywordMatchesBusinessSignals(
-      topic.primaryKeyword,
-      businessSignals,
-    ) && keywordMatchesBusinessModel(topic.primaryKeyword, [
-      site.siteType ?? "",
-      site.niche ?? "",
-      site.siteSummary ?? "",
-    ]);
-    const titleMatchesKeyword = keywordMatchesBusinessSignals(
-      topic.label,
-      [topic.primaryKeyword],
-    );
-    if (!keywordMatchesSite || !titleMatchesKeyword) {
+    const fit = evaluateTopicBusinessFit({
+      keyword: topic.primaryKeyword,
+      label: topic.label,
+      coreBusinessSignals: businessSignals,
+      businessModelSignals,
+      growthSeed: growthContext?.seed,
+    });
+    if (!fit.eligible) {
       console.log(
-        `Blocked: "${topic.primaryKeyword}" (business/title relevance mismatch)`,
+        `Blocked: "${topic.primaryKeyword}" (${fit.reasons.join("; ")})`,
       );
     }
-    return keywordMatchesSite && titleMatchesKeyword;
+    return fit.eligible;
   });
   console.log(
     `Business/title relevance gate: ${plan.length}/${beforeRelevanceGate} topics remain`,
@@ -2449,6 +2447,8 @@ async function handlePlan(
       searchVolume?: number; keywordDifficulty?: number; cpc?: number;
       serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string;
       paaQuestions?: string[]; serpTopUrls?: string[];
+      businessFitEligible?: boolean; businessFitScore?: number;
+      businessFitVersion?: number; businessFitReasons?: string[];
     })[] = [];
     let kd0Count = 0;
     let noDataCount = 0;
@@ -2578,6 +2578,32 @@ async function handlePlan(
     );
     console.log(
       `Combined SERP/keyword intent gate: ${enrichedPlan.length}/${beforeIntentGate} non-cannibalizing topics remain`,
+    );
+    const beforeFinalBusinessFitGate = enrichedPlan.length;
+    enrichedPlan = enrichedPlan.flatMap((topic) => {
+      const fit = evaluateTopicBusinessFit({
+        keyword: topic.primaryKeyword,
+        label: topic.label,
+        coreBusinessSignals: businessSignals,
+        businessModelSignals,
+        growthSeed: growthContext?.seed,
+      });
+      if (!fit.eligible) {
+        console.log(
+          `Blocked after SERP analysis: "${topic.primaryKeyword}" (${fit.reasons.join("; ")})`,
+        );
+        return [];
+      }
+      return [{
+        ...topic,
+        businessFitEligible: true,
+        businessFitScore: fit.score,
+        businessFitVersion: fit.version,
+        businessFitReasons: fit.reasons,
+      }];
+    });
+    console.log(
+      `Final tenant product-fit gate: ${enrichedPlan.length}/${beforeFinalBusinessFitGate} topics remain`,
     );
 
     // ══════════════════════════════════════════════════════════════════════
@@ -4995,13 +5021,26 @@ async function reviewExistingArticleHandler(
     const reviewBusinessSignals = [
       site.niche,
       site.blogTheme,
+      site.siteSummary,
+      site.targetAudienceSummary,
+      site.productUsage,
       ...(site.anchorKeywords ?? []),
+      ...(site.keyFeatures ?? []),
       ...(site.painPoints ?? []),
     ].filter((signal): signal is string => Boolean(signal));
-    const targetAlignmentPassed = !topic || (
-      keywordMatchesBusinessSignals(topic.primaryKeyword, reviewBusinessSignals) &&
-      keywordMatchesBusinessSignals(nextTitle, [topic.primaryKeyword])
-    );
+    const targetAlignment = topic
+      ? evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: nextTitle,
+          coreBusinessSignals: reviewBusinessSignals,
+          businessModelSignals: [
+            site.siteType ?? "",
+            site.niche ?? "",
+            site.siteSummary ?? "",
+          ],
+        })
+      : undefined;
+    const targetAlignmentPassed = !targetAlignment || targetAlignment.eligible;
     const targetAlignmentIssues = targetAlignmentPassed
       ? []
       : [
@@ -6064,6 +6103,46 @@ export const processNextJob = internalAction({
             processed: true,
             jobId: job._id,
             error: "Topic not found or does not belong to this site",
+          };
+        }
+        const fit = evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: topic.label,
+          coreBusinessSignals: [
+            site.niche,
+            site.blogTheme,
+            site.siteSummary,
+            site.targetAudienceSummary,
+            site.productUsage,
+            ...(site.anchorKeywords ?? []),
+            ...(site.keyFeatures ?? []),
+            ...(site.painPoints ?? []),
+          ].filter((signal): signal is string => Boolean(signal)),
+          businessModelSignals: [
+            site.siteType ?? "",
+            site.niche ?? "",
+            site.siteSummary ?? "",
+          ],
+        });
+        if (!fit.eligible) {
+          await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
+            siteId: args.siteId,
+            topicId: payload.topicId,
+            score: fit.score,
+            version: fit.version,
+            reasons: fit.reasons,
+          });
+          const error = `Topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
+          await ctx.runMutation(internal.jobs.markFailed, {
+            jobId: job._id,
+            workerToken,
+            error,
+          });
+          return {
+            processed: true,
+            jobId: job._id,
+            error,
+            failureKind: "topic_business_fit_failed",
           };
         }
       }

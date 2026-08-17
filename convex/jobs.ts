@@ -462,7 +462,13 @@ export const queueTopicArticleIfAbsent = internalMutation({
       return job.type === "article" && payload.topicId === topicId;
     });
     if (duplicate) return { queued: false, jobId: duplicate._id };
-    if (!manual && ["used", "queued", "cannibalizing"].includes(topic.status ?? "")) {
+    if (topic.status === "disqualified") {
+      return { queued: false, reason: "topic_business_fit_failed" as const };
+    }
+    if (
+      !manual &&
+      ["used", "queued", "cannibalizing"].includes(topic.status ?? "")
+    ) {
       return { queued: false, reason: "topic_not_available" as const };
     }
     const timestamp = now();

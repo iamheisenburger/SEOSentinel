@@ -124,6 +124,15 @@ export default defineSchema({
     serpTopUrls: v.optional(v.array(v.string())), // normalized by the overlap gate
     volumeTrend: v.optional(v.array(v.number())), // last 12 months search volume
 
+    // Deterministic, tenant-specific product-fit audit. The scheduler
+    // revalidates legacy inventory before any article job can be queued.
+    businessFitEligible: v.optional(v.boolean()),
+    businessFitScore: v.optional(v.number()),
+    businessFitVersion: v.optional(v.number()),
+    businessFitReasons: v.optional(v.array(v.string())),
+    businessFitCheckedAt: v.optional(v.number()),
+    disqualifiedReason: v.optional(v.string()),
+
     // A measured growth action may commission a support topic for one exact
     // published page. These fields are tenant-scoped routing metadata, not an
     // inferred cluster label. They let article generation and final linking

@@ -155,7 +155,9 @@ export default function PlanPage() {
     if (activeTab === "all") return sorted;
     return sorted.filter((t) => {
       if (activeTab === "available")
-        return t.status !== "used" && t.status !== "queued";
+        return !["used", "queued", "cannibalizing", "disqualified"].includes(
+          t.status ?? "",
+        );
       if (activeTab === "generating")
         return t.label === activeTopicLabel || t.status === "queued";
       return t.status === activeTab;
@@ -163,7 +165,11 @@ export default function PlanPage() {
   }, [sorted, activeTab, activeTopicLabel]);
 
   const available = useMemo(
-    () => sorted.filter((t) => t.status !== "used" && t.status !== "queued"),
+    () => sorted.filter((t) =>
+      !["used", "queued", "cannibalizing", "disqualified"].includes(
+        t.status ?? "",
+      )
+    ),
     [sorted],
   );
   const availableCount = available.length;
@@ -476,6 +482,7 @@ export default function PlanPage() {
             const isUsed = topic.status === "used";
             const isGenerating = activeTopicLabel === topic.label;
             const isQueued = topic.status === "queued";
+            const isDisqualified = topic.status === "disqualified";
             const isManuallyGenerating = generatingTopicId === topic._id;
             const isExpanded = expandedTopicId === topic._id;
             const opportunity = computeOpportunity(topic);
@@ -488,7 +495,7 @@ export default function PlanPage() {
                 className={`rounded-xl border overflow-hidden transition-all ${
                   isGenerating
                     ? "border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.03]"
-                    : isUsed
+                    : isUsed || isDisqualified
                       ? "border-white/[0.04] bg-[#0F1117] opacity-50"
                       : "border-white/[0.06] bg-[#0F1117] hover:border-white/[0.1]"
                 }`}
@@ -603,6 +610,13 @@ export default function PlanPage() {
                       <span className="inline-flex items-center gap-1.5 text-[11px] text-[#565A6E]">
                         <CheckCircle2 className="h-3 w-3" />
                         Used
+                      </span>
+                    ) : isDisqualified ? (
+                      <span
+                        className="inline-flex items-center gap-1.5 rounded-full bg-[#EF4444]/[0.08] px-2.5 py-1 text-[11px] font-medium text-[#F87171]"
+                        title={(topic as any).disqualifiedReason ?? "Does not match this site's product and audience"}
+                      >
+                        Disqualified
                       </span>
                     ) : (
                       <button
