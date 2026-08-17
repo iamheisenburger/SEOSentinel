@@ -40,6 +40,19 @@ test("publication renderer rejects raw HTML, executable MDX, and unsafe URL sche
   );
 });
 
+test("safe publication accepts deterministic same-document section links", () => {
+  const markdown = "## Website lead capture\n\n[Jump to the section](#website-lead-capture).";
+  assert.doesNotThrow(() => assertSafePublishableMarkdown(markdown));
+  assert.match(renderSafePublicationHtml(markdown), /href="#website-lead-capture"/);
+});
+
+test("safe publication rejects malformed same-document section links", () => {
+  assert.throws(
+    () => assertSafePublishableMarkdown("[Bad](#section/child)"),
+    /relative paths or absolute HTTPS URLs/,
+  );
+});
+
 test("WordPress receipt must confirm the exact slug, status, host, and post id", () => {
   const receipt = wordpressReceiptFromResponse({
     response: {

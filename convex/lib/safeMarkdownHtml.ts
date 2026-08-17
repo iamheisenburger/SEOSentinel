@@ -27,6 +27,10 @@ export function assertSafePublishableMarkdown(markdown: string): void {
   for (const match of markdown.matchAll(/(?<!!)\[[^\]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)) {
     const target = match[1];
     if (target.startsWith("/") && !target.startsWith("//")) continue;
+    // Same-document section links are ordinary Markdown navigation, not an
+    // outbound protocol. The article quality gate already permits them, so
+    // the publication adapter must apply the same deterministic contract.
+    if (/^#[a-z0-9][a-z0-9._:-]*$/i.test(target)) continue;
     let url: URL;
     try {
       url = new URL(target);
