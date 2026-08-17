@@ -41,6 +41,9 @@ type ArticleSummary = {
   publicationGateIssues?: string[];
   publicationAuditVersion?: number;
   auditedContentHash?: string;
+  publicUrl?: string;
+  publicUrlStatus?: "pending" | "verified" | "failed";
+  publicUrlCheckError?: string;
   qualityRevisionCount?: number;
   metaKeywords?: string[];
 };
@@ -139,6 +142,41 @@ export const scheduleCadence = internalAction({
     const autonomousDelivery =
       rolloutMode === "live" &&
       !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
+
+    const latestPublicStatus = state.latestPublished?.publicUrlStatus as
+      | "pending"
+      | "verified"
+      | "failed"
+      | undefined;
+    if (
+      autonomousDelivery &&
+      latestPublicStatus !== undefined &&
+      latestPublicStatus !== "verified"
+    ) {
+      const failed = latestPublicStatus === "failed";
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "public_publication_unverified",
+        message: failed
+          ? "Autonomous content work is paused because the latest delivered article did not become live at its exact public URL."
+          : "Autonomous content work is waiting for the latest delivered article to become live at its exact public URL.",
+        details: {
+          articleId: state.latestPublished?._id,
+          publicUrl: state.latestPublished?.publicUrl,
+          status: latestPublicStatus,
+          error: state.latestPublished?.publicUrlCheckError,
+        },
+      });
+      return {
+        scheduled: 0,
+        mode: failed ? "public_url_failed" : "public_url_pending",
+        bufferCount: buffer.length,
+      };
+    }
+    await ctx.runMutation(internal.autopilot.resolveAlertKind, {
+      siteId,
+      kind: "public_publication_unverified",
+    });
 
     const exactWakeupAt = exactCadenceWakeupAt({
       autonomousDelivery,

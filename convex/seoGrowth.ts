@@ -77,18 +77,26 @@ export const getSiteInputs = internalQuery({
       },
       dataThrough: latest?.date,
       rows,
-      articles: articles.map((article) => ({
-        articleId: article.articleId,
-        topicId: article.topicId,
-        title: article.title,
-        slug: article.slug,
-        publishedAt: article.publishedAt ?? article.articleCreatedAt,
-        gscIndexVerdict: article.gscIndexVerdict,
-        gscCoverageState: article.gscCoverageState,
-        gscPageFetchState: article.gscPageFetchState,
-        gscRobotsTxtState: article.gscRobotsTxtState,
-        gscInspectionError: article.gscInspectionError,
-      })),
+      articles: articles
+        // Legacy rows predate public-page verification. New deliveries are not
+        // eligible for GSC growth diagnosis until the exact tenant URL is live.
+        .filter(
+          (article) =>
+            article.publicUrlStatus === undefined ||
+            article.publicUrlStatus === "verified",
+        )
+        .map((article) => ({
+          articleId: article.articleId,
+          topicId: article.topicId,
+          title: article.title,
+          slug: article.slug,
+          publishedAt: article.publishedAt ?? article.articleCreatedAt,
+          gscIndexVerdict: article.gscIndexVerdict,
+          gscCoverageState: article.gscCoverageState,
+          gscPageFetchState: article.gscPageFetchState,
+          gscRobotsTxtState: article.gscRobotsTxtState,
+          gscInspectionError: article.gscInspectionError,
+        })),
       monthlyOrganicClicksGoal:
         goal?.monthlyOrganicClicksGoal ?? DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
     };

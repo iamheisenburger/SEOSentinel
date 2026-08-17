@@ -23,6 +23,57 @@ import {
   nextPublicationRetry,
   ownsPublicationLease,
 } from "../convex/lib/publicationLease.ts";
+import {
+  publishedArticlePublicUrl,
+  verifyLivePublicationPage,
+} from "../convex/lib/publicationLive.ts";
+
+test("public publication URLs use each tenant's sealed URL structure", () => {
+  assert.equal(
+    publishedArticlePublicUrl({
+      domain: "https://Example.com/ignored",
+      urlStructure: "/resources/[slug]",
+      slug: "qualified-lead-routing",
+    }),
+    "https://example.com/resources/qualified-lead-routing",
+  );
+  assert.throws(
+    () => publishedArticlePublicUrl({
+      domain: "https://example.com",
+      urlStructure: "/blog/[slug]",
+      slug: "../admin",
+    }),
+    /safe path segment/,
+  );
+});
+
+test("public publication verification requires the exact live page and visible title", () => {
+  const expectedUrl = "https://example.com/blog/lead-routing";
+  assert.doesNotThrow(() => verifyLivePublicationPage({
+    expectedUrl,
+    fetchedUrl: `${expectedUrl}/`,
+    title: "Lead Routing & Qualification",
+    html: "<html><head><title>Different metadata</title></head><body><main><h1>Lead Routing &amp; Qualification</h1></main></body></html>",
+  }));
+  assert.throws(
+    () => verifyLivePublicationPage({
+      expectedUrl,
+      fetchedUrl: "https://example.com/blog/another-page",
+      title: "Lead Routing & Qualification",
+      html: "<body><h1>Lead Routing &amp; Qualification</h1></body>",
+    }),
+    /different canonical URL/,
+  );
+  assert.throws(
+    () => verifyLivePublicationPage({
+      expectedUrl,
+      fetchedUrl: expectedUrl,
+      title: "Lead Routing & Qualification",
+      html: "<head><title>Lead Routing &amp; Qualification</title></head><body><p>Not deployed.</p></body>",
+    }),
+    /does not contain the published article title/,
+  );
+});
 
 test("warm rollout ignores pre-rollout candidates and can fill its bounded buffer", () => {
   const now = Date.UTC(2026, 6, 21, 12);

@@ -33,6 +33,7 @@ import type * as lib_markdownPublishing from "../lib/markdownPublishing.js";
 import type * as lib_mediaQuality from "../lib/mediaQuality.js";
 import type * as lib_publicationArtifact from "../lib/publicationArtifact.js";
 import type * as lib_publicationLease from "../lib/publicationLease.js";
+import type * as lib_publicationLive from "../lib/publicationLive.js";
 import type * as lib_publicationReceipts from "../lib/publicationReceipts.js";
 import type * as lib_safeMarkdownHtml from "../lib/safeMarkdownHtml.js";
 import type * as lib_safeOutbound from "../lib/safeOutbound.js";
@@ -82,6 +83,7 @@ declare const fullApi: ApiFromModules<{
   "lib/mediaQuality": typeof lib_mediaQuality;
   "lib/publicationArtifact": typeof lib_publicationArtifact;
   "lib/publicationLease": typeof lib_publicationLease;
+  "lib/publicationLive": typeof lib_publicationLive;
   "lib/publicationReceipts": typeof lib_publicationReceipts;
   "lib/safeMarkdownHtml": typeof lib_safeMarkdownHtml;
   "lib/safeOutbound": typeof lib_safeOutbound;

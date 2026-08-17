@@ -5544,6 +5544,18 @@ export const autopilotTick = internalAction({
         "Publication-integrity migration is incomplete; all tenant work is fail-closed.",
       );
     }
+    if (
+      cadenceSchedule.mode === "public_url_pending" ||
+      cadenceSchedule.mode === "public_url_failed"
+    ) {
+      return finish(
+        { processed: 0 },
+        cadenceSchedule.mode,
+        cadenceSchedule.mode === "public_url_failed"
+          ? "The latest delivered article is not live at its exact public URL; tenant content work remains fail-closed."
+          : "The latest delivered article is still awaiting exact public URL verification.",
+      );
+    }
     const deliveryPriority = cadenceSchedule.mode === "buffer_delivery" ||
       cadenceSchedule.mode === "buffer_delivery_pending";
 
@@ -5653,6 +5665,8 @@ export const autopilotTick = internalAction({
       work_in_progress: "Another leased worker is still processing tenant work.",
       pending_plan: "A pending topic plan is ready for immediate processing.",
       buffer_delivery_pending: "A sealed delivery job exists but is not currently claimable.",
+      public_url_pending: "The latest delivered article is awaiting exact public URL verification.",
+      public_url_failed: "The latest delivered article failed exact public URL verification.",
       approval_waiting: "A quality-gated draft is waiting for owner approval.",
       manual_delivery_waiting: "A quality-gated draft is waiting for manual delivery.",
       cadence_not_due: "The next cadence window is not due yet.",

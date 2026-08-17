@@ -32,6 +32,7 @@ import {
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
 import { needsDeterministicMechanicalRepair } from "./lib/autopilotCadence";
+import { publishedArticlePublicUrl } from "./lib/publicationLive";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -71,6 +72,12 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     auditedAt: article.auditedAt,
     publishedContentHash: article.publishedContentHash,
     publishedAt: article.publishedAt,
+    publicUrl: article.publicUrl,
+    publicUrlStatus: article.publicUrlStatus,
+    publicUrlLastCheckedAt: article.publicUrlLastCheckedAt,
+    publicUrlVerifiedAt: article.publicUrlVerifiedAt,
+    publicUrlCheckAttempts: article.publicUrlCheckAttempts,
+    publicUrlCheckError: article.publicUrlCheckError,
     qualityRevisionCount: article.qualityRevisionCount,
     entityCoverage: article.entityCoverage,
     topicCompleteness: article.topicCompleteness,
@@ -171,6 +178,12 @@ function summaryListItem(summary: ArticleSummaryFields) {
     auditedAt: summary.auditedAt,
     publishedContentHash: summary.publishedContentHash,
     publishedAt: summary.publishedAt,
+    publicUrl: summary.publicUrl,
+    publicUrlStatus: summary.publicUrlStatus,
+    publicUrlLastCheckedAt: summary.publicUrlLastCheckedAt,
+    publicUrlVerifiedAt: summary.publicUrlVerifiedAt,
+    publicUrlCheckAttempts: summary.publicUrlCheckAttempts,
+    publicUrlCheckError: summary.publicUrlCheckError,
     qualityRevisionCount: summary.qualityRevisionCount,
     entityCoverage: summary.entityCoverage,
     topicCompleteness: summary.topicCompleteness,
@@ -884,10 +897,21 @@ export const completePublication = internalMutation({
     ) {
       throw new Error("Refusing to complete publication after site lease loss");
     }
+    const publicUrl = publishedArticlePublicUrl({
+      domain: site.domain,
+      urlStructure: site.urlStructure,
+      slug: article.slug,
+    });
     await ctx.db.patch(articleId, {
       status: "published",
       publishedContentHash,
       publishedAt: completedAt,
+      publicUrl,
+      publicUrlStatus: "pending",
+      publicUrlLastCheckedAt: undefined,
+      publicUrlVerifiedAt: undefined,
+      publicUrlCheckAttempts: 0,
+      publicUrlCheckError: undefined,
       publicationReceipt: receipt,
       publicationLeaseHash: undefined,
       publicationLeaseOwner: undefined,
@@ -928,6 +952,87 @@ export const completePublication = internalMutation({
       }
     }
     await syncSummary(ctx, articleId);
+    await ctx.scheduler.runAfter(
+      0,
+      internal.publisher.verifyPublicPublicationInternal,
+      {
+        siteId: article.siteId,
+        articleId,
+        expectedContentHash: publishedContentHash,
+        attempt: 0,
+      },
+    );
+  },
+});
+
+export const recordPublicPublicationCheck = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+    expectedContentHash: v.string(),
+    publicUrl: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("verified"),
+      v.literal("failed"),
+    ),
+    attempts: v.number(),
+    error: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    {
+      siteId,
+      articleId,
+      expectedContentHash,
+      publicUrl,
+      status,
+      attempts,
+      error,
+    },
+  ) => {
+    const [site, article] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db.get(articleId),
+    ]);
+    if (!site || !article || article.siteId !== siteId) {
+      throw new Error("Public publication check tenant mismatch");
+    }
+    if (
+      article.status !== "published" ||
+      article.publishedContentHash !== expectedContentHash
+    ) {
+      throw new Error("Public publication check artifact mismatch");
+    }
+    const expectedPublicUrl = publishedArticlePublicUrl({
+      domain: site.domain,
+      urlStructure: site.urlStructure,
+      slug: article.slug,
+    });
+    if (publicUrl !== expectedPublicUrl) {
+      throw new Error("Public publication check URL mismatch");
+    }
+    if (article.publicUrlStatus === "verified") {
+      return { recorded: false, reason: "already_verified" };
+    }
+    if (
+      status !== "verified" &&
+      attempts <= (article.publicUrlCheckAttempts ?? 0)
+    ) {
+      return { recorded: false, reason: "stale_attempt" };
+    }
+    const checkedAt = now();
+    await ctx.db.patch(articleId, {
+      publicUrl,
+      publicUrlStatus: status,
+      publicUrlLastCheckedAt: checkedAt,
+      publicUrlVerifiedAt: status === "verified" ? checkedAt : undefined,
+      publicUrlCheckAttempts: Math.max(1, Math.floor(attempts)),
+      publicUrlCheckError: status === "verified" ? undefined : error?.slice(0, 500),
+      updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, articleId);
+    return { recorded: true };
   },
 });
 

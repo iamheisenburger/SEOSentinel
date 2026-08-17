@@ -16,7 +16,11 @@ import {
   PUBLISHER_RENDERER_VERSION,
   renderSafePublicationHtml,
 } from "./lib/safeMarkdownHtml";
-import { safeRequestPublicHttps, validatePublicHttpsUrl } from "./lib/safeOutbound";
+import {
+  safeFetchPublicText,
+  safeRequestPublicHttps,
+  validatePublicHttpsUrl,
+} from "./lib/safeOutbound";
 import {
   PUBLICATION_ADAPTER_VERSION,
   type PublicationReceipt,
@@ -35,6 +39,22 @@ import {
   safeGitHubRepositoryPart,
   type PublicationDeliveryConfig,
 } from "./lib/publicationArtifact";
+import {
+  publishedArticlePublicUrl,
+  verifyLivePublicationPage,
+} from "./lib/publicationLive";
+
+const PUBLIC_URL_RETRY_DELAYS_MS = [
+  30_000,
+  2 * 60_000,
+  5 * 60_000,
+  15 * 60_000,
+  30 * 60_000,
+  60 * 60_000,
+  3 * 60 * 60_000,
+  12 * 60 * 60_000,
+  24 * 60 * 60_000,
+] as const;
 
 type FileContent = {
   path: string;
@@ -1182,6 +1202,123 @@ async function publishArticleHandler(
       throw error;
     }
 }
+
+export const verifyPublicPublicationInternal = internalAction({
+  args: {
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+    expectedContentHash: v.string(),
+    attempt: v.number(),
+  },
+  handler: async (ctx, args): Promise<{
+    status: "stale" | "pending" | "failed" | "verified";
+    reason?: string;
+    publicUrl?: string;
+    retryInMs?: number;
+  }> => {
+    if (!Number.isInteger(args.attempt) || args.attempt < 0) {
+      throw new Error("Invalid public publication verification attempt");
+    }
+    const [site, article] = await Promise.all([
+      ctx.runQuery(internal.sites.getFull, { siteId: args.siteId }),
+      ctx.runQuery(internal.articles.getInternal, { articleId: args.articleId }),
+    ]);
+    if (!site || !article || article.siteId !== args.siteId) {
+      return { status: "stale", reason: "tenant_mismatch" };
+    }
+    if (
+      article.status !== "published" ||
+      article.publishedContentHash !== args.expectedContentHash
+    ) {
+      return { status: "stale", reason: "artifact_mismatch" };
+    }
+    if (article.publicUrlStatus === "verified") {
+      return { status: "verified", publicUrl: article.publicUrl };
+    }
+
+    const publicUrl = publishedArticlePublicUrl({
+      domain: site.domain,
+      urlStructure: site.urlStructure,
+      slug: article.slug,
+    });
+    try {
+      const fetched = await safeFetchPublicText(publicUrl, {
+        expectedHost: new URL(publicUrl).hostname,
+        sameHostRedirects: true,
+        maxRedirects: 3,
+        maxBytes: 1_000_000,
+        timeoutMs: 15_000,
+        allowedContentTypes: [
+          /^text\/html(?:;|$)/i,
+          /^application\/xhtml\+xml(?:;|$)/i,
+        ],
+        headers: {
+          "User-Agent": "Pentra/1.0 (public publication verifier)",
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Encoding": "identity",
+        },
+      });
+      verifyLivePublicationPage({
+        expectedUrl: publicUrl,
+        fetchedUrl: fetched.url,
+        html: fetched.text,
+        title: article.title,
+      });
+      const recorded = await ctx.runMutation(
+        internal.articles.recordPublicPublicationCheck,
+        {
+          siteId: args.siteId,
+          articleId: args.articleId,
+          expectedContentHash: args.expectedContentHash,
+          publicUrl,
+          status: "verified",
+          attempts: args.attempt + 1,
+        },
+      );
+      if (recorded.recorded) {
+        await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+          siteId: args.siteId,
+          trigger: "public_url_verified",
+          reason: "exact_publication_url_verified_live",
+        });
+      }
+      return { status: "verified", publicUrl };
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Public page verification failed";
+      const nextDelay = PUBLIC_URL_RETRY_DELAYS_MS[args.attempt];
+      const status = nextDelay === undefined ? "failed" : "pending";
+      if (nextDelay !== undefined) {
+        await ctx.scheduler.runAfter(
+          nextDelay,
+          internal.publisher.verifyPublicPublicationInternal,
+          { ...args, attempt: args.attempt + 1 },
+        );
+      }
+      const recorded = await ctx.runMutation(
+        internal.articles.recordPublicPublicationCheck,
+        {
+          siteId: args.siteId,
+          articleId: args.articleId,
+          expectedContentHash: args.expectedContentHash,
+          publicUrl,
+          status,
+          attempts: args.attempt + 1,
+          error: message,
+        },
+      );
+      if (status === "failed" && recorded.recorded) {
+        await ctx.runMutation(internal.autopilot.dispatchSiteFollowup, {
+          siteId: args.siteId,
+          trigger: "public_url_failed",
+          reason: "exact_publication_url_verification_exhausted",
+        });
+      }
+      return { status, publicUrl, retryInMs: nextDelay };
+    }
+  },
+});
 
 export const publishArticleInternal = internalAction({
   args: publishArgs,

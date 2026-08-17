@@ -410,6 +410,7 @@ export const markRunFinished = internalMutation({
       "topic_replenishment_exhausted",
       "job_failed",
       "publication_failed",
+      "public_url_failed",
       "quality_quarantined",
     ]);
     const waitingOutcomes = new Set([
@@ -418,6 +419,7 @@ export const markRunFinished = internalMutation({
       "approval_waiting",
       "manual_delivery_waiting",
       "retry_scheduled",
+      "public_url_pending",
     ]);
     let completionStatus = blockedOutcomes.has(args.outcome)
       ? args.outcome
@@ -455,18 +457,24 @@ export const markRunFinished = internalMutation({
         const cadence = site.cadencePerWeek ?? 4;
         const cadenceMs = cadenceIntervalMs(cadence);
         nextPublicationDueAt = lastPublishedAt + cadenceMs;
-        completionStatus =
-          approvedBufferCount === 0
-            ? "buffer_empty"
-            : approvedBufferCount < MIN_APPROVED_BUFFER
-              ? "buffer_low"
-              : "healthy";
-        completionDetail =
-          approvedBufferCount === 0
-            ? "Publication succeeded; replenishing the strict-quality future buffer."
-            : approvedBufferCount < MIN_APPROVED_BUFFER
-              ? "Publication succeeded; the strict-quality future buffer is being replenished."
-              : "Publication succeeded and the strict-quality future buffer is healthy.";
+        if (article.publicUrlStatus === "pending") {
+          completionStatus = "public_url_pending";
+          completionDetail =
+            "The article reached its configured destination and is awaiting exact public URL verification.";
+        } else {
+          completionStatus =
+            approvedBufferCount === 0
+              ? "buffer_empty"
+              : approvedBufferCount < MIN_APPROVED_BUFFER
+                ? "buffer_low"
+                : "healthy";
+          completionDetail =
+            approvedBufferCount === 0
+              ? "Publication succeeded; replenishing the strict-quality future buffer."
+              : approvedBufferCount < MIN_APPROVED_BUFFER
+                ? "Publication succeeded; the strict-quality future buffer is being replenished."
+                : "Publication succeeded and the strict-quality future buffer is healthy.";
+        }
       }
     }
     if (args.outcome === "quality_budget_exhausted") {
@@ -592,6 +600,16 @@ export const raiseAlert = internalMutation({
     details: v.optional(v.any()),
   },
   handler: setAlert,
+});
+
+export const resolveAlertKind = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    kind: v.string(),
+  },
+  handler: async (ctx, { siteId, kind }) => {
+    await resolveAlert(ctx, siteId, kind);
+  },
 });
 
 export const auditSla = internalMutation({

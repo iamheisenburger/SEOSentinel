@@ -218,6 +218,16 @@ export default defineSchema({
     auditedAt: v.optional(v.number()),
     publishedContentHash: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
+    publicUrl: v.optional(v.string()),
+    publicUrlStatus: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("verified"),
+      v.literal("failed"),
+    )),
+    publicUrlLastCheckedAt: v.optional(v.number()),
+    publicUrlVerifiedAt: v.optional(v.number()),
+    publicUrlCheckAttempts: v.optional(v.number()),
+    publicUrlCheckError: v.optional(v.string()),
     publicationReceipt: v.optional(
       v.object({
         method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
@@ -319,6 +329,16 @@ export default defineSchema({
     auditedAt: v.optional(v.number()),
     publishedContentHash: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
+    publicUrl: v.optional(v.string()),
+    publicUrlStatus: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("verified"),
+      v.literal("failed"),
+    )),
+    publicUrlLastCheckedAt: v.optional(v.number()),
+    publicUrlVerifiedAt: v.optional(v.number()),
+    publicUrlCheckAttempts: v.optional(v.number()),
+    publicUrlCheckError: v.optional(v.string()),
     gscIndexVerdict: v.optional(v.string()),
     gscCoverageState: v.optional(v.string()),
     gscPageFetchState: v.optional(v.string()),
