@@ -438,7 +438,7 @@ reason to restore the removed content.
 ### Measurement baseline and activation verdict
 
 LeadPilot is now connected to the exact Search Console domain property
-`sc-domain:leadpilot.chat` through `leadpilotchat@gmail.com`. The pre-activation
+`sc-domain:leadpilot.chat` through the privately configured GSC account. The pre-activation
 baseline for June 15 through July 13, 2026 is:
 
 - 190 impressions;

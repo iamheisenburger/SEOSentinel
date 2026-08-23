@@ -36,18 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local agent state and generated Convex inspection artifacts
+.claude/
+function_spec_*.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-
-
-
-
-
-
-
-
-
-
-

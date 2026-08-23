@@ -1,362 +1,808 @@
 "use client";
 
-import { useAction } from "convex/react";
-import { api } from "../../../../convex/_generated/api";
-import { useActiveSite } from "@/contexts/site-context";
-import { Button } from "@/components/ui/button";
-import { useState } from "react";
+import { useAction, useMutation, useQuery } from "convex/react";
+import { useMemo, useState } from "react";
 import {
-  Link2,
-  Search,
-  Globe,
-  TrendingUp,
-  ExternalLink,
-  Mail,
-  Copy,
-  Check,
   AlertCircle,
+  Check,
+  CheckCircle2,
+  Clock3,
+  ExternalLink,
+  Inbox,
+  Link2,
   Loader2,
-  Shield,
-  Anchor,
-  ArrowRight,
+  Mail,
+  Search,
+  Send,
+  ShieldCheck,
+  XCircle,
 } from "lucide-react";
 
-interface BacklinkProfile {
-  totalBacklinks: number;
-  referringDomains: number;
-  domainAuthority: number;
-  topReferrers: Array<{ domain: string; backlinks: number; rank: number }>;
-  anchorDistribution: Array<{ anchor: string; count: number }>;
+import { api } from "../../../../convex/_generated/api";
+import { Button } from "@/components/ui/button";
+import { useActiveSite } from "@/contexts/site-context";
+
+type Notice = { tone: "success" | "error"; text: string } | null;
+type Tab = "opportunities" | "outreach";
+
+const OPPORTUNITY_STYLES: Record<string, string> = {
+  verified: "border-[#0EA5E9]/20 bg-[#0EA5E9]/10 text-[#38BDF8]",
+  outreach_prepared: "border-[#A78BFA]/20 bg-[#A78BFA]/10 text-[#C4B5FD]",
+  contacted: "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]",
+  acquired: "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]",
+  rejected: "border-white/[0.08] bg-white/[0.03] text-[#707589]",
+};
+
+const MESSAGE_STYLES: Record<string, string> = {
+  draft: "border-[#0EA5E9]/20 bg-[#0EA5E9]/10 text-[#38BDF8]",
+  blocked: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
+  approved: "border-[#A78BFA]/20 bg-[#A78BFA]/10 text-[#C4B5FD]",
+  sending: "border-[#0EA5E9]/20 bg-[#0EA5E9]/10 text-[#38BDF8]",
+  delivery_unverified: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
+  delivery_reviewed_sent: "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]",
+  sent: "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]",
+  replied: "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]",
+  failed: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
+  bounced: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
+};
+
+function labelStatus(status: string) {
+  return status.replaceAll("_", " ");
 }
 
-interface OutreachEmail {
-  to: string;
-  subject: string;
-  body: string;
+function formatTime(value?: number) {
+  if (!value) return "Not yet";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(value);
+}
+
+function safeHost(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function externalUrl(url: string) {
+  return /^https:\/\//i.test(url) ? url : "#";
 }
 
 export default function BacklinksPage() {
   const { activeSite: site } = useActiveSite();
+  const [tab, setTab] = useState<Tab>("opportunities");
+  const [pending, setPending] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  const opportunities = useQuery(
+    api.seoAuthority.listForSite,
+    site?._id ? { siteId: site._id, limit: 200 } : "skip",
+  );
+  const messages = useQuery(
+    api.outreach.listMessages,
+    site?._id ? { siteId: site._id, limit: 200 } : "skip",
+  );
+  const inbox = useQuery(
+    api.outreach.getInbox,
+    site?._id ? { siteId: site._id } : "skip",
+  );
 
   const analyzeBacklinks = useAction(api.actions.backlinks.analyzeBacklinks);
-  const generateOutreach = useAction(api.actions.backlinks.generateOutreach);
+  const prepareOutreach = useAction(api.actions.outreach.prepareOutreach);
+  const sendApproved = useAction(api.actions.outreach.sendApprovedOutreach);
+  const syncInbound = useAction(api.actions.outreach.syncInboundReplies);
+  const verifyLinks = useAction(api.actions.outreach.verifyAcquiredLinks);
+  const approveMessage = useMutation(api.outreach.approveMessage);
+  const discardMessage = useMutation(api.outreach.discardMessage);
+  const setComplianceProfile = useMutation(api.outreach.setInboxComplianceProfile);
+  const suppressRecipient = useMutation(api.outreach.suppress);
+  const resolveUnverified = useMutation(api.outreach.resolveUnverifiedDelivery);
 
-  const [profile, setProfile] = useState<BacklinkProfile | null>(null);
-  const [opportunities, setOpportunities] = useState<Array<{ type: string; sourceDomain: string; sourceUrl: string; context: string }>>([]);
-  const [outreachEmails, setOutreachEmails] = useState<OutreachEmail[]>([]);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [generatingOutreach, setGeneratingOutreach] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "outreach">("overview");
-
-  const handleAnalyze = async () => {
-    if (!site?._id) return;
-    setAnalyzing(true);
-    setError(null);
-    try {
-      const result = await analyzeBacklinks({ siteId: site._id });
-      if (result.profile) {
-        setProfile(result.profile as unknown as BacklinkProfile);
-      }
-      // Collect opportunities from mentions and broken links
-      const opps: Array<{ type: string; sourceDomain: string; sourceUrl: string; context: string }> = [];
-      if (result.mentions) {
-        for (const m of result.mentions as Array<{ sourceDomain: string; sourceUrl: string; mentionText: string }>) {
-          opps.push({ type: "mention", sourceDomain: m.sourceDomain, sourceUrl: m.sourceUrl, context: m.mentionText });
-        }
-      }
-      if (result.brokenLinks) {
-        for (const b of result.brokenLinks as Array<{ sourceDomain: string; sourceUrl: string; brokenUrl: string }>) {
-          opps.push({ type: "broken_link", sourceDomain: b.sourceDomain, sourceUrl: b.sourceUrl, context: b.brokenUrl });
-        }
-      }
-      setOpportunities(opps);
-      if (!result.profile && opps.length === 0) {
-        setError("No backlink data found. This may require DataForSEO credentials to be configured.");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Analysis failed. Make sure DataForSEO credentials are configured.");
-    } finally {
-      setAnalyzing(false);
+  const counts = useMemo(() => {
+    const opportunityCounts: Record<string, number> = {};
+    const messageCounts: Record<string, number> = {};
+    for (const opportunity of opportunities ?? []) {
+      opportunityCounts[opportunity.status] =
+        (opportunityCounts[opportunity.status] ?? 0) + 1;
     }
-  };
+    for (const message of messages ?? []) {
+      messageCounts[message.status] = (messageCounts[message.status] ?? 0) + 1;
+    }
+    return { opportunityCounts, messageCounts };
+  }, [messages, opportunities]);
 
-  const handleOutreach = async () => {
-    if (!site?._id || opportunities.length === 0) return;
-    setGeneratingOutreach(true);
-    setError(null);
+  const messageByOpportunity = useMemo(
+    () => new Map((messages ?? []).map((message) => [message.opportunityId, message])),
+    [messages],
+  );
+  const approvedCount = counts.messageCounts.approved ?? 0;
+  const inboxNeedsReconnect = !inbox ||
+    !Boolean(inbox.credentialsPresent) ||
+    !Boolean(inbox.inboundMonitoringReady) ||
+    ["disconnected", "suspended"].includes(String(inbox.status));
+  const isLoading = Boolean(site?._id) &&
+    (opportunities === undefined || messages === undefined || inbox === undefined);
+
+  async function runOperation(
+    key: string,
+    operation: () => Promise<void>,
+  ) {
+    setPending(key);
+    setNotice(null);
     try {
-      const result = await generateOutreach({
-        siteId: site._id,
-        opportunities: opportunities.slice(0, 5),
+      await operation();
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : "The operation failed.",
       });
-      setOutreachEmails((result as { emails: OutreachEmail[] }).emails ?? []);
-      setActiveTab("outreach");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Outreach generation failed");
     } finally {
-      setGeneratingOutreach(false);
+      setPending(null);
     }
-  };
+  }
 
-  const copyEmail = (idx: number) => {
-    const email = outreachEmails[idx];
-    navigator.clipboard.writeText(`Subject: ${email.subject}\n\n${email.body}`);
-    setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(null), 2000);
-  };
+  function connectGmail() {
+    if (!site?._id) return;
+    const url = `/api/outreach/gmail/auth?siteId=${encodeURIComponent(site._id)}&returnTo=${encodeURIComponent("/backlinks")}`;
+    const popup = window.open(
+      url,
+      "pentra-outreach-gmail",
+      "width=600,height=720,popup=yes",
+    );
+    if (!popup) {
+      setNotice({ tone: "error", text: "Allow popups, then try connecting Gmail again." });
+      return;
+    }
+    const timer = window.setInterval(() => {
+      if (popup.closed) {
+        window.clearInterval(timer);
+        window.location.reload();
+      }
+    }, 500);
+  }
+
+  if (!site) {
+    return (
+      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] px-6 py-16 text-center">
+        <Link2 className="mx-auto mb-3 h-8 w-8 text-[#565A6E]" />
+        <h1 className="text-[15px] font-semibold text-[#EDEEF1]">Add a site first</h1>
+        <p className="mt-2 text-[13px] text-[#565A6E]">
+          Backlink discovery and outreach are isolated to one site at a time.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[#EDEEF1]">
-            Backlinks
-          </h1>
+          <h1 className="text-xl font-semibold tracking-tight text-[#EDEEF1]">Backlinks</h1>
           <p className="mt-1 text-[13px] text-[#565A6E]">
-            Analyze your link profile and generate outreach emails
+            Evidence-backed opportunities and approval-first outreach for {site.domain}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="secondary"
-            onClick={handleOutreach}
-            loading={generatingOutreach}
-            disabled={opportunities.length === 0}
-            icon={<Mail className="h-3.5 w-3.5" />}
+            disabled={!Boolean(inbox?.inboundMonitoringReady)}
+            onClick={() => runOperation("inbound", async () => {
+              const result = await syncInbound({ siteId: site._id });
+              setNotice({
+                tone: result.stopped ? "error" : "success",
+                text: result.stopped
+                  ? result.stopped
+                  : `Checked ${result.checked} inbound message${result.checked === 1 ? "" : "s"}. ${result.replied} replies, ${result.optedOut} opt-outs, and ${result.bounced} hard bounces recorded.${result.partial ? " More Gmail pages remain queued for the next bounded sync." : ""}`,
+              });
+            })}
+            loading={pending === "inbound"}
+            icon={<Inbox className="h-3.5 w-3.5" />}
           >
-            Generate Outreach
+            Check replies
           </Button>
           <Button
-            onClick={handleAnalyze}
-            loading={analyzing}
+            variant="secondary"
+            onClick={() => runOperation("verify", async () => {
+              const result = await verifyLinks({ siteId: site._id, limit: 200 });
+              setNotice({
+                tone: "success",
+                text: `Checked ${result.checked} page${result.checked === 1 ? "" : "s"}. ${result.acquired} exact link${result.acquired === 1 ? "" : "s"} acquired, ${result.lost} lost.`,
+              });
+            })}
+            loading={pending === "verify"}
+            icon={<ShieldCheck className="h-3.5 w-3.5" />}
+          >
+            Verify links
+          </Button>
+          <Button
+            onClick={() => runOperation("scan", async () => {
+              const result = await analyzeBacklinks({ siteId: site._id });
+              const found = (result.mentions?.length ?? 0) + (result.brokenLinks?.length ?? 0);
+              setNotice({
+                tone: "success",
+                text: `Analysis finished. ${found} ${found === 1 ? "opportunity" : "opportunities"} passed live-page verification.`,
+              });
+            })}
+            loading={pending === "scan"}
             icon={<Search className="h-3.5 w-3.5" />}
           >
-            Analyze Backlinks
+            Discover opportunities
           </Button>
         </div>
       </div>
 
-      {error && (
-        <div className="flex items-center gap-3 rounded-lg border border-[#EF4444]/[0.2] bg-[#EF4444]/[0.05] px-4 py-3">
-          <AlertCircle className="h-4 w-4 shrink-0 text-[#EF4444]" />
-          <p className="text-[13px] text-[#F87171]">{error}</p>
-        </div>
-      )}
-
-      {/* Tabs */}
-      {(profile || outreachEmails.length > 0) && (
-        <div className="flex gap-1 rounded-lg bg-white/[0.02] border border-white/[0.06] p-1 w-fit">
-          <button
-            onClick={() => setActiveTab("overview")}
-            className={`rounded-md px-4 py-1.5 text-[12px] font-medium transition ${
-              activeTab === "overview"
-                ? "bg-white/[0.06] text-[#EDEEF1]"
-                : "text-[#565A6E] hover:text-[#8B8FA3]"
-            }`}
-          >
-            Link Profile
-          </button>
-          <button
-            onClick={() => setActiveTab("outreach")}
-            className={`rounded-md px-4 py-1.5 text-[12px] font-medium transition ${
-              activeTab === "outreach"
-                ? "bg-white/[0.06] text-[#EDEEF1]"
-                : "text-[#565A6E] hover:text-[#8B8FA3]"
-            }`}
-          >
-            Outreach
-            {outreachEmails.length > 0 && (
-              <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0EA5E9]/[0.15] px-1 text-[9px] font-bold text-[#0EA5E9]">
-                {outreachEmails.length}
-              </span>
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* No data state */}
-      {!profile && outreachEmails.length === 0 && !analyzing && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-16 px-6">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0EA5E9]/[0.08] mb-4">
-            <Link2 className="h-7 w-7 text-[#0EA5E9]" />
-          </div>
-          <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Analyze Your Backlink Profile</h2>
-          <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-5">
-            Discover who links to your site, find broken link opportunities, and generate personalized outreach emails to build more links.
+      {notice && (
+        <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+          notice.tone === "success"
+            ? "border-[#22C55E]/20 bg-[#22C55E]/[0.06]"
+            : "border-[#EF4444]/20 bg-[#EF4444]/[0.06]"
+        }`}>
+          {notice.tone === "success" ? (
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#4ADE80]" />
+          ) : (
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#F87171]" />
+          )}
+          <p className={`text-[13px] ${notice.tone === "success" ? "text-[#86EFAC]" : "text-[#FCA5A5]"}`}>
+            {notice.text}
           </p>
-          <Button
-            onClick={handleAnalyze}
-            loading={analyzing}
-            icon={<Search className="h-3.5 w-3.5" />}
-          >
-            Start Analysis
-          </Button>
         </div>
       )}
 
-      {/* Loading */}
-      {analyzing && !profile && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-16">
-          <Loader2 className="h-8 w-8 text-[#0EA5E9] animate-spin mb-4" />
-          <p className="text-[13px] text-[#565A6E]">Analyzing backlink profile for {site?.domain}...</p>
-        </div>
-      )}
-
-      {/* Overview Tab */}
-      {activeTab === "overview" && profile && (
-        <>
-          {/* Summary */}
-          <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Link2 className="h-3.5 w-3.5 text-[#0EA5E9]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Total Backlinks</span>
-              </div>
-              <p className="text-xl font-bold text-[#EDEEF1]">{profile.totalBacklinks.toLocaleString()}</p>
+      <section className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#0EA5E9]/10">
+              <Inbox className="h-5 w-5 text-[#38BDF8]" />
             </div>
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Globe className="h-3.5 w-3.5 text-[#22D3EE]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Referring Domains</span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-[14px] font-semibold text-[#EDEEF1]">Sending inbox</h2>
+                {inbox && (
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                    ["active", "warming"].includes(String(inbox.status))
+                      ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
+                      : "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]"
+                  }`}>
+                    {String(inbox.status)}
+                  </span>
+                )}
               </div>
-              <p className="text-xl font-bold text-[#EDEEF1]">{profile.referringDomains.toLocaleString()}</p>
-            </div>
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Shield className="h-3.5 w-3.5 text-[#22C55E]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Domain Authority</span>
-              </div>
-              <p className="text-xl font-bold text-[#EDEEF1]">{profile.domainAuthority}</p>
-            </div>
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <TrendingUp className="h-3.5 w-3.5 text-[#22C55E]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Link Ratio</span>
-              </div>
-              <p className="text-xl font-bold text-[#EDEEF1]">{profile.referringDomains > 0 ? (profile.totalBacklinks / profile.referringDomains).toFixed(1) : "0"}</p>
+              {inbox ? (
+                <>
+                  <p className="mt-1 truncate text-[13px] text-[#8B8FA3]">
+                    {String(inbox.fromEmail)} · {String(inbox.mode ?? "approval")} mode
+                  </p>
+                  <p className="mt-1 text-[11px] text-[#565A6E]">
+                    Sent today: {Number(inbox.sentToday ?? 0)}/{Number(inbox.effectiveDailyCap ?? 0)} safe warm-up allowance
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="mt-1 text-[13px] text-[#8B8FA3]">
+                    Connect a secondary-domain Gmail inbox. Your primary transactional domain stays isolated.
+                  </p>
+                  <p className="mt-1 text-[11px] text-[#565A6E]">
+                    New inboxes remain in approval mode and start at the safe warm-up allowance.
+                  </p>
+                </>
+              )}
+              {Boolean(inbox?.lastError) && (
+                <p className="mt-2 text-[11px] text-[#F87171]">{String(inbox?.lastError)}</p>
+              )}
+              {Boolean(inbox?.inboundLastError) && (
+                <p className="mt-2 text-[11px] text-[#F87171]">
+                  Reply monitoring: {String(inbox?.inboundLastError).replaceAll("_", " ")}
+                </p>
+              )}
+              <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
+                Pentra reads only this dedicated outreach mailbox to detect replies, hard bounces,
+                and explicit opt-outs. Inbound message bodies are processed transiently and are not stored.
+              </p>
+              {inbox && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <ReadinessBadge label="Gmail OAuth" ready={Boolean(inbox.credentialsPresent)} />
+                  <ReadinessBadge label="Reply monitoring" ready={Boolean(inbox.inboundMonitoringReady)} />
+                  <ReadinessBadge label="SPF" ready={Boolean(inbox.spfVerifiedAt)} />
+                  <ReadinessBadge label="DKIM" ready={Boolean(inbox.dkimVerifiedAt)} />
+                  <ReadinessBadge label="DMARC" ready={Boolean(inbox.dmarcVerifiedAt)} />
+                  {Boolean(inbox.dnsCheckedAt) && (
+                    <span className="self-center text-[10px] text-[#565A6E]">
+                      DNS checked {formatTime(Number(inbox.dnsCheckedAt))}
+                    </span>
+                  )}
+                  {Boolean(inbox.inboundLastCompletedAt) && (
+                    <span className="self-center text-[10px] text-[#565A6E]">
+                      Inbox checked {formatTime(Number(inbox.inboundLastCompletedAt))}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-
-          {/* Top Referrers */}
-          {profile.topReferrers.length > 0 && (
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-              <h2 className="text-[13px] font-semibold text-[#EDEEF1] mb-4">Top Referring Domains</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-white/[0.06]">
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Domain</th>
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Backlinks</th>
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Rank</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {profile.topReferrers.map((r, i) => (
-                      <tr key={i} className="border-b border-white/[0.03] last:border-0">
-                        <td className="py-2.5">
-                          <div className="flex items-center gap-2">
-                            <Globe className="h-3 w-3 text-[#565A6E]" />
-                            <span className="text-[12px] text-[#EDEEF1]">{r.domain}</span>
-                          </div>
-                        </td>
-                        <td className="py-2.5 text-[12px] text-[#0EA5E9] text-right font-mono">{r.backlinks}</td>
-                        <td className="py-2.5 text-[12px] text-[#565A6E] text-right">{r.rank}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Anchor Text Distribution */}
-          {profile.anchorDistribution.length > 0 && (
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Anchor className="h-4 w-4 text-[#0EA5E9]" />
-                <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Anchor Text Distribution</h2>
-              </div>
-              <div className="flex flex-col gap-2">
-                {(() => {
-                const totalAnchors = profile.anchorDistribution.reduce((s, a) => s + a.count, 0) || 1;
-                return profile.anchorDistribution.slice(0, 10).map((a, i) => {
-                  const pct = Math.round((a.count / totalAnchors) * 100);
-                  return (
-                    <div key={i} className="flex items-center gap-3">
-                      <span className="text-[12px] text-[#EDEEF1] truncate w-48 shrink-0">{a.anchor || "(empty)"}</span>
-                      <div className="flex-1 h-2 rounded-full bg-white/[0.04]">
-                        <div
-                          className="h-2 rounded-full bg-[#0EA5E9]/40"
-                          style={{ width: `${Math.max(pct, 2)}%` }}
-                        />
-                      </div>
-                      <span className="text-[10px] text-[#565A6E] w-12 text-right shrink-0">{pct}%</span>
-                      <span className="text-[10px] text-[#565A6E] w-10 text-right shrink-0">{a.count}</span>
-                    </div>
-                  );
-                });
-              })()}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Outreach Tab */}
-      {activeTab === "outreach" && outreachEmails.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {outreachEmails.map((email, i) => (
-            <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Mail className="h-3.5 w-3.5 text-[#0EA5E9]" />
-                  <span className="text-[12px] font-medium text-[#EDEEF1]">{email.to}</span>
-                </div>
-                <button
-                  onClick={() => copyEmail(i)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-[#8B8FA3] transition hover:bg-white/[0.08] hover:text-white"
-                >
-                  {copiedIdx === i ? (
-                    <>
-                      <Check className="h-3 w-3 text-[#22C55E]" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3 w-3" />
-                      Copy
-                    </>
-                  )}
-                </button>
-              </div>
-              <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-4">
-                <p className="text-[11px] text-[#565A6E] mb-1">Subject:</p>
-                <p className="text-[13px] text-[#EDEEF1] mb-3 font-medium">{email.subject}</p>
-                <p className="text-[11px] text-[#565A6E] mb-1">Body:</p>
-                <p className="text-[12px] text-[#EDEEF1] whitespace-pre-line leading-relaxed">{email.body}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === "outreach" && outreachEmails.length === 0 && !generatingOutreach && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-12">
-          <Mail className="h-8 w-8 text-[#565A6E]/30 mb-3" />
-          <p className="text-[13px] text-[#565A6E] mb-4">No outreach emails generated yet</p>
           <Button
-            onClick={handleOutreach}
-            loading={generatingOutreach}
-            disabled={opportunities.length === 0}
+            variant={inboxNeedsReconnect ? "primary" : "secondary"}
+            onClick={connectGmail}
             icon={<Mail className="h-3.5 w-3.5" />}
           >
-            Generate Outreach Emails
+            {inboxNeedsReconnect ? (inbox ? "Reconnect Gmail" : "Connect Gmail") : "Refresh Gmail connection"}
           </Button>
         </div>
+        {inbox && (
+          <form
+            className="mt-5 grid gap-3 border-t border-white/[0.05] pt-5 md:grid-cols-[1fr_2fr_auto] md:items-end"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const data = new FormData(event.currentTarget);
+              void runOperation("compliance", async () => {
+                const result = await setComplianceProfile({
+                  siteId: site._id,
+                  fromName: String(data.get("fromName") || ""),
+                  physicalMailingAddress: String(data.get("physicalMailingAddress") || ""),
+                });
+                setNotice({
+                  tone: result.ready ? "success" : "error",
+                  text: result.ready
+                    ? "Sender identity saved. The inbox is ready in approval mode."
+                    : "Sender identity saved. DNS still needs attention before sending.",
+                });
+              });
+            }}
+          >
+            <label className="block">
+              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">
+                Sender name
+              </span>
+              <input
+                name="fromName"
+                required
+                minLength={2}
+                maxLength={100}
+                defaultValue={String(inbox.fromName ?? "")}
+                autoComplete="name"
+                className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+                placeholder="Real person or business name"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">
+                Physical mailing address
+              </span>
+              <input
+                name="physicalMailingAddress"
+                required
+                minLength={15}
+                maxLength={300}
+                defaultValue={String(inbox.physicalMailingAddress ?? "")}
+                autoComplete="street-address"
+                className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+                placeholder="Required in every outreach footer"
+              />
+            </label>
+            <Button type="submit" size="sm" loading={pending === "compliance"}>
+              Save sender profile
+            </Button>
+          </form>
+        )}
+      </section>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <SummaryCard
+          label="Verified queue"
+          value={counts.opportunityCounts.verified ?? 0}
+          icon={<Search className="h-3.5 w-3.5 text-[#38BDF8]" />}
+        />
+        <SummaryCard
+          label="Drafts to review"
+          value={counts.messageCounts.draft ?? 0}
+          icon={<Mail className="h-3.5 w-3.5 text-[#C4B5FD]" />}
+        />
+        <SummaryCard
+          label="Contacted"
+          value={counts.opportunityCounts.contacted ?? 0}
+          icon={<Send className="h-3.5 w-3.5 text-[#FBBF24]" />}
+        />
+        <SummaryCard
+          label="Verified links"
+          value={counts.opportunityCounts.acquired ?? 0}
+          icon={<Check className="h-3.5 w-3.5 text-[#4ADE80]" />}
+        />
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex rounded-lg border border-white/[0.06] bg-white/[0.02] p-1">
+          <TabButton active={tab === "opportunities"} onClick={() => setTab("opportunities")}>
+            Opportunities <CountBadge value={opportunities?.length ?? 0} />
+          </TabButton>
+          <TabButton active={tab === "outreach"} onClick={() => setTab("outreach")}>
+            Outreach <CountBadge value={messages?.length ?? 0} />
+          </TabButton>
+        </div>
+        {tab === "opportunities" ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={(counts.opportunityCounts.verified ?? 0) === 0}
+            loading={pending === "prepare"}
+            onClick={() => runOperation("prepare", async () => {
+              const result = await prepareOutreach({ siteId: site._id, limit: 25 });
+              setTab("outreach");
+              setNotice({
+                tone: "success",
+                text: `Prepared ${result.drafted} draft${result.drafted === 1 ? "" : "s"}. ${result.blocked} blocked with a visible reason; ${result.skipped} skipped.${result.partial ? ` This bounded run ended with at least ${result.deferredAtLeast} verified opportunit${result.deferredAtLeast === 1 ? "y" : "ies"} still queued (${result.stopReason}).` : " The bounded queue was fully processed."}`,
+              });
+            })}
+            icon={<Mail className="h-3.5 w-3.5" />}
+          >
+            Prepare verified outreach
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={approvedCount === 0}
+            loading={pending === "send"}
+            onClick={() => runOperation("send", async () => {
+              if (!window.confirm("Send exactly one approved email now? Pentra will not send the remaining approvals automatically.")) return;
+              const result = await sendApproved({ siteId: site._id, max: 1 });
+              setNotice({
+                tone: result.failed > 0 || result.stopped ? "error" : "success",
+                text: `Sent ${result.sent}; failed ${result.failed}.${result.stopped ? ` ${result.stopped}` : ""}`,
+              });
+            })}
+            icon={<Send className="h-3.5 w-3.5" />}
+          >
+            Send next approved (1 of {approvedCount})
+          </Button>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-16">
+          <Loader2 className="h-7 w-7 animate-spin text-[#38BDF8]" />
+        </div>
+      ) : tab === "opportunities" ? (
+        <div className="flex flex-col gap-3">
+          {(opportunities ?? []).map((opportunity) => {
+            const message = messageByOpportunity.get(opportunity._id);
+            return (
+              <article key={opportunity._id} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${OPPORTUNITY_STYLES[opportunity.status] ?? OPPORTUNITY_STYLES.rejected}`}>
+                        {labelStatus(opportunity.status)}
+                      </span>
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-[#565A6E]">
+                        {opportunity.type === "broken_link" ? "Broken link" : "Unlinked mention"}
+                      </span>
+                      {message && (
+                        <span className="text-[10px] text-[#707589]">Message: {labelStatus(message.status)}</span>
+                      )}
+                    </div>
+                    <h2 className="mt-2 truncate text-[14px] font-semibold text-[#EDEEF1]">
+                      {opportunity.sourceDomain || safeHost(opportunity.sourceUrl)}
+                    </h2>
+                    <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-[#8B8FA3]">
+                      {opportunity.context}
+                    </p>
+                  </div>
+                  {typeof opportunity.domainRank === "number" && (
+                    <div className="shrink-0 text-right">
+                      <p className="text-[10px] uppercase tracking-wide text-[#565A6E]">Domain rank</p>
+                      <p className="mt-0.5 text-[16px] font-semibold text-[#EDEEF1]">{opportunity.domainRank}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 grid gap-3 border-t border-white/[0.05] pt-4 md:grid-cols-2 xl:grid-cols-4">
+                  <EvidenceLink label="Verified source page" url={opportunity.sourceUrl} />
+                  <EvidenceLink label="Requested exact href" url={opportunity.targetUrl} />
+                  <EvidenceValue label="Anchor evidence" value={opportunity.anchorText || "Page context verified"} />
+                  <EvidenceValue label="Last evidence check" value={formatTime(opportunity.lastCheckedAt)} />
+                </div>
+
+                {opportunity.status === "acquired" && opportunity.acquiredLinkUrl && (
+                  <div className="mt-4 flex flex-col gap-2 rounded-lg border border-[#22C55E]/20 bg-[#22C55E]/[0.05] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#4ADE80]" />
+                      <p className="text-[11px] text-[#86EFAC]">
+                        Exact href observed on the requested page at {formatTime(opportunity.acquiredAt)}.
+                      </p>
+                    </div>
+                    <a
+                      href={externalUrl(opportunity.acquiredLinkUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-[#4ADE80] hover:underline"
+                    >
+                      View receipt <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                )}
+                {opportunity.status === "rejected" && (
+                  <p className="mt-4 flex items-center gap-2 text-[11px] text-[#707589]">
+                    <XCircle className="h-3.5 w-3.5" />
+                    A later live-page scan did not reconfirm this evidence, so it is not actionable.
+                  </p>
+                )}
+              </article>
+            );
+          })}
+          {(opportunities ?? []).length === 0 && (
+            <EmptyState
+              icon={<Link2 className="h-8 w-8" />}
+              title="No verified opportunities yet"
+              detail="Run discovery. Pentra only stores an opportunity after it verifies the evidence on the live source page."
+            />
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {(messages ?? []).map((message) => {
+            const reasons = [
+              message.blockedReason,
+              message.pacingReason,
+              message.status === "delivery_reviewed_sent" ? undefined : message.failureReason,
+              ...(message.complianceIssues ?? []),
+            ].filter((reason): reason is string => Boolean(reason));
+            const approveKey = `approve:${message._id}`;
+            const discardKey = `discard:${message._id}`;
+            const suppressKey = `suppress:${message._id}`;
+            const reviewSentKey = `review-sent:${message._id}`;
+            const reviewNotSentKey = `review-not-sent:${message._id}`;
+            return (
+              <article key={message._id} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${MESSAGE_STYLES[message.status] ?? OPPORTUNITY_STYLES.rejected}`}>
+                        {labelStatus(message.status)}
+                      </span>
+                      <span className="truncate text-[11px] text-[#707589]">{message.toEmail || message.toDomain}</span>
+                    </div>
+                    <h2 className="mt-2 text-[14px] font-semibold text-[#EDEEF1]">{message.subject}</h2>
+                    <p className="mt-1 text-[10px] text-[#565A6E]">Created {formatTime(message.createdAt)}</p>
+                  </div>
+                  {message.status === "draft" && (
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={pending === discardKey}
+                        onClick={() => runOperation(discardKey, async () => {
+                          await discardMessage({ siteId: site._id, messageId: message._id });
+                          setNotice({ tone: "success", text: "Draft discarded. Nothing was sent." });
+                        })}
+                      >
+                        Discard
+                      </Button>
+                      <Button
+                        size="sm"
+                        loading={pending === approveKey}
+                        onClick={() => runOperation(approveKey, async () => {
+                          await approveMessage({ siteId: site._id, messageId: message._id });
+                          setNotice({ tone: "success", text: "Draft approved. It has not been sent yet." });
+                        })}
+                        icon={<Check className="h-3.5 w-3.5" />}
+                      >
+                        Approve
+                      </Button>
+                    </div>
+                  )}
+                  {["sent", "replied", "delivery_unverified", "delivery_reviewed_sent"].includes(message.status) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={pending === suppressKey}
+                      onClick={() => runOperation(suppressKey, async () => {
+                        if (!window.confirm(`Permanently suppress ${message.toEmail || message.toDomain} for this site?`)) return;
+                        await suppressRecipient({
+                          siteId: site._id,
+                          kind: "domain",
+                          value: message.toDomain,
+                          reason: "manual",
+                        });
+                        if (message.toEmail) {
+                          await suppressRecipient({
+                            siteId: site._id,
+                            kind: "email",
+                            value: message.toEmail,
+                            reason: "manual",
+                          });
+                        }
+                        setNotice({
+                          tone: "success",
+                          text: "Recipient opt-out recorded. Pentra will not contact this domain or address again.",
+                        });
+                      })}
+                    >
+                      Record opt-out
+                    </Button>
+                  )}
+                  {message.status === "delivery_unverified" && (
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={pending === reviewNotSentKey}
+                        onClick={() => runOperation(reviewNotSentKey, async () => {
+                          if (!window.confirm("After checking Gmail's Sent folder, confirm this message was not sent? A fresh draft and approval will be required.")) return;
+                          await resolveUnverified({
+                            siteId: site._id,
+                            messageId: message._id,
+                            resolution: "confirmed_not_sent",
+                          });
+                          setNotice({ tone: "success", text: "Manual review recorded as not sent. This draft will not be retried." });
+                        })}
+                      >
+                        Not in Sent
+                      </Button>
+                      <Button
+                        size="sm"
+                        loading={pending === reviewSentKey}
+                        onClick={() => runOperation(reviewSentKey, async () => {
+                          if (!window.confirm("Confirm that you found this exact message in Gmail's Sent folder?")) return;
+                          await resolveUnverified({
+                            siteId: site._id,
+                            messageId: message._id,
+                            resolution: "confirmed_sent",
+                          });
+                          setNotice({ tone: "success", text: "Manual Gmail review recorded as sent. The audit trail identifies it as manually verified." });
+                        })}
+                      >
+                        Found in Sent
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                {reasons.length > 0 && (
+                  <div className="mt-4 rounded-lg border border-[#EF4444]/20 bg-[#EF4444]/[0.05] px-3 py-2.5">
+                    <p className="mb-1.5 flex items-center gap-2 text-[11px] font-medium text-[#FCA5A5]">
+                      <AlertCircle className="h-3.5 w-3.5" /> Why this message cannot proceed
+                    </p>
+                    <ul className="space-y-1 pl-5 text-[11px] text-[#F87171]">
+                      {reasons.map((reason, index) => <li key={`${reason}-${index}`} className="list-disc">{reason}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="mt-4 whitespace-pre-wrap rounded-lg border border-white/[0.05] bg-black/10 p-4 text-[12px] leading-relaxed text-[#B8BBC7]">
+                  {message.body}
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#565A6E]">
+                  {message.sentAt && <span>Sent {formatTime(message.sentAt)}</span>}
+                  {message.repliedAt && <span>Replied {formatTime(message.repliedAt)}</span>}
+                  {message.bouncedAt && <span>Bounced {formatTime(message.bouncedAt)}</span>}
+                  {message.inboundReceiptKind && message.inboundReceiptAt && (
+                    <span className="text-[#4ADE80]">
+                      Gmail {labelStatus(String(message.inboundReceiptKind))} receipt sealed {formatTime(message.inboundReceiptAt)}
+                    </span>
+                  )}
+                  {message.status === "approved" && (
+                    <span className="flex items-center gap-1 text-[#C4B5FD]">
+                      <Clock3 className="h-3 w-3" /> Approved and waiting for your send command
+                    </span>
+                  )}
+                  {message.status === "delivery_reviewed_sent" && (
+                    <span className="text-[#FBBF24]">
+                      Confirmed manually in Gmail&apos;s Sent folder; Pentra did not capture a provider receipt.
+                    </span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {(messages ?? []).length === 0 && (
+            <EmptyState
+              icon={<Mail className="h-8 w-8" />}
+              title="No durable outreach records yet"
+              detail="Prepare outreach from the verified queue. Drafts, approvals, send receipts, automatic reply and bounce receipts, failures, and suppressions remain visible."
+            />
+          )}
+        </div>
       )}
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, icon }: { label: string; value: number; icon: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+      <div className="flex items-center gap-1.5">
+        {icon}
+        <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">{label}</span>
+      </div>
+      <p className="mt-2 text-xl font-bold text-[#EDEEF1]">{value}</p>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
+        active ? "bg-white/[0.06] text-[#EDEEF1]" : "text-[#565A6E] hover:text-[#8B8FA3]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CountBadge({ value }: { value: number }) {
+  return (
+    <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-white/[0.06] px-1 text-[9px] text-[#8B8FA3]">
+      {value}
+    </span>
+  );
+}
+
+function ReadinessBadge({ label, ready }: { label: string; ready: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-medium ${
+      ready
+        ? "border-[#22C55E]/20 bg-[#22C55E]/[0.07] text-[#4ADE80]"
+        : "border-[#F59E0B]/20 bg-[#F59E0B]/[0.07] text-[#FBBF24]"
+    }`}>
+      {ready ? <Check className="h-2.5 w-2.5" /> : <Clock3 className="h-2.5 w-2.5" />}
+      {label}
+    </span>
+  );
+}
+
+function EvidenceLink({ label, url }: { label: string; url: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[9px] font-medium uppercase tracking-wider text-[#565A6E]">{label}</p>
+      <a
+        href={externalUrl(url)}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-[#38BDF8] hover:underline"
+      >
+        <span className="truncate">{safeHost(url)}</span>
+        <ExternalLink className="h-3 w-3 shrink-0" />
+      </a>
+    </div>
+  );
+}
+
+function EvidenceValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[9px] font-medium uppercase tracking-wider text-[#565A6E]">{label}</p>
+      <p className="mt-1 truncate text-[11px] text-[#B8BBC7]" title={value}>{value}</p>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  detail,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] px-6 py-14 text-center">
+      <div className="mb-3 text-[#565A6E]/50">{icon}</div>
+      <h2 className="text-[14px] font-semibold text-[#EDEEF1]">{title}</h2>
+      <p className="mt-2 max-w-lg text-[12px] leading-relaxed text-[#565A6E]">{detail}</p>
     </div>
   );
 }

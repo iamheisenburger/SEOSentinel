@@ -54,6 +54,7 @@ test("legacy and prior-epoch autonomous jobs cannot block a warm transition", ()
 test("site deletion and reset fail closed around publication leases", () => {
   const sites = readFileSync("convex/sites.ts", "utf8");
   assert.match(sites, /Cannot delete a site while a publication lease exists/);
-  assert.match(sites, /articles\.some\(\(article\) => article\.publicationLeaseOwner\)/);
+  assert.match(sites, /leasedArticles\.some\(\(article\) => article\.publicationLeaseOwner\)/);
   assert.match(sites, /Cannot reset data while a publication lease exists/);
+  assert.match(sites, /Cannot reset data while an article publication lease exists/);
 });

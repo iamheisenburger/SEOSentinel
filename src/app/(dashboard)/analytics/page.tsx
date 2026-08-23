@@ -18,6 +18,9 @@ import {
   ArrowRight,
   Target,
   Workflow,
+  UserPlus,
+  Rocket,
+  BadgeDollarSign,
 } from "lucide-react";
 
 export default function AnalyticsPage() {
@@ -40,6 +43,14 @@ export default function AnalyticsPage() {
   );
   const growthSummary = useQuery(
     api.seoGrowth.getSummary,
+    site?._id ? { siteId: site._id } : "skip",
+  );
+  const outcomeCredential = useQuery(
+    api.outcomes.getIngestCredentialStatus,
+    site?._id ? { siteId: site._id } : "skip",
+  );
+  const outcomeSummary = useQuery(
+    api.outcomes.getOutcomeSummary,
     site?._id ? { siteId: site._id } : "skip",
   );
 
@@ -73,6 +84,51 @@ export default function AnalyticsPage() {
         )}
       </div>
 
+      {outcomeCredential?.configured && outcomeSummary && (
+        <div className="rounded-xl border border-[#A78BFA]/[0.16] bg-[#A78BFA]/[0.025] p-5">
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-[#A78BFA]" />
+                <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Organic outcome receipts</h2>
+              </div>
+              <p className="mt-1 text-[11px] text-[#565A6E]">
+                Exact server receipts for 90-day organic article landing cohorts through signup, activation, and paid conversion.
+              </p>
+            </div>
+            <Link href="/settings" className="text-[10px] font-medium text-[#A78BFA] hover:text-[#C4B5FD]">
+              Integration settings
+            </Link>
+          </div>
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+            <OutcomeMetric
+              icon={<MousePointerClick className="h-3.5 w-3.5 text-[#0EA5E9]" />}
+              label="Organic landings"
+              value={outcomeSummary.organicLandingSessions}
+              rateLabel="Landing cohort"
+            />
+            <OutcomeMetric
+              icon={<UserPlus className="h-3.5 w-3.5 text-[#22D3EE]" />}
+              label="Signups"
+              value={outcomeSummary.signups}
+              rateLabel={`${(outcomeSummary.organicLandingToSignupRate * 100).toFixed(1)}% of landings`}
+            />
+            <OutcomeMetric
+              icon={<Rocket className="h-3.5 w-3.5 text-[#F59E0B]" />}
+              label="Activations"
+              value={outcomeSummary.activations}
+              rateLabel={`${(outcomeSummary.signupToActivationRate * 100).toFixed(1)}% of signups`}
+            />
+            <OutcomeMetric
+              icon={<BadgeDollarSign className="h-3.5 w-3.5 text-[#22C55E]" />}
+              label="Paid conversions"
+              value={outcomeSummary.paidConversions}
+              rateLabel={`${(outcomeSummary.organicLandingToPaidRate * 100).toFixed(1)}% of landings`}
+            />
+          </div>
+        </div>
+      )}
+
       {!gscConnected ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-16 px-6">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0EA5E9]/[0.08] mb-4">
@@ -80,7 +136,7 @@ export default function AnalyticsPage() {
           </div>
           <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Connect Google Search Console</h2>
           <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-3">
-            See which keywords bring traffic to your site, track rankings over time, and automatically refresh declining content.
+            See which keywords bring traffic, track rankings over time, and turn declining pages into auditable recovery actions.
           </p>
           <button
             onClick={() => {
@@ -434,6 +490,29 @@ function GrowthMetric({ label, value, color }: { label: string; value: number; c
     <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
       <p className="text-[10px] uppercase tracking-wider text-[#565A6E]">{label}</p>
       <p className="mt-1 text-lg font-bold" style={{ color }}>{value}</p>
+    </div>
+  );
+}
+
+function OutcomeMetric({
+  icon,
+  label,
+  value,
+  rateLabel,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  rateLabel: string;
+}) {
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+      <div className="flex items-center gap-1.5">
+        {icon}
+        <p className="text-[10px] uppercase tracking-wider text-[#565A6E]">{label}</p>
+      </div>
+      <p className="mt-1 text-lg font-bold text-[#EDEEF1]">{value.toLocaleString()}</p>
+      <p className="mt-0.5 text-[10px] text-[#565A6E]">{rateLabel}</p>
     </div>
   );
 }

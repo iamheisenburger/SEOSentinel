@@ -65,7 +65,7 @@ const tiers = [
     name: "Enterprise",
     monthlyPrice: 499,
     annualPrice: 399,
-    desc: "Unlimited scale for large operations.",
+    desc: "Unlimited sites for large operations.",
     sites: "Unlimited sites",
     articles: "150 articles / month",
     cta: "Get started",

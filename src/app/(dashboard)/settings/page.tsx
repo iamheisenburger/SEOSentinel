@@ -2,11 +2,12 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Trash2, Loader2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
+import { Trash2, Loader2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check, Target, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
@@ -33,7 +34,33 @@ function getPlanName(features: string[]): string {
   return PLAN_NAMES[articleFeature] || "Free";
 }
 
-function PublishingSection({ pubSite }: { pubSite: any }) {
+type PublishingSettingsSite = {
+  _id: Id<"sites">;
+  domain: string;
+  publishMethod?: string;
+  wpUrl?: string;
+  wpUsername?: string;
+  webhookUrl?: string;
+  repoOwner?: string;
+  repoName?: string;
+  githubConnected?: boolean;
+  wordpressConfigured?: boolean;
+  webhookSecretConfigured?: boolean;
+};
+
+type PublishingSiteUpdate = {
+  id: Id<"sites">;
+  domain: string;
+  repoOwner?: string;
+  repoName?: string;
+  wpUrl?: string;
+  wpUsername?: string;
+  wpAppPassword?: string;
+  webhookUrl?: string;
+  webhookSecret?: string;
+};
+
+function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
   const updateSite = useMutation(api.sites.upsert);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -59,7 +86,10 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const updates: any = { id: pubSite._id, domain: pubSite.domain };
+      const updates: PublishingSiteUpdate = {
+        id: pubSite._id,
+        domain: pubSite.domain,
+      };
       if (isGithub) {
         updates.repoOwner = repoOwner.trim() || undefined;
         updates.repoName = repoName.trim() || undefined;
@@ -272,12 +302,197 @@ function PublishingSection({ pubSite }: { pubSite: any }) {
   );
 }
 
+function OutcomeAttributionSection({ site }: { site: { _id: Id<"sites"> } }) {
+  const credential = useQuery(
+    api.outcomes.getIngestCredentialStatus,
+    site?._id ? { siteId: site._id } : "skip",
+  );
+  const rotateCredential = useAction(
+    api.actions.outcomeCredentials.rotateIngestCredential,
+  );
+  const inspectReadiness = useAction(
+    api.actions.outcomeCredentials.getIngestRuntimeReadiness,
+  );
+  const [goalKey, setGoalKey] = useState("primary_revenue");
+  const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<{
+    publicEndpointEnabled: boolean;
+    tenantExecutionAuthorized: boolean;
+    ready: boolean;
+    safetyContract: string;
+  } | null>(null);
+  const [rotating, setRotating] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [confirmRotation, setConfirmRotation] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const normalizedGoal = goalKey.trim().toLowerCase();
+  const validGoal = /^[a-z0-9][a-z0-9._:-]{2,63}$/.test(normalizedGoal);
+  const convexCloudUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const endpoint = convexCloudUrl
+    ? `${convexCloudUrl.replace(/\.convex\.cloud\/?$/, ".convex.site")}/outcomes/v1/receipts`
+    : "/outcomes/v1/receipts";
+
+  const checkReadiness = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const next = await inspectReadiness({ siteId: site._id });
+      setReadiness({
+        publicEndpointEnabled: next.publicEndpointEnabled,
+        tenantExecutionAuthorized: next.tenantExecutionAuthorized,
+        ready: next.ready,
+        safetyContract: next.safetyContract,
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Readiness check failed");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const issueCredential = async () => {
+    if (!validGoal) return;
+    if (credential?.configured && !confirmRotation) {
+      setConfirmRotation(true);
+      return;
+    }
+    setRotating(true);
+    setError(null);
+    try {
+      const result = await rotateCredential({
+        siteId: site._id,
+        qualifiedActionGoalKey: normalizedGoal,
+      });
+      setOneTimeToken(result.token);
+      setConfirmRotation(false);
+      const next = await inspectReadiness({ siteId: site._id });
+      setReadiness({
+        publicEndpointEnabled: next.publicEndpointEnabled,
+        tenantExecutionAuthorized: next.tenantExecutionAuthorized,
+        ready: next.ready,
+        safetyContract: next.safetyContract,
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Credential rotation failed");
+    } finally {
+      setRotating(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
+        <Target className="h-4 w-4 text-[#0EA5E9]" />
+        <p className="text-[13px] font-semibold text-[#EDEEF1]">Outcome attribution</p>
+        <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-medium ${
+          credential?.configured
+            ? "bg-[#22C55E]/[0.1] text-[#4ADE80]"
+            : "bg-white/[0.05] text-[#8B8FA3]"
+        }`}>
+          {credential?.configured ? "Credential active" : "Not connected"}
+        </span>
+      </div>
+      <div className="px-5 py-5 space-y-4">
+        <div>
+          <p className="text-[12px] leading-relaxed text-[#8B8FA3]">
+            Attribute a verified organic article landing through signup, activation, and paid conversion. The credential is for your private server only and must never be shipped to browser code.
+          </p>
+          <p className="mt-2 break-all font-mono text-[10px] text-[#565A6E]">{endpoint}</p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-medium text-[#8B8FA3]">Outcome goal key</label>
+            <input
+              value={goalKey}
+              onChange={(event) => {
+                setGoalKey(event.target.value);
+                setConfirmRotation(false);
+              }}
+              placeholder="primary_revenue"
+              className="w-full rounded-lg border border-white/[0.06] bg-[#090B10] px-3 py-2 text-[12px] font-mono text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            />
+            <p className="text-[10px] text-[#565A6E]">
+              All four server events must use this exact tenant-specific key.
+            </p>
+          </div>
+          <button
+            onClick={issueCredential}
+            disabled={rotating || !validGoal}
+            className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-4 text-[11px] font-medium transition disabled:opacity-50 ${
+              confirmRotation
+                ? "bg-[#F59E0B] text-black hover:bg-[#FBBF24]"
+                : "bg-[#0EA5E9] text-white hover:bg-[#38BDF8]"
+            }`}
+          >
+            {rotating ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
+            {rotating
+              ? "Issuing..."
+              : confirmRotation
+                ? "Confirm rotation"
+                : credential?.configured
+                  ? "Rotate credential"
+                  : "Create credential"}
+          </button>
+        </div>
+
+        {confirmRotation && (
+          <div className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.04] px-3 py-2 text-[11px] text-[#FBBF24]">
+            Rotation immediately invalidates the credential currently installed on your server. Click Confirm rotation only when you are ready to replace it.
+          </div>
+        )}
+
+        {oneTimeToken && (
+          <div className="rounded-lg border border-[#F59E0B]/25 bg-[#F59E0B]/[0.04] p-3 space-y-2">
+            <p className="text-[11px] font-medium text-[#FBBF24]">Copy this server secret now. Pentra will not show it again.</p>
+            <div className="flex items-center gap-2">
+              <code className="min-w-0 flex-1 overflow-x-auto rounded bg-black/20 px-2.5 py-2 text-[10px] text-[#EDEEF1]">{oneTimeToken}</code>
+              <button
+                onClick={() => navigator.clipboard.writeText(oneTimeToken)}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 text-[10px] text-[#8B8FA3] hover:text-white"
+              >
+                <Copy className="h-3 w-3" /> Copy
+              </button>
+            </div>
+            <button onClick={() => setOneTimeToken(null)} className="text-[10px] text-[#8B8FA3] hover:text-white">
+              I stored it securely. Hide token.
+            </button>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2.5">
+          <div className="flex-1 text-[11px] text-[#8B8FA3]">
+            {readiness
+              ? readiness.ready
+                ? `Ready on ${readiness.safetyContract}`
+                : !readiness.tenantExecutionAuthorized
+                  ? "This site is paused by its current account entitlement"
+                : readiness.publicEndpointEnabled
+                  ? "Endpoint enabled, but this site's credential is not ready"
+                  : "Endpoint remains paused by the Pentra safety gate"
+              : "Run an exact readiness check after installing the server credential."}
+          </div>
+          <button
+            onClick={checkReadiness}
+            disabled={checking}
+            className="inline-flex items-center gap-1.5 text-[10px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] disabled:opacity-50"
+          >
+            {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            Check readiness
+          </button>
+        </div>
+        {error && <p className="text-[11px] text-[#EF4444]">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { userId: _clerkId } = useAuth();
   const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
-  const articles = useQuery(
-    api.articles.listBySite,
-    sites?.[0]?._id ? { siteId: sites[0]._id } : "skip",
+  const usageCount = useQuery(
+    api.articles.countThisMonth,
+    _clerkId ? { userId: _clerkId } : "skip",
   );
   const resetAll = useMutation(api.sites.resetAll);
   const [showReset, setShowReset] = useState(false);
@@ -291,12 +506,8 @@ export default function SettingsPage() {
   const siteCount = sites?.length ?? 0;
   const planName = getPlanName(features);
 
-  // Count articles this month
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
-  const articlesThisMonth =
-    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  // Account-wide immutable usage remains truthful across sites and deletions.
+  const articlesThisMonth = usageCount ?? 0;
 
   const handleReset = async () => {
     setResetting(true);
@@ -475,7 +686,7 @@ export default function SettingsPage() {
                   <div className="flex-1">
                     <p className="text-[11px] text-[#565A6E]">Security</p>
                     <p className="text-[13px] text-[#EDEEF1]">
-                      {(user as any).twoFactorEnabled ? "2FA enabled" : "Password authentication"}
+                      {user.twoFactorEnabled ? "2FA enabled" : "Password authentication"}
                     </p>
                   </div>
                   <button
@@ -494,6 +705,10 @@ export default function SettingsPage() {
       {/* Publishing */}
       {pubSite && (
         <PublishingSection pubSite={pubSite} />
+      )}
+
+      {pubSite && (
+        <OutcomeAttributionSection site={pubSite} />
       )}
 
       {/* Notifications */}

@@ -32,7 +32,17 @@ import {
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
 import { needsDeterministicMechanicalRepair } from "./lib/autopilotCadence";
-import { publishedArticlePublicUrl } from "./lib/publicationLive";
+import {
+  publishedArticlePublicUrl,
+  selectVerifiedAuthorityTargets,
+} from "./lib/publicationLive";
+import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
+import { jobAuthorizedForExecution } from "./lib/jobRollout";
+import {
+  executionLeasePredatesPlanTransition,
+  siteExecutionActive,
+  siteExecutionAuthorized,
+} from "./lib/planSiteAllowance";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -114,6 +124,12 @@ async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) 
     await ctx.db.patch(existing._id, fields);
   } else {
     await ctx.db.insert("article_summaries", fields);
+  }
+  if (article.topicId) {
+    await reconcileTopicLifecycle(ctx, {
+      siteId: article.siteId,
+      topicId: article.topicId,
+    });
   }
 }
 
@@ -240,6 +256,40 @@ export const listBySite = query({
 export const listBySiteInternal = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => listBySiteHandler(ctx, siteId),
+});
+
+/**
+ * Minimal, receipt-verified replacement inventory for authority discovery.
+ * This deliberately reloads the full article rows because compact summaries
+ * do not contain the external publication receipt. A `ready` article can
+ * never enter this inventory, even for an owner-triggered scan.
+ */
+export const listVerifiedAuthorityTargetsInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    focusArticleId: v.optional(v.id("articles")),
+  },
+  handler: async (ctx, { siteId, focusArticleId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) return [];
+    const listed = await listBySiteHandler(ctx, siteId);
+    const published = listed.filter(
+      (article) =>
+        article.status === "published" &&
+        (!focusArticleId || article._id === focusArticleId),
+    );
+    const fullArticles = (
+      await Promise.all(published.map((article) => ctx.db.get(article._id)))
+    ).filter((article): article is Doc<"articles"> =>
+      Boolean(article && article.siteId === siteId)
+    );
+    return selectVerifiedAuthorityTargets({
+      site,
+      articles: fullArticles,
+      now: Date.now(),
+      focusArticleId,
+    });
+  },
 });
 
 export const getAutopilotState = internalQuery({
@@ -405,6 +455,10 @@ export const createDraft = internalMutation({
     productEvidenceStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (!await siteExecutionAuthorized(ctx, site)) {
+      throw new Error("This site is not active under the current plan");
+    }
     // Deduplicate slug — prevent multiple articles with the same URL path
     let slug = args.slug;
     const existing = await ctx.db
@@ -459,8 +513,8 @@ export const createDraft = internalMutation({
   },
 });
 
-// Persist the generated draft, usage settlement, topic transition, and job
-// checkpoint in one serializable mutation. If a worker is reset, its old token
+// Persist the generated draft, usage settlement, and job checkpoint in one
+// serializable mutation. If a worker is reset, its old token
 // cannot insert a late duplicate; a replacement worker resumes from articleId.
 export const createDraftForJob = internalMutation({
   args: {
@@ -503,12 +557,18 @@ export const createDraftForJob = internalMutation({
     productEvidenceStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const job = await ctx.db.get(args.jobId);
+    const [job, site] = await Promise.all([
+      ctx.db.get(args.jobId),
+      ctx.db.get(args.siteId),
+    ]);
+    const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     if (
       !job ||
       job.siteId !== args.siteId ||
       job.status !== "running" ||
-      job.workerToken !== args.workerToken
+      job.workerToken !== args.workerToken ||
+      !executionAuthorized ||
+      !jobAuthorizedForExecution(site, job)
     ) {
       throw new Error("Worker lease lost before generated draft checkpoint");
     }
@@ -588,12 +648,6 @@ export const createDraftForJob = internalMutation({
       heartbeatAt: timestamp,
       updatedAt: timestamp,
     });
-    if (args.topicId) {
-      const topic = await ctx.db.get(args.topicId);
-      if (topic?.siteId === args.siteId) {
-        await ctx.db.patch(args.topicId, { status: "used", updatedAt: timestamp });
-      }
-    }
     await syncSummary(ctx, articleId);
     return articleId;
   },
@@ -699,8 +753,8 @@ export const quarantineLinkSealFailure = internalMutation({
 
 // Operator-safe migration path for artifacts created before the deterministic
 // business/title target-alignment gate existed. This invalidates every seal in
-// the same atomic write and quarantines the source topic so a fleet tick cannot
-// immediately recreate the same targeting mistake.
+// the same atomic write. Topic lifecycle reconciliation then returns an
+// unreserved failed draft to the normal tenant-specific validation gates.
 export const quarantineTargetMismatch = internalMutation({
   args: {
     articleId: v.id("articles"),
@@ -727,12 +781,6 @@ export const quarantineTargetMismatch = internalMutation({
       auditedAt: undefined,
       updatedAt: currentTime,
     });
-    if (article.topicId) {
-      await ctx.db.patch(article.topicId, {
-        status: "cannibalizing",
-        updatedAt: currentTime,
-      });
-    }
     await syncSummary(ctx, articleId);
     return { quarantined: true, topicId: article.topicId };
   },
@@ -761,6 +809,7 @@ export const beginPublication = internalMutation({
     const site = await ctx.db.get(article.siteId);
     if (
       !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
       !site.autopilotEnabled ||
       site.autopilotRolloutMode !== "live" ||
       (site.autopilotRolloutEpoch ?? 0) !== expectedRolloutEpoch
@@ -866,9 +915,12 @@ export const completePublication = internalMutation({
     const site = await ctx.db.get(article.siteId);
     const completedAt = now();
     validatePublicationReceipt(receipt);
-    const currentConfigHash = site
-      ? publicationDeliveryConfigHash(publicationDeliveryConfig(site))
-      : undefined;
+    if (!site) {
+      throw new Error("Refusing to complete publication after site lease loss");
+    }
+    const currentConfigHash = publicationDeliveryConfigHash(
+      publicationDeliveryConfig(site),
+    );
     const expectedEnvelope = article.publicationDate
       ? publicationDeliveryEnvelopeHash({
           contentHash: publishedContentHash,
@@ -877,11 +929,19 @@ export const completePublication = internalMutation({
           rolloutEpoch: expectedRolloutEpoch,
         })
       : undefined;
+    const normalSettlementAuthorized =
+      await siteExecutionAuthorized(ctx, site) &&
+      Boolean(site.autopilotEnabled) &&
+      site.autopilotRolloutMode === "live" &&
+      (site.autopilotRolloutEpoch ?? 0) === expectedRolloutEpoch;
+    const receiptOnlyPlanTransition =
+      await executionLeasePredatesPlanTransition(
+        ctx,
+        site,
+        article.publicationLeaseStartedAt,
+      );
     if (
-      !site ||
-      !site.autopilotEnabled ||
-      site.autopilotRolloutMode !== "live" ||
-      (site.autopilotRolloutEpoch ?? 0) !== expectedRolloutEpoch ||
+      (!normalSettlementAuthorized && !receiptOnlyPlanTransition) ||
       currentConfigHash !== expectedConfigHash ||
       article.publicationConfigHash !== expectedConfigHash ||
       expectedEnvelope !== expectedDeliveryHash ||
@@ -995,7 +1055,7 @@ export const recordPublicPublicationCheck = internalMutation({
       ctx.db.get(siteId),
       ctx.db.get(articleId),
     ]);
-    if (!site || !article || article.siteId !== siteId) {
+    if (!siteExecutionActive(site) || !article || article.siteId !== siteId) {
       throw new Error("Public publication check tenant mismatch");
     }
     if (
@@ -1577,6 +1637,12 @@ export const deleteArticle = mutation({
       .first();
     if (summary) await ctx.db.delete(summary._id);
     await ctx.db.delete(articleId);
+    if (article.topicId) {
+      await reconcileTopicLifecycle(ctx, {
+        siteId: article.siteId,
+        topicId: article.topicId,
+      });
+    }
   },
 });
 

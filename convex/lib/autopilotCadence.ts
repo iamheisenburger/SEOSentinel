@@ -1,4 +1,7 @@
-import { effectivePublishedAt } from "./autopilotBuffer.ts";
+import {
+  effectivePublishedAt,
+  hasTerminalTopicFitFailure,
+} from "./autopilotBuffer.ts";
 
 export type CadenceArticle = {
   _id?: string;
@@ -44,6 +47,26 @@ export function needsDeterministicMechanicalRepair(
         DETERMINISTIC_METADATA_ISSUES.has(issue) ||
         DETERMINISTIC_STRUCTURE_ISSUE_PATTERN.test(issue),
     )
+  );
+}
+
+/**
+ * Return whether the scheduler has quality recovery work that must take
+ * priority over new article generation. Keep admission paths that can create
+ * new work on this shared predicate so they cannot race or spend ahead of a
+ * recoverable draft.
+ */
+export function hasRecoverableQualityWork(
+  articles: CadenceArticle[],
+  candidateWindowStart: number,
+): boolean {
+  return articles.some((article) =>
+    (article.createdAt >= candidateWindowStart &&
+      article.status === "review" &&
+      article.publicationGateStatus === "blocked" &&
+      !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
+      (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
+    needsDeterministicMechanicalRepair(article)
   );
 }
 

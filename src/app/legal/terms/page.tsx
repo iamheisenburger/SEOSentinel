@@ -27,7 +27,7 @@ export default function TermsOfServicePage() {
 
       <main className="mx-auto max-w-4xl px-6 py-16">
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Terms of Service</h1>
-        <p className="mt-2 text-sm text-[#8B8FA3]">Last updated: March 5, 2026</p>
+        <p className="mt-2 text-sm text-[#8B8FA3]">Last updated: August 23, 2026</p>
 
         <div className="mt-10 space-y-8 text-[#94A3B8] leading-relaxed [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[#F1F5F9] [&_h2]:mt-10 [&_h2]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1">
           <p>
@@ -53,7 +53,7 @@ export default function TermsOfServicePage() {
           </ul>
 
           <h2>4. Subscription Plans &amp; Billing</h2>
-          <p>Pentra offers multiple subscription tiers with varying article limits and site allowances. All plans include access to the full feature set. Billing is processed monthly through our payment provider (Stripe via Clerk). You may cancel your subscription at any time, and it will remain active until the end of the current billing period.</p>
+          <p>Pentra offers multiple subscription tiers with varying article limits and site allowances. All plans include access to the full feature set. Billing is processed monthly or annually, according to the billing period selected at checkout, through our payment provider (Stripe via Clerk). You may cancel your subscription at any time, and it will remain active until the end of the current billing period.</p>
           <p>We reserve the right to change pricing with 30 days&apos; notice. Free tier users receive limited article generation per month at no cost.</p>
 
           <h2>5. AI-Generated Content</h2>
@@ -72,13 +72,13 @@ export default function TermsOfServicePage() {
           <p>Your use of Pentra is also governed by our <Link href="/legal/privacy" className="text-[#0EA5E9] hover:underline">Privacy Policy</Link>. By using Pentra, you acknowledge that your website data will be crawled and analyzed by our AI systems to generate content. If you publish content that involves personal data, you are responsible for compliance with applicable data protection laws (GDPR, CCPA, etc.).</p>
 
           <h2>8. Third-Party Integrations</h2>
-          <p>Pentra integrates with third-party services including GitHub, WordPress, and webhook endpoints for publishing. You are responsible for maintaining valid credentials and permissions for these integrations. We are not responsible for issues arising from third-party service outages or changes.</p>
+          <p>Pentra integrates with third-party services including GitHub, WordPress, webhook endpoints for publishing, Search Console for measurement, and a separately authorized Gmail mailbox for approval-first outreach and reply, bounce, and opt-out monitoring. You are responsible for maintaining valid credentials and permissions for these integrations. You are also responsible for the sender identity, mailing address, message approval, and legal basis for outreach performed through your mailbox. We are not responsible for issues arising from third-party service outages or changes.</p>
 
           <h2>9. Service Availability</h2>
           <p>While we strive for high uptime, we do not guarantee uninterrupted service. We may perform maintenance, updates, or experience outages. We will make reasonable efforts to notify you of planned downtime.</p>
 
           <h2>10. Termination</h2>
-          <p>You may delete your account at any time. We may suspend or terminate accounts that violate these Terms. Upon termination, your data will be retained for 30 days before permanent deletion.</p>
+          <p>You may delete your account at any time. We may suspend or terminate accounts that violate these Terms. When we receive a verified account-deletion request, Pentra immediately stops execution for the account and revokes stored publishing, search, and outreach credentials. After a short safety quiescence for any in-flight external operation, associated site content and configuration are removed through a bounded, resumable purge. We may retain or pseudonymize only minimal billing, abuse-prevention, quota, and provider-spend receipts where required for legal, security, or accounting purposes; those receipts do not contain reusable credentials or retained site content.</p>
 
           <h2>11. Limitation of Liability</h2>
           <p>To the maximum extent permitted by law, Pentra shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including loss of profits, data, or business opportunities. Our total liability is limited to the amount you paid us in the 12 months preceding the claim.</p>

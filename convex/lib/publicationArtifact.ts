@@ -3,7 +3,9 @@ import {
   PUBLISHER_RENDERER_VERSION,
 } from "./publicationReceipts.ts";
 
-export const PUBLICATION_AUDIT_VERSION = 4;
+// Version 5 adds a final tenant-topic product-fit check. Bumping the seal
+// invalidates artifacts approved under the older, weaker relevance contract.
+export const PUBLICATION_AUDIT_VERSION = 5;
 
 // Convex mutations run in the default V8 runtime, where Node's `crypto`
 // module is unavailable.  Keep the digest synchronous because the exact same
@@ -406,8 +408,25 @@ export function publicationDeliveryConfigHash(
 export function publicationArtifactHash(
   article: PublicationArtifact,
 ): string {
+  return publicationArtifactHashForAuditVersion(
+    article,
+    PUBLICATION_AUDIT_VERSION,
+  );
+}
+
+export function publicationArtifactHashForAuditVersion(
+  article: PublicationArtifact,
+  auditVersion: number,
+): string {
+  if (
+    !Number.isInteger(auditVersion) ||
+    auditVersion < 4 ||
+    auditVersion > PUBLICATION_AUDIT_VERSION
+  ) {
+    throw new Error("Unsupported publication artifact audit version");
+  }
   const canonical = JSON.stringify({
-    auditVersion: PUBLICATION_AUDIT_VERSION,
+    auditVersion,
     title: article.title,
     slug: article.slug,
     markdown: article.markdown,

@@ -6,11 +6,17 @@ import { addSearchConsoleDays } from "./lib/searchPerformance";
 import {
   DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
   growthActionFingerprint,
+  isSeoGrowthActuationEligible,
 } from "./lib/seoGrowth";
 import {
   keywordMatchesBusinessModel,
   keywordMatchesBusinessSignals,
 } from "./lib/autopilotBuffer";
+import { filterRowsForGscReceipts } from "./lib/gscSearchAnalytics";
+import {
+  siteExecutionActive,
+  siteExecutionAuthorized,
+} from "./lib/planSiteAllowance";
 
 const ACTIVE_ACTION_STATUSES = ["open", "monitoring"] as const;
 const RETRYABLE_SUPPORT_AUTOMATION = new Set([
@@ -19,7 +25,23 @@ const RETRYABLE_SUPPORT_AUTOMATION = new Set([
   "bounded_wait",
   "support_failed",
   "discovery_repair_verified",
+  "measurement_only",
 ]);
+const RETRYABLE_REVISION_AUTOMATION = new Set([
+  "no_safe_candidate",
+  "bounded_wait",
+  "measurement_only",
+  "awaiting_published_revision",
+  "revision_prepared",
+  "revision_failed",
+  "revision_unverified",
+]);
+
+const MEASUREMENT_ONLY_AUTOMATION: GrowthAutomationResult = {
+  status: "measurement_only",
+  detail:
+    "Pentra recorded this measured opportunity without changing topics or contacting an external service because SEO growth automation is not enabled for this tenant rollout.",
+};
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -36,17 +58,15 @@ export const getSiteInputs = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
-    if (!site) throw new Error("Site not found");
-    const latest = await ctx.db
-      .query("search_performance")
-      .withIndex("by_site_version_date", (q) =>
-        q.eq("siteId", siteId).eq("syncVersion", 2),
-      )
-      .order("desc")
-      .first();
-    const cutoff = latest ? addSearchConsoleDays(latest.date, -89) : undefined;
-    const [rows, articles, goal] = await Promise.all([
-      cutoff
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("Site not found");
+    }
+    const cutoff = site.gscDataThrough
+      ? addSearchConsoleDays(site.gscDataThrough, -89)
+      : undefined;
+    const receipts = site.gscDateEpochs ?? [];
+    const [rowCandidates, articles, goal] = await Promise.all([
+      cutoff && receipts.length > 0
         ? ctx.db
           .query("search_page_daily")
           .withIndex("by_site_date", (q) =>
@@ -69,13 +89,16 @@ export const getSiteInputs = internalQuery({
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .unique(),
     ]);
+    const rows = filterRowsForGscReceipts(rowCandidates, receipts);
     return {
       site: {
         siteId,
         domain: site.domain,
         urlStructure: site.urlStructure,
       },
-      dataThrough: latest?.date,
+      dataWindowStart: site.gscDataWindowStart,
+      dataThrough: site.gscDataThrough,
+      dateEpochs: receipts,
       rows,
       articles: articles
         // Legacy rows predate public-page verification. New deliveries are not
@@ -114,6 +137,9 @@ const evidenceValidator = v.object({
   nonBrandedImpressions: v.number(),
   nonBrandedCtr: v.number(),
   nonBrandedPosition: v.union(v.number(), v.null()),
+  unattributedClicks: v.number(),
+  unattributedImpressions: v.number(),
+  queryCoverageComplete: v.boolean(),
   indexVerdict: v.optional(v.string()),
   coverageState: v.optional(v.string()),
   pageFetchState: v.optional(v.string()),
@@ -302,6 +328,11 @@ export const reconcileSite = internalMutation({
     }),
   },
   handler: async (ctx, { siteId, classifications, health }) => {
+    const currentSite = await ctx.db.get(siteId);
+    if (!currentSite || !(await siteExecutionAuthorized(ctx, currentSite))) {
+      throw new Error("Site not found");
+    }
+    const actuationEligible = isSeoGrowthActuationEligible(currentSite);
     const now = Date.now();
     let openActions = 0;
     const replenishmentRequests: Array<{
@@ -312,6 +343,17 @@ export const reconcileSite = internalMutation({
     }> = [];
     const discoveryRepairRequests: Array<{
       fingerprint: string;
+      priority: number;
+    }> = [];
+    const authorityRequests: Array<{
+      articleId: Id<"articles">;
+      fingerprint: string;
+      priority: number;
+    }> = [];
+    const revisionRequests: Array<{
+      articleId: Id<"articles">;
+      fingerprint: string;
+      actionKind: "improve_snippet" | "strengthen_cluster";
       priority: number;
     }> = [];
     for (const classification of classifications) {
@@ -354,6 +396,28 @@ export const reconcileSite = internalMutation({
       if (existing) {
         let automation: GrowthAutomationResult | undefined;
         if (
+          actuationEligible &&
+          desiredStatus === "open" &&
+          (classification.actionKind === "improve_snippet" ||
+            classification.actionKind === "strengthen_cluster") &&
+          RETRYABLE_REVISION_AUTOMATION.has(
+            existing.automationStatus ?? "no_safe_candidate",
+          )
+        ) {
+          revisionRequests.push({
+            articleId: classification.articleId,
+            fingerprint,
+            actionKind: classification.actionKind,
+            priority: classification.priority,
+          });
+          automation = {
+            status: "awaiting_published_revision",
+            detail:
+              "Pentra will attempt one deterministic immutable revision, then require exact external CAS and live URL receipts.",
+          };
+        }
+        if (
+          actuationEligible &&
           desiredStatus === "open" &&
           classification.actionKind === "repair_discovery" &&
           !existing.discoveryRepairVerifiedAt
@@ -364,13 +428,26 @@ export const reconcileSite = internalMutation({
           });
         }
         if (
+          actuationEligible &&
           desiredStatus === "open" &&
-          (classification.actionKind === "strengthen_cluster" ||
-            (
-              classification.actionKind === "repair_discovery" &&
-              existing.discoveryRepairVerifiedAt !== undefined &&
-              existing.discoveryRepairVerifiedAt <= now - 7 * 24 * 60 * 60 * 1000
-            )) &&
+          classification.actionKind === "build_authority" &&
+          (
+            !existing.authorityDiscoveryAttemptedAt ||
+            existing.authorityDiscoveryAttemptedAt <= now - 7 * 24 * 60 * 60 * 1000
+          )
+        ) {
+          authorityRequests.push({
+            articleId: classification.articleId,
+            fingerprint,
+            priority: classification.priority,
+          });
+        }
+        if (
+          actuationEligible &&
+          desiredStatus === "open" &&
+          classification.actionKind === "repair_discovery" &&
+          existing.discoveryRepairVerifiedAt !== undefined &&
+          existing.discoveryRepairVerifiedAt <= now - 7 * 24 * 60 * 60 * 1000 &&
           RETRYABLE_SUPPORT_AUTOMATION.has(
             existing.automationStatus ?? "no_safe_candidate",
           )
@@ -389,6 +466,20 @@ export const reconcileSite = internalMutation({
               priority: classification.priority,
             });
           }
+        }
+        if (
+          actuationEligible &&
+          desiredStatus === "open" &&
+          classification.actionKind === "reassess_opportunity" &&
+          RETRYABLE_SUPPORT_AUTOMATION.has(
+            existing.automationStatus ?? "no_safe_candidate",
+          )
+        ) {
+          automation = await deprioritizeFailedOpportunityCluster(
+            ctx,
+            siteId,
+            classification.articleId,
+          );
         }
         await ctx.db.patch(existing._id, {
           status: desiredStatus,
@@ -412,7 +503,9 @@ export const reconcileSite = internalMutation({
           status: "not_applicable",
           detail: "This measured stage has no safe automatic mutation.",
         };
-        if (classification.actionKind === "repair_discovery") {
+        if (!actuationEligible && desiredStatus === "open") {
+          automation = MEASUREMENT_ONLY_AUTOMATION;
+        } else if (classification.actionKind === "repair_discovery") {
           automation = {
             status: "awaiting_discovery_repair",
             detail:
@@ -422,13 +515,32 @@ export const reconcileSite = internalMutation({
             fingerprint,
             priority: classification.priority,
           });
-        } else if (classification.actionKind === "strengthen_cluster") {
-          automation = await prioritizeVerifiedSupportingTopic(
-            ctx,
-            siteId,
-            classification.articleId,
+        } else if (classification.actionKind === "build_authority") {
+          automation = {
+            status: "awaiting_authority_discovery",
+            detail:
+              "Pentra will inspect evidence-backed authority opportunities for this exact page before preparing any outreach.",
+          };
+          authorityRequests.push({
+            articleId: classification.articleId,
             fingerprint,
-          );
+            priority: classification.priority,
+          });
+        } else if (
+          classification.actionKind === "strengthen_cluster" ||
+          classification.actionKind === "improve_snippet"
+        ) {
+          automation = {
+            status: "awaiting_published_revision",
+            detail:
+              "Pentra will attempt one deterministic immutable revision, then require exact external CAS and live URL receipts.",
+          };
+          revisionRequests.push({
+            articleId: classification.articleId,
+            fingerprint,
+            actionKind: classification.actionKind,
+            priority: classification.priority,
+          });
         } else if (classification.actionKind === "reassess_opportunity") {
           automation = await deprioritizeFailedOpportunityCluster(
             ctx,
@@ -536,7 +648,44 @@ export const reconcileSite = internalMutation({
       stageCounts,
       replenishmentRequests,
       discoveryRepairRequests,
+      authorityRequests,
+      revisionRequests,
     };
+  },
+});
+
+export const recordAuthorityDiscovery = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    fingerprint: v.string(),
+    status: v.string(),
+    detail: v.string(),
+    attemptedAt: v.number(),
+    verifiedAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const action = await ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", args.fingerprint))
+      .unique();
+    if (
+      !action ||
+      action.siteId !== args.siteId ||
+      action.status !== "open" ||
+      action.actionKind !== "build_authority"
+    ) {
+      throw new Error("Authority discovery does not match an open tenant action");
+    }
+    await ctx.db.patch(action._id, {
+      authorityDiscoveryAttemptedAt: args.attemptedAt,
+      authorityDiscoveryVerifiedAt: args.verifiedAt,
+      authorityDiscoveryDetail: args.detail,
+      automationStatus: args.status,
+      automationDetail: args.detail,
+      automatedAt: args.status === "authority_outreach_prepared" ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    });
+    return { updated: true };
   },
 });
 
@@ -715,6 +864,13 @@ export const setGoal = mutation({
       .query("seo_growth_goals")
       .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
       .unique();
+    // Keep the legacy site mirror synchronized during the migration. The
+    // canonical source read by growth health and portfolio audits remains the
+    // seo_growth_goals row.
+    await ctx.db.patch(args.siteId, {
+      organicClickGoalMonthly: monthlyOrganicClicksGoal,
+      updatedAt: timestamp,
+    });
     if (existing) {
       await ctx.db.patch(existing._id, {
         monthlyOrganicClicksGoal,

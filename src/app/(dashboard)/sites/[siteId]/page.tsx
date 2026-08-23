@@ -40,7 +40,6 @@ import {
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { formatDistanceToNow } from "date-fns";
-import { usePlanLimits } from "@/hooks/usePlanLimits";
 import {
   cadenceLabel,
   cadenceOptionsForMonthlyLimit,
@@ -49,11 +48,11 @@ import {
 type Tab = "overview" | "articles" | "settings";
 
 export default function SiteDetailPage() {
-  const { maxArticles } = usePlanLimits();
   const params = useParams();
   const router = useRouter();
   const siteId = params.siteId as Id<"sites">;
   const site = useQuery(api.sites.get, { siteId });
+  const cadenceCapacity = useQuery(api.sites.getCadenceCapacity, { siteId });
   const articles = useQuery(api.articles.listBySite, { siteId });
   const topics = useQuery(api.topics.listBySite, { siteId });
   const deleteSite = useMutation(api.sites.deleteSite);
@@ -92,9 +91,6 @@ export default function SiteDetailPage() {
   const [painPoints, setPainPoints] = useState<string[]>([]);
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [keywords, setKeywords] = useState<string[]>([]);
-  const [mediumToken, setMediumToken] = useState("");
-  const [linkedinToken, setLinkedinToken] = useState("");
-  const [syndicationEnabled, setSyndicationEnabled] = useState(false);
 
   // Initialize settings from site data (once)
   if (site && !settingsInitialized) {
@@ -119,9 +115,6 @@ export default function SiteDetailPage() {
     setPainPoints(site.painPoints ?? []);
     setCompetitors(site.competitors ?? []);
     setKeywords(site.anchorKeywords ?? []);
-    setMediumToken("");
-    setLinkedinToken("");
-    setSyndicationEnabled(site.syndicationEnabled ?? false);
     setSettingsInitialized(true);
   }
 
@@ -195,9 +188,6 @@ export default function SiteDetailPage() {
         painPoints: painPoints.length > 0 ? painPoints : undefined,
         competitors: competitors.length > 0 ? competitors : undefined,
         anchorKeywords: keywords.length > 0 ? keywords : undefined,
-        mediumToken: mediumToken || undefined,
-        linkedinAccessToken: linkedinToken || undefined,
-        syndicationEnabled,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -350,13 +340,15 @@ export default function SiteDetailPage() {
           painPoints={painPoints} setPainPoints={setPainPoints}
           competitors={competitors} setCompetitors={setCompetitors}
           keywords={keywords} setKeywords={setKeywords}
-          mediumToken={mediumToken} setMediumToken={setMediumToken}
-          linkedinToken={linkedinToken} setLinkedinToken={setLinkedinToken}
-          syndicationEnabled={syndicationEnabled} setSyndicationEnabled={setSyndicationEnabled}
           saving={saving}
           saved={saved}
           saveError={saveError}
-          cadenceOptions={cadenceOptionsForMonthlyLimit(maxArticles)}
+          cadenceOptions={cadenceOptionsForMonthlyLimit(
+            cadenceCapacity?.ready
+              ? cadenceCapacity.availableMonthlyArticles
+              : 0,
+          )}
+          cadenceCapacity={cadenceCapacity}
           onSave={handleSaveSettings}
         />
       )}
@@ -751,13 +743,11 @@ function SettingsTab({
   painPoints, setPainPoints,
   competitors, setCompetitors,
   keywords, setKeywords,
-  mediumToken, setMediumToken,
-  linkedinToken, setLinkedinToken,
-  syndicationEnabled, setSyndicationEnabled,
   saving,
   saved,
   saveError,
   cadenceOptions,
+  cadenceCapacity,
   onSave,
 }: {
   site: any;
@@ -782,13 +772,18 @@ function SettingsTab({
   painPoints: string[]; setPainPoints: (v: string[]) => void;
   competitors: string[]; setCompetitors: (v: string[]) => void;
   keywords: string[]; setKeywords: (v: string[]) => void;
-  mediumToken: string; setMediumToken: (v: string) => void;
-  linkedinToken: string; setLinkedinToken: (v: string) => void;
-  syndicationEnabled: boolean; setSyndicationEnabled: (v: boolean) => void;
   saving: boolean;
   saved: boolean;
   saveError: string | null;
   cadenceOptions: Array<{ value: number; label: string }>;
+  cadenceCapacity:
+    | {
+        ready: boolean;
+        maxArticles: number;
+        availableMonthlyArticles: number;
+        siteParked: boolean;
+      }
+    | undefined;
   onSave: () => void;
 }) {
   return (
@@ -821,42 +816,17 @@ function SettingsTab({
 
       {/* Content Syndication */}
       <SettingsSection title="Content Syndication" icon={Share2}>
-        <ToggleRow
-          label="Auto-Syndicate"
-          description="Automatically distribute articles to connected platforms when published"
-          value={syndicationEnabled}
-          onChange={setSyndicationEnabled}
-        />
-        <FieldRow label="Medium Integration Token" description="Get your token from medium.com/me/settings/security">
-          <Input
-            type="password"
-            value={mediumToken}
-            onChange={(e) => setMediumToken(e.target.value)}
-            placeholder={site.mediumConnected ? "Leave blank to keep current token" : "Enter Medium integration token"}
-          />
-          {mediumToken || site.mediumConnected ? (
-            <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#22C55E]">
-              <Check className="h-3 w-3" /> Token configured — articles will be posted as drafts with canonical URL
+        <div className="rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-4 py-3">
+          <p className="text-[12px] font-medium text-[#FBBF24]">Unavailable</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-[#8B8FA3]">
+            Automatic Medium and LinkedIn syndication is not available yet. Pentra does not collect new platform tokens or claim cross-post delivery without an audited, idempotent destination receipt.
+          </p>
+          {(site.mediumConnected || site.linkedinConnected) && (
+            <p className="mt-2 text-[10px] text-[#565A6E]">
+              A previously saved credential remains preserved but is not used by the disabled workflow.
             </p>
-          ) : (
-            <p className="mt-1.5 text-[11px] text-[#565A6E]">Articles are posted as drafts on Medium with canonical URL pointing to your site</p>
           )}
-        </FieldRow>
-        <FieldRow label="LinkedIn Access Token" description="OAuth access token for LinkedIn posting">
-          <Input
-            type="password"
-            value={linkedinToken}
-            onChange={(e) => setLinkedinToken(e.target.value)}
-            placeholder={site.linkedinConnected ? "Leave blank to keep current token" : "Enter LinkedIn access token"}
-          />
-          {linkedinToken || site.linkedinConnected ? (
-            <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#22C55E]">
-              <Check className="h-3 w-3" /> Token configured — AI-generated LinkedIn posts with article links
-            </p>
-          ) : (
-            <p className="mt-1.5 text-[11px] text-[#565A6E]">Each article gets an AI-written LinkedIn post linking back to the original</p>
-          )}
-        </FieldRow>
+        </div>
       </SettingsSection>
 
       {/* General */}
@@ -888,17 +858,27 @@ function SettingsTab({
       {/* Publishing */}
       <SettingsSection title="Publishing" icon={Zap}>
         <FieldRow label="Publishing cadence" description="Only cadences sustainable within the active monthly plan are available">
-          <select
-            className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
-            value={cadence}
-            onChange={(event) => setCadence(Number(event.target.value))}
-          >
-            {cadenceOptions.map((option) => (
-              <option key={option.label} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <div className="space-y-2">
+            <select
+              className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+              value={cadence}
+              disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
+              onChange={(event) => setCadence(Number(event.target.value))}
+            >
+              {cadenceOptions.map((option) => (
+                <option key={option.label} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] leading-relaxed text-[#565A6E]">
+              {cadenceCapacity === undefined || !cadenceCapacity.ready
+                ? "Checking the current account-wide article allowance."
+                : cadenceCapacity.siteParked
+                  ? "This site is parked by the current site allowance. Its requested cadence is saved and will be reconsidered after an upgrade or site removal."
+                  : `${cadenceCapacity.availableMonthlyArticles} of ${cadenceCapacity.maxArticles} monthly articles are available for this site across the account.`}
+            </p>
+          </div>
         </FieldRow>
         <ToggleRow
           label="Autopilot"

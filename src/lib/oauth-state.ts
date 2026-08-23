@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
-export type OAuthProvider = "github" | "gsc";
+export type OAuthProvider = "github" | "gsc" | "gmail_outreach";
 
 const STATE_VERSION = 1;
 const STATE_TTL_MS = 10 * 60 * 1000;

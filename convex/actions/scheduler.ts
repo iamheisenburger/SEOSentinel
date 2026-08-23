@@ -8,6 +8,15 @@ import { v } from "convex/values";
 import { getLimitsFromFeatures } from "../planLimits";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
 import {
+  evaluateSerpAttainability,
+  evaluateSerpBusinessIntent,
+} from "../lib/serpAttainability";
+import {
+  MAX_CLICK_GOAL_REPLENISHMENTS_PER_DAY,
+  type ExpectedClickPortfolioEvaluation,
+} from "../lib/expectedClickPortfolio";
+import {
+  hasRecoverableQualityWork,
   MAX_QUALITY_REVISIONS,
   needsDeterministicMechanicalRepair,
 } from "../lib/autopilotCadence";
@@ -24,10 +33,13 @@ import {
   exactCadenceWakeupAt,
   coveredIntentTopics,
   filterNonCannibalizingIntentTopics,
+  hasTerminalTopicFitFailure,
+  isUnderfilledPlanContinuationPayload,
   isSealedReady,
+  tenantTopicBusinessSignals,
+  topicReplenishmentBudget,
 } from "../lib/autopilotBuffer";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_TOPIC_REPLENISHMENTS_PER_24H = 2;
 
 type ArticleSummary = {
   _id: Id<"articles">;
@@ -70,9 +82,7 @@ type TopicBusinessFitAuditReport = {
 };
 
 function hasTerminalTargetAlignmentFailure(article: ArticleSummary): boolean {
-  return (article.publicationGateIssues ?? []).some((issue) =>
-    issue.includes("does not align with both the configured business and the final article title")
-  );
+  return hasTerminalTopicFitFailure(article.publicationGateIssues);
 }
 
 // Operator-safe inventory audit. It changes only topic eligibility metadata
@@ -89,35 +99,37 @@ export const auditTopicBusinessFit = internalAction({
       internal.topics.listBySiteInternal,
       { siteId },
     );
-    const coreBusinessSignals = [
-      site.niche,
-      site.blogTheme,
-      site.siteSummary,
-      site.targetAudienceSummary,
-      site.productUsage,
-      ...(site.anchorKeywords ?? []),
-      ...(site.keyFeatures ?? []),
-      ...(site.painPoints ?? []),
-    ].filter((signal): signal is string => Boolean(signal));
-    const businessModelSignals = [
-      site.siteType ?? "",
-      site.niche ?? "",
-      site.siteSummary ?? "",
-    ];
+    const {
+      coreBusinessSignals,
+      productAnchorSignals,
+      businessModelSignals,
+    } = tenantTopicBusinessSignals(site);
     const audits: TopicBusinessFitAudit[] = topics
       .filter((topic: Doc<"topic_clusters">) =>
         !["used", "queued", "cannibalizing"].includes(topic.status ?? "")
       )
-      .map((topic: Doc<"topic_clusters">) => ({
-        topicId: topic._id,
-        keyword: topic.primaryKeyword,
-        ...evaluateTopicBusinessFit({
+      .map((topic: Doc<"topic_clusters">) => {
+        const fit = evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: topic.label,
           coreBusinessSignals,
+          productAnchorSignals,
           businessModelSignals,
-        }),
-      }));
+        });
+        const serpIntent = (topic.serpTopUrls?.length ?? 0) >= 5
+          ? evaluateSerpBusinessIntent({
+              results: topic.serpTopUrls!.map((url: string) => ({ url })),
+              businessModelSignals,
+            })
+          : { aligned: true, reasons: [] as string[] };
+        return {
+          topicId: topic._id,
+          keyword: topic.primaryKeyword,
+          ...fit,
+          eligible: fit.eligible && serpIntent.aligned,
+          reasons: [...fit.reasons, ...serpIntent.reasons],
+        };
+      });
     const result: {
       disqualified: number;
       requalified: number;
@@ -169,6 +181,16 @@ export const scheduleCadence = internalAction({
     if (!site) throw new Error("Site not found");
     if (!site.autopilotEnabled) {
       return { scheduled: 0, mode: "autopilot_disabled" };
+    }
+
+    if ((site.cadencePerWeek ?? 0) <= 0) {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: "cadence_paused",
+        message:
+          "Publishing is paused because this site has no current account-wide article allocation.",
+      });
+      return { scheduled: 0, mode: "cadence_paused" };
     }
 
     const rolloutMode = site.autopilotRolloutMode ?? "observe";
@@ -352,6 +374,100 @@ export const scheduleCadence = internalAction({
       });
     }
 
+    // Growth inventory must never delay an already-due sealed publication.
+    // Audit it only after the independent delivery path above has had priority.
+    const inventoryAudit: {
+      expectedClickPortfolio: ExpectedClickPortfolioEvaluation;
+    } = await ctx.runQuery(internal.topics.getInventoryAuditInternal, {
+      siteId,
+      recentLimit: 10,
+    });
+    const portfolio = inventoryAudit.expectedClickPortfolio;
+    const strictExpectedClickScheduling =
+      site.expectedClickSchedulingEnabled === true;
+    await ctx.runMutation(internal.autopilot.recordTopicPortfolioAudit, {
+      siteId,
+      status: portfolio.status,
+      decision: portfolio.decision,
+      supportsGoal: portfolio.supportsGoal,
+      expectedClicksMonthly: portfolio.expectedClicksMonthly,
+      ...(portfolio.monthlyOrganicClickGoal === null
+        ? {}
+        : { monthlyOrganicClickGoal: portfolio.monthlyOrganicClickGoal }),
+      ...(portfolio.clickDeficit === null
+        ? {}
+        : { clickDeficit: portfolio.clickDeficit }),
+      evidenceMissing: portfolio.insufficientEvidenceTopicIds.length,
+      evaluatedAt: now,
+      version: portfolio.version,
+    });
+    const portfolioAlertKind = portfolio.status === "below_goal"
+      ? "topic_portfolio_below_goal"
+      : "topic_portfolio_evidence_missing";
+    if (strictExpectedClickScheduling && portfolio.supportsGoal) {
+      await Promise.all([
+        ctx.runMutation(internal.autopilot.resolveAlertKind, {
+          siteId,
+          kind: "topic_portfolio_below_goal",
+        }),
+        ctx.runMutation(internal.autopilot.resolveAlertKind, {
+          siteId,
+          kind: "topic_portfolio_evidence_missing",
+        }),
+      ]);
+    } else if (strictExpectedClickScheduling) {
+      await ctx.runMutation(internal.autopilot.resolveAlertKind, {
+        siteId,
+        kind: portfolioAlertKind === "topic_portfolio_below_goal"
+          ? "topic_portfolio_evidence_missing"
+          : "topic_portfolio_below_goal",
+      });
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId,
+        kind: portfolioAlertKind,
+        message: portfolio.status === "below_goal"
+          ? `Measured topic inventory is ${portfolio.clickDeficit ?? 0} expected clicks/month below the configured goal.`
+          : "Topic inventory cannot prove its click goal because fresh demand, locale-bound SERP, or authority evidence is missing.",
+        details: {
+          status: portfolio.status,
+          decision: portfolio.decision,
+          expectedClicksMonthly: portfolio.expectedClicksMonthly,
+          monthlyOrganicClickGoal: portfolio.monthlyOrganicClickGoal,
+          clickDeficit: portfolio.clickDeficit,
+          evidenceMissing: portfolio.insufficientEvidenceTopicIds.length,
+          version: portfolio.version,
+        },
+      });
+    } else {
+      // Compatibility tenants are measured but never forced into the new
+      // gate or its paid replenishment loop until explicitly canaried.
+      await Promise.all([
+        ctx.runMutation(internal.autopilot.resolveAlertKind, {
+          siteId,
+          kind: "topic_portfolio_below_goal",
+        }),
+        ctx.runMutation(internal.autopilot.resolveAlertKind, {
+          siteId,
+          kind: "topic_portfolio_evidence_missing",
+        }),
+      ]);
+    }
+    const portfolioReplenishmentReason = portfolio.status === "below_goal"
+      ? "topic_portfolio_goal_replenishment"
+      : "topic_portfolio_evidence_replenishment";
+    const queuePortfolioPlan = async () => ctx.runMutation(
+      internal.jobs.queuePlanIfAbsent,
+      {
+        siteId,
+        reason: portfolioReplenishmentReason,
+        since: now - DAY_MS,
+        maximumRecent: Math.min(
+          topicReplenishmentBudget(site.cadencePerWeek ?? 1),
+          MAX_CLICK_GOAL_REPLENISHMENTS_PER_DAY,
+        ),
+      },
+    );
+
     // Replenishment and topic-plan work may be long-running, but they are
     // checked only after the independent due-delivery path above.
     const siteJobs = (await ctx.runQuery(internal.jobs.listActiveBySite, {
@@ -360,17 +476,31 @@ export const scheduleCadence = internalAction({
       (job: Doc<"jobs">) =>
         job.siteId === siteId && (job.type === "article" || job.type === "plan"),
     );
-    const qualityRecoveryAvailable = (state.review as ArticleSummary[]).some(
-      (article: ArticleSummary) =>
-        (article.createdAt >= candidateWindowStart &&
-          article.status === "review" &&
-          article.publicationGateStatus === "blocked" &&
-          !hasTerminalTargetAlignmentFailure(article) &&
-          (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
-        needsDeterministicMechanicalRepair(article),
+    const pendingUnderfilledPlan = siteJobs.find(
+      (job: Doc<"jobs">) =>
+        job.type === "plan" &&
+        job.status === "pending" &&
+        (job.workerAttempts ?? 0) === 1 &&
+        isUnderfilledPlanContinuationPayload(job.payload),
+    );
+    // Execution two is already budgeted and cannot disappear, but it must sit
+    // behind every usable topic proved by execution one. Excluding only this
+    // exact pending marker lets overdue delivery and strict buffer fill queue
+    // article work first; all other plan/article jobs keep the normal lock.
+    const contentBlockingJobs = pendingUnderfilledPlan
+      ? siteJobs.filter((job: Doc<"jobs">) =>
+          job._id !== pendingUnderfilledPlan._id
+        )
+      : siteJobs;
+    const qualityRecoveryAvailable = hasRecoverableQualityWork(
+      state.review as ArticleSummary[],
+      candidateWindowStart,
     );
     if (
-      contentWorkBlocksQualityRecovery(siteJobs, qualityRecoveryAvailable)
+      contentWorkBlocksQualityRecovery(
+        contentBlockingJobs,
+        qualityRecoveryAvailable,
+      )
     ) {
       const pendingPlanReady = siteJobs.every(
         (job: Doc<"jobs">) => job.type === "plan" && job.status === "pending",
@@ -410,6 +540,23 @@ export const scheduleCadence = internalAction({
     // A full buffer deliberately does no generation work.  This is the main
     // protection against both deadline pressure and runaway provider spend.
     if ((autonomousDelivery || rolloutMode === "warm") && buffer.length >= TARGET_APPROVED_BUFFER) {
+      if (pendingUnderfilledPlan) {
+        return {
+          scheduled: 1,
+          mode: "pending_plan",
+          bufferCount: buffer.length,
+        };
+      }
+      if (strictExpectedClickScheduling && !portfolio.supportsGoal) {
+        const replenishment = await queuePortfolioPlan();
+        if (replenishment.queued) {
+          return {
+            scheduled: 1,
+            mode: portfolioReplenishmentReason,
+            bufferCount: buffer.length,
+          };
+        }
+      }
       return {
         scheduled: 0,
         mode: "buffer_full",
@@ -474,8 +621,18 @@ export const scheduleCadence = internalAction({
 
     // Warm mode serially builds the initial safety buffer. Live canary mode
     // permits one baseline candidate plus one bounded replacement in 24h.
-    const candidateBudget = autopilotCandidateBudget(rolloutMode);
+    const candidateBudget = autopilotCandidateBudget(
+      rolloutMode,
+      site.cadencePerWeek,
+    );
     if (recentCandidates.length >= candidateBudget) {
+      if (pendingUnderfilledPlan) {
+        return {
+          scheduled: 1,
+          mode: "pending_plan",
+          bufferCount: buffer.length,
+        };
+      }
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
         kind: "quality_quarantined",
@@ -512,11 +669,13 @@ export const scheduleCadence = internalAction({
           bufferCount: buffer.length,
         };
       }
-      const userSiteCount = await ctx.runQuery(
-        internal.sites.countByUserBounded,
-        { userId: site.userId, maximum: limits.maxSites },
-      );
-      if (userSiteCount > limits.maxSites) {
+      const userSiteCount = limits.maxSites >= 9999
+        ? 0
+        : await ctx.runQuery(
+          internal.sites.countByUserBounded,
+          { userId: site.userId, maximum: limits.maxSites },
+        );
+      if (limits.maxSites < 9999 && userSiteCount > limits.maxSites) {
         await ctx.runMutation(internal.autopilot.raiseAlert, {
           siteId,
           kind: "site_limit_reached",
@@ -531,64 +690,133 @@ export const scheduleCadence = internalAction({
     }
 
     const topics = await ctx.runQuery(internal.topics.listBySiteInternal, { siteId });
-    const coreBusinessSignals = [
-      site.niche,
-      site.blogTheme,
-      site.siteSummary,
-      site.targetAudienceSummary,
-      site.productUsage,
-      ...(site.anchorKeywords ?? []),
-      ...(site.keyFeatures ?? []),
-      ...(site.painPoints ?? []),
-    ].filter((signal): signal is string => Boolean(signal));
-    const businessModelSignals = [
-      site.siteType ?? "",
-      site.niche ?? "",
-      site.siteSummary ?? "",
-    ];
+    const {
+      coreBusinessSignals,
+      productAnchorSignals,
+      businessModelSignals,
+    } = tenantTopicBusinessSignals(site);
     const revalidatable = topics.filter((topic: Doc<"topic_clusters">) =>
       !["used", "queued", "cannibalizing"].includes(topic.status ?? "")
     );
-    const businessFitAudits = revalidatable.map(
-      (topic: Doc<"topic_clusters">) => ({
-        topicId: topic._id,
-        ...evaluateTopicBusinessFit({
+    const businessFitAudits: TopicBusinessFitAudit[] = revalidatable.map(
+      (topic: Doc<"topic_clusters">) => {
+        const fit = evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: topic.label,
           coreBusinessSignals,
+          productAnchorSignals,
           businessModelSignals,
-        }),
-      }),
+        });
+        const serpIntent = (topic.serpTopUrls?.length ?? 0) >= 5
+          ? evaluateSerpBusinessIntent({
+              results: topic.serpTopUrls!.map((url: string) => ({ url })),
+              businessModelSignals,
+            })
+          : { aligned: true, reasons: [] as string[] };
+        return {
+          topicId: topic._id,
+          keyword: topic.primaryKeyword,
+          ...fit,
+          eligible: fit.eligible && serpIntent.aligned,
+          reasons: [...fit.reasons, ...serpIntent.reasons],
+        };
+      },
     );
     const businessFitResult = await ctx.runMutation(
       internal.topics.recordBusinessFitAuditsInternal,
-      { siteId, audits: businessFitAudits },
+      {
+        siteId,
+        // `keyword` is operator evidence used only by the local scheduler
+        // report/map. Keep the mutation contract narrow so a display field
+        // can never become persisted business-fit authority.
+        audits: businessFitAudits.map(
+          ({ topicId, eligible, score, version, reasons }) => ({
+            topicId,
+            eligible,
+            score,
+            version,
+            reasons,
+          }),
+        ),
+      },
     );
     if (businessFitResult.disqualified > 0 || businessFitResult.requalified > 0) {
       console.log(
         `Topic business-fit audit: ${businessFitResult.disqualified} disqualified, ${businessFitResult.requalified} requalified.`,
       );
     }
-    const fitByTopic = new Map(
-      businessFitAudits.map((audit) => [String(audit.topicId), audit]),
+    const fitByTopic = new Map<string, TopicBusinessFitAudit>(
+      businessFitAudits.map((audit: TopicBusinessFitAudit) => [String(audit.topicId), audit]),
+    );
+    const expectedClickByTopic = new Map(
+      portfolio.topics.map((audit) => [audit.topicId, audit]),
     );
     const fitEligible = revalidatable.filter(
       (topic: Doc<"topic_clusters">) =>
         fitByTopic.get(String(topic._id))?.eligible === true,
     );
     const available = fitEligible.filter((topic: Doc<"topic_clusters">) => {
-      if (!site.verifiedKeywordDataRequired) return true;
+      if (!strictExpectedClickScheduling) {
+        if (!site.verifiedKeywordDataRequired) return true;
+        return (
+          Number.isFinite(topic.searchVolume) &&
+          Number.isFinite(topic.keywordDifficulty) &&
+          typeof topic.serpIntent === "string" &&
+          topic.serpIntent.length > 0
+        );
+      }
       return (
         Number.isFinite(topic.searchVolume) &&
         Number.isFinite(topic.keywordDifficulty) &&
+        topic.keywordDifficultyMeasured === true &&
         typeof topic.serpIntent === "string" &&
-        topic.serpIntent.length > 0
+        topic.serpIntent.length > 0 &&
+        expectedClickByTopic.get(String(topic._id))?.status === "eligible"
       );
     });
-    available.sort(
-      (a: Doc<"topic_clusters">, b: Doc<"topic_clusters">) =>
-        (b.priority ?? 1) - (a.priority ?? 1),
-    );
+    // Reject keywords whose live SERP is owned by entrenched publishers. A
+    // difficulty score that was never measured has repeatedly authorised
+    // page-one competition against mega-vendors, which no amount of article
+    // quality displaces from a standing start. Observed SERP evidence is the
+    // stronger signal, so it gates selection.
+    const selectionHost = String(site.domain ?? "")
+      .replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .split("/")[0];
+    const attainableTopics = strictExpectedClickScheduling
+      ? available.filter((topic: Doc<"topic_clusters">) =>
+          evaluateSerpAttainability({
+            serpTopUrls: topic.serpTopUrls,
+            siteHost: selectionHost,
+          }).attainable
+        )
+      : available;
+    const entrenchedSkipped = strictExpectedClickScheduling
+      ? available.length - attainableTopics.length
+      : 0;
+    if (entrenchedSkipped > 0) {
+      console.log(
+        `SERP attainability: ${entrenchedSkipped} topic(s) deprioritised because entrenched publishers own their page one.`,
+      );
+    }
+    // A cadence deadline cannot turn an unwinnable keyword into a useful
+    // article. When no observed SERP is attainable, replenish the measured
+    // inventory instead of publishing output that is predictably invisible.
+    const selectable = attainableTopics;
+    // Rank only from the live portfolio audit. Persisted estimates are display
+    // evidence; the audit recomputes freshness, locale, SERP binding and
+    // authority compatibility on every scheduler pass.
+    selectable.sort((a: Doc<"topic_clusters">, b: Doc<"topic_clusters">) => {
+      if (strictExpectedClickScheduling) {
+        const delta =
+          (expectedClickByTopic.get(String(b._id))?.expectedClicksMonthly ?? 0) -
+          (expectedClickByTopic.get(String(a._id))?.expectedClicksMonthly ?? 0);
+        if (delta !== 0) return delta;
+      }
+      return (b.priority ?? 1) - (a.priority ?? 1);
+    });
+    available.length = 0;
+    available.push(...selectable);
 
     const coveredTopics = coveredIntentTopics(
       topics.map((topic: Doc<"topic_clusters">) => ({
@@ -600,6 +828,10 @@ export const scheduleCadence = internalAction({
       [...published, ...buffer].map((article) => ({
         topicId: article.topicId ? String(article.topicId) : undefined,
         slug: article.slug,
+        status: article.status,
+        publicationGateStatus: article.publicationGateStatus,
+        publicationAuditVersion: article.publicationAuditVersion,
+        auditedContentHash: article.auditedContentHash,
       })),
     );
     const schedulableTopics = filterNonCannibalizingIntentTopics<
@@ -612,11 +844,26 @@ export const scheduleCadence = internalAction({
       schedulableTopics[0];
 
     if (!selectedTopic) {
-      const replenishmentReason = fitEligible.length === 0
+      if (pendingUnderfilledPlan) {
+        return {
+          scheduled: 1,
+          mode: "pending_plan",
+          bufferCount: buffer.length,
+        };
+      }
+      const replenishmentReason = strictExpectedClickScheduling && !portfolio.supportsGoal
+        ? portfolioReplenishmentReason
+        : fitEligible.length === 0
         ? "topic_business_fit_replenishment"
         : available.length === 0
           ? "topic_evidence_replenishment"
           : "topic_overlap_replenishment";
+      const maximumTopicReplenishments = replenishmentReason.startsWith("topic_portfolio_")
+        ? Math.min(
+            topicReplenishmentBudget(site.cadencePerWeek ?? 1),
+            MAX_CLICK_GOAL_REPLENISHMENTS_PER_DAY,
+          )
+        : topicReplenishmentBudget(site.cadencePerWeek ?? 1);
       // Do not repeatedly reconsider the same rejected set. A new plan must
       // pass current product-fit, keyword-evidence, and intent-overlap gates.
       const replenishment = await ctx.runMutation(
@@ -632,7 +879,7 @@ export const scheduleCadence = internalAction({
               }
             : {}),
           since: now - DAY_MS,
-          maximumRecent: MAX_TOPIC_REPLENISHMENTS_PER_24H,
+          maximumRecent: maximumTopicReplenishments,
         },
       );
       if (!replenishment.queued && replenishment.reason === "recent_limit") {
@@ -643,7 +890,7 @@ export const scheduleCadence = internalAction({
             "Bounded topic-plan recovery is cooling down; the scheduler will retry automatically when the 24-hour request window resets.",
           details: {
             replenishments: replenishment.recent,
-            maximum: MAX_TOPIC_REPLENISHMENTS_PER_24H,
+            maximum: maximumTopicReplenishments,
           },
         });
         return {
@@ -658,7 +905,11 @@ export const scheduleCadence = internalAction({
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
         kind: "topic_replenishment",
-        message: replenishmentReason === "topic_business_fit_replenishment"
+        message: replenishmentReason === "topic_portfolio_goal_replenishment"
+          ? "Measured topic demand is below the configured organic-click goal; a bounded evidence-backed plan was queued."
+          : replenishmentReason === "topic_portfolio_evidence_replenishment"
+            ? "Topic click potential cannot be proven from fresh evidence; a bounded measurement plan was queued."
+          : replenishmentReason === "topic_business_fit_replenishment"
           ? "No available topic still matched the tenant's product and audience; a fresh verified plan was queued."
           : replenishmentReason === "topic_evidence_replenishment"
             ? "No product-aligned topic retained complete keyword evidence; a fresh verified plan was queued."
@@ -681,12 +932,27 @@ export const scheduleCadence = internalAction({
     // higher worker priority, so horizon planning cannot delay the immediate
     // quality-buffer fill, and the one-per-day bound prevents paid loops.
     const remainingTopicHorizon = Math.max(0, schedulableTopics.length - 1);
-    if (queued.queued && remainingTopicHorizon < MIN_VERIFIED_TOPIC_HORIZON) {
+    if (
+      queued.queued &&
+      strictExpectedClickScheduling &&
+      !portfolio.supportsGoal
+    ) {
+      const replenishment = await queuePortfolioPlan();
+      if (replenishment.queued) {
+        console.log(
+          `Queued ${portfolioReplenishmentReason} behind the selected article; ` +
+          `portfolio=${portfolio.expectedClicksMonthly}/${portfolio.monthlyOrganicClickGoal ?? "unconfigured"}.`,
+        );
+      }
+    } else if (queued.queued && remainingTopicHorizon < MIN_VERIFIED_TOPIC_HORIZON) {
+      const maximumTopicReplenishments = topicReplenishmentBudget(
+        site.cadencePerWeek ?? 1,
+      );
       const horizon = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
         siteId,
         reason: "topic_horizon_replenishment",
         since: now - DAY_MS,
-        maximumRecent: 1,
+        maximumRecent: maximumTopicReplenishments,
       });
       if (horizon.queued) {
         await ctx.runMutation(internal.autopilot.raiseAlert, {

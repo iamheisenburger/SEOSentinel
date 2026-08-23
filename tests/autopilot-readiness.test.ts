@@ -42,6 +42,14 @@ test("a fully connected tenant can warm and promote without operator interventio
   assert.match(autopilot, /export const promoteWarmSiteIfReady/);
   assert.match(autopilot, /export const getFleetReadiness/);
   assert.match(autopilot, /automatic_live_promotion/);
+  assert.match(
+    autopilot,
+    /autopilotRolloutMode: "warm"[\s\S]{0,220}expectedClickSchedulingEnabled: true/,
+  );
+  assert.match(
+    autopilot,
+    /autopilotRolloutMode: "live"[\s\S]{0,220}expectedClickSchedulingEnabled: true/,
+  );
   assert.match(scheduler, /internal\.autopilot\.promoteWarmSiteIfReady/);
   assert.match(
     scheduler,

@@ -1,4 +1,5 @@
 import { addSearchConsoleDays } from "./searchPerformance.ts";
+import { siteExecutionActive } from "./planSiteAllowance.ts";
 
 export const DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL = 100;
 
@@ -13,6 +14,9 @@ export type SeoWindow = {
   nonBrandedImpressions: number;
   nonBrandedCtr: number;
   nonBrandedPosition: number | null;
+  unattributedClicks: number;
+  unattributedImpressions: number;
+  queryCoverageComplete: boolean;
 };
 
 export type SeoGrowthInput = {
@@ -67,12 +71,39 @@ export type SeoGrowthClassification = {
     nonBrandedImpressions: number;
     nonBrandedCtr: number;
     nonBrandedPosition: number | null;
+    unattributedClicks: number;
+    unattributedImpressions: number;
+    queryCoverageComplete: boolean;
     indexVerdict?: string;
     coverageState?: string;
     pageFetchState?: string;
     robotsTxtState?: string;
   };
 };
+
+export type SeoGrowthAutomationSite = {
+  autopilotEnabled?: boolean;
+  autopilotRolloutMode?: string;
+  deletionStatus?: string;
+  planParkedAt?: number;
+};
+
+/**
+ * Measurement is fleet-wide, but external or topic-changing growth work is
+ * allowed only for a tenant that has explicitly entered an executing rollout.
+ * Feature entitlements and provider budgets remain additional downstream
+ * gates; this helper is only the minimum rollout prerequisite.
+ */
+export function isSeoGrowthActuationEligible(
+  site: SeoGrowthAutomationSite,
+): boolean {
+  return (
+    siteExecutionActive(site) &&
+    site.autopilotEnabled === true &&
+    (site.autopilotRolloutMode === "warm" ||
+      site.autopilotRolloutMode === "live")
+  );
+}
 
 function normalized(value?: string): string {
   return value?.trim().toLowerCase() ?? "";
@@ -146,6 +177,9 @@ function result(
       nonBrandedImpressions: window?.nonBrandedImpressions ?? 0,
       nonBrandedCtr: window?.nonBrandedCtr ?? 0,
       nonBrandedPosition: window?.nonBrandedPosition ?? null,
+      unattributedClicks: window?.unattributedClicks ?? 0,
+      unattributedImpressions: window?.unattributedImpressions ?? 0,
+      queryCoverageComplete: window?.queryCoverageComplete ?? false,
       indexVerdict: input.indexInspection.verdict,
       coverageState: input.indexInspection.coverageState,
       pageFetchState: input.indexInspection.pageFetchState,
@@ -214,20 +248,40 @@ export function classifySeoGrowth(
     );
   }
 
-  if (window.nonBrandedClicks >= 3 || window.clicks >= 5) {
+  if (window.nonBrandedClicks >= 3) {
     return result(
       input,
       "performing",
       "observe",
       20,
-      "The page is already earning measured organic clicks; preserve it and monitor the next checkpoint.",
+      "The page is already earning measured non-branded organic clicks; preserve it and monitor the next checkpoint.",
       indexState,
       window,
       14,
     );
   }
 
-  if (window.days >= 28 && window.nonBrandedImpressions === 0) {
+  if (
+    !window.queryCoverageComplete &&
+    window.nonBrandedImpressions === 0
+  ) {
+    return result(
+      input,
+      "awaiting_data",
+      "observe",
+      15,
+      "Google reports page-level visibility, but withheld or anonymized query rows prevent Pentra from attributing that visibility to non-branded searches. Overall position is recorded for reporting only and cannot authorize a ranking intervention.",
+      indexState,
+      window,
+      7,
+    );
+  }
+
+  if (
+    window.days >= 28 &&
+    window.queryCoverageComplete &&
+    window.nonBrandedImpressions === 0
+  ) {
     return result(
       input,
       "no_visibility",
@@ -240,7 +294,11 @@ export function classifySeoGrowth(
     );
   }
 
-  if (window.days >= 14 && window.nonBrandedImpressions === 0) {
+  if (
+    window.days >= 14 &&
+    window.queryCoverageComplete &&
+    window.nonBrandedImpressions === 0
+  ) {
     return result(
       input,
       "no_visibility",
@@ -253,11 +311,9 @@ export function classifySeoGrowth(
     );
   }
 
-  const position = window.nonBrandedPosition ?? window.position;
-  const impressions = window.nonBrandedImpressions || window.impressions;
-  const ctr = window.nonBrandedImpressions > 0
-    ? window.nonBrandedCtr
-    : window.ctr;
+  const position = window.nonBrandedPosition;
+  const impressions = window.nonBrandedImpressions;
+  const ctr = window.nonBrandedCtr;
 
   if (
     window.days >= 28 &&
@@ -271,7 +327,7 @@ export function classifySeoGrowth(
       "low_ctr",
       "improve_snippet",
       85,
-      "The page ranks on page one but earns under 1.5% CTR across at least 50 impressions.",
+      "Known non-branded queries rank on page one but earn under 1.5% CTR across at least 50 attributed impressions.",
       indexState,
       window,
       7,
@@ -285,7 +341,7 @@ export function classifySeoGrowth(
         "striking_distance",
         "build_authority",
         82,
-        "The page has remained within positions 4-20 through 56 days; on-site support alone has had time to work, so verified authority opportunities are now appropriate.",
+        "Known non-branded queries have remained within positions 4-20 through 56 days; on-site support alone has had time to work, so verified authority opportunities are now appropriate.",
         indexState,
         window,
         14,
@@ -296,7 +352,7 @@ export function classifySeoGrowth(
       "striking_distance",
       "strengthen_cluster",
       80,
-      "The page is within positions 4-20, where stronger internal support and authority can plausibly move it into click-producing rankings.",
+      "Known non-branded queries are within positions 4-20, where stronger internal support and authority can plausibly move them into click-producing rankings.",
       indexState,
       window,
       7,
@@ -309,7 +365,7 @@ export function classifySeoGrowth(
       "low_visibility",
       "reassess_opportunity",
       70,
-      "The page has impressions but remains below position 20 after 28 days; intent and attainable SERP fit need revalidation before more content is produced.",
+      "Known non-branded queries have impressions but remain below position 20 after 28 days; intent and attainable SERP fit need revalidation before more content is produced.",
       indexState,
       window,
       7,

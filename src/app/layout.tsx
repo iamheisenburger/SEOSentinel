@@ -5,6 +5,7 @@ import { dark } from "@clerk/themes";
 import Script from "next/script";
 import "./globals.css";
 import { Providers } from "./providers";
+import { PentraSalesAgent } from "@/components/pentra-sales-agent";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -100,6 +101,7 @@ export default function RootLayout({
         >
           <Providers>{children}</Providers>
         </ClerkProvider>
+        <PentraSalesAgent />
         {GA_ID && (
           <>
             <Script

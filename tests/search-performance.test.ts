@@ -3,11 +3,19 @@ import test from "node:test";
 
 import {
   addSearchConsoleDays,
+  isBrandedSearchQuery,
   isSameSearchConsolePage,
   normalizeSearchConsolePage,
   publishedArticlePageUrl,
   searchConsoleDate,
+  summarizeSearchPagePerformance,
 } from "../convex/lib/searchPerformance.ts";
+
+test("recognizes spaced brand searches for compact domain names", () => {
+  assert.equal(isBrandedSearchQuery("lead pilot", "leadpilot.chat"), true);
+  assert.equal(isBrandedSearchQuery("+lead +pilot", "leadpilot.chat"), true);
+  assert.equal(isBrandedSearchQuery("ai lead capture", "leadpilot.chat"), false);
+});
 
 test("normalizes protocol, www, query strings, and trailing slashes", () => {
   assert.equal(
@@ -60,4 +68,27 @@ test("uses Search Console Pacific dates for evening publications", () => {
   assert.equal(searchConsoleDate(publishedAt), "2026-07-27");
   assert.equal(addSearchConsoleDays("2026-07-27", 6), "2026-08-02");
   assert.equal(addSearchConsoleDays("2026-07-27", 55), "2026-09-20");
+});
+
+test("page totals report unattributed query coverage without losing traffic", () => {
+  const summary = summarizeSearchPagePerformance([
+    {
+      date: "2026-08-01",
+      clicks: 3,
+      impressions: 100,
+      weightedPosition: 800,
+      nonBrandedClicks: 1,
+      nonBrandedImpressions: 40,
+      unattributedClicks: 2,
+      unattributedImpressions: 60,
+      queryCoverageComplete: false,
+      syncedAt: 1,
+    },
+  ]);
+  assert.equal(summary.totalClicks, 3);
+  assert.equal(summary.totalImpressions, 100);
+  assert.equal(summary.nonBrandedImpressions, 40);
+  assert.equal(summary.unattributedImpressions, 60);
+  assert.equal(summary.queryCoverageComplete, false);
+  assert.equal(summary.avgPosition, 8);
 });
