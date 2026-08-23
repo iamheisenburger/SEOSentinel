@@ -21,8 +21,14 @@ import {
   growthSupportDeliveryReceiptsMatch,
   isTerminalPublishedRevisionStatus,
   legacyExecutedSupportRevisionAdmission,
+  MAX_LEGACY_SUPPORT_ARTICLES_PER_TOPIC,
+  MAX_LEGACY_SUPPORT_TOPICS_PER_ACTION,
+  selectLegacySupportDeliveryAdoptionCandidate,
   SUPPORT_DELIVERY_VERIFIED_STATUS,
   verifiedGrowthSupportDelivery,
+  verifiedGrowthSupportDeliveryCandidate,
+  verifiedGrowthSupportDeliveryEvidence,
+  type GrowthSupportDeliveryEvidence,
   type GrowthSupportDeliveryReceipt,
 } from "./lib/growthSupportDelivery";
 import {
@@ -134,14 +140,21 @@ async function verifiedSupportDeliveryForAction(
   ctx: QueryCtx | MutationCtx,
   site: Doc<"sites">,
   action: Doc<"seo_growth_actions">,
-): Promise<GrowthSupportDeliveryReceipt<Id<"articles">> | null> {
+  timestamp: number,
+): Promise<GrowthSupportDeliveryEvidence<Id<"articles">> | null> {
   const validateCandidate = async (
     article: Doc<"articles"> | null,
-  ): Promise<GrowthSupportDeliveryReceipt<Id<"articles">> | null> => {
+  ): Promise<GrowthSupportDeliveryEvidence<Id<"articles">> | null> => {
     if (!article?.topicId) return null;
     const topic = await ctx.db.get(article.topicId);
     if (!topic) return null;
-    return verifiedGrowthSupportDelivery({ site, action, topic, article });
+    return verifiedGrowthSupportDeliveryEvidence({
+      site,
+      action,
+      topic,
+      article,
+      now: timestamp,
+    });
   };
 
   if (action.supportDeliveryReceipt) {
@@ -149,40 +162,109 @@ async function verifiedSupportDeliveryForAction(
       await ctx.db.get(action.supportDeliveryReceipt.articleId),
     );
     return current &&
-      growthSupportDeliveryReceiptsMatch(action.supportDeliveryReceipt, current)
+      growthSupportDeliveryReceiptsMatch(
+        action.supportDeliveryReceipt,
+        current.receipt,
+      )
       ? current
       : null;
   }
 
+  if (
+    action.status !== "open" ||
+    action.stage !== "striking_distance" ||
+    action.actionKind !== "strengthen_cluster" ||
+    (
+      action.automationStatus !== "executed" &&
+      action.automationStatus !== SUPPORT_DELIVERY_VERIFIED_STATUS
+    ) ||
+    action.publishedRevisionId
+  ) {
+    return null;
+  }
+
   const topics = await ctx.db
     .query("topic_clusters")
-    .withIndex("by_site", (q) => q.eq("siteId", action.siteId))
-    .filter((q) =>
-      q.and(
-        q.eq(q.field("growthActionFingerprint"), action.fingerprint),
-        q.eq(q.field("growthParentArticleId"), action.articleId),
-      )
+    .withIndex("by_site_growth_action_parent", (q) =>
+      q
+        .eq("siteId", action.siteId)
+        .eq("growthActionFingerprint", action.fingerprint)
+        .eq("growthParentArticleId", action.articleId)
     )
-    .take(2);
-  if (topics.length !== 1) return null;
-  const articles = await ctx.db
-    .query("articles")
-    .withIndex("by_topic", (q) => q.eq("topicId", topics[0]!._id))
-    .take(11);
-  if (articles.length > 10) return null;
-  const verified = articles
-    .map((article) =>
-      verifiedGrowthSupportDelivery({
+    .take(MAX_LEGACY_SUPPORT_TOPICS_PER_ACTION + 1);
+  if (
+    topics.length < 1 ||
+    topics.length > MAX_LEGACY_SUPPORT_TOPICS_PER_ACTION
+  ) {
+    return null;
+  }
+  const articleGroups = await Promise.all(
+    topics.map((topic) =>
+      ctx.db
+        .query("articles")
+        .withIndex("by_topic", (q) => q.eq("topicId", topic._id))
+        .take(MAX_LEGACY_SUPPORT_ARTICLES_PER_TOPIC + 1)
+    ),
+  );
+  if (
+    articleGroups.some(
+      (articles) =>
+        articles.length > MAX_LEGACY_SUPPORT_ARTICLES_PER_TOPIC,
+    )
+  ) {
+    return null;
+  }
+  const records = articleGroups.flatMap((articles, topicIndex) =>
+    articles.map((article) => {
+      const candidate = verifiedGrowthSupportDeliveryCandidate({
         site,
         action,
-        topic: topics[0]!,
+        topic: topics[topicIndex]!,
         article,
-      })
-    )
-    .filter((receipt): receipt is GrowthSupportDeliveryReceipt<Id<"articles">> =>
-      Boolean(receipt)
-    );
-  return verified.length === 1 ? verified[0]! : null;
+      });
+      return {
+        article,
+        record: {
+          articleId: article._id,
+          status: article.status,
+          publishedAt: article.publishedAt,
+          candidate,
+        },
+      };
+    })
+  );
+  const selected = selectLegacySupportDeliveryAdoptionCandidate({
+    action,
+    records: records.map((record) => record.record),
+  });
+  if (!selected) return null;
+  const selectedRecord = records.find(
+    ({ record }) =>
+      record.candidate?.receipt.articleId === selected.receipt.articleId &&
+      growthSupportDeliveryReceiptsMatch(
+        record.candidate?.receipt,
+        selected.receipt,
+      ),
+  );
+  if (!selectedRecord?.article.topicId) return null;
+  const selectedTopic = topics.find(
+    (topic) => topic._id === selectedRecord.article.topicId,
+  );
+  if (!selectedTopic || selectedTopic._id !== selected.topicId) return null;
+  const liveEvidence = verifiedGrowthSupportDeliveryEvidence({
+    site,
+    action,
+    topic: selectedTopic,
+    article: selectedRecord.article,
+    now: timestamp,
+  });
+  return liveEvidence &&
+      growthSupportDeliveryReceiptsMatch(
+        liveEvidence.receipt,
+        selected.receipt,
+      )
+    ? liveEvidence
+    : null;
 }
 
 function sourceReceiptMode(
@@ -667,6 +749,7 @@ export const reconcileSite = internalMutation({
               ctx,
               currentSite,
               existing,
+              now,
             );
             const admission = legacyExecutedSupportRevisionAdmission({
               action: existing,
@@ -684,7 +767,7 @@ export const reconcileSite = internalMutation({
               !existing.supportDeliveryReceipt
             ) {
               supportDeliveryPatch = {
-                supportDeliveryReceipt: supportDelivery,
+                supportDeliveryReceipt: supportDelivery.receipt,
                 supportDeliveryRecordedAt: now,
               };
             }
@@ -1193,7 +1276,7 @@ export const getPublishedRevisionReadinessInternal = internalQuery({
       const [supportDelivery, revisionHistory, sourceArticle] =
         await Promise.all([
           action.actionKind === "strengthen_cluster"
-            ? verifiedSupportDeliveryForAction(ctx, site, action)
+            ? verifiedSupportDeliveryForAction(ctx, site, action, timestamp)
             : Promise.resolve(null),
           actionRevisionHistory(ctx, action),
           ctx.db.get(action.articleId),
@@ -1260,6 +1343,15 @@ export const getPublishedRevisionReadinessInternal = internalQuery({
           verified: Boolean(supportDelivery),
           recordedAt: action.supportDeliveryRecordedAt,
           legacyExecutedPhase: action.automationStatus === "executed",
+          sourceArticleId: supportDelivery?.receipt.articleId,
+          sourceTopicId: supportDelivery?.topicId,
+          currentPublicUrl: supportDelivery?.targetUrl,
+          publicUrlVerifiedAt: supportDelivery?.publicUrlVerifiedAt,
+          adoptionMode: action.supportDeliveryReceipt
+            ? "recorded_receipt"
+            : supportDelivery
+              ? "bounded_first_receipt_adoption"
+              : undefined,
         },
         revision: {
           bound: Boolean(action.publishedRevisionId),

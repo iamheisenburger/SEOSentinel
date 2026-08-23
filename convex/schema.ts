@@ -311,7 +311,13 @@ export default defineSchema({
 
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_site", ["siteId"]),
+  })
+    .index("by_site", ["siteId"])
+    .index("by_site_growth_action_parent", [
+      "siteId",
+      "growthActionFingerprint",
+      "growthParentArticleId",
+    ]),
 
   articles: defineTable({
     siteId: v.id("sites"),

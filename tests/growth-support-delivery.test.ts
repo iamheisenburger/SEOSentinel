@@ -6,17 +6,25 @@ import {
   growthSupportDeliveryReceiptsMatch,
   isTerminalPublishedRevisionStatus,
   legacyExecutedSupportRevisionAdmission,
+  MAX_LEGACY_SUPPORT_DELIVERY_CANDIDATES,
+  selectLegacySupportDeliveryAdoptionCandidate,
   SUPPORT_DELIVERY_VERIFIED_STATUS,
   verifiedGrowthSupportDelivery,
+  verifiedGrowthSupportDeliveryCandidate,
+  verifiedGrowthSupportDeliveryEvidence,
+  type GrowthSupportDeliveryCandidate,
 } from "../convex/lib/growthSupportDelivery.ts";
 import { publicationDeliveryKey } from "../convex/lib/publicationArtifact.ts";
 
 const site = {
   _id: "site-a",
+  domain: "https://example.com",
+  urlStructure: "/blog/[slug]",
   publishMethod: "github",
 };
 
 const action = {
+  _id: "action-a",
   siteId: site._id,
   articleId: "parent-article",
   fingerprint: "growth-action-a",
@@ -41,9 +49,16 @@ const supportArticle = {
   siteId: site._id,
   topicId: topic._id,
   status: "published",
+  title: "Support article",
+  slug: "/support-article",
   publishedContentHash: contentHash,
   publicationDeliveryHash: deliveryHash,
   publishedAt,
+  publicUrl: "https://example.com/blog/support-article",
+  publicUrlStatus: "verified" as const,
+  publicUrlLastCheckedAt: publishedAt + 30_000,
+  publicUrlVerifiedAt: publishedAt + 30_000,
+  publicUrlCheckAttempts: 1,
   publicationReceipt: {
     method: "github" as const,
     deliveryKey: publicationDeliveryKey(deliveryHash),
@@ -54,6 +69,15 @@ const supportArticle = {
     receivedAt: publishedAt,
   },
 };
+
+function adoptionRecord(candidate: GrowthSupportDeliveryCandidate) {
+  return {
+    articleId: candidate.receipt.articleId,
+    status: "published",
+    publishedAt: candidate.publishedAt,
+    candidate,
+  };
+}
 
 test("an exact support publication receipt proves the completed support phase", () => {
   const receipt = verifiedGrowthSupportDelivery({
@@ -79,6 +103,271 @@ test("an exact support publication receipt proves the completed support phase", 
       externalId: "different-commit",
     }),
     false,
+  );
+});
+
+test("legacy adoption requires the exact current live tenant URL", () => {
+  const evidence = verifiedGrowthSupportDeliveryEvidence({
+    site,
+    action,
+    topic,
+    article: supportArticle,
+    now: publishedAt + 60_000,
+  });
+  assert.ok(evidence);
+  assert.equal(evidence.topicId, topic._id);
+  assert.equal(evidence.targetUrl, supportArticle.publicUrl);
+  assert.equal(evidence.receipt.articleId, supportArticle._id);
+
+  assert.equal(
+    verifiedGrowthSupportDeliveryEvidence({
+      site,
+      action,
+      topic,
+      article: {
+        ...supportArticle,
+        publicUrl: "https://other.example/blog/support-article",
+      },
+      now: publishedAt + 60_000,
+    }),
+    null,
+  );
+  assert.equal(
+    verifiedGrowthSupportDeliveryEvidence({
+      site,
+      action,
+      topic,
+      article: {
+        ...supportArticle,
+        publicUrlVerifiedAt: undefined,
+      },
+      now: publishedAt + 60_000,
+    }),
+    null,
+  );
+});
+
+test("multiple exact support topics adopt the immutable first external receipt", () => {
+  const laterTopic = { ...topic, _id: "support-topic-later" };
+  const laterDeliveryHash = "e".repeat(64);
+  const laterArticle = {
+    ...supportArticle,
+    _id: "support-article-later",
+    topicId: laterTopic._id,
+    slug: "/support-article-later",
+    publicUrl: "https://example.com/blog/support-article-later",
+    publishedAt: publishedAt + 3_600_000,
+    publicUrlLastCheckedAt: publishedAt + 3_660_000,
+    publicUrlVerifiedAt: publishedAt + 3_660_000,
+    publicationDeliveryHash: laterDeliveryHash,
+    publicationReceipt: {
+      ...supportArticle.publicationReceipt,
+      deliveryKey: publicationDeliveryKey(laterDeliveryHash),
+      externalId: "commit-later",
+      receivedAt: publishedAt + 3_600_000,
+    },
+  };
+  const earlier = verifiedGrowthSupportDeliveryEvidence({
+    site,
+    action,
+    topic,
+    article: supportArticle,
+    now: publishedAt + 7_200_000,
+  });
+  const later = verifiedGrowthSupportDeliveryEvidence({
+    site,
+    action,
+    topic: laterTopic,
+    article: laterArticle,
+    now: publishedAt + 7_200_000,
+  });
+  assert.ok(earlier && later);
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [adoptionRecord(later), adoptionRecord(earlier)],
+    })?.receipt.articleId,
+    supportArticle._id,
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action: { ...action, fingerprint: "other-action" },
+      records: [adoptionRecord(earlier)],
+    }),
+    null,
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [
+        adoptionRecord(earlier),
+        adoptionRecord({ ...later, publishedAt: earlier.publishedAt }),
+      ],
+    }),
+    null,
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action: { ...action, publishedRevisionId: "revision-a" },
+      records: [adoptionRecord(earlier)],
+    }),
+    null,
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [
+        adoptionRecord(earlier),
+        adoptionRecord({
+          ...later,
+          receipt: {
+            ...later.receipt,
+            articleId: earlier.receipt.articleId,
+          },
+        }),
+      ],
+    }),
+    null,
+  );
+  const overflow = Array.from(
+    { length: MAX_LEGACY_SUPPORT_DELIVERY_CANDIDATES + 1 },
+    (_, index) => ({
+      ...earlier,
+      topicId: `support-topic-${index}`,
+      receipt: {
+        ...earlier.receipt,
+        articleId: `support-article-${index}`,
+      },
+    }),
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: overflow.map(adoptionRecord),
+    }),
+    null,
+  );
+});
+
+test("an older exact receipt without current live proof cannot fall through", () => {
+  const month = 31 * 24 * 60 * 60 * 1000;
+  const freshPublishedAt = publishedAt + month;
+  const freshTopic = { ...topic, _id: "fresh-support-topic" };
+  const freshDeliveryHash = "f".repeat(64);
+  const freshArticle = {
+    ...supportArticle,
+    _id: "fresh-support-article",
+    topicId: freshTopic._id,
+    slug: "/fresh-support-article",
+    publicUrl: "https://example.com/blog/fresh-support-article",
+    publishedAt: freshPublishedAt,
+    publicUrlLastCheckedAt: freshPublishedAt + 30_000,
+    publicUrlVerifiedAt: freshPublishedAt + 30_000,
+    publicationDeliveryHash: freshDeliveryHash,
+    publicationReceipt: {
+      ...supportArticle.publicationReceipt,
+      deliveryKey: publicationDeliveryKey(freshDeliveryHash),
+      externalId: "commit-fresh",
+      receivedAt: freshPublishedAt,
+    },
+  };
+  const timestamp = freshPublishedAt + 60_000;
+  const olderCandidate = verifiedGrowthSupportDeliveryCandidate({
+    site,
+    action,
+    topic,
+    article: supportArticle,
+  });
+  const freshCandidate = verifiedGrowthSupportDeliveryCandidate({
+    site,
+    action,
+    topic: freshTopic,
+    article: freshArticle,
+  });
+  const freshEvidence = verifiedGrowthSupportDeliveryEvidence({
+    site,
+    action,
+    topic: freshTopic,
+    article: freshArticle,
+    now: timestamp,
+  });
+  assert.ok(olderCandidate && freshCandidate && freshEvidence);
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [
+        adoptionRecord(freshCandidate),
+        adoptionRecord(olderCandidate),
+      ],
+    })?.receipt.articleId,
+    supportArticle._id,
+  );
+  assert.equal(
+    verifiedGrowthSupportDeliveryEvidence({
+      site,
+      action,
+      topic,
+      article: supportArticle,
+      now: timestamp,
+    }),
+    null,
+  );
+  assert.equal(freshEvidence.receipt.articleId, freshArticle._id);
+});
+
+test("an earlier linked published row without exact receipt proof blocks adoption", () => {
+  const candidate = verifiedGrowthSupportDeliveryCandidate({
+    site,
+    action,
+    topic,
+    article: supportArticle,
+  });
+  assert.ok(candidate);
+  const verifiedRecord = adoptionRecord(candidate);
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [
+        {
+          articleId: "earlier-receiptless",
+          status: "published",
+          publishedAt: candidate.publishedAt - 1,
+          candidate: null,
+        },
+        verifiedRecord,
+      ],
+    }),
+    null,
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [
+        {
+          articleId: "unknown-time-receiptless",
+          status: "published",
+          publishedAt: undefined,
+          candidate: null,
+        },
+        verifiedRecord,
+      ],
+    }),
+    null,
+  );
+  assert.equal(
+    selectLegacySupportDeliveryAdoptionCandidate({
+      action,
+      records: [
+        {
+          articleId: "earlier-draft",
+          status: "draft",
+          publishedAt: candidate.publishedAt - 1,
+          candidate: null,
+        },
+        verifiedRecord,
+      ],
+    })?.receipt.articleId,
+    candidate.receipt.articleId,
   );
 });
 
@@ -205,4 +494,23 @@ test("executed and failed are not made globally retryable", () => {
   assert.match(source, /getPublishedRevisionReadinessInternal/);
   assert.match(source, /revisionAdapterReadiness/);
   assert.match(source, /publicationAdapterConfigHash/);
+  assert.match(source, /MAX_LEGACY_SUPPORT_TOPICS_PER_ACTION \+ 1/);
+  assert.match(source, /withIndex\("by_site_growth_action_parent"/);
+  assert.match(source, /verifiedGrowthSupportDeliveryCandidate/);
+  assert.match(
+    source,
+    /const selected = selectLegacySupportDeliveryAdoptionCandidate[\s\S]*?const liveEvidence = verifiedGrowthSupportDeliveryEvidence/,
+  );
+  assert.match(source, /bounded_first_receipt_adoption/);
+  assert.match(source, /currentPublicUrl: supportDelivery\?\.targetUrl/);
+  assert.match(source, /sourceTopicId: supportDelivery\?\.topicId/);
+
+  const schema = readFileSync(
+    new URL("../convex/schema.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    schema,
+    /\.index\("by_site_growth_action_parent", \[[\s\S]*?"siteId",[\s\S]*?"growthActionFingerprint",[\s\S]*?"growthParentArticleId",[\s\S]*?\]\)/,
+  );
 });
