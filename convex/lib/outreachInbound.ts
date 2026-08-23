@@ -24,6 +24,8 @@ export type OutreachInboundEvidence = {
   mimeTypes?: string[];
   failedRecipients?: string[];
   autoSubmitted?: string;
+  /** First provider-added Authentication-Results header from Gmail. */
+  authenticationResults?: string;
   receivedAt: number;
 };
 
@@ -123,50 +125,38 @@ function isAutomaticReply(evidence: OutreachInboundEvidence): boolean {
   );
 }
 
-function bounceSender(fromEmail: string): boolean {
-  const local = normalizeOutreachEmail(fromEmail).split("@")[0] ?? "";
-  return /^(?:mailer-daemon|postmaster|mail-daemon|maildelivery-subsystem)$/.test(local);
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function evidenceNamesRecipient(
+/** Legacy Gmail reads have no relay assertion, so trust only Gmail's first
+ * provider-added Authentication-Results header and require alignment to the
+ * parsed From domain. */
+function gmailAuthenticatedSender(
   evidence: OutreachInboundEvidence,
-  recipient: string,
+  fromEmail: string,
 ): boolean {
-  const normalized = normalizeOutreachEmail(recipient);
-  if (!normalized) return false;
-  if (
-    (evidence.failedRecipients ?? [])
-      .map(normalizeOutreachEmail)
-      .includes(normalized)
-  ) {
-    return true;
-  }
-  return String(evidence.bodyText ?? "").toLowerCase().includes(normalized);
-}
-
-function isHardBounce(
-  evidence: OutreachInboundEvidence,
-  candidate: OutreachInboundCandidate,
-): boolean {
-  if (!bounceSender(evidence.fromEmail)) return false;
-  if (!evidenceNamesRecipient(evidence, candidate.toEmail)) return false;
-  const deliveryMime = (evidence.mimeTypes ?? []).some(
-    (value) => value.toLowerCase() === "message/delivery-status",
-  );
-  const failedSubject = /\b(?:delivery status notification|delivery failure|undeliver(?:ed|able)|mail delivery failed|returned mail)\b/i.test(
-    evidence.subject,
-  );
-  const hardFailureText = /\b(?:address not found|user unknown|no such user|mailbox (?:does not exist|unavailable)|recipient rejected|5\.[0-9]\.[0-9])\b/i.test(
-    evidence.bodyText,
-  );
-  return (deliveryMime || failedSubject) && hardFailureText;
+  const results = String(evidence.authenticationResults ?? "").slice(0, 4_000);
+  const domain = emailDomain(fromEmail);
+  if (!domain || !/^\s*mx\.google\.com\s*;/i.test(results)) return false;
+  const escaped = escapeRegex(domain);
+  const dmarcAligned = new RegExp(
+    `\\bdmarc=pass\\b[\\s\\S]{0,500}\\bheader\\.from=${escaped}(?:\\s|;|$)`,
+    "i",
+  ).test(results);
+  const dkimAligned = new RegExp(
+    `\\bdkim=pass\\b[\\s\\S]{0,500}\\bheader\\.i=(?:[^@;\\s]+@|@)${escaped}(?:\\s|;|$)`,
+    "i",
+  ).test(results);
+  return dmarcAligned || dkimAligned;
 }
 
 /**
  * Bind one provider message to exactly one sent Pentra message. Thread identity
- * is authoritative for replies; a bounce may arrive in a separate thread, so
- * it additionally requires a trusted daemon sender and the exact failed
- * recipient in the delivery-status evidence.
+ * is authoritative for replies. Legacy Gmail polling deliberately ignores
+ * DSNs: sender authentication alone cannot prove that an attacker-controlled
+ * daemon describes Pentra's original outbound Message-ID. Hard-bounce
+ * suppression is available only through the signed, exact-ID relay path.
  */
 export function classifyOutreachInbound(args: {
   evidence: OutreachInboundEvidence;
@@ -180,6 +170,7 @@ export function classifyOutreachInbound(args: {
   if (!evidence.fromEmail || evidence.fromEmail === normalizeOutreachEmail(args.senderEmail)) {
     return null;
   }
+  if (!gmailAuthenticatedSender(evidence, evidence.fromEmail)) return null;
 
   const plausible = args.candidates
     .filter(
@@ -188,12 +179,6 @@ export function classifyOutreachInbound(args: {
         evidence.receivedAt >= candidate.sentAt - 60_000,
     )
     .sort((a, b) => b.sentAt - a.sentAt);
-
-  for (const candidate of plausible) {
-    if (isHardBounce(evidence, candidate)) {
-      return { candidate, kind: "bounce" };
-    }
-  }
 
   const threaded = plausible.find(
     (candidate) =>
@@ -210,7 +195,10 @@ export function classifyOutreachInbound(args: {
 
   return {
     candidate: threaded,
-    kind: requestsOutreachOptOut(evidence.bodyText) ? "unsubscribe" : "reply",
+    kind:
+      requestsOutreachOptOut(evidence.bodyText) && exactRecipient
+        ? "unsubscribe"
+        : "reply",
   };
 }
 

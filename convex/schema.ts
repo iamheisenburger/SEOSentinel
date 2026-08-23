@@ -734,6 +734,24 @@ export default defineSchema({
     authorityDiscoveryAttemptedAt: v.optional(v.number()),
     authorityDiscoveryVerifiedAt: v.optional(v.number()),
     authorityDiscoveryDetail: v.optional(v.string()),
+    // Support delivery and immutable published revisions are separate phases.
+    // This exact child-publication receipt lets a legacy `executed` support
+    // action enter the revision lifecycle once without making `executed`
+    // globally retryable or overwriting a terminal revision outcome.
+    supportDeliveryReceipt: v.optional(v.object({
+      articleId: v.id("articles"),
+      method: v.union(
+        v.literal("github"),
+        v.literal("wordpress"),
+        v.literal("webhook"),
+      ),
+      deliveryKey: v.string(),
+      contentHash: v.string(),
+      externalId: v.string(),
+      status: v.string(),
+      receivedAt: v.number(),
+    })),
+    supportDeliveryRecordedAt: v.optional(v.number()),
     publishedRevisionId: v.optional(v.id("published_article_revisions")),
     publishedRevisionAttemptedAt: v.optional(v.number()),
     publishedRevisionVerifiedAt: v.optional(v.number()),
@@ -1402,6 +1420,18 @@ export default defineSchema({
     inboundSyncLeaseId: v.optional(v.string()),
     inboundSyncLeaseExpiresAt: v.optional(v.number()),
     inboundLastError: v.optional(v.string()),
+    // A send-only Gmail inbox may release outreach only after a real hard-DSN
+    // canary traverses the current Workspace routing rule and signed adapter.
+    // Every mutable fence is sealed so reconnects, plan epochs, sender-domain
+    // changes and relay-secret/config rotations invalidate the proof.
+    inboundRelayDsnRoutingVerifiedAt: v.optional(v.number()),
+    inboundRelayDsnRoutingConfigurationVersion: v.optional(v.number()),
+    inboundRelayDsnRoutingRolloutEpoch: v.optional(v.number()),
+    inboundRelayDsnRoutingSenderDomain: v.optional(v.string()),
+    inboundRelayDsnRoutingRelayConfigurationHash: v.optional(v.string()),
+    inboundRelayDsnRoutingEvidenceHash: v.optional(v.string()),
+    inboundRelayDsnRoutingAdapterVersion: v.optional(v.string()),
+    inboundRelayDsnRoutingRetentionPolicyHash: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_site", ["siteId"]),
@@ -1458,6 +1488,16 @@ export default defineSchema({
     inboundReceiptKind: v.optional(v.string()), // reply | unsubscribe | bounce
     inboundReceiptAt: v.optional(v.number()),
     inboundReceiptFrom: v.optional(v.string()),
+    // Receiving-only relay binding. The random alias itself is never stored;
+    // only its digest and immutable delivery fences survive the send.
+    inboundRelayAliasHash: v.optional(v.string()),
+    inboundRelayAliasDomain: v.optional(v.string()),
+    // The custom outbound Message-ID uses a separate random token. Persist
+    // only its digest, so neither it nor the receiving alias is reconstructible.
+    inboundRelayOutboundMessageIdHash: v.optional(v.string()),
+    inboundRelayRolloutEpoch: v.optional(v.number()),
+    inboundRelayInboxConfigurationVersion: v.optional(v.number()),
+    inboundRelaySenderDomain: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -1466,7 +1506,87 @@ export default defineSchema({
     .index("by_site_domain", ["siteId", "toDomain"])
     .index("by_site_email", ["siteId", "toEmail"])
     .index("by_site_provider_thread", ["siteId", "providerThreadId"])
+    .index("by_relay_alias_hash", ["inboundRelayAliasHash"])
+    .index("by_inbox_relay_status_sent", [
+      "inboxId",
+      "inboundRelayAliasHash",
+      "status",
+      "sentAt",
+    ])
+    .index("by_inbox_relay_status_claimed", [
+      "inboxId",
+      "inboundRelayAliasHash",
+      "status",
+      "deliveryClaimedAt",
+    ])
+    .index("by_inbox_relay_thread_status_sent", [
+      "inboxId",
+      "inboundRelayAliasHash",
+      "providerThreadId",
+      "status",
+      "sentAt",
+    ])
     .index("by_thread", ["threadKey"]),
+
+  // A challenge is prepared without sending mail. It can seal an inbox only
+  // when the receiving-only adapter later submits an exact signed, structured
+  // hard-DSN receipt. No alias, test address, MIME, subject or body is stored.
+  outreach_inbound_relay_canaries: defineTable({
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    aliasHash: v.string(),
+    outboundMessageIdHash: v.string(),
+    testRecipientHash: v.string(),
+    relayDomain: v.string(),
+    senderDomain: v.string(),
+    rolloutEpoch: v.number(),
+    inboxConfigurationVersion: v.number(),
+    relayConfigurationHash: v.string(),
+    adapterVersion: v.string(),
+    retentionPolicyHash: v.string(),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    deliveryStatus: v.string(), // claimed | accepted | unverified | failed | dsn_verified
+    deliveryAttemptId: v.string(),
+    deliveryClaimedAt: v.number(),
+    deliveryLeaseExpiresAt: v.optional(v.number()),
+    providerMessageIdHash: v.optional(v.string()),
+    deliveryFinalizedAt: v.optional(v.number()),
+    verifiedAt: v.optional(v.number()),
+    eventKey: v.optional(v.string()),
+    payloadHash: v.optional(v.string()),
+    evidenceHash: v.optional(v.string()),
+  })
+    .index("by_alias_hash", ["aliasHash"])
+    .index("by_inbox", ["inboxId"])
+    .index("by_site", ["siteId"]),
+
+  // One bodyless, replay-safe receipt per signed receiving-relay event. Raw
+  // subjects and message bodies are parsed only inside the HTTP action and
+  // never become mutation arguments or database fields.
+  outreach_inbound_relay_receipts: defineTable({
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.id("outreach_messages"),
+    eventKey: v.string(),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    aliasHash: v.string(),
+    inboundMessageId: v.string(),
+    outboundMessageIdHash: v.string(),
+    kind: v.string(), // reply | unsubscribe | bounce | ignored
+    reason: v.optional(v.string()),
+    fromEmail: v.optional(v.string()),
+    receivedAt: v.number(),
+    rolloutEpoch: v.number(),
+    inboxConfigurationVersion: v.number(),
+    senderDomain: v.string(),
+    processedAt: v.number(),
+  })
+    .index("by_event_key", ["eventKey"])
+    .index("by_site", ["siteId"])
+    .index("by_site_message", ["siteId", "messageId"])
+    .index("by_message_inbound_id", ["messageId", "inboundMessageId"]),
 
   // Unsubscribes, bounces and complaints. Checked before every send and never
   // expires: an opt-out is permanent.

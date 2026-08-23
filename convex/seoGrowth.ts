@@ -1,6 +1,6 @@
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { addSearchConsoleDays } from "./lib/searchPerformance";
 import {
@@ -17,6 +17,30 @@ import {
   siteExecutionActive,
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import {
+  growthSupportDeliveryReceiptsMatch,
+  isTerminalPublishedRevisionStatus,
+  legacyExecutedSupportRevisionAdmission,
+  SUPPORT_DELIVERY_VERIFIED_STATUS,
+  verifiedGrowthSupportDelivery,
+  type GrowthSupportDeliveryReceipt,
+} from "./lib/growthSupportDelivery";
+import {
+  LEGACY_GITHUB_PUBLICATION_AUDIT_VERSION,
+  MAX_PUBLISHED_REVISIONS_PER_TENANT_24H,
+} from "./lib/publishedRevision";
+import {
+  PUBLICATION_AUDIT_VERSION,
+  publicationAdapterConfigHash,
+  publicationArtifactHashForAuditVersion,
+  publicationDeliveryConfig,
+  publicationDeliveryConfigHash,
+  publicationDeliveryKey,
+} from "./lib/publicationArtifact";
+import {
+  PUBLICATION_ADAPTER_VERSION,
+  validatePublicationReceipt,
+} from "./lib/publicationReceipts";
 
 const ACTIVE_ACTION_STATUSES = ["open", "monitoring"] as const;
 const RETRYABLE_SUPPORT_AUTOMATION = new Set([
@@ -33,7 +57,6 @@ const RETRYABLE_REVISION_AUTOMATION = new Set([
   "measurement_only",
   "awaiting_published_revision",
   "revision_prepared",
-  "revision_failed",
   "revision_unverified",
 ]);
 
@@ -52,6 +75,226 @@ async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
     throw new Error("Not authorized to access this site's SEO growth data");
   }
   return site;
+}
+
+type ActionRevisionHistory = {
+  anyRevisionExists: boolean;
+  boundRevisionMissing: boolean;
+  revisionBindingInvalid: boolean;
+  latestStatus?: string;
+  terminalRevisionStatus?: string;
+};
+
+async function actionRevisionHistory(
+  ctx: QueryCtx | MutationCtx,
+  action: Doc<"seo_growth_actions">,
+): Promise<ActionRevisionHistory> {
+  const [linked, bound] = await Promise.all([
+    ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_action", (q) => q.eq("growthActionId", action._id))
+      .order("desc")
+      .collect(),
+    action.publishedRevisionId
+      ? ctx.db.get(action.publishedRevisionId)
+      : Promise.resolve(null),
+  ]);
+  const boundMatchesAction = Boolean(
+    bound &&
+    bound.siteId === action.siteId &&
+    bound.articleId === action.articleId &&
+    bound.growthActionId === action._id,
+  );
+  const boundRevisionMissing = Boolean(action.publishedRevisionId && !bound);
+  const revisionBindingInvalid = Boolean(
+    (action.publishedRevisionId && !boundMatchesAction) ||
+    (!action.publishedRevisionId && linked.length > 0),
+  );
+  const revisions = [...linked];
+  if (
+    boundMatchesAction &&
+    !revisions.some((revision) => revision._id === bound!._id)
+  ) {
+    revisions.push(bound!);
+  }
+  revisions.sort((left, right) => right.createdAt - left.createdAt);
+  const terminal = revisions.find((revision) =>
+    isTerminalPublishedRevisionStatus(revision.status)
+  );
+  return {
+    anyRevisionExists: revisions.length > 0,
+    boundRevisionMissing,
+    revisionBindingInvalid,
+    latestStatus: revisions[0]?.status,
+    terminalRevisionStatus: terminal?.status,
+  };
+}
+
+async function verifiedSupportDeliveryForAction(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+  action: Doc<"seo_growth_actions">,
+): Promise<GrowthSupportDeliveryReceipt<Id<"articles">> | null> {
+  const validateCandidate = async (
+    article: Doc<"articles"> | null,
+  ): Promise<GrowthSupportDeliveryReceipt<Id<"articles">> | null> => {
+    if (!article?.topicId) return null;
+    const topic = await ctx.db.get(article.topicId);
+    if (!topic) return null;
+    return verifiedGrowthSupportDelivery({ site, action, topic, article });
+  };
+
+  if (action.supportDeliveryReceipt) {
+    const current = await validateCandidate(
+      await ctx.db.get(action.supportDeliveryReceipt.articleId),
+    );
+    return current &&
+      growthSupportDeliveryReceiptsMatch(action.supportDeliveryReceipt, current)
+      ? current
+      : null;
+  }
+
+  const topics = await ctx.db
+    .query("topic_clusters")
+    .withIndex("by_site", (q) => q.eq("siteId", action.siteId))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("growthActionFingerprint"), action.fingerprint),
+        q.eq(q.field("growthParentArticleId"), action.articleId),
+      )
+    )
+    .take(2);
+  if (topics.length !== 1) return null;
+  const articles = await ctx.db
+    .query("articles")
+    .withIndex("by_topic", (q) => q.eq("topicId", topics[0]!._id))
+    .take(11);
+  if (articles.length > 10) return null;
+  const verified = articles
+    .map((article) =>
+      verifiedGrowthSupportDelivery({
+        site,
+        action,
+        topic: topics[0]!,
+        article,
+      })
+    )
+    .filter((receipt): receipt is GrowthSupportDeliveryReceipt<Id<"articles">> =>
+      Boolean(receipt)
+    );
+  return verified.length === 1 ? verified[0]! : null;
+}
+
+function sourceReceiptMode(
+  site: Doc<"sites">,
+  article: Doc<"articles"> | null,
+):
+  | "current_receipt"
+  | "legacy_github_adoption_expected"
+  | "legacy_github_adoption_configuration_missing"
+  | "unavailable" {
+  if (!article || article.siteId !== site._id || article.status !== "published") {
+    return "unavailable";
+  }
+  try {
+    const configSealed = Boolean(
+      article.publicationConfigHash &&
+      article.publicationConfigSnapshot &&
+      publicationDeliveryConfigHash(publicationDeliveryConfig(site)) ===
+        article.publicationConfigHash &&
+      publicationDeliveryConfigHash(
+        publicationDeliveryConfig(article.publicationConfigSnapshot!),
+      ) === article.publicationConfigHash,
+    );
+    if (article.publicationReceipt) {
+      const receipt = validatePublicationReceipt(article.publicationReceipt);
+      const auditVersion =
+        article.publicationAuditVersion ?? PUBLICATION_AUDIT_VERSION;
+      const expectedStatus = {
+        github: "committed",
+        wordpress: "published",
+        webhook: "accepted",
+      } as const;
+      return configSealed &&
+        Boolean(
+          article.publicationDate &&
+          article.publishedContentHash &&
+          article.publicationDeliveryHash &&
+          article.auditedContentHash === article.publishedContentHash &&
+          receipt.method === (site.publishMethod ?? "github") &&
+          receipt.status === expectedStatus[receipt.method] &&
+          receipt.contentHash === article.publishedContentHash &&
+          receipt.deliveryKey ===
+            publicationDeliveryKey(article.publicationDeliveryHash) &&
+          publicationArtifactHashForAuditVersion(article, auditVersion) ===
+            article.publishedContentHash,
+        )
+        ? "current_receipt"
+        : "unavailable";
+    }
+    const legacyGitHubCandidate =
+      configSealed &&
+      (site.publishMethod ?? "github") === "github" &&
+      article.publicationAuditVersion ===
+        LEGACY_GITHUB_PUBLICATION_AUDIT_VERSION &&
+      Boolean(
+        article.publishedContentHash &&
+        article.auditedContentHash === article.publishedContentHash &&
+        article.publicationDeliveryHash &&
+        article.publicationDate &&
+        publicationArtifactHashForAuditVersion(
+          article,
+          LEGACY_GITHUB_PUBLICATION_AUDIT_VERSION,
+        ) === article.publishedContentHash,
+      );
+    if (!legacyGitHubCandidate) return "unavailable";
+    return site.githubToken &&
+      site.repoOwner &&
+      site.repoName &&
+      site.repoDefaultBranch
+      ? "legacy_github_adoption_expected"
+      : "legacy_github_adoption_configuration_missing";
+  } catch {
+    return "unavailable";
+  }
+}
+
+function revisionAdapterReadiness(site: Doc<"sites">): {
+  method: string;
+  supported: boolean;
+  configured: boolean;
+} {
+  const method = site.publishMethod ?? "github";
+  if (method === "github") {
+    return {
+      method,
+      supported: true,
+      configured: Boolean(
+        site.githubToken &&
+        site.repoOwner &&
+        site.repoName &&
+        site.repoDefaultBranch,
+      ),
+    };
+  }
+  if (method === "webhook") {
+    try {
+      const expectedConfigHash = publicationAdapterConfigHash(site);
+      return {
+        method,
+        supported: true,
+        configured: Boolean(
+          expectedConfigHash &&
+          site.publicationAdapterVersion === PUBLICATION_ADAPTER_VERSION &&
+          site.publicationAdapterConfigHash === expectedConfigHash &&
+          (site.publicationAdapterVerifiedAt ?? 0) > 0,
+        ),
+      };
+    } catch {
+      return { method, supported: true, configured: false };
+    }
+  }
+  return { method, supported: false, configured: false };
 }
 
 export const getSiteInputs = internalQuery({
@@ -395,26 +638,70 @@ export const reconcileSite = internalMutation({
         : undefined;
       if (existing) {
         let automation: GrowthAutomationResult | undefined;
+        let supportDeliveryPatch:
+          | {
+              supportDeliveryReceipt: GrowthSupportDeliveryReceipt<
+                Id<"articles">
+              >;
+              supportDeliveryRecordedAt: number;
+            }
+          | undefined;
         if (
           actuationEligible &&
           desiredStatus === "open" &&
           (classification.actionKind === "improve_snippet" ||
-            classification.actionKind === "strengthen_cluster") &&
-          RETRYABLE_REVISION_AUTOMATION.has(
-            existing.automationStatus ?? "no_safe_candidate",
-          )
+            classification.actionKind === "strengthen_cluster")
         ) {
-          revisionRequests.push({
-            articleId: classification.articleId,
-            fingerprint,
-            actionKind: classification.actionKind,
-            priority: classification.priority,
-          });
-          automation = {
-            status: "awaiting_published_revision",
-            detail:
-              "Pentra will attempt one deterministic immutable revision, then require exact external CAS and live URL receipts.",
-          };
+          const revisionHistory = await actionRevisionHistory(ctx, existing);
+          let revisionEligible =
+            !revisionHistory.terminalRevisionStatus &&
+            !revisionHistory.revisionBindingInvalid &&
+            RETRYABLE_REVISION_AUTOMATION.has(
+              existing.automationStatus ?? "no_safe_candidate",
+            );
+          if (
+            existing.automationStatus === "executed" ||
+            existing.automationStatus === SUPPORT_DELIVERY_VERIFIED_STATUS
+          ) {
+            const supportDelivery = await verifiedSupportDeliveryForAction(
+              ctx,
+              currentSite,
+              existing,
+            );
+            const admission = legacyExecutedSupportRevisionAdmission({
+              action: existing,
+              verifiedSupportDelivery: Boolean(supportDelivery),
+              terminalRevisionStatus:
+                revisionHistory.terminalRevisionStatus,
+              anyRevisionExists:
+                revisionHistory.anyRevisionExists ||
+                revisionHistory.revisionBindingInvalid,
+            });
+            revisionEligible = admission.allowed;
+            if (
+              admission.allowed &&
+              supportDelivery &&
+              !existing.supportDeliveryReceipt
+            ) {
+              supportDeliveryPatch = {
+                supportDeliveryReceipt: supportDelivery,
+                supportDeliveryRecordedAt: now,
+              };
+            }
+          }
+          if (revisionEligible) {
+            revisionRequests.push({
+              articleId: classification.articleId,
+              fingerprint,
+              actionKind: classification.actionKind,
+              priority: classification.priority,
+            });
+            automation = {
+              status: "awaiting_published_revision",
+              detail:
+                "Pentra will attempt one deterministic immutable revision, then require exact external CAS and live URL receipts.",
+            };
+          }
         }
         if (
           actuationEligible &&
@@ -491,6 +778,7 @@ export const reconcileSite = internalMutation({
           nextReviewAt,
           resolvedAt: undefined,
           resolution: undefined,
+          ...(supportDeliveryPatch ?? {}),
           ...(automation ? {
             automationStatus: automation.status,
             automationDetail: automation.detail,
@@ -795,13 +1083,207 @@ export const recordSupportArticleOutcome = internalMutation({
       return { updated: false, reason: "action_not_open" };
     }
     const timestamp = Date.now();
+    const revisionHistory = await actionRevisionHistory(ctx, action);
+    let supportDeliveryPatch:
+      | {
+          supportDeliveryReceipt: GrowthSupportDeliveryReceipt<
+            Id<"articles">
+          >;
+          supportDeliveryRecordedAt: number;
+        }
+      | undefined;
+    let effectiveStatus = status;
+    const preserveRevisionLifecycle =
+      Boolean(action.publishedRevisionId) ||
+      revisionHistory.anyRevisionExists ||
+      revisionHistory.revisionBindingInvalid;
+    if (status === "executed") {
+      const site = await ctx.db.get(article.siteId);
+      const supportDelivery = site
+        ? verifiedGrowthSupportDelivery({ site, action, topic, article })
+        : null;
+      if (!supportDelivery) {
+        return { updated: false, reason: "support_delivery_unverified" };
+      }
+      if (
+        action.supportDeliveryReceipt &&
+        !growthSupportDeliveryReceiptsMatch(
+          action.supportDeliveryReceipt,
+          supportDelivery,
+        )
+      ) {
+        return { updated: false, reason: "support_delivery_receipt_conflict" };
+      }
+      if (!action.supportDeliveryReceipt) {
+        supportDeliveryPatch = {
+          supportDeliveryReceipt: supportDelivery,
+          supportDeliveryRecordedAt: timestamp,
+        };
+      }
+      if (
+        !preserveRevisionLifecycle &&
+        action.stage === "striking_distance" &&
+        action.actionKind === "strengthen_cluster"
+      ) {
+        effectiveStatus = SUPPORT_DELIVERY_VERIFIED_STATUS;
+      }
+    }
     await ctx.db.patch(action._id, {
-      automationStatus: status,
-      automationDetail: detail,
-      automatedAt: status === "executed" ? timestamp : undefined,
+      ...(supportDeliveryPatch ?? {}),
+      ...(preserveRevisionLifecycle
+        ? {}
+        : {
+            automationStatus: effectiveStatus,
+            automationDetail: effectiveStatus ===
+                SUPPORT_DELIVERY_VERIFIED_STATUS
+              ? "The support article has an exact external publication receipt; the still-open striking-distance page is eligible for one immutable revision assessment."
+              : detail,
+            automatedAt: effectiveStatus === "executed" ? timestamp : undefined,
+          }),
       updatedAt: timestamp,
     });
     return { updated: true };
+  },
+});
+
+/**
+ * Credential-free operator projection for the immutable revision actuator.
+ * It exposes phase/cap/fence outcomes only; publication credentials, receipt
+ * hashes, external ids, article bodies, and destination configuration stay in
+ * their tenant rows.
+ */
+export const getPublishedRevisionReadinessInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    articleId: v.optional(v.id("articles")),
+  },
+  handler: async (ctx, { siteId, articleId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) return null;
+    const timestamp = Date.now();
+    const [executionAuthorized, actions, recentRevisions] = await Promise.all([
+      siteExecutionAuthorized(ctx, site),
+      ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "open")
+        )
+        .take(100),
+      ctx.db
+        .query("published_article_revisions")
+        .withIndex("by_site_created", (q) =>
+          q.eq("siteId", siteId).gte("createdAt", timestamp - 24 * 60 * 60 * 1000)
+        )
+        .order("asc")
+        .take(MAX_PUBLISHED_REVISIONS_PER_TENANT_24H + 1),
+    ]);
+    const tenantCapActive =
+      recentRevisions.length >= MAX_PUBLISHED_REVISIONS_PER_TENANT_24H;
+    const tenantCapNextEligibleAt = tenantCapActive
+      ? recentRevisions[0]!.createdAt + 24 * 60 * 60 * 1000
+      : undefined;
+    const revisionAdapter = revisionAdapterReadiness(site);
+    const candidates = actions.filter((action) =>
+      (!articleId || action.articleId === articleId) &&
+      (action.actionKind === "strengthen_cluster" ||
+        action.actionKind === "improve_snippet")
+    );
+    const rows = [];
+    for (const action of candidates) {
+      const [supportDelivery, revisionHistory, sourceArticle] =
+        await Promise.all([
+          action.actionKind === "strengthen_cluster"
+            ? verifiedSupportDeliveryForAction(ctx, site, action)
+            : Promise.resolve(null),
+          actionRevisionHistory(ctx, action),
+          ctx.db.get(action.articleId),
+        ]);
+      const legacySupportAdmission = legacyExecutedSupportRevisionAdmission({
+        action,
+        verifiedSupportDelivery: Boolean(supportDelivery),
+        terminalRevisionStatus: revisionHistory.terminalRevisionStatus,
+        anyRevisionExists:
+          revisionHistory.anyRevisionExists ||
+          revisionHistory.revisionBindingInvalid,
+      });
+      const supportPhase =
+        action.automationStatus === "executed" ||
+        action.automationStatus === SUPPORT_DELIVERY_VERIFIED_STATUS;
+      const ordinaryRetry = RETRYABLE_REVISION_AUTOMATION.has(
+        action.automationStatus ?? "no_safe_candidate",
+      );
+      const capBlocksNewRevision =
+        tenantCapActive && !revisionHistory.anyRevisionExists;
+      const receiptMode = sourceReceiptMode(site, sourceArticle);
+      const sourceReceiptUnavailable =
+        !revisionHistory.anyRevisionExists &&
+        receiptMode !== "current_receipt" &&
+        receiptMode !== "legacy_github_adoption_expected";
+      let reason = "automation_phase_not_retryable";
+      if (!executionAuthorized) reason = "execution_unauthorized";
+      else if (!isSeoGrowthActuationEligible(site)) reason = "rollout_ineligible";
+      else if (!revisionAdapter.supported) reason = "revision_adapter_unsupported";
+      else if (!revisionAdapter.configured) {
+        reason = "revision_adapter_configuration_missing";
+      }
+      else if (revisionHistory.revisionBindingInvalid) {
+        reason = "revision_binding_invalid";
+      } else if (revisionHistory.terminalRevisionStatus) {
+        reason = "terminal_revision_exists";
+      } else if (capBlocksNewRevision) reason = "tenant_revision_cap";
+      else if (sourceReceiptUnavailable) {
+        reason = receiptMode === "legacy_github_adoption_configuration_missing"
+          ? "legacy_adoption_configuration_missing"
+          : "source_receipt_unavailable";
+      } else if (supportPhase) reason = legacySupportAdmission.reason;
+      else if (ordinaryRetry) reason = "revision_phase_ready";
+      const ready =
+        executionAuthorized &&
+        isSeoGrowthActuationEligible(site) &&
+        revisionAdapter.supported &&
+        revisionAdapter.configured &&
+        !revisionHistory.revisionBindingInvalid &&
+        !revisionHistory.terminalRevisionStatus &&
+        !capBlocksNewRevision &&
+        !sourceReceiptUnavailable &&
+        (supportPhase ? legacySupportAdmission.allowed : ordinaryRetry);
+      rows.push({
+        articleId: action.articleId,
+        fingerprint: action.fingerprint,
+        stage: action.stage,
+        actionKind: action.actionKind,
+        automationStatus: action.automationStatus,
+        ready,
+        reason: ready ? "eligible" : reason,
+        supportDelivery: {
+          recorded: Boolean(action.supportDeliveryReceipt),
+          verified: Boolean(supportDelivery),
+          recordedAt: action.supportDeliveryRecordedAt,
+          legacyExecutedPhase: action.automationStatus === "executed",
+        },
+        revision: {
+          bound: Boolean(action.publishedRevisionId),
+          boundMissing: revisionHistory.boundRevisionMissing,
+          bindingValid: !revisionHistory.revisionBindingInvalid,
+          anyExists: revisionHistory.anyRevisionExists,
+          latestStatus: revisionHistory.latestStatus,
+          terminalStatus: revisionHistory.terminalRevisionStatus,
+        },
+        sourceReceiptMode: receiptMode,
+      });
+    }
+    return {
+      siteId,
+      rolloutMode: site.autopilotRolloutMode ?? "observe",
+      executionAuthorized,
+      revisionAdapter,
+      tenantRevisionCap: {
+        active: tenantCapActive,
+        recentCount: recentRevisions.length,
+        nextEligibleAt: tenantCapNextEligibleAt,
+      },
+      candidates: rows,
+    };
   },
 });
 

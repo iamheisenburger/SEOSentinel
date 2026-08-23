@@ -7,6 +7,7 @@ import {
   GMAIL_SEND_SCOPE,
   hasGmailReadScope,
   hasGmailSendScope,
+  hasOnlyGmailOutboundScopes,
   hasOnlyGmailOutreachScopes,
   normalizeMailDomain,
   secondaryGmailSenderIssues,
@@ -19,7 +20,7 @@ test("Gmail outreach requires the exact least-privilege send scope", () => {
   assert.equal(hasGmailSendScope("https://mail.google.com/evil"), false);
 });
 
-test("reply monitoring requires the isolated Gmail readonly scope", () => {
+test("legacy reply monitoring recognizes the isolated Gmail readonly scope", () => {
   assert.equal(hasGmailReadScope(`${GMAIL_READONLY_SCOPE} openid email`), true);
   assert.equal(hasGmailReadScope(`${GMAIL_SEND_SCOPE} openid email`), false);
 });
@@ -39,6 +40,16 @@ test("Gmail outreach rejects coalesced Search Console or broader Gmail scopes", 
   );
   assert.equal(
     hasOnlyGmailOutreachScopes("https://mail.google.com/"),
+    false,
+  );
+  assert.equal(
+    hasOnlyGmailOutboundScopes(`${GMAIL_SEND_SCOPE} openid email`),
+    true,
+  );
+  assert.equal(
+    hasOnlyGmailOutboundScopes(
+      `${GMAIL_SEND_SCOPE} ${GMAIL_READONLY_SCOPE} openid email`,
+    ),
     false,
   );
 });
@@ -73,6 +84,10 @@ test("primary, subdomain and consumer inboxes fail closed", () => {
 
 test("Gmail connection is server-side, DNS-gated and never accepts Resend", () => {
   const backend = readFileSync("convex/outreach.ts", "utf8");
+  const auth = readFileSync(
+    "src/app/api/outreach/gmail/auth/route.ts",
+    "utf8",
+  );
   const callback = readFileSync(
     "src/app/api/outreach/gmail/callback/route.ts",
     "utf8",
@@ -83,11 +98,19 @@ test("Gmail connection is server-side, DNS-gated and never accepts Resend", () =
   assert.match(backend, /setInboxComplianceProfile = mutation/);
   assert.match(callback, /verifyGoogleWorkspaceDns/);
   assert.match(callback, /hasGmailSendScope/);
-  assert.match(callback, /hasGmailReadScope/);
-  assert.match(callback, /hasOnlyGmailOutreachScopes/);
+  assert.doesNotMatch(callback, /hasGmailReadScope/);
+  assert.match(callback, /hasOnlyGmailOutboundScopes/);
   assert.match(callback, /OUTREACH_GOOGLE_CLIENT_ID/);
   assert.doesNotMatch(callback, /GSC_CLIENT_ID/);
   assert.doesNotMatch(callback, /console\.(log|error).*token/i);
+  assert.match(auth, /GMAIL_SEND_SCOPE/);
+  assert.doesNotMatch(auth, /GMAIL_READONLY_SCOPE|gmail\.readonly/);
+  const connect = backend.slice(
+    backend.indexOf("export const connectGmailInboxInternal"),
+    backend.indexOf("export const setInboxComplianceProfile"),
+  );
+  assert.doesNotMatch(connect, /did not grant Gmail reply-monitoring permission/);
+  assert.match(connect, /existingRefreshHasLegacyRead/);
 
   const delivery = readFileSync("convex/actions/outreach.ts", "utf8");
   const refresh = delivery.slice(

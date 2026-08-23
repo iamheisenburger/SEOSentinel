@@ -25,7 +25,9 @@ export function hasGmailReadScope(scopes: string): boolean {
   return scopes.split(/\s+/).filter(Boolean).includes(GMAIL_READONLY_SCOPE);
 }
 
-/** Reject incrementally coalesced GSC or broader Gmail permissions. */
+/** Reject incrementally coalesced GSC or broader Gmail permissions. Existing
+ * readonly grants remain accepted during migration, but new authorization
+ * requests ask only for gmail.send plus identity. */
 export function hasOnlyGmailOutreachScopes(scopes: string): boolean {
   const granted = scopes.split(/\s+/).filter(Boolean);
   return (
@@ -35,6 +37,18 @@ export function hasOnlyGmailOutreachScopes(scopes: string): boolean {
         scope === GMAIL_SEND_SCOPE ||
         scope === GMAIL_READONLY_SCOPE ||
         GOOGLE_IDENTITY_SCOPES.has(scope),
+    )
+  );
+}
+
+/** New and reconnect OAuth flows must never retain the restricted readonly
+ * grant. Compatibility is limited to untouched legacy database rows. */
+export function hasOnlyGmailOutboundScopes(scopes: string): boolean {
+  const granted = scopes.split(/\s+/).filter(Boolean);
+  return (
+    granted.includes(GMAIL_SEND_SCOPE) &&
+    granted.every(
+      (scope) => scope === GMAIL_SEND_SCOPE || GOOGLE_IDENTITY_SCOPES.has(scope),
     )
   );
 }

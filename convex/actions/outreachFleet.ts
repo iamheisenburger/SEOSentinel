@@ -27,6 +27,7 @@ export type OutreachFleetSiteState = {
   hasApprovedMessages: boolean;
   hasLinksToVerify: boolean;
   inboundMonitoringReady?: boolean;
+  inboundMonitoringMode?: "signed_relay" | "legacy_gmail" | "unavailable";
   hasMessagesToMonitor?: boolean;
 };
 
@@ -73,18 +74,27 @@ export function planOutreachFleetSite(
   }
 
   if (phase === "inbound") {
+    if (state.inboundMonitoringMode === "signed_relay") {
+      return {
+        prepare: false,
+        deliver: false,
+        verify: false,
+        monitor: false,
+      };
+    }
     return {
       prepare: false,
       deliver: false,
       verify: false,
       monitor:
+        state.inboundMonitoringMode === "legacy_gmail" &&
         state.inboundMonitoringReady === true &&
         state.hasMessagesToMonitor === true,
       ...(state.inboundMonitoringReady === true
         ? {}
         : {
             failClosedReason:
-              "Reconnect the tenant's Gmail inbox with reply monitoring permission.",
+              "Configure the signed inbound relay or retain the legacy Gmail monitoring grant.",
           }),
     };
   }
@@ -174,9 +184,11 @@ export const dispatchFleet = internalAction({
     failed: number;
     scheduledNext: boolean;
   }> => {
-    const page = await ctx.runQuery(internal.sites.listOutreachFleetPage, {
-      cursor,
-    });
+    const page = phase === "inbound"
+      ? await ctx.runQuery(internal.outreach.listLegacyInboundFleetPage, {
+          cursor,
+        })
+      : await ctx.runQuery(internal.sites.listOutreachFleetPage, { cursor });
     let scheduled = 0;
     let skipped = 0;
     let failed = 0;
@@ -224,9 +236,11 @@ export const runSite = internalAction({
   handler: async (ctx, { siteId, phase }): Promise<SiteRunResult> => {
     let state: OutreachFleetSiteState | null;
     try {
-      state = await ctx.runQuery(internal.sites.getOutreachFleetState, {
-        siteId,
-      });
+      state = phase === "inbound"
+        ? await ctx.runQuery(internal.outreach.getLegacyInboundFleetState, {
+            siteId,
+          })
+        : await ctx.runQuery(internal.sites.getOutreachFleetState, { siteId });
     } catch {
       console.error(
         `[outreach-fleet] readiness lookup failed for tenant ${siteId}`,

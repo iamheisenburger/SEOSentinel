@@ -37,6 +37,9 @@ export function resolveGmailReconnectProfile(args: {
 export function sanitizeInboxForClient(
   inbox: StoredInbox,
   now: number,
+  relayConfigured = false,
+  relayDsnRoutingReady = false,
+  legacyDrainRequired = false,
 ): Record<string, unknown> | null {
   if (!inbox) return null;
   const dailySendCap =
@@ -48,7 +51,7 @@ export function sanitizeInboxForClient(
   const credentialsPresent = Boolean(
     inbox.oauthAccessToken || inbox.oauthRefreshToken || inbox.smtpPassword || inbox.apiKey,
   );
-  const inboundMonitoringReady = Boolean(
+  const legacyGmailReadReady = Boolean(
     inbox.provider === "gmail" &&
     credentialsPresent &&
     !["disconnected", "suspended"].includes(String(inbox.status ?? "")) &&
@@ -56,6 +59,13 @@ export function sanitizeInboxForClient(
       .split(/\s+/)
       .includes("https://www.googleapis.com/auth/gmail.readonly"),
   );
+  const relayReady = Boolean(
+    relayConfigured &&
+    relayDsnRoutingReady &&
+    inbox.provider === "gmail" &&
+    !["disconnected", "suspended"].includes(String(inbox.status ?? "")),
+  );
+  const inboundMonitoringReady = relayReady || legacyGmailReadReady;
 
   return {
     _id: inbox._id,
@@ -85,6 +95,17 @@ export function sanitizeInboxForClient(
     dmarcVerifiedAt: inbox.dmarcVerifiedAt,
     lastError: inbox.lastError,
     inboundMonitoringReady,
+    inboundRelayConfigured: relayConfigured,
+    inboundRelayDsnRoutingReady: relayDsnRoutingReady,
+    inboundRelayDsnRoutingVerifiedAt:
+      inbox.inboundRelayDsnRoutingVerifiedAt,
+    inboundMonitoringMode: legacyDrainRequired && legacyGmailReadReady
+      ? "legacy_gmail"
+      : relayReady
+      ? "signed_relay"
+      : legacyGmailReadReady
+        ? "legacy_gmail"
+        : "unavailable",
     inboundLastScannedAt: inbox.inboundLastScannedAt,
     inboundLastCompletedAt: inbox.inboundLastCompletedAt,
     inboundLastError: inbox.inboundLastError,

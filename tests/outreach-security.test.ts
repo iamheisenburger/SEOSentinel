@@ -74,7 +74,7 @@ test("no stored credential means no false connected signal", () => {
   assert.equal(sanitized?.credentialsPresent, false);
 });
 
-test("reply monitoring readiness requires scope, credential, and an active Gmail connection", () => {
+test("legacy reply monitoring remains compatible while signed relay requires a DSN canary", () => {
   const ready = sanitizeInboxForClient(
     {
       provider: "gmail",
@@ -119,6 +119,29 @@ test("reply monitoring readiness requires scope, credential, and an active Gmail
         oauthRefreshToken: "refresh-token",
       },
       NOW,
+    )?.inboundMonitoringReady,
+    false,
+  );
+  const relayReady = sanitizeInboxForClient(
+    {
+      provider: "gmail",
+      status: "active",
+      oauthScopes: "https://www.googleapis.com/auth/gmail.send",
+      oauthRefreshToken: "refresh-token",
+    },
+    NOW,
+    true,
+    true,
+  );
+  assert.equal(relayReady?.inboundMonitoringReady, true);
+  assert.equal(relayReady?.inboundMonitoringMode, "signed_relay");
+  assert.equal(ready?.inboundMonitoringMode, "legacy_gmail");
+  assert.equal(
+    sanitizeInboxForClient(
+      { provider: "gmail", status: "suspended" },
+      NOW,
+      true,
+      true,
     )?.inboundMonitoringReady,
     false,
   );

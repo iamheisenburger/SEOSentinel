@@ -30,6 +30,8 @@ function evidence(
     fromEmail: "Editor <editor@example.org>",
     subject: "Re: Broken resource",
     bodyText: "Thanks, I will take a look.",
+    authenticationResults:
+      "mx.google.com; dmarc=pass header.from=example.org; dkim=pass header.i=@example.org",
     mimeTypes: ["text/plain"],
     receivedAt: SENT_AT + 60_000,
     ...overrides,
@@ -74,6 +76,31 @@ test("explicit STOP suppresses but a quoted Pentra footer does not", () => {
   );
 });
 
+test("legacy Gmail STOP requires the exact authenticated recipient", () => {
+  assert.equal(
+    classifyOutreachInbound({
+      evidence: evidence({
+        fromEmail: "Owner <owner@example.org>",
+        bodyText: "STOP",
+      }),
+      candidates: [candidate],
+      senderEmail: "alex@gettenant.com",
+    })?.kind,
+    "reply",
+  );
+  assert.equal(
+    classifyOutreachInbound({
+      evidence: evidence({
+        authenticationResults:
+          "mx.google.com; dmarc=fail header.from=example.org",
+      }),
+      candidates: [candidate],
+      senderEmail: "alex@gettenant.com",
+    }),
+    null,
+  );
+});
+
 test("automatic vacation responses do not masquerade as human replies", () => {
   assert.equal(
     classifyOutreachInbound({
@@ -88,8 +115,8 @@ test("automatic vacation responses do not masquerade as human replies", () => {
   );
 });
 
-test("hard bounces require a daemon, failure evidence, and the exact recipient", () => {
-  assert.deepEqual(
+test("legacy Gmail DSNs fail closed even when an attacker daemon authenticates", () => {
+  assert.equal(
     classifyOutreachInbound({
       evidence: evidence({
         providerThreadId: "bounce-thread",
@@ -102,7 +129,7 @@ test("hard bounces require a daemon, failure evidence, and the exact recipient",
       candidates: [candidate],
       senderEmail: "alex@gettenant.com",
     }),
-    { candidate, kind: "bounce" },
+    null,
   );
   assert.equal(
     classifyOutreachInbound({
@@ -193,7 +220,8 @@ test("the durable inbound path is leased, tenant-scoped, bodyless, and suppressi
   assert.match(action, /boundedResponseJson/);
   assert.doesNotMatch(schema, /inbound(?:Message)?Body/i);
   assert.match(schema, /inboundReceiptHash/);
-  assert.match(privacy, /Inbound message bodies are processed transiently/);
+  assert.match(privacy, /application database never stores inbound MIME, attachments, subjects, or bodies/);
+  assert.match(privacy, /audited receiving provider and adapter are configured to discard attachments and content after bounded transient classification/);
   assert.match(privacy, /Google API Services User Data Policy/);
   assert.match(privacy, /Limited Use requirements/);
   assert.match(

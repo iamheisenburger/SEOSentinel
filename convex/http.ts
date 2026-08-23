@@ -14,6 +14,35 @@ import {
   parseOutcomeBearerToken,
 } from "./lib/outcomeReceipts";
 import { isAuthorizedInternalBearer } from "./lib/internalHttpAuth";
+import { sha256Hex } from "./lib/publicationArtifact";
+import {
+  OUTREACH_INBOUND_RELAY_MAX_BODY_BYTES,
+  classifyInboundRelay,
+  classifyInboundRelayDsnCanary,
+  inboundRelayAliasHash,
+  inboundRelayCanaryEvidenceReceipt,
+  inboundRelayConfigured,
+  inboundRelayEventKey,
+  inboundRelayEvidenceReceipt,
+  inboundRelayMessageIdHash,
+  normalizeInboundRelayDomain,
+  parseInboundRelayPayload,
+  verifyInboundRelaySignature,
+} from "./lib/outreachInboundRelay";
+
+function inboundRelayRuntimeConfig() {
+  return {
+    domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    secrets: [
+      process.env.OUTREACH_INBOUND_RELAY_SECRET,
+      process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+    ],
+    adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+    retentionPolicyHash:
+      process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+    retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+  };
+}
 
 const http = httpRouter();
 
@@ -93,6 +122,253 @@ async function readBoundedOutcomeBody(request: Request) {
     return null;
   }
 }
+
+async function readBoundedRawJson(
+  request: Request,
+  maximumBytes: number,
+): Promise<{ bytes: Uint8Array; text: string } | null> {
+  const contentType = request.headers.get("content-type") ?? "";
+  const contentLength = request.headers.get("content-length");
+  const declaredLength = contentLength === null ? undefined : Number(contentLength);
+  if (
+    !contentType.toLowerCase().startsWith("application/json") ||
+    (declaredLength !== undefined &&
+      (!Number.isSafeInteger(declaredLength) ||
+        declaredLength <= 0 ||
+        declaredLength > maximumBytes)) ||
+    !request.body
+  ) {
+    return null;
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytesRead += chunk.value.byteLength;
+      if (bytesRead > maximumBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(chunk.value);
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return null;
+  }
+  if (bytesRead === 0) return null;
+  const bytes = new Uint8Array(bytesRead);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return {
+      bytes,
+      text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Provider-neutral receiving-only authority webhook.
+ *
+ * The relay signs exact bytes and forwards only inbound mail. This route has
+ * no reference to an outbound action and passes only bodyless digests and a
+ * classification to the durable mutation.
+ */
+http.route({
+  path: "/webhooks/outreach-inbound",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const relayDomain = normalizeInboundRelayDomain(
+      process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    );
+    const secrets = [
+      process.env.OUTREACH_INBOUND_RELAY_SECRET,
+      process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+    ];
+    if (!inboundRelayConfigured(inboundRelayRuntimeConfig())) {
+      return json({ error: "Inbound relay is unavailable" }, 503);
+    }
+    const body = await readBoundedRawJson(
+      request,
+      OUTREACH_INBOUND_RELAY_MAX_BODY_BYTES,
+    );
+    if (!body) return json({ error: "Invalid relay payload" }, 400);
+
+    const eventIdHeader = request.headers.get("x-pentra-relay-event-id");
+    const signatureValid = await verifyInboundRelaySignature({
+      rawBody: body.bytes,
+      timestampHeader: request.headers.get("x-pentra-relay-timestamp"),
+      eventIdHeader,
+      signatureHeader: request.headers.get("x-pentra-relay-signature"),
+      secrets,
+      now: Date.now(),
+    });
+    if (!signatureValid) return json({ error: "Invalid relay signature" }, 401);
+
+    const payload = parseInboundRelayPayload(body.text);
+    if (!payload || payload.eventId !== eventIdHeader) {
+      return json({ error: "Invalid relay payload" }, 400);
+    }
+    if (
+      payload.adapterVersion !==
+        process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION ||
+      payload.retentionPolicyHash !==
+        process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH
+    ) {
+      // A signed but stale adapter must retry after the deployment/config is
+      // reconciled; it cannot silently settle mail under a different audit.
+      return json({ error: "Relay adapter configuration is stale" }, 503);
+    }
+    const recipientDomain = normalizeInboundRelayDomain(
+      payload.recipient.split("@")[1],
+    );
+    if (!recipientDomain || recipientDomain !== relayDomain) {
+      return json({ error: "Invalid relay recipient" }, 400);
+    }
+
+    const aliasHash = inboundRelayAliasHash(payload.recipient);
+    const candidate = await ctx.runQuery(
+      internal.outreach.getInboundRelayCandidate,
+      { aliasHash, aliasDomain: recipientDomain },
+    );
+    if (!candidate) {
+      const canary = await ctx.runQuery(
+        internal.outreach.getInboundRelayDsnCanaryCandidate,
+        { aliasHash, aliasDomain: recipientDomain },
+      );
+      // Unknown, stale, deleted or cross-tenant aliases deliberately receive
+      // a generic acknowledgement so the endpoint is not an alias oracle.
+      if (!canary) return json({ ok: true }, 202);
+      const classification = classifyInboundRelayDsnCanary({
+        payload,
+        candidate: {
+          testRecipientHash: canary.testRecipientHash,
+          outboundRfcMessageIdHash: canary.outboundRfcMessageIdHash,
+          issuedAt: canary.issuedAt,
+          expiresAt: canary.expiresAt,
+        },
+        now: Date.now(),
+      });
+      if (!classification) return json({ ok: true }, 202);
+      const eventKey = inboundRelayEventKey(payload.eventId);
+      const payloadHash = sha256Hex(body.text);
+      const evidenceHash = sha256Hex(inboundRelayCanaryEvidenceReceipt({
+        eventKey,
+        siteId: canary.siteId,
+        inboxId: canary.inboxId,
+        canaryId: canary.canaryId,
+        aliasHash,
+        inboundMessageId: payload.messageId,
+        outboundMessageIdHash: canary.outboundRfcMessageIdHash,
+        receivedAt: payload.receivedAt,
+        adapterVersion: payload.adapterVersion,
+        retentionPolicyHash: payload.retentionPolicyHash,
+      }));
+      const result = await ctx.runMutation(
+        internal.outreach.recordInboundRelayDsnCanaryReceipt,
+        {
+          canaryId: canary.canaryId,
+          siteId: canary.siteId,
+          inboxId: canary.inboxId,
+          aliasHash,
+          aliasDomain: canary.aliasDomain,
+          eventKey,
+          payloadHash,
+          evidenceHash,
+          inboundMessageIdHash: inboundRelayMessageIdHash(payload.messageId),
+          fromEmail: classification.fromEmail,
+          receivedAt: payload.receivedAt,
+          rolloutEpoch: canary.rolloutEpoch,
+          inboxConfigurationVersion: canary.inboxConfigurationVersion,
+          senderDomain: canary.senderDomain,
+          relayConfigurationHash: canary.relayConfigurationHash,
+          adapterVersion: canary.adapterVersion,
+          retentionPolicyHash: canary.retentionPolicyHash,
+        },
+      );
+      return json({
+        ok: true,
+        accepted: true,
+        canary: true,
+        replay: "replay" in result && result.replay === true,
+      });
+    }
+    if (candidate.state === "pending") {
+      return json(
+        { error: "Outbound delivery is still settling" },
+        425,
+        { "Retry-After": "30" },
+      );
+    }
+
+    const classification = classifyInboundRelay({
+      payload,
+      candidate: {
+        messageId: candidate.messageId,
+        toEmail: candidate.toEmail,
+        toDomain: candidate.toDomain,
+        sentAt: candidate.sentAt,
+        outboundRfcMessageIdHash: candidate.outboundRfcMessageIdHash,
+      },
+      now: Date.now(),
+    });
+    const eventKey = inboundRelayEventKey(payload.eventId);
+    const payloadHash = sha256Hex(body.text);
+    const subjectDigest = sha256Hex(payload.subject);
+    const bodyDigest = sha256Hex(payload.text);
+    const evidenceHash = sha256Hex(inboundRelayEvidenceReceipt({
+      eventKey,
+      siteId: candidate.siteId,
+      messageId: candidate.messageId,
+      inboundMessageId: payload.messageId,
+      outboundMessageIdHash: candidate.outboundRfcMessageIdHash,
+      aliasHash,
+      kind: classification.kind,
+      fromEmail: classification.fromEmail,
+      receivedAt: payload.receivedAt,
+      subjectDigest,
+      bodyDigest,
+    }));
+    const result = await ctx.runMutation(
+      internal.outreach.recordInboundRelayReceipt,
+      {
+        siteId: candidate.siteId,
+        inboxId: candidate.inboxId,
+        messageId: candidate.messageId,
+        aliasHash,
+        aliasDomain: candidate.aliasDomain,
+        eventKey,
+        payloadHash,
+        evidenceHash,
+        inboundMessageId: payload.messageId,
+        outboundMessageIdHash: candidate.outboundRfcMessageIdHash,
+        kind: classification.kind,
+        reason:
+          classification.kind === "ignored"
+            ? classification.reason
+            : undefined,
+        fromEmail: classification.fromEmail,
+        receivedAt: payload.receivedAt,
+        rolloutEpoch: candidate.rolloutEpoch,
+        inboxConfigurationVersion: candidate.inboxConfigurationVersion,
+        senderDomain: candidate.senderDomain,
+      },
+    );
+    return json({
+      ok: true,
+      accepted: classification.kind !== "ignored",
+      replay: "replay" in result && result.replay === true,
+    });
+  }),
+});
 
 http.route({
   path: "/internal/oauth/site",
@@ -241,6 +517,23 @@ http.route({
 });
 
 http.route({
+  path: "/internal/oauth/outreach-gmail/preflight",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+    const body = await readBody(request);
+    if (typeof body?.siteId !== "string") {
+      return json({ error: "Invalid Gmail outreach preflight" }, 400);
+    }
+    const result = await ctx.runQuery(
+      internal.outreach.getGmailReconnectReadinessInternal,
+      { siteId: body.siteId as Id<"sites"> },
+    );
+    return json(result, result.ready ? 200 : 409);
+  }),
+});
+
+http.route({
   path: "/internal/oauth/outreach-gmail",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
@@ -284,7 +577,11 @@ http.route({
         dmarcVerified: body.dmarcVerified,
       },
     );
-    return json({ ok: true, ready: result.ready });
+    return json({
+      ok: true,
+      ready: result.ready,
+      inboundReady: result.inboundReady,
+    });
   }),
 });
 
