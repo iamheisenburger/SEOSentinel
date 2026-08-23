@@ -39,12 +39,11 @@ import {
 } from "lucide-react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
-  cadenceFitsMonthlyLimit,
+  cadenceFitsMonthlyAllowance,
   cadenceLabel,
   cadenceOptionsForMonthlyLimit,
   defaultCadenceForMonthlyLimit,
 } from "../../../convex/planLimits";
-import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 type Step = "domain" | "profile" | "audience" | "strategy" | "integrations" | "preview" | "generate" | "done";
 
@@ -247,7 +246,6 @@ function SectionHeader({
 // ── Main Wizard ─────────────────────────────────────────
 
 export function SetupWizard() {
-  const { maxArticles } = usePlanLimits();
   const [step, setStep] = useState<Step>("domain");
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -303,11 +301,6 @@ export function SetupWizard() {
   const [brandFontFamily, setBrandFontFamily] = useState<string | null>(null);
   const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(null);
 
-  // Integrations
-  const [mediumToken, setMediumToken] = useState("");
-  const [linkedinToken, setLinkedinToken] = useState("");
-  const [syndicationEnabled, setSyndicationEnabled] = useState(false);
-
   // Loading states
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -318,21 +311,36 @@ export function SetupWizard() {
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
   const generatePlan = useAction(api.actions.pipeline.generatePlan);
   const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
-  const cadenceOptions = cadenceOptionsForMonthlyLimit(maxArticles);
+  const cadenceCapacity = useQuery(
+    api.sites.getCadenceCapacity,
+    authLoaded && clerkUserId
+      ? siteId
+        ? { siteId }
+        : {}
+      : "skip",
+  );
+  const cadenceMonthlyAllowance = cadenceCapacity?.ready
+    ? cadenceCapacity.availableMonthlyArticles
+    : 0;
+  const cadenceOptions = cadenceOptionsForMonthlyLimit(
+    cadenceMonthlyAllowance,
+  );
 
   useEffect(() => {
-    const nextDefault = defaultCadenceForMonthlyLimit(maxArticles);
+    const nextDefault = defaultCadenceForMonthlyLimit(
+      cadenceMonthlyAllowance,
+    );
     setCadencePerWeek((current) => {
       if (
         current === lastAutomaticCadence.current ||
-        !cadenceFitsMonthlyLimit(current, maxArticles)
+        !cadenceFitsMonthlyAllowance(current, cadenceMonthlyAllowance)
       ) {
         return nextDefault;
       }
       return current;
     });
     lastAutomaticCadence.current = nextDefault;
-  }, [maxArticles]);
+  }, [cadenceMonthlyAllowance]);
 
   // After OAuth popup closes, server has saved token directly to Convex.
   // We just need to detect when the popup closes to update local UI state.
@@ -535,10 +543,6 @@ export function SetupWizard() {
         wpAppPassword: wpAppPassword.trim() || undefined,
         webhookUrl: webhookUrl.trim() || undefined,
         webhookSecret: webhookSecret.trim() || undefined,
-        // Syndication
-        mediumToken: mediumToken.trim() || undefined,
-        linkedinAccessToken: linkedinToken.trim() || undefined,
-        syndicationEnabled: syndicationEnabled || undefined,
       });
       if (publishMethod === "wordpress" || publishMethod === "webhook") {
         setStatusMsg("Verifying the publishing destination...");
@@ -1056,6 +1060,11 @@ export function SetupWizard() {
                     </button>
                   ))}
                 </div>
+                <p className="mt-2 text-[10px] leading-relaxed text-[#565A6E]">
+                  {cadenceCapacity === undefined || !cadenceCapacity.ready
+                    ? "Checking your account-wide article capacity. Publishing stays paused until the plan receipt is ready."
+                    : `${cadenceCapacity.availableMonthlyArticles} of ${cadenceCapacity.maxArticles} monthly articles are available for this site across your account.`}
+                </p>
               </div>
 
               <div className="px-3 mb-3">
@@ -1303,7 +1312,7 @@ export function SetupWizard() {
                 <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#F59E0B]/[0.08] text-[#FBBF24]">Recommended</span>
               </div>
               <p className="text-[11px] text-[#565A6E] px-1 mb-3">
-                Pentra uses GSC to track your keyword rankings, detect when articles lose traffic, and automatically refresh declining content. Without it, we can still write and publish — but we can&apos;t monitor or maintain your rankings.
+                Pentra uses GSC to measure rankings, clicks, indexing, and declining pages, then records the recovery work each page needs. Without it, Pentra can still write and publish, but it cannot prove or diagnose search outcomes.
               </p>
 
               {gscConnected ? (
@@ -1347,49 +1356,11 @@ export function SetupWizard() {
               <div className="flex items-center gap-2 mb-2 px-1">
                 <Share2 className="h-4 w-4 text-[#A78BFA]" />
                 <h3 className="text-[13px] font-medium text-[#EDEEF1]">Content Syndication</h3>
-                <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-white/[0.04] text-[#565A6E]">Optional</span>
+                <span className="ml-auto text-[10px] rounded-full px-2 py-0.5 bg-[#F59E0B]/10 text-[#FBBF24]">Unavailable</span>
               </div>
-              <p className="text-[11px] text-[#565A6E] px-1 mb-3">
-                Automatically cross-post your articles to Medium and LinkedIn when they&apos;re published. Each post includes a canonical URL pointing back to your site so you get the SEO credit — no duplicate content penalty.
+              <p className="rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-3 py-2.5 text-[11px] leading-relaxed text-[#8B8FA3]">
+                Automatic Medium and LinkedIn syndication is not available yet. Pentra will not collect platform tokens or claim a cross-post until that delivery has an audited, idempotent destination-receipt workflow.
               </p>
-
-              <div className="flex flex-col gap-3">
-                <ToggleSetting
-                  label="Auto-Syndicate"
-                  description="Automatically distribute articles to connected platforms when published"
-                  value={syndicationEnabled}
-                  onChange={setSyndicationEnabled}
-                />
-
-                {syndicationEnabled && (
-                  <div className="flex flex-col gap-3 pl-1">
-                    <div>
-                      <Input
-                        label="Medium Integration Token"
-                        type="password"
-                        placeholder="Get it from medium.com/me/settings/security"
-                        value={mediumToken}
-                        onChange={(e) => setMediumToken(e.target.value)}
-                      />
-                      <p className="text-[10px] text-[#565A6E] mt-1 px-1">
-                        In Medium: Settings → Security → Integration tokens → generate one. Articles are posted as drafts with a canonical URL to your site.
-                      </p>
-                    </div>
-                    <div>
-                      <Input
-                        label="LinkedIn Access Token"
-                        type="password"
-                        placeholder="OAuth access token for LinkedIn"
-                        value={linkedinToken}
-                        onChange={(e) => setLinkedinToken(e.target.value)}
-                      />
-                      <p className="text-[10px] text-[#565A6E] mt-1 px-1">
-                        Each article gets an AI-written LinkedIn post linking back to the original.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
 
             <div className="flex gap-3 mt-6">
@@ -1406,7 +1377,7 @@ export function SetupWizard() {
                 icon={<ArrowRight className="h-3.5 w-3.5" />}
                 className="flex-[2]"
               >
-                {gscConnected || syndicationEnabled ? "Continue" : "Skip for Now"}
+                {gscConnected ? "Continue" : "Skip for Now"}
               </Button>
             </div>
           </div>

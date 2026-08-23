@@ -38,7 +38,8 @@ export async function GET(req: NextRequest) {
     scope: `${GSC_GROWTH_SCOPE} openid email`,
     access_type: "offline",
     prompt: "consent", // Force consent to get refresh token
-    include_granted_scopes: "true",
+    // Do not coalesce permissions previously granted to this Google client.
+    include_granted_scopes: "false",
     state,
   });
 

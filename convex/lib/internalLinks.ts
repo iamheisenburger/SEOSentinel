@@ -7,6 +7,13 @@ export type InternalLink = {
   href: string;
 };
 
+export type RelatedInternalDestination = {
+  href: string;
+  title: string;
+  summary?: string;
+  keywords?: string[];
+};
+
 type MarkdownNode = {
   type: string;
   value?: string;
@@ -37,6 +44,12 @@ const GENERIC_ANCHORS = new Set([
   "pricing",
   "read more",
   "sign up",
+]);
+
+const RELATED_STOPWORDS = new Set([
+  "about", "after", "best", "build", "complete", "does", "faster",
+  "from", "guide", "help", "into", "more", "that", "their", "this",
+  "through", "using", "what", "when", "which", "with", "your",
 ]);
 
 const BLOCKED_NODE_TYPES = new Set([
@@ -145,6 +158,74 @@ export function preferredInternalLinkAnchorCandidates(
     }
   }
   return candidates;
+}
+
+function relatedTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          !RELATED_STOPWORDS.has(token) &&
+          !/^\d+$/.test(token),
+      ),
+  );
+}
+
+/**
+ * Deterministic fallback when a model cannot find an exact phrase already in
+ * the prose. A sealed article should still join a real same-tenant topic
+ * cluster, but only when the source and destination share explicit topical
+ * terms. The destination title becomes the visible related-reading anchor;
+ * no copy or URL is invented.
+ */
+export function selectRelatedInternalLinks(args: {
+  currentTitle: string;
+  currentKeywords?: string[];
+  destinations: RelatedInternalDestination[];
+  limit?: number;
+}): InternalLink[] {
+  const wanted = relatedTokens(
+    [args.currentTitle, ...(args.currentKeywords ?? [])].join(" "),
+  );
+  const boundedLimit = Math.max(0, Math.min(args.limit ?? 3, 6));
+  if (wanted.size === 0 || boundedLimit === 0) return [];
+
+  return args.destinations
+    .map((destination) => {
+      const titleTokens = relatedTokens(destination.title);
+      const allTokens = relatedTokens(
+        [
+          destination.title,
+          destination.summary ?? "",
+          ...(destination.keywords ?? []),
+        ].join(" "),
+      );
+      let score = 0;
+      for (const token of wanted) {
+        if (allTokens.has(token)) score += titleTokens.has(token) ? 2 : 1;
+      }
+      const anchor = preferredInternalLinkAnchorCandidates(
+        destination.title,
+        destination.keywords,
+      )[0];
+      return { destination, anchor, score };
+    })
+    .filter(
+      (candidate): candidate is typeof candidate & { anchor: string } =>
+        candidate.score > 0 && Boolean(candidate.anchor),
+    )
+    .sort(
+      (a, b) =>
+        b.score - a.score || a.destination.href.localeCompare(b.destination.href),
+    )
+    .slice(0, boundedLimit)
+    .map(({ destination, anchor }) => ({
+      anchor,
+      href: destination.href,
+    }));
 }
 
 export function validateInternalLinkSuggestions(
@@ -300,5 +381,43 @@ export function injectInternalLinks(
   return {
     markdown: updated,
     inserted: insertions.map((insertion) => insertion.link),
+  };
+}
+
+/**
+ * Add crawlable related-reading links without rewriting approved prose.
+ * Sources/references remain last, and already-linked destinations are not
+ * duplicated. Callers must validate the links against the tenant allowlist
+ * before using this function.
+ */
+export function appendRelatedInternalLinks(
+  markdown: string,
+  links: InternalLink[],
+): { markdown: string; inserted: InternalLink[] } {
+  if (!markdown.trim() || links.length === 0) return { markdown, inserted: [] };
+
+  const tree = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .parse(markdown) as MarkdownNode;
+  const existingHrefs = new Set<string>();
+  collectExistingHrefs(tree, existingHrefs);
+  const inserted = links.filter((link) => !existingHrefs.has(link.href));
+  if (inserted.length === 0) return { markdown, inserted: [] };
+
+  const block = [
+    "## Related reading",
+    "",
+    ...inserted.map((link) => `- [${link.anchor}](${link.href})`),
+  ].join("\n");
+  const sourcesHeading = /^##\s+(?:Sources|References)\s*$/im.exec(markdown);
+  if (!sourcesHeading || sourcesHeading.index === undefined) {
+    return { markdown: `${markdown.trimEnd()}\n\n${block}\n`, inserted };
+  }
+  return {
+    markdown:
+      `${markdown.slice(0, sourcesHeading.index).trimEnd()}\n\n${block}\n\n` +
+      markdown.slice(sourcesHeading.index),
+    inserted,
   };
 }

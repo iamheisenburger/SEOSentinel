@@ -1,4 +1,12 @@
 import { PUBLICATION_AUDIT_VERSION } from "./publicationArtifact.ts";
+import {
+  articleReservesTopicIntent,
+  type TopicReservationArticle,
+} from "./topicLifecycle.ts";
+import {
+  AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD,
+  AUTOMATIC_PLAN_TOPIC_CAPACITY,
+} from "./planProviderBudget.ts";
 
 export const MIN_APPROVED_BUFFER = 2;
 export const TARGET_APPROVED_BUFFER = 3;
@@ -15,6 +23,111 @@ export const MAX_NEW_CANDIDATES_PER_24H =
   TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Bound paid topic recovery to the tenant's configured publishing pressure.
+ * A fixed two-plan allowance cannot sustain a tenant that publishes three
+ * times a day, while giving every tenant an arbitrary large allowance would
+ * hide a broken discovery loop and waste provider credits.
+ */
+export function topicReplenishmentBudget(cadencePerWeek: number): number {
+  const dailyDemand = Number.isFinite(cadencePerWeek) && cadencePerWeek > 0
+    ? Math.ceil(cadencePerWeek / 7)
+    : 1;
+  return Math.max(2, Math.min(8, dailyDemand + 2));
+}
+
+/**
+ * The same authority ceiling must be used before and after strategist
+ * selection. Otherwise low-volume keywords that can never pass the final gate
+ * consume scarce strategist/SERP slots and make a healthy inventory look
+ * exhausted.
+ */
+export function keywordDifficultyCeiling(
+  maximumDifficulty: number,
+  monthlySearchVolume: number,
+): number {
+  return monthlySearchVolume >= 1_000
+    ? maximumDifficulty + 10
+    : maximumDifficulty;
+}
+
+const DISCOVERY_SPLIT_PATTERN =
+  /[,;:.|/]+|\b(?:and|or|but|because|despite|without|before|after|while|which|that|leading to|resulting in|due to|powered by|grounded in|integrated with|connected to)\b/gi;
+const DISCOVERY_LEADING_NOISE = new Set([
+  "a", "an", "the", "low", "lower", "poor", "weak", "high", "higher",
+  "lack", "lacking", "inability", "unable", "difficulty", "difficult",
+  "need", "needs", "needed", "no",
+]);
+const DISCOVERY_GLUE_WORDS = new Set([
+  "a", "an", "the", "to", "of", "in", "on", "at", "as", "by", "from",
+  "with", "is", "are", "was", "were", "be", "being", "been", "has",
+  "have", "had", "can", "could", "would", "should",
+]);
+
+function normalizeDiscoveryPhrase(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9+ -]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Turn the tenant's own long-form profile fields into bounded search phrases.
+ * Profile inference often stores useful features and pain points as sentences;
+ * the old six-word seed filter silently discarded them. This extractor is
+ * deterministic and tenant-generic: it never invents a product or keyword and
+ * every returned phrase remains traceable to configured/crawled tenant data.
+ */
+export function tenantDiscoveryAnchors(
+  signals: Array<string | undefined>,
+  limit = 40,
+): string[] {
+  if (limit <= 0) return [];
+  const anchors: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: string) => {
+    let words = normalizeDiscoveryPhrase(candidate).split(" ").filter(Boolean);
+    while (words.length > 0 && DISCOVERY_LEADING_NOISE.has(words[0])) {
+      words = words.slice(1);
+    }
+    const phrase = words.join(" ");
+    if (words.length < 2 || words.length > 6 || seen.has(phrase)) return;
+    seen.add(phrase);
+    anchors.push(phrase);
+  };
+
+  for (const signal of signals) {
+    if (!signal || anchors.length >= limit) continue;
+    const normalized = normalizeDiscoveryPhrase(signal);
+    const fullWords = normalized.split(" ").filter(Boolean);
+    if (fullWords.length <= 6) add(normalized);
+
+    const clauses = signal.split(DISCOVERY_SPLIT_PATTERN);
+    for (const clause of clauses) {
+      const normalizedClause = normalizeDiscoveryPhrase(clause);
+      if (!normalizedClause) continue;
+      add(normalizedClause);
+
+      const meaningful = normalizedClause
+        .split(" ")
+        .filter((word) => !DISCOVERY_GLUE_WORDS.has(word));
+      while (
+        meaningful.length > 0 &&
+        DISCOVERY_LEADING_NOISE.has(meaningful[0])
+      ) {
+        meaningful.shift();
+      }
+      if (meaningful.length >= 2) {
+        add(meaningful.slice(0, 6).join(" "));
+        if (meaningful.length > 6) add(meaningful.slice(-6).join(" "));
+      }
+      if (anchors.length >= limit) break;
+    }
+  }
+  return anchors.slice(0, limit);
+}
+
 export function cadenceIntervalMs(cadencePerWeek: number): number {
   if (
     !Number.isFinite(cadencePerWeek) ||
@@ -26,10 +139,31 @@ export function cadenceIntervalMs(cadencePerWeek: number): number {
   return Math.floor(WEEK_MS / cadencePerWeek);
 }
 
-export function autopilotCandidateBudget(rolloutMode: string): number {
-  return ["warm", "live"].includes(rolloutMode)
-    ? MAX_NEW_CANDIDATES_PER_24H
-    : 1;
+/**
+ * How many candidates a tenant may generate in 24 hours.
+ *
+ * The flat allowance assumed a low cadence: three passing candidates plus two
+ * replacements. A tenant publishing three articles a day must then clear the
+ * strict gate on 60% of first attempts every single day, and a normal run of
+ * quarantines exhausts the budget and misses cadence with an empty buffer.
+ *
+ * Scaling replacements with the tenant's own daily cadence keeps the bound
+ * meaningful for slow tenants while giving fast ones enough attempts to
+ * survive ordinary rejection rates. This does not weaken any quality gate; it
+ * only stops a healthy tenant from running out of tries.
+ */
+export function autopilotCandidateBudget(
+  rolloutMode: string,
+  cadencePerWeek?: number,
+): number {
+  if (!["warm", "live"].includes(rolloutMode)) return 1;
+  const perDay =
+    Number.isFinite(cadencePerWeek) && (cadencePerWeek ?? 0) > 0
+      ? (cadencePerWeek as number) / 7
+      : 1;
+  // Allow two attempts per scheduled article, never fewer than the flat bound.
+  const scaled = Math.ceil(perDay * 2) + MAX_QUALITY_REPLACEMENTS_PER_24H;
+  return Math.max(MAX_NEW_CANDIDATES_PER_24H, scaled);
 }
 
 export function autopilotCandidateWindowStart(args: {
@@ -61,7 +195,7 @@ export type PublicationClockArticle = {
   auditedContentHash?: string;
 };
 
-export type TopicCoverageArticle = {
+export type TopicCoverageArticle = TopicReservationArticle & {
   topicId?: string;
   slug: string;
 };
@@ -83,17 +217,16 @@ export function coveredPrimaryKeywords(
   topics: TopicCoverageTopic[],
   articles: TopicCoverageArticle[],
 ): string[] {
+  const reservingArticles = articles.filter(articleReservesTopicIntent);
   const usedTopicIds = new Set(
-    articles
+    reservingArticles
       .map((article) => article.topicId)
       .filter((topicId): topicId is string => Boolean(topicId)),
   );
   const canonical = topics
-    .filter(
-      (topic) => topic.status === "used" || usedTopicIds.has(topic._id),
-    )
+    .filter((topic) => usedTopicIds.has(topic._id))
     .map((topic) => topic.primaryKeyword);
-  const legacy = articles
+  const legacy = reservingArticles
     .filter((article) => !article.topicId)
     .map((article) => article.slug.replace(/^\//, "").replace(/-/g, " "));
   return [...new Set([...canonical, ...legacy].filter(Boolean))];
@@ -110,20 +243,19 @@ export function coveredIntentTopics(
   topics: TopicCoverageTopic[],
   articles: TopicCoverageArticle[],
 ): SerpCoverageTopic[] {
+  const reservingArticles = articles.filter(articleReservesTopicIntent);
   const usedTopicIds = new Set(
-    articles
+    reservingArticles
       .map((article) => article.topicId)
       .filter((topicId): topicId is string => Boolean(topicId)),
   );
   const canonical = topics
-    .filter(
-      (topic) => topic.status === "used" || usedTopicIds.has(topic._id),
-    )
+    .filter((topic) => usedTopicIds.has(topic._id))
     .map((topic) => ({
       primaryKeyword: topic.primaryKeyword,
       serpTopUrls: topic.serpTopUrls,
     }));
-  const legacy = articles
+  const legacy = reservingArticles
     .filter((article) => !article.topicId)
     .map((article) => ({
       primaryKeyword: article.slug.replace(/^\//, "").replace(/-/g, " "),
@@ -232,13 +364,39 @@ export function autopilotHealthStatus(args: {
   if (args.lastOutcome && failClosedOutcomes.has(args.lastOutcome)) {
     return args.lastOutcome;
   }
-  if (args.lastOutcome === "publication_failed" || args.lastOutcome === "job_failed") {
-    return "publication_failed";
-  }
+  if (args.lastOutcome === "publication_failed") return "publication_failed";
+  if (args.lastOutcome === "job_failed") return "job_failed";
   if (args.lastOutcome === "quality_quarantined") return "quality_quarantined";
   if (args.bufferCount === 0) return "buffer_empty";
   if (args.bufferCount < MIN_APPROVED_BUFFER) return "buffer_low";
   return "healthy";
+}
+
+// A red run outcome is historical evidence, not permanent tenant state. A
+// newer strict, sealed buffer item proves recovery from content-generation,
+// topic-replenishment, or quality failures. Destination/publication failures
+// are deliberately not cleared by a buffered article because no external
+// receipt has succeeded yet.
+export function currentHealthOutcome(args: {
+  lastOutcome?: string;
+  lastOutcomeAt?: number;
+  latestSealedAt?: number;
+}): string | undefined {
+  if (!args.lastOutcome) return undefined;
+  const contentFailures = new Set([
+    "job_failed",
+    "job_lease_exhausted",
+    "quality_quarantined",
+    "quality_budget_exhausted",
+    "topic_replenishment_exhausted",
+  ]);
+  if (
+    contentFailures.has(args.lastOutcome) &&
+    (args.latestSealedAt ?? 0) > (args.lastOutcomeAt ?? Number.POSITIVE_INFINITY)
+  ) {
+    return undefined;
+  }
+  return args.lastOutcome;
 }
 
 function keywordTokens(value: string): string[] {
@@ -724,20 +882,32 @@ function relevanceRoot(word: string): string {
   let normalized = word
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
-  const suffixes = [
-    "izations", "ization", "ations", "ation", "itions", "ition", "ments",
-    "ment", "ness", "ingly", "ing", "edly", "ies", "ers", "ed", "er", "s",
+  const suffixes: Array<[string, string]> = [
+    ["izations", "ize"], ["ization", "ize"],
+    ["cations", ""], ["cation", ""],
+    ["tions", "t"], ["tion", "t"],
+    ["sions", "s"], ["sion", "s"],
+    ["ments", ""], ["ment", ""], ["ness", ""],
+    ["ingly", ""], ["ing", ""], ["edly", ""], ["ies", "y"],
+    ["ers", ""], ["ed", ""], ["er", ""], ["s", ""],
   ];
-  for (const suffix of suffixes) {
+  for (const [suffix, replacement] of suffixes) {
     if (
       normalized.endsWith(suffix) &&
       normalized.length - suffix.length >= 4
     ) {
-      normalized = normalized.slice(0, -suffix.length);
+      normalized = `${normalized.slice(0, -suffix.length)}${replacement}`;
       break;
     }
   }
-  return normalized.length >= 5 ? normalized.slice(0, 5) : normalized;
+  if (normalized.endsWith("e") && normalized.length > 5) {
+    normalized = normalized.slice(0, -1);
+  }
+  // Five-character truncation made unrelated words collide (for example,
+  // "consultation" and "consuming" both became "consu"). Seven characters
+  // still joins common inflections such as qualified/qualification after the
+  // suffix pass, without turning a coincidental prefix into product evidence.
+  return normalized.length >= 7 ? normalized.slice(0, 7) : normalized;
 }
 
 const RELEVANCE_STOP_WORDS = new Set([
@@ -854,9 +1024,14 @@ export function keywordMatchesBusinessSignals(
   return businessSignalMatch(keyword, businessSignals).eligible;
 }
 
-const PROFESSIONAL_SERVICE_TERM = /\b(?:consulting|consultant|agency|firm)\b/i;
+const PROFESSIONAL_SERVICE_TERM =
+  /\b(?:consulting|consultant|agency|firm|professional services?|service provider)\b/i;
 const PROFESSIONAL_SERVICE_QUERY =
-  /(?:\b(?:hire|hiring|find|choose|best|top)\b.*\b(?:consultant|agency|firm|expert)\b|\b(?:consulting|consultant|agency|firm)\b\s*$|\b(?:consulting|consultant|agency|firm)\b.*\b(?:career|careers|course|courses|definition|job|jobs|meaning|role|roles|salary|training|what)\b)/i;
+  /(?:\b(?:hire|hiring|find|choose|best|top)\b.*\b(?:consultant|agency|firm|expert|professional services?|service provider)\b|\b(?:consulting|consultant|agency|firm|professional services?|service provider)\b\s*$|\b(?:consulting|consultant|agency|firm|professional services?|service provider)\b.*\b(?:career|careers|course|courses|definition|job|jobs|meaning|role|roles|salary|training|what)\b|\b(?:conversion rate optimization|lead generation|marketing|seo|search engine optimization|web design|software development)\s+services\b)/i;
+const EDUCATION_PROVIDER_TERM =
+  /\b(?:academy|college|course provider|education provider|school|training provider|university)\b/i;
+const EDUCATION_QUERY =
+  /\b(?:career|careers|certificate|certification|course|courses|degree|degrees|job|jobs|salary|salaries)\b|\btraining\s+(?:academy|course|courses|program|programs|provider)\b/i;
 
 /**
  * A SaaS may serve consultants without being a consultancy. Keep product
@@ -868,11 +1043,23 @@ export function keywordMatchesBusinessModel(
   keyword: string,
   siteSignals: string[],
 ): boolean {
-  if (!PROFESSIONAL_SERVICE_QUERY.test(keyword.trim())) return true;
-  return siteSignals.some((signal) => PROFESSIONAL_SERVICE_TERM.test(signal));
+  const normalized = keyword.trim();
+  if (
+    PROFESSIONAL_SERVICE_QUERY.test(normalized) &&
+    !siteSignals.some((signal) => PROFESSIONAL_SERVICE_TERM.test(signal))
+  ) {
+    return false;
+  }
+  if (
+    EDUCATION_QUERY.test(normalized) &&
+    !siteSignals.some((signal) => EDUCATION_PROVIDER_TERM.test(signal))
+  ) {
+    return false;
+  }
+  return true;
 }
 
-export const TOPIC_BUSINESS_FIT_VERSION = 2;
+export const TOPIC_BUSINESS_FIT_VERSION = 5;
 
 export type TopicBusinessFitEvaluation = {
   eligible: boolean;
@@ -881,14 +1068,103 @@ export type TopicBusinessFitEvaluation = {
   version: number;
 };
 
+export type TenantTopicSignalSource = {
+  niche?: string | null;
+  blogTheme?: string | null;
+  siteSummary?: string | null;
+  targetAudienceSummary?: string | null;
+  productUsage?: string | null;
+  siteType?: string | null;
+  anchorKeywords?: string[] | null;
+  keyFeatures?: string[] | null;
+  painPoints?: string[] | null;
+};
+
+/**
+ * One canonical projection of a tenant profile into the deterministic topic
+ * fit gate. Discovery, scheduling, generation and final review must all use
+ * this projection; otherwise a topic can be accepted by one stage and
+ * rejected by the next forever.
+ */
+export function tenantTopicBusinessSignals(site: TenantTopicSignalSource): {
+  coreBusinessSignals: string[];
+  productAnchorSignals: string[];
+  businessModelSignals: string[];
+} {
+  const present = (value: string | null | undefined): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  return {
+    coreBusinessSignals: [
+      site.niche,
+      site.blogTheme,
+      site.siteSummary,
+      site.targetAudienceSummary,
+      site.productUsage,
+      ...(site.anchorKeywords ?? []),
+      ...(site.keyFeatures ?? []),
+      ...(site.painPoints ?? []),
+    ].filter(present),
+    productAnchorSignals: [
+      // Only explicit product phrases and capabilities may authorize a
+      // target. Broad editorial themes and customer pain prose still inform
+      // core relevance, but cannot turn adjacent intent into product intent.
+      ...(site.anchorKeywords ?? []),
+      ...(site.keyFeatures ?? []),
+    ].filter(present),
+    businessModelSignals: [
+      site.siteType,
+      site.niche,
+      site.siteSummary,
+    ].filter(present),
+  };
+}
+
+const TERMINAL_TOPIC_FIT_ISSUE_MARKERS = [
+  "does not align with both the configured business and the final article title",
+  "failed the current tenant product-fit gate",
+] as const;
+
+/** Product-fit rejection changes the target, not the prose. Re-running a
+ * quality revision cannot make that measured search intent relevant, so the
+ * scheduler must quarantine it and move on to a different topic. */
+export function hasTerminalTopicFitFailure(
+  issues: string[] | null | undefined,
+): boolean {
+  return (issues ?? []).some((issue) =>
+    TERMINAL_TOPIC_FIT_ISSUE_MARKERS.some((marker) => issue.includes(marker))
+  );
+}
+
 export function evaluateTopicBusinessFit(args: {
   keyword: string;
   label?: string;
   coreBusinessSignals: string[];
+  /**
+   * Concise phrases that describe what the tenant actually sells or solves.
+   * These are deliberately separate from broad crawl prose: a single word in
+   * a long site summary must not authorize a detached search intent.
+   */
+  productAnchorSignals?: string[];
   businessModelSignals: string[];
   growthSeed?: string;
 }): TopicBusinessFitEvaluation {
   const core = businessSignalMatch(args.keyword, args.coreBusinessSignals);
+  const keywordWords = relevanceTokens(args.keyword);
+  const keywordRoots = new Set(keywordWords.map(relevanceRoot));
+  const anchorWords = (args.productAnchorSignals ?? []).flatMap(relevanceTokens);
+  const anchorRoots = new Set(anchorWords.map(relevanceRoot));
+  const sharedAnchorRoots = [...keywordRoots].filter((root) =>
+    anchorRoots.has(root)
+  );
+  const matchedDistinctiveAnchorRoots = core.matchedDistinctiveRoots.filter(
+    (root) => anchorRoots.has(root),
+  );
+  const anchorAligned = anchorWords.length === 0 || (
+    matchedDistinctiveAnchorRoots.length >= 1 && sharedAnchorRoots.length >= 2
+  ) || (
+    distinctiveRelevanceRoots(keywordWords).size === 0 &&
+    genericOfferingAlignment(keywordWords, anchorWords)
+  );
   const modelAligned = keywordMatchesBusinessModel(
     args.keyword,
     args.businessModelSignals,
@@ -912,11 +1188,16 @@ export function evaluateTopicBusinessFit(args: {
         : "keyword lacks a product-specific tenant signal",
     );
   }
+  if (!anchorAligned) {
+    reasons.push("keyword is not anchored to a specific tenant product or buyer problem");
+  }
   if (!modelAligned) reasons.push("search intent targets a different business model");
   if (!titleAligned) reasons.push("article title does not preserve the measured keyword intent");
   if (!growthAligned) reasons.push("support topic is not adjacent to its measured parent query");
   return {
-    eligible: core.eligible && modelAligned && titleAligned && growthAligned,
+    eligible:
+      core.eligible && anchorAligned && modelAligned && titleAligned &&
+      growthAligned,
     score: core.score,
     reasons,
     version: TOPIC_BUSINESS_FIT_VERSION,
@@ -943,6 +1224,35 @@ export function pendingJobPriority(payload: unknown): number {
   if (record?.manual === true) return 2;
   if (record?.qualityRetry === true || record?.bufferFill === true) return 1;
   return 0;
+}
+
+export function isUnderfilledPlanContinuationPayload(
+  payload: unknown,
+): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const record = payload as Record<string, unknown>;
+  const marker = record.underfilledPlanContinuation;
+  if (!marker || typeof marker !== "object") return false;
+  const receipt = marker as Record<string, unknown>;
+  return Boolean(
+    receipt.version === 1 &&
+      Number.isInteger(receipt.firstExecutionCount) &&
+      (receipt.firstExecutionCount as number) > 0 &&
+      (receipt.firstExecutionCount as number) <
+        AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD &&
+      Number.isInteger(receipt.remainingTopicCapacity) &&
+      receipt.remainingTopicCapacity ===
+        AUTOMATIC_PLAN_TOPIC_CAPACITY -
+          (receipt.firstExecutionCount as number) &&
+      Number.isFinite(receipt.queuedAt) &&
+      record.manual !== true &&
+      typeof record.reason === "string" &&
+      record.reason.startsWith("topic_") &&
+      record.growthParentArticleId === undefined &&
+      record.growthSeed === undefined &&
+      record.growthActionFingerprint === undefined &&
+      record.expectedClickPlanMigrationVersion === undefined,
+  );
 }
 
 /** A pending topic-plan must not strand an already-created article that needs

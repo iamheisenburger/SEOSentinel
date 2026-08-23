@@ -25,6 +25,10 @@ type SiteConnectionFlags = {
   mediumConnected: boolean;
   linkedinConnected: boolean;
   publicationAdapterVerified: boolean;
+  planAccessStatus: "active" | "parked";
+  planAccessReason?: string;
+  domainAccessStatus: "active" | "blocked";
+  domainAccessReason?: string;
 };
 
 export function sanitizeSiteForClient<T extends SiteRecord>(
@@ -57,5 +61,15 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
     publicationAdapterVerified: Boolean(
       site.publicationAdapterVerifiedAt && site.publicationAdapterVersion,
     ),
+    planAccessStatus: site.planParkedAt ? "parked" : "active",
+    planAccessReason: site.planParkedAt
+      ? "This site is parked because it is outside your current plan's site allowance. Its data and integrations are preserved. Upgrade or remove an active site to reactivate the next eligible site."
+      : undefined,
+    domainAccessStatus: site.domainOwnershipConflictAt
+      ? "blocked"
+      : "active",
+    domainAccessReason: site.domainOwnershipConflictAt
+      ? "This hostname is connected to more than one tenant record. Automation is paused to protect tenant isolation; contact support to resolve ownership."
+      : undefined,
   };
 }

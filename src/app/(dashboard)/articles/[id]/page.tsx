@@ -322,15 +322,12 @@ export default function ArticleDetailPage() {
     api.searchPerformance.getArticleSeoScorecard,
     article?.status === "published" ? { articleId } : "skip",
   );
-  const suggestLinks = useAction(api.actions.pipeline.suggestInternalLinks);
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
-  const refreshArticleAction = useAction(api.actions.contentDecay.refreshArticle);
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);
   const deleteArticle = useMutation(api.articles.deleteArticle);
   const [linkStatus, setLinkStatus] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
   const [schemaOpen, setSchemaOpen] = useState(false);
 
@@ -380,19 +377,6 @@ export default function ArticleDetailPage() {
   const faqCount = faqSchema ? (faqSchema.mainEntity as unknown[] | undefined)?.length ?? 0 : 0;
   const hasHowTo = schemas.some((s) => s["@type"] === "HowTo");
 
-  const handleLinks = async () => {
-    if (!site?._id) return;
-    setLinkStatus("Generating internal links...");
-    try {
-      await suggestLinks({ siteId: site._id, articleId });
-      setLinkStatus("Internal links generated.");
-    } catch (err: unknown) {
-      setLinkStatus(
-        err instanceof Error ? err.message : "Failed to suggest links",
-      );
-    }
-  };
-
   const handleApprove = async () => {
     setActionBusy(true);
     try {
@@ -434,8 +418,12 @@ export default function ArticleDetailPage() {
     setActionBusy(true);
     setLinkStatus("Publishing...");
     try {
-      await publishApproved({ siteId: site._id, articleId });
-      setLinkStatus("Article published successfully.");
+      const result = await publishApproved({ siteId: site._id, articleId });
+      setLinkStatus(
+        result.published
+          ? "Article published successfully."
+          : "Quality review queued. Pentra will make this draft publish-safe before delivery.",
+      );
     } catch (err: unknown) {
       setLinkStatus(err instanceof Error ? err.message : "Publish failed");
     } finally {
@@ -549,15 +537,6 @@ export default function ArticleDetailPage() {
                 icon={<Download className="h-3.5 w-3.5" />}
               >
                 Download
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleLinks}
-                disabled={!site}
-                icon={<Link2 className="h-3.5 w-3.5" />}
-              >
-                Internal Links
               </Button>
               {article.status !== "published" && (
                 <Button
@@ -675,10 +654,14 @@ export default function ArticleDetailPage() {
 
       {/* Fixed-window SEO Outcome Scorecard */}
       {article?.status === "published" && articleSeoScorecard && (() => {
-        const measuredWindow = [...articleSeoScorecard.windows]
-          .reverse()
-          .find((window) => window.impressions > 0);
-        const topKeywords = measuredWindow?.topQueries.slice(0, 5) ?? [];
+        const windowsNewestFirst = [...articleSeoScorecard.windows].reverse();
+        const evidenceWindow = windowsNewestFirst
+          .find((window) => window.complete && window.impressions > 0)
+          ?? windowsNewestFirst.find((window) => window.impressions > 0)
+          ?? windowsNewestFirst.find((window) => window.complete);
+        const queryWindow = windowsNewestFirst
+          .find((window) => window.topQueries.length > 0);
+        const topKeywords = queryWindow?.topQueries.slice(0, 5) ?? [];
         return (
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-4">
@@ -691,7 +674,7 @@ export default function ArticleDetailPage() {
               </p>
             </div>
             <p className="text-[11px] text-[#565A6E] mb-4">
-              Each article is measured at equal 7, 14, 28, and 56-day exposure windows. Non-brand visibility is separated from searches for LeadPilot itself.
+              Page totals are authoritative. Known non-brand metrics come only from visible query rows; hidden or anonymized query impressions remain unattributed and never drive autonomous ranking actions.
             </p>
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
@@ -748,28 +731,43 @@ export default function ArticleDetailPage() {
                   <p className="text-[10px] text-[#565A6E] mb-2">Due {window.expectedEndDate}</p>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Non-brand imp.</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Total page imp.</p>
+                      <p className="text-base font-bold text-[#EDEEF1]">{window.impressions.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Known non-brand imp.</p>
                       <p className="text-base font-bold text-[#EDEEF1]">{window.nonBrandedImpressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Queries</p>
-                      <p className="text-base font-bold text-[#EDEEF1]">{window.queryCount}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Hidden-query imp.</p>
+                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.unattributedImpressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Clicks</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Total clicks</p>
                       <p className="text-sm font-semibold text-[#EDEEF1]">{window.clicks}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Avg position</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Total avg position</p>
                       <p className="text-sm font-semibold text-[#EDEEF1]">{window.position ?? "—"}</p>
                     </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Known non-brand pos.</p>
+                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.nonBrandedPosition ?? "—"}</p>
+                    </div>
                   </div>
+                  <p className={`mt-3 border-t border-white/[0.04] pt-2 text-[9px] ${
+                    window.queryCoverageComplete ? "text-[#4ADE80]" : "text-[#FBBF24]"
+                  }`}>
+                    {window.queryCoverageComplete
+                      ? `Query detail complete · ${window.queryCount} known queries`
+                      : `Query detail partial · ${window.unattributedImpressions.toLocaleString()} impressions hidden or anonymized`}
+                  </p>
                 </div>
               ))}
             </div>
             {topKeywords.length > 0 && (
               <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Top measured queries</p>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Known query detail</p>
                 <div className="flex flex-col gap-1">
                   {topKeywords.map((q, i) => (
                     <div key={i} className="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-1.5">
@@ -788,7 +786,9 @@ export default function ArticleDetailPage() {
             )}
             {topKeywords.length === 0 && (
               <p className="rounded-lg bg-white/[0.02] px-3 py-2 text-[11px] text-[#565A6E]">
-                No article-level Search Console impressions have been recorded yet. This is expected before the first checkpoint and will become a failure signal only when a completed window still has no visibility.
+                {evidenceWindow && evidenceWindow.impressions > 0
+                  ? `Google reports ${evidenceWindow.impressions.toLocaleString()} total page impressions${evidenceWindow.position !== null ? ` at an overall average position of ${evidenceWindow.position}` : ""}. ${evidenceWindow.unattributedImpressions.toLocaleString()} impressions have no visible query attribution, so Pentra cannot label them branded or non-branded and will not use the overall position for an autonomous ranking action.`
+                  : "No page-level Search Console impressions have been recorded in the most mature available window. Pentra will only treat this as no visibility after the window and its daily page totals are complete."}
               </p>
             )}
           </div>
@@ -823,25 +823,11 @@ export default function ArticleDetailPage() {
                 </div>
               )}
             </div>
-            <button
-              onClick={async () => {
-                setRefreshing(true);
-                setLinkStatus("Refreshing article with latest research...");
-                try {
-                  await refreshArticleAction({ articleId });
-                  setLinkStatus("Article refreshed successfully with updated content.");
-                } catch (err: unknown) {
-                  setLinkStatus(err instanceof Error ? err.message : "Refresh failed");
-                } finally {
-                  setRefreshing(false);
-                }
-              }}
-              disabled={refreshing || (article as any).decayStatus === "refreshing"}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-3 py-2 text-[12px] font-medium text-white transition hover:bg-[#38BDF8] disabled:opacity-50 shrink-0"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-              {refreshing ? "Refreshing..." : "Refresh Article"}
-            </button>
+            <div className="max-w-[240px] rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-[#8B8FA3]">
+              {article.status === "published"
+                ? "Published content is protected. Pentra records the recovery action, but will not overwrite the live page without a newly audited revision."
+                : "Direct model refresh is disabled. Edit the draft, then use the audited review and publication workflow so quota, evidence, and delivery gates remain intact."}
+            </div>
           </div>
         </div>
       )}

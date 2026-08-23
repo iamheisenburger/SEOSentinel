@@ -1,38 +1,56 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth, clerkClient } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
-import { ALL_FEATURE_KEYS } from "../../../../../convex/planLimits";
+import {
+  canonicalPlanSummary,
+  type ClerkBillingSubscriptionLike,
+  resolvePlanEntitlement,
+} from "@/lib/clerk-billing-reconciliation";
 import { callPentraInternal } from "@/lib/pentra-internal-api";
 
 export async function POST() {
-  const { userId, has } = await auth();
+  const { userId } = await auth();
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
   }
 
-  const planFeatures = ALL_FEATURE_KEYS.filter((feature) => {
-    try {
-      return has({ feature } as Parameters<typeof has>[0]);
-    } catch {
-      return false;
+  try {
+    const client = await clerkClient();
+    const [subscription, user] = await Promise.all([
+      client.billing.getUserBillingSubscription(userId),
+      client.users.getUser(userId),
+    ]);
+    const resolution = resolvePlanEntitlement({
+      subscription: subscription as ClerkBillingSubscriptionLike,
+      metadata: {
+        privateMetadata: user.privateMetadata,
+        publicMetadata: user.publicMetadata,
+      },
+    });
+    if (!resolution.ok) {
+      return NextResponse.json(
+        { error: "Plan reconciliation blocked" },
+        { status: 503, headers: { "Cache-Control": "no-store" } },
+      );
     }
-  });
-
-  const user = await currentUser();
-  const metadataFeatures = Array.isArray(user?.publicMetadata?.features)
-    ? user.publicMetadata.features.filter(
-        (feature): feature is string =>
-          typeof feature === "string" && ALL_FEATURE_KEYS.includes(feature),
-      )
-    : [];
-
-  for (const feature of metadataFeatures) {
-    if (!planFeatures.includes(feature)) planFeatures.push(feature);
+    const authoritative = resolution.entitlement;
+    await callPentraInternal("/internal/plan/features", {
+      userId,
+      planFeatures: authoritative.planFeatures,
+    });
+    return NextResponse.json(
+      { ok: true, ...canonicalPlanSummary(authoritative) },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch {
+    // Preserve the last verified entitlement during a transient Clerk/Convex
+    // failure. The authenticated client retries instead of forcing a downgrade.
+    return NextResponse.json(
+      { error: "Billing reconciliation unavailable" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
   }
-
-  await callPentraInternal("/internal/plan/features", {
-    userId,
-    planFeatures,
-  });
-  return NextResponse.json({ ok: true });
 }

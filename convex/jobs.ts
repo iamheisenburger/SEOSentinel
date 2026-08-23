@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
+import { MAX_QUALITY_REVISIONS } from "./lib/autopilotCadence";
 import {
   MAX_PUBLICATION_ATTEMPTS,
   nextPublicationRetry,
@@ -13,16 +14,61 @@ import {
   autonomousRolloutActive,
   jobAuthorizedForExecution,
 } from "./lib/jobRollout";
+import {
+  reconcileJobTopicLifecycle,
+  reconcileTopicLifecycle,
+} from "./lib/topicLifecycleDb";
+import {
+  AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES,
+  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
+  UNDERFILLED_PLAN_CONTINUATION_RECOVERY_VERSION,
+  countsTowardTopicPlanRecentLimit,
+  evaluateAutomaticPlanContinuation,
+  planRetryUsesCurrentReservationDay,
+} from "./lib/planProviderBudget";
+import { reservePlanProviderBudget } from "./lib/planProviderReservation";
+import {
+  EXPECTED_CLICK_PLAN_MIGRATION_RECOVERY_VERSION,
+  isExpectedClickZeroInsertTerminalError,
+} from "./lib/expectedClickMigrationRecovery";
+import {
+  releaseSharedProviderReservation,
+  type ProviderReservationReleaseReason,
+} from "./lib/providerSpendReservation";
+import {
+  siteExecutionActive,
+  siteExecutionAuthorized,
+} from "./lib/planSiteAllowance";
+import {
+  ARTICLE_PROVIDER_ACCOUNT_CONCURRENCY,
+  ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
+  ARTICLE_PROVIDER_FLEET_CONCURRENCY,
+  articleGenerationAttemptAllowance,
+  articleGenerationAttemptKey,
+  articleGenerationAttemptMonth,
+  decideArticleProviderAdmission,
+  type ArticleProviderAttemptStatus,
+} from "./lib/articleGenerationAttempt";
+import {
+  evaluateTopicBusinessFit,
+  isUnderfilledPlanContinuationPayload,
+  tenantTopicBusinessSignals,
+} from "./lib/autopilotBuffer";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
 const MAX_JOB_ATTEMPTS = 3;
+const AUTOMATIC_PLAN_CONTINUATION_DELAY_MS = 1_000;
 
 function activeRollout(site: Doc<"sites"> | null): boolean {
   return autonomousRolloutActive(site);
 }
 
 function rolloutFields(site: Doc<"sites">, manual = false) {
+  if (site.deletionStatus || site.planParkedAt) {
+    throw new Error("This site is not active under the current plan");
+  }
   if (!manual && !activeRollout(site)) {
     throw new Error(
       "Automation is in fail-closed observe mode for this site",
@@ -31,8 +77,134 @@ function rolloutFields(site: Doc<"sites">, manual = false) {
   return { rolloutEpoch: site.autopilotRolloutEpoch ?? 0 };
 }
 
+async function currentSitePlanAllowance(
+  ctx: MutationCtx,
+  site: Doc<"sites"> | null,
+): Promise<
+  | { ok: true; limits: ReturnType<typeof getLimitsFromFeatures> }
+  | { ok: false; reason: string }
+> {
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !(await siteExecutionAuthorized(ctx, site))
+  ) {
+    return {
+      ok: false,
+      reason: "This site is not active under the current plan",
+    };
+  }
+  const entitlement = await ctx.db
+    .query("account_plan_entitlements")
+    .withIndex("by_user", (q) => q.eq("userId", site.userId!))
+    .unique();
+  const limits = getLimitsFromFeatures(
+    entitlement?.planFeatures ?? site.planFeatures ?? [],
+  );
+  if (limits.maxSites >= 9999) return { ok: true, limits };
+  const activeSites = await ctx.db
+    .query("sites")
+    .withIndex("by_user", (q) => q.eq("userId", site.userId!))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("deletionStatus"), undefined),
+        q.eq(q.field("planParkedAt"), undefined),
+      )
+    )
+    .take(limits.maxSites + 1);
+  if (
+    activeSites.length > limits.maxSites ||
+    !activeSites.some((activeSite) => activeSite._id === site._id)
+  ) {
+    return {
+      ok: false,
+      reason: "This site is outside the current plan allowance",
+    };
+  }
+  return { ok: true, limits };
+}
+
+async function accountHasArticleHeadroom(
+  ctx: MutationCtx,
+  userId: string,
+  maximumArticles: number,
+  timestamp: number,
+): Promise<boolean> {
+  const date = new Date(timestamp);
+  const monthStart = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    1,
+  );
+  const logs = await ctx.db
+    .query("usage_log")
+    .withIndex("by_user_type_created", (q) =>
+      q
+        .eq("userId", userId)
+        .eq("type", "article_generated")
+        .gte("createdAt", monthStart)
+    )
+    .collect();
+  const activeUsage = logs.filter(
+    (log) =>
+      log.state !== "reserved" ||
+      (log.expiresAt ?? Infinity) > timestamp,
+  ).length;
+  return activeUsage < maximumArticles;
+}
+
 function ownsJob(job: Doc<"jobs">, workerToken: string): boolean {
   return job.status === "running" && job.workerToken === workerToken;
+}
+
+async function articleProviderAttemptForJob(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+) {
+  return await ctx.db
+    .query("article_generation_attempts")
+    .withIndex("by_attempt_key", (q) =>
+      q.eq(
+        "attemptKey",
+        articleGenerationAttemptKey(
+          String(job._id),
+          job.workerAttempts ?? 0,
+        ),
+      )
+    )
+    .unique();
+}
+
+async function renewArticleProviderAttempt(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+  currentTime: number,
+) {
+  const attempt = await articleProviderAttemptForJob(ctx, job);
+  if (attempt?.status !== "reserved") return false;
+  await ctx.db.patch(attempt._id, {
+    expiresAt: currentTime + ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
+    updatedAt: currentTime,
+  });
+  return true;
+}
+
+async function settleArticleProviderAttempt(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+  status: Exclude<ArticleProviderAttemptStatus, "reserved">,
+  currentTime: number,
+) {
+  const attempt = await articleProviderAttemptForJob(ctx, job);
+  if (attempt?.status !== "reserved") return false;
+  await ctx.db.patch(attempt._id, {
+    status,
+    expiresAt: undefined,
+    settledAt: currentTime,
+    articleKey: job.articleId ? String(job.articleId) : undefined,
+    updatedAt: currentTime,
+  });
+  return true;
 }
 
 async function releaseReservedUsage(
@@ -246,6 +418,10 @@ export const resetStuckJobs = internalMutation({
         : job.updatedAt <= legacyStaleAt;
       if (!expired) continue;
 
+      // A crashed lease is an ambiguous paid execution. Keep its immutable
+      // attempt receipt before the quota reservation is released or the job
+      // ordinal advances; the retry must acquire a fresh bounded receipt.
+      await settleArticleProviderAttempt(ctx, job, "ambiguous", currentTime);
       const attempts = (job.workerAttempts ?? 0) + 1;
       if (await releaseReservedUsage(ctx, job)) reservationsReleased += 1;
       const ownershipReset = {
@@ -255,6 +431,40 @@ export const resetStuckJobs = internalMutation({
         reservationId: job.articleId ? job.reservationId : undefined,
         updatedAt: currentTime,
       };
+      if (job.type === "plan") {
+        await ctx.db.patch(job._id, {
+          ...ownershipReset,
+          status: "failed",
+          nextAttemptAt: undefined,
+          workerAttempts: attempts,
+          error:
+            "Plan worker lease expired after provider work may have started; paid state is ambiguous and automatic replay is forbidden.",
+        });
+        terminal += 1;
+        if (job.siteId) {
+          await raiseJobAlert(
+            ctx,
+            job.siteId,
+            "plan_spend_ambiguous",
+            "A topic plan lost its worker lease after paid work may have started; it was stopped without replay.",
+            { jobId: job._id, attempts },
+          );
+          if (isUnderfilledPlanContinuationPayload(job.payload)) {
+            await ctx.scheduler.runAfter(
+              0,
+              internal.autopilot.dispatchSiteFollowup,
+              {
+                siteId: job.siteId,
+                trigger: "underfilled_plan_settled",
+                reason:
+                  "Continuation lease became ambiguous; using only the verified first-execution inventory.",
+              },
+            );
+          }
+        }
+        await reconcileJobTopicLifecycle(ctx, job);
+        continue;
+      }
       if (attempts <= MAX_JOB_ATTEMPTS) {
         await ctx.db.patch(job._id, {
           ...ownershipReset,
@@ -283,6 +493,7 @@ export const resetStuckJobs = internalMutation({
           );
         }
       }
+      await reconcileJobTopicLifecycle(ctx, job);
     }
 
     return { reset, terminal, reservationsReleased };
@@ -310,8 +521,43 @@ export const recoverParentTimeoutJob = internalMutation({
     if (currentTime - expectedHeartbeatAt < 5 * 60 * 1000) {
       return { recovered: false, reason: "heartbeat_too_fresh" as const };
     }
+    await settleArticleProviderAttempt(ctx, job, "ambiguous", currentTime);
     await releaseReservedUsage(ctx, job);
     const attempts = (job.workerAttempts ?? 0) + 1;
+    if (job.type === "plan") {
+      await ctx.db.patch(jobId, {
+        status: "failed",
+        workerAttempts: attempts,
+        error:
+          "Plan parent timed out after provider work may have started; paid state is ambiguous and automatic replay is forbidden.",
+        nextAttemptAt: undefined,
+        workerToken: undefined,
+        heartbeatAt: undefined,
+        leaseExpiresAt: undefined,
+        updatedAt: currentTime,
+      });
+      await reconcileJobTopicLifecycle(ctx, job);
+      if (
+        job.siteId &&
+        isUnderfilledPlanContinuationPayload(job.payload)
+      ) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.autopilot.dispatchSiteFollowup,
+          {
+            siteId: job.siteId,
+            trigger: "underfilled_plan_settled",
+            reason:
+              "Continuation parent timed out ambiguously; using only the verified first-execution inventory.",
+          },
+        );
+      }
+      return {
+        recovered: false,
+        reason: "plan_spend_ambiguous" as const,
+        attempts,
+      };
+    }
     await ctx.db.patch(jobId, {
       status: "pending",
       workerAttempts: attempts,
@@ -332,12 +578,20 @@ export const cleanupExpiredGenerationReservations = internalMutation({
   args: {},
   handler: async (ctx) => {
     const currentTime = now();
-    const expired = await ctx.db
+    const [expired, expiredProviderAttempts] = await Promise.all([
+      ctx.db
       .query("usage_log")
       .withIndex("by_state_expires", (q) =>
         q.eq("state", "reserved").lt("expiresAt", currentTime),
       )
-      .take(50);
+      .take(50),
+      ctx.db
+        .query("article_generation_attempts")
+        .withIndex("by_status_expires", (q) =>
+          q.eq("status", "reserved").lt("expiresAt", currentTime)
+        )
+        .take(50),
+    ]);
     let deleted = 0;
     for (const reservation of expired) {
       const job = reservation.jobId ? await ctx.db.get(reservation.jobId) : null;
@@ -369,7 +623,41 @@ export const cleanupExpiredGenerationReservations = internalMutation({
         deleted += 1;
       }
     }
-    return { inspected: expired.length, deleted };
+    let providerAttemptsSettled = 0;
+    for (const attempt of expiredProviderAttempts) {
+      const jobId = ctx.db.normalizeId("jobs", attempt.jobKey);
+      const job = jobId ? await ctx.db.get(jobId) : null;
+      const stillOwned = Boolean(
+        job &&
+        job.status === "running" &&
+        (job.leaseExpiresAt ?? 0) > currentTime &&
+        articleGenerationAttemptKey(
+          String(job._id),
+          job.workerAttempts ?? 0,
+        ) === attempt.attemptKey,
+      );
+      if (stillOwned && job) {
+        await ctx.db.patch(attempt._id, {
+          expiresAt: currentTime + ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
+          updatedAt: currentTime,
+        });
+        continue;
+      }
+      await ctx.db.patch(attempt._id, {
+        status: "ambiguous",
+        expiresAt: undefined,
+        settledAt: currentTime,
+        articleKey: job?.articleId ? String(job.articleId) : undefined,
+        updatedAt: currentTime,
+      });
+      providerAttemptsSettled += 1;
+    }
+    return {
+      inspected: expired.length,
+      deleted,
+      providerAttemptsInspected: expiredProviderAttempts.length,
+      providerAttemptsSettled,
+    };
   },
 });
 
@@ -547,6 +835,15 @@ export const queueQualityRetryIfAbsent = internalMutation({
     if (!article || article.siteId !== siteId || article.status === "published") {
       throw new Error("Article is not eligible for quality recovery");
     }
+    if (
+      article.auditedContentHash &&
+      article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION
+    ) {
+      return { queued: false, reason: "already_audited" as const };
+    }
+    if ((article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS) {
+      return { queued: false, reason: "revision_limit" as const };
+    }
     const active = await activeJobsForSite(ctx, siteId);
     const duplicate = active.find((job) => {
       const payload = job.payload && typeof job.payload === "object"
@@ -596,6 +893,12 @@ export const queueQualityRetryIfAbsent = internalMutation({
       createdAt: timestamp,
       updatedAt: timestamp,
     });
+    if (article.topicId) {
+      await reconcileTopicLifecycle(ctx, {
+        siteId,
+        topicId: article.topicId,
+      });
+    }
     return { queued: true, jobId };
   },
 });
@@ -614,7 +917,7 @@ export const queuePlanIfAbsent = internalMutation({
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
-    if (!site) throw new Error("Site not found");
+    if (!siteExecutionActive(site)) throw new Error("Site not found");
     const normalizedGrowthSeed = args.growthSeed?.trim();
     if (args.growthParentArticleId) {
       const parent = await ctx.db.get(args.growthParentArticleId);
@@ -657,6 +960,24 @@ export const queuePlanIfAbsent = internalMutation({
     const duplicate = active.find((job) => job.type === "plan");
     if (duplicate) return { queued: false, jobId: duplicate._id, reason: "active" as const };
 
+    const timestamp = now();
+    const automaticPlan = args.manual !== true;
+    let providerCostCeilingMicroUsd: number | undefined;
+    let providerCostReservedMicroUsd: number | undefined;
+    let providerCostReservationDay: string | undefined;
+    let providerSpendReservationId:
+      | Id<"provider_spend_reservations">
+      | undefined;
+
+    if (automaticPlan) {
+      if (
+        !site.autopilotEnabled ||
+        !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
+      ) {
+        return { queued: false, reason: "autopilot_disabled" as const };
+      }
+    }
+
     let recentCount = 0;
     if (args.reason && args.since !== undefined && args.maximumRecent !== undefined) {
       const recent = await ctx.db
@@ -666,10 +987,20 @@ export const queuePlanIfAbsent = internalMutation({
         )
         .take(50);
       const count = recent.filter((job) => {
+        if (!countsTowardTopicPlanRecentLimit(job)) return false;
         const payload = job.payload && typeof job.payload === "object"
           ? (job.payload as Record<string, unknown>)
           : {};
-        return payload.reason === args.reason;
+        const payloadReason = typeof payload.reason === "string"
+          ? payload.reason
+          : "";
+        // All automatic topic-plan reasons share one tenant budget. Counting
+        // only the exact reason allowed business-fit, evidence, overlap, and
+        // horizon requests to bypass one another's paid recovery limit, while
+        // also giving each reason an artificially tiny independent window.
+        return args.reason?.startsWith("topic_") === true
+          ? payloadReason.startsWith("topic_")
+          : payloadReason === args.reason;
       }).length;
       recentCount = count;
       if (recentCount >= args.maximumRecent) {
@@ -677,13 +1008,28 @@ export const queuePlanIfAbsent = internalMutation({
       }
     }
 
+    // Customer clicks, fleet planning, internal repairs, and authority-driven
+    // replenishment all reserve from the same shared provider ledger.
+    // "manual" controls rollout authorization only; it is never a spending
+    // bypass. Reserve only after every no-provider gate so a rejected queue
+    // request cannot consume capacity.
+    const reservation = await reservePlanProviderBudget(ctx, site, timestamp);
+    if (!reservation.ok) {
+      return { queued: false, ...reservation };
+    }
+    providerCostCeilingMicroUsd =
+      reservation.providerCostCeilingMicroUsd;
+    providerCostReservedMicroUsd =
+      reservation.providerCostReservedMicroUsd;
+    providerCostReservationDay = reservation.providerCostReservationDay;
+    providerSpendReservationId = reservation.providerSpendReservationId;
+
     for (const topicId of args.cannibalizingTopicIds ?? []) {
       const topic = await ctx.db.get(topicId);
       if (topic?.siteId === args.siteId && topic.status !== "used") {
         await ctx.db.patch(topicId, { status: "cannibalizing", updatedAt: now() });
       }
     }
-    const timestamp = now();
     const payload = args.reason || args.manual || args.growthParentArticleId
       ? {
           ...(args.reason ? {
@@ -703,6 +1049,10 @@ export const queuePlanIfAbsent = internalMutation({
       type: "plan",
       status: "pending",
       payload,
+      providerCostCeilingMicroUsd,
+      providerCostReservedMicroUsd,
+      providerCostReservationDay,
+      providerSpendReservationId,
       ...rolloutFields(site, args.manual === true),
       workerAttempts: 0,
       publicationAttempts: 0,
@@ -710,6 +1060,412 @@ export const queuePlanIfAbsent = internalMutation({
       updatedAt: timestamp,
     });
     return { queued: true, jobId, recent: recentCount };
+  },
+});
+
+/**
+ * One explicitly operator-triggered bridge for a legacy tenant that has just
+ * entered the expected-click rollout. Old plan rows are retained for audit and
+ * continue to block every ordinary queue path. This mutation may discount only
+ * rows that never carried the modern provider reservation contract, and may do
+ * so once for the reviewed migration version.
+ */
+export const queueExpectedClickPlanMigrationAfterPreflight = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    migrationVersion: v.number(),
+  },
+  handler: async (ctx, { siteId, migrationVersion }) => {
+    if (migrationVersion !== EXPECTED_CLICK_PLAN_MIGRATION_VERSION) {
+      throw new Error("Unsupported expected-click plan migration version");
+    }
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (site.expectedClickSchedulingEnabled !== true) {
+      return {
+        queued: false,
+        reason: "expected_click_rollout_disabled" as const,
+      };
+    }
+    if (!activeRollout(site)) {
+      return { queued: false, reason: "autopilot_disabled" as const };
+    }
+    if (
+      (site.expectedClickPlanMigrationVersion ?? 0) >= migrationVersion
+    ) {
+      return {
+        queued: false,
+        reason: "already_applied" as const,
+        jobId: site.expectedClickPlanMigrationJobId,
+        migrationVersion: site.expectedClickPlanMigrationVersion,
+      };
+    }
+
+    const health = await ctx.db
+      .query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .unique();
+    if (health?.portfolioSupportsGoal !== false) {
+      return {
+        queued: false,
+        reason: health?.portfolioSupportsGoal === true
+          ? "portfolio_goal_supported" as const
+          : "portfolio_not_evaluated" as const,
+      };
+    }
+
+    const active = await activeJobsForSite(ctx, siteId);
+    const duplicate = active.find((job) => job.type === "plan");
+    if (duplicate) {
+      return {
+        queued: false,
+        reason: "active" as const,
+        jobId: duplicate._id,
+      };
+    }
+
+    const timestamp = now();
+    const reservation = await reservePlanProviderBudget(
+      ctx,
+      site,
+      timestamp,
+      { expectedClickMigrationVersion: migrationVersion },
+    );
+    if (!reservation.ok) {
+      return { queued: false, ...reservation };
+    }
+
+    const jobId = await ctx.db.insert("jobs", {
+      siteId,
+      type: "plan",
+      status: "pending",
+      payload: {
+        manual: true,
+        reason: `expected_click_plan_migration_v${migrationVersion}`,
+        expectedClickPlanMigrationVersion: migrationVersion,
+      },
+      providerCostCeilingMicroUsd:
+        reservation.providerCostCeilingMicroUsd,
+      providerCostReservedMicroUsd:
+        reservation.providerCostReservedMicroUsd,
+      providerCostReservationDay: reservation.providerCostReservationDay,
+      providerSpendReservationId: reservation.providerSpendReservationId,
+      ...rolloutFields(site),
+      workerAttempts: 0,
+      publicationAttempts: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await ctx.db.patch(siteId, {
+      expectedClickPlanMigrationVersion: migrationVersion,
+      expectedClickPlanMigrationJobId: jobId,
+      expectedClickPlanMigrationReservedAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.pipeline.processNextJob,
+      { siteId, jobId },
+    );
+    return {
+      queued: true,
+      jobId,
+      migrationVersion,
+      providerCostReservedMicroUsd:
+        reservation.providerCostReservedMicroUsd,
+    };
+  },
+});
+
+/**
+ * Re-open only the reviewed expected-click migration zero-insert incident.
+ *
+ * The original immutable reservation contains exactly two $1 execution
+ * allowances. A terminal first execution normally cannot be replayed. This
+ * versioned bridge consumes the remaining allowance by moving workerAttempts
+ * from 0 to 1, but only while every original tenant, marker, day, receipt, and
+ * error invariant still matches. It never inserts or reserves anything new.
+ */
+export const recoverExpectedClickPlanMigrationAfterPreflight = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    migrationVersion: v.number(),
+    recoveryVersion: v.number(),
+  },
+  handler: async (
+    ctx,
+    { siteId, jobId, migrationVersion, recoveryVersion },
+  ) => {
+    if (migrationVersion !== EXPECTED_CLICK_PLAN_MIGRATION_VERSION) {
+      throw new Error("Unsupported expected-click plan migration version");
+    }
+    if (
+      recoveryVersion !== EXPECTED_CLICK_PLAN_MIGRATION_RECOVERY_VERSION
+    ) {
+      throw new Error("Unsupported expected-click plan recovery version");
+    }
+
+    const [site, job] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db.get(jobId),
+    ]);
+    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (
+      site.autopilotEnabled !== true ||
+      site.autopilotRolloutMode !== "live" ||
+      site.expectedClickSchedulingEnabled !== true
+    ) {
+      throw new Error(
+        "Expected-click migration recovery requires a live tenant",
+      );
+    }
+    if (!job || job.siteId !== siteId) {
+      throw new Error("Expected-click migration recovery job was not found");
+    }
+    if (
+      site.expectedClickPlanMigrationVersion !== migrationVersion ||
+      site.expectedClickPlanMigrationJobId !== jobId ||
+      site.expectedClickPlanMigrationReservedAt !== job.createdAt
+    ) {
+      throw new Error(
+        "Expected-click migration recovery is not bound to the site marker",
+      );
+    }
+
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    if (
+      payload.expectedClickPlanMigrationVersion !== migrationVersion ||
+      payload.reason !== `expected_click_plan_migration_v${migrationVersion}` ||
+      payload.manual !== true
+    ) {
+      throw new Error(
+        "Expected-click migration recovery job payload is not authorized",
+      );
+    }
+    if (
+      payload.expectedClickPlanMigrationRecoveryVersion === recoveryVersion
+    ) {
+      return {
+        recovered: false,
+        reason: "already_applied" as const,
+        jobId,
+        migrationVersion,
+        recoveryVersion,
+      };
+    }
+    if (
+      payload.expectedClickPlanMigrationRecoveryVersion !== undefined
+    ) {
+      throw new Error(
+        "Expected-click migration recovery marker conflicts with this version",
+      );
+    }
+
+    if (
+      job.type !== "plan" ||
+      job.status !== "failed" ||
+      (job.workerAttempts ?? 0) !== 0
+    ) {
+      throw new Error(
+        "Expected-click migration recovery requires the untouched terminal job",
+      );
+    }
+    if (
+      job.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+      !isExpectedClickZeroInsertTerminalError(job.error)
+    ) {
+      throw new Error(
+        "Expected-click migration recovery terminal signature is not recognized",
+      );
+    }
+
+    const reservationDay = new Date(now()).toISOString().slice(0, 10);
+    if (
+      job.providerCostCeilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerCostReservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerCostReservationDay !== reservationDay ||
+      job.providerReservationReleasedAt !== undefined ||
+      job.providerReservationReleaseReason !== undefined ||
+      !job.providerSpendReservationId
+    ) {
+      throw new Error(
+        "Expected-click migration recovery reservation is missing or stale",
+      );
+    }
+    const reservation = await ctx.db.get(job.providerSpendReservationId);
+    if (
+      !reservation ||
+      reservation.siteId !== siteId ||
+      reservation.userId !== site.userId ||
+      reservation.purpose !== "topic_plan" ||
+      reservation.trigger !==
+        `expected_click_plan_migration_v${migrationVersion}` ||
+      reservation.reservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      reservation.reservationDay !== reservationDay ||
+      reservation.createdAt !== job.createdAt ||
+      reservation.releasedAt !== undefined
+    ) {
+      throw new Error(
+        "Expected-click migration recovery reservation receipt is not bound",
+      );
+    }
+
+    const [pendingPlans, runningPlans, contemporaryPlans] = await Promise.all([
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "pending")
+        )
+        .collect(),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "running")
+        )
+        .collect(),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_type_created", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("type", "plan")
+            .gte("createdAt", job.createdAt)
+        )
+        .collect(),
+    ]);
+    const newerPlan = contemporaryPlans.find((candidate) =>
+      candidate._id !== jobId &&
+      (
+        candidate.createdAt > job.createdAt ||
+        candidate._creationTime > job._creationTime
+      )
+    );
+    if (
+      [...pendingPlans, ...runningPlans].some((candidate) =>
+        candidate.type === "plan" && candidate._id !== jobId
+      ) || newerPlan
+    ) {
+      throw new Error(
+        "Expected-click migration recovery is superseded by another plan",
+      );
+    }
+
+    const recoveredAt = now();
+    await ctx.db.patch(jobId, {
+      status: "pending",
+      payload: {
+        ...payload,
+        expectedClickPlanMigrationRecoveryVersion: recoveryVersion,
+        expectedClickPlanMigrationRecoveredAt: recoveredAt,
+      },
+      // Consume the sole remaining execution allowance before scheduling.
+      // processNextJob reports this as execution 2 and cannot schedule a third.
+      workerAttempts: 1,
+      error: undefined,
+      result: undefined,
+      stepProgress: undefined,
+      nextAttemptAt: undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: recoveredAt,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.pipeline.processNextJob,
+      { siteId, jobId },
+    );
+    return {
+      recovered: true,
+      jobId,
+      migrationVersion,
+      recoveryVersion,
+      workerExecution: 2,
+    };
+  },
+});
+
+/**
+ * Abort a plan whose free provider-account preflight failed before paid work.
+ * Only a first execution can release capacity and roll back the migration
+ * marker: after a prior worker failure, provider spend is ambiguous and the
+ * original reservation remains consumed for audit safety.
+ */
+export const abortPlanForProviderBalance = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+    releaseReason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (
+      !job ||
+      job.siteId !== args.siteId ||
+      job.type !== "plan" ||
+      !ownsJob(job, args.workerToken)
+    ) {
+      return { updated: false, released: false, migrationRolledBack: false };
+    }
+    const releaseReason = args.releaseReason as ProviderReservationReleaseReason;
+    if (
+      releaseReason !== "provider_balance_insufficient" &&
+      releaseReason !== "provider_balance_preflight_unavailable"
+    ) {
+      throw new Error("Unknown provider reservation release reason");
+    }
+    const firstExecution = (job.workerAttempts ?? 0) === 0;
+    let released = false;
+    if (firstExecution && job.providerSpendReservationId) {
+      released = (await releaseSharedProviderReservation(ctx, {
+        reservationId: job.providerSpendReservationId,
+        siteId: args.siteId,
+        purpose: "topic_plan",
+        reason: releaseReason,
+        timestamp: now(),
+      })).released;
+    }
+
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as { expectedClickPlanMigrationVersion?: number }
+      : undefined;
+    let migrationRolledBack = false;
+    if (released && payload?.expectedClickPlanMigrationVersion !== undefined) {
+      const site = await ctx.db.get(args.siteId);
+      if (
+        site?.expectedClickPlanMigrationJobId === args.jobId &&
+        site.expectedClickPlanMigrationVersion ===
+          payload.expectedClickPlanMigrationVersion
+      ) {
+        await ctx.db.patch(args.siteId, {
+          expectedClickPlanMigrationVersion: undefined,
+          expectedClickPlanMigrationJobId: undefined,
+          expectedClickPlanMigrationReservedAt: undefined,
+          updatedAt: now(),
+        });
+        migrationRolledBack = true;
+      }
+    }
+
+    await ctx.db.patch(args.jobId, {
+      status: "failed",
+      error: "Provider account funding preflight blocked paid topic planning.",
+      providerReservationReleasedAt: released ? now() : undefined,
+      providerReservationReleaseReason: released ? releaseReason : undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      nextAttemptAt: undefined,
+      updatedAt: now(),
+    });
+    return { updated: true, released, migrationRolledBack };
   },
 });
 
@@ -806,10 +1562,12 @@ export const markRunning = internalMutation({
     const job = await ctx.db.get(args.jobId);
     const currentTime = now();
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
+    const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     if (
       !job ||
       job.siteId !== args.siteId ||
       job.status !== "pending" ||
+      !executionAuthorized ||
       !jobAuthorizedForExecution(site, job) ||
       (job.nextAttemptAt !== undefined && job.nextAttemptAt > currentTime)
     ) return null;
@@ -838,6 +1596,7 @@ export const claimPending = internalMutation({
     const job = await ctx.db.get(jobId);
     const updatedAt = now();
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
+    const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     const runningJobs = job
       ? await ctx.db
           .query("jobs")
@@ -855,6 +1614,7 @@ export const claimPending = internalMutation({
       !job ||
       job.siteId !== siteId ||
       job.status !== "pending" ||
+      !executionAuthorized ||
       !jobAuthorizedForExecution(site, job) ||
       otherRunning !== undefined ||
       (job.nextAttemptAt !== undefined && job.nextAttemptAt > updatedAt)
@@ -887,9 +1647,11 @@ export const heartbeatWorker = internalMutation({
   handler: async (ctx, { jobId, workerToken }) => {
     const job = await ctx.db.get(jobId);
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
+    const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     if (
       !job ||
       !ownsJob(job, workerToken) ||
+      !executionAuthorized ||
       !jobAuthorizedForExecution(site, job)
     ) return { owned: false };
     const currentTime = now();
@@ -901,6 +1663,7 @@ export const heartbeatWorker = internalMutation({
         });
       }
     }
+    await renewArticleProviderAttempt(ctx, job, currentTime);
     await ctx.db.patch(jobId, {
       heartbeatAt: currentTime,
       leaseExpiresAt: currentTime + JOB_LEASE_MS,
@@ -914,28 +1677,36 @@ export const reserveGenerationSlot = internalMutation({
   args: {
     jobId: v.id("jobs"),
     workerToken: v.string(),
-    userId: v.string(),
     siteId: v.id("sites"),
-    maxArticles: v.number(),
   },
   handler: async (ctx, args) => {
-    const job = await ctx.db.get(args.jobId);
-    if (!job || job.siteId !== args.siteId || !ownsJob(job, args.workerToken)) {
+    const [job, site] = await Promise.all([
+      ctx.db.get(args.jobId),
+      ctx.db.get(args.siteId),
+    ]);
+    if (
+      !job || job.siteId !== args.siteId ||
+      !ownsJob(job, args.workerToken) ||
+      !site?.userId || site.deletionStatus || site.planParkedAt ||
+      !jobAuthorizedForExecution(site, job)
+    ) {
       return { ok: false, reason: "Worker lease lost" };
     }
+    const allowance = await currentSitePlanAllowance(ctx, site);
+    if (!allowance.ok) return allowance;
+    const { limits } = allowance;
     if (job.articleId) {
       return { ok: true, reason: "Article checkpoint already exists", articleId: job.articleId };
     }
-    if (job.reservationId) {
-      const reservation = await ctx.db.get(job.reservationId);
-      if (reservation?.state === "reserved" && reservation.jobId === job._id) {
-        await ctx.db.patch(reservation._id, {
-          expiresAt: now() + JOB_LEASE_MS + 5 * 60 * 1000,
-        });
-        return { ok: true, reason: "Existing reservation", reservationId: reservation._id };
-      }
-    }
-
+    const existingReservation = job.reservationId
+      ? await ctx.db.get(job.reservationId)
+      : null;
+    const ownsExistingReservation = Boolean(
+      existingReservation?.state === "reserved" &&
+      existingReservation.jobId === job._id &&
+      existingReservation.siteId === site._id &&
+      existingReservation.userId === site.userId,
+    );
     const currentTime = now();
     const date = new Date(currentTime);
     const monthStart = new Date(
@@ -945,7 +1716,7 @@ export const reserveGenerationSlot = internalMutation({
       .query("usage_log")
       .withIndex("by_user_type_created", (q) =>
         q
-          .eq("userId", args.userId)
+          .eq("userId", site.userId!)
           .eq("type", "article_generated")
           .gte("createdAt", monthStart),
       )
@@ -953,11 +1724,25 @@ export const reserveGenerationSlot = internalMutation({
     const count = logs.filter(
       (log) => log.state !== "reserved" || (log.expiresAt ?? Infinity) > currentTime,
     ).length;
-    if (count >= args.maxArticles) {
-      return { ok: false, reason: `Limit reached (${count}/${args.maxArticles})` };
+    if (
+      ownsExistingReservation
+        ? count > limits.maxArticles
+        : count >= limits.maxArticles
+    ) {
+      return { ok: false, reason: `Limit reached (${count}/${limits.maxArticles})` };
+    }
+    if (ownsExistingReservation && existingReservation) {
+        await ctx.db.patch(existingReservation._id, {
+          expiresAt: currentTime + JOB_LEASE_MS + 5 * 60 * 1000,
+        });
+        return {
+          ok: true,
+          reason: "Existing reservation",
+          reservationId: existingReservation._id,
+        };
     }
     const reservationId = await ctx.db.insert("usage_log", {
-      userId: args.userId,
+      userId: site.userId,
       siteId: args.siteId,
       jobId: args.jobId,
       type: "article_generated",
@@ -967,6 +1752,182 @@ export const reserveGenerationSlot = internalMutation({
     });
     await ctx.db.patch(args.jobId, { reservationId, updatedAt: currentTime });
     return { ok: true, reason: "", reservationId };
+  },
+});
+
+/**
+ * Reserve one exact provider-bearing worker execution. This is intentionally
+ * separate from the successful article usage slot: failures and ambiguous
+ * leases remain in this account-level ledger and cannot be erased by deleting
+ * a site or releasing a pre-draft quota reservation.
+ */
+export const reserveArticleProviderAttempt = internalMutation({
+  args: {
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+    siteId: v.id("sites"),
+    providerWorkKind: v.union(
+      v.literal("generation"),
+      v.literal("quality_review"),
+      v.literal("internal_links"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const currentTime = now();
+    const [job, site] = await Promise.all([
+      ctx.db.get(args.jobId),
+      ctx.db.get(args.siteId),
+    ]);
+    if (
+      !job ||
+      job.siteId !== args.siteId ||
+      !ownsJob(job, args.workerToken) ||
+      !job.leaseExpiresAt ||
+      job.leaseExpiresAt <= currentTime ||
+      !site?.userId ||
+      !jobAuthorizedForExecution(site, job)
+    ) {
+      return { ok: false as const, reason: "worker_lease_lost" as const };
+    }
+    const allowance = await currentSitePlanAllowance(ctx, site);
+    if (!allowance.ok) {
+      return { ok: false as const, reason: "site_not_authorized" as const };
+    }
+
+    const workerAttempt = job.workerAttempts ?? 0;
+    const attemptKey = articleGenerationAttemptKey(
+      String(job._id),
+      workerAttempt,
+    );
+    const existing = await ctx.db
+      .query("article_generation_attempts")
+      .withIndex("by_attempt_key", (q) => q.eq("attemptKey", attemptKey))
+      .unique();
+    const monthKey = articleGenerationAttemptMonth(currentTime);
+    const attemptAllowance = articleGenerationAttemptAllowance(
+      allowance.limits.maxArticles,
+    );
+    const accountAttempts = await ctx.db
+      .query("article_generation_attempts")
+      .withIndex("by_user_month", (q) =>
+        q.eq("userId", site.userId!).eq("monthKey", monthKey)
+      )
+      .collect();
+    // Concurrency spans the UTC month boundary. Monthly usage and active
+    // leases are separate questions; a lease started at 23:59 must still
+    // occupy the account slot after midnight.
+    const activeAccountAttempts = await ctx.db
+      .query("article_generation_attempts")
+      .withIndex("by_user_status_expires", (q) =>
+        q
+          .eq("userId", site.userId!)
+          .eq("status", "reserved")
+          .gt("expiresAt", currentTime)
+      )
+      .take(ARTICLE_PROVIDER_ACCOUNT_CONCURRENCY);
+    const activeFleetAttempts = await ctx.db
+      .query("article_generation_attempts")
+      .withIndex("by_status_expires", (q) =>
+        q.eq("status", "reserved").gt("expiresAt", currentTime)
+      )
+      .take(ARTICLE_PROVIDER_FLEET_CONCURRENCY);
+    const decision = decideArticleProviderAdmission({
+      existingStatus: existing?.status as
+        | ArticleProviderAttemptStatus
+        | undefined,
+      existingOwnedByAccount: existing?.userId === site.userId,
+      attemptsUsed: accountAttempts.length,
+      attemptAllowance,
+      activeAccountAttempts: activeAccountAttempts.length,
+      activeFleetAttempts: activeFleetAttempts.length,
+    });
+    if (decision.status === "reuse" && existing) {
+      await ctx.db.patch(existing._id, {
+        expiresAt: currentTime + ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
+        updatedAt: currentTime,
+      });
+      return {
+        ok: true as const,
+        reused: true,
+        attemptId: existing._id,
+        attemptsUsed: undefined,
+        attemptAllowance: existing.attemptAllowance,
+      };
+    }
+    if (decision.status === "reject") {
+      if (
+        decision.reason === "account_concurrency" ||
+        decision.reason === "fleet_concurrency"
+      ) {
+        return {
+          ok: false as const,
+          reason: decision.reason,
+          retryAfterMs: 2 * 60 * 1000,
+        };
+      }
+      return {
+        ok: false as const,
+        reason: decision.reason,
+        attemptsUsed: accountAttempts.length,
+        attemptAllowance,
+      };
+    }
+
+    const attemptId = await ctx.db.insert("article_generation_attempts", {
+      userId: site.userId,
+      jobKey: String(job._id),
+      workerAttempt,
+      attemptKey,
+      monthKey,
+      providerWorkKind: args.providerWorkKind,
+      maxArticles: allowance.limits.maxArticles,
+      attemptAllowance,
+      status: "reserved",
+      expiresAt: currentTime + ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
+      createdAt: currentTime,
+      updatedAt: currentTime,
+    });
+    return {
+      ok: true as const,
+      reused: false,
+      attemptId,
+      attemptsUsed: accountAttempts.length + 1,
+      attemptAllowance,
+    };
+  },
+});
+
+/** Concurrency is a transient fleet condition, not a paid failure. Return the
+ * exact job to pending without consuming a worker retry or attempt receipt. */
+export const deferArticleProviderAdmission = internalMutation({
+  args: {
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+    reason: v.union(
+      v.literal("account_concurrency"),
+      v.literal("fleet_concurrency"),
+    ),
+    retryAfterMs: v.number(),
+  },
+  handler: async (ctx, { jobId, workerToken, reason, retryAfterMs }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job || !ownsJob(job, workerToken)) {
+      return { deferred: false, nextAttemptAt: undefined };
+    }
+    if (await releaseReservedUsage(ctx, job)) job.reservationId = undefined;
+    const currentTime = now();
+    const nextAttemptAt = currentTime + Math.max(30_000, retryAfterMs);
+    await ctx.db.patch(jobId, {
+      status: "pending",
+      error: `Provider capacity is temporarily busy (${reason}); the paid attempt has not started.`,
+      nextAttemptAt,
+      reservationId: job.articleId ? job.reservationId : undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: currentTime,
+    });
+    return { deferred: true, nextAttemptAt };
   },
 });
 
@@ -985,6 +1946,519 @@ export const releaseGenerationReservation = internalMutation({
   },
 });
 
+/**
+ * Reuse execution two of one already-reserved automatic topic plan when its
+ * first verified execution succeeded but could not fill the protected topic
+ * horizon. This does not insert a plan or reserve another dollar. Moving the
+ * worker ordinal before scheduling makes the allowance consumed even if the
+ * continuation later fails, loses its lease, or cannot pass preflight.
+ */
+export const continueSuccessfulUnderfilledPlan = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+    savedTopicCount: v.number(),
+    firstResult: v.any(),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (
+      !job ||
+      job.siteId !== args.siteId ||
+      job.type !== "plan" ||
+      !ownsJob(job, args.workerToken)
+    ) {
+      return { queued: false, reason: "worker_lease_lost" as const };
+    }
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    const continuation = payload.underfilledPlanContinuation;
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    const automaticTopicPlan =
+      payload.manual !== true &&
+      reason.startsWith("topic_") &&
+      payload.growthParentArticleId === undefined &&
+      payload.growthSeed === undefined &&
+      payload.growthActionFingerprint === undefined &&
+      payload.expectedClickPlanMigrationVersion === undefined;
+    const scheduledAt = now() + AUTOMATIC_PLAN_CONTINUATION_DELAY_MS;
+    const decision = evaluateAutomaticPlanContinuation({
+      automaticTopicPlan,
+      savedTopicCount: args.savedTopicCount,
+      workerAttempts: job.workerAttempts ?? 0,
+      continuationAlreadyQueued: continuation !== undefined,
+      reservationDay: job.providerCostReservationDay,
+      executionAt: scheduledAt,
+    });
+    if (!decision.allowed) {
+      return { queued: false, reason: decision.reason };
+    }
+    const firstResult = args.firstResult && typeof args.firstResult === "object"
+      ? args.firstResult as Record<string, unknown>
+      : {};
+    if (firstResult.count !== args.savedTopicCount) {
+      return { queued: false, reason: "successful_result_mismatch" as const };
+    }
+
+    const [site, reservation] = await Promise.all([
+      ctx.db.get(args.siteId),
+      job.providerSpendReservationId
+        ? ctx.db.get(job.providerSpendReservationId)
+        : Promise.resolve(null),
+    ]);
+    const allowance = await currentSitePlanAllowance(ctx, site);
+    const articleHeadroom =
+      allowance.ok && site?.userId
+        ? await accountHasArticleHeadroom(
+            ctx,
+            site.userId,
+            allowance.limits.maxArticles,
+            scheduledAt,
+          )
+        : false;
+    if (
+      !site ||
+      !allowance.ok ||
+      !articleHeadroom ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !jobAuthorizedForExecution(site, job) ||
+      job.providerCostCeilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerCostReservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerReservationReleasedAt !== undefined ||
+      !reservation ||
+      reservation.siteId !== args.siteId ||
+      reservation.userId !== site.userId ||
+      reservation.purpose !== "topic_plan" ||
+      reservation.trigger !== "topic_plan" ||
+      reservation.reservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      reservation.reservationDay !== job.providerCostReservationDay ||
+      reservation.createdAt !== job.createdAt ||
+      reservation.releasedAt !== undefined
+    ) {
+      return { queued: false, reason: "reservation_or_entitlement_invalid" as const };
+    }
+
+    await ctx.db.patch(args.jobId, {
+      status: "pending",
+      payload: {
+        ...payload,
+        underfilledPlanContinuation: {
+          version: 1,
+          firstExecutionCount: args.savedTopicCount,
+          remainingTopicCapacity: decision.remainingTopicCapacity,
+          queuedAt: scheduledAt,
+        },
+      },
+      // Execution two is consumed before its durable wake-up. A provider
+      // failure, ambiguous lease, or preflight result can never grant a third.
+      workerAttempts: 1,
+      result: {
+        ...firstResult,
+        count: args.savedTopicCount,
+        providerBudget: {
+          reservedMicroUsd: job.providerCostReservedMicroUsd,
+          ceilingMicroUsd: job.providerCostCeilingMicroUsd,
+          reservationDay: job.providerCostReservationDay,
+          workerExecution: 1,
+        },
+        continuationStatus: "queued",
+        continuationWorkerExecution: decision.workerExecution,
+        remainingTopicCapacity: decision.remainingTopicCapacity,
+      },
+      error: undefined,
+      stepProgress: undefined,
+      nextAttemptAt: scheduledAt,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: now(),
+    });
+    await ctx.scheduler.runAt(
+      scheduledAt,
+      internal.autopilot.dispatchSiteFollowup,
+      {
+        siteId: args.siteId,
+        trigger: "underfilled_plan_continuation",
+        reason:
+          `Verified plan yielded ${args.savedTopicCount} topic(s); ` +
+          "using its already-reserved second execution to refill the horizon.",
+      },
+    );
+    return {
+      queued: true,
+      workerExecution: decision.workerExecution,
+      remainingTopicCapacity: decision.remainingTopicCapacity,
+      scheduledAt,
+    };
+  },
+});
+
+/**
+ * Re-authorize the already-consumed second plan execution immediately before
+ * its paid provider boundary. Execution-one inventory deliberately runs first
+ * when it can protect cadence, so account article headroom may have changed
+ * since the continuation was queued. A denied check is terminal: it does not
+ * restore worker ordinal two or create another reservation.
+ */
+export const authorizeUnderfilledPlanContinuationExecution = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (
+      !job ||
+      job.siteId !== args.siteId ||
+      job.type !== "plan" ||
+      !ownsJob(job, args.workerToken) ||
+      (job.workerAttempts ?? 0) !== 1 ||
+      !isUnderfilledPlanContinuationPayload(job.payload)
+    ) {
+      return { authorized: false, reason: "continuation_lease_invalid" as const };
+    }
+    const payload = job.payload as Record<string, unknown>;
+    const marker = payload.underfilledPlanContinuation as Record<
+      string,
+      unknown
+    >;
+    const storedResult = job.result && typeof job.result === "object"
+      ? job.result as Record<string, unknown>
+      : {};
+    const providerBudget = storedResult.providerBudget &&
+        typeof storedResult.providerBudget === "object"
+      ? storedResult.providerBudget as Record<string, unknown>
+      : {};
+    if (
+      storedResult.count !== marker.firstExecutionCount ||
+      providerBudget.workerExecution !== 1 ||
+      providerBudget.reservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      providerBudget.ceilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      providerBudget.reservationDay !== job.providerCostReservationDay
+    ) {
+      return { authorized: false, reason: "first_execution_receipt_invalid" as const };
+    }
+
+    const executionAt = now();
+    const [site, reservation] = await Promise.all([
+      ctx.db.get(args.siteId),
+      job.providerSpendReservationId
+        ? ctx.db.get(job.providerSpendReservationId)
+        : Promise.resolve(null),
+    ]);
+    const allowance = await currentSitePlanAllowance(ctx, site);
+    const articleHeadroom =
+      allowance.ok && site?.userId
+        ? await accountHasArticleHeadroom(
+            ctx,
+            site.userId,
+            allowance.limits.maxArticles,
+            executionAt,
+          )
+        : false;
+    if (!articleHeadroom) {
+      return { authorized: false, reason: "article_quota_no_headroom" as const };
+    }
+    if (
+      !site ||
+      !allowance.ok ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !jobAuthorizedForExecution(site, job) ||
+      !planRetryUsesCurrentReservationDay(
+        job.providerCostReservationDay,
+        executionAt,
+      ) ||
+      job.providerCostCeilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerCostReservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerReservationReleasedAt !== undefined ||
+      !reservation ||
+      reservation.siteId !== args.siteId ||
+      reservation.userId !== site.userId ||
+      reservation.purpose !== "topic_plan" ||
+      reservation.trigger !== "topic_plan" ||
+      reservation.reservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      reservation.reservationDay !== job.providerCostReservationDay ||
+      reservation.createdAt !== job.createdAt ||
+      reservation.releasedAt !== undefined
+    ) {
+      return { authorized: false, reason: "reservation_or_entitlement_invalid" as const };
+    }
+    return { authorized: true as const };
+  },
+});
+
+/**
+ * Versioned operator bridge for a plan that completed before automatic
+ * underfill continuation existed. Inspect with apply=false first. Applying
+ * reopens only that same successful job at execution two; it cannot create a
+ * provider reservation, coexist with newer/active tenant work, or replay.
+ */
+export const recoverCompletedUnderfilledPlanContinuation = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    recoveryVersion: v.number(),
+    apply: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    if (
+      args.recoveryVersion !==
+        UNDERFILLED_PLAN_CONTINUATION_RECOVERY_VERSION
+    ) {
+      throw new Error("Unsupported underfilled-plan recovery version");
+    }
+    const [site, job] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.jobId),
+    ]);
+    if (!siteExecutionActive(site) || !job || job.siteId !== args.siteId) {
+      throw new Error("Underfilled-plan recovery target was not found");
+    }
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    const existingContinuation = payload.underfilledPlanContinuation;
+    if (existingContinuation !== undefined) {
+      if (existingContinuation && typeof existingContinuation === "object") {
+        const marker = existingContinuation as Record<string, unknown>;
+        if (
+          marker.version === 1 &&
+          marker.recoveryVersion === args.recoveryVersion
+        ) {
+          return {
+            eligible: false,
+            applied: false,
+            reason: "already_applied" as const,
+            jobId: args.jobId,
+            workerExecution: job.workerAttempts ?? 0,
+          };
+        }
+      }
+      throw new Error("Underfilled-plan continuation marker conflicts");
+    }
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    const automaticTopicPlan =
+      payload.manual !== true &&
+      reason.startsWith("topic_") &&
+      payload.growthParentArticleId === undefined &&
+      payload.growthSeed === undefined &&
+      payload.growthActionFingerprint === undefined &&
+      payload.expectedClickPlanMigrationVersion === undefined;
+    const storedResult = job.result && typeof job.result === "object"
+      ? job.result as Record<string, unknown>
+      : {};
+    const providerBudget = storedResult.providerBudget &&
+        typeof storedResult.providerBudget === "object"
+      ? storedResult.providerBudget as Record<string, unknown>
+      : {};
+    const savedTopicCount =
+      typeof storedResult.count === "number"
+        ? storedResult.count
+        : Number.NaN;
+    const scheduledAt = now() + AUTOMATIC_PLAN_CONTINUATION_DELAY_MS;
+    const decision = evaluateAutomaticPlanContinuation({
+      automaticTopicPlan,
+      savedTopicCount,
+      workerAttempts: job.workerAttempts ?? 0,
+      continuationAlreadyQueued: false,
+      reservationDay: job.providerCostReservationDay,
+      executionAt: scheduledAt,
+    });
+    if (!decision.allowed) {
+      return {
+        eligible: false,
+        applied: false,
+        reason: decision.reason,
+        jobId: args.jobId,
+      };
+    }
+    if (
+      job.status !== "done" ||
+      job.error !== undefined ||
+      providerBudget.workerExecution !== 1 ||
+      providerBudget.reservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      providerBudget.ceilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      providerBudget.reservationDay !== job.providerCostReservationDay
+    ) {
+      return {
+        eligible: false,
+        applied: false,
+        reason: "successful_execution_receipt_missing" as const,
+        jobId: args.jobId,
+      };
+    }
+
+    const [allowance, reservation, pending, running, contemporaryPlans] =
+      await Promise.all([
+        currentSitePlanAllowance(ctx, site),
+        job.providerSpendReservationId
+          ? ctx.db.get(job.providerSpendReservationId)
+          : Promise.resolve(null),
+        ctx.db
+          .query("jobs")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", args.siteId).eq("status", "pending")
+          )
+          .collect(),
+        ctx.db
+          .query("jobs")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", args.siteId).eq("status", "running")
+          )
+          .collect(),
+        ctx.db
+          .query("jobs")
+          .withIndex("by_site_type_created", (q) =>
+            q
+              .eq("siteId", args.siteId)
+              .eq("type", "plan")
+              .gte("createdAt", job.createdAt)
+          )
+          .collect(),
+      ]);
+    const articleHeadroom =
+      allowance.ok && site.userId
+        ? await accountHasArticleHeadroom(
+            ctx,
+            site.userId,
+            allowance.limits.maxArticles,
+            scheduledAt,
+          )
+        : false;
+    if (
+      !allowance.ok ||
+      !articleHeadroom ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !jobAuthorizedForExecution(site, job) ||
+      job.providerCostCeilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerCostReservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      job.providerReservationReleasedAt !== undefined ||
+      !reservation ||
+      reservation.siteId !== args.siteId ||
+      reservation.userId !== site.userId ||
+      reservation.purpose !== "topic_plan" ||
+      reservation.trigger !== "topic_plan" ||
+      reservation.reservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+      reservation.reservationDay !== job.providerCostReservationDay ||
+      reservation.createdAt !== job.createdAt ||
+      reservation.releasedAt !== undefined
+    ) {
+      return {
+        eligible: false,
+        applied: false,
+        reason: "reservation_or_entitlement_invalid" as const,
+        jobId: args.jobId,
+      };
+    }
+    const activeJob = [...pending, ...running].find((candidate) =>
+      candidate._id !== args.jobId &&
+      jobAuthorizedForExecution(site, candidate)
+    );
+    if (activeJob) {
+      return {
+        eligible: false,
+        applied: false,
+        reason: "active_job" as const,
+        jobId: args.jobId,
+      };
+    }
+    const newerPlan = contemporaryPlans.find((candidate) =>
+      candidate._id !== args.jobId &&
+      (
+        candidate.createdAt > job.createdAt ||
+        candidate._creationTime > job._creationTime
+      )
+    );
+    if (newerPlan) {
+      return {
+        eligible: false,
+        applied: false,
+        reason: "newer_plan" as const,
+        jobId: args.jobId,
+      };
+    }
+    if (!args.apply) {
+      return {
+        eligible: true,
+        applied: false,
+        reason: "ready" as const,
+        jobId: args.jobId,
+        savedTopicCount,
+        remainingTopicCapacity: decision.remainingTopicCapacity,
+        workerExecution: decision.workerExecution,
+        scheduledAt,
+      };
+    }
+
+    await ctx.db.patch(args.jobId, {
+      status: "pending",
+      payload: {
+        ...payload,
+        underfilledPlanContinuation: {
+          version: 1,
+          recoveryVersion: args.recoveryVersion,
+          firstExecutionCount: savedTopicCount,
+          remainingTopicCapacity: decision.remainingTopicCapacity,
+          queuedAt: scheduledAt,
+        },
+      },
+      // This is the same immutable second provider execution as the live path.
+      workerAttempts: 1,
+      result: {
+        ...storedResult,
+        continuationStatus: "queued",
+        continuationRecoveryVersion: args.recoveryVersion,
+        continuationWorkerExecution: decision.workerExecution,
+        remainingTopicCapacity: decision.remainingTopicCapacity,
+      },
+      error: undefined,
+      stepProgress: undefined,
+      nextAttemptAt: scheduledAt,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: now(),
+    });
+    await ctx.scheduler.runAt(
+      scheduledAt,
+      internal.autopilot.dispatchSiteFollowup,
+      {
+        siteId: args.siteId,
+        trigger: "underfilled_plan_recovery",
+        reason:
+          `Recovered completed plan ${args.jobId} at reserved execution two ` +
+          `after a verified ${savedTopicCount}-topic yield.`,
+      },
+    );
+    return {
+      eligible: true,
+      applied: true,
+      reason: "applied" as const,
+      jobId: args.jobId,
+      savedTopicCount,
+      remainingTopicCapacity: decision.remainingTopicCapacity,
+      workerExecution: decision.workerExecution,
+      scheduledAt,
+    };
+  },
+});
+
 export const markDone = internalMutation({
   args: {
     jobId: v.id("jobs"),
@@ -994,6 +2468,8 @@ export const markDone = internalMutation({
   handler: async (ctx, { jobId, workerToken, result }) => {
     const job = await ctx.db.get(jobId);
     if (!job || !ownsJob(job, workerToken)) return { updated: false };
+    const currentTime = now();
+    await settleArticleProviderAttempt(ctx, job, "completed", currentTime);
     await ctx.db.patch(jobId, {
       status: "done",
       result,
@@ -1004,8 +2480,9 @@ export const markDone = internalMutation({
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,
       nextAttemptAt: undefined,
-      updatedAt: now(),
+      updatedAt: currentTime,
     });
+    await reconcileJobTopicLifecycle(ctx, job);
     return { updated: true };
   },
 });
@@ -1019,6 +2496,8 @@ export const markFailed = internalMutation({
   handler: async (ctx, { jobId, workerToken, error }) => {
     const job = await ctx.db.get(jobId);
     if (!job || !ownsJob(job, workerToken)) return { updated: false };
+    const currentTime = now();
+    await settleArticleProviderAttempt(ctx, job, "failed", currentTime);
     await releaseReservedUsage(ctx, job);
     await ctx.db.patch(jobId, {
       status: "failed",
@@ -1028,8 +2507,9 @@ export const markFailed = internalMutation({
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,
       nextAttemptAt: undefined,
-      updatedAt: now(),
+      updatedAt: currentTime,
     });
+    await reconcileJobTopicLifecycle(ctx, job);
     return { updated: true };
   },
 });
@@ -1042,28 +2522,36 @@ export const markRetryableFailure = internalMutation({
   },
   handler: async (ctx, { jobId, workerToken, error }) => {
     const job = await ctx.db.get(jobId);
-    if (!job || !ownsJob(job, workerToken)) return { updated: false, willRetry: false };
+    if (!job || !ownsJob(job, workerToken)) {
+      return { updated: false, willRetry: false, nextAttemptAt: undefined };
+    }
     const attempts = (job.workerAttempts ?? 0) + 1;
-    const willRetry = attempts <= MAX_JOB_ATTEMPTS;
+    const maximumRetries = job.type === "plan"
+      ? AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES
+      : MAX_JOB_ATTEMPTS;
+    const willRetry = attempts <= maximumRetries;
+    const currentTime = now();
+    await settleArticleProviderAttempt(ctx, job, "failed", currentTime);
     if (!job.articleId && await releaseReservedUsage(ctx, job)) {
       job.reservationId = undefined;
     }
-    const currentTime = now();
+    const nextAttemptAt = willRetry
+      ? currentTime + Math.min(15, 2 ** attempts) * 60_000
+      : undefined;
     await ctx.db.patch(jobId, {
       status: willRetry ? "pending" : "failed",
       workerAttempts: attempts,
       error: willRetry
-        ? `Transient worker failure; retry ${attempts}/${MAX_JOB_ATTEMPTS}: ${error}`
+        ? `Transient worker failure; retry ${attempts}/${maximumRetries}: ${error}`
         : `Worker failure exhausted after ${attempts} attempts: ${error}`,
-      nextAttemptAt: willRetry
-        ? currentTime + Math.min(15, 2 ** attempts) * 60_000
-        : undefined,
+      nextAttemptAt,
       reservationId: job.articleId ? job.reservationId : undefined,
       workerToken: undefined,
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,
       updatedAt: currentTime,
     });
+    await reconcileJobTopicLifecycle(ctx, job);
     if (!willRetry && job.siteId) {
       await raiseJobAlert(
         ctx,
@@ -1073,7 +2561,7 @@ export const markRetryableFailure = internalMutation({
         { jobId, attempts, articleId: job.articleId, error },
       );
     }
-    return { updated: true, willRetry, attempts };
+    return { updated: true, willRetry, attempts, nextAttemptAt };
   },
 });
 
@@ -1103,6 +2591,50 @@ export const markPublishFailed = internalMutation({
       job.publicationAttempts ?? 0,
     );
     const currentTime = now();
+    await settleArticleProviderAttempt(ctx, job, "completed", currentTime);
+    const [site, topic] = await Promise.all([
+      ctx.db.get(job.siteId),
+      article.topicId ? ctx.db.get(article.topicId) : Promise.resolve(null),
+    ]);
+    const topicFit = site && topic && topic.siteId === job.siteId
+      ? evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: article.title,
+          ...tenantTopicBusinessSignals(site),
+        })
+      : undefined;
+    if (topic && topicFit && !topicFit.eligible) {
+      await ctx.db.patch(topic._id, {
+        status: "disqualified",
+        businessFitEligible: false,
+        businessFitScore: topicFit.score,
+        businessFitVersion: topicFit.version,
+        businessFitReasons: topicFit.reasons,
+        businessFitCheckedAt: currentTime,
+        disqualifiedReason: topicFit.reasons.join("; "),
+        updatedAt: currentTime,
+      });
+      await ctx.db.patch(jobId, {
+        status: "failed",
+        error:
+          `Terminal publication product-fit rejection: ${topicFit.reasons.join("; ")}`,
+        publicationAttempts: attempts,
+        articleId,
+        nextAttemptAt: undefined,
+        workerToken: undefined,
+        heartbeatAt: undefined,
+        leaseExpiresAt: undefined,
+        updatedAt: currentTime,
+      });
+      await reconcileJobTopicLifecycle(ctx, job);
+      return {
+        updated: true,
+        willRetry: false,
+        terminalTopicFit: true,
+        attempts,
+        maxAttempts: MAX_PUBLICATION_ATTEMPTS,
+      };
+    }
     await ctx.db.patch(jobId, {
       status: willRetry ? "pending" : "failed",
       error: willRetry
@@ -1121,6 +2653,7 @@ export const markPublishFailed = internalMutation({
       leaseExpiresAt: undefined,
       updatedAt: currentTime,
     });
+    await reconcileJobTopicLifecycle(ctx, job);
     if (willRetry) {
       await ctx.scheduler.runAfter(
         retryDelayMs,
@@ -1135,6 +2668,7 @@ export const markPublishFailed = internalMutation({
     return {
       updated: true,
       willRetry,
+      terminalTopicFit: false,
       attempts,
       maxAttempts: MAX_PUBLICATION_ATTEMPTS,
     };
@@ -1169,6 +2703,7 @@ export const updateProgress = internalMutation({
         });
       }
     }
+    await renewArticleProviderAttempt(ctx, job, currentTime);
     await ctx.db.patch(jobId, {
       stepProgress: { current, total, stepLabel, topicLabel },
       heartbeatAt: currentTime,
@@ -1221,9 +2756,12 @@ export const getPendingByTopic = query({
         q.eq("siteId", topic.siteId).eq("status", "pending"),
       )
       .collect();
-    return pending.find(
-      (j) => j.siteId === topic.siteId && (j.payload as any)?.topicId === topicId,
-    ) ?? null;
+    return pending.find((job) => {
+      const payload = job.payload && typeof job.payload === "object"
+        ? (job.payload as Record<string, unknown>)
+        : {};
+      return job.siteId === topic.siteId && payload.topicId === topicId;
+    }) ?? null;
   },
 });
 
@@ -1242,6 +2780,11 @@ export const runQueuedTopic = mutation({
     ) {
       throw new Error("Not authorized to run this topic");
     }
+    if (requestedSite.deletionStatus || requestedSite.planParkedAt) {
+      throw new Error("This site is not active under the current plan");
+    }
+    const allowance = await currentSitePlanAllowance(ctx, requestedSite);
+    if (!allowance.ok) throw new Error(allowance.reason);
     const active = await activeJobsForSite(ctx, requestedTopic.siteId);
     const existing = active.find((job) => {
       const payload = job.payload && typeof job.payload === "object"
@@ -1251,7 +2794,8 @@ export const runQueuedTopic = mutation({
     });
     if (existing) {
       if (existing.status === "pending" && (existing.nextAttemptAt ?? 0) <= now()) {
-        await ctx.scheduler.runAfter(0, internal.actions.pipeline.processSpecificJob, {
+        await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, {
+          siteId: requestedTopic.siteId,
           jobId: existing._id,
         });
       }
@@ -1276,7 +2820,8 @@ export const runQueuedTopic = mutation({
 
     await ctx.db.patch(topicId, { status: "queued", updatedAt: now() });
 
-    await ctx.scheduler.runAfter(0, internal.actions.pipeline.processSpecificJob, {
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, {
+      siteId,
       jobId,
     });
     return jobId;
@@ -1295,9 +2840,13 @@ export const queueArticleNow = mutation({
     if (!site?.userId || !identity || identity.subject !== site.userId) {
       throw new Error("Not authorized to queue content for this site");
     }
-    if (site?.userId) {
-      const features = (site as any).planFeatures ?? [];
-      const limits = getLimitsFromFeatures(features);
+    if (site.deletionStatus || site.planParkedAt) {
+      throw new Error("This site is not active under the current plan");
+    }
+    const allowance = await currentSitePlanAllowance(ctx, site);
+    if (!allowance.ok) throw new Error(allowance.reason);
+    if (site.userId) {
+      const limits = allowance.limits;
 
       // Count from usage_log (immutable — deletions cannot reduce count)
       const monthStart = new Date();
@@ -1326,16 +2875,6 @@ export const queueArticleNow = mutation({
         );
       }
 
-      // ── Site over-limit check (downgrade protection) ──
-      const userSites = await ctx.db
-        .query("sites")
-        .withIndex("by_user", (q) => q.eq("userId", site.userId!))
-        .take(limits.maxSites + 1);
-      if (userSites.length > limits.maxSites) {
-        throw new Error(
-          `You have ${userSites.length} sites but your plan allows ${limits.maxSites}. Remove excess sites or upgrade to continue.`,
-        );
-      }
     }
 
     const active = await activeJobsForSite(ctx, siteId);
@@ -1374,9 +2913,13 @@ export const queueArticleNow = mutation({
       await ctx.db.patch(topicId, { status: "queued", updatedAt: now() });
     }
 
-    // Schedule processSpecificJob to run ONLY this job — no autopilotTick
-    // This prevents scheduleCadence from creating extra jobs or auto-generating past limits
-    await ctx.scheduler.runAfter(0, internal.actions.pipeline.processSpecificJob, { jobId });
+    // Schedule the durable worker directly for this exact job. Wrapping it in
+    // another action can exhaust the parent request deadline before the child
+    // finishes and strand a running lease.
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, {
+      siteId,
+      jobId,
+    });
 
     return jobId;
   },

@@ -206,6 +206,23 @@ test("UI and public status mutation cannot bypass a publisher rejection", () => 
   );
 });
 
+test("final delivery revalidates current tenant topic fit", () => {
+  const publisher = readFileSync("convex/publisher.ts", "utf8");
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(publisher, /internal\.topics\.getInternal/);
+  assert.match(publisher, /evaluateTopicBusinessFit/);
+  assert.match(publisher, /\.\.\.tenantTopicBusinessSignals\(site\)/);
+  assert.match(publisher, /autonomous delivery requires a tenant-scoped measured topic/);
+  assert.match(jobs, /Terminal publication product-fit rejection/);
+  assert.match(jobs, /status: "disqualified"/);
+  assert.match(jobs, /terminalTopicFit: true/);
+  assert.match(pipeline, /qualityQuarantined: terminalTopicFit/);
+  assert.match(scheduler, /hasTerminalTopicFitFailure/);
+  assert.ok(PUBLICATION_AUDIT_VERSION >= 5);
+});
+
 test("external delivery completes before the internal published transition", () => {
   const publisher = readFileSync("convex/publisher.ts", "utf8");
   const delivery = publisher.indexOf("result = await publishToGitHub");
@@ -520,8 +537,9 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
   const autopilot = readFileSync("convex/autopilot.ts", "utf8");
   assert.match(
     pipeline,
-    /!processed\.buffered[\s\S]{0,120}!processed\.planCompleted[\s\S]{0,120}!processed\.qualityQuarantined[\s\S]{0,120}!processed\.publicationSucceeded/,
+    /processed\.buffered \|\|[\s\S]{0,120}processed\.planCompleted \|\|[\s\S]{0,120}processed\.planContinuationSettled \|\|[\s\S]{0,120}processed\.qualityQuarantined \|\|[\s\S]{0,120}processed\.publicationSucceeded/,
   );
+  assert.match(pipeline, /const pendingUnderfilledPlan = activeJobs\.some/);
   assert.match(pipeline, /quality_gate_authorized_bounded_revision/);
   assert.match(pipeline, /strict_gate_authorized_deterministic_mechanical_repair/);
   assert.match(
@@ -554,4 +572,12 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
     pipeline,
     /await continueAutopilotAfterProcessedJob\(ctx, args\.siteId, result\)/,
   );
+});
+
+test("bounded worker retries schedule their own exact wake-up", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  assert.match(pipeline, /ctx\.scheduler\.runAt\(\s*retry\.nextAttemptAt/);
+  assert.match(pipeline, /trigger:\s*"job_retry"/);
+  assert.match(jobs, /return \{ updated: true, willRetry, attempts, nextAttemptAt \}/);
 });

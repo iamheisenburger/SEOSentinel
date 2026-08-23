@@ -21,7 +21,6 @@ import {
   RefreshCw,
   MousePointerClick,
   Mail,
-  Share2,
   Target,
 } from "lucide-react";
 import { LandingNav } from "@/components/layout/landing-nav";
@@ -59,9 +58,9 @@ function Hero() {
             </h1>
 
             <p className="mt-5 max-w-md text-[16px] leading-relaxed text-[#8B8FA3]">
-              Pentra creates, publishes, monitors, and maintains your SEO content.
-              It tracks your rankings, detects declining articles, refreshes them
-              automatically, and builds backlinks — all on autopilot.
+              Pentra creates, publishes, and measures SEO content. It tracks
+              rankings, detects indexing and performance problems, and turns
+              verified authority opportunities into approval-first outreach.
             </p>
 
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -96,20 +95,20 @@ function Hero() {
               {/* Terminal content */}
               <div className="p-5 font-mono text-[12.5px] leading-[1.8] space-y-0.5">
                 <TerminalLine delay={0} icon="✓" color="#22C55E">
-                  Crawled 47 pages · niche detected: AI SaaS
+                  Website crawl completed
                 </TerminalLine>
                 <TerminalLine delay={1} icon="✓" color="#22C55E">
-                  Generated 12 keyword clusters
+                  Measured topic portfolio prepared
                 </TerminalLine>
                 <TerminalLine delay={2} icon="●" color="#0EA5E9">
                   Writing: &quot;How to Increase B2B Conversion Rates&quot;
                 </TerminalLine>
                 <div className="pl-5 space-y-0.5">
                   <TerminalLine delay={3} icon="├─" color="#565A6E" sub>
-                    Web research · 8 sources found
+                    Source ledger captured
                   </TerminalLine>
                   <TerminalLine delay={4} icon="├─" color="#565A6E" sub>
-                    2,847 words · fact-check 94%
+                    Claims checked against preserved evidence
                   </TerminalLine>
                   <TerminalLine delay={5} icon="└─" color="#565A6E" sub>
                     Published → GitHub
@@ -117,16 +116,16 @@ function Hero() {
                 </div>
                 <div className="pt-2" />
                 <TerminalLine delay={6} icon="✓" color="#22C55E">
-                  GSC sync: 142 keywords tracked
+                  Search Console measurement synced
                 </TerminalLine>
                 <TerminalLine delay={7} icon="⚠" color="#F59E0B">
-                  Decay detected: &quot;SEO Strategy Guide&quot; dropped 5 positions
+                  Ranking decline detected from measured history
                 </TerminalLine>
                 <TerminalLine delay={8} icon="●" color="#0EA5E9">
-                  Auto-refreshing with latest research...
+                  Recovery action queued with measured evidence...
                 </TerminalLine>
                 <TerminalLine delay={9} icon="✓" color="#22C55E">
-                  Refreshed → republished with updated data
+                  Operator review required before publication changes
                 </TerminalLine>
 
                 {/* Blinking cursor */}
@@ -182,9 +181,9 @@ function TerminalLine({
 function Stats() {
   const stats = [
     { value: "8-step", label: "Automated pipeline", icon: Zap },
-    { value: "94%", label: "Fact-check confidence", icon: ShieldCheck },
-    { value: "24/7", label: "Rank monitoring", icon: BarChart3 },
-    { value: "Auto", label: "Content refresh", icon: RefreshCw },
+    { value: "Strict", label: "Claim-evidence gates", icon: ShieldCheck },
+    { value: "Daily", label: "GSC measurement", icon: BarChart3 },
+    { value: "Exact", label: "Outcome receipts", icon: RefreshCw },
   ];
 
   return (
@@ -220,8 +219,8 @@ function TheLoop() {
           </h2>
           <p className="mt-3 text-[15px] text-[#8B8FA3]">
             Most AI tools write and forget. Pentra creates content, monitors its
-            performance, and automatically maintains it — a continuous loop that
-            compounds traffic over time.
+            performance, diagnoses the next action, and records whether that
+            action produced an indexed page, click, or verified link.
           </p>
         </div>
 
@@ -249,7 +248,7 @@ function TheLoop() {
               "Auto-publishes to GitHub, WordPress, or Webhook",
               "Injects JSON-LD schema markup (Article, FAQ, HowTo)",
               "Weaves in internal links across your content",
-              "Syndicates to Medium & LinkedIn",
+              "Verifies the exact destination receipt before marking published",
               "Optimized for AI Overviews & featured snippets",
             ]}
           />
@@ -273,10 +272,10 @@ function TheLoop() {
             color="#EF4444"
             items={[
               "Flags articles losing rankings",
-              "One-click AI refresh with latest research",
-              "Auto-refresh declining content weekly",
+              "Queues evidence-backed recovery work",
+              "Protects published artifacts with revision gates",
               "Analyzes backlink profile & broken links",
-              "Generates personalized outreach emails",
+              "Prepares approval-first, evidence-grounded outreach",
             ]}
           />
         </div>
@@ -285,7 +284,7 @@ function TheLoop() {
         <div className="mt-6 flex justify-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.02] px-4 py-2">
             <RefreshCw className="h-3.5 w-3.5 text-[#0EA5E9]" />
-            <span className="text-[12px] text-[#8B8FA3]">Continuous loop — compounds traffic over time</span>
+            <span className="text-[12px] text-[#8B8FA3]">Measured loop. Every outcome remains auditable.</span>
           </div>
         </div>
       </div>
@@ -359,7 +358,7 @@ function Features() {
     {
       icon: TrendingDown,
       title: "Content decay detection",
-      desc: "Automatically flags articles losing rankings. One-click or auto-refresh with fresh research.",
+      desc: "Flags ranking decline and records the recovery action without silently mutating published content.",
     },
     {
       icon: Link2,
@@ -368,8 +367,8 @@ function Features() {
     },
     {
       icon: Mail,
-      title: "Outreach automation",
-      desc: "AI-generated personalized outreach emails for link building at scale.",
+      title: "Authority outreach",
+      desc: "Verified public-page opportunities, grounded drafts, human approval, safe pacing, and exact-link receipts.",
     },
     {
       icon: Target,
@@ -377,9 +376,9 @@ function Features() {
       desc: "Articles structured for Google AI Overviews — question patterns, definitive answers, structured data.",
     },
     {
-      icon: Share2,
-      title: "Content syndication",
-      desc: "Auto-distribute to Medium and LinkedIn with canonical URLs. Maximize reach per article.",
+      icon: ShieldCheck,
+      title: "Publication receipts",
+      desc: "Records a verified GitHub, WordPress, or webhook receipt before treating an article as published.",
     },
     {
       icon: GitBranch,
@@ -413,8 +412,8 @@ function Features() {
             <span className="text-[#565A6E]">Without the team.</span>
           </h2>
           <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            Content creation, rank tracking, decay detection, backlink building,
-            and content syndication — all automated, all included on every plan.
+            Content creation, rank tracking, decay detection, authority discovery,
+            and auditable outreach in one tenant-isolated workflow.
           </p>
         </div>
 
@@ -504,16 +503,15 @@ function Differentiators() {
                 </div>
               </div>
               <p className="text-[13px] leading-relaxed text-[#EDEEF1]">
-                &ldquo;According to HubSpot&apos;s 2025 State of Marketing
-                report, 64% of B2B teams now use AI for first-draft
-                content.&rdquo;
+                Evidence-required claims remain bound to the exact preserved
+                source record that reviewers can audit before publication.
               </p>
               <div className="mt-2 flex items-center gap-2">
                 <span className="rounded bg-[#22C55E]/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E]">
-                  94% confidence
+                  Evidence linked
                 </span>
                 <span className="text-[11px] text-[#565A6E]">
-                  Source: hubspot.com/marketing-report
+                  Preserved source ledger
                 </span>
               </div>
             </div>
@@ -567,7 +565,7 @@ function Differentiators() {
                 <div className="flex items-center gap-2.5 rounded-lg bg-[#EF4444]/[0.04] border border-[#EF4444]/[0.1] px-3 py-2.5">
                   <TrendingDown className="h-3.5 w-3.5 text-[#EF4444] shrink-0" />
                   <span className="text-[11px] text-[#F87171] flex-1">&ldquo;SEO Strategy Guide&rdquo; dropped 5 positions</span>
-                  <span className="text-[10px] text-[#0EA5E9] font-medium shrink-0">Auto-refresh</span>
+                  <span className="text-[10px] text-[#0EA5E9] font-medium shrink-0">Recovery queued</span>
                 </div>
               </div>
             </div>
@@ -588,16 +586,16 @@ function Differentiators() {
               </span>
             </h2>
             <p className="mt-4 text-[15px] leading-relaxed text-[#8B8FA3]">
-              Most content starts decaying within 6 months. Pentra connects to
-              Google Search Console, tracks every keyword daily, and automatically
-              detects when articles start losing rankings. Declining content gets
-              refreshed with the latest research — no manual intervention needed.
+              Pentra connects to Google Search Console, measures page and query
+              performance daily, and detects when articles lose visibility.
+              Published content remains immutable until a new revision passes the
+              same quality and delivery gates as the original.
             </p>
             <div className="mt-6 flex flex-col gap-2.5">
               {[
                 "Google Search Console integration — daily rank tracking",
                 "Automated content decay detection with position history",
-                "One-click AI refresh with fresh web research",
+                "Evidence-backed recovery actions for declining pages",
                 "Striking distance alerts for keywords close to page 1",
               ].map((item) => (
                 <div
@@ -676,7 +674,7 @@ function Differentiators() {
                 </div>
               </div>
               <SettingRow label="Publish to" value="GitHub / WordPress / Webhook" />
-              <SettingRow label="Syndicate to" value="Medium + LinkedIn" />
+              <SettingRow label="Delivery" value="Exact destination receipt" />
               <SettingRow label="GSC Connected" value="✓ Daily rank tracking" />
             </div>
           </div>
@@ -709,7 +707,7 @@ function SettingRow({ label, value }: { label: string; value: string }) {
 const faqs = [
   {
     q: "How is Pentra different from other AI writing tools?",
-    a: "Most AI tools just write and forget. Pentra is a complete SEO loop: it creates content with live web research, publishes it, monitors rankings via Google Search Console, detects when articles start declining, and automatically refreshes them. It also builds backlinks through automated outreach. It's the difference between an AI writer and an AI SEO department.",
+    a: "Most AI tools stop after writing. Pentra researches, publishes, measures Search Console outcomes, diagnoses underperforming pages, discovers verified authority opportunities, and preserves the receipt for each action. Outreach stays approval-first until a tenant explicitly enables a verified sending inbox.",
   },
   {
     q: "Is the content actually unique and not just AI slop?",
@@ -721,7 +719,7 @@ const faqs = [
   },
   {
     q: "What publishing platforms do you support?",
-    a: "GitHub (commits MDX with frontmatter and schema markup), WordPress (via REST API), webhooks (for custom CMS), and manual. Plus optional syndication to Medium (as drafts with canonical URL) and LinkedIn (AI-generated posts with article links).",
+    a: "GitHub (commits MDX with frontmatter and schema markup), WordPress (via REST API), webhooks (for custom CMS), and manual copy or download. Automatic Medium and LinkedIn syndication is not currently available.",
   },
   {
     q: "Can I review articles before they go live?",
@@ -733,15 +731,15 @@ const faqs = [
   },
   {
     q: "Do all plans get the same features?",
-    a: "Yes. Every plan — including Free — gets the full platform: web research, fact-checking, hero images, internal linking, schema markup, rank tracking, content decay detection, backlink analysis, outreach emails, content syndication, and multi-platform publishing. The only difference is articles per month and number of sites.",
+    a: "Core research, quality gates, publishing, and measurement are available according to each plan's limits. Search Console, publishing adapters, and outreach remain fail-closed until that site's owner connects and verifies them.",
   },
   {
     q: "How long does it take to generate an article?",
-    a: "A typical 2,500-3,000 word article takes about 3-5 minutes from start to publish. This includes web research, drafting, fact-checking, image generation, internal linking, schema markup, and publishing — all fully automated.",
+    a: "Generation time varies with research depth, source availability, quality revisions, media review, and the connected publishing destination. Pentra shows job progress and will reject or defer work that does not clear its publication gates.",
   },
   {
     q: "Can I cancel anytime?",
-    a: "Yes. All plans are month-to-month with no contracts. Cancel anytime from your dashboard.",
+    a: "Yes. Monthly and annual plans can be canceled anytime from your dashboard. Your access remains active through the end of the current billing period.",
   },
 ];
 
@@ -887,9 +885,9 @@ const organizationSchema = {
     "AI article generation with web research",
     "Automated fact-checking with citations",
     "Google Search Console rank tracking",
-    "Content decay detection and auto-refresh",
+    "Content decay detection and recovery actions",
     "Multi-platform publishing (GitHub, WordPress, Webhook)",
-    "Backlink analysis and outreach automation",
+    "Verified backlink opportunities and approval-first outreach",
     "JSON-LD schema markup generation",
     "Internal linking optimization",
   ],

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useMemo, useState } from "react";
@@ -111,6 +112,7 @@ function getArticleTypeInfo(type: string): { label: string; color: string; bg: s
 
 export default function PlanPage() {
   const { activeSite: site, sites } = useActiveSite();
+  const { userId } = useAuth();
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
@@ -124,12 +126,11 @@ export default function PlanPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
   const { maxArticles } = usePlanLimits();
-
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
-  const articlesThisMonth =
-    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  const usageCount = useQuery(
+    api.articles.countThisMonth,
+    userId ? { userId } : "skip",
+  );
+  const articlesThisMonth = usageCount ?? 0;
   const atArticleLimit = articlesThisMonth >= maxArticles;
 
   const queuePlan = useMutation(api.planJobs.queuePlanGeneration);
@@ -190,6 +191,7 @@ export default function PlanPage() {
   // Schedule weeks
   const scheduleWeeks = useMemo(() => {
     const cadence = site?.cadencePerWeek ?? 4;
+    if (cadence <= 0) return [];
     const msPerArticle = ((7 * 24) / cadence) * 60 * 60 * 1000;
     const now = Date.now();
 
@@ -390,11 +392,13 @@ export default function PlanPage() {
       )}
 
       {/* Cadence info */}
-      {site?.cadencePerWeek && sorted.length > 0 && (
+      {site && sorted.length > 0 && (
         <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
           <Clock className="h-3 w-3" />
           <span>
-            {cadenceLabel(site.cadencePerWeek)} · ~{Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining
+            {(site.cadencePerWeek ?? 0) <= 0
+              ? "Publishing paused because this account's monthly article allowance is allocated to other sites"
+              : `${cadenceLabel(site.cadencePerWeek)} · ~${Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining`}
           </span>
         </div>
       )}
@@ -404,11 +408,13 @@ export default function PlanPage() {
       {/* Schedule View */}
       {activeTab === "schedule" && (
         <div className="flex flex-col gap-4">
-          {site?.cadencePerWeek && (
+          {site && (
             <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
               <Calendar className="h-3 w-3 text-[#0EA5E9]" />
               <span>
-                Publishing at {cadenceLabel(site.cadencePerWeek)} · {availableCount} topics queued
+                {(site.cadencePerWeek ?? 0) <= 0
+                  ? `${availableCount} topics retained; publishing is paused until account article capacity is available`
+                  : `Publishing at ${cadenceLabel(site.cadencePerWeek)} · ${availableCount} topics queued`}
               </span>
             </div>
           )}

@@ -28,7 +28,7 @@ export default function WebsitesPage() {
   const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
   const loading = sites === undefined;
   const { maxSites } = usePlanLimits();
-  const atSiteLimit = (sites?.length ?? 0) >= maxSites;
+  const atSiteLimit = maxSites < 9999 && (sites?.length ?? 0) >= maxSites;
 
   if (loading) {
     return (

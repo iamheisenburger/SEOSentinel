@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  allocateCadenceForMonthlyAllowance,
+  cadenceFitsMonthlyAllowance,
   cadenceFitsMonthlyLimit,
   cadenceLabel,
   cadenceOptionsForMonthlyLimit,
@@ -14,13 +16,13 @@ import { cadenceIntervalMs } from "../convex/lib/autopilotBuffer.ts";
 
 test("the free plan receives an honest three-per-month autonomous cadence", () => {
   const options = cadenceOptionsForMonthlyLimit(3);
-  assert.equal(options.length, 1);
-  assert.equal(options[0].label, "3/month");
-  assert.equal(requiredMonthlyArticlesForCadence(options[0].value), 3);
-  assert.equal(cadenceLabel(options[0].value), "3/month");
-  assert.equal(defaultCadenceForMonthlyLimit(3), options[0].value);
+  assert.deepEqual(options.map((option) => option.label), ["Paused", "3/month"]);
+  const active = options[1];
+  assert.equal(requiredMonthlyArticlesForCadence(active.value), 3);
+  assert.equal(cadenceLabel(active.value), "3/month");
+  assert.equal(defaultCadenceForMonthlyLimit(3), active.value);
   assert.equal(
-    cadenceIntervalMs(options[0].value),
+    cadenceIntervalMs(active.value),
     Math.floor((31 * 24 * 60 * 60 * 1000) / 3),
   );
 });
@@ -31,7 +33,7 @@ test("every selectable cadence fits its monthly plan capacity", () => {
     assert.ok(options.length > 0);
     assert.ok(
       options.every((option) =>
-        cadenceFitsMonthlyLimit(option.value, maxArticles)
+        cadenceFitsMonthlyAllowance(option.value, maxArticles)
       ),
     );
   }
@@ -42,9 +44,21 @@ test("every selectable cadence fits its monthly plan capacity", () => {
 
 test("tenant cadence writes are enforced server-side and legacy mismatches are migratable", () => {
   const sites = readFileSync("convex/sites.ts", "utf8");
-  assert.match(sites, /function assertCadenceFitsPlan/);
+  assert.match(sites, /function assertCadenceFitsAccountAllowance/);
+  assert.match(sites, /async function reserveAccountCadence/);
   assert.match(sites, /export const reconcileUnsustainableCadences/);
-  assert.match(sites, /maximumSelectableCadenceForMonthlyLimit/);
+  assert.match(sites, /applyCanonicalPlanToUserSites/);
+});
+
+test("the allocator uses remaining account capacity and pauses truthfully at zero", () => {
+  assert.equal(allocateCadenceForMonthlyAllowance(4, 25), 4);
+  assert.equal(requiredMonthlyArticlesForCadence(4), 18);
+  const reduced = allocateCadenceForMonthlyAllowance(4, 7);
+  assert.ok(requiredMonthlyArticlesForCadence(reduced) <= 7);
+  assert.equal(allocateCadenceForMonthlyAllowance(4, 0), 0);
+  assert.equal(cadenceLabel(0), "Paused");
+  assert.equal(cadenceFitsMonthlyAllowance(0, 0), true);
+  assert.equal(cadenceFitsMonthlyLimit(0, 25), false);
 });
 
 test("Search Console outcomes run for the paginated tenant fleet", () => {

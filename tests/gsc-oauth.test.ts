@@ -29,16 +29,70 @@ test("normalizes domain and URL-prefix properties", () => {
   assert.equal(normalizeGscDomain("leadpilot.chat/blog/article"), "leadpilot.chat");
 });
 
-test("selects only the exact site's Search Console property", () => {
+test("prefers the exact domain property over an exact root URL prefix", () => {
   const entries = [
     { siteUrl: "sc-domain:unrelated.example" },
     { siteUrl: "https://leadpilot.chat/" },
+    { siteUrl: "sc-domain:leadpilot.chat" },
     { siteUrl: "sc-domain:another.example" },
   ];
 
   assert.equal(
     findMatchingGscProperty(entries, "leadpilot.chat"),
-    "https://leadpilot.chat/",
+    "sc-domain:leadpilot.chat",
   );
   assert.equal(findMatchingGscProperty(entries, "missing.example"), undefined);
+});
+
+test("falls back only to an exact origin-root URL-prefix property", () => {
+  const entries = [
+    { siteUrl: "https://leadpilot.chat/blog/" },
+    { siteUrl: "https://www.leadpilot.chat/" },
+    { siteUrl: "http://leadpilot.chat/" },
+    { siteUrl: "https://leadpilot.chat/" },
+  ];
+
+  assert.equal(
+    findMatchingGscProperty(entries, "https://leadpilot.chat"),
+    "https://leadpilot.chat/",
+  );
+});
+
+test("rejects subpath, sibling-host, protocol, query, and fragment prefixes", () => {
+  const invalid = [
+    { siteUrl: "https://leadpilot.chat/blog/" },
+    { siteUrl: "https://www.leadpilot.chat/" },
+    { siteUrl: "http://leadpilot.chat/" },
+    { siteUrl: "https://leadpilot.chat/?scope=blog" },
+    { siteUrl: "https://leadpilot.chat/#blog" },
+  ];
+
+  assert.equal(
+    findMatchingGscProperty(invalid, "https://leadpilot.chat"),
+    undefined,
+  );
+});
+
+test("requires an exact hostname for domain properties", () => {
+  assert.equal(
+    findMatchingGscProperty(
+      [{ siteUrl: "sc-domain:www.leadpilot.chat" }],
+      "leadpilot.chat",
+    ),
+    undefined,
+  );
+  assert.equal(
+    findMatchingGscProperty(
+      [{ siteUrl: "sc-domain:www.leadpilot.chat" }],
+      "https://www.leadpilot.chat",
+    ),
+    "sc-domain:www.leadpilot.chat",
+  );
+  assert.equal(
+    findMatchingGscProperty(
+      [{ siteUrl: "sc-domain:leadpilot.chat/blog" }],
+      "leadpilot.chat",
+    ),
+    undefined,
+  );
 });

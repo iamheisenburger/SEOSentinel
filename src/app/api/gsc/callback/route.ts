@@ -3,10 +3,19 @@ import { auth } from "@clerk/nextjs/server";
 import {
   findMatchingGscProperty,
   hasGscGrowthScope,
+  hasOnlyGscGrowthScopes,
 } from "@/lib/gsc-oauth";
 import { getOwnedSite } from "@/lib/owned-site";
 import { verifyOAuthState } from "@/lib/oauth-state";
 import { callPentraInternal } from "@/lib/pentra-internal-api";
+
+const OAUTH_HTTP_TIMEOUT_MS = 15_000;
+
+type GoogleTokenResponse = {
+  access_token?: string;
+  refresh_token?: string;
+  scope?: string;
+};
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -55,28 +64,36 @@ export async function GET(req: NextRequest) {
   }
 
   // Exchange code for tokens
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: callbackUrl,
-      grant_type: "authorization_code",
-    }),
-  });
+  let tokenRes: Response;
+  try {
+    tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: callbackUrl,
+        grant_type: "authorization_code",
+      }),
+      signal: AbortSignal.timeout(OAUTH_HTTP_TIMEOUT_MS),
+    });
+  } catch {
+    return new NextResponse(renderPage("Google authorization timed out. Please reconnect.", false), {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
 
   if (!tokenRes.ok) {
-    const errText = await tokenRes.text();
-    console.error("GSC token exchange failed:", errText);
+    console.error(`GSC token exchange failed with HTTP ${tokenRes.status}`);
     return new NextResponse(renderPage("Failed to exchange authorization code.", false), {
       status: 500,
       headers: { "Content-Type": "text/html" },
     });
   }
 
-  const tokenData = await tokenRes.json();
+  const tokenData = (await tokenRes.json()) as GoogleTokenResponse;
   const accessToken = tokenData.access_token;
   const refreshToken = tokenData.refresh_token;
 
@@ -87,25 +104,21 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  let grantedScopes = typeof tokenData.scope === "string" ? tokenData.scope : "";
-  if (!hasGscGrowthScope(grantedScopes)) {
-    try {
-      const tokenInfoRes = await fetch(
-        `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
-      );
-      if (tokenInfoRes.ok) {
-        const tokenInfo = await tokenInfoRes.json();
-        grantedScopes = typeof tokenInfo.scope === "string" ? tokenInfo.scope : grantedScopes;
-      }
-    } catch {
-      // The explicit permission check below remains authoritative.
-    }
-  }
+  const grantedScopes = typeof tokenData.scope === "string" ? tokenData.scope : "";
 
   if (!hasGscGrowthScope(grantedScopes)) {
     return new NextResponse(
       renderPage(
         "Search Console growth permission was not granted. Reconnect and allow Pentra to read performance data and submit your sitemap.",
+        false,
+      ),
+      { status: 403, headers: { "Content-Type": "text/html" } },
+    );
+  }
+  if (!hasOnlyGscGrowthScopes(grantedScopes)) {
+    return new NextResponse(
+      renderPage(
+        "Google returned permissions outside the dedicated Search Console scope. Revoke Pentra's Google access and reconnect Search Console.",
         false,
       ),
       { status: 403, headers: { "Content-Type": "text/html" } },
@@ -117,6 +130,7 @@ export async function GET(req: NextRequest) {
   try {
     const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(OAUTH_HTTP_TIMEOUT_MS),
     });
     if (userRes.ok) {
       const userData = await userRes.json();
@@ -135,8 +149,8 @@ export async function GET(req: NextRequest) {
         { siteId },
       );
       siteDomain = site.domain;
-    } catch (error) {
-      console.error("Failed to load Pentra site for GSC matching:", error);
+    } catch {
+      console.error("Failed to load the tenant site for GSC matching");
     }
   }
 
@@ -150,10 +164,10 @@ export async function GET(req: NextRequest) {
   try {
     const sitesRes = await fetch("https://www.googleapis.com/webmasters/v3/sites", {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(OAUTH_HTTP_TIMEOUT_MS),
     });
     if (!sitesRes.ok) {
-      const errorText = await sitesRes.text();
-      console.error("GSC property listing failed:", errorText);
+      console.error(`GSC property listing failed with HTTP ${sitesRes.status}`);
       return new NextResponse(
         renderPage("Pentra could not verify Search Console access. Reconnect and allow performance reading and sitemap submission.", false),
         { status: 403, headers: { "Content-Type": "text/html" } },
@@ -162,8 +176,8 @@ export async function GET(req: NextRequest) {
 
     const sitesData = await sitesRes.json();
     gscProperty = findMatchingGscProperty(sitesData.siteEntry || [], siteDomain) || "";
-  } catch (e) {
-    console.error("Failed to list GSC properties:", e);
+  } catch {
+    console.error("Failed to list GSC properties");
     return new NextResponse(renderPage("Pentra could not load your Search Console properties.", false), {
       status: 502,
       headers: { "Content-Type": "text/html" },
@@ -193,18 +207,32 @@ export async function GET(req: NextRequest) {
         gscScopes: grantedScopes,
       });
       saved = true;
-    } catch (e) {
-      console.error("Failed to save GSC token to Convex:", e);
+    } catch {
+      console.error("Failed to save the GSC connection");
     }
   }
 
-  const msg = saved
-    ? `Connected to Google Search Console! Property: ${gscProperty}`
-    : "Connected! You can close this window.";
+  if (!saved) {
+    const response = new NextResponse(
+      renderPage(
+        "Pentra verified Search Console access but could not save the tenant connection. Please reconnect.",
+        false,
+      ),
+      { status: 502, headers: { "Content-Type": "text/html" } },
+    );
+    response.cookies.delete("gsc_oauth_state");
+    return response;
+  }
 
-  const response = new NextResponse(renderPage(msg, true, email, saved), {
-    headers: { "Content-Type": "text/html" },
-  });
+  const response = new NextResponse(
+    renderPage(
+      `Connected to Google Search Console! Property: ${gscProperty}`,
+      true,
+      email,
+      true,
+    ),
+    { headers: { "Content-Type": "text/html" } },
+  );
   response.cookies.delete("gsc_oauth_state");
   return response;
 }
@@ -212,7 +240,8 @@ export async function GET(req: NextRequest) {
 function renderPage(message: string, success: boolean, email?: string, autoSaved?: boolean): string {
   const icon = success ? "&#10003;" : "&#10007;";
   const color = success ? "#22C55E" : "#EF4444";
-  const userLine = email ? `<p class="msg">Signed in as <strong style="color:#EDEEF1">${email}</strong></p>` : "";
+  const safeMessage = escapeHtml(message);
+  const userLine = email ? `<p class="msg">Signed in as <strong style="color:#EDEEF1">${escapeHtml(email)}</strong></p>` : "";
   const subMsg = success && autoSaved ? "This window will close automatically..." : success ? "Close this window and refresh the page." : "You can close this window.";
   const closeScript = success && autoSaved ? `<script>setTimeout(function() { window.close(); }, 1500);</script>` : "";
 
@@ -227,8 +256,17 @@ h2{font-size:1.1rem;margin:0}
 </style></head>
 <body><div class="card">
 <div class="icon">${icon}</div>
-<h2 style="color:${color}">${message}</h2>
+<h2 style="color:${color}">${safeMessage}</h2>
 ${userLine}
 <p class="msg">${subMsg}</p>
 </div>${closeScript}</body></html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

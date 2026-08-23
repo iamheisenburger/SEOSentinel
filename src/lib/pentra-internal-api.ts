@@ -24,13 +24,12 @@ export async function callPentraInternal<T>(
     },
     body: JSON.stringify(body),
     cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
   });
 
-  const payload = (await response.json().catch(() => ({}))) as {
-    error?: string;
-  };
   if (!response.ok) {
-    throw new Error(payload.error || `Pentra internal API failed (${response.status})`);
+    throw new Error(`Pentra internal API failed with HTTP ${response.status}`);
   }
+  const payload = (await response.json().catch(() => ({}))) as T;
   return payload as T;
 }

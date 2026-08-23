@@ -1,6 +1,7 @@
 "use client";
 
 import { useAction, useQuery } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "../../../../convex/_generated/api";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -35,11 +36,16 @@ import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
+import {
+  autopilotHealthRequiresAttention,
+  dashboardAutopilotRequiresAttention,
+} from "../../../../convex/lib/autopilotAlerts";
 
 export default function DashboardPage() {
   const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
+  const { userId } = useAuth();
   const topics = useQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
@@ -70,16 +76,16 @@ export default function DashboardPage() {
   const [genBusy, setGenBusy] = useState(false);
   const [genMessage, setGenMessage] = useState<string | null>(null);
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
-  const { maxSites, maxArticles, isFreePlan } = usePlanLimits();
+  const { maxSites, maxArticles } = usePlanLimits();
+  const usageCount = useQuery(
+    api.articles.countThisMonth,
+    userId ? { userId } : "skip",
+  );
 
-  // Articles generated this calendar month (across all sites)
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
-  const articlesThisMonth =
-    articles?.filter((a) => a.createdAt >= monthStart.getTime()).length ?? 0;
+  // Account-wide immutable usage remains truthful across sites and deletions.
+  const articlesThisMonth = usageCount ?? 0;
   const atArticleLimit = articlesThisMonth >= maxArticles;
-  const atSiteLimit = (sites?.length ?? 0) >= maxSites;
+  const atSiteLimit = maxSites < 9999 && (sites?.length ?? 0) >= maxSites;
 
   const publishedCount =
     articles?.filter((a) => a.status === "published").length ?? 0;
@@ -98,11 +104,16 @@ export default function DashboardPage() {
   const recentArticles = articles?.slice(0, 5) ?? [];
   const decayCount = decayingArticles?.length ?? 0;
   const activeAutopilotAlerts = autopilotHealth?.alerts ?? [];
-  const autopilotBlocked =
-    activeAutopilotAlerts.length > 0 ||
-    (autopilotHealth?.health?.status &&
-      autopilotHealth.health.status !== "healthy" &&
-      autopilotHealth.health.status !== "recovering");
+  const autopilotBlocked = dashboardAutopilotRequiresAttention({
+    health: autopilotHealth?.health,
+    alerts: activeAutopilotAlerts,
+  });
+  const healthRequiresAttention = autopilotHealthRequiresAttention(
+    autopilotHealth?.health?.status,
+  );
+  const autopilotAttentionMessage = healthRequiresAttention
+    ? autopilotHealth?.health?.detail
+    : activeAutopilotAlerts[0]?.message;
 
   const loading = sites === undefined;
 
@@ -204,8 +215,7 @@ export default function DashboardPage() {
                 Content automation needs attention
               </p>
               <p className="mt-1 text-[12px] text-[#F87171]">
-                {activeAutopilotAlerts[0]?.message ??
-                  autopilotHealth?.health?.detail ??
+                {autopilotAttentionMessage ??
                   "Automation is fail-closed."}
               </p>
             </div>
@@ -451,7 +461,7 @@ export default function DashboardPage() {
               </p>
               <p className="mt-2 text-[10px] text-[#F87171]">
                 {autopilotBlocked
-                  ? autopilotHealth?.health?.detail ?? "Automation is fail-closed"
+                  ? autopilotAttentionMessage ?? "Automation is fail-closed"
                   : "Ranking decline detected"}
               </p>
             </>

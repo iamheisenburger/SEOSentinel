@@ -11,9 +11,11 @@ import { randomUUID } from "crypto";
 import { z } from "zod";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
+  appendRelatedInternalLinks,
   injectInternalLinks,
   preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
+  selectRelatedInternalLinks,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
 import {
@@ -44,16 +46,50 @@ import {
 } from "../lib/autopilotCadence";
 import {
   cadenceIntervalMs,
+  coveredIntentTopics,
   evaluateTopicBusinessFit,
   evergreenTopicLabel,
   filterNonCannibalizingIntentTopics,
   hasReliableSerpFingerprint,
+  isUnderfilledPlanContinuationPayload,
+  keywordDifficultyCeiling,
   normalizedSerpQuestions,
   pendingJobPriority,
-  serpFingerprintOverlap,
+  tenantDiscoveryAnchors,
+  tenantTopicBusinessSignals,
   topicDiscoverySeedWindow,
 } from "../lib/autopilotBuffer";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
+import { evaluateSerpBusinessIntent } from "../lib/serpAttainability";
+import {
+  DATAFORSEO_DEMAND_SOURCE,
+  EXPECTED_CLICK_PORTFOLIO_VERSION,
+  estimatedAuthorityBulkCostUsd,
+  estimateTopicExpectedClicks,
+  measuredAuthorityIsFresh,
+  planSerpAuthorityCollection,
+  tenantAuthorityFromStoredEvidence,
+  type MeasuredAuthority,
+} from "../lib/expectedClickPortfolio";
+import {
+  dataForSeoLanguageCode,
+  dataForSeoLocationCode,
+} from "../lib/dataForSeoLocale";
+import {
+  AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD,
+  AUTOMATIC_PLAN_TOPIC_CAPACITY,
+  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
+  classifyPlanFailure,
+  planRetryUsesCurrentReservationDay,
+  requiredPlanProviderBalanceMicroUsd,
+} from "../lib/planProviderBudget";
+import {
+  assertDataForSeoAccountBalance,
+  isDataForSeoBalancePreflightError,
+  type DataForSeoBalancePreflightError,
+} from "../lib/dataForSeoAccountBalance";
+import { normalizeTopicIntentKeyword } from "../lib/topicLifecycle";
 import {
   STRICT_EVIDENCE_SEARCH_DOMAINS,
   strictEvidenceSources,
@@ -75,6 +111,15 @@ import {
 
 const defaultModel = "claude-haiku-4-5-20251001";
 
+function providerBalanceReleaseReason(
+  error: DataForSeoBalancePreflightError,
+): "provider_balance_insufficient" |
+  "provider_balance_preflight_unavailable" {
+  return error.code === "insufficient_balance"
+    ? "provider_balance_insufficient"
+    : "provider_balance_preflight_unavailable";
+}
+
 type RichMediaOptions = {
   targetWords?: number;
   includeTables?: boolean;
@@ -88,6 +133,99 @@ type GrowthPlanContext = {
   seed: string;
   actionFingerprint: string;
 };
+
+type SiteAnalysisResult = {
+  siteName: string;
+  siteType: string;
+  siteSummary: string;
+  blogTheme: string;
+  keyFeatures: string[];
+  pricingInfo: string;
+  founders: string;
+  niche: string;
+  tone: string;
+  targetCountry: string;
+  targetAudienceSummary: string;
+  painPoints: string[];
+  productUsage: string;
+  suggestedCompetitors: string[];
+  suggestedAnchorKeywords: string[];
+};
+
+type CrawlAndAnalyzeResult = {
+  pages: {
+    slug: string;
+    title: string;
+    summary: string;
+    keywords?: string[];
+  }[];
+  analysis: SiteAnalysisResult;
+  brand: BrandDetection;
+};
+
+type OnboardingClaimResult =
+  | { status: "claimed"; jobId: Id<"jobs"> }
+  | { status: "cached"; result: unknown }
+  | { status: "in_progress"; retryAt: number }
+  | { status: "cooling_down"; retryAt: number }
+  | { status: "budget_blocked"; reason: string };
+
+type PublishApprovedResult =
+  | { published: true; articleId: Id<"articles"> }
+  | {
+      published: false;
+      queuedForQualityReview: true;
+      articleId: Id<"articles">;
+      jobId?: Id<"jobs">;
+    };
+
+type ArticleProviderWorkKind =
+  | "generation"
+  | "quality_review"
+  | "internal_links";
+
+class ArticleProviderAdmissionError extends Error {
+  constructor(
+    readonly reason:
+      | "worker_lease_lost"
+      | "site_not_authorized"
+      | "attempt_already_settled"
+      | "monthly_attempt_limit"
+      | "account_concurrency"
+      | "fleet_concurrency",
+    readonly retryAfterMs?: number,
+  ) {
+    super(`Article provider work is unavailable (${reason})`);
+    this.name = "ArticleProviderAdmissionError";
+  }
+}
+
+function assertPlanProviderReservation(job: Doc<"jobs">): void {
+  if (
+    job.providerCostCeilingMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+    job.providerCostReservedMicroUsd !==
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+    job.providerCostReservationDay !==
+        new Date(job.createdAt).toISOString().slice(0, 10) ||
+    job.providerReservationReleasedAt !== undefined
+  ) {
+    throw new Error(
+      "Budgeted plan provider reservation is missing or invalid; refusing paid discovery.",
+    );
+  }
+  if (
+    (job.workerAttempts ?? 0) > 0 &&
+    !planRetryUsesCurrentReservationDay(
+      job.providerCostReservationDay,
+      Date.now(),
+    )
+  ) {
+    throw new Error(
+      "Paid plan retry crossed its UTC reservation day; refusing to spend against a stale provider budget.",
+    );
+  }
+}
 
 const TopicSchema = z.object({
   label: z.string(),
@@ -277,28 +415,7 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
 
 /** Map country name to DataForSEO location code. Defaults to US (2840). */
 function mapCountryToLocation(country?: string): number {
-  if (!country) return 2840;
-  const c = country.toLowerCase().trim();
-  const map: Record<string, number> = {
-    "us": 2840, "usa": 2840, "united states": 2840,
-    "uk": 2826, "united kingdom": 2826, "gb": 2826,
-    "ca": 2124, "canada": 2124,
-    "au": 2036, "australia": 2036,
-    "de": 2276, "germany": 2276,
-    "fr": 2250, "france": 2250,
-    "in": 2356, "india": 2356,
-    "br": 2076, "brazil": 2076,
-    "jp": 2392, "japan": 2392,
-    "es": 2724, "spain": 2724,
-    "it": 2380, "italy": 2380,
-    "nl": 2528, "netherlands": 2528,
-    "se": 2752, "sweden": 2752,
-    "sg": 2702, "singapore": 2702,
-    "ae": 2784, "uae": 2784, "united arab emirates": 2784,
-    "mx": 2484, "mexico": 2484,
-    "global": 2840, "worldwide": 2840,
-  };
-  return map[c] ?? 2840;
+  return dataForSeoLocationCode(country);
 }
 
 const buildSlug = (title: string) =>
@@ -978,34 +1095,67 @@ async function callClaudeStructured<T>(args: {
   maxTokens?: number;
 }): Promise<T> {
   const client = anthropicClient();
-  const response = await client.messages.create({
-    model: defaultModel,
-    max_tokens: args.maxTokens ?? 8192,
-    system: args.system,
-    messages: [{ role: "user", content: args.userMessage }],
-    tools: [
-      {
+  let correction = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await client.messages.create({
+      model: defaultModel,
+      max_tokens: args.maxTokens ?? 8192,
+      system: args.system,
+      messages: [{
+        role: "user",
+        content: `${args.userMessage}${correction}`,
+      }],
+      tools: [
+        {
+          name: args.toolName,
+          description: args.toolDescription,
+          input_schema: args.inputSchema,
+          strict: true,
+        },
+      ],
+      tool_choice: {
+        type: "tool",
         name: args.toolName,
-        description: args.toolDescription,
-        input_schema: args.inputSchema,
-        strict: true,
+        disable_parallel_tool_use: true,
       },
-    ],
-    tool_choice: {
-      type: "tool",
-      name: args.toolName,
-      disable_parallel_tool_use: true,
-    },
-  });
+    });
 
-  const toolUse = response.content.find(
-    (block) => block.type === "tool_use" && block.name === args.toolName,
-  );
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error(`Claude did not submit the required ${args.toolName} tool output`);
+    const toolUse = response.content.find(
+      (block) => block.type === "tool_use" && block.name === args.toolName,
+    );
+    if (!toolUse || toolUse.type !== "tool_use") {
+      if (attempt === 0) {
+        console.log(
+          `Structured output for ${args.toolName} was missing; retrying once.`,
+        );
+        correction =
+          `\n\nCORRECTION: Your previous response did not call ${args.toolName}. ` +
+          "Call the required tool exactly once and obey its field types.";
+        continue;
+      }
+      throw new Error(
+        `Claude did not submit the required ${args.toolName} tool output`,
+      );
+    }
+
+    const parsed = args.outputSchema.safeParse(toolUse.input);
+    if (parsed.success) return parsed.data;
+    if (attempt === 0) {
+      const issues = parsed.error.issues.slice(0, 5).map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      }));
+      console.log(
+        `Structured output for ${args.toolName} failed schema validation; retrying once.`,
+      );
+      correction =
+        "\n\nCORRECTION: Your previous tool input failed validation. " +
+        `Correct these field/type errors and resubmit the complete output: ${JSON.stringify(issues)}`;
+      continue;
+    }
+    throw parsed.error;
   }
-
-  return args.outputSchema.parse(toolUse.input);
+  throw new Error(`Structured output retry exhausted for ${args.toolName}`);
 }
 
 async function fetchHtml(domain: string) {
@@ -1932,8 +2082,37 @@ async function handlePlan(
   workerToken?: string,
   replenishmentSequence = 0,
   growthContext?: GrowthPlanContext,
-): Promise<{ count: number }> {
+  expectedClickMigrationVersion?: number,
+  maximumTopicsToSave = AUTOMATIC_PLAN_TOPIC_CAPACITY,
+): Promise<{
+  count: number;
+  portfolio: {
+    status: string;
+    supportsGoal: boolean;
+    expectedClicksMonthly: number;
+    monthlyOrganicClickGoal: number | null;
+    clickDeficit: number | null;
+  };
+  authorityMeasurement: {
+    bulkRequests: number;
+    targets: number;
+    estimatedCostUsd: number;
+    tenantAuthorityCacheHit: boolean;
+  };
+}> {
   const PLAN_STEPS = 6;
+  const assertCurrentPlanWorker = async () => {
+    if (!jobId || !workerToken) {
+      throw new Error("Paid topic planning requires an active worker lease");
+    }
+    const lease = await ctx.runMutation(internal.jobs.heartbeatWorker, {
+      jobId,
+      workerToken,
+    });
+    if (!lease.owned) {
+      throw new Error("Plan worker lost its current tenant entitlement");
+    }
+  };
   const reportProgress = async (step: number, label: string) => {
     if (!jobId) return;
     if (!workerToken) throw new Error("Tracked plan work requires a worker token");
@@ -1948,30 +2127,145 @@ async function handlePlan(
 
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
+  if (
+    expectedClickMigrationVersion !== undefined &&
+    (
+      expectedClickMigrationVersion !==
+        EXPECTED_CLICK_PLAN_MIGRATION_VERSION ||
+      site.expectedClickSchedulingEnabled !== true ||
+      !site.autopilotEnabled ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+      site.expectedClickPlanMigrationVersion !==
+        expectedClickMigrationVersion ||
+      site.expectedClickPlanMigrationJobId !== jobId
+    )
+  ) {
+    throw new Error(
+      "Expected-click plan migration authorization is no longer current",
+    );
+  }
+  const requireVerifiedKeywordData =
+    site.autopilotEnabled !== false || site.verifiedKeywordDataRequired === true;
+  // Expected-click portfolio enforcement is an explicit tenant canary. Legacy
+  // tenants retain their existing keyword/SERP planning contract and must not
+  // incur the new competitor-authority request or its stricter terminal gates
+  // until this flag is deliberately enabled for that site.
+  const expectedClickSchedulingEnabled =
+    site.expectedClickSchedulingEnabled === true;
+  const requestedTopicLimit =
+    Number.isFinite(maximumTopicsToSave) && maximumTopicsToSave > 0
+      ? Math.floor(maximumTopicsToSave)
+      : AUTOMATIC_PLAN_TOPIC_CAPACITY;
+  const planTopicLimit = Math.max(
+    1,
+    Math.min(
+      growthContext ? 3 : AUTOMATIC_PLAN_TOPIC_CAPACITY,
+      requestedTopicLimit,
+    ),
+  );
+  let authorityBulkRequests = 0;
+  let authorityTargets = 0;
+  let authorityEstimatedCostUsd = 0;
+  let tenantAuthorityCacheHit = false;
 
   const existingTopics = await ctx.runQuery(internal.topics.listBySiteInternal, { siteId });
+  const existingArticleSummaries = await ctx.runQuery(
+    internal.articles.listBySiteInternal,
+    { siteId },
+  );
   const existingKeywords = existingTopics.map((t: { primaryKeyword: string }) => t.primaryKeyword);
+  const rawSearchDemandSignals = await ctx.runQuery(
+    internal.searchPerformance.getDiscoverySignalsInternal,
+    { siteId, limit: 12 },
+  );
+  const tenantBusinessSignals = tenantTopicBusinessSignals(site);
+  // Search Console can expose accidental impressions from old, weak pages.
+  // Reuse only queries that still satisfy the same tenant product/model gate
+  // as a new topic; observed demand must not become a relevance bypass.
+  const searchDemandSignals = rawSearchDemandSignals.filter(
+    (signal: { query: string }) => evaluateTopicBusinessFit({
+      keyword: signal.query,
+      ...tenantBusinessSignals,
+    }).eligible,
+  );
 
   await reportProgress(1, "Analyzing site authority...");
 
   const productName = site.siteName ?? site.domain;
   const locationCode = mapCountryToLocation(site.targetCountry);
+  const languageCode = dataForSeoLanguageCode(site.language);
 
   // ══════════════════════════════════════════════════════════════════════
   // STEP 1: Gather all intelligence about this site
   // ══════════════════════════════════════════════════════════════════════
 
   // 1a. Domain authority — what can this site realistically rank for?
-  let domainMetrics: { domainRank: number; organicTraffic: number; backlinks: number; referringDomains: number } | null = null;
+  let domainMetrics: {
+    domain: string;
+    domainRank: number;
+    organicTraffic: number;
+    backlinks: number;
+    referringDomains: number;
+    source: string;
+    measuredAt: number;
+  } | null = null;
   let maxKD = 35;
   try {
     const { getDomainAuthority, computeMaxKD } = await import("./seoData");
-    domainMetrics = await getDomainAuthority(site.domain);
+    const cachedAuthority = tenantAuthorityFromStoredEvidence({
+      domain: site.seoAuthorityDomain,
+      currentDomain: site.domain,
+      domainRank: site.seoAuthorityDomainRank,
+      referringDomains: site.seoAuthorityReferringDomains,
+      source: site.seoAuthoritySource,
+      measuredAt: site.seoAuthorityMeasuredAt,
+    });
+    if (measuredAuthorityIsFresh(cachedAuthority)) {
+      tenantAuthorityCacheHit = true;
+      domainMetrics = {
+        domain: site.seoAuthorityDomain!,
+        domainRank: cachedAuthority.domainRank,
+        organicTraffic: 0,
+        backlinks: 0,
+        referringDomains: cachedAuthority.referringDomains ?? 0,
+        source: cachedAuthority.source,
+        measuredAt: cachedAuthority.measuredAt,
+      };
+    } else {
+      await assertCurrentPlanWorker();
+      authorityBulkRequests += 1;
+      authorityTargets += 1;
+      authorityEstimatedCostUsd += estimatedAuthorityBulkCostUsd(1);
+      domainMetrics = await getDomainAuthority(site.domain);
+    }
     maxKD = computeMaxKD(domainMetrics);
+    if (domainMetrics) {
+      await ctx.runMutation(internal.sites.recordSeoAuthorityEvidenceInternal, {
+        siteId,
+        domain: domainMetrics.domain,
+        domainRank: domainMetrics.domainRank,
+        referringDomains: domainMetrics.referringDomains,
+        source: domainMetrics.source,
+        measuredAt: domainMetrics.measuredAt,
+      });
+    }
     console.log(domainMetrics
       ? `Domain: DR=${domainMetrics.domainRank}, traffic=${domainMetrics.organicTraffic}/mo → maxKD=${maxKD}`
       : `Domain: no data → maxKD=${maxKD}`);
-  } catch (err) { console.log("Domain authority unavailable:", err); }
+  } catch (err) {
+    domainMetrics = null;
+    console.log("Domain authority unavailable:", err);
+  }
+
+  if (
+    expectedClickSchedulingEnabled &&
+    requireVerifiedKeywordData &&
+    !domainMetrics
+  ) {
+    throw new Error(
+      "Fresh tenant authority evidence is required; refusing to plan an expected-click portfolio without a DataForSEO one-hundred-scale measurement.",
+    );
+  }
 
   const dr = domainMetrics?.domainRank ?? 0;
   const kdWeight = dr >= 50 ? 0.4 : dr >= 20 ? 0.5 : 0.6;
@@ -2012,10 +2306,16 @@ async function handlePlan(
 
   await reportProgress(2, "Discovering high-opportunity keywords...");
 
-  let discoveredKeywords: { keyword: string; searchVolume: number; difficulty: number; cpc: number }[] = [];
+  let discoveredKeywords: {
+    keyword: string;
+    searchVolume: number;
+    difficulty: number;
+    difficultyMeasured: boolean;
+    cpc: number;
+  }[] = [];
   let keywordDiscoveryError: unknown = null;
   try {
-    const { discoverKeywords, findKeywordGaps } = await import("./seoData");
+    const { discoverKeywords, findKeywordGaps, getKeywordMetrics } = await import("./seoData");
 
     // Build base keywords from the full site profile. The final twenty-seed
     // request is balanced and rotated below; repeated replenishments must not
@@ -2031,25 +2331,63 @@ async function handlePlan(
         baseSeeds.push(clean);
       }
     };
+    const profileDiscoveryAnchors = tenantDiscoveryAnchors([
+      ...(site.anchorKeywords ?? []),
+      ...(site.keyFeatures ?? []),
+      ...(site.painPoints ?? []),
+      site.blogTheme,
+      site.productUsage,
+      site.targetAudienceSummary,
+      site.niche,
+      site.siteSummary,
+    ], 48);
+    for (const anchor of profileDiscoveryAnchors) addSeed(anchor);
     if (site.niche) for (const p of site.niche.split(/[,;]/)) addSeed(p);
-    if (site.anchorKeywords?.length) for (const kw of site.anchorKeywords.slice(0, 5)) addSeed(kw);
+    for (const signal of searchDemandSignals) addSeed(signal.query);
+    if (site.anchorKeywords?.length) for (const kw of site.anchorKeywords) addSeed(kw);
     if (site.keyFeatures?.length) for (const f of site.keyFeatures.slice(0, 5)) addSeed(f.split(/[,.:;]/)[0]);
     if (site.painPoints?.length) for (const p of site.painPoints.slice(0, 5)) addSeed(p.split(/[,.:;]/)[0]);
     if (site.blogTheme) for (const p of site.blogTheme.split(/[,;.]/)) addSeed(p);
     if (baseSeeds.length === 0) baseSeeds.push(site.domain.replace(/\.\w+$/, ""));
-    const seedCycle = existingTopics.length + replenishmentSequence * 11;
+    // Every independently queued plan receives a stable extra rotation. This
+    // prevents two operator/fleet requests with the same recent-count payload
+    // from replaying an identical paid DataForSEO window.
+    const jobRotation = jobId
+      ? [...String(jobId)].reduce(
+          (hash, character) => (hash * 31 + character.charCodeAt(0)) % 997,
+          0,
+        )
+      : 0;
+    const seedCycle =
+      existingTopics.length + replenishmentSequence * 11 + jobRotation;
     const rotatingSeeds = topicDiscoverySeedWindow(baseSeeds, seedCycle, 20);
-    const seeds = growthContext
-      ? [
-          growthContext.seed.trim().toLowerCase(),
-          ...rotatingSeeds,
-        ].filter((seed, index, all) => seed && all.indexOf(seed) === index).slice(0, 20)
-      : rotatingSeeds;
+    // Rotation should expand discovery, not erase what the tenant actually
+    // sells. Keep the strongest configured product anchors in every request
+    // and rotate only the remaining feature/problem vocabulary.
+    const durableProductAnchors = profileDiscoveryAnchors.slice(0, 16);
+    const durableSearchDemand = searchDemandSignals
+      .map((signal: { query: string }) => signal.query.trim().toLowerCase())
+      .filter((seed: string, index: number, all: string[]) =>
+        Boolean(seed) && all.indexOf(seed) === index
+      )
+      .slice(0, 5);
+    const rotateDurableSeeds = (values: string[]) => values.length === 0
+      ? []
+      : values.map((_, index) =>
+          values[(index + seedCycle) % values.length]
+        );
+    const seeds = [
+      ...(growthContext ? [growthContext.seed.trim().toLowerCase()] : []),
+      ...rotateDurableSeeds(durableSearchDemand),
+      ...rotateDurableSeeds(durableProductAnchors),
+      ...rotatingSeeds,
+    ].filter((seed, index, all) => seed && all.indexOf(seed) === index).slice(0, 20);
     console.log(
       `Seeds: ${baseSeeds.length} business anchors → ${seeds.length} balanced discovery seeds (cycle ${seedCycle})`,
     );
 
     // Request 300 keywords — enough volume for 10+ to survive filters without burning DataForSEO credits
+    await assertCurrentPlanWorker();
     discoveredKeywords = (await discoverKeywords(
       seeds,
       locationCode,
@@ -2058,21 +2396,80 @@ async function handlePlan(
       {
         targetDomain: site.domain,
         minimumResults: 20,
+        // Broad Google Ads/Ideas responses can contain hundreds of real
+        // searches yet still yield no low-difficulty product query. Expand a
+        // bounded set of exact tenant anchors before allowing the planner to
+        // conclude that the inventory is empty.
+        maxLabsSeeds: 4,
+        maxRelatedSeeds: 2,
+        expandProductAnchors: true,
       },
     ))
       .filter(k => k.searchVolume >= 10)
-      .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc }));
+      .map(k => ({
+        keyword: k.keyword,
+        searchVolume: k.searchVolume,
+        difficulty: k.difficulty,
+        difficultyMeasured: k.difficultyMeasured,
+        cpc: k.cpc,
+      }));
     console.log(`Discovered ${discoveredKeywords.length} keywords with volume`);
+
+    // Suggestions are not guaranteed to echo their seed. Measure the tenant's
+    // exact configured product anchors as a separate, bounded request so the
+    // planner cannot drift into adjacent high-volume intent merely because an
+    // API omitted the words that describe what the customer actually sells.
+    const exactProductAnchors = profileDiscoveryAnchors.slice(0, 20);
+    if (exactProductAnchors.length > 0) {
+      try {
+        await assertCurrentPlanWorker();
+        const exactMetrics = await getKeywordMetrics(
+          exactProductAnchors,
+          locationCode,
+          site.language ?? "en",
+        );
+        const seen = new Set(discoveredKeywords.map(k => k.keyword.toLowerCase()));
+        let added = 0;
+        for (const metric of exactMetrics) {
+          const normalized = metric.keyword.trim().toLowerCase();
+          if (!seen.has(normalized) && metric.searchVolume >= 10) {
+            discoveredKeywords.push({
+              keyword: metric.keyword,
+              searchVolume: metric.searchVolume,
+              difficulty: metric.difficulty,
+              difficultyMeasured: metric.difficultyMeasured,
+              cpc: metric.cpc,
+            });
+            seen.add(normalized);
+            added++;
+          }
+        }
+        console.log(
+          `Exact product anchors: measured ${exactMetrics.length}, added ${added} with volume`,
+        );
+      } catch (error) {
+        // Discovery remains fail-closed below: an unmeasured anchor can never
+        // pass the verified-data or difficulty gates.
+        console.log("Exact product-anchor measurement failed:", error);
+      }
+    }
 
     // Add competitor gap keywords
     if ((site.competitors ?? []).length > 0) {
       try {
+        await assertCurrentPlanWorker();
         const gaps = await findKeywordGaps(site.domain, site.competitors!, locationCode, site.language ?? "en");
         const seen = new Set(discoveredKeywords.map(k => k.keyword.toLowerCase()));
         let added = 0;
         for (const g of gaps) {
           if (!seen.has(g.keyword.toLowerCase()) && g.searchVolume >= 10) {
-            discoveredKeywords.push({ keyword: g.keyword, searchVolume: g.searchVolume, difficulty: g.difficulty, cpc: 0 });
+            discoveredKeywords.push({
+              keyword: g.keyword,
+              searchVolume: g.searchVolume,
+              difficulty: g.difficulty,
+              difficultyMeasured: g.difficultyMeasured,
+              cpc: 0,
+            });
             seen.add(g.keyword.toLowerCase());
             added++;
           }
@@ -2085,8 +2482,6 @@ async function handlePlan(
     console.log("Keyword discovery unavailable:", err);
   }
 
-  const requireVerifiedKeywordData =
-    site.autopilotEnabled !== false || site.verifiedKeywordDataRequired === true;
   if (requireVerifiedKeywordData && discoveredKeywords.length === 0) {
     const reason = keywordDiscoveryError instanceof Error
       ? keywordDiscoveryError.message
@@ -2113,12 +2508,17 @@ async function handlePlan(
   };
 
   // Score each keyword
-  const scoreKeyword = (k: { searchVolume: number; difficulty: number; cpc: number }) => {
+  const scoreKeyword = (k: {
+    searchVolume: number;
+    difficulty: number;
+    difficultyMeasured: boolean;
+    cpc: number;
+  }) => {
+    if (!k.difficultyMeasured) return 0;
     const vol = k.searchVolume > 0 ? Math.min(Math.log10(k.searchVolume) * 13, 40) : 0;
-    // KD 0 + high volume = genuinely easy, reward it. KD 0 + low volume = uncertain, small penalty.
-    const kd = k.difficulty > 0
-      ? Math.max(0, (100 - k.difficulty) * kdWeight)
-      : (k.searchVolume >= 200 ? 30 : 10); // High-vol KD0 = easy win, low-vol KD0 = uncertain
+    // A measured zero is a real easy-query signal. Unknown difficulty never
+    // reaches this scorer and cannot masquerade as an SEO opportunity.
+    const kd = Math.max(0, (100 - k.difficulty) * kdWeight);
     const cpc = Math.min(k.cpc * 4, 20);
     return Math.max(0, Math.round(vol + kd + cpc));
   };
@@ -2139,37 +2539,60 @@ async function handlePlan(
     return overlap / Math.max(aSet.size, bSet.size) >= 0.75;
   };
 
-  let candidates: { keyword: string; searchVolume: number; difficulty: number; cpc: number; opportunity: number }[] = [];
-  const businessSignals = [
-    site.niche,
-    site.blogTheme,
-    site.siteSummary,
-    site.targetAudienceSummary,
-    site.productUsage,
-    ...(site.anchorKeywords ?? []),
-    ...(site.keyFeatures ?? []),
-    ...(site.painPoints ?? []),
-  ].filter((signal): signal is string => Boolean(signal));
-  const businessModelSignals = [
-    site.siteType ?? "",
-    site.niche ?? "",
-    site.siteSummary ?? "",
-  ];
+  let candidates: {
+    keyword: string;
+    searchVolume: number;
+    difficulty: number;
+    difficultyMeasured: boolean;
+    cpc: number;
+    opportunity: number;
+  }[] = [];
+  const {
+    coreBusinessSignals: businessSignals,
+    productAnchorSignals,
+    businessModelSignals,
+  } = tenantBusinessSignals;
 
   if (discoveredKeywords.length > 0) {
     // Data-first: rank real keywords
-    const raw = discoveredKeywords
-      .filter(k => !existingSet.has(k.keyword.toLowerCase()))
-      .filter(k => k.difficulty <= maxKD + 10 || k.difficulty === 0) // Slightly permissive, quality gate handles the rest
-      .filter(k => !isKeywordBlocked(k.keyword))
+    const unused = discoveredKeywords.filter(
+      k => !existingSet.has(k.keyword.toLowerCase()),
+    );
+    const measured = unused.filter(
+      k => !requireVerifiedKeywordData || k.difficultyMeasured,
+    );
+    const difficultyEligible = measured.filter(
+      k => k.difficulty <= keywordDifficultyCeiling(maxKD, k.searchVolume),
+    );
+    const unblocked = difficultyEligible.filter(
+      k => !isKeywordBlocked(k.keyword),
+    );
+    const raw = unblocked
       .filter(k => evaluateTopicBusinessFit({
         keyword: k.keyword,
         coreBusinessSignals: businessSignals,
+        productAnchorSignals,
         businessModelSignals,
         growthSeed: growthContext?.seed,
       }).eligible)
       .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
       .sort((a, b) => b.opportunity - a.opportunity);
+
+    console.log(
+      `Verified keyword funnel: discovered=${discoveredKeywords.length}, unused=${unused.length}, ` +
+        `measured=${measured.length}, authority-eligible=${difficultyEligible.length}, ` +
+        `brand-safe=${unblocked.length}, product-fit=${raw.length}`,
+    );
+    if (raw.length === 0) {
+      console.log(
+        `Lowest-difficulty measured samples: ${measured
+          .slice()
+          .sort((a, b) => a.difficulty - b.difficulty || b.searchVolume - a.searchVolume)
+          .slice(0, 12)
+          .map((keyword) => `${keyword.keyword} (KD ${keyword.difficulty}, vol ${keyword.searchVolume})`)
+          .join(" | ")}`,
+      );
+    }
 
     // Dedup — keep a large pool so AI has plenty to choose from
     for (const kw of raw) {
@@ -2223,98 +2646,46 @@ async function handlePlan(
   let plan: z.infer<typeof PlanSchema>;
 
   if (candidates.length > 0) {
-    // ── DATA-FIRST: real keywords drive selection ──
-    const prompt = [
-      `You are an SEO strategist. Your job: select the best keywords from the list below to create a content plan for ${productName}.`,
-      ``,
-      siteContext,
-      ``,
-      `<your_task>`,
-      growthContext
-        ? `This is a measured recovery plan for an existing published page targeting "${growthContext.seed}". Select up to 12 distinct supporting intents that deepen that exact subject without competing for the same query. Our evidence gates will retain at most 3.`
-        : `From the keyword list below, select every strategically eligible keyword, up to 25. For each, create an article topic. Our quality filters will narrow the result to the best 10.`,
-      ``,
-      `SELECTION CRITERIA (in order of importance):`,
-      `1. RELEVANCE — Would someone searching this keyword be a potential ${productName} user? If not, SKIP IT.`,
-      `2. SEARCH VOLUME — Higher volume = more potential traffic`,
-      `3. DIFFICULTY — Lower KD = easier to rank (this site's ceiling is KD ${maxKD})`,
-      `4. COMMERCIAL VALUE — Higher CPC signals buyer intent`,
-      `5. FUNNEL COVERAGE — Mix TOFU (awareness), MOFU (consideration), BOFU (decision)`,
-      growthContext
-        ? `6. CLUSTER SUPPORT — Every selected keyword must answer a narrower, adjacent question that gives a reader a natural reason to visit the existing page about "${growthContext.seed}".`
-        : "",
-      ``,
-      `HARD RULES:`,
-      `- SKIP keywords about other products/brands (ChatGPT, Jasper, Semrush, etc.)`,
-      `- SKIP keywords unrelated to ${productName}'s niche — if you can't explain how it connects to the product, don't include it`,
-      `- SKIP generic marketing buzzwords that mega-sites dominate ("content marketing best practices", "digital marketing strategy")`,
-      `- Each keyword must target a DIFFERENT search intent — no near-duplicates`,
-      `- Use the EXACT keyword string from the list as primaryKeyword`,
-      site.competitors?.length ? `- NEVER reference these competitors: ${site.competitors.join(", ")}` : "",
-      `</your_task>`,
-      ``,
-      `<keywords>`,
-      ...candidates.slice(0, 80).map(k => `- "${k.keyword}" (vol:${k.searchVolume}/mo, KD:${k.difficulty}, CPC:$${k.cpc.toFixed(2)}, score:${k.opportunity})`),
-      `</keywords>`,
-      ``,
-      existingKeywords.length > 0 ? `<already_covered>\n${existingKeywords.map((kw: string) => `- "${kw}"`).join("\n")}\n</already_covered>` : "",
-      ``,
-      `Return a JSON array. Use EXACT keyword strings as primaryKeyword:`,
-      `[{"label":"article title","primaryKeyword":"exact keyword","secondaryKeywords":["kw1","kw2"],"intent":"informational|commercial|transactional","priority":3,"articleType":"standard|listicle|how-to|checklist|comparison|roundup|ultimate-guide","notes":"why this keyword serves ${productName}'s audience"}]`,
-      ``,
-      `Article types: standard (deep dive), listicle (list-based), how-to (tutorial), checklist (actionable), comparison (X vs Y), roundup (resources), ultimate-guide (comprehensive reference). Pick what fits the keyword's SERP intent.`,
-      site.language && site.language !== "en" ? `Write all labels and keywords in ${site.language}.` : "",
-      site.anchorKeywords?.length ? `Priority keywords to incorporate: ${site.anchorKeywords.join(", ")}` : "",
-    ].filter(Boolean).join("\n");
-
-    const text = await callClaude(
-      prompt,
-      growthContext
-        ? `Select up to 12 measured supporting intents for "${growthContext.seed}". Use exact keyword strings from the list.`
-        : `Select every strategically eligible keyword, up to 25, and create topics. Use exact keyword strings from the list. We will filter down to the best 10.`,
-      12000,
+    // ── DATA-FIRST: the measured ranking already performed every selection
+    // decision. Asking a model to select the same three exact strings adds a
+    // paid failure mode (truncated JSON, invented keywords) without adding
+    // evidence. Build the plan deterministically; the article writer still
+    // receives the live SERP, PAA questions, sources, and tenant voice.
+    const planLimit = planTopicLimit;
+    const acronym = new Map([
+      ["ai", "AI"], ["api", "API"], ["b2b", "B2B"], ["b2c", "B2C"],
+      ["crm", "CRM"], ["cro", "CRO"], ["cta", "CTA"], ["roi", "ROI"],
+      ["saas", "SaaS"], ["seo", "SEO"],
+    ]);
+    const titleCaseKeyword = (keyword: string) => keyword
+      .split(/\s+/)
+      .map((word) => acronym.get(word.toLowerCase()) ??
+        `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+      .join(" ");
+    const articleTypeFor = (keyword: string) => {
+      if (/^how to\b/i.test(keyword)) return "how-to";
+      if (/\b(?:vs|versus)\b/i.test(keyword)) return "comparison";
+      if (/\bchecklist\b/i.test(keyword)) return "checklist";
+      if (/\b(?:best|top|ideas|examples|ways)\b/i.test(keyword)) return "listicle";
+      if (/\bguide\b/i.test(keyword)) return "ultimate-guide";
+      return "standard";
+    };
+    plan = candidates.slice(0, planLimit).map((keyword, index) => ({
+      label: titleCaseKeyword(keyword.keyword),
+      primaryKeyword: keyword.keyword,
+      secondaryKeywords: [],
+      intent: keyword.cpc > 0 ? "commercial" : "informational",
+      priority: Math.max(1, planLimit - index),
+      articleType: articleTypeFor(keyword.keyword),
+      notes:
+        `Measured opportunity: ${keyword.searchVolume}/month, KD ${keyword.difficulty}, ` +
+        `CPC $${keyword.cpc.toFixed(2)}; passed tenant product-fit and authority ceilings.`,
+    }));
+    console.log(`Deterministically selected ${plan.length} measured topic(s).`);
+  } else if (requireVerifiedKeywordData) {
+    throw new Error(
+      "Verified discovery returned no measured, authority-attainable, tenant-product-fit keyword; rotating the bounded seed window instead of paying a model to invent one.",
     );
-    plan = parseJson<z.infer<typeof PlanSchema>>(PlanSchema, text).slice(
-      0,
-      growthContext ? 12 : 25,
-    );
-    console.log(`AI selected ${plan.length} topics from ${candidates.length} candidates:`);
-    for (const t of plan) console.log(`  → "${t.primaryKeyword}" (${t.label})`);
-
-    // Snap AI-modified keywords back to exact discovered matches
-    // Use candidate list (scored keywords) as primary snap target, then discovered as fallback
-    const candidateLower = new Map(candidates.map(k => [k.keyword.toLowerCase(), k.keyword]));
-    const discoveredLower = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k.keyword]));
-    for (const topic of plan) {
-      const kwLower = topic.primaryKeyword.toLowerCase();
-      // Already an exact match in candidates or discovered? Keep it.
-      if (candidateLower.has(kwLower) || discoveredLower.has(kwLower)) continue;
-
-      // Fuzzy snap: find best match by word overlap ratio (must be >= 50%)
-      const topicWords = new Set(kwLower.split(/\s+/));
-      let bestMatch = "", bestScore = 0;
-      for (const [cl, orig] of candidateLower) {
-        const clWords = new Set(cl.split(/\s+/));
-        const overlap = [...topicWords].filter(w => clWords.has(w)).length;
-        const score = overlap / Math.max(topicWords.size, clWords.size);
-        if (score > bestScore) { bestScore = score; bestMatch = orig; }
-      }
-      // Also check full discovered pool
-      if (bestScore < 0.5) {
-        for (const [cl, orig] of discoveredLower) {
-          const clWords = new Set(cl.split(/\s+/));
-          const overlap = [...topicWords].filter(w => clWords.has(w)).length;
-          const score = overlap / Math.max(topicWords.size, clWords.size);
-          if (score > bestScore) { bestScore = score; bestMatch = orig; }
-        }
-      }
-      if (bestMatch && bestScore >= 0.5) {
-        console.log(`Snap: "${topic.primaryKeyword}" → "${bestMatch}" (${Math.round(bestScore * 100)}%)`);
-        topic.primaryKeyword = bestMatch;
-      } else {
-        console.log(`No snap match for: "${topic.primaryKeyword}" (best: ${Math.round(bestScore * 100)}%)`);
-      }
-    }
   } else {
     // ── AI-FIRST: no DataForSEO data, let AI generate keywords ──
     const prompt = [
@@ -2375,6 +2746,7 @@ async function handlePlan(
       keyword: topic.primaryKeyword,
       label: topic.label,
       coreBusinessSignals: businessSignals,
+      productAnchorSignals,
       businessModelSignals,
       growthSeed: growthContext?.seed,
     });
@@ -2391,6 +2763,7 @@ async function handlePlan(
   console.log(`After dedup: ${plan.length} topics (${plan.length} from AI's ${plan.length + (deduped.length < plan.length ? 0 : 0)})`);
 
   // 5b. Build metrics from candidates (which already have real data) + fetch fresh for any unknowns
+  let savedTopicCount = 0;
   try {
     const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
 
@@ -2398,12 +2771,30 @@ async function handlePlan(
     const candidateMap = new Map(candidates.map(k => [k.keyword.toLowerCase(), k]));
     const discoveredMap = new Map(discoveredKeywords.map(k => [k.keyword.toLowerCase(), k]));
 
-    type Metric = { keyword: string; searchVolume: number; difficulty: number; cpc: number; competition: number; intent: string; trend: number[] };
+    type Metric = {
+      keyword: string;
+      searchVolume: number;
+      difficulty: number;
+      difficultyMeasured: boolean;
+      cpc: number;
+      competition: number;
+      intent: string;
+      trend: number[];
+    };
     const metricsMap = new Map<string, Metric>();
 
     // Pre-populate from discovered keywords (broadest source)
     for (const k of discoveredKeywords) {
-      metricsMap.set(k.keyword.toLowerCase(), { keyword: k.keyword, searchVolume: k.searchVolume, difficulty: k.difficulty, cpc: k.cpc, competition: 0, intent: "informational", trend: [] });
+      metricsMap.set(k.keyword.toLowerCase(), {
+        keyword: k.keyword,
+        searchVolume: k.searchVolume,
+        difficulty: k.difficulty,
+        difficultyMeasured: k.difficultyMeasured,
+        cpc: k.cpc,
+        competition: 0,
+        intent: "informational",
+        trend: [],
+      });
     }
 
     // Find keywords that aren't in our discovered pool at all
@@ -2414,6 +2805,7 @@ async function handlePlan(
     if (needFresh.length > 0) {
       console.log(`Fetching fresh metrics for ${needFresh.length} unknown keywords: ${needFresh.join(", ")}`);
       try {
+        await assertCurrentPlanWorker();
         const fresh = await getKeywordMetrics(needFresh, locationCode, site.language ?? "en");
         for (const m of fresh) metricsMap.set(m.keyword.toLowerCase(), m);
       } catch (e) { console.log("Fresh metrics fetch failed:", e); }
@@ -2423,6 +2815,9 @@ async function handlePlan(
     const findMetrics = (kw: string): Metric | null => {
       const exact = metricsMap.get(kw.toLowerCase());
       if (exact) return exact;
+      // A similar phrase is not the same measured query. Autonomous plans
+      // must never borrow search volume or difficulty from fuzzy text.
+      if (requireVerifiedKeywordData) return null;
 
       // Fuzzy: find best overlap match in discovered keywords
       const words = new Set(kw.toLowerCase().split(/\s+/));
@@ -2444,12 +2839,26 @@ async function handlePlan(
 
     // 5c. Quality gate — single pass, clean logic
     let enrichedPlan: (typeof plan[0] & {
-      searchVolume?: number; keywordDifficulty?: number; cpc?: number;
+      searchVolume?: number; keywordDifficulty?: number;
+      keywordDifficultyMeasured?: boolean; cpc?: number;
       serpIntent?: string; volumeTrend?: number[]; recommendedArticleType?: string;
       paaQuestions?: string[]; serpTopUrls?: string[];
+      serpOrganicResults?: Array<{ position: number; url: string }>;
+      searchDemandSource?: string; searchDemandMeasuredAt?: number;
+      searchDemandLocationCode?: number; searchDemandLanguageCode?: string;
+      serpObservedAt?: number; serpLocationCode?: number; serpLanguageCode?: string;
+      serpAuthorityCompetitors?: Array<{
+        position: number; url: string; domain: string; domainRank: number;
+        referringDomains?: number; source: string; measuredAt: number;
+      }>;
+      expectedClicksMonthly?: number; expectedClickProjectedPosition?: number;
+      expectedClickRankProbability?: number; expectedClickStatus?: string;
+      expectedClickReasons?: string[]; expectedClickAuditVersion?: number;
+      expectedClickAuditedAt?: number;
       businessFitEligible?: boolean; businessFitScore?: number;
       businessFitVersion?: number; businessFitReasons?: string[];
     })[] = [];
+    const demandMeasuredAt = Date.now();
     let kd0Count = 0;
     let noDataCount = 0;
 
@@ -2481,6 +2890,13 @@ async function handlePlan(
         continue;
       }
 
+      if (requireVerifiedKeywordData && !m.difficultyMeasured) {
+        console.log(
+          `Blocked: "${topic.primaryKeyword}" (organic keyword difficulty was not measured)`,
+        );
+        continue;
+      }
+
       // Hard kills
       if (m.searchVolume === 0 && m.difficulty === 0 && m.cpc === 0) {
         console.log(`Blocked: "${topic.primaryKeyword}" (no search data)`);
@@ -2488,7 +2904,7 @@ async function handlePlan(
       }
 
       // KD ceiling — allow up to maxKD+10 if volume justifies it (>1000/mo), strict maxKD otherwise
-      const effectiveMaxKD = m.searchVolume >= 1000 ? maxKD + 10 : maxKD;
+      const effectiveMaxKD = keywordDifficultyCeiling(maxKD, m.searchVolume);
       if (m.difficulty > effectiveMaxKD) {
         console.log(`Blocked: "${topic.primaryKeyword}" (KD ${m.difficulty} > ${effectiveMaxKD})`);
         continue;
@@ -2513,9 +2929,18 @@ async function handlePlan(
         priority,
         searchVolume: m.searchVolume,
         keywordDifficulty: m.difficulty,
+        keywordDifficultyMeasured: m.difficultyMeasured,
         cpc: m.cpc,
         serpIntent: m.intent,
         volumeTrend: m.trend.length > 0 ? m.trend : undefined,
+        ...(m.difficultyMeasured
+          ? {
+              searchDemandSource: DATAFORSEO_DEMAND_SOURCE,
+              searchDemandMeasuredAt: demandMeasuredAt,
+              searchDemandLocationCode: locationCode,
+              searchDemandLanguageCode: languageCode,
+            }
+          : {}),
       });
       console.log(`✓ "${topic.primaryKeyword}": opp=${opportunity}, KD=${m.difficulty}, vol=${m.searchVolume}, pri=${priority}`);
     }
@@ -2540,17 +2965,48 @@ async function handlePlan(
 
     // 5d. SERP analysis — determine optimal article format for each surviving topic
     await reportProgress(5, "Analyzing SERPs for article format optimization...");
+    const serpIntentRejected = new Set<string>();
     for (const topic of enrichedPlan) {
       try {
-        const serp = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
+        const serp = await analyzeSERP(topic.primaryKeyword, locationCode, languageCode);
+        const serpObservedAt = Date.now();
         topic.recommendedArticleType = serp.recommendedArticleType;
         topic.articleType = serp.recommendedArticleType as any;
         topic.paaQuestions = serp.paaQuestions.length > 0 ? serp.paaQuestions : undefined;
         topic.serpTopUrls = [...new Set(
           serp.results.map((result) => result.url).filter(Boolean),
         )].slice(0, 10);
+        topic.serpOrganicResults = serp.results
+          .filter((result) =>
+            result.type === "organic" &&
+            Number.isInteger(result.position) &&
+            result.position >= 1 &&
+            result.position <= 10 &&
+            Boolean(result.url)
+          )
+          .map((result) => ({ position: result.position, url: result.url }))
+          .slice(0, 10);
+        topic.serpObservedAt = serpObservedAt;
+        topic.serpLocationCode = locationCode;
+        topic.serpLanguageCode = languageCode;
+        const intentAlignment = evaluateSerpBusinessIntent({
+          results: serp.results,
+          businessModelSignals,
+        });
+        if (!intentAlignment.aligned) {
+          serpIntentRejected.add(topic.primaryKeyword.toLowerCase());
+          console.log(
+            `Blocked by live SERP intent: "${topic.primaryKeyword}" (${intentAlignment.reasons.join("; ")})`,
+          );
+        }
         console.log(`SERP: "${topic.primaryKeyword}" → ${serp.recommendedArticleType} (${serp.paaQuestions.length} PAA)`);
       } catch (e) { console.error(`SERP failed for "${topic.primaryKeyword}":`, e); }
+    }
+
+    if (serpIntentRejected.size > 0) {
+      enrichedPlan = enrichedPlan.filter((topic) =>
+        !serpIntentRejected.has(topic.primaryKeyword.toLowerCase())
+      );
     }
 
     if (requireVerifiedKeywordData) {
@@ -2563,15 +3019,41 @@ async function handlePlan(
       );
     }
     const beforeIntentGate = enrichedPlan.length;
-    enrichedPlan = filterNonCannibalizingIntentTopics(
-      enrichedPlan,
+    // A topic row is planning inventory, not proof of search coverage. Only an
+    // externally published artifact or the exact current sealed-ready artifact
+    // may reserve intent. Failed and quarantined drafts are therefore free to
+    // re-enter tenant-scoped validation rather than poisoning replenishment.
+    const intentReservedTopics = coveredIntentTopics(
       existingTopics.map((topic: {
+        _id: Id<"topic_clusters">;
+        status?: string;
         primaryKeyword: string;
         serpTopUrls?: string[];
       }) => ({
+        _id: String(topic._id),
+        status: topic.status ?? "planned",
         primaryKeyword: topic.primaryKeyword,
         serpTopUrls: topic.serpTopUrls,
       })),
+      existingArticleSummaries.map((article: {
+        topicId?: Id<"topic_clusters">;
+        slug: string;
+        status: string;
+        publicationGateStatus?: string;
+        publicationAuditVersion?: number;
+        auditedContentHash?: string;
+      }) => ({
+        topicId: article.topicId ? String(article.topicId) : undefined,
+        slug: article.slug,
+        status: article.status,
+        publicationGateStatus: article.publicationGateStatus,
+        publicationAuditVersion: article.publicationAuditVersion,
+        auditedContentHash: article.auditedContentHash,
+      })),
+    );
+    enrichedPlan = filterNonCannibalizingIntentTopics(
+      enrichedPlan,
+      intentReservedTopics,
       0.4,
       0.35,
       10,
@@ -2585,6 +3067,7 @@ async function handlePlan(
         keyword: topic.primaryKeyword,
         label: topic.label,
         coreBusinessSignals: businessSignals,
+        productAnchorSignals,
         businessModelSignals,
         growthSeed: growthContext?.seed,
       });
@@ -2606,16 +3089,138 @@ async function handlePlan(
       `Final tenant product-fit gate: ${enrichedPlan.length}/${beforeFinalBusinessFitGate} topics remain`,
     );
 
+    // Measure the actual page-one competitors on the same authority scale as
+    // the tenant. The planner builds one bounded, deduplicated worklist first:
+    // ten candidate topics x five organic positions means no more than fifty
+    // deduplicated targets in one billable bulk request.
+    const expectedClickEvidenceRequired =
+      expectedClickSchedulingEnabled && requireVerifiedKeywordData;
+    if (expectedClickEvidenceRequired) {
+      if (!domainMetrics) {
+        throw new Error(
+          "Expected-click evidence requires a fresh persisted tenant authority measurement.",
+        );
+      }
+      const authorityPlan = planSerpAuthorityCollection({
+        tenantDomain: site.domain,
+        topics: enrichedPlan
+          .slice(0, planTopicLimit)
+          .map((topic) => ({
+            topicId: topic.primaryKeyword.trim().toLowerCase(),
+            results: topic.serpOrganicResults ?? [],
+          })),
+      });
+      const { getDomainAuthorities } = await import("./seoData");
+      await reportProgress(5, "Measuring bounded page-one authority evidence...");
+      if (authorityPlan.domains.length > 0) {
+        authorityBulkRequests += 1;
+        authorityTargets += authorityPlan.domains.length;
+        authorityEstimatedCostUsd += estimatedAuthorityBulkCostUsd(
+          authorityPlan.domains.length,
+        );
+      }
+      const authorityEvidence = await getDomainAuthorities(authorityPlan.domains);
+      await reportProgress(5, "Page-one authority evidence measured...");
+      const authorityByDomain = new Map(
+        authorityEvidence.map((evidence) => [evidence.domain, evidence]),
+      );
+      const candidatesByTopic = new Map(
+        authorityPlan.topics.map((topic) => [topic.topicId, topic.candidates]),
+      );
+      const tenantAuthority: MeasuredAuthority = {
+        domainRank: domainMetrics.domainRank,
+        referringDomains: domainMetrics.referringDomains,
+        source: domainMetrics.source,
+        measuredAt: domainMetrics.measuredAt,
+      };
+      const auditedAt = Date.now();
+      const beforeExpectedClickGate = enrichedPlan.length;
+      enrichedPlan = enrichedPlan.flatMap((topic) => {
+        const topicKey = topic.primaryKeyword.trim().toLowerCase();
+        const competitors = (candidatesByTopic.get(topicKey) ?? []).flatMap(
+          (candidate) => {
+            const evidence = authorityByDomain.get(candidate.domain);
+            return evidence
+              ? [{
+                  position: candidate.position,
+                  url: candidate.url,
+                  domain: candidate.domain,
+                  domainRank: evidence.domainRank,
+                  referringDomains: evidence.referringDomains,
+                  source: evidence.source,
+                  measuredAt: evidence.measuredAt,
+                }]
+              : [];
+          },
+        );
+        const estimate = estimateTopicExpectedClicks({
+          topic: {
+            topicId: topicKey,
+            keyword: topic.primaryKeyword,
+            demand:
+              topic.searchVolume !== undefined &&
+              topic.searchDemandSource &&
+              topic.searchDemandMeasuredAt
+                ? {
+                    monthlySearches: topic.searchVolume,
+                    source: topic.searchDemandSource,
+                    measuredAt: topic.searchDemandMeasuredAt,
+                  }
+                : undefined,
+            serpCompetitors: competitors,
+          },
+          tenantAuthority,
+          now: auditedAt,
+        });
+        if (estimate.status !== "eligible") {
+          console.log(
+            `Blocked by expected-click evidence: "${topic.primaryKeyword}" (${estimate.reasons.join("; ")})`,
+          );
+          return [];
+        }
+        return [{
+          ...topic,
+          serpAuthorityCompetitors: competitors,
+          expectedClicksMonthly: estimate.expectedClicksMonthly,
+          ...(estimate.projectedPosition === null
+            ? {}
+            : { expectedClickProjectedPosition: estimate.projectedPosition }),
+          expectedClickRankProbability: estimate.rankProbability,
+          expectedClickStatus: estimate.status,
+          expectedClickReasons: estimate.reasons,
+          expectedClickAuditVersion: EXPECTED_CLICK_PORTFOLIO_VERSION,
+          expectedClickAuditedAt: auditedAt,
+        }];
+      });
+      console.log(
+        `Expected-click evidence gate: ${enrichedPlan.length}/${beforeExpectedClickGate} topics retained; ` +
+        `${authorityPlan.domains.length} unique competitor authority target(s) in one bulk request.`,
+      );
+      console.log(
+        `Authority measurement ceiling: one bulk request, ${authorityPlan.domains.length}/50 rows, ` +
+        `estimated maximum $${estimatedAuthorityBulkCostUsd(authorityPlan.domains.length).toFixed(6)}.`,
+      );
+      if (enrichedPlan.length === 0) {
+        throw new Error(
+          "No topic retained five fresh page-one authority measurements on the tenant's DataForSEO scale; refusing to save unverifiable inventory.",
+        );
+      }
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // STEP 6: Save fully enriched topics to DB (ONE atomic save — no half-baked topics)
     // ══════════════════════════════════════════════════════════════════════
 
-    plan = enrichedPlan.slice(0, growthContext ? 3 : 10).map((topic) => ({
-      ...topic,
-      priority: growthContext
-        ? Math.max(90, topic.priority ?? 0)
-        : topic.priority,
-    }));
+    plan = enrichedPlan.slice(0, planTopicLimit).map((topic) => {
+      const persisted = { ...topic };
+      delete persisted.serpOrganicResults;
+      return {
+        ...persisted,
+        priority: growthContext
+          ? Math.max(90, topic.priority ?? 0)
+          : topic.priority,
+      };
+    });
     const saved = await ctx.runMutation(internal.topics.upsertMany, {
       siteId,
       topics: plan,
@@ -2624,14 +3229,21 @@ async function handlePlan(
         growthActionFingerprint: growthContext.actionFingerprint,
       } : {}),
     });
-    if (saved.inserted === 0 && requireVerifiedKeywordData) {
+    const savedCount = saved.inserted + saved.revived;
+    if (savedCount === 0 && requireVerifiedKeywordData) {
       throw new Error(
         "Verified planning produced no new scheduler-eligible topics; refusing to report a false replenishment success.",
       );
     }
-    plan = plan.slice(0, saved.inserted);
+    savedTopicCount = savedCount;
+    const acceptedKeywordKeys = new Set(saved.acceptedKeywordKeys);
+    plan = plan.filter((topic) =>
+      acceptedKeywordKeys.has(normalizeTopicIntentKeyword(topic.primaryKeyword))
+    );
     console.log(
-      `Saved ${saved.inserted} fully-enriched topics (${saved.skipped} duplicate rows skipped)`,
+      `Saved ${savedCount} fully-enriched topics ` +
+      `(${saved.inserted} inserted, ${saved.revived} revived, ` +
+      `${saved.skipped} covered rows skipped)`,
     );
   } catch (err) {
     if (requireVerifiedKeywordData) {
@@ -2642,16 +3254,56 @@ async function handlePlan(
       );
     }
     console.error(`SEO enrichment failed, saving raw topics:`, err instanceof Error ? err.message : err);
-    plan = plan.slice(0, 10);
+    plan = plan.slice(0, planTopicLimit);
     const saved = await ctx.runMutation(internal.topics.upsertMany, {
       siteId,
       topics: plan,
     });
-    plan = plan.slice(0, saved.inserted);
+    savedTopicCount = saved.inserted + saved.revived;
+    const acceptedKeywordKeys = new Set(saved.acceptedKeywordKeys);
+    plan = plan.filter((topic) =>
+      acceptedKeywordKeys.has(normalizeTopicIntentKeyword(topic.primaryKeyword))
+    );
   }
 
+  const inventoryAudit = await ctx.runQuery(
+    internal.topics.getInventoryAuditInternal,
+    { siteId, recentLimit: 10 },
+  );
+  const portfolio = inventoryAudit.expectedClickPortfolio;
+  await ctx.runMutation(internal.autopilot.recordTopicPortfolioAudit, {
+    siteId,
+    status: portfolio.status,
+    decision: portfolio.decision,
+    supportsGoal: portfolio.supportsGoal,
+    expectedClicksMonthly: portfolio.expectedClicksMonthly,
+    ...(portfolio.monthlyOrganicClickGoal === null
+      ? {}
+      : { monthlyOrganicClickGoal: portfolio.monthlyOrganicClickGoal }),
+    ...(portfolio.clickDeficit === null
+      ? {}
+      : { clickDeficit: portfolio.clickDeficit }),
+    evidenceMissing: portfolio.insufficientEvidenceTopicIds.length,
+    evaluatedAt: Date.now(),
+    version: portfolio.version,
+  });
   await reportProgress(6, "Content strategy ready!");
-  return { count: plan.length };
+  return {
+    count: savedTopicCount,
+    portfolio: {
+      status: portfolio.status,
+      supportsGoal: portfolio.supportsGoal,
+      expectedClicksMonthly: portfolio.expectedClicksMonthly,
+      monthlyOrganicClickGoal: portfolio.monthlyOrganicClickGoal,
+      clickDeficit: portfolio.clickDeficit,
+    },
+    authorityMeasurement: {
+      bulkRequests: authorityBulkRequests,
+      targets: authorityTargets,
+      estimatedCostUsd: Math.round(authorityEstimatedCostUsd * 1_000_000) / 1_000_000,
+      tenantAuthorityCacheHit,
+    },
+  };
 }
 
 async function handleArticle(
@@ -4081,6 +4733,7 @@ async function handleLinks(
   siteId: Id<"sites">,
   articleId: Id<"articles">,
   expectedSealedContentHash?: string,
+  beforeProviderCall?: () => Promise<void>,
 ): Promise<{
   count: number;
   readyForPublication?: boolean;
@@ -4167,6 +4820,9 @@ async function handleLinks(
     return { count: 0 };
   }
 
+  // Empty/no-destination link passes are deterministic and free. Acquire the
+  // immutable paid-attempt receipt only at the exact Claude call boundary.
+  await beforeProviderCall?.();
   const linkText = await callClaude(
     [
       "Select contextual internal links for an SEO article.",
@@ -4214,7 +4870,44 @@ async function handleLinks(
     destinations.map((destination) => destination.href),
     publishedArticleInternalHref(site.urlStructure, article.slug),
   );
-  const result = injectInternalLinks(article.markdown, links);
+  const contextualResult = injectInternalLinks(article.markdown, links);
+  const relatedFallbacks = selectRelatedInternalLinks({
+    currentTitle: article.title,
+    currentKeywords: article.metaKeywords,
+    destinations: relatedArticles,
+    limit: Math.max(0, 3 - contextualResult.inserted.length),
+  });
+  const preferredFallback = preferredDestination
+    ? {
+        anchor: preferredInternalLinkAnchorCandidates(
+          preferredDestination.title,
+          preferredDestination.keywords,
+        )[0],
+        href: preferredDestination.href,
+      }
+    : undefined;
+  const fallbackLinks = validateInternalLinkSuggestions(
+    [
+      ...(preferredFallback?.anchor ? [preferredFallback] : []),
+      ...relatedFallbacks,
+    ],
+    destinations.map((destination) => destination.href),
+    publishedArticleInternalHref(site.urlStructure, article.slug),
+  ).filter(
+    (fallback) =>
+      !contextualResult.inserted.some((link) => link.href === fallback.href),
+  );
+  const appendedResult = appendRelatedInternalLinks(
+    contextualResult.markdown,
+    fallbackLinks.slice(
+      0,
+      Math.max(0, 3 - contextualResult.inserted.length),
+    ),
+  );
+  const result = {
+    markdown: appendedResult.markdown,
+    inserted: [...contextualResult.inserted, ...appendedResult.inserted],
+  };
 
   if (
     expectedSealedContentHash &&
@@ -4262,23 +4955,7 @@ async function handleAnalyzeSite(
   siteId: Id<"sites">,
   html: string,
   pages: { slug: string; title: string; summary: string; keywords?: string[] }[],
-): Promise<{
-  siteName: string;
-  siteType: string;
-  siteSummary: string;
-  blogTheme: string;
-  keyFeatures: string[];
-  pricingInfo: string;
-  founders: string;
-  niche: string;
-  tone: string;
-  targetCountry: string;
-  targetAudienceSummary: string;
-  painPoints: string[];
-  productUsage: string;
-  suggestedCompetitors: string[];
-  suggestedAnchorKeywords: string[];
-}> {
+): Promise<SiteAnalysisResult> {
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
 
@@ -4419,6 +5096,31 @@ async function requireOwnedSite(ctx: ActionCtx, siteId: Id<"sites">) {
   if (!site?.userId || !identity || identity.subject !== site.userId) {
     throw new Error("Not authorized to access this site");
   }
+  const executionAuthorized = await ctx.runQuery(
+    internal.executionAuthorization.isSiteExecutionAuthorized,
+    { siteId },
+  );
+  if (!executionAuthorized) {
+    throw new Error("This site is not active under the current plan");
+  }
+  return site;
+}
+
+async function requireExecutableSite(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<Doc<"sites">> {
+  const site: Doc<"sites"> | null = await ctx.runQuery(
+    internal.sites.getFull,
+    { siteId },
+  );
+  const executionAuthorized = await ctx.runQuery(
+    internal.executionAuthorization.isSiteExecutionAuthorized,
+    { siteId },
+  );
+  if (!site || !executionAuthorized) {
+    throw new Error("This site is not active under the current plan");
+  }
   return site;
 }
 
@@ -4426,65 +5128,131 @@ export const onboardSite = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     await requireOwnedSite(ctx, siteId);
-    return handleOnboarding(ctx, siteId);
+    throw new Error(
+      "This legacy onboarding endpoint is disabled. Use the supported website analysis workflow.",
+    );
   },
 });
+
+async function performCrawlAndAnalyze(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<CrawlAndAnalyzeResult> {
+  const crawlResult = await handleOnboarding(ctx, siteId);
+
+  // Re-check canonical execution after the first provider phase so a plan
+  // transition cannot start the remaining paid analysis work.
+  const site = await requireExecutableSite(ctx, siteId);
+  const { html, url } = await fetchHtml(site.domain);
+
+  let brand: BrandDetection = {
+    primaryColor: null,
+    accentColor: null,
+    fontFamily: null,
+    logoUrl: null,
+  };
+  try {
+    brand = await extractBrandFromHtml(html, url);
+    console.log(
+      `Brand detection: primary=${brand.primaryColor}, accent=${brand.accentColor}, font=${brand.fontFamily}, logo=${brand.logoUrl ? "found" : "none"}`,
+    );
+    await ctx.runMutation(internal.sites.patchInternal, {
+      siteId,
+      patch: {
+        brandPrimaryColor: brand.primaryColor ?? undefined,
+        brandAccentColor: brand.accentColor ?? undefined,
+        brandFontFamily: brand.fontFamily ?? undefined,
+        brandLogoUrl: brand.logoUrl ?? undefined,
+      },
+    });
+  } catch {
+    console.error("Brand detection failed during website analysis");
+  }
+
+  // A complete profile is the success condition. Failed analysis is cooled
+  // down and retried; it is never cached as successful.
+  const analysis = await handleAnalyzeSite(
+    ctx,
+    siteId,
+    html,
+    crawlResult.pages,
+  );
+
+  return {
+    pages: crawlResult.pages,
+    analysis,
+    brand: {
+      primaryColor: brand.primaryColor,
+      accentColor: brand.accentColor,
+      fontFamily: brand.fontFamily,
+      logoUrl: brand.logoUrl,
+    },
+  };
+}
+
+function cachedCrawledPages(result: unknown): CrawlAndAnalyzeResult["pages"] | null {
+  if (!result || typeof result !== "object") return null;
+  const pages = (result as { pages?: unknown }).pages;
+  if (!Array.isArray(pages)) return null;
+  const valid = pages.every(
+    (page) =>
+      page &&
+      typeof page === "object" &&
+      typeof (page as { slug?: unknown }).slug === "string" &&
+      typeof (page as { title?: unknown }).title === "string" &&
+      typeof (page as { summary?: unknown }).summary === "string",
+  );
+  return valid ? (pages as CrawlAndAnalyzeResult["pages"]) : null;
+}
 
 /** Crawl + deep AI analysis in one step. Returns everything the wizard needs. */
 export const crawlAndAnalyze = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  handler: async (ctx, { siteId }): Promise<CrawlAndAnalyzeResult> => {
     await requireOwnedSite(ctx, siteId);
-    // Step 1: Crawl (reuse existing handleOnboarding)
-    const crawlResult = await handleOnboarding(ctx, siteId);
-
-    // Step 2: Fetch homepage HTML again for deep analysis + brand detection
-    const site = await requireOwnedSite(ctx, siteId);
-    const { html, url } = await fetchHtml(site.domain);
-
-    // Step 2.5: Programmatic brand extraction (colors, fonts, logo)
-    let brand: BrandDetection = { primaryColor: null, accentColor: null, fontFamily: null, logoUrl: null };
-    try {
-      brand = await extractBrandFromHtml(html, url);
-      console.log(`Brand detection: primary=${brand.primaryColor}, accent=${brand.accentColor}, font=${brand.fontFamily}, logo=${brand.logoUrl ? "found" : "none"}`);
-      await ctx.runMutation(internal.sites.patchInternal, {
-        siteId,
-        patch: {
-          brandPrimaryColor: brand.primaryColor ?? undefined,
-          brandAccentColor: brand.accentColor ?? undefined,
-          brandFontFamily: brand.fontFamily ?? undefined,
-          brandLogoUrl: brand.logoUrl ?? undefined,
-        },
-      });
-    } catch (err) {
-      console.error(`Brand detection failed (non-critical): ${err instanceof Error ? err.message : "unknown"}`);
+    const workerToken = randomUUID();
+    const claim: OnboardingClaimResult = await ctx.runMutation(
+      internal.onboardingClaims.claim,
+      { siteId, workerToken },
+    );
+    if (claim.status === "cached") {
+      return claim.result as CrawlAndAnalyzeResult;
+    }
+    if (claim.status === "in_progress") {
+      throw new Error(
+        "Website analysis is already running for this site. Please wait for it to finish.",
+      );
+    }
+    if (claim.status === "cooling_down") {
+      throw new Error(
+        "The previous website analysis did not complete and is cooling down. Please retry later.",
+      );
+    }
+    if (claim.status === "budget_blocked") {
+      throw new Error(
+        "Website analysis is temporarily unavailable under the current provider budget.",
+      );
     }
 
-    // Step 3: Deep AI analysis (non-fatal — site can still function without full profile)
-    let analysis = null;
     try {
-      analysis = await handleAnalyzeSite(ctx, siteId, html, crawlResult.pages);
-    } catch (err) {
-      console.error(`Site analysis failed (non-fatal): ${err instanceof Error ? err.message : "unknown"}`);
-      // Save a basic siteSummary so the overview page works
-      await ctx.runMutation(internal.sites.patchInternal, {
+      const result = await performCrawlAndAnalyze(ctx, siteId);
+      await ctx.runMutation(internal.onboardingClaims.complete, {
         siteId,
-        patch: {
-          siteSummary: `Website at ${site.domain}`,
-        },
+        jobId: claim.jobId,
+        workerToken,
+        result,
       });
+      return result;
+    } catch {
+      await ctx.runMutation(internal.onboardingClaims.fail, {
+        siteId,
+        jobId: claim.jobId,
+        workerToken,
+      });
+      throw new Error(
+        "Website analysis did not complete. A retry cooldown is now active.",
+      );
     }
-
-    return {
-      pages: crawlResult.pages,
-      analysis,
-      brand: {
-        primaryColor: brand.primaryColor,
-        accentColor: brand.accentColor,
-        fontFamily: brand.fontFamily,
-        logoUrl: brand.logoUrl,
-      },
-    };
   },
 });
 
@@ -4511,12 +5279,68 @@ export const repairOnboardingInternal = internalAction({
         pages: existingPages.length,
       };
     }
-    const result = await handleOnboarding(ctx, siteId);
-    return {
-      repaired: result.pages.length > 0,
-      reason: result.pages.length > 0 ? "crawl_repaired" : "crawl_empty",
-      pages: result.pages.length,
-    };
+    const workerToken = randomUUID();
+    let claim: OnboardingClaimResult;
+    try {
+      claim = await ctx.runMutation(internal.onboardingClaims.claim, {
+        siteId,
+        workerToken,
+      });
+    } catch {
+      return { repaired: false, reason: "site_not_executable", pages: 0 };
+    }
+    if (claim.status === "in_progress") {
+      return { repaired: false, reason: "analysis_in_progress", pages: 0 };
+    }
+    if (claim.status === "cooling_down") {
+      return { repaired: false, reason: "analysis_cooling_down", pages: 0 };
+    }
+    if (claim.status === "budget_blocked") {
+      return { repaired: false, reason: "provider_budget_blocked", pages: 0 };
+    }
+    if (claim.status === "cached") {
+      const pages = cachedCrawledPages(claim.result);
+      if (!pages?.length) {
+        return { repaired: false, reason: "cached_analysis_invalid", pages: 0 };
+      }
+      await ctx.runMutation(internal.pages.bulkUpsert, {
+        siteId,
+        pages: pages.map((page) => ({
+          url: `${site.domain.replace(/\/$/, "")}/${page.slug.replace(/^\//, "")}`,
+          slug: page.slug.startsWith("/") ? page.slug : `/${page.slug}`,
+          title: page.title,
+          keywords: page.keywords,
+          summary: page.summary,
+        })),
+      });
+      return {
+        repaired: true,
+        reason: "crawl_restored_from_cache",
+        pages: pages.length,
+      };
+    }
+
+    try {
+      const result = await performCrawlAndAnalyze(ctx, siteId);
+      await ctx.runMutation(internal.onboardingClaims.complete, {
+        siteId,
+        jobId: claim.jobId,
+        workerToken,
+        result,
+      });
+      return {
+        repaired: result.pages.length > 0,
+        reason: result.pages.length > 0 ? "crawl_repaired" : "crawl_empty",
+        pages: result.pages.length,
+      };
+    } catch {
+      await ctx.runMutation(internal.onboardingClaims.fail, {
+        siteId,
+        jobId: claim.jobId,
+        workerToken,
+      });
+      return { repaired: false, reason: "analysis_failed", pages: 0 };
+    }
   },
 });
 
@@ -4539,8 +5363,20 @@ async function generatePlanHandler(
             growthParentArticleId?: Id<"articles">;
             growthSeed?: string;
             growthActionFingerprint?: string;
+            expectedClickPlanMigrationVersion?: number;
           })
         : undefined;
+      assertPlanProviderReservation(claimed);
+      const lease = await ctx.runMutation(internal.jobs.heartbeatWorker, {
+        jobId,
+        workerToken,
+      });
+      if (!lease.owned) {
+        throw new Error("Plan worker lost its current tenant entitlement");
+      }
+      await assertDataForSeoAccountBalance(
+        requiredPlanProviderBalanceMicroUsd(),
+      );
       const growthContext = payload?.growthParentArticleId &&
         payload.growthSeed &&
         payload.growthActionFingerprint
@@ -4555,8 +5391,9 @@ async function generatePlanHandler(
         siteId,
         jobId,
         workerToken,
-        (payload?.replenishmentSequence ?? 0) + (claimed.workerAttempts ?? 0),
+        payload?.replenishmentSequence ?? 0,
         growthContext,
+        payload?.expectedClickPlanMigrationVersion,
       );
       const completed = await ctx.runMutation(internal.jobs.markDone, {
         jobId,
@@ -4567,15 +5404,26 @@ async function generatePlanHandler(
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      await ctx.runMutation(internal.jobs.markFailed, {
-        jobId,
-        workerToken,
-        error: msg,
-      });
+      if (isDataForSeoBalancePreflightError(err)) {
+        await ctx.runMutation(internal.jobs.abortPlanForProviderBalance, {
+          siteId,
+          jobId,
+          workerToken,
+          releaseReason: providerBalanceReleaseReason(err),
+        });
+      } else {
+        await ctx.runMutation(internal.jobs.markFailed, {
+          jobId,
+          workerToken,
+          error: msg,
+        });
+      }
       throw err;
     }
   }
-  return handlePlan(ctx, siteId);
+  throw new Error(
+    "Paid topic planning requires a queued plan job and active worker lease.",
+  );
 }
 
 export const generatePlanInternal = internalAction({
@@ -4587,13 +5435,27 @@ export const generatePlan = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<unknown> => {
     await requireOwnedSite(ctx, siteId);
-    const queued: { queued: boolean; jobId?: Id<"jobs"> } = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
+    // Avoid creating a reservation at all for the public action when the
+    // provider already reports that it cannot fund the bounded plan. The
+    // worker repeats this check at the paid-call boundary.
+    await assertDataForSeoAccountBalance(
+      requiredPlanProviderBalanceMicroUsd(),
+    );
+    const queued: {
+      queued: boolean;
+      jobId?: Id<"jobs">;
+      reason?: string;
+    } = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
       siteId,
       reason: "owner_requested_plan",
       manual: true,
     });
     if (!queued.queued || !queued.jobId) {
-      throw new Error("Topic generation is already in progress for this site.");
+      throw new Error(
+        queued.reason === "active"
+          ? "Topic generation is already in progress for this site."
+          : `Topic planning is unavailable (${queued.reason ?? "provider_budget_not_reserved"}).`,
+      );
     }
     return generatePlanHandler(ctx, { siteId, jobId: queued.jobId });
   },
@@ -5018,26 +5880,12 @@ async function reviewExistingArticleHandler(
       publicationConfigHash: deliveryConfigHash,
     };
     const quality = evaluatePublicationQuality(qualityCandidate, "strict");
-    const reviewBusinessSignals = [
-      site.niche,
-      site.blogTheme,
-      site.siteSummary,
-      site.targetAudienceSummary,
-      site.productUsage,
-      ...(site.anchorKeywords ?? []),
-      ...(site.keyFeatures ?? []),
-      ...(site.painPoints ?? []),
-    ].filter((signal): signal is string => Boolean(signal));
+    const reviewBusinessSignals = tenantTopicBusinessSignals(site);
     const targetAlignment = topic
       ? evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: nextTitle,
-          coreBusinessSignals: reviewBusinessSignals,
-          businessModelSignals: [
-            site.siteType ?? "",
-            site.niche ?? "",
-            site.siteSummary ?? "",
-          ],
+          ...reviewBusinessSignals,
         })
       : undefined;
     const targetAlignmentPassed = !targetAlignment || targetAlignment.eligible;
@@ -5140,7 +5988,11 @@ export const reviewExistingArticleInternal = internalAction({
     articleId: v.id("articles"),
     incrementRevision: v.boolean(),
   },
-  handler: reviewExistingArticleHandler,
+  handler: async (_ctx, _args) => {
+    throw new Error(
+      "Direct internal article review is disabled. Queue a bounded quality-retry job instead.",
+    );
+  },
 });
 
 export const reviewExistingArticle = action({
@@ -5148,18 +6000,11 @@ export const reviewExistingArticle = action({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
   },
-  handler: async (ctx, args) => {
-    const site = await ctx.runQuery(internal.sites.getFull, {
-      siteId: args.siteId,
-    });
-    const identity = await ctx.auth.getUserIdentity();
-    if (!site?.userId || !identity || identity.subject !== site.userId) {
-      throw new Error("Not authorized to review this site");
-    }
-    return reviewExistingArticleHandler(ctx, {
-      ...args,
-      incrementRevision: true,
-    });
+  handler: async (ctx, { siteId }) => {
+    await requireOwnedSite(ctx, siteId);
+    throw new Error(
+      "Direct article review is disabled. Quality review runs through the metered recovery workflow.",
+    );
   },
 });
 
@@ -5169,13 +6014,15 @@ export const publishApproved = action({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
   },
-  handler: async (ctx, { siteId, articleId }) => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-    const identity = await ctx.auth.getUserIdentity();
-    if (!site?.userId || !identity || identity.subject !== site.userId) {
-      throw new Error("Not authorized to publish this site");
-    }
-    const article = await ctx.runQuery(internal.articles.getInternal, { articleId });
+  handler: async (
+    ctx,
+    { siteId, articleId },
+  ): Promise<PublishApprovedResult> => {
+    await requireOwnedSite(ctx, siteId);
+    const article: Doc<"articles"> | null = await ctx.runQuery(
+      internal.articles.getInternal,
+      { articleId },
+    );
     if (!article || article.siteId !== siteId) {
       throw new Error("Article not found for site");
     }
@@ -5183,15 +6030,37 @@ export const publishApproved = action({
       !article.auditedContentHash ||
       article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION
     ) {
-      const review = await reviewExistingArticleHandler(ctx, {
-        siteId,
-        articleId,
-        incrementRevision: true,
-      });
-      if (!review.readyForPublication) {
+      const recovery: {
+        queued: boolean;
+        jobId?: Id<"jobs">;
+        reason?: "already_audited" | "revision_limit" | "already_attempted";
+      } = await ctx.runMutation(
+        internal.jobs.queueQualityRetryIfAbsent,
+        {
+          siteId,
+          articleId,
+          bufferFill: false,
+        },
+      );
+      if (recovery.reason === "revision_limit") {
         throw new Error(
-          `Publication quality gate blocked this article: ${review.issues.join(" ")}`,
+          "This legacy draft exhausted its bounded quality revisions and cannot be published.",
         );
+      }
+      if (recovery.reason !== "already_audited") {
+        if (recovery.queued && recovery.jobId) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.actions.pipeline.processSpecificJob,
+            { jobId: recovery.jobId },
+          );
+        }
+        return {
+          published: false,
+          queuedForQualityReview: true,
+          articleId,
+          jobId: recovery.jobId,
+        };
       }
     }
     await ctx.runAction(internal.publisher.publishArticleInternal, {
@@ -5258,10 +6127,9 @@ export const suggestInternalLinks = action({
     if (!article || article.siteId !== siteId) {
       throw new Error("Article not found for site");
     }
-    if (article.status === "published") {
-      throw new Error("Published artifacts are immutable; internal-link revisions require re-audit and republish");
-    }
-    return handleLinks(ctx, siteId, articleId);
+    throw new Error(
+      "Direct internal-link generation is disabled. Links are generated and audited inside the metered article workflow.",
+    );
   },
 });
 
@@ -5321,27 +6189,12 @@ export const generateProgrammaticTemplate = action({
     fields: string[];
     samplePage: string;
   }> => {
-    const site = await requireOwnedSite(ctx, siteId);
-    const text = await callClaude(
-      "You generate programmatic SEO templates (MDX/Markdown) with slots and examples.",
-      `Domain: ${site.domain}\nEntity: ${entityType}\nAttributes: ${attributes.join(
-        ", ",
-      )}\nExamples: ${JSON.stringify(
-        exampleRows ?? [],
-      )}\nReturn JSON like {"template":"...","fields":["..."],"samplePage":"..."} with placeholders for the attributes.`,
-      8192,
-    );
-    return parseJson<{
-      template: string;
-      fields: string[];
-      samplePage: string;
-    }>(
-      z.object({
-        template: z.string(),
-        fields: z.array(z.string()),
-        samplePage: z.string(),
-      }),
-      text,
+    await requireOwnedSite(ctx, siteId);
+    void entityType;
+    void attributes;
+    void exampleRows;
+    throw new Error(
+      "Legacy programmatic template generation is disabled because it bypasses article quota and provider budgets. Use the metered article workflow instead.",
     );
   },
 });
@@ -5362,24 +6215,11 @@ export const generateNewsArticle = action({
     markdown: string;
     sources?: { url: string; title?: string }[];
   }> => {
-    const site = await requireOwnedSite(ctx, siteId);
-    const newsText = await callClaude(
-      "You are a news-focused SEO writer. Produce a concise news article with sources and a quick facts box. Output JSON only.",
-      `Site: ${site.domain}\nTopic: ${topic}\nRegion: ${
-        region ?? "global"
-      }\nReturn JSON like {"title":"...","slug":"...","markdown":"...","sources":[{"url":"..."}]}.`,
-      8192,
-    );
-    return parseJson(
-      z.object({
-        title: z.string(),
-        slug: z.string(),
-        markdown: z.string(),
-        sources: z
-          .array(z.object({ url: z.string(), title: z.string().optional() }))
-          .optional(),
-      }),
-      newsText,
+    await requireOwnedSite(ctx, siteId);
+    void topic;
+    void region;
+    throw new Error(
+      "Legacy news generation is disabled because it bypasses article quota and provider budgets. Use the metered article workflow instead.",
     );
   },
 });
@@ -5393,22 +6233,10 @@ export const suggestBacklinks = action({
   ): Promise<
     { site: string; reason: string; anchor: string; targetUrl: string }[]
   > => {
-    const site = await requireOwnedSite(ctx, siteId);
-    const backlinkText = await callClaude(
-      "List high-quality backlink prospects with anchor suggestions. Output JSON only.",
-      `Domain: ${site.domain}\nNiche: ${niche ?? site.niche ?? ""}\nReturn JSON like [{"site":"...","reason":"...","anchor":"...","targetUrl":"..."}]`,
-      4096,
-    );
-    return parseJson(
-      z.array(
-        z.object({
-          site: z.string(),
-          reason: z.string(),
-          anchor: z.string(),
-          targetUrl: z.string(),
-        }),
-      ),
-      backlinkText,
+    await requireOwnedSite(ctx, siteId);
+    void niche;
+    throw new Error(
+      "Legacy backlink suggestions are disabled because model-invented prospects are not verified authority evidence. Use the metered Backlinks approval workflow instead.",
     );
   },
 });
@@ -5425,26 +6253,30 @@ type ProcessedJobResult = {
   qualityRecovered?: boolean;
   buffered?: boolean;
   planCompleted?: boolean;
+  planContinuationQueued?: boolean;
+  planContinuationSettled?: boolean;
 };
 
 function processedJobOutcome(processed: ProcessedJobResult): string {
   return !processed.processed && !processed.error
     ? "claim_lost"
-    : processed.qualityQuarantined
-      ? "quality_quarantined"
-      : processed.failureKind === "publication_failed"
-        ? "publication_failed"
-        : processed.failureKind === "retry_scheduled"
-          ? "retry_scheduled"
-          : processed.publicationSucceeded
-            ? "publication_succeeded"
-            : processed.buffered
-              ? "buffer_ready"
-              : processed.qualityRecovered
-                ? "quality_recovered"
-                : processed.error
-                  ? "job_failed"
-                  : "job_processed";
+    : processed.planContinuationQueued
+      ? "plan_continuation_queued"
+      : processed.qualityQuarantined
+        ? "quality_quarantined"
+        : processed.failureKind === "publication_failed"
+          ? "publication_failed"
+          : processed.failureKind === "retry_scheduled"
+            ? "retry_scheduled"
+            : processed.publicationSucceeded
+              ? "publication_succeeded"
+              : processed.buffered
+                ? "buffer_ready"
+                : processed.qualityRecovered
+                  ? "quality_recovered"
+                  : processed.error
+                    ? "job_failed"
+                    : "job_processed";
 }
 
 function processedJobDetail(processed: ProcessedJobResult): string | undefined {
@@ -5454,7 +6286,9 @@ function processedJobDetail(processed: ProcessedJobResult): string | undefined {
       : undefined) ??
     (processed.qualityQuarantined
       ? "The candidate was quarantined by the strict quality gate."
-      : undefined);
+      : processed.planContinuationQueued
+        ? "A successful underfilled plan is using its already-reserved second execution."
+        : undefined);
 }
 
 async function continueAutopilotAfterProcessedJob(
@@ -5462,15 +6296,24 @@ async function continueAutopilotAfterProcessedJob(
   siteId: Id<"sites">,
   processed: ProcessedJobResult,
 ): Promise<void> {
-  if (
-    !processed.buffered &&
-    !processed.planCompleted &&
-    !processed.qualityQuarantined &&
-    !processed.publicationSucceeded
-  ) {
-    return;
+  const ordinarySchedulerContinuation =
+    processed.buffered ||
+    processed.planCompleted ||
+    processed.planContinuationSettled ||
+    processed.qualityQuarantined ||
+    processed.publicationSucceeded;
+  if (!ordinarySchedulerContinuation) {
+    const activeJobs: Doc<"jobs">[] = await ctx.runQuery(
+      internal.jobs.listActiveBySite,
+      { siteId },
+    );
+    const pendingUnderfilledPlan = activeJobs.some((job) =>
+      job.type === "plan" &&
+      job.status === "pending" &&
+      isUnderfilledPlanContinuationPayload(job.payload)
+    );
+    if (!pendingUnderfilledPlan) return;
   }
-
   // Every quality-bearing terminal state and successful delivery must
   // immediately re-enter the bounded scheduler. Otherwise a quarantined
   // candidate, a completed topic plan, a partially filled buffer, or a newly
@@ -5581,6 +6424,13 @@ export const autopilotTick = internalAction({
         { processed: 0 },
         "migration_pending",
         "Publication-integrity migration is incomplete; all tenant work is fail-closed.",
+      );
+    }
+    if (cadenceSchedule.mode === "cadence_paused") {
+      return finish(
+        { processed: 0 },
+        "cadence_paused",
+        "Publishing is paused because this site's effective account-wide cadence allocation is zero.",
       );
     }
     if (
@@ -5747,10 +6597,18 @@ export const processSpecificJob = internalAction({
     if (!candidate?.siteId) {
       return { processed: false, error: "Job not found or missing site" };
     }
-    return ctx.runAction(
+    // Do not await a nested long-running action here. A full article pass can
+    // legitimately exceed the parent action's request deadline while image and
+    // editorial providers are still working. The parent would then be killed
+    // without reaching processNextJob's retry/finalization catch, leaving a
+    // live lease and a draft checkpoint behind. Schedule the durable worker as
+    // its own action so it owns the complete execution window and failure path.
+    await ctx.scheduler.runAfter(
+      0,
       internal.actions.pipeline.processNextJob as any,
       { siteId: candidate.siteId, jobId },
     );
+    return { processed: true };
   },
 });
 export const processNextJob = internalAction({
@@ -5789,9 +6647,16 @@ export const processNextJob = internalAction({
       manual?: boolean;
       reason?: string;
       replenishmentSequence?: number;
+      underfilledPlanContinuation?: {
+        version: number;
+        firstExecutionCount: number;
+        remainingTopicCapacity: number;
+        queuedAt: number;
+      };
       growthParentArticleId?: Id<"articles">;
       growthSeed?: string;
       growthActionFingerprint?: string;
+      expectedClickPlanMigrationVersion?: number;
       options?: RichMediaOptions;
     };
     const payload = job.payload as JobPayload | undefined;
@@ -5818,6 +6683,49 @@ export const processNextJob = internalAction({
         articleId,
       });
     };
+    const failPublication = async (
+      articleId: Id<"articles">,
+      message: string,
+      context: string,
+    ): Promise<ProcessedJobResult> => {
+      const failure = await ctx.runMutation(internal.jobs.markPublishFailed, {
+        jobId: job._id,
+        workerToken,
+        articleId,
+        error: `${context}: ${message}`,
+      });
+      const terminalTopicFit =
+        "terminalTopicFit" in failure && failure.terminalTopicFit === true;
+      return {
+        processed: failure.updated,
+        jobId: job._id,
+        articleId,
+        error: message,
+        failureKind: terminalTopicFit
+          ? "topic_business_fit_failed"
+          : "publication_failed",
+        qualityQuarantined: terminalTopicFit,
+      };
+    };
+    const reserveArticleProviderAttempt = async (
+      providerWorkKind: ArticleProviderWorkKind,
+    ) => {
+      const admission = await ctx.runMutation(
+        internal.jobs.reserveArticleProviderAttempt,
+        {
+          jobId: job._id,
+          workerToken,
+          siteId: args.siteId,
+          providerWorkKind,
+        },
+      );
+      if (!admission.ok) {
+        throw new ArticleProviderAdmissionError(
+          admission.reason,
+          "retryAfterMs" in admission ? admission.retryAfterMs : undefined,
+        );
+      }
+    };
 
     try {
       if (job.type === "onboarding") {
@@ -5828,6 +6736,8 @@ export const processNextJob = internalAction({
       }
 
       if (job.type === "plan") {
+        assertPlanProviderReservation(job);
+        await heartbeat();
         const growthContext = payload?.growthParentArticleId &&
           payload.growthSeed &&
           payload.growthActionFingerprint
@@ -5837,14 +6747,109 @@ export const processNextJob = internalAction({
               actionFingerprint: payload.growthActionFingerprint,
             }
           : undefined;
-        const result = await handlePlan(
+        const underfilledContinuation =
+          payload?.underfilledPlanContinuation;
+        if (
+          underfilledContinuation &&
+          (
+            underfilledContinuation.version !== 1 ||
+            !Number.isInteger(underfilledContinuation.firstExecutionCount) ||
+            underfilledContinuation.firstExecutionCount <= 0 ||
+            underfilledContinuation.firstExecutionCount >=
+              AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD ||
+            !Number.isInteger(underfilledContinuation.remainingTopicCapacity) ||
+            underfilledContinuation.remainingTopicCapacity !==
+              AUTOMATIC_PLAN_TOPIC_CAPACITY -
+                underfilledContinuation.firstExecutionCount ||
+            !Number.isFinite(underfilledContinuation.queuedAt) ||
+            (job.workerAttempts ?? 0) !== 1 ||
+            payload?.manual === true ||
+            !payload?.reason?.startsWith("topic_") ||
+            growthContext !== undefined ||
+            payload?.expectedClickPlanMigrationVersion !== undefined
+          )
+        ) {
+          throw new Error(
+            "Automatic plan continuation receipt is invalid; refusing paid discovery.",
+          );
+        }
+        await assertDataForSeoAccountBalance(
+          requiredPlanProviderBalanceMicroUsd(),
+        );
+        if (underfilledContinuation) {
+          const continuationAuthorization = await ctx.runMutation(
+            internal.jobs.authorizeUnderfilledPlanContinuationExecution,
+            {
+              siteId: args.siteId,
+              jobId: job._id,
+              workerToken,
+            },
+          );
+          if (!continuationAuthorization.authorized) {
+            throw new Error(
+              "Automatic plan continuation lost its paid-boundary " +
+              `authorization (${continuationAuthorization.reason}); ` +
+              "execution two remains consumed.",
+            );
+          }
+        }
+        const discoverySequence =
+          (payload?.replenishmentSequence ?? 0) +
+          (underfilledContinuation ? 1 : 0);
+        const planResult = await handlePlan(
           ctx,
           args.siteId,
           job._id,
           workerToken,
-          (payload?.replenishmentSequence ?? 0) + (job.workerAttempts ?? 0),
+          discoverySequence,
           growthContext,
+          payload?.expectedClickPlanMigrationVersion,
+          underfilledContinuation?.remainingTopicCapacity ??
+            AUTOMATIC_PLAN_TOPIC_CAPACITY,
         );
+        if (!underfilledContinuation) {
+          const continuation = await ctx.runMutation(
+            internal.jobs.continueSuccessfulUnderfilledPlan,
+            {
+              siteId: args.siteId,
+              jobId: job._id,
+              workerToken,
+              savedTopicCount: planResult.count,
+              firstResult: planResult,
+            },
+          );
+          if (continuation.queued) {
+            return {
+              processed: true,
+              jobId: job._id,
+              planContinuationQueued: true,
+            };
+          }
+        }
+        const cumulativeCount = underfilledContinuation
+          ? underfilledContinuation.firstExecutionCount + planResult.count
+          : planResult.count;
+        const result = {
+          ...planResult,
+          count: cumulativeCount,
+          ...(underfilledContinuation
+            ? {
+                underfilledContinuation: {
+                  firstExecutionCount:
+                    underfilledContinuation.firstExecutionCount,
+                  continuationCount: planResult.count,
+                  cumulativeCount,
+                  capacity: AUTOMATIC_PLAN_TOPIC_CAPACITY,
+                },
+              }
+            : {}),
+          providerBudget: {
+            reservedMicroUsd: job.providerCostReservedMicroUsd!,
+            ceilingMicroUsd: job.providerCostCeilingMicroUsd!,
+            reservationDay: job.providerCostReservationDay!,
+            workerExecution: (job.workerAttempts ?? 0) + 1,
+          },
+        };
         await complete(result);
         return { processed: true, jobId: job._id, planCompleted: true };
       }
@@ -5852,7 +6857,13 @@ export const processNextJob = internalAction({
       if (job.type === "links") {
         if (!payload?.articleId) throw new Error("Missing articleId on links job");
         await heartbeat();
-        await handleLinks(ctx, args.siteId, payload.articleId);
+        await handleLinks(
+          ctx,
+          args.siteId,
+          payload.articleId,
+          undefined,
+          () => reserveArticleProviderAttempt("internal_links"),
+        );
         await complete({ articleId: payload.articleId });
         return {
           processed: true,
@@ -5872,8 +6883,10 @@ export const processNextJob = internalAction({
 
       if (payload?.qualityRetry) {
         if (!payload.articleId) throw new Error("Quality retry is missing its articleId");
-        const deterministicRepair =
-          payload.metadataOnlyRepair || payload.deterministicRepair;
+        if (!payload.metadataOnlyRepair && !payload.deterministicRepair) {
+          await reserveArticleProviderAttempt("quality_review");
+        }
+        const deterministicRepair = payload.metadataOnlyRepair || payload.deterministicRepair;
         const review = deterministicRepair
           ? await ctx.runMutation(
               internal.articles.applyDeterministicQualityRepair,
@@ -5892,6 +6905,7 @@ export const processNextJob = internalAction({
               args.siteId,
               payload.articleId,
               review.contentHash,
+              () => reserveArticleProviderAttempt("internal_links"),
             );
           } catch (error) {
             const issues = [`Post-review internal-link sealing failed: ${
@@ -6006,18 +7020,12 @@ export const processNextJob = internalAction({
               const message = error instanceof Error
                 ? error.message
                 : "unknown publish error";
-              await ctx.runMutation(internal.jobs.markPublishFailed, {
-                jobId: job._id,
-                workerToken,
-                articleId: payload.articleId,
-                error: `Quality recovery passed but publication failed: ${message}`,
-              });
               return {
-                processed: true,
-                jobId: job._id,
-                articleId: payload.articleId,
-                error: message,
-                failureKind: "publication_failed",
+                ...(await failPublication(
+                  payload.articleId,
+                  message,
+                  "Quality recovery passed but publication failed",
+                )),
                 qualityRecovered: true,
               };
             }
@@ -6065,19 +7073,11 @@ export const processNextJob = internalAction({
           const message = error instanceof Error
             ? error.message
             : "unknown publish error";
-          await ctx.runMutation(internal.jobs.markPublishFailed, {
-            jobId: job._id,
-            workerToken,
-            articleId: payload.articleId,
-            error: `Publish retry failed: ${message}`,
-          });
-          return {
-            processed: true,
-            jobId: job._id,
-            articleId: payload.articleId,
-            error: message,
-            failureKind: "publication_failed",
-          };
+          return failPublication(
+            payload.articleId,
+            message,
+            "Publish retry failed",
+          );
         }
         await complete({ articleId: payload.articleId, publishRetry: true });
         return {
@@ -6108,21 +7108,7 @@ export const processNextJob = internalAction({
         const fit = evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: topic.label,
-          coreBusinessSignals: [
-            site.niche,
-            site.blogTheme,
-            site.siteSummary,
-            site.targetAudienceSummary,
-            site.productUsage,
-            ...(site.anchorKeywords ?? []),
-            ...(site.keyFeatures ?? []),
-            ...(site.painPoints ?? []),
-          ].filter((signal): signal is string => Boolean(signal)),
-          businessModelSignals: [
-            site.siteType ?? "",
-            site.niche ?? "",
-            site.siteSummary ?? "",
-          ],
+          ...tenantTopicBusinessSignals(site),
         });
         if (!fit.eligible) {
           await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
@@ -6157,23 +7143,19 @@ export const processNextJob = internalAction({
         }
       } else {
         if (site.userId) {
-          const { getLimitsFromFeatures } = await import("../planLimits");
-          const limits = getLimitsFromFeatures((site as any).planFeatures ?? []);
           const reservation = await ctx.runMutation(
             internal.jobs.reserveGenerationSlot,
             {
               jobId: job._id,
               workerToken,
-              userId: site.userId,
               siteId: args.siteId,
-              maxArticles: limits.maxArticles,
             },
           );
           if (!reservation.ok) {
             await ctx.runMutation(internal.jobs.markFailed, {
               jobId: job._id,
               workerToken,
-              error: `Article limit reached (${limits.maxArticles}/month): ${reservation.reason}`,
+              error: `Article generation is not authorized: ${reservation.reason}`,
             });
             return {
               processed: true,
@@ -6182,6 +7164,7 @@ export const processNextJob = internalAction({
             };
           }
         }
+        await reserveArticleProviderAttempt("generation");
         const generated = await handleArticle(
           ctx,
           args.siteId,
@@ -6203,6 +7186,7 @@ export const processNextJob = internalAction({
           : "Running final quality review...",
       });
 
+      await reserveArticleProviderAttempt("quality_review");
       const finalReview = await reviewExistingArticleHandler(ctx, {
         siteId: args.siteId,
         articleId,
@@ -6243,6 +7227,7 @@ export const processNextJob = internalAction({
           args.siteId,
           articleId,
           finalReview.contentHash,
+          () => reserveArticleProviderAttempt("internal_links"),
         );
         if (!linked.readyForPublication) {
           const issues = linked.issues ?? ["Post-review internal-link seal failed"];
@@ -6338,19 +7323,11 @@ export const processNextJob = internalAction({
           const message = error instanceof Error
             ? error.message
             : "unknown publish error";
-          await ctx.runMutation(internal.jobs.markPublishFailed, {
-            jobId: job._id,
-            workerToken,
+          return failPublication(
             articleId,
-            error: `Article generated but publication failed: ${message}`,
-          });
-          return {
-            processed: true,
-            jobId: job._id,
-            articleId,
-            error: message,
-            failureKind: "publication_failed",
-          };
+            message,
+            "Article generated but publication failed",
+          );
         }
       }
 
@@ -6365,17 +7342,120 @@ export const processNextJob = internalAction({
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
+      const planContinuationSettled =
+        job.type === "plan" &&
+        payload?.underfilledPlanContinuation !== undefined;
+      if (error instanceof ArticleProviderAdmissionError) {
+        if (
+          error.reason === "account_concurrency" ||
+          error.reason === "fleet_concurrency"
+        ) {
+          const deferred = await ctx.runMutation(
+            internal.jobs.deferArticleProviderAdmission,
+            {
+              jobId: job._id,
+              workerToken,
+              reason: error.reason,
+              retryAfterMs: error.retryAfterMs ?? 2 * 60 * 1000,
+            },
+          );
+          if (deferred.deferred && deferred.nextAttemptAt) {
+            await ctx.scheduler.runAt(
+              deferred.nextAttemptAt,
+              internal.autopilot.dispatchSiteFollowup,
+              {
+                siteId: args.siteId,
+                trigger: "provider_capacity_retry",
+                reason: error.reason,
+              },
+            );
+          }
+          return {
+            processed: deferred.deferred,
+            jobId: job._id,
+            articleId: job.articleId,
+            error: message,
+            failureKind: "provider_capacity_deferred",
+          };
+        }
+        const failed = await ctx.runMutation(internal.jobs.markFailed, {
+          jobId: job._id,
+          workerToken,
+          error: `Terminal article provider admission outcome: ${error.reason}`,
+        });
+        return {
+          processed: failed.updated,
+          jobId: job._id,
+          articleId: job.articleId,
+          error: message,
+          failureKind: "job_failed",
+        };
+      }
+      if (job.type === "plan") {
+        if (isDataForSeoBalancePreflightError(error)) {
+          const aborted = await ctx.runMutation(
+            internal.jobs.abortPlanForProviderBalance,
+            {
+              siteId: args.siteId,
+              jobId: job._id,
+              workerToken,
+              releaseReason: providerBalanceReleaseReason(error),
+            },
+          );
+          return {
+            processed: aborted.updated,
+            jobId: job._id,
+            articleId: job.articleId,
+            error: message,
+            failureKind: "job_failed",
+            planContinuationSettled,
+          };
+        }
+        const classification = classifyPlanFailure(message);
+        if (!classification.retryable) {
+          const failed = await ctx.runMutation(internal.jobs.markFailed, {
+            jobId: job._id,
+            workerToken,
+            error:
+              `Terminal planner outcome (${classification.category}): ${message}`,
+          });
+          return {
+            processed: failed.updated,
+            jobId: job._id,
+            articleId: job.articleId,
+            error: message,
+            failureKind: "job_failed",
+            planContinuationSettled,
+          };
+        }
+      }
       const retry = await ctx.runMutation(internal.jobs.markRetryableFailure, {
         jobId: job._id,
         workerToken,
         error: message,
       });
+      if (retry.willRetry && retry.nextAttemptAt) {
+        // A retry with a durable timestamp must wake itself. Depending on the
+        // next three-hour fleet cron turned a two-minute backoff into a silent
+        // cadence miss and required an operator to poke the tenant manually.
+        await ctx.scheduler.runAt(
+          retry.nextAttemptAt,
+          internal.autopilot.dispatchSiteFollowup,
+          {
+            siteId: args.siteId,
+            trigger: "job_retry",
+            reason: `bounded_retry_${retry.attempts}`,
+          },
+        );
+      }
       return {
         processed: retry.updated,
         jobId: job._id,
         articleId: job.articleId,
         error: message,
         failureKind: retry.willRetry ? "retry_scheduled" : "job_failed",
+        planContinuationSettled:
+          planContinuationSettled && !retry.willRetry,
       };
     }
     };
@@ -6417,22 +7497,10 @@ export const analyzeKeywordGaps = action({
   handler: async (ctx, { siteId }): Promise<{
     gaps: { keyword: string; searchVolume: number; difficulty: number; competitorUrl: string; opportunity: string }[];
   }> => {
-    const site = await requireOwnedSite(ctx, siteId);
-    if (!site.competitors?.length) {
-      return { gaps: [] };
-    }
-
-    const { findKeywordGaps } = await import("./seoData");
-    const locationCode = mapCountryToLocation(site.targetCountry);
-    const gaps = await findKeywordGaps(
-      site.domain,
-      site.competitors,
-      locationCode,
-      site.language ?? "en",
+    await requireOwnedSite(ctx, siteId);
+    throw new Error(
+      "Legacy keyword-gap analysis is disabled because it bypasses the tenant provider budget. Generate a topic plan through the reserved planning workflow instead.",
     );
-
-    console.log(`Found ${gaps.length} keyword gaps for ${site.domain}`);
-    return { gaps };
   },
 });
 
@@ -6523,146 +7591,24 @@ export const detectContentDecay = action({
   },
 });
 
-// ── Backfill live SERP fingerprints for the whole tenant corpus ──
-// This is an operator migration, not part of the cadence-critical path. It
-// gives legacy/used topics the same DataForSEO intent evidence as new topics,
-// then reports actual top-ten overlap without deleting or deindexing content.
+// ── Legacy SERP fingerprint backfill ──
+// This migration pre-dated the durable tenant/fleet provider reservation.
+// Keep the internal action name for queued-call compatibility, but fail closed
+// before DataForSEO so an old operator invocation cannot create unmetered spend.
 export const backfillTopicSerpFingerprints = internalAction({
   args: {
     siteId: v.id("sites"),
     force: v.optional(v.boolean()),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, { siteId, force, limit }): Promise<{
-    updated: number;
-    skipped: number;
-    remaining: number;
-    scheduledNext: boolean;
-    failed: Array<{ topicId: string; keyword: string; error: string }>;
-    overlaps: Array<{
-      leftTopicId: string;
-      rightTopicId: string;
-      leftKeyword: string;
-      rightKeyword: string;
-      shared: number;
-      coefficient: number;
-    }>;
-  }> => {
+  handler: async (ctx, { siteId, force, limit }) => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
-    const topics: Doc<"topic_clusters">[] = await ctx.runQuery(
-      internal.topics.listBySiteInternal,
-      {
-      siteId,
-      },
+    void force;
+    void limit;
+    throw new Error(
+      "Legacy SERP fingerprint backfill is disabled because it bypasses the shared provider reservation. Use the metered expected-click evidence backfill workflow instead.",
     );
-    const { analyzeSERP } = await import("./seoData");
-    const locationCode = mapCountryToLocation(site.targetCountry);
-    const batchLimit = Math.max(1, Math.min(5, Math.floor(limit ?? 5)));
-    const pendingTopicIds = new Set(
-      topics
-        .filter((topic) =>
-          force || !hasReliableSerpFingerprint(topic.serpTopUrls)
-        )
-        .slice(0, batchLimit)
-        .map((topic) => String(topic._id)),
-    );
-    let updated = 0;
-    let skipped = 0;
-    const failed: Array<{ topicId: string; keyword: string; error: string }> = [];
-    const audited = [] as Array<{
-      topicId: string;
-      primaryKeyword: string;
-      serpTopUrls?: string[];
-    }>;
-
-    for (const topic of topics) {
-      let serpTopUrls = topic.serpTopUrls;
-      if (!pendingTopicIds.has(String(topic._id))) {
-        skipped += 1;
-      } else {
-        try {
-          const analysis = await analyzeSERP(
-            topic.primaryKeyword,
-            locationCode,
-            site.language ?? "en",
-          );
-          serpTopUrls = [...new Set(
-            analysis.results.map((result) => result.url).filter(Boolean),
-          )].slice(0, 10);
-          if (!hasReliableSerpFingerprint(serpTopUrls)) {
-            throw new Error("DataForSEO returned fewer than five organic URLs");
-          }
-          await ctx.runMutation(internal.topics.updateSEOMetrics, {
-            topicId: topic._id,
-            serpTopUrls,
-            recommendedArticleType: analysis.recommendedArticleType,
-            paaQuestions: analysis.paaQuestions.length > 0
-              ? analysis.paaQuestions
-              : undefined,
-          });
-          updated += 1;
-        } catch (error) {
-          failed.push({
-            topicId: String(topic._id),
-            keyword: topic.primaryKeyword,
-            error: error instanceof Error ? error.message : "unknown error",
-          });
-        }
-      }
-      audited.push({
-        topicId: String(topic._id),
-        primaryKeyword: topic.primaryKeyword,
-        serpTopUrls,
-      });
-    }
-
-    const overlaps = [] as Array<{
-      leftTopicId: string;
-      rightTopicId: string;
-      leftKeyword: string;
-      rightKeyword: string;
-      shared: number;
-      coefficient: number;
-    }>;
-    for (let leftIndex = 0; leftIndex < audited.length; leftIndex += 1) {
-      for (
-        let rightIndex = leftIndex + 1;
-        rightIndex < audited.length;
-        rightIndex += 1
-      ) {
-        const left = audited[leftIndex];
-        const right = audited[rightIndex];
-        const evidence = serpFingerprintOverlap(
-          left.serpTopUrls,
-          right.serpTopUrls,
-        );
-        if (evidence.shared < 3 || evidence.coefficient < 0.4) continue;
-        overlaps.push({
-          leftTopicId: left.topicId,
-          rightTopicId: right.topicId,
-          leftKeyword: left.primaryKeyword,
-          rightKeyword: right.primaryKeyword,
-          ...evidence,
-        });
-      }
-    }
-
-    const remaining = Math.max(
-      0,
-      topics.filter((topic) =>
-        force || !hasReliableSerpFingerprint(topic.serpTopUrls)
-      ).length - updated,
-    );
-    const scheduledNext = !force && remaining > 0;
-    if (scheduledNext) {
-      await ctx.scheduler.runAfter(
-        5_000,
-        internal.actions.pipeline.backfillTopicSerpFingerprints,
-        { siteId, force: false, limit: batchLimit },
-      );
-    }
-    return { updated, skipped, remaining, scheduledNext, failed, overlaps };
   },
 });
 
@@ -6672,89 +7618,9 @@ export const backfillTopicSerpFingerprints = internalAction({
 export const backfillTopicMetrics = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ enriched: number; removed: number }> => {
-    const site = await requireOwnedSite(ctx, siteId);
-
-    const allTopics = await ctx.runQuery(internal.topics.listBySiteInternal, { siteId });
-    // Backfill topics without metrics or with invalid markers (-1 = force refresh)
-    const unenriched = allTopics.filter(
-      (t: any) => (t.searchVolume === undefined || t.searchVolume < 0) && t.status !== "used",
+    await requireOwnedSite(ctx, siteId);
+    throw new Error(
+      "Legacy topic-metrics backfill is disabled because it bypasses the tenant provider budget. Generate a topic plan through the reserved planning workflow instead.",
     );
-    if (unenriched.length === 0) {
-      console.log("All topics already have SEO metrics — nothing to backfill.");
-      return { enriched: 0, removed: 0 };
-    }
-
-    console.log(`Backfilling SEO metrics for ${unenriched.length} topics...`);
-
-    const { getKeywordMetrics, analyzeSERP } = await import("./seoData");
-    const keywords = unenriched.map((t: any) => t.primaryKeyword);
-    const locationCode = mapCountryToLocation(site.targetCountry);
-    const metrics = await getKeywordMetrics(keywords, locationCode, site.language ?? "en");
-
-    let enriched = 0;
-    let removed = 0;
-
-    for (const topic of unenriched) {
-      const kwMetric = metrics.find(
-        (m) => m.keyword.toLowerCase() === topic.primaryKeyword.toLowerCase(),
-      );
-      if (!kwMetric) continue;
-
-      // Quality gate: remove topics with zero volume AND high difficulty
-      if (kwMetric.searchVolume === 0 && kwMetric.difficulty > 70) {
-        console.log(`Backfill quality gate: removing "${topic.primaryKeyword}" (0 vol, ${kwMetric.difficulty} KD)`);
-        try {
-          await ctx.runMutation(internal.topics.removeInternal, { topicId: topic._id });
-          removed++;
-        } catch { /* already gone */ }
-        continue;
-      }
-
-      // Compute opportunity score (logarithmic volume scaling for niche keywords)
-      const volumeScore = kwMetric.searchVolume > 0
-        ? Math.min(Math.log10(kwMetric.searchVolume) * 13, 40)
-        : 0;
-      const difficultyBonus = Math.max(0, (100 - kwMetric.difficulty) * 0.4);
-      const cpcSignal = Math.min(kwMetric.cpc * 4, 20);
-      const opportunityScore = Math.round(volumeScore + difficultyBonus + cpcSignal);
-      const autoPriority = opportunityScore >= 70 ? 5
-        : opportunityScore >= 55 ? 4
-        : opportunityScore >= 40 ? 3
-        : opportunityScore >= 25 ? 2
-        : 1;
-
-      // Save metrics + priority
-      await ctx.runMutation(internal.topics.updateSEOMetrics, {
-        topicId: topic._id,
-        searchVolume: kwMetric.searchVolume,
-        keywordDifficulty: kwMetric.difficulty,
-        cpc: kwMetric.cpc,
-        serpIntent: kwMetric.intent,
-        volumeTrend: kwMetric.trend.length > 0 ? kwMetric.trend : undefined,
-        priority: autoPriority,
-      });
-
-      // SERP analysis: auto-set article type
-      try {
-        const serpAnalysis = await analyzeSERP(topic.primaryKeyword, locationCode, site.language ?? "en");
-        await ctx.runMutation(internal.topics.updateSEOMetrics, {
-          topicId: topic._id,
-          recommendedArticleType: serpAnalysis.recommendedArticleType,
-          articleType: serpAnalysis.recommendedArticleType,
-          paaQuestions: serpAnalysis.paaQuestions.length > 0 ? serpAnalysis.paaQuestions : undefined,
-          serpTopUrls: [...new Set(
-            serpAnalysis.results.map((result) => result.url).filter(Boolean),
-          )].slice(0, 10),
-        });
-      } catch (serpErr) {
-        console.error(`SERP analysis failed for "${topic.primaryKeyword}":`, serpErr);
-      }
-
-      enriched++;
-      console.log(`Backfilled "${topic.primaryKeyword}": vol=${kwMetric.searchVolume}, KD=${kwMetric.difficulty}, priority=${autoPriority}`);
-    }
-
-    console.log(`Backfill complete: ${enriched} enriched, ${removed} removed by quality gate.`);
-    return { enriched, removed };
   },
 });

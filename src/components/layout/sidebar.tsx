@@ -51,7 +51,7 @@ const navSections = [
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { isFreePlan } = usePlanLimits();
+  const { isFreePlan, isPlanLoaded } = usePlanLimits();
   const { sites, activeSite, setActiveSiteId } = useActiveSite();
   const [siteDropdownOpen, setSiteDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -161,7 +161,7 @@ export function Sidebar() {
         <div className="flex-1 overflow-y-auto py-5">{nav}</div>
 
         {/* Upgrade CTA (free plan only) */}
-        {isFreePlan && (
+        {isPlanLoaded && isFreePlan && (
           <div className="px-3 pb-3">
             <Link
               href="/upgrade"
@@ -195,7 +195,11 @@ export function Sidebar() {
                     {activeSite.siteName || activeSite.domain}
                   </p>
                   <p className="text-[11px] text-[#565A6E]">
-                    {activeSite.autopilotEnabled !== false ? "Autopilot on" : "Manual"}
+                    {activeSite.planAccessStatus === "parked"
+                      ? "Parked by plan"
+                      : activeSite.autopilotEnabled !== false
+                        ? "Autopilot on"
+                        : "Manual"}
                   </p>
                 </div>
                 {hasMultipleSites && (
@@ -224,9 +228,16 @@ export function Sidebar() {
                         >
                           <Globe className="h-3 w-3" style={{ color: sColor }} />
                         </div>
-                        <span className="truncate text-[12px] font-medium text-[#EDEEF1]">
-                          {s.siteName || s.domain}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate text-[12px] font-medium text-[#EDEEF1]">
+                            {s.siteName || s.domain}
+                          </span>
+                          {s.planAccessStatus === "parked" && (
+                            <span className="block text-[10px] text-[#F87171]">
+                              Parked by plan
+                            </span>
+                          )}
+                        </div>
                         {isSelected && (
                           <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-[#0EA5E9]" />
                         )}

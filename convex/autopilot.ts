@@ -9,6 +9,7 @@ import {
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
   cadenceIntervalMs,
+  currentHealthOutcome,
   effectivePublishedAt,
   isSealedReady,
 } from "./lib/autopilotBuffer";
@@ -19,10 +20,21 @@ import {
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
 import { getLimitsFromFeatures } from "./planLimits";
+import {
+  autopilotAlertRequiresAttention,
+  isRecoveredByHealthyAutopilotReceipt,
+} from "./lib/autopilotAlerts";
+import {
+  siteExecutionAuthorized,
+} from "./lib/planSiteAllowance";
 
 const SITE_STAGGER_MS = 5_000;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
+const PUBLIC_URL_VERIFIED_TRIGGER = "public_url_verified";
+const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
+  "operator_recovery_of_public_url_verified:";
+const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
 
 async function upsertHealth(
   ctx: MutationCtx,
@@ -44,6 +56,34 @@ async function upsertHealth(
       status: "recovering",
       ...fields,
     });
+  }
+  if (patch.status === "healthy") {
+    await resolveAlertsRecoveredByHealthyReceipt(ctx, siteId, fields.updatedAt);
+  }
+}
+
+async function resolveAlertsRecoveredByHealthyReceipt(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  receiptAt: number,
+) {
+  const active = await ctx.db
+    .query("autopilot_alerts")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", siteId).eq("status", "active"),
+    )
+    .take(100);
+  for (const alert of active) {
+    if (
+      alert.updatedAt <= receiptAt &&
+      isRecoveredByHealthyAutopilotReceipt(alert.kind)
+    ) {
+      await ctx.db.patch(alert._id, {
+        status: "resolved",
+        resolvedAt: receiptAt,
+        updatedAt: receiptAt,
+      });
+    }
   }
 }
 
@@ -114,12 +154,60 @@ export const dispatchActiveSites = internalMutation({
     const page = await ctx.db
       .query("sites")
       .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("deletionStatus"), undefined),
+          q.eq(q.field("planParkedAt"), undefined),
+        )
+      )
       .paginate({ cursor: args.cursor ?? null, numItems: 25 });
     const activeSites: typeof page.page = [];
     for (const site of page.page) {
+      // The index excludes parked sites, but a trusted billing receipt pauses
+      // the whole account while its bounded site reconciliation is in flight.
+      if (!(await siteExecutionAuthorized(ctx, site))) continue;
+      if ((site.cadencePerWeek ?? 0) <= 0) {
+        await setAlert(ctx, {
+          siteId: site._id,
+          kind: "cadence_paused",
+          message:
+            "Publishing is paused because this site has no current account-wide article allocation.",
+        });
+        await upsertHealth(ctx, site._id, {
+          heartbeatAt: now,
+          status: "cadence_paused",
+          detail:
+            "No generation or publication is scheduled while the effective cadence is paused.",
+        });
+        continue;
+      }
+      await resolveAlert(ctx, site._id, "cadence_paused");
       const currentMode = site.autopilotRolloutMode ?? "observe";
       if (["warm", "live"].includes(currentMode)) {
-        activeSites.push(site);
+        // Expected-click planning is part of every advertised plan. Preserve
+        // an explicit false emergency stop, but enroll legacy warm/live sites
+        // whose compatibility flag predates the general tenant rollout.
+        if (
+          site.expectedClickSchedulingEnabled === undefined ||
+          site.verifiedKeywordDataRequired !== true
+        ) {
+          const enrolledAt = Date.now();
+          const expectedClickSchedulingEnabled =
+            site.expectedClickSchedulingEnabled ?? true;
+          await ctx.db.patch(site._id, {
+            expectedClickSchedulingEnabled,
+            verifiedKeywordDataRequired: true,
+            updatedAt: enrolledAt,
+          });
+          activeSites.push({
+            ...site,
+            expectedClickSchedulingEnabled,
+            verifiedKeywordDataRequired: true,
+            updatedAt: enrolledAt,
+          });
+        } else {
+          activeSites.push(site);
+        }
         continue;
       }
       const hasCrawledPage = !!(await ctx.db
@@ -147,6 +235,8 @@ export const dispatchActiveSites = internalMutation({
         autopilotRolloutMode: "warm",
         autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
         autopilotRolloutStartedAt: promotedAt,
+        expectedClickSchedulingEnabled: true,
+        verifiedKeywordDataRequired: true,
         updatedAt: promotedAt,
       });
       await resolveAlert(ctx, site._id, "autopilot_readiness_blocked");
@@ -155,6 +245,8 @@ export const dispatchActiveSites = internalMutation({
         autopilotRolloutMode: "warm",
         autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
         autopilotRolloutStartedAt: promotedAt,
+        expectedClickSchedulingEnabled: true,
+        verifiedKeywordDataRequired: true,
         updatedAt: promotedAt,
       });
     }
@@ -209,7 +301,10 @@ export const dispatchSiteFollowup = internalMutation({
   handler: async (ctx, { siteId, trigger, reason }) => {
     const site = await ctx.db.get(siteId);
     if (
-      !site?.autopilotEnabled ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
       !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
     ) {
       return { scheduled: false, reason: "autopilot_disabled" };
@@ -238,11 +333,305 @@ export const dispatchSiteFollowup = internalMutation({
   },
 });
 
+// Operator-only recovery for the narrow case where the live URL was already
+// verified but its immediate scheduler follow-up failed. The failed run stays
+// immutable evidence. A recovery run carries a dedicated immutable receipt
+// keyed to that exact failure, so concurrent or repeated invocations schedule
+// at most one replacement tick even after normal run completion rewrites its
+// operator-facing detail.
+export const recoverFailedPublicUrlVerifiedFollowup = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    failedRunId: v.id("autopilot_runs"),
+  },
+  handler: async (ctx, { siteId, failedRunId }) => {
+    const failedRun = await ctx.db.get(failedRunId);
+    if (!failedRun || failedRun.siteId !== siteId) {
+      throw new Error("Public URL follow-up recovery run/tenant mismatch");
+    }
+    if (
+      failedRun.trigger !== PUBLIC_URL_VERIFIED_TRIGGER ||
+      failedRun.status !== "failed"
+    ) {
+      throw new Error(
+        "Only a failed public_url_verified run can be recovered",
+      );
+    }
+
+    const recoveryDetail =
+      `${PUBLIC_URL_VERIFIED_RECOVERY_PREFIX}${failedRunId}`;
+    const existingRecovery = await ctx.db
+      .query("autopilot_runs")
+      .withIndex("by_site_recovery_source", (q) =>
+        q.eq("siteId", siteId).eq("recoveryOfRunId", failedRunId),
+      )
+      .unique();
+    if (existingRecovery) {
+      return {
+        scheduled: false,
+        reason: "already_replayed",
+        runId: existingRecovery._id,
+      };
+    }
+
+    const [
+      site,
+      health,
+      latestModernPublished,
+      latestPublishedByCreation,
+      pendingJob,
+      runningJob,
+    ] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db
+        .query("autopilot_health")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .first(),
+      ctx.db
+        .query("article_summaries")
+        .withIndex("by_site_status_audit_published", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("status", "published")
+            .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
+        )
+        .order("desc")
+        .first(),
+      ctx.db
+        .query("article_summaries")
+        .withIndex("by_site_status_created", (q) =>
+          q.eq("siteId", siteId).eq("status", "published"),
+        )
+        .order("desc")
+        .first(),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "pending"),
+        )
+        .first(),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "running"),
+        )
+        .first(),
+    ]);
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
+    ) {
+      throw new Error("Site is not eligible for autopilot follow-up recovery");
+    }
+    // The failed run must still be the unrecovered health receipt. Any newer
+    // run means another worker or operator has already superseded this repair.
+    if (!health || health.lastRunId !== failedRunId) {
+      throw new Error(
+        "Public URL follow-up recovery was superseded by a later run",
+      );
+    }
+    if (pendingJob || runningJob) {
+      throw new Error(
+        "Public URL follow-up recovery refused while tenant work is active",
+      );
+    }
+
+    const latestPublished = [
+      latestModernPublished,
+      latestPublishedByCreation,
+    ]
+      .filter(
+        (article): article is Doc<"article_summaries"> => Boolean(article),
+      )
+      .sort(
+        (a, b) =>
+          effectivePublishedAt({
+            createdAt: b.articleCreatedAt,
+            publishedAt: b.publishedAt,
+            publicationAuditVersion: b.publicationAuditVersion,
+            auditedContentHash: b.auditedContentHash,
+          }) -
+          effectivePublishedAt({
+            createdAt: a.articleCreatedAt,
+            publishedAt: a.publishedAt,
+            publicationAuditVersion: a.publicationAuditVersion,
+            auditedContentHash: a.auditedContentHash,
+          }),
+      )[0];
+    if (!latestPublished || latestPublished.publicUrlStatus !== "verified") {
+      throw new Error(
+        "Latest delivered article is not verified at its public URL",
+      );
+    }
+    if (
+      !latestPublished.publicUrlVerifiedAt ||
+      failedRun.scheduledAt < latestPublished.publicUrlVerifiedAt
+    ) {
+      throw new Error(
+        "Failed follow-up does not belong to the latest verified publication",
+      );
+    }
+
+    const lastPublishedAt = effectivePublishedAt({
+      createdAt: latestPublished.articleCreatedAt,
+      publishedAt: latestPublished.publishedAt,
+      publicationAuditVersion: latestPublished.publicationAuditVersion,
+      auditedContentHash: latestPublished.auditedContentHash,
+    });
+    const nextPublicationDueAt =
+      lastPublishedAt + cadenceIntervalMs(site.cadencePerWeek ?? 4);
+    const scheduledAt = Date.now();
+    if (
+      scheduledAt + PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS >=
+      nextPublicationDueAt
+    ) {
+      throw new Error(
+        "Cadence deadline has arrived; refusing a post-verification recovery that could publish",
+      );
+    }
+    if (
+      health.lastPublishedAt !== lastPublishedAt ||
+      health.nextPublicationDueAt !== nextPublicationDueAt
+    ) {
+      throw new Error(
+        "Cadence health does not match the latest verified publication",
+      );
+    }
+
+    const runId = await ctx.db.insert("autopilot_runs", {
+      siteId,
+      trigger: PUBLIC_URL_VERIFIED_TRIGGER,
+      recoveryOfRunId: failedRunId,
+      scheduledAt,
+      heartbeatAt: scheduledAt,
+      status: "scheduled",
+      detail: recoveryDetail,
+    });
+    await upsertHealth(ctx, siteId, {
+      lastRunId: runId,
+      heartbeatAt: scheduledAt,
+      status: "recovering",
+      detail:
+        "Replaying the failed post-verification scheduler follow-up exactly once.",
+    });
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.autopilotTick, {
+      siteId,
+      runId,
+      trigger: PUBLIC_URL_VERIFIED_TRIGGER,
+    });
+    return {
+      scheduled: true,
+      runId,
+      articleId: latestPublished.articleId,
+      lastPublishedAt,
+      nextPublicationDueAt,
+    };
+  },
+});
+
+// One-shot receipt migration for a recovery that completed before
+// `recoveryOfRunId` existed. It only binds two exact historical runs; it does
+// not change health, resolve alerts, schedule work, or touch publication state.
+export const backfillPublicUrlVerifiedRecoveryReceipt = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    failedRunId: v.id("autopilot_runs"),
+    recoveryRunId: v.id("autopilot_runs"),
+    backfillVersion: v.literal(1),
+  },
+  handler: async (
+    ctx,
+    { siteId, failedRunId, recoveryRunId },
+  ) => {
+    if (failedRunId === recoveryRunId) {
+      throw new Error("Recovery receipt cannot point to itself");
+    }
+    const [site, failedRun, recoveryRun, conflictingReceipt] =
+      await Promise.all([
+        ctx.db.get(siteId),
+        ctx.db.get(failedRunId),
+        ctx.db.get(recoveryRunId),
+        ctx.db
+          .query("autopilot_runs")
+          .withIndex("by_site_recovery_source", (q) =>
+            q.eq("siteId", siteId).eq("recoveryOfRunId", failedRunId),
+          )
+          .unique(),
+      ]);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("Recovery receipt backfill site is not executable");
+    }
+    if (
+      !failedRun ||
+      !recoveryRun ||
+      failedRun.siteId !== siteId ||
+      recoveryRun.siteId !== siteId
+    ) {
+      throw new Error("Recovery receipt backfill run/tenant mismatch");
+    }
+    if (
+      failedRun.trigger !== PUBLIC_URL_VERIFIED_TRIGGER ||
+      recoveryRun.trigger !== PUBLIC_URL_VERIFIED_TRIGGER ||
+      failedRun.status !== "failed" ||
+      failedRun.outcome !== "failed" ||
+      recoveryRun.status !== "completed" ||
+      recoveryRun.outcome === "failed"
+    ) {
+      throw new Error("Recovery receipt backfill run state mismatch");
+    }
+    if (
+      failedRun.completedAt === undefined ||
+      recoveryRun.startedAt === undefined ||
+      recoveryRun.completedAt === undefined ||
+      recoveryRun._creationTime <= failedRun._creationTime ||
+      recoveryRun.scheduledAt < failedRun.completedAt ||
+      recoveryRun.startedAt < recoveryRun.scheduledAt ||
+      recoveryRun.completedAt < recoveryRun.startedAt ||
+      recoveryRun.scheduledAt - failedRun.completedAt > 24 * 60 * 60 * 1000
+    ) {
+      throw new Error("Recovery receipt backfill timestamp/order mismatch");
+    }
+    if (conflictingReceipt) {
+      if (conflictingReceipt._id === recoveryRunId) {
+        return {
+          bound: false,
+          reason: "already_bound",
+          recoveryRunId,
+        };
+      }
+      throw new Error("Failed run already has a conflicting recovery receipt");
+    }
+    if (recoveryRun.recoveryOfRunId !== undefined) {
+      if (recoveryRun.recoveryOfRunId === failedRunId) {
+        return {
+          bound: false,
+          reason: "already_bound",
+          recoveryRunId,
+        };
+      }
+      throw new Error("Recovery run is already bound to another failed run");
+    }
+
+    await ctx.db.patch(recoveryRunId, { recoveryOfRunId: failedRunId });
+    return {
+      bound: true,
+      failedRunId,
+      recoveryRunId,
+      backfillVersion: 1,
+    };
+  },
+});
+
 export const promoteWarmSiteIfReady = internalMutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
-    if (!site) throw new Error("Site not found");
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("Site not found");
+    }
     if (site.autopilotRolloutMode !== "warm") {
       return { promoted: false, blockers: ["site_not_warm"] };
     }
@@ -282,6 +671,8 @@ export const promoteWarmSiteIfReady = internalMutation({
       autopilotRolloutMode: "live",
       autopilotRolloutEpoch: rolloutEpoch,
       autopilotRolloutStartedAt: promotedAt,
+      expectedClickSchedulingEnabled: true,
+      verifiedKeywordDataRequired: true,
       updatedAt: promotedAt,
     });
     await resolveAlert(ctx, siteId, "autopilot_readiness_blocked");
@@ -320,7 +711,10 @@ export const scheduleCadenceDeadline = internalMutation({
   handler: async (ctx, { siteId, dueAt }) => {
     const site = await ctx.db.get(siteId);
     if (
-      !site?.autopilotEnabled ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
       site.autopilotRolloutMode !== "live" ||
       site.approvalRequired ||
       (site.publishMethod ?? "github") === "manual"
@@ -365,7 +759,18 @@ export const markRunStarted = internalMutation({
   handler: async (ctx, { runId }) => {
     const run = await ctx.db.get(runId);
     if (!run) return;
+    const site = await ctx.db.get(run.siteId);
     const now = Date.now();
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      await ctx.db.patch(runId, {
+        status: "failed",
+        completedAt: now,
+        heartbeatAt: now,
+        outcome: "site_parked",
+        detail: "The site is not active under the current plan.",
+      });
+      return;
+    }
     await ctx.db.patch(runId, {
       status: "running",
       startedAt: now,
@@ -381,6 +786,39 @@ export const markRunStarted = internalMutation({
   },
 });
 
+export const recordTopicPortfolioAudit = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    status: v.string(),
+    decision: v.string(),
+    supportsGoal: v.boolean(),
+    expectedClicksMonthly: v.number(),
+    monthlyOrganicClickGoal: v.optional(v.number()),
+    clickDeficit: v.optional(v.number()),
+    evidenceMissing: v.number(),
+    evaluatedAt: v.number(),
+    version: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("Site not found");
+    }
+    await upsertHealth(ctx, args.siteId, {
+      portfolioStatus: args.status,
+      portfolioDecision: args.decision,
+      portfolioSupportsGoal: args.supportsGoal,
+      portfolioExpectedClicksMonthly: args.expectedClicksMonthly,
+      portfolioGoalMonthly: args.monthlyOrganicClickGoal,
+      portfolioClickDeficit: args.clickDeficit,
+      portfolioEvidenceMissing: args.evidenceMissing,
+      portfolioEvaluatedAt: args.evaluatedAt,
+      portfolioVersion: args.version,
+    });
+    return { recorded: true };
+  },
+});
+
 export const markRunFinished = internalMutation({
   args: {
     runId: v.id("autopilot_runs"),
@@ -392,7 +830,18 @@ export const markRunFinished = internalMutation({
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
     if (!run) return;
+    const runSite = await ctx.db.get(run.siteId);
     const now = Date.now();
+    if (!runSite || !(await siteExecutionAuthorized(ctx, runSite))) {
+      await ctx.db.patch(args.runId, {
+        status: "failed",
+        completedAt: now,
+        heartbeatAt: now,
+        outcome: "site_parked",
+        detail: "The site is not active under the current plan.",
+      });
+      return;
+    }
     await ctx.db.patch(args.runId, {
       status: "completed",
       completedAt: now,
@@ -419,6 +868,7 @@ export const markRunFinished = internalMutation({
       "approval_waiting",
       "manual_delivery_waiting",
       "retry_scheduled",
+      "plan_continuation_queued",
       "public_url_pending",
     ]);
     let completionStatus = blockedOutcomes.has(args.outcome)
@@ -455,9 +905,18 @@ export const markRunFinished = internalMutation({
           auditedContentHash: article.auditedContentHash,
         });
         const cadence = site.cadencePerWeek ?? 4;
-        const cadenceMs = cadenceIntervalMs(cadence);
-        nextPublicationDueAt = lastPublishedAt + cadenceMs;
-        if (article.publicUrlStatus === "pending") {
+        if (cadence > 0) {
+          const cadenceMs = cadenceIntervalMs(cadence);
+          nextPublicationDueAt = lastPublishedAt + cadenceMs;
+        } else {
+          completionStatus = "cadence_paused";
+          completionDetail =
+            "The external publication receipt was preserved, but no further work is scheduled while cadence is paused.";
+        }
+        if (cadence <= 0) {
+          // The delivery began before the account allocation changed. Keep
+          // the exact external receipt, but do not arm another deadline.
+        } else if (article.publicUrlStatus === "pending") {
           completionStatus = "public_url_pending";
           completionDetail =
             "The article reached its configured destination and is awaiting exact public URL verification.";
@@ -498,6 +957,22 @@ export const markRunFinished = internalMutation({
         completionDetail =
           "Scheduler, cadence, and strict-quality publication buffer are healthy.";
       }
+    }
+    const currentPortfolioHealth = await ctx.db
+      .query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", run.siteId))
+      .first();
+    if (
+      completionStatus === "healthy" &&
+      runSite?.expectedClickSchedulingEnabled === true &&
+      currentPortfolioHealth?.portfolioSupportsGoal === false
+    ) {
+      completionStatus = currentPortfolioHealth.portfolioStatus === "below_goal"
+        ? "topic_portfolio_below_goal"
+        : "topic_portfolio_evidence_missing";
+      completionDetail =
+        `Cadence is operational, but the measured topic portfolio does not yet support ` +
+        `${currentPortfolioHealth.portfolioGoalMonthly ?? "the configured"} organic clicks/month.`;
     }
     await upsertHealth(ctx, run.siteId, {
       lastRunId: args.runId,
@@ -619,6 +1094,12 @@ export const auditSla = internalMutation({
     const sites = await ctx.db
       .query("sites")
       .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("deletionStatus"), undefined),
+          q.eq(q.field("planParkedAt"), undefined),
+        )
+      )
       .take(50);
     const migrationState = await ctx.db
       .query("maintenance_state")
@@ -633,10 +1114,27 @@ export const auditSla = internalMutation({
     let migrationPending = 0;
 
     for (const site of sites) {
+      if (!(await siteExecutionAuthorized(ctx, site))) continue;
       const health = await ctx.db
         .query("autopilot_health")
         .withIndex("by_site", (q) => q.eq("siteId", site._id))
         .first();
+      if ((site.cadencePerWeek ?? 0) <= 0) {
+        await setAlert(ctx, {
+          siteId: site._id,
+          kind: "cadence_paused",
+          message:
+            "Publishing is paused because this site has no current account-wide article allocation.",
+        });
+        await upsertHealth(ctx, site._id, {
+          heartbeatAt: health?.heartbeatAt ?? now,
+          status: "cadence_paused",
+          detail:
+            "Cadence is intentionally paused; SEO measurement remains available.",
+        });
+        continue;
+      }
+      await resolveAlert(ctx, site._id, "cadence_paused");
       if ((site.autopilotRolloutMode ?? "observe") === "observe") {
         await setAlert(ctx, {
           siteId: site._id,
@@ -749,6 +1247,18 @@ export const auditSla = internalMutation({
       const lastRun = health?.lastRunId
         ? await ctx.db.get(health.lastRunId)
         : null;
+      const latestSealedAt = readySummaries
+        .filter(isSealedReady)
+        .reduce(
+          (latest, article) => Math.max(latest, article.articleUpdatedAt),
+          0,
+        );
+      const lastOutcome = currentHealthOutcome({
+        lastOutcome: lastRun?.outcome,
+        lastOutcomeAt:
+          lastRun?.completedAt ?? lastRun?.startedAt ?? lastRun?.scheduledAt,
+        latestSealedAt,
+      });
 
       if (schedulerStale) {
         stale++;
@@ -808,12 +1318,21 @@ export const auditSla = internalMutation({
       const effectiveBufferCount = autonomousDelivery
         ? approvedBufferCount
         : MIN_APPROVED_BUFFER;
-      const status = autopilotHealthStatus({
+      let status = autopilotHealthStatus({
         schedulerStale,
         publicationMissed,
         bufferCount: effectiveBufferCount,
-        lastOutcome: lastRun?.outcome,
+        lastOutcome,
       });
+      if (
+        status === "healthy" &&
+        site.expectedClickSchedulingEnabled === true &&
+        health?.portfolioSupportsGoal === false
+      ) {
+        status = health.portfolioStatus === "below_goal"
+          ? "topic_portfolio_below_goal"
+          : "topic_portfolio_evidence_missing";
+      }
 
       await upsertHealth(ctx, site._id, {
         heartbeatAt: health?.heartbeatAt ?? now,
@@ -836,6 +1355,12 @@ export const auditSla = internalMutation({
                     ? "The latest candidate was quarantined by the strict quality gate."
                     : status === "publication_failed"
                       ? "The latest external publication attempt failed."
+                      : status === "job_failed"
+                        ? "The latest content or plan worker failed."
+                        : status === "topic_portfolio_below_goal"
+                          ? "Cadence is healthy, but measured topic demand is below the organic-click goal."
+                          : status === "topic_portfolio_evidence_missing"
+                            ? "Cadence is healthy, but the topic portfolio lacks fresh outcome evidence."
                       : "Scheduler, quality buffer, and cadence are healthy.",
       });
     }
@@ -884,7 +1409,19 @@ export const refreshSiteCadenceHealth = internalMutation({
           )
           .take(10),
       ]);
-    if (!site) throw new Error("Site not found");
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      return { siteId, status: "site_parked" };
+    }
+    if ((site.cadencePerWeek ?? 0) <= 0) {
+      const pausedAt = Date.now();
+      await upsertHealth(ctx, siteId, {
+        heartbeatAt: health?.heartbeatAt ?? pausedAt,
+        status: "cadence_paused",
+        detail:
+          "Cadence is intentionally paused; no generation or publication is due.",
+      });
+      return { siteId, status: "cadence_paused" };
+    }
     const latestPublished = [
       latestModernPublished,
       latestPublishedByCreation,
@@ -927,15 +1464,36 @@ export const refreshSiteCadenceHealth = internalMutation({
     const lastRun = health?.lastRunId
       ? await ctx.db.get(health.lastRunId)
       : null;
-    const status =
+    const latestSealedAt = ready
+      .filter(isSealedReady)
+      .reduce(
+        (latest, article) => Math.max(latest, article.articleUpdatedAt),
+        0,
+      );
+    const lastOutcome = currentHealthOutcome({
+      lastOutcome: lastRun?.outcome,
+      lastOutcomeAt:
+        lastRun?.completedAt ?? lastRun?.startedAt ?? lastRun?.scheduledAt,
+      latestSealedAt,
+    });
+    let status =
       lastRun?.status === "running"
         ? "recovering"
         : autopilotHealthStatus({
             schedulerStale,
             publicationMissed: now > nextPublicationDueAt,
             bufferCount: approvedBufferCount,
-            lastOutcome: lastRun?.outcome,
+            lastOutcome,
           });
+    if (
+      status === "healthy" &&
+      site.expectedClickSchedulingEnabled === true &&
+      health?.portfolioSupportsGoal === false
+    ) {
+      status = health.portfolioStatus === "below_goal"
+        ? "topic_portfolio_below_goal"
+        : "topic_portfolio_evidence_missing";
+    }
     const detail =
       status === "recovering"
         ? "Autopilot is actively replenishing the strict-quality buffer."
@@ -945,8 +1503,14 @@ export const refreshSiteCadenceHealth = internalMutation({
             ? "Strict-quality future buffer is below minimum."
             : status === "missed"
               ? "Publication cadence deadline missed."
-              : status === "scheduler_stale"
-                ? "Natural dispatcher heartbeat is stale."
+            : status === "scheduler_stale"
+              ? "Natural dispatcher heartbeat is stale."
+              : status === "job_failed"
+                ? "The latest content or plan worker failed."
+                : status === "topic_portfolio_below_goal"
+                  ? "Cadence is healthy, but measured topic demand is below the organic-click goal."
+                  : status === "topic_portfolio_evidence_missing"
+                    ? "Cadence is healthy, but the topic portfolio lacks fresh outcome evidence."
                 : "Scheduler, quality buffer, and cadence are healthy.";
     await upsertHealth(ctx, siteId, {
       lastPublishedAt,
@@ -1089,6 +1653,7 @@ export const getOperatorSnapshot = internalQuery({
       runs: runs.map((run) => ({
         runId: run._id,
         trigger: run.trigger,
+        recoveryOfRunId: run.recoveryOfRunId,
         status: run.status,
         outcome: run.outcome,
         detail: run.detail,
@@ -1112,6 +1677,12 @@ export const getFleetReadiness = internalQuery({
     const sites = await ctx.db
       .query("sites")
       .withIndex("by_autopilot", (q) => q.eq("autopilotEnabled", true))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("deletionStatus"), undefined),
+          q.eq(q.field("planParkedAt"), undefined),
+        )
+      )
       .take(50);
     const rows = [];
     for (const site of sites) {
@@ -1164,6 +1735,15 @@ export const getFleetReadiness = internalQuery({
               heartbeatAt: health.heartbeatAt,
               lastPublishedAt: health.lastPublishedAt,
               nextPublicationDueAt: health.nextPublicationDueAt,
+              portfolioStatus: health.portfolioStatus,
+              portfolioDecision: health.portfolioDecision,
+              portfolioSupportsGoal: health.portfolioSupportsGoal,
+              portfolioExpectedClicksMonthly: health.portfolioExpectedClicksMonthly,
+              portfolioGoalMonthly: health.portfolioGoalMonthly,
+              portfolioClickDeficit: health.portfolioClickDeficit,
+              portfolioEvidenceMissing: health.portfolioEvidenceMissing,
+              portfolioEvaluatedAt: health.portfolioEvaluatedAt,
+              portfolioVersion: health.portfolioVersion,
             }
           : undefined,
       });
@@ -1184,12 +1764,21 @@ export const getHealthForSite = query({
       .query("autopilot_health")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .first();
-    const alerts = await ctx.db
+    const activeAlerts = await ctx.db
       .query("autopilot_alerts")
       .withIndex("by_site_status", (q) =>
         q.eq("siteId", siteId).eq("status", "active"),
       )
-      .collect();
-    return { health, alerts };
+      .take(100);
+    const alerts = activeAlerts.filter((alert) =>
+      autopilotAlertRequiresAttention(alert, health),
+    );
+    return {
+      health,
+      alerts,
+      nonBlockingAlerts: activeAlerts.filter(
+        (alert) => !autopilotAlertRequiresAttention(alert, health),
+      ),
+    };
   },
 });

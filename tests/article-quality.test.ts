@@ -28,9 +28,11 @@ import {
   strictEvidenceSources,
 } from "../convex/lib/sourceQuality.ts";
 import {
+  appendRelatedInternalLinks,
   injectInternalLinks,
   preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
+  selectRelatedInternalLinks,
   validateInternalLinkSuggestions,
 } from "../convex/lib/internalLinks.ts";
 import {
@@ -910,6 +912,41 @@ test("derives bounded exact anchors for a measured parent article", () => {
   assert.ok(anchors.every((anchor) => anchor.split(/\s+/).length <= 8));
 });
 
+test("adds deterministic same-tenant related reading when exact prose has no anchor", () => {
+  const links = selectRelatedInternalLinks({
+    currentTitle: "CRM Chatbot Integration for Sales Teams",
+    currentKeywords: ["crm chatbot", "sales automation"],
+    destinations: [
+      {
+        href: "/blog/crm-workflow-automation",
+        title: "CRM Workflow Automation for Sales",
+        keywords: ["crm workflow", "sales automation"],
+      },
+      {
+        href: "/blog/office-furniture",
+        title: "Office Furniture Maintenance",
+        keywords: ["wooden desks"],
+      },
+    ],
+  });
+  assert.deepEqual(links, [
+    {
+      anchor: "CRM Workflow Automation for Sales",
+      href: "/blog/crm-workflow-automation",
+    },
+  ]);
+
+  const appended = appendRelatedInternalLinks(
+    "# CRM integration\n\nUseful approved prose.\n\n## Sources\n\n- Source",
+    links,
+  );
+  assert.equal(appended.inserted.length, 1);
+  assert.match(
+    appended.markdown,
+    /## Related reading[\s\S]*\/blog\/crm-workflow-automation[\s\S]*## Sources/,
+  );
+});
+
 test("injects links only into eligible article prose", () => {
   const markdown = [
     "# Lead qualification workflow",
@@ -1074,4 +1111,16 @@ test("grounds a supporting visual in an exact article section", () => {
     insertImageUnderSection(markdown, "Missing heading", "![x](https://example.com/x)"),
     markdown,
   );
+});
+
+test("malformed strict tool output receives one bounded schema correction", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const structured = pipeline.slice(
+    pipeline.indexOf("async function callClaudeStructured"),
+    pipeline.indexOf("async function fetchHtml"),
+  );
+  assert.match(structured, /for \(let attempt = 0; attempt < 2;/);
+  assert.match(structured, /outputSchema\.safeParse\(toolUse\.input\)/);
+  assert.match(structured, /failed schema validation; retrying once/);
+  assert.doesNotMatch(structured, /attempt < 3/);
 });

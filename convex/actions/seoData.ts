@@ -15,6 +15,14 @@ import OpenAI from "openai";
 import { dataForSeoLanguageCode } from "../lib/dataForSeoLocale.ts";
 import { topicDiscoverySeedBatches } from "../lib/autopilotBuffer.ts";
 import { safeFetchPublicText } from "../lib/safeOutbound.ts";
+import {
+  DATAFORSEO_AUTHORITY_SOURCE,
+  MAX_AUTHORITY_DOMAINS_PER_PLAN,
+} from "../lib/expectedClickPortfolio.ts";
+import {
+  EXPECTED_CLICK_DEMAND_PROVIDER_ENDPOINT,
+  normalizeExactDemandKeyword,
+} from "../lib/expectedClickDemandBackfill.ts";
 
 // ── Types ──
 
@@ -22,10 +30,24 @@ export interface KeywordMetrics {
   keyword: string;
   searchVolume: number; // monthly searches
   difficulty: number; // 0-100 keyword difficulty
+  difficultyMeasured: boolean; // true only when DataForSEO returned SEO KD
   cpc: number; // cost per click USD
   competition: number; // 0-1 competition level
   intent: string; // informational | commercial | transactional | navigational
   trend: number[]; // last 12 months search volume trend
+}
+
+/**
+ * Exact demand receipts intentionally keep ad-market fields optional.
+ * DataForSEO can return measured search volume with null CPC or competition;
+ * those nulls must not erase useful demand or be fabricated as numeric zero.
+ */
+export interface ExactKeywordDemandMetric {
+  keyword: string;
+  searchVolume: number;
+  cpc?: number;
+  competition?: number;
+  trend: number[];
 }
 
 export interface SerpResult {
@@ -60,6 +82,7 @@ export interface KeywordGap {
   keyword: string;
   searchVolume: number;
   difficulty: number;
+  difficultyMeasured: boolean;
   competitorUrl: string; // which competitor ranks for this
   competitorPosition: number;
   opportunity: string; // high | medium | low
@@ -75,8 +98,39 @@ export interface KeywordDiscoveryOptions {
   minimumResults?: number;
   maxGoogleAdsBatches?: number;
   maxLabsSeeds?: number;
+  maxRelatedSeeds?: number;
   useKeywordIdeas?: boolean;
+  /**
+   * Broad Google Ads suggestions can return hundreds of high-volume but
+   * semantically detached phrases. Verified autopilot planning needs the
+   * product-anchored Labs and Ideas sources even when that broad result count
+   * is already large. The additional requests remain bounded by the existing
+   * batch/seed limits.
+   */
+  expandProductAnchors?: boolean;
   request?: KeywordDiscoveryRequest;
+}
+
+export interface CadenceMicroSeedKeywordMetric {
+  keyword: string;
+  searchVolume: number;
+  difficulty: number;
+  difficultyMeasured: true;
+  cpc?: number;
+  competition?: number;
+  intent: string;
+  trend: number[];
+}
+
+export interface CadenceMicroSeedDiscoveryReceipt {
+  endpoint: "dataforseo_labs/google/keyword_suggestions/live";
+  seed: string;
+  requestTag: string;
+  locationCode: number;
+  languageCode: string;
+  resultLimit: number;
+  providerTaskCostUsd: number;
+  candidates: CadenceMicroSeedKeywordMetric[];
 }
 
 // ── DataForSEO API Client ──
@@ -104,16 +158,18 @@ async function dataForSEORequest(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`DataForSEO API error (${response.status}): ${text.slice(0, 500)}`);
+    throw new Error(`DataForSEO API error (HTTP ${response.status})`);
   }
 
   const data = await response.json();
   if (data.status_code !== 20000) {
-    throw new Error(`DataForSEO error: ${data.status_message ?? "unknown"}`);
+    throw new Error(
+      `DataForSEO response failed with status code ${data.status_code ?? "unknown"}`,
+    );
   }
 
   const failedTask = (data.tasks ?? []).find(
@@ -121,11 +177,232 @@ async function dataForSEORequest(
   );
   if (failedTask) {
     throw new Error(
-      `DataForSEO task error (${failedTask.status_code ?? "unknown"}): ${failedTask.status_message ?? "unknown"}`,
+      `DataForSEO task failed with status code ${failedTask.status_code ?? "unknown"}`,
     );
   }
 
   return data;
+}
+
+/**
+ * One deliberately tiny recovery request for an empty verified-topic buffer.
+ *
+ * This is not the general planner: it sends exactly one tenant-derived seed,
+ * never asks for clickstream or SERP data, and accepts at most one hundred
+ * DataForSEO Labs rows. The Labs response supplies both exact demand and
+ * organic keyword difficulty, so no model estimate or borrowed metric can
+ * make a staged candidate scheduler-eligible.
+ */
+export async function discoverCadenceMicroSeedFromDataForSEO(
+  seed: string,
+  locationCode: number = 2840,
+  languageCode: string = "en",
+  options: {
+    request?: KeywordDiscoveryRequest;
+    limit?: number;
+    requestTag?: string;
+  } = {},
+): Promise<CadenceMicroSeedDiscoveryReceipt> {
+  if (!getDataForSEOCredentials() && !options.request) {
+    throw new Error("DataForSEO credentials not configured");
+  }
+  const normalizedSeed = seed.trim().toLowerCase().replace(/\s+/g, " ");
+  const wordCount = normalizedSeed.split(" ").filter(Boolean).length;
+  if (
+    normalizedSeed.length < 4 ||
+    normalizedSeed.length > 200 ||
+    wordCount < 2 ||
+    wordCount > 6
+  ) {
+    throw new Error("Cadence micro-seed is outside its bounded contract");
+  }
+  const requestedLimit = options.limit ?? 100;
+  if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) {
+    throw new Error("Cadence micro-seed result limit is outside its contract");
+  }
+  const limit = requestedLimit;
+  const requestTag = options.requestTag?.trim() ?? "";
+  if (!requestTag || requestTag.length > 255) {
+    throw new Error("Cadence micro-seed request tag is outside its contract");
+  }
+  const endpoint = "dataforseo_labs/google/keyword_suggestions/live" as const;
+  const request = options.request ?? dataForSEORequest;
+  languageCode = dataForSeoLanguageCode(languageCode);
+  const data = await request(endpoint, [{
+    keyword: normalizedSeed,
+    location_code: locationCode,
+    language_code: languageCode,
+    include_seed_keyword: true,
+    include_serp_info: false,
+    include_clickstream_data: false,
+    tag: requestTag,
+    filters: ["keyword_info.search_volume", ">=", 10],
+    order_by: [
+      "keyword_properties.keyword_difficulty,asc",
+      "keyword_info.search_volume,desc",
+    ],
+    limit,
+  }]);
+
+  const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+  if (
+    data?.status_code !== 20_000 ||
+    data?.tasks_count !== 1 ||
+    data?.tasks_error !== 0 ||
+    tasks.length !== 1
+  ) {
+    throw new Error("Cadence micro-seed provider receipt is incompatible");
+  }
+  const task = tasks[0];
+  const taskData = task?.data;
+  if (
+    task?.status_code !== 20_000 ||
+    !taskData ||
+    taskData.api !== "dataforseo_labs" ||
+    taskData.function !== "keyword_suggestions" ||
+    taskData.se_type !== "google" ||
+    taskData.keyword !== normalizedSeed ||
+    taskData.location_code !== locationCode ||
+    taskData.language_code !== languageCode ||
+    taskData.include_serp_info !== false ||
+    taskData.include_clickstream_data !== false ||
+    taskData.include_seed_keyword !== true ||
+    taskData.tag !== requestTag ||
+    taskData.limit !== limit ||
+    JSON.stringify(taskData.filters) !==
+      JSON.stringify(["keyword_info.search_volume", ">=", 10]) ||
+    JSON.stringify(taskData.order_by) !== JSON.stringify([
+      "keyword_properties.keyword_difficulty,asc",
+      "keyword_info.search_volume,desc",
+    ])
+  ) {
+    throw new Error("Cadence micro-seed provider request echo is incompatible");
+  }
+  const resultGroup = task?.result?.[0];
+  if (
+    JSON.stringify(task?.path) !== JSON.stringify([
+      "v3",
+      "dataforseo_labs",
+      "google",
+      "keyword_suggestions",
+      "live",
+    ]) ||
+    resultGroup?.seed_keyword !== normalizedSeed ||
+    (resultGroup?.location_code !== undefined &&
+      resultGroup.location_code !== locationCode) ||
+    (resultGroup?.language_code !== undefined &&
+      resultGroup.language_code !== languageCode) ||
+    (resultGroup?.se_type !== undefined && resultGroup.se_type !== "google")
+  ) {
+    throw new Error("Cadence micro-seed provider path is incompatible");
+  }
+  const providerTaskCostUsd = task?.cost;
+  const providerResponseCostUsd = data?.cost;
+  if (
+    typeof providerTaskCostUsd !== "number" ||
+    !Number.isFinite(providerTaskCostUsd) ||
+    providerTaskCostUsd < 0 ||
+    providerTaskCostUsd > 0.024001 ||
+    typeof providerResponseCostUsd !== "number" ||
+    !Number.isFinite(providerResponseCostUsd) ||
+    providerResponseCostUsd < 0 ||
+    providerResponseCostUsd > 0.024001 ||
+    Math.abs(providerResponseCostUsd - providerTaskCostUsd) > 0.000001
+  ) {
+    throw new Error("Cadence micro-seed provider cost exceeded its contract");
+  }
+  const items = Array.isArray(resultGroup?.items)
+    ? resultGroup.items
+    : [];
+  if (items.length > limit) {
+    throw new Error("Cadence micro-seed provider row limit exceeded");
+  }
+  const candidates: CadenceMicroSeedKeywordMetric[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const keyword = typeof item?.keyword === "string"
+      ? item.keyword.trim().toLowerCase().replace(/\s+/g, " ")
+      : "";
+    const searchVolume = item?.keyword_info?.search_volume;
+    const difficulty = item?.keyword_properties?.keyword_difficulty;
+    const cpcValue = item?.keyword_info?.cpc;
+    const competitionValue = item?.keyword_info?.competition;
+    const intentValue = item?.search_intent_info?.main_intent;
+    const monthlySearches = item?.keyword_info?.monthly_searches;
+    if (
+      !keyword ||
+      keyword.length > 700 ||
+      seen.has(keyword) ||
+      typeof searchVolume !== "number" ||
+      !Number.isFinite(searchVolume) ||
+      searchVolume <= 0 ||
+      typeof difficulty !== "number" ||
+      !Number.isFinite(difficulty) ||
+      difficulty < 0 ||
+      difficulty > 100 ||
+      (item?.se_type !== undefined && item.se_type !== "google") ||
+      (item?.location_code !== undefined &&
+        item.location_code !== locationCode) ||
+      (item?.language_code !== undefined &&
+        item.language_code !== languageCode) ||
+      (cpcValue !== null && cpcValue !== undefined &&
+        (typeof cpcValue !== "number" || !Number.isFinite(cpcValue) ||
+          cpcValue < 0)) ||
+      (competitionValue !== null && competitionValue !== undefined &&
+        (typeof competitionValue !== "number" ||
+          !Number.isFinite(competitionValue) || competitionValue < 0 ||
+          competitionValue > 1)) ||
+      typeof intentValue !== "string" ||
+      !["informational", "commercial", "transactional", "navigational"]
+        .includes(intentValue.trim().toLowerCase()) ||
+      (monthlySearches !== null && monthlySearches !== undefined &&
+        !Array.isArray(monthlySearches))
+    ) {
+      throw new Error("Cadence micro-seed provider item is incompatible");
+    }
+    const cpc = typeof cpcValue === "number" && Number.isFinite(cpcValue) &&
+        cpcValue >= 0
+      ? cpcValue
+      : undefined;
+    const competition = typeof competitionValue === "number" &&
+        Number.isFinite(competitionValue) && competitionValue >= 0 &&
+        competitionValue <= 1
+      ? competitionValue
+      : undefined;
+    const intent = intentValue.trim().toLowerCase();
+    const trend = Array.isArray(monthlySearches)
+      ? monthlySearches.slice(0, 12).map((month: unknown) => {
+        const value = month && typeof month === "object"
+          ? (month as { search_volume?: unknown }).search_volume
+          : undefined;
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          throw new Error("Cadence micro-seed trend receipt is incompatible");
+        }
+        return value;
+      })
+      : [];
+    seen.add(keyword);
+    candidates.push({
+      keyword,
+      searchVolume,
+      difficulty,
+      difficultyMeasured: true,
+      ...(cpc === undefined ? {} : { cpc }),
+      ...(competition === undefined ? {} : { competition }),
+      intent,
+      trend,
+    });
+  }
+  return {
+    endpoint,
+    seed: normalizedSeed,
+    requestTag,
+    locationCode,
+    languageCode,
+    resultLimit: limit,
+    providerTaskCostUsd,
+    candidates,
+  };
 }
 
 // ── Domain Authority ──
@@ -137,41 +414,95 @@ export interface DomainMetrics {
   referringDomains: number; // unique referring domains
 }
 
+export interface DomainAuthorityEvidence extends DomainMetrics {
+  domain: string;
+  source: typeof DATAFORSEO_AUTHORITY_SOURCE;
+  measuredAt: number;
+}
+
+function authorityDomain(value: string): string | null {
+  try {
+    return new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`)
+      .hostname
+      .toLowerCase()
+      .replace(/^www\./, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Measure a bounded, deduplicated domain set on DataForSEO's explicit
+ * one-hundred rank scale. The Bulk Pages Summary Live endpoint accepts up to
+ * 1,000 targets in one task (and at most 100 root domains). Pentra intentionally
+ * caps this much lower at 50 targets and sends exactly one billable task.
+ */
+export async function getDomainAuthorities(
+  domains: string[],
+  options: {
+    request?: KeywordDiscoveryRequest;
+    measuredAt?: number;
+    maxDomains?: number;
+  } = {},
+): Promise<DomainAuthorityEvidence[]> {
+  const creds = getDataForSEOCredentials();
+  if (!creds && !options.request) return [];
+  const maximum = Math.max(
+    1,
+    Math.min(
+      options.maxDomains ?? MAX_AUTHORITY_DOMAINS_PER_PLAN,
+      MAX_AUTHORITY_DOMAINS_PER_PLAN,
+    ),
+  );
+  const targets = [...new Set(
+    domains.map(authorityDomain).filter((domain): domain is string => Boolean(domain)),
+  )].slice(0, maximum);
+  if (targets.length === 0) return [];
+  const request = options.request ?? dataForSEORequest;
+  const measuredAt = options.measuredAt ?? Date.now();
+  const data = await request(
+    "backlinks/bulk_pages_summary/live",
+    [{
+      targets,
+      include_subdomains: true,
+      rank_scale: "one_hundred",
+    }],
+  );
+
+  const evidence: DomainAuthorityEvidence[] = [];
+  const items = data.tasks?.[0]?.result?.[0]?.items ?? [];
+  for (const item of items) {
+    const domain = authorityDomain(item.url ?? item.target ?? "");
+    if (!domain || !targets.includes(domain) || typeof item.main_domain_rank !== "number") {
+      continue;
+    }
+    evidence.push({
+      domain,
+      domainRank: item.main_domain_rank,
+      organicTraffic: 0,
+      backlinks: item.backlinks ?? 0,
+      referringDomains: item.referring_domains ?? 0,
+      source: DATAFORSEO_AUTHORITY_SOURCE,
+      measuredAt,
+    });
+  }
+  return evidence.filter(
+    (item, index, all) => all.findIndex((other) => other.domain === item.domain) === index,
+  );
+}
+
 /**
  * Get domain authority metrics from DataForSEO.
  * Returns null if API unavailable or domain has no data.
  */
-export async function getDomainAuthority(domain: string): Promise<DomainMetrics | null> {
-  const creds = getDataForSEOCredentials();
-  if (!creds) return null;
-
-  const cleanDomain = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
-
+export async function getDomainAuthority(
+  domain: string,
+): Promise<DomainAuthorityEvidence | null> {
   try {
-    const data = await dataForSEORequest(
-      "backlinks/summary/live",
-      [{
-        target: cleanDomain,
-        include_subdomains: true,
-        exclude_internal_backlinks: true,
-        backlinks_status_type: "live",
-        rank_scale: "one_hundred",
-      }],
-    );
-
-    const item = data.tasks?.[0]?.result?.[0];
-    if (!item) return null;
-
-    return {
-      domainRank: item.rank ?? 0,
-      // Backlink authority and organic traffic are different metrics. Keep
-      // traffic unknown here instead of presenting backlink data as traffic.
-      organicTraffic: 0,
-      backlinks: item.backlinks ?? 0,
-      referringDomains: item.referring_domains ?? 0,
-    };
+    const [evidence] = await getDomainAuthorities([domain], { maxDomains: 1 });
+    return evidence ?? null;
   } catch (err) {
-    console.log(`Domain authority lookup failed for ${cleanDomain}:`, err);
+    console.log(`Domain authority lookup failed for ${authorityDomain(domain) ?? domain}:`, err);
     return null;
   }
 }
@@ -182,19 +513,33 @@ export async function getDomainAuthority(domain: string): Promise<DomainMetrics 
  * Returns a number 0-100.
  */
 export function computeMaxKD(metrics: DomainMetrics | null): number {
-  if (!metrics) return 35; // Unknown authority → be conservative
+  if (!metrics) return 15; // Unknown authority must never be treated as established.
 
-  const dr = metrics.domainRank;
-  // DR 0-10: max KD 30 (very new, target easy keywords)
-  // DR 10-30: max KD 45
-  // DR 30-50: max KD 60
-  // DR 50-70: max KD 75
-  // DR 70+: max KD 90
-  if (dr <= 10) return 30;
-  if (dr <= 30) return 45;
-  if (dr <= 50) return 60;
-  if (dr <= 70) return 75;
-  return 90;
+  const dr = Math.max(0, metrics.domainRank);
+  const referringDomains = Math.max(0, metrics.referringDomains);
+
+  // DataForSEO keyword difficulty already measures the backlink strength of
+  // the current top ten. A weak domain therefore needs a ceiling well below
+  // its own domain-rank score, not the old 30-45 floor that sent new sites
+  // against entrenched page-one results.
+  const rankCeiling =
+    dr <= 10 ? 10
+      : dr <= 20 ? 15
+        : dr <= 30 ? 20
+          : dr <= 40 ? 30
+            : dr <= 50 ? 40
+              : dr <= 65 ? 55
+                : dr <= 80 ? 70
+                  : 85;
+  const referringDomainCeiling =
+    referringDomains < 10 ? 15
+      : referringDomains < 25 ? 20
+        : referringDomains < 50 ? 30
+          : referringDomains < 100 ? 40
+            : referringDomains < 250 ? 55
+              : referringDomains < 500 ? 70
+                : 85;
+  return Math.min(rankCeiling, referringDomainCeiling);
 }
 
 // ── Keyword Metrics ──
@@ -218,14 +563,90 @@ export async function getKeywordMetrics(
   return getKeywordMetricsFromAI(keywords);
 }
 
-async function getKeywordMetricsFromAPI(
+/**
+ * One-call provider-only demand measurement for an exact, already-selected
+ * keyword batch. This deliberately omits the second difficulty request and
+ * has no AI fallback, making a durable attempt receipt sufficient to prevent
+ * accidental replay after an ambiguous response.
+ */
+export async function getExactKeywordDemandFromDataForSEO(
+  keywords: string[],
+  locationCode: number = 2840,
+  languageCode: string = "en",
+  options: { request?: KeywordDiscoveryRequest } = {},
+): Promise<ExactKeywordDemandMetric[]> {
+  if (!getDataForSEOCredentials() && !options.request) {
+    throw new Error("DataForSEO credentials not configured");
+  }
+  const exactKeywords = keywords.map((keyword) => keyword.trim());
+  const normalizedKeywords = exactKeywords.map(normalizeExactDemandKeyword);
+  if (
+    exactKeywords.length === 0 ||
+    exactKeywords.length > 10 ||
+    exactKeywords.some((keyword) => !keyword || keyword.length > 700) ||
+    new Set(normalizedKeywords).size !== normalizedKeywords.length
+  ) {
+    throw new Error("Exact keyword demand batch is outside its bounded contract");
+  }
+  const request = options.request ?? dataForSEORequest;
+  languageCode = dataForSeoLanguageCode(languageCode);
+  const data = await request(
+    EXPECTED_CLICK_DEMAND_PROVIDER_ENDPOINT,
+    [{
+      keywords: exactKeywords,
+      location_code: locationCode,
+      language_code: languageCode,
+      date_from: getDateMonthsAgo(12),
+    }],
+  );
+
+  const requestedKeywords = new Set(normalizedKeywords);
+  const results: ExactKeywordDemandMetric[] = [];
+  const tasks: unknown = data?.tasks;
+  if (!Array.isArray(tasks)) return results;
+
+  for (const task of tasks) {
+    if (!isUnknownRecord(task) || !Array.isArray(task.result)) continue;
+    for (const item of task.result) {
+      if (!isUnknownRecord(item) || typeof item.keyword !== "string") continue;
+      const keyword = item.keyword.trim();
+      if (!keyword || !requestedKeywords.has(normalizeExactDemandKeyword(keyword))) {
+        continue;
+      }
+      const searchVolume = finiteNonnegativeNumber(item.search_volume);
+      if (searchVolume === undefined) continue;
+
+      const cpc = finiteNonnegativeNumber(item.cpc);
+      const competitionIndex = finiteBoundedNumber(
+        item.competition_index,
+        0,
+        100,
+      );
+      const metric: ExactKeywordDemandMetric = {
+        keyword,
+        searchVolume,
+        trend: exactMonthlySearchTrend(item.monthly_searches),
+      };
+      if (cpc !== undefined) metric.cpc = cpc;
+      if (competitionIndex !== undefined) {
+        metric.competition = competitionIndex / 100;
+      }
+      results.push(metric);
+    }
+  }
+
+  return results;
+}
+
+async function getKeywordSearchVolumeFromAPI(
   keywords: string[],
   locationCode: number,
   languageCode: string,
+  request: KeywordDiscoveryRequest = dataForSEORequest,
 ): Promise<KeywordMetrics[]> {
   languageCode = dataForSeoLanguageCode(languageCode);
   // Use Keywords Data API - Google Ads Search Volume
-  const data = await dataForSEORequest(
+  const data = await request(
     "keywords_data/google_ads/search_volume/live",
     [{
       keywords,
@@ -252,6 +673,7 @@ async function getKeywordMetricsFromAPI(
         keyword: item.keyword,
         searchVolume: item.search_volume ?? 0,
         difficulty: 0, // Will be enriched by difficulty endpoint
+        difficultyMeasured: false,
         cpc: item.cpc ?? 0,
         competition: item.competition ?? 0,
         intent: mapCompetitionToIntent(item.competition ?? 0),
@@ -259,6 +681,21 @@ async function getKeywordMetricsFromAPI(
       });
     }
   }
+
+  return results;
+}
+
+async function getKeywordMetricsFromAPI(
+  keywords: string[],
+  locationCode: number,
+  languageCode: string,
+): Promise<KeywordMetrics[]> {
+  const results = await getKeywordSearchVolumeFromAPI(
+    keywords,
+    locationCode,
+    languageCode,
+  );
+  languageCode = dataForSeoLanguageCode(languageCode);
 
   // Enrich with real keyword difficulty scores (DataForSEO Labs)
   if (results.length > 0) {
@@ -278,8 +715,9 @@ async function getKeywordMetricsFromAPI(
             const match = results.find(
               (r) => r.keyword.toLowerCase() === (item.keyword ?? "").toLowerCase(),
             );
-            if (match) {
-              match.difficulty = item.keyword_difficulty ?? 0;
+            if (match && typeof item.keyword_difficulty === "number") {
+              match.difficulty = item.keyword_difficulty;
+              match.difficultyMeasured = true;
             }
           }
         }
@@ -315,6 +753,7 @@ export async function discoverKeywords(
 
   const request = options.request ?? dataForSEORequest;
   const resultsByKeyword = new Map<string, KeywordMetrics>();
+  const productExpandedKeywords = new Set<string>();
   const sourceErrors: string[] = [];
   const minimumResults = Math.max(
     1,
@@ -333,9 +772,11 @@ export async function discoverKeywords(
     resultsByKeyword.set(key, {
       ...existing,
       searchVolume: Math.max(existing.searchVolume, candidate.searchVolume),
-      difficulty: candidate.difficulty > 0
+      difficulty: candidate.difficultyMeasured
         ? candidate.difficulty
         : existing.difficulty,
+      difficultyMeasured:
+        candidate.difficultyMeasured || existing.difficultyMeasured,
       cpc: Math.max(existing.cpc, candidate.cpc),
       competition: Math.max(existing.competition, candidate.competition),
       intent: candidate.intent || existing.intent,
@@ -360,6 +801,7 @@ export async function discoverKeywords(
           keyword: item.keyword,
           searchVolume: item.search_volume,
           difficulty: 0,
+          difficultyMeasured: false,
           cpc: item.cpc ?? 0,
           competition,
           intent: mapCompetitionToIntent(competition),
@@ -382,15 +824,54 @@ export async function discoverKeywords(
             : typeof info.competition === "number"
               ? info.competition
               : 0;
+          const measuredDifficulty =
+            typeof item.keyword_properties?.keyword_difficulty === "number";
           parsed.push({
             keyword: item.keyword,
             searchVolume: info.search_volume,
-            difficulty: item.keyword_properties?.keyword_difficulty ?? 0,
+            difficulty: measuredDifficulty
+              ? item.keyword_properties.keyword_difficulty
+              : 0,
+            difficultyMeasured: measuredDifficulty,
             cpc: info.cpc ?? 0,
             competition,
             intent:
               item.search_intent_info?.main_intent ??
               mapCompetitionToIntent(competition),
+            trend: (info.monthly_searches ?? [])
+              .slice(0, 12)
+              .map((month: any) => month.search_volume ?? 0),
+          });
+        }
+      }
+    }
+    return parsed;
+  };
+
+  const relatedKeywordResults = (data: any): KeywordMetrics[] => {
+    const parsed: KeywordMetrics[] = [];
+    for (const task of data.tasks ?? []) {
+      for (const resultGroup of task.result ?? []) {
+        for (const item of resultGroup.items ?? []) {
+          const keywordData = item.keyword_data ?? {};
+          const info = keywordData.keyword_info ?? {};
+          if (!keywordData.keyword || !info.search_volume) continue;
+          const measuredDifficulty =
+            typeof keywordData.keyword_properties?.keyword_difficulty === "number";
+          parsed.push({
+            keyword: keywordData.keyword,
+            searchVolume: info.search_volume,
+            difficulty: measuredDifficulty
+              ? keywordData.keyword_properties.keyword_difficulty
+              : 0,
+            difficultyMeasured: measuredDifficulty,
+            cpc: info.cpc ?? 0,
+            competition: typeof info.competition === "number"
+              ? info.competition
+              : 0,
+            intent:
+              keywordData.search_intent_info?.main_intent ??
+              mapCompetitionToIntent(info.competition ?? 0),
             trend: (info.monthly_searches ?? [])
               .slice(0, 12)
               .map((month: any) => month.search_volume ?? 0),
@@ -434,13 +915,19 @@ export async function discoverKeywords(
         }`,
       );
     }
-    if (resultsByKeyword.size >= targetResults) break;
+    if (
+      resultsByKeyword.size >= targetResults &&
+      options.expandProductAnchors !== true
+    ) break;
   }
 
   // When Google Ads is sparse, DataForSEO Labs expands individual business
   // anchors into long-tail suggestions and includes difficulty in the result.
   let labsCount = 0;
-  if (resultsByKeyword.size < minimumResults) {
+  if (
+    resultsByKeyword.size < minimumResults ||
+    options.expandProductAnchors === true
+  ) {
     const genericSeedWords = new Set([
       "agent", "ai", "business", "marketing", "online", "page", "sales",
       "site", "software", "tool", "website",
@@ -474,7 +961,10 @@ export async function discoverKeywords(
         );
         const parsed = labsResults(data);
         labsCount += parsed.length;
-        parsed.forEach(mergeResult);
+        parsed.forEach((candidate) => {
+          productExpandedKeywords.add(candidate.keyword.trim().toLowerCase());
+          mergeResult(candidate);
+        });
       } catch (error) {
         sourceErrors.push(
           `Labs suggestions for "${seed}": ${
@@ -482,7 +972,59 @@ export async function discoverKeywords(
           }`,
         );
       }
-      if (resultsByKeyword.size >= targetResults) break;
+      if (
+        resultsByKeyword.size >= targetResults &&
+        options.expandProductAnchors !== true
+      ) break;
+    }
+  }
+
+  // Literal suggestions miss adjacent language that searchers use. Google's
+  // own "searches related to" graph supplies that vocabulary while staying
+  // anchored to a tenant-provided phrase. Depth two is capped at 72 results
+  // and the number of paid requests is explicitly bounded per plan.
+  let relatedCount = 0;
+  const relatedSeedLimit = Math.max(0, options.maxRelatedSeeds ?? 0);
+  if (
+    relatedSeedLimit > 0 &&
+    (resultsByKeyword.size < minimumResults ||
+      options.expandProductAnchors === true)
+  ) {
+    const relatedSeeds = seeds
+      .filter((seed) => {
+        const wordCount = seed.split(/\s+/).filter(Boolean).length;
+        return wordCount >= 2 && wordCount <= 6;
+      })
+      .slice(0, relatedSeedLimit);
+    for (const seed of relatedSeeds) {
+      try {
+        const data = await request(
+          "dataforseo_labs/google/related_keywords/live",
+          [{
+            keyword: seed,
+            location_code: locationCode,
+            language_code: languageCode,
+            depth: 2,
+            include_seed_keyword: true,
+            include_serp_info: false,
+            filters: ["keyword_data.keyword_info.search_volume", ">=", 10],
+            order_by: ["keyword_data.keyword_info.search_volume,desc"],
+            limit: Math.min(limit, 72),
+          }],
+        );
+        const parsed = relatedKeywordResults(data);
+        relatedCount += parsed.length;
+        parsed.forEach((candidate) => {
+          productExpandedKeywords.add(candidate.keyword.trim().toLowerCase());
+          mergeResult(candidate);
+        });
+      } catch (error) {
+        sourceErrors.push(
+          `Related keywords for "${seed}": ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
     }
   }
 
@@ -491,7 +1033,8 @@ export async function discoverKeywords(
   // better recovery source than broad domain suggestions for young sites.
   let keywordIdeasCount = 0;
   if (
-    resultsByKeyword.size < minimumResults &&
+    (resultsByKeyword.size < minimumResults ||
+      options.expandProductAnchors === true) &&
     options.useKeywordIdeas !== false
   ) {
     try {
@@ -513,7 +1056,10 @@ export async function discoverKeywords(
       );
       const parsed = labsResults(data);
       keywordIdeasCount += parsed.length;
-      parsed.forEach(mergeResult);
+      parsed.forEach((candidate) => {
+        productExpandedKeywords.add(candidate.keyword.trim().toLowerCase());
+        mergeResult(candidate);
+      });
     } catch (error) {
       sourceErrors.push(
         `Labs keyword ideas: ${
@@ -561,10 +1107,18 @@ export async function discoverKeywords(
   }
 
   const topResults = [...resultsByKeyword.values()]
-    .sort((a, b) => b.searchVolume - a.searchVolume)
+    .sort((a, b) => {
+      if (options.expandProductAnchors === true) {
+        const productDelta =
+          Number(productExpandedKeywords.has(b.keyword.trim().toLowerCase())) -
+          Number(productExpandedKeywords.has(a.keyword.trim().toLowerCase()));
+        if (productDelta !== 0) return productDelta;
+      }
+      return b.searchVolume - a.searchVolume;
+    })
     .slice(0, limit);
   console.log(
-    `Keyword discovery sources: Google Ads=${googleAdsCount}, Labs=${labsCount}, ideas=${keywordIdeasCount}, site=${siteCount}, unique=${topResults.length}` +
+    `Keyword discovery sources: Google Ads=${googleAdsCount}, Labs=${labsCount}, related=${relatedCount}, ideas=${keywordIdeasCount}, site=${siteCount}, unique=${topResults.length}` +
       (sourceErrors.length > 0 ? `, recoverable errors=${sourceErrors.length}` : ""),
   );
 
@@ -586,7 +1140,10 @@ export async function discoverKeywords(
             const match = topResults.find(
               r => r.keyword.toLowerCase() === (item.keyword ?? "").toLowerCase(),
             );
-            if (match) match.difficulty = item.keyword_difficulty ?? 0;
+            if (match && typeof item.keyword_difficulty === "number") {
+              match.difficulty = item.keyword_difficulty;
+              match.difficultyMeasured = true;
+            }
           }
         }
       }
@@ -609,6 +1166,7 @@ async function getKeywordMetricsFromAI(
       keyword: kw,
       searchVolume: 0,
       difficulty: 50,
+      difficultyMeasured: false,
       cpc: 0,
       competition: 0.5,
       intent: "informational",
@@ -660,6 +1218,7 @@ async function getKeywordMetricsFromAI(
 
     return parsed.map((m) => ({
       ...m,
+      difficultyMeasured: false,
       trend: [],
     }));
   } catch (err) {
@@ -668,6 +1227,7 @@ async function getKeywordMetricsFromAI(
       keyword: kw,
       searchVolume: 0,
       difficulty: 50,
+      difficultyMeasured: false,
       cpc: 0,
       competition: 0.5,
       intent: "informational",
@@ -694,6 +1254,25 @@ export async function analyzeSERP(
   }
 
   return analyzeSERPFromAI(keyword);
+}
+
+/**
+ * Provider-only SERP measurement for paid evidence migrations.
+ *
+ * Unlike the interactive analysis helper above, this function never falls
+ * back to a model. A missing provider credential must stop the evidence job;
+ * an AI reconstruction is not a live top-ten receipt and would also violate
+ * the backfill's no-model call budget.
+ */
+export async function analyzeSERPFromDataForSEO(
+  keyword: string,
+  locationCode: number = 2840,
+  languageCode: string = "en",
+): Promise<SerpAnalysis> {
+  if (!getDataForSEOCredentials()) {
+    throw new Error("DataForSEO credentials not configured");
+  }
+  return analyzeSERPFromAPI(keyword, locationCode, languageCode);
 }
 
 async function analyzeSERPFromAPI(
@@ -1023,6 +1602,8 @@ async function findKeywordGapsFromAPI(
               keyword: kw,
               searchVolume: vol,
               difficulty: diff,
+              // Google Ads competition is not organic keyword difficulty.
+              difficultyMeasured: false,
               competitorUrl: competitor,
               competitorPosition: pos,
               opportunity: vol > 1000 && diff < 50 ? "high" : vol > 500 ? "medium" : "low",
@@ -1093,7 +1674,9 @@ async function findKeywordGapsFromAI(
     const arrStart = clean.indexOf("[");
     const arrEnd = clean.lastIndexOf("]");
     if (arrStart === -1 || arrEnd === -1) return [];
-    return GapSchema.parse(JSON.parse(clean.slice(arrStart, arrEnd + 1)));
+    return GapSchema.parse(JSON.parse(clean.slice(arrStart, arrEnd + 1))).map(
+      (gap) => ({ ...gap, difficultyMeasured: false }),
+    );
   } catch (err) {
     console.error("AI keyword gap analysis failed:", err);
     return [];
@@ -1101,6 +1684,42 @@ async function findKeywordGapsFromAI(
 }
 
 // ── Helpers ──
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function finiteNonnegativeNumber(value: unknown): number | undefined {
+  return finiteBoundedNumber(value, 0, Number.MAX_VALUE);
+}
+
+function finiteBoundedNumber(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): number | undefined {
+  return typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= minimum &&
+      value <= maximum
+    ? value
+    : undefined;
+}
+
+/**
+ * Null or malformed monthly rows are omitted rather than rewritten as zero.
+ * A literal numeric zero remains valid evidence for that month.
+ */
+function exactMonthlySearchTrend(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const trend: number[] = [];
+  for (const month of value.slice(0, 12)) {
+    if (!isUnknownRecord(month)) continue;
+    const searchVolume = finiteNonnegativeNumber(month.search_volume);
+    if (searchVolume !== undefined) trend.push(searchVolume);
+  }
+  return trend;
+}
 
 function getDateMonthsAgo(months: number): string {
   const d = new Date();

@@ -13,6 +13,8 @@ import {
   filterNonCannibalizingTopics,
   filterNonCannibalizingSerpTopics,
   hasReliableSerpFingerprint,
+  hasTerminalTopicFitFailure,
+  isUnderfilledPlanContinuationPayload,
   MAX_NEW_CANDIDATES_PER_24H,
   MAX_QUALITY_REPLACEMENTS_PER_24H,
   MIN_APPROVED_BUFFER,
@@ -20,9 +22,11 @@ import {
   TARGET_APPROVED_BUFFER,
   autopilotHealthStatus,
   contentWorkBlocksQualityRecovery,
+  currentHealthOutcome,
   isSealedReady,
   keywordMatchesBusinessModel,
   keywordMatchesBusinessSignals,
+  keywordDifficultyCeiling,
   migrationBlocksAutopilot,
   normalizedSerpQuestions,
   pendingJobPriority,
@@ -30,6 +34,9 @@ import {
   serpFingerprintOverlap,
   topicDiscoverySeedBatches,
   topicDiscoverySeedWindow,
+  tenantDiscoveryAnchors,
+  tenantTopicBusinessSignals,
+  topicReplenishmentBudget,
 } from "../convex/lib/autopilotBuffer.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
@@ -40,6 +47,118 @@ test("candidate budget can still fill the target after two strict-gate rejection
     TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H,
   );
   assert.ok(MAX_NEW_CANDIDATES_PER_24H - 2 >= MIN_APPROVED_BUFFER);
+});
+
+test("topic recovery capacity scales with tenant cadence but stays bounded", () => {
+  assert.equal(topicReplenishmentBudget(1), 3);
+  assert.equal(topicReplenishmentBudget(7), 3);
+  assert.equal(topicReplenishmentBudget(21), 5);
+  assert.equal(topicReplenishmentBudget(Number.NaN), 3);
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  assert.match(jobs, /args\.reason\?\.startsWith\("topic_"\)/);
+  assert.match(jobs, /payloadReason\.startsWith\("topic_"\)/);
+});
+
+test("tenant profile sentences become bounded traceable discovery anchors", () => {
+  const anchors = tenantDiscoveryAnchors([
+    "AI chat engagement powered by live website content learning",
+    "Low website lead conversion rates despite strong traffic",
+    "Automated lead qualification and booking link integration",
+  ]);
+  assert.ok(anchors.includes("ai chat engagement"));
+  assert.ok(anchors.includes("live website content learning"));
+  assert.ok(anchors.includes("website lead conversion rates"));
+  assert.ok(anchors.includes("automated lead qualification"));
+  assert.ok(anchors.includes("booking link integration"));
+  assert.ok(anchors.every((anchor) => anchor.split(/\s+/).length <= 6));
+});
+
+test("every topic stage can share one tenant business-signal projection", () => {
+  const signals = tenantTopicBusinessSignals({
+    niche: "Conversion software for SaaS businesses",
+    blogTheme: "Website conversion and sales automation",
+    siteSummary: "An AI agent that converts website visitors into leads",
+    targetAudienceSummary: "SaaS founders and growth teams",
+    productUsage: "Answers visitor questions and qualifies leads",
+    siteType: "SaaS",
+    anchorKeywords: ["AI sales agent"],
+    keyFeatures: ["lead scoring"],
+    painPoints: ["low website conversion"],
+  });
+  assert.ok(signals.coreBusinessSignals.includes("SaaS founders and growth teams"));
+  assert.ok(signals.coreBusinessSignals.includes("low website conversion"));
+  assert.ok(!signals.productAnchorSignals.includes("low website conversion"));
+  assert.deepEqual(signals.productAnchorSignals, [
+    "AI sales agent",
+    "lead scoring",
+  ]);
+  assert.deepEqual(signals.businessModelSignals, [
+    "SaaS",
+    "Conversion software for SaaS businesses",
+    "An AI agent that converts website visitors into leads",
+  ]);
+
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.ok((scheduler.match(/tenantTopicBusinessSignals\(site\)/g) ?? []).length >= 2);
+  assert.ok((pipeline.match(/tenantTopicBusinessSignals\(site\)/g) ?? []).length >= 3);
+});
+
+test("canonical tenant anchors reject adjacent service intent and preserve the product replacement", () => {
+  const signals = tenantTopicBusinessSignals({
+    siteType: "SaaS Product",
+    niche: "B2B SaaS AI-powered lead generation and sales automation",
+    blogTheme:
+      "AI chatbot best practices and customer case studies showing lead improvements",
+    siteSummary:
+      "An AI sales agent that qualifies website visitors and captures leads",
+    targetAudienceSummary: "B2B marketing and sales teams",
+    productUsage: "Qualifies and hands off warm website leads",
+    anchorKeywords: [
+      "AI sales agent for websites",
+      "lead qualification chatbot",
+      "lead scoring and qualification tool",
+    ],
+    keyFeatures: [
+      "Automated lead qualification and intent detection",
+      "Lead scoring and hand-off system",
+    ],
+    painPoints: ["High customer acquisition costs"],
+  });
+  assert.equal(
+    evaluateTopicBusinessFit({
+      keyword: "customer service chatbot examples",
+      label: "Customer Service Chatbot Examples That Convert",
+      ...signals,
+    }).eligible,
+    false,
+  );
+  assert.equal(
+    evaluateTopicBusinessFit({
+      keyword: "lead scoring saas",
+      label: "Lead Scoring SaaS for Automated Qualification",
+      ...signals,
+    }).eligible,
+    true,
+  );
+});
+
+test("final product-fit rejection is terminal for prose recovery", () => {
+  assert.equal(
+    hasTerminalTopicFitFailure([
+      'Measured topic "customer service chatbot examples" failed the current tenant product-fit gate: keyword is not anchored to a specific tenant product or buyer problem',
+    ]),
+    true,
+  );
+  assert.equal(
+    hasTerminalTopicFitFailure(["Meta description is too short"]),
+    false,
+  );
+});
+
+test("authority ceiling is identical for shortlist and final review", () => {
+  assert.equal(keywordDifficultyCeiling(10, 999), 10);
+  assert.equal(keywordDifficultyCeiling(10, 1_000), 20);
 });
 
 test("cached SERP records without a People Also Ask block stay array-shaped", () => {
@@ -90,8 +209,8 @@ test("topic coverage ignores broad article metadata and uses canonical primary k
       { _id: "planned-topic", status: "planned", primaryKeyword: "AI chatbot for sales" },
     ],
     [
-      { topicId: "used-topic", slug: "/chatbot-for-lead-generation" },
-      { slug: "/legacy-website-conversion-guide" },
+      { topicId: "used-topic", slug: "/chatbot-for-lead-generation", status: "published" },
+      { slug: "/legacy-website-conversion-guide", status: "published" },
     ],
   );
 
@@ -161,6 +280,10 @@ test("health distinguishes scheduler, cadence, publication, quality, and buffer 
     "publication_failed",
   );
   assert.equal(
+    autopilotHealthStatus({ schedulerStale: false, publicationMissed: false, bufferCount: 3, lastOutcome: "job_failed" }),
+    "job_failed",
+  );
+  assert.equal(
     autopilotHealthStatus({ schedulerStale: false, publicationMissed: false, bufferCount: 3, lastOutcome: "quality_quarantined" }),
     "quality_quarantined",
   );
@@ -182,6 +305,33 @@ test("health distinguishes scheduler, cadence, publication, quality, and buffer 
   );
 });
 
+test("a newer strict sealed article clears only stale content-worker health", () => {
+  assert.equal(
+    currentHealthOutcome({
+      lastOutcome: "job_failed",
+      lastOutcomeAt: 100,
+      latestSealedAt: 101,
+    }),
+    undefined,
+  );
+  assert.equal(
+    currentHealthOutcome({
+      lastOutcome: "quality_quarantined",
+      lastOutcomeAt: 100,
+      latestSealedAt: 99,
+    }),
+    "quality_quarantined",
+  );
+  assert.equal(
+    currentHealthOutcome({
+      lastOutcome: "publication_failed",
+      lastOutcomeAt: 100,
+      latestSealedAt: 101,
+    }),
+    "publication_failed",
+  );
+});
+
 test("due publication outranks manual and replenishment jobs", () => {
   assert.ok(
     pendingJobPriority({ publishOnly: true }) >
@@ -199,6 +349,87 @@ test("due publication outranks manual and replenishment jobs", () => {
     /ctx\.scheduler\.runAfter\(\s*0,\s*internal\.actions\.pipeline\.processNextJob/,
   );
   assert.match(pipeline, /runId: v\.optional\(v\.id\("autopilot_runs"\)\)/);
+});
+
+test("a reserved underfill continuation yields to proved topics and due delivery", () => {
+  const validContinuation = {
+    reason: "topic_horizon_replenishment",
+    underfilledPlanContinuation: {
+      version: 1,
+      firstExecutionCount: 1,
+      remainingTopicCapacity: 9,
+      queuedAt: Date.UTC(2026, 7, 23, 12),
+    },
+  };
+  assert.equal(
+    isUnderfilledPlanContinuationPayload(validContinuation),
+    true,
+  );
+  assert.equal(
+    isUnderfilledPlanContinuationPayload({
+      ...validContinuation,
+      underfilledPlanContinuation: {
+        ...validContinuation.underfilledPlanContinuation,
+        version: 2,
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isUnderfilledPlanContinuationPayload({
+      ...validContinuation,
+      underfilledPlanContinuation: {
+        ...validContinuation.underfilledPlanContinuation,
+        remainingTopicCapacity: 10,
+      },
+    }),
+    false,
+  );
+  assert.equal(isUnderfilledPlanContinuationPayload({}), false);
+
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(scheduler, /const pendingUnderfilledPlan = siteJobs\.find/);
+  assert.match(scheduler, /\(job\.workerAttempts \?\? 0\) === 1/);
+  assert.match(scheduler, /const contentBlockingJobs = pendingUnderfilledPlan/);
+  assert.match(
+    scheduler,
+    /contentWorkBlocksQualityRecovery\(\s*contentBlockingJobs/,
+  );
+  assert.match(
+    scheduler,
+    /buffer\.length >= TARGET_APPROVED_BUFFER\) \{[\s\S]{0,180}if \(pendingUnderfilledPlan\)/,
+  );
+  assert.match(
+    scheduler,
+    /if \(!selectedTopic\) \{[\s\S]{0,120}if \(pendingUnderfilledPlan\)/,
+  );
+  assert.match(
+    scheduler,
+    /recentCandidates\.length >= candidateBudget\) \{[\s\S]{0,120}if \(pendingUnderfilledPlan\)/,
+  );
+  assert.match(scheduler, /mode: "pending_plan"/);
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /const ordinarySchedulerContinuation =/);
+  assert.match(
+    pipeline,
+    /isUnderfilledPlanContinuationPayload\(job\.payload\)/,
+  );
+});
+
+test("specific jobs schedule the durable worker without a nested action deadline", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const wrapper = pipeline.slice(
+    pipeline.indexOf("export const processSpecificJob"),
+    pipeline.indexOf("export const processNextJob"),
+  );
+  assert.match(wrapper, /ctx\.scheduler\.runAfter\(/);
+  assert.match(wrapper, /internal\.actions\.pipeline\.processNextJob/);
+  assert.doesNotMatch(wrapper, /ctx\.runAction\(/);
+  assert.doesNotMatch(
+    jobs,
+    /scheduler\.runAfter\([\s\S]*?processSpecificJob/,
+  );
 });
 
 test("a sealed autonomous buffer arms the exact cadence deadline", () => {
@@ -280,7 +511,8 @@ test("topic selection includes buffered coverage and can trigger fresh-plan reco
   );
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   assert.match(scheduler, /topic_overlap_replenishment/);
-  assert.match(scheduler, /MAX_TOPIC_REPLENISHMENTS_PER_24H/);
+  assert.match(scheduler, /topicReplenishmentBudget/);
+  assert.match(scheduler, /maximumRecent: maximumTopicReplenishments/);
   assert.match(scheduler, /topic_replenishment_exhausted/);
   assert.match(scheduler, /queuePlanIfAbsent/);
 });
@@ -437,7 +669,7 @@ test("live SERP evidence overrides lexical similarity while legacy rows fail clo
       primaryKeyword: "AI chatbot for sales",
       serpTopUrls: distinctA,
     }],
-    [{ topicId: "parent-topic", slug: "ai-chatbot-for-sales" }],
+    [{ topicId: "parent-topic", slug: "ai-chatbot-for-sales", status: "published" }],
   );
   assert.deepEqual(
     filterNonCannibalizingIntentTopics(
@@ -454,9 +686,8 @@ test("live SERP evidence overrides lexical similarity while legacy rows fail clo
   assert.match(scheduler, /filterNonCannibalizingIntentTopics/);
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.match(pipeline, /export const backfillTopicSerpFingerprints = internalAction/);
-  assert.match(pipeline, /DataForSEO returned fewer than five organic URLs/);
-  assert.match(pipeline, /Math\.min\(5, Math\.floor\(limit \?\? 5\)\)/);
-  assert.match(pipeline, /internal\.actions\.pipeline\.backfillTopicSerpFingerprints/);
+  assert.match(pipeline, /Legacy SERP fingerprint backfill is disabled/);
+  assert.match(pipeline, /metered expected-click evidence backfill workflow/);
 });
 
 test("topic discovery rotates intent seeds instead of replaying one exhausted request", () => {
@@ -491,12 +722,17 @@ test("topic discovery splits a rotated window into bounded distinct requests", (
   assert.equal(batches[2][4], "business seed 14");
 });
 
-test("plan retries rotate discovery using the durable worker attempt count", () => {
+test("plan retries reuse the original discovery rotation under one reserved budget", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.match(
     pipeline,
+    /payload\?\.replenishmentSequence \?\? 0/,
+  );
+  assert.doesNotMatch(
+    pipeline,
     /\(payload\?\.replenishmentSequence \?\? 0\) \+ \(job\.workerAttempts \?\? 0\)/,
   );
+  assert.match(pipeline, /classifyPlanFailure\(message\)/);
   assert.match(pipeline, /minimumResults: 20/);
   assert.match(pipeline, /targetDomain: site\.domain/);
   assert.match(pipeline, /if \(discoveredKeywords\.length > 0\)/);
@@ -554,6 +790,13 @@ test("LeadPilot topic fit rejects measured keywords that do not describe its pro
     "SaaS Product",
     "AI lead generation software for business websites",
   ];
+  const productAnchorSignals = [
+    "AI sales agent for websites",
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "AI chatbot for lead capture",
+    "website visitor engagement AI",
+  ];
 
   for (const keyword of [
     "customer lead time",
@@ -564,11 +807,16 @@ test("LeadPilot topic fit rejects measured keywords that do not describe its pro
     "best lead generation for realtors",
     "employee chatbot",
     "consultative selling training",
+    "sales enablement courses",
+    "sales manager training courses",
+    "direct sales",
+    "conversion rate optimization services",
   ]) {
     assert.equal(
       evaluateTopicBusinessFit({
         keyword,
         coreBusinessSignals,
+        productAnchorSignals,
         businessModelSignals,
       }).eligible,
       false,
@@ -581,6 +829,7 @@ test("LeadPilot topic fit rejects measured keywords that do not describe its pro
       keyword: "lead capture software",
       label: "How to Choose Lead Capture Software for Your Website",
       coreBusinessSignals,
+      productAnchorSignals,
       businessModelSignals,
     }).eligible,
     true,
@@ -602,6 +851,14 @@ test("LeadPilot topic fit preserves specific product and buyer-problem queries",
     "SaaS Product",
     "AI lead generation software for business websites",
   ];
+  const productAnchorSignals = [
+    "AI sales agent for websites",
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "AI chatbot for lead capture",
+    "website visitor engagement AI",
+    "sales qualification techniques",
+  ];
 
   for (const keyword of [
     "website visitor engagement",
@@ -615,12 +872,29 @@ test("LeadPilot topic fit preserves specific product and buyer-problem queries",
       evaluateTopicBusinessFit({
         keyword,
         coreBusinessSignals,
+        productAnchorSignals,
         businessModelSignals,
       }).eligible,
       true,
       `expected ${keyword} to pass tenant product fit`,
     );
   }
+});
+
+test("business-fit stemming does not confuse consultation with consuming", () => {
+  const fit = evaluateTopicBusinessFit({
+    keyword: "sales consultation",
+    coreBusinessSignals: [
+      "AI sales agent for websites",
+      "manual lead qualification consuming sales team time",
+    ],
+    productAnchorSignals: [
+      "manual lead qualification consuming sales team time",
+      "sales automation chat widget",
+    ],
+    businessModelSignals: ["B2B SaaS", "AI sales software"],
+  });
+  assert.equal(fit.eligible, false);
 });
 
 test("a measured growth seed cannot substitute for core tenant relevance", () => {
@@ -668,6 +942,14 @@ test("the scheduler revalidates stale topics and the queue fails closed", () => 
 
   assert.match(scheduler, /export const auditTopicBusinessFit = internalAction/);
   assert.match(scheduler, /recordBusinessFitAuditsInternal/);
+  assert.match(
+    scheduler,
+    /audits: businessFitAudits\.map\([\s\S]*topicId, eligible, score, version, reasons/,
+  );
+  assert.doesNotMatch(
+    scheduler,
+    /\{\s*siteId,\s*audits: businessFitAudits\s*\}/,
+  );
   assert.match(scheduler, /topic_business_fit_replenishment/);
   assert.match(jobs, /topic_business_fit_failed/);
   assert.match(pipeline, /disqualifyQueuedTopicInternal/);
@@ -702,6 +984,30 @@ test("service-provider intent must match the tenant business model", () => {
   assert.equal(
     keywordMatchesBusinessModel("conversion optimization consulting", [
       "conversion consulting agency",
+    ]),
+    true,
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("conversion rate optimization services", [
+      "AI sales software",
+    ]),
+    false,
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("sales enablement courses", [
+      "AI sales software",
+    ]),
+    false,
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("sales enablement courses", [
+      "sales training provider",
+    ]),
+    true,
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("how to train your chatbot", [
+      "AI chatbot SaaS",
     ]),
     true,
   );
