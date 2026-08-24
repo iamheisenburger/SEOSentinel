@@ -175,6 +175,11 @@ test("every provider-credential boundary rejects a changed site owner", () => {
   assert.match(inboundClaim, /credentialOwnerAccountKey !== accountDeletionKey/);
   assert.match(inboundClaim, /oauthRefreshToken: undefined/);
   assert.match(inboundClaim, /status: "disconnected"/);
+  assert.match(inboundClaim, /!site\?\.userId \|\| !inbox\.credentialOwnerAccountKey/);
+  assert.ok(
+    inboundClaim.indexOf("!inbox.credentialOwnerAccountKey") <
+      inboundClaim.indexOf("oauthRefreshToken: undefined"),
+  );
 });
 
 test("legacy owner rollout reconnects only through a fresh scrubbed OAuth grant", () => {
@@ -219,6 +224,18 @@ test("an ownerless legacy readonly drain is adopted, never overwritten by send-o
   assert.match(drainAdoption, /legacyDrainAdopted: true/);
   assert.doesNotMatch(drainAdoption, /oauthRefreshToken:/);
   assert.doesNotMatch(drainAdoption, /oauthScopes:/);
+
+  const disconnect = backend.slice(
+    backend.indexOf("export const disconnectInbox"),
+    backend.indexOf("export const getInboxInternal"),
+  );
+  assert.match(disconnect, /pendingLegacyUnboundMessageCount/);
+  assert.match(disconnect, /status: "pending"/);
+  assert.match(disconnect, /migrateOutreachDurabilityInternal/);
+  assert.ok(
+    disconnect.indexOf('status: "pending"') <
+      disconnect.indexOf("oauthRefreshToken: undefined"),
+  );
 });
 
 test("delivery settlement remains bound to the immutable claiming account", () => {
@@ -245,6 +262,20 @@ test("delivery settlement remains bound to the immutable claiming account", () =
   assert.match(relay, /inboundProvesAmbiguousDelivery && !message\.sentAt/);
   assert.match(relay, /materializeOutreachSuppressionTombstoneForAccount/);
   assert.match(http, /deliveryOwnerAccountKey: candidate\.deliveryOwnerAccountKey/);
+
+  const deletion = sites.slice(
+    sites.indexOf("export const continueSiteDeletionInternal"),
+    sites.indexOf("export const requestSiteDeletionInternal"),
+  );
+  assert.match(deletion, /message\.deliveryOwnerAccountKey \?\?/);
+  assert.match(deletion, /messageInbox\.credentialOwnerAccountKey/);
+  assert.doesNotMatch(
+    deletion,
+    /messageInbox[\s\S]{0,300}accountDeletionKey\(site\.userId\)/,
+  );
+  assert.match(deletion, /materializeOutreachSuppressionTombstoneForAccount/);
+  assert.match(deletion, /const settlementAccountKey = inbox\.credentialOwnerAccountKey/);
+  assert.match(deletion, /unresolved immutable ownership/);
 });
 
 test("legacy inbound rows bind immutable ownership inside the current-owner lease", () => {

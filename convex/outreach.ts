@@ -1873,10 +1873,69 @@ export const reconcileAutonomousInitialMessagesInternal = internalMutation({
 export const disconnectInbox = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     await assertNoActiveDelivery(ctx, siteId);
     const inbox = await inboxForSite(ctx, siteId);
     if (!inbox) return { disconnected: false };
+    if (
+      !site.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      throw new Error(
+        "The Gmail credential does not belong to the current site owner",
+      );
+    }
+    const pendingLegacyDrain = Boolean(
+      inbox.oauthScopes?.split(/\s+/).includes(
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ) && (await pendingLegacyUnboundMessageCount(ctx, inbox._id)) > 0,
+    );
+    if (pendingLegacyDrain) {
+      // The owner may revoke Gmail immediately, but doing so discards the only
+      // provider path that can observe an unseen pre-relay STOP. Atomically
+      // reopen the account durability migration before clearing credentials;
+      // all outbound claims stay closed until every pre-lineage recipient is
+      // conservatively tombstoned from site-scoped history.
+      const accountKey = accountDeletionKey(site.userId);
+      const timestamp = Date.now();
+      const receipt = await ctx.db
+        .query("outreach_durability_migrations")
+        .withIndex("by_account", (q) => q.eq("accountKey", accountKey))
+        .first();
+      if (receipt) {
+        await ctx.db.patch(receipt._id, {
+          userId: site.userId,
+          version: OUTREACH_DURABILITY_MIGRATION_VERSION,
+          status: "pending",
+          siteCursor: undefined,
+          nextSiteCursor: undefined,
+          sitesDoneAfterActive: undefined,
+          activeSiteId: undefined,
+          rowStage: undefined,
+          rowCursor: undefined,
+          completedAt: undefined,
+          updatedAt: timestamp,
+        });
+      } else {
+        await ctx.db.insert("outreach_durability_migrations", {
+          accountKey,
+          userId: site.userId,
+          version: OUTREACH_DURABILITY_MIGRATION_VERSION,
+          status: "pending",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+      }
+      await ctx.scheduler.runAfter(
+        0,
+        internal.outreach.migrateOutreachDurabilityInternal,
+        {
+          siteId,
+          inboxId: inbox._id,
+          generation: inbox.autonomyReconciliationGeneration ?? 0,
+        },
+      );
+    }
     // Credentials are cleared rather than the row deleted so warm-up history
     // and the audit trail on sent messages survive a reconnect.
     await ctx.db.patch(inbox._id, {
@@ -4940,8 +4999,17 @@ export const claimInboundSync = internalMutation({
       return { claimed: false as const, reason: "Exactly one outreach inbox is required." };
     }
     const inbox = inboxes[0];
+    if (!site?.userId || !inbox.credentialOwnerAccountKey) {
+      // Additive rollout rows are unproven, not foreign. Never destroy the
+      // only legacy readonly credential from a scheduled pre-rollout job; a
+      // fresh exact-mailbox OAuth callback owns the safe adoption protocol.
+      return {
+        claimed: false as const,
+        reason:
+          "The legacy Gmail credential requires exact-mailbox ownership adoption before monitoring can resume.",
+      };
+    }
     if (
-      !site?.userId ||
       inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
     ) {
       // A legacy read grant belongs to the account that connected it. Clear

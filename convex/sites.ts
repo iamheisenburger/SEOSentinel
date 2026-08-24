@@ -76,7 +76,6 @@ import {
   recordDurablePacingReceiptForAccount,
 } from "./lib/outreachDurability.ts";
 import {
-  materializeOutreachSuppressionTombstone,
   materializeOutreachSuppressionTombstoneForAccount,
 } from "./lib/outreachSuppression.ts";
 
@@ -1629,7 +1628,9 @@ async function gateSiteDeletionForOutreach(
   | { ready: true }
   | {
       ready: false;
-      reason: "outreach_delivery_unverified";
+      reason:
+        | "outreach_delivery_unverified"
+        | "outreach_owner_unresolved";
       convertedExpired: number;
     }
 > {
@@ -1689,6 +1690,51 @@ async function gateSiteDeletionForOutreach(
       reason: "outreach_delivery_unverified",
       convertedExpired: 0,
     };
+  }
+  const inboxes = await ctx.db
+    .query("outreach_inboxes")
+    .withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .take(2);
+  const exactInboxOwner = inboxes.length === 1
+    ? inboxes[0].credentialOwnerAccountKey
+    : undefined;
+  if (!exactInboxOwner) {
+    const [suppression, ...acceptedBatches] = await Promise.all([
+      ctx.db
+        .query("outreach_suppressions")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .first(),
+      ...[
+        "sent",
+        "delivery_reviewed_sent",
+        "replied",
+        "bounced",
+        "delivery_unverified",
+      ].map((status) =>
+        ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", status)
+          )
+          .take(51)
+      ),
+    ]);
+    const unresolvedAccepted = acceptedBatches.some(
+      (batch) =>
+        batch.length >= 51 ||
+        batch.some((message) => !message.deliveryOwnerAccountKey),
+    );
+    if (
+      suppression ||
+      unresolvedAccepted ||
+      inboxes.some((inbox) => Boolean(inbox.lastSentAt))
+    ) {
+      return {
+        ready: false,
+        reason: "outreach_owner_unresolved",
+        convertedExpired: 0,
+      };
+    }
   }
   return { ready: true };
 }
@@ -2098,11 +2144,10 @@ export const continueSiteDeletionInternal = internalMutation({
             message.deliveryOwnerAccountKey ??
             (messageInbox?.siteId === siteId
               ? messageInbox.credentialOwnerAccountKey
-              : undefined) ??
-            (site.userId ? accountDeletionKey(site.userId) : undefined);
+              : undefined);
           if (!settlementAccountKey) {
             throw new Error(
-              "Outreach history lost its immutable account owner during deletion",
+              "Outreach history has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
             );
           }
           // Legacy rows predate the durable ledgers. Materialize the exact
@@ -2146,9 +2191,21 @@ export const continueSiteDeletionInternal = internalMutation({
       } else if (SITE_DELETION_STAGES[safeStage] === "outreach_suppressions") {
         const suppression = row as Doc<"outreach_suppressions">;
         if (suppression.kind === "domain" || suppression.kind === "email") {
-          await materializeOutreachSuppressionTombstone(
+          const suppressionInboxes = await ctx.db
+            .query("outreach_inboxes")
+            .withIndex("by_site", (q) => q.eq("siteId", siteId))
+            .take(2);
+          const settlementAccountKey = suppressionInboxes.length === 1
+            ? suppressionInboxes[0].credentialOwnerAccountKey
+            : undefined;
+          if (!settlementAccountKey) {
+            throw new Error(
+              "Outreach suppression history has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
+            );
+          }
+          await materializeOutreachSuppressionTombstoneForAccount(
             ctx,
-            site,
+            settlementAccountKey,
             suppression.kind,
             suppression.value,
             suppression.reason,
@@ -2159,12 +2216,10 @@ export const continueSiteDeletionInternal = internalMutation({
       } else if (SITE_DELETION_STAGES[safeStage] === "outreach_inboxes") {
         const inbox = row as Doc<"outreach_inboxes">;
         if (inbox.lastSentAt) {
-          const settlementAccountKey =
-            inbox.credentialOwnerAccountKey ??
-            (site.userId ? accountDeletionKey(site.userId) : undefined);
+          const settlementAccountKey = inbox.credentialOwnerAccountKey;
           if (!settlementAccountKey) {
             throw new Error(
-              "Outreach inbox lost its immutable account owner during deletion",
+              "Outreach inbox pacing has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
             );
           }
           await recordDurablePacingReceiptForAccount(
