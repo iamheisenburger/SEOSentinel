@@ -21,6 +21,10 @@ test("the v2 initial-only consent receipt has an exact audited hash", () => {
   assert.equal(OUTREACH_AUTONOMY_CONSENT_VERSION, 2);
   assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /initial commercial business outreach/i);
   assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /does not permit automated follow-ups/i);
+  assert.match(
+    OUTREACH_AUTONOMY_CONSENT_TEXT,
+    /disabling autonomy stops new delivery claims; one attempt already claimed by the provider boundary may settle once/i,
+  );
   assert.equal(
     createHash("sha256").update(OUTREACH_AUTONOMY_CONSENT_TEXT).digest("hex"),
     OUTREACH_AUTONOMY_POLICY_HASH,

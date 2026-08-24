@@ -11,10 +11,10 @@
 export const OUTREACH_AUTONOMY_CONSENT_VERSION = 2;
 
 export const OUTREACH_AUTONOMY_CONSENT_TEXT =
-  "I authorize Pentra to send evidence-grounded one-to-one initial commercial business outreach messages automatically from this dedicated secondary-domain Gmail inbox. This authorization does not permit automated follow-ups. Sends remain subject to warm-up, daily caps, permanent suppression, bounce/reply monitoring, and immediate disable. I confirm the sender identity and physical address are accurate, that I am responsible for a lawful basis in each recipient jurisdiction, and that this use complies with my mailbox provider’s terms; I accept the sending-domain and mailbox-reputation risk.";
+  "I authorize Pentra to send evidence-grounded one-to-one initial commercial business outreach messages automatically from this dedicated secondary-domain Gmail inbox. This authorization does not permit automated follow-ups. Sends remain subject to warm-up, daily caps, permanent suppression, and bounce/reply monitoring. Disabling autonomy stops new delivery claims; one attempt already claimed by the provider boundary may settle once. I confirm the sender identity and physical address are accurate, that I am responsible for a lawful basis in each recipient jurisdiction, and that this use complies with my mailbox provider’s terms; I accept the sending-domain and mailbox-reputation risk.";
 
 export const OUTREACH_AUTONOMY_POLICY_HASH =
-  "002238ce5c4c2f62d40042f32d83bdcebe64cf6c20b03fcc8c19fb2ded5c6121";
+  "85d194b791fb3fe5104ef5ee377cf1b01c2a123ccaf5723c3a63fddf53d48250";
 
 /** The first release stays deliberately below the general mailbox ceiling. */
 export const OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP = 10;
