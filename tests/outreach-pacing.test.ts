@@ -225,6 +225,19 @@ test("late historical materialization cannot steal a newer sender owner", () => 
     }).preservesExistingOwner,
     false,
   );
+  assert.deepEqual(
+    durablePacingReceiptOwnership({
+      existingAccountKey: undefined,
+      existingTenantDomainKey: undefined,
+      incomingAccountKey: "account-b",
+      incomingTenantDomainKey: "tenant-b",
+    }),
+    {
+      accountKey: undefined,
+      tenantDomainKey: undefined,
+      preservesExistingOwner: true,
+    },
+  );
 });
 
 test("recipient cooldown identity follows an organisation across subdomains", () => {

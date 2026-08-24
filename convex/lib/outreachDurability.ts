@@ -117,17 +117,21 @@ export function durablePacingReceiptOwnership(args: {
   incomingAccountKey: string;
   incomingTenantDomainKey: string;
 }): {
-  accountKey: string;
+  accountKey?: string;
   tenantDomainKey?: string;
   preservesExistingOwner: boolean;
 } {
-  const preservesExistingOwner = Boolean(
-    args.existingAccountKey &&
-      args.existingAccountKey !== args.incomingAccountKey,
-  );
+  // An undefined account key is deliberate after verified account deletion:
+  // the globally hashed reputation state stays reserved through retention
+  // without linking it to the deleted user. Historical migration/materialize
+  // callers must not adopt either that unlinked row or another account's row;
+  // only the explicit, preflighted OAuth connect protocol may establish an
+  // owner.
+  const preservesExistingOwner =
+    args.existingAccountKey !== args.incomingAccountKey;
   return preservesExistingOwner
     ? {
-        accountKey: args.existingAccountKey!,
+        accountKey: args.existingAccountKey,
         tenantDomainKey: args.existingTenantDomainKey,
         preservesExistingOwner: true,
       }
