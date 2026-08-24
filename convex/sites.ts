@@ -62,6 +62,8 @@ function inboundRelayRuntimeConfig() {
       process.env.OUTREACH_INBOUND_RELAY_SECRET,
       process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
     ],
+    dsnTargetSecret:
+      process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
     adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
     retentionPolicyHash:
       process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
@@ -312,6 +314,8 @@ async function demoteOutreachForDomainChange(
       inboundRelayDsnRoutingEvidenceHash: undefined,
       inboundRelayDsnRoutingAdapterVersion: undefined,
       inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
       lastError:
         "The tenant domain changed. Reconnect and verify the secondary-domain sender before reviewing new outreach.",
       updatedAt: timestamp,
@@ -1677,6 +1681,17 @@ async function requestSiteDeletion(
       smtpPassword: undefined,
       apiKey: undefined,
       verifiedAt: undefined,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
+      inboundRelayDsnRoutingTargetGeneration: undefined,
       updatedAt: timestamp,
     });
   }
@@ -1739,6 +1754,17 @@ async function revokeSiteCredentialsForAccountDeletion(
       smtpPassword: undefined,
       apiKey: undefined,
       verifiedAt: undefined,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
+      inboundRelayDsnRoutingTargetGeneration: undefined,
       updatedAt: timestamp,
     });
   }

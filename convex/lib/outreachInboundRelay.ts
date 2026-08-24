@@ -9,6 +9,7 @@ import {
 export const OUTREACH_INBOUND_RELAY_MAX_BODY_BYTES = 64 * 1024;
 export const OUTREACH_INBOUND_RELAY_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 export const OUTREACH_INBOUND_RELAY_VERSION = 1;
+export const OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION = 1;
 export const OUTREACH_INBOUND_RELAY_CANARY_TTL_MS = 30 * 60 * 1000;
 export const OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS = 2 * 60 * 1000;
 export const OUTREACH_INBOUND_RELAY_CANARY_VALID_MS = 30 * 24 * 60 * 60 * 1000;
@@ -47,6 +48,7 @@ export type InboundRelayPayload = {
     finalRecipient: string;
     originalRecipient?: string;
     originalMessageId: string;
+    routingRecipientHash: string;
     source: "message/delivery-status";
   };
 };
@@ -57,6 +59,9 @@ export type InboundRelayCandidate = {
   toDomain: string;
   sentAt: number;
   outboundRfcMessageIdHash: string;
+  dsnRoutingTargetHash: string;
+  dsnRoutingTargetVersion: number;
+  dsnRoutingTargetGeneration: number;
 };
 
 export type InboundRelayCanaryCandidate = {
@@ -64,6 +69,9 @@ export type InboundRelayCanaryCandidate = {
   outboundRfcMessageIdHash: string;
   issuedAt: number;
   expiresAt: number;
+  dsnRoutingTargetHash: string;
+  dsnRoutingTargetVersion: number;
+  dsnRoutingTargetGeneration: number;
 };
 
 export type InboundRelayClassification =
@@ -113,6 +121,7 @@ export function normalizeInboundRelayDomain(value: string | undefined): string |
 export function inboundRelayConfigured(args: {
   domain?: string;
   secrets?: Array<string | undefined>;
+  dsnTargetSecret?: string;
   adapterVersion?: string;
   retentionPolicyHash?: string;
   retentionAudited?: string | boolean;
@@ -120,6 +129,7 @@ export function inboundRelayConfigured(args: {
   return Boolean(
     normalizeInboundRelayDomain(args.domain) &&
     args.secrets?.some((secret) => (secret?.trim().length ?? 0) >= 32) &&
+    (args.dsnTargetSecret?.trim().length ?? 0) >= 32 &&
     /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(
       String(args.adapterVersion ?? ""),
     ) &&
@@ -133,6 +143,7 @@ export function inboundRelayConfigured(args: {
 export function inboundRelayConfigurationHash(args: {
   domain?: string;
   secrets?: Array<string | undefined>;
+  dsnTargetSecret?: string;
   adapterVersion?: string;
   retentionPolicyHash?: string;
   retentionAudited?: string | boolean;
@@ -140,10 +151,12 @@ export function inboundRelayConfigurationHash(args: {
   if (!inboundRelayConfigured(args)) return null;
   return sha256Hex(JSON.stringify({
     version: OUTREACH_INBOUND_RELAY_VERSION,
+    dsnRoutingTargetVersion: OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
     domain: normalizeInboundRelayDomain(args.domain),
     secretDigests: (args.secrets ?? []).map((secret) =>
       secret?.trim() ? sha256Hex(secret.trim()) : ""
     ),
+    dsnTargetSecretDigest: sha256Hex(args.dsnTargetSecret!.trim()),
     adapterVersion: args.adapterVersion,
     retentionPolicyHash: args.retentionPolicyHash,
   }));
@@ -178,9 +191,84 @@ export function inboundRelayDsnRoutingReady(args: {
       args.runtimeConfig.adapterVersion &&
     inbox.inboundRelayDsnRoutingRetentionPolicyHash ===
       args.runtimeConfig.retentionPolicyHash &&
+    inbox.inboundRelayDsnRoutingTargetVersion ===
+      OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION &&
+    Number.isSafeInteger(inbox.inboundRelayDsnRoutingTargetGeneration) &&
+    Number(inbox.inboundRelayDsnRoutingTargetGeneration) >= 1 &&
+    typeof inbox.inboundRelayDsnRoutingTargetHash === "string" &&
+    /^[a-f0-9]{64}$/.test(inbox.inboundRelayDsnRoutingTargetHash) &&
     typeof inbox.inboundRelayDsnRoutingEvidenceHash === "string" &&
     /^[a-f0-9]{64}$/.test(inbox.inboundRelayDsnRoutingEvidenceHash)
   );
+}
+
+/** Derive the current Workspace DSN routing address without persisting its
+ * secret local part. The dedicated target secret is a server-only HMAC key; every
+ * tenant/inbox/generation fence is included in the canonical input. Routine
+ * sender-profile, plan-epoch and relay-signing changes therefore do not force
+ * a Workspace administrator to replace the route. A changed mailbox or an
+ * explicit owner rotation advances the persisted non-secret generation.
+ * The receiving adapter still treats this alias only as an authenticated
+ * intake lane, never as a tenant selector. */
+export async function inboundRelayDsnRoutingTarget(args: {
+  siteId: string;
+  inboxId: string;
+  generation: number;
+  relayDomain?: string;
+  secret?: string;
+}): Promise<{
+  address: string;
+  hash: string;
+  version: number;
+} | null> {
+  const domain = normalizeInboundRelayDomain(args.relayDomain);
+  const secret = args.secret?.trim();
+  const siteId = String(args.siteId ?? "");
+  const inboxId = String(args.inboxId ?? "");
+  if (
+    !domain ||
+    !secret ||
+    secret.length < 32 ||
+    !siteId ||
+    siteId.length > 200 ||
+    !inboxId ||
+    inboxId.length > 200 ||
+    !Number.isSafeInteger(args.generation) ||
+    args.generation < 1
+  ) {
+    return null;
+  }
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const binding = new TextEncoder().encode(JSON.stringify({
+      version: OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
+      purpose: "workspace_dsn_routing",
+      relayDomain: domain,
+      siteId,
+      inboxId,
+      generation: args.generation,
+    }));
+    const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, binding));
+    // 24 bytes / 192 bits remains computationally unguessable while keeping
+    // `dsn-<token>` below SMTP's 64-octet local-part ceiling.
+    const token = Array.from(digest.slice(0, 24), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("");
+    const address = `dsn-${token}@${domain}`;
+    return {
+      address,
+      hash: inboundRelayAliasHash(address),
+      version: OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function inboundRelayAliasAddress(token: string, relayDomain: string): string | null {
@@ -296,13 +384,20 @@ export function parseInboundRelayPayload(rawBody: string): InboundRelayPayload |
       220,
       { required: true },
     );
+    const routingRecipientHash = boundedString(
+      input.dsn.routingRecipientHash,
+      64,
+      { required: true },
+    );
     if (
       input.dsn.action !== "failed" ||
       input.dsn.source !== "message/delivery-status" ||
       !status ||
       !finalRecipient ||
       !originalMessageId ||
-      !normalizeRfcMessageId(originalMessageId)
+      !normalizeRfcMessageId(originalMessageId) ||
+      !routingRecipientHash ||
+      !/^[a-f0-9]{64}$/.test(routingRecipientHash)
     ) return null;
     dsn = {
       action: "failed",
@@ -310,6 +405,7 @@ export function parseInboundRelayPayload(rawBody: string): InboundRelayPayload |
       finalRecipient,
       ...(originalRecipient ? { originalRecipient } : {}),
       originalMessageId: normalizeRfcMessageId(originalMessageId),
+      routingRecipientHash,
       source: "message/delivery-status",
     };
   }
@@ -383,6 +479,7 @@ export function classifyInboundRelay(args: {
       !daemonSender(fromEmail) ||
       inboundRelayMessageIdHash(payload.dsn.originalMessageId) !==
         candidate.outboundRfcMessageIdHash ||
+      payload.dsn.routingRecipientHash !== candidate.dsnRoutingTargetHash ||
       !/^5\.\d{1,3}\.\d{1,3}$/.test(payload.dsn.status) ||
       !failedRecipients.includes(normalizeOutreachEmail(candidate.toEmail))
     ) {
@@ -454,6 +551,7 @@ export function classifyInboundRelayDsnCanary(args: {
     !daemonSender(fromEmail) ||
     inboundRelayMessageIdHash(dsn.originalMessageId) !==
       candidate.outboundRfcMessageIdHash ||
+    dsn.routingRecipientHash !== candidate.dsnRoutingTargetHash ||
     !/^5\.\d{1,3}\.\d{1,3}$/.test(dsn.status) ||
     !failedRecipients.includes(candidate.testRecipientHash) ||
     !Number.isSafeInteger(payload.receivedAt) ||
@@ -483,6 +581,7 @@ export function inboundRelayEvidenceReceipt(args: {
   receivedAt: number;
   subjectDigest: string;
   bodyDigest: string;
+  dsnRoutingTargetHash?: string;
 }): string {
   return JSON.stringify({
     version: 1,
@@ -497,6 +596,9 @@ export function inboundRelayEvidenceReceipt(args: {
     receivedAt: args.receivedAt,
     subjectDigest: args.subjectDigest,
     bodyDigest: args.bodyDigest,
+    ...(args.dsnRoutingTargetHash
+      ? { dsnRoutingTargetHash: args.dsnRoutingTargetHash }
+      : {}),
   });
 }
 
@@ -508,6 +610,9 @@ export function inboundRelayCanaryEvidenceReceipt(args: {
   aliasHash: string;
   inboundMessageId: string;
   outboundMessageIdHash: string;
+  dsnRoutingTargetHash: string;
+  dsnRoutingTargetVersion: number;
+  dsnRoutingTargetGeneration: number;
   receivedAt: number;
   adapterVersion: string;
   retentionPolicyHash: string;
@@ -522,6 +627,9 @@ export function inboundRelayCanaryEvidenceReceipt(args: {
     aliasHash: args.aliasHash,
     inboundMessageId: normalizeRfcMessageId(args.inboundMessageId),
     outboundMessageIdHash: args.outboundMessageIdHash,
+    dsnRoutingTargetHash: args.dsnRoutingTargetHash,
+    dsnRoutingTargetVersion: args.dsnRoutingTargetVersion,
+    dsnRoutingTargetGeneration: args.dsnRoutingTargetGeneration,
     receivedAt: args.receivedAt,
     adapterVersion: args.adapterVersion,
     retentionPolicyHash: args.retentionPolicyHash,

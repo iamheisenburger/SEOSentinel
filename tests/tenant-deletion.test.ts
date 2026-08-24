@@ -87,6 +87,13 @@ test("credentials are revoked before resumable data deletion begins", () => {
   }
   assert.match(sites, /continueSiteDeletionInternal/);
   assert.match(schema, /\.index\("by_site", \["siteId"\]\)/);
+  for (const field of [
+    "inboundRelayDsnRoutingTargetHash",
+    "inboundRelayDsnRoutingTargetVersion",
+    "inboundRelayDsnRoutingTargetGeneration",
+  ]) {
+    assert.match(sites, new RegExp(`${field}: undefined`));
+  }
 });
 
 test("account reset preflights all site and article leases before scheduling", () => {

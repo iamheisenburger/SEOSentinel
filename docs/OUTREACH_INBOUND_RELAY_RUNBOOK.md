@@ -9,9 +9,11 @@ A syntactically valid relay domain and HMAC secret do **not** release outreach. 
 - tenant, site, inbox and inbox configuration version;
 - site rollout/plan epoch and authenticated sender domain;
 - relay domain, HMAC-secret set, adapter version and retention-policy digest; and
+- the current per-inbox DSN-target generation and digest of the actual `dsn-*`
+  envelope target observed by the adapter; and
 - a real Gmail-origin hard DSN containing the independently random canary Message-ID and exact controlled rejection recipient.
 
-The seal expires after 30 days. A reconnect, sender/profile/domain change, site epoch change, adapter/retention change, or relay-secret rotation invalidates it. The delivery claim rechecks every fence atomically before any prospect send.
+The seal expires after 30 days. A reconnect, sender/profile/domain change, site epoch change, adapter/retention change, or relay-signing-secret rotation invalidates it. These changes do not rotate the Workspace target for the same mailbox. A changed mailbox, explicit owner target rotation, relay-domain change, or dedicated target-secret rotation does rotate that target. The delivery claim rechecks every fence atomically before any prospect send.
 
 ## Why Reply-To is not bounce routing
 
@@ -28,10 +30,12 @@ Do not claim automated bounce handling and do not release send-only outreach unt
 3. The Google Workspace DSN routing rule described above for every outreach mailbox admitted to send-only mode.
 4. A fixed, operator-controlled recipient address that reliably produces a permanent structured `5.x.x` DSN. It is configured server-side; owners cannot supply or change the canary recipient.
 5. A randomly generated HMAC secret of at least 32 characters, installed without printing it in logs.
-6. A versioned adapter release and a SHA-256 digest of its reviewed retention policy.
-7. A provider/worker privacy audit proving either no raw MIME persistence or a documented minimal TTL, purge procedure, and DPA. Attachments must be discarded after bounded parsing; request/retry/dead-letter logs must redact raw payloads, headers, aliases and addresses. Audit the actual production provider's retention, attachment disposal, log redaction and purge behavior end to end.
-8. Provider-side limits no looser than 64 KiB per normalized event, 10 accepted events per alias per hour, and 60 accepted events per source IP per minute. Bound MIME depth, decompressed bytes, attachment bytes and parse time before the webhook.
-9. A production-domain signed adapter canary covering MX receipt, aligned SPF/DKIM/DMARC assertion, Reply-To and Message-ID preservation, structured DSN extraction, replay, 425 retry and retention controls.
+6. A separate randomly generated DSN-target derivation secret of at least 32
+   characters. It must not be the relay signing secret.
+7. A versioned adapter release and a SHA-256 digest of its reviewed retention policy.
+8. A provider/worker privacy audit proving either no raw MIME persistence or a documented minimal TTL, purge procedure, and DPA. Attachments must be discarded after bounded parsing; request/retry/dead-letter logs must redact raw payloads, headers, aliases and addresses. Audit the actual production provider's retention, attachment disposal, log redaction and purge behavior end to end.
+9. Provider-side limits no looser than 64 KiB per normalized event, 10 accepted events per alias per hour, and 60 accepted events per source IP per minute. Bound MIME depth, decompressed bytes, attachment bytes and parse time before the webhook.
+10. A production-domain signed adapter canary covering MX receipt, aligned SPF/DKIM/DMARC assertion, Reply-To and Message-ID preservation, structured DSN extraction, replay, 425 retry and retention controls.
 
 Do not point a tenant primary or sender-domain MX record at the relay.
 
@@ -42,6 +46,7 @@ All fields below are required. Missing or invalid fields make the relay unavaila
 ```text
 OUTREACH_INBOUND_RELAY_DOMAIN=inbound.example.net
 OUTREACH_INBOUND_RELAY_SECRET=<at-least-32-random-characters>
+OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET=<independent-at-least-32-random-characters>
 OUTREACH_INBOUND_RELAY_ADAPTER_VERSION=relay-adapter-2026.08.23
 OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH=<64-lowercase-hex-sha256>
 OUTREACH_INBOUND_RELAY_RETENTION_AUDITED=true
@@ -60,11 +65,14 @@ OUTREACH_INBOUND_RELAY_SECRET_NEXT=<next-at-least-32-random-characters>
 
 1. Connect/reconnect the secondary-domain Gmail mailbox with the strict send-only grant.
 2. Complete sender name, physical address, SPF, DKIM and DMARC readiness.
-3. In Backlinks, the owner clicks **Verify bounce routing** and confirms one canary send.
-4. Pentra atomically claims a two-minute canary delivery lease bound to the current account, plan, site, inbox, credential configuration, sender and live DNS evidence.
-5. Pentra sends exactly one message through that Gmail credential to `OUTREACH_INBOUND_RELAY_CANARY_RECIPIENT`. There is no caller-supplied recipient, prospect, cron, fleet or automatic retry path.
-6. Gmail acceptance does not mark readiness. The inbox remains blocked while Workspace routing delivers the resulting DSN to the adapter.
-7. Only an exact signed structured hard-DSN webhook seals readiness. Ambiguous Gmail outcomes are never retried automatically.
+3. In Backlinks, copy this inbox's owner-only 192-bit HMAC-derived **Workspace delivery-status route**
+   and configure the Workspace administrator rule to preserve the original
+   structured DSN. Pentra stores only its digest and non-secret generation.
+4. In Backlinks, the owner clicks **Verify bounce routing** and confirms one canary send.
+5. Pentra atomically claims a two-minute canary delivery lease bound to the current account, plan, site, inbox, credential configuration, sender, DSN-target digest/generation and live DNS evidence.
+6. Pentra sends exactly one message through that Gmail credential to `OUTREACH_INBOUND_RELAY_CANARY_RECIPIENT`. There is no caller-supplied recipient, prospect, cron, fleet or automatic retry path.
+7. Gmail acceptance does not mark readiness. The inbox remains blocked while Workspace routing delivers the resulting DSN to the adapter.
+8. Only an exact signed structured hard-DSN webhook whose actual envelope-target digest matches the current inbox target seals readiness. Ambiguous Gmail outcomes are never retried automatically.
 
 Site/account deletion, plan parking, domain changes and inbox reconnect/profile changes serialize against an active canary lease. A fast DSN may arrive before Gmail response finalization; the signed receipt may settle that exact claimed canary without creating a second send.
 
@@ -133,12 +141,13 @@ Add `dsn` only after parsing a real `message/delivery-status` MIME part. Subject
     "status": "5.1.1",
     "finalRecipient": "editor@publisher.example",
     "originalRecipient": "editor@publisher.example",
-    "originalMessageId": "<pentra.<independent-token>@sender.example>"
+    "originalMessageId": "<pentra.<independent-token>@sender.example>",
+    "routingRecipientHash": "<sha256-of-actual-dsn-envelope-target>"
   }
 }
 ```
 
-Pentra requires an authenticated daemon, permanent `5.x.x` status, exact recipient and exact original Message-ID extracted from returned/original headers. Soft, malformed or ambiguous DSNs create neither state changes nor suppression.
+Pentra requires an authenticated daemon, permanent `5.x.x` status, exact recipient, exact original Message-ID extracted from returned/original headers, and an exact match between the signed actual-envelope digest and the target bound to the inbox/message claim. Soft, malformed or ambiguous DSNs create neither state changes nor suppression.
 
 ## Retry contract
 
@@ -161,7 +170,7 @@ Existing `gmail.readonly` rows remain a bounded compatibility drain for unbound 
 
 Legacy polling does **not** auto-classify DSNs or suppress bounce addresses: Gmail sender authentication cannot prove an attacker-authenticated daemon refers to Pentra's original Message-ID. Signed relay hard-DSN handling is the secure path.
 
-Reconnect is blocked while any eligible unbound sent/reviewed/replied message remains in the 90-day window or any unbound `delivery_unverified` outcome exists. New callback grants are strict send-only, and a missing refresh token may be reused only when the existing stored scope set is already exactly send plus identity scopes. Never overwrite a broader legacy token and disguise it as narrow.
+Reconnect is blocked while any eligible unbound sent/reviewed/replied message remains in the 90-day window or any unbound `delivery_unverified` outcome exists. New callback grants are strict send-only, and a missing refresh token may be reused only when the existing stored scope set is already exactly send plus identity scopes **and** the authenticated Gmail address is unchanged. A changed mailbox requires its own refresh token and advances the DSN-target generation. Never overwrite a broader legacy token or reuse another mailbox's token.
 
 ## Rotation and operations
 
@@ -170,6 +179,13 @@ Reconnect is blocked while any eligible unbound sent/reviewed/replied message re
 3. Promote it to `SECRET` and remove the old secret after the retry window.
 4. Secret-set/configuration hash changes invalidate every inbox canary. Re-run the owner canary for each inbox before prospect sending resumes.
 5. Re-canary every inbox at least every 30 days and immediately after Workspace routing, adapter, retention or sender configuration changes.
+
+`OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET` is independent from this signing
+rotation. Rotate it only as a deliberate fleet routing migration: every inbox
+will receive a new owner-visible Workspace target and remain blocked until its
+administrator updates the route and the owner completes a fresh canary. An
+owner can instead rotate one compromised target from Backlinks; that advances
+only that inbox's generation and never sends mail automatically.
 
 Monitor only aggregate status codes, latency, byte counts, adapter version, seal age and bodyless receipt counts. Never log secrets, OAuth tokens, raw inbound content, attachments, aliases, addresses, Message-IDs or full signed bodies.
 

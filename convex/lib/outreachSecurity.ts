@@ -40,6 +40,7 @@ export function sanitizeInboxForClient(
   relayConfigured = false,
   relayDsnRoutingReady = false,
   legacyDrainRequired = false,
+  relayDsnRoutingTargetAddress?: string,
 ): Record<string, unknown> | null {
   if (!inbox) return null;
   const dailySendCap =
@@ -65,6 +66,15 @@ export function sanitizeInboxForClient(
     inbox.provider === "gmail" &&
     !["disconnected", "suspended"].includes(String(inbox.status ?? "")),
   );
+  const safeDsnRoutingTarget = Boolean(
+    inbox.provider === "gmail" &&
+    credentialsPresent &&
+    !["disconnected", "suspended"].includes(String(inbox.status ?? "")) &&
+    typeof relayDsnRoutingTargetAddress === "string" &&
+    /^dsn-[a-f0-9]{48}@[a-z0-9.-]+$/i.test(relayDsnRoutingTargetAddress)
+  )
+    ? relayDsnRoutingTargetAddress!.toLowerCase()
+    : undefined;
   const inboundMonitoringReady = relayReady || legacyGmailReadReady;
 
   return {
@@ -97,6 +107,13 @@ export function sanitizeInboxForClient(
     inboundMonitoringReady,
     inboundRelayConfigured: relayConfigured,
     inboundRelayDsnRoutingReady: relayDsnRoutingReady,
+    // This is a capability address and is returned only by the owner-scoped
+    // inbox query. Its digest/version, never its plaintext, is persisted.
+    inboundRelayDsnRoutingTargetAddress:
+      safeDsnRoutingTarget,
+    inboundRelayDsnRoutingTargetReady: Boolean(
+      safeDsnRoutingTarget && relayDsnRoutingReady,
+    ),
     inboundRelayDsnRoutingVerifiedAt:
       inbox.inboundRelayDsnRoutingVerifiedAt,
     inboundMonitoringMode: legacyDrainRequired && legacyGmailReadReady

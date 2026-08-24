@@ -39,7 +39,10 @@ deployment.
    failed `message/delivery-status` recipient and exactly one returned-message
    header set containing both `<pentra.<token>@sender.example>` and the exact
    original `reply-*` alias. The normalized recipient is that recovered reply
-   alias. Ordinary forwarding, body phrases and ambiguous reports fail closed.
+   alias. The signed DSN object also contains only the SHA-256 digest of the
+   actual incoming `dsn-*` envelope target, allowing Pentra to compare it with
+   the current inbox capability without exposing that target to logs or using
+   it as a tenant selector. Ordinary forwarding, body phrases and ambiguous reports fail closed.
 8. Exact deterministic bytes are HMAC-SHA256 signed and posted to Pentra. A 2xx
    deletes raw/proof state. `425` honors `Retry-After`; redirects and 5xx retry
    with bounded backoff and one stable event ID. Other 4xx delete as terminal.
@@ -95,16 +98,19 @@ These are intentionally different routes:
 - Pentra sends every approved outreach message with a unique
   `Reply-To: reply-<per-message-token>@<relay-domain>`. A human's ordinary reply
   reaches that exact envelope alias directly through the relay MX.
-- For each dedicated send-only Workspace mailbox, create an independent random
-  `dsn-<per-inbox-token>@<relay-domain>` target. The Workspace admin routing
+- For each dedicated send-only Workspace mailbox, copy Pentra's owner-only,
+  HMAC-derived `dsn-<per-inbox-token>@<relay-domain>` target. The Workspace admin routing
   rule must add that target only for delivery-status notifications received by
   that mailbox, preserving the original `multipart/report` and returned-message
   part. A user-level forward that wraps or rewrites the DSN is not equivalent.
 
 The DSN alias is only an authenticated intake channel. It never selects a
-tenant or message. The parser recovers the original `reply-*` alias and exact
-Pentra Message-ID from the returned-message part; Convex performs the final
-tenant, recipient, canary, replay, timestamp and rollout checks.
+tenant or message. The parser signs its digest, then recovers the original
+`reply-*` alias and exact Pentra Message-ID from the returned-message part;
+Convex performs the final target, tenant, recipient, canary, replay, timestamp
+and rollout checks. The target remains stable across same-mailbox reconnects,
+profile edits, plan parking and relay signing-secret rotation. A changed
+mailbox or explicit owner rotation advances its non-secret generation.
 
 ## Pre-deployment validation
 

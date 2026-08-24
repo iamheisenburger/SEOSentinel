@@ -1438,6 +1438,11 @@ export default defineSchema({
     inboundRelayDsnRoutingEvidenceHash: v.optional(v.string()),
     inboundRelayDsnRoutingAdapterVersion: v.optional(v.string()),
     inboundRelayDsnRoutingRetentionPolicyHash: v.optional(v.string()),
+    // The owner-visible dsn-* address is derived on demand from a server-only
+    // HMAC key. Only its digest/version survives a successful signed canary.
+    inboundRelayDsnRoutingTargetHash: v.optional(v.string()),
+    inboundRelayDsnRoutingTargetVersion: v.optional(v.number()),
+    inboundRelayDsnRoutingTargetGeneration: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_site", ["siteId"]),
@@ -1504,6 +1509,9 @@ export default defineSchema({
     inboundRelayRolloutEpoch: v.optional(v.number()),
     inboundRelayInboxConfigurationVersion: v.optional(v.number()),
     inboundRelaySenderDomain: v.optional(v.string()),
+    inboundRelayDsnRoutingTargetHash: v.optional(v.string()),
+    inboundRelayDsnRoutingTargetVersion: v.optional(v.number()),
+    inboundRelayDsnRoutingTargetGeneration: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -1550,6 +1558,11 @@ export default defineSchema({
     relayConfigurationHash: v.string(),
     adapterVersion: v.string(),
     retentionPolicyHash: v.string(),
+    // Optional only for additive rollout across expired legacy challenges.
+    // Every newly issued challenge requires both values before it can seal.
+    dsnRoutingTargetHash: v.optional(v.string()),
+    dsnRoutingTargetVersion: v.optional(v.number()),
+    dsnRoutingTargetGeneration: v.optional(v.number()),
     issuedAt: v.number(),
     expiresAt: v.number(),
     deliveryStatus: v.string(), // claimed | accepted | unverified | failed | dsn_verified
@@ -1587,6 +1600,9 @@ export default defineSchema({
     rolloutEpoch: v.number(),
     inboxConfigurationVersion: v.number(),
     senderDomain: v.string(),
+    dsnRoutingTargetHash: v.optional(v.string()),
+    dsnRoutingTargetVersion: v.optional(v.number()),
+    dsnRoutingTargetGeneration: v.optional(v.number()),
     processedAt: v.number(),
   })
     .index("by_event_key", ["eventKey"])

@@ -74,6 +74,7 @@ import {
 import {
   OUTREACH_INBOUND_RELAY_CANARY_TTL_MS,
   OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS,
+  inboundRelayDsnRoutingTarget,
   inboundRelayAliasAddress,
   inboundRelayAliasHash,
   inboundRelayConfigurationHash,
@@ -91,6 +92,8 @@ function inboundRelayRuntimeConfig() {
       process.env.OUTREACH_INBOUND_RELAY_SECRET,
       process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
     ],
+    dsnTargetSecret:
+      process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
     adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
     retentionPolicyHash:
       process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
@@ -874,6 +877,16 @@ async function sendHandler(
   const relayMessageToken = relayReady
     ? randomBytes(24).toString("base64url")
     : undefined;
+  const dsnRoutingTarget = relayReady
+    ? await inboundRelayDsnRoutingTarget({
+        siteId: String(siteId),
+        inboxId: String(inboxSnapshot._id),
+        generation:
+          inboxSnapshot.inboundRelayDsnRoutingTargetGeneration ?? 1,
+        relayDomain,
+        secret: inboundRelayRuntimeConfig().dsnTargetSecret,
+      })
+    : null;
   const relayAlias = relayAliasToken && relayDomain
     ? inboundRelayAliasAddress(relayAliasToken, relayDomain)
     : null;
@@ -883,12 +896,16 @@ async function sendHandler(
         senderDomain: inboxSnapshot.senderDomain ?? "",
       })
     : null;
-  const relayBinding = relayAlias && outboundRfcMessageId
+  const relayBinding = relayAlias && outboundRfcMessageId && dsnRoutingTarget
     ? {
         aliasAddress: relayAlias,
         aliasHash: inboundRelayAliasHash(relayAlias),
         aliasDomain: relayDomain!,
         outboundRfcMessageId,
+        dsnRoutingTargetHash: dsnRoutingTarget.hash,
+        dsnRoutingTargetVersion: dsnRoutingTarget.version,
+        dsnRoutingTargetGeneration:
+          inboxSnapshot.inboundRelayDsnRoutingTargetGeneration ?? 1,
       }
     : undefined;
   if (relayReady && !relayBinding) {
@@ -1075,6 +1092,16 @@ export const sendInboundRelayDsnCanary = action({
     if (!replyToAlias || !outboundRfcMessageId) {
       throw new Error("The inbound relay canary binding is invalid");
     }
+    const dsnRoutingTarget = await inboundRelayDsnRoutingTarget({
+      siteId: String(siteId),
+      inboxId: String(inbox._id),
+      generation: inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+      relayDomain,
+      secret: runtimeConfig.dsnTargetSecret,
+    });
+    if (!dsnRoutingTarget) {
+      throw new Error("The per-inbox DSN routing target is unavailable");
+    }
     const issuedAt = Date.now();
     const expiresAt = issuedAt + OUTREACH_INBOUND_RELAY_CANARY_TTL_MS;
     const attemptId = randomUUID();
@@ -1094,6 +1121,10 @@ export const sendInboundRelayDsnCanary = action({
       relayConfigurationHash,
       adapterVersion: runtimeConfig.adapterVersion ?? "",
       retentionPolicyHash: runtimeConfig.retentionPolicyHash ?? "",
+      dsnRoutingTargetHash: dsnRoutingTarget.hash,
+      dsnRoutingTargetVersion: dsnRoutingTarget.version,
+      dsnRoutingTargetGeneration:
+        inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
       issuedAt,
       expiresAt,
       attemptId,

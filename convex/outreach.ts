@@ -66,6 +66,8 @@ import {
   inboundRelayConfigurationHash,
   inboundRelayConfigured,
   inboundRelayDsnRoutingReady,
+  inboundRelayDsnRoutingTarget,
+  OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
   inboundRelayEmailHash,
   inboundRelayMessageIdHash,
   normalizeInboundRelayDomain,
@@ -80,6 +82,8 @@ function inboundRelayRuntimeConfig() {
       process.env.OUTREACH_INBOUND_RELAY_SECRET,
       process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
     ],
+    dsnTargetSecret:
+      process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
     adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
     retentionPolicyHash:
       process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
@@ -371,17 +375,38 @@ export const getInbox = query({
       ? (await pendingLegacyUnboundMessageCount(ctx, inbox._id)) > 0
       : false;
     const runtimeConfig = inboundRelayRuntimeConfig();
-    return sanitizeInboxForClient(
-      inbox,
-      Date.now(),
-      inboundRelayConfigured(runtimeConfig),
+    const routingTarget =
+      inbox &&
+      inbox.provider === "gmail" &&
+      !["disconnected", "suspended"].includes(inbox.status) &&
+      Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken) &&
+      (await siteExecutionAuthorized(ctx, site))
+        ? await inboundRelayDsnRoutingTarget({
+            siteId: String(site._id),
+            inboxId: String(inbox._id),
+            generation: inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+            relayDomain: runtimeConfig.domain,
+            secret: runtimeConfig.dsnTargetSecret,
+          })
+        : null;
+    const routingCanaryReady = Boolean(
+      routingTarget &&
+      inbox?.inboundRelayDsnRoutingTargetHash === routingTarget.hash &&
+      inbox.inboundRelayDsnRoutingTargetVersion === routingTarget.version &&
       inboundRelayDsnRoutingReady({
         inbox,
         now: Date.now(),
         rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
         runtimeConfig,
       }),
+    );
+    return sanitizeInboxForClient(
+      inbox,
+      Date.now(),
+      inboundRelayConfigured(runtimeConfig),
+      routingCanaryReady,
       legacyDrainRequired,
+      routingTarget?.address,
     );
   },
 });
@@ -459,6 +484,9 @@ export const connectGmailInboxInternal = internalMutation({
       existingScopes.includes("https://www.googleapis.com/auth/gmail.send") &&
       existingScopes.every((scope) => allowedScopes.has(scope)),
     );
+    const reconnectsSameMailbox = Boolean(
+      existing && existing.fromEmail.trim().toLowerCase() === fromEmail,
+    );
     if (
       existing &&
       existingRefreshHasLegacyRead &&
@@ -470,7 +498,7 @@ export const connectGmailInboxInternal = internalMutation({
     }
     if (
       !args.oauthRefreshToken &&
-      (!existing?.oauthRefreshToken || !existingRefreshIsStrictOutbound)
+      (!reconnectsSameMailbox || !existingRefreshIsStrictOutbound)
     ) {
       throw new Error("Google did not provide durable offline mailbox access");
     }
@@ -484,12 +512,18 @@ export const connectGmailInboxInternal = internalMutation({
     const complianceReady = reconnectProfile.complianceReady;
     const ready = dnsReady && complianceReady;
     const inboundReady = false;
+    const dsnRoutingTargetGeneration = existing
+      ? reconnectsSameMailbox
+        ? existing.inboundRelayDsnRoutingTargetGeneration ?? 1
+        : (existing.inboundRelayDsnRoutingTargetGeneration ?? 1) + 1
+      : 1;
     const record = {
       provider: "gmail",
       fromEmail,
       fromName: reconnectProfile.fromName,
       oauthAccessToken: args.oauthAccessToken,
-      oauthRefreshToken: args.oauthRefreshToken ?? existing?.oauthRefreshToken,
+      oauthRefreshToken: args.oauthRefreshToken ??
+        (reconnectsSameMailbox ? existing?.oauthRefreshToken : undefined),
       oauthExpiresAt: args.oauthExpiresAt,
       oauthScopes: args.oauthScopes,
       senderDomain: emailDomain,
@@ -520,6 +554,9 @@ export const connectGmailInboxInternal = internalMutation({
       inboundRelayDsnRoutingEvidenceHash: undefined,
       inboundRelayDsnRoutingAdapterVersion: undefined,
       inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
+      inboundRelayDsnRoutingTargetGeneration: dsnRoutingTargetGeneration,
       updatedAt: now,
     };
 
@@ -578,6 +615,8 @@ export const setInboxComplianceProfile = mutation({
       inboundRelayDsnRoutingEvidenceHash: undefined,
       inboundRelayDsnRoutingAdapterVersion: undefined,
       inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
       verifiedAt: dnsReady ? now : undefined,
       status: dnsReady ? "warming" : "connected",
       mode: "approval",
@@ -587,6 +626,61 @@ export const setInboxComplianceProfile = mutation({
       updatedAt: now,
     });
     return { ready: dnsReady, status: dnsReady ? "warming" : "connected" };
+  },
+});
+
+/** Rotate only this tenant's Workspace DSN intake capability. The address is
+ * derived for the authenticated owner and is never stored; its non-secret
+ * generation is durable so routine reconnects and plan parking stay stable. */
+export const rotateInboundRelayDsnRoutingTarget = mutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await requireSiteOwner(ctx, siteId);
+    if (!(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("This site's outreach configuration is currently parked");
+    }
+    await assertNoActiveDelivery(ctx, siteId);
+    const inbox = await inboxForSite(ctx, siteId);
+    if (
+      !inbox ||
+      inbox.provider !== "gmail" ||
+      ["disconnected", "suspended"].includes(inbox.status) ||
+      !(inbox.oauthRefreshToken || inbox.oauthAccessToken)
+    ) {
+      throw new Error("Connect the Gmail outreach inbox before rotating its route");
+    }
+    const runtimeConfig = inboundRelayRuntimeConfig();
+    const generation =
+      (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) + 1;
+    const target = await inboundRelayDsnRoutingTarget({
+      siteId: String(siteId),
+      inboxId: String(inbox._id),
+      generation,
+      relayDomain: runtimeConfig.domain,
+      secret: runtimeConfig.dsnTargetSecret,
+    });
+    if (!target) {
+      throw new Error("The per-inbox DSN routing target is unavailable");
+    }
+    await ctx.db.patch(inbox._id, {
+      inboundRelayDsnRoutingTargetGeneration: generation,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
+      updatedAt: Date.now(),
+    });
+    return {
+      rotated: true as const,
+      routingAddress: target.address,
+      canaryReady: false as const,
+    };
   },
 });
 
@@ -637,6 +731,8 @@ export const disconnectInbox = mutation({
       inboundRelayDsnRoutingEvidenceHash: undefined,
       inboundRelayDsnRoutingAdapterVersion: undefined,
       inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
       configurationVersion: (inbox.configurationVersion ?? 0) + 1,
       updatedAt: Date.now(),
     });
@@ -1156,6 +1252,9 @@ const inboundRelayBindingValidator = v.object({
   aliasHash: v.string(),
   aliasDomain: v.string(),
   outboundRfcMessageId: v.string(),
+  dsnRoutingTargetHash: v.string(),
+  dsnRoutingTargetVersion: v.number(),
+  dsnRoutingTargetGeneration: v.number(),
 });
 
 /**
@@ -1287,6 +1386,14 @@ export const claimApprovedDelivery = internalMutation({
       const outboundMessageId = normalizeRfcMessageId(
         inboundRelay.outboundRfcMessageId,
       );
+      const expectedDsnRoutingTarget = await inboundRelayDsnRoutingTarget({
+        siteId: String(siteId),
+        inboxId: String(inbox._id),
+        generation:
+          inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+        relayDomain: configuredRelayDomain ?? undefined,
+        secret: inboundRelayRuntimeConfig().dsnTargetSecret,
+      });
       if (
         !relayIsConfigured ||
         !configuredRelayDomain ||
@@ -1295,6 +1402,19 @@ export const claimApprovedDelivery = internalMutation({
         !/^reply-[a-z0-9_-]{32,64}@[a-z0-9.-]+$/i.test(aliasAddress) ||
         inboundRelayAliasHash(aliasAddress) !== inboundRelay.aliasHash ||
         !/^[a-f0-9]{64}$/.test(inboundRelay.aliasHash) ||
+        !expectedDsnRoutingTarget ||
+        inboundRelay.dsnRoutingTargetHash !==
+          expectedDsnRoutingTarget.hash ||
+        inboundRelay.dsnRoutingTargetVersion !==
+          expectedDsnRoutingTarget.version ||
+        inboundRelay.dsnRoutingTargetHash !==
+          inbox.inboundRelayDsnRoutingTargetHash ||
+        inboundRelay.dsnRoutingTargetVersion !==
+          OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION ||
+        inboundRelay.dsnRoutingTargetVersion !==
+          inbox.inboundRelayDsnRoutingTargetVersion ||
+        inboundRelay.dsnRoutingTargetGeneration !==
+          (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
         !outboundMessageId ||
         !outboundMessageId.endsWith(
           `@${normalizeDomain(inbox.senderDomain ?? "")}>`,
@@ -1562,6 +1682,12 @@ export const claimApprovedDelivery = internalMutation({
             inboundRelaySenderDomain: normalizeDomain(
               inbox.senderDomain ?? "",
             ),
+            inboundRelayDsnRoutingTargetHash:
+              inboundRelay.dsnRoutingTargetHash,
+            inboundRelayDsnRoutingTargetVersion:
+              inboundRelay.dsnRoutingTargetVersion,
+            inboundRelayDsnRoutingTargetGeneration:
+              inboundRelay.dsnRoutingTargetGeneration,
           }
         : {}),
       updatedAt: now,
@@ -1867,6 +1993,9 @@ export const createInboundRelayDsnCanary = internalMutation({
     relayConfigurationHash: v.string(),
     adapterVersion: v.string(),
     retentionPolicyHash: v.string(),
+    dsnRoutingTargetHash: v.string(),
+    dsnRoutingTargetVersion: v.number(),
+    dsnRoutingTargetGeneration: v.number(),
     issuedAt: v.number(),
     expiresAt: v.number(),
     attemptId: v.string(),
@@ -1886,6 +2015,13 @@ export const createInboundRelayDsnCanary = internalMutation({
     const runtimeConfig = inboundRelayRuntimeConfig();
     const configurationHash = inboundRelayConfigurationHash(runtimeConfig);
     const relayDomain = normalizeInboundRelayDomain(args.relayDomain);
+    const expectedDsnRoutingTarget = await inboundRelayDsnRoutingTarget({
+      siteId: String(args.siteId),
+      inboxId: String(args.inboxId),
+      generation: inbox?.inboundRelayDsnRoutingTargetGeneration ?? 1,
+      relayDomain: runtimeConfig.domain,
+      secret: runtimeConfig.dsnTargetSecret,
+    });
     if (
       !site ||
       !(await siteExecutionAuthorized(ctx, site)) ||
@@ -1902,6 +2038,13 @@ export const createInboundRelayDsnCanary = internalMutation({
       relayDomain !== normalizeInboundRelayDomain(runtimeConfig.domain) ||
       args.adapterVersion !== runtimeConfig.adapterVersion ||
       args.retentionPolicyHash !== runtimeConfig.retentionPolicyHash ||
+      !expectedDsnRoutingTarget ||
+      args.dsnRoutingTargetHash !== expectedDsnRoutingTarget.hash ||
+      args.dsnRoutingTargetVersion !== expectedDsnRoutingTarget.version ||
+      args.dsnRoutingTargetVersion !==
+        OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION ||
+      args.dsnRoutingTargetGeneration !==
+        (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
       !/^[a-f0-9]{64}$/.test(args.aliasHash) ||
       !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash) ||
       !/^[a-f0-9]{64}$/.test(args.testRecipientHash) ||
@@ -1991,6 +2134,9 @@ export const createInboundRelayDsnCanary = internalMutation({
       relayConfigurationHash: args.relayConfigurationHash,
       adapterVersion: args.adapterVersion,
       retentionPolicyHash: args.retentionPolicyHash,
+      dsnRoutingTargetHash: args.dsnRoutingTargetHash,
+      dsnRoutingTargetVersion: args.dsnRoutingTargetVersion,
+      dsnRoutingTargetGeneration: args.dsnRoutingTargetGeneration,
       issuedAt: args.issuedAt,
       expiresAt: args.expiresAt,
       deliveryStatus: "claimed",
@@ -2107,6 +2253,11 @@ export const getInboundRelayDsnCanaryCandidate = internalQuery({
       canary.relayConfigurationHash !== configurationHash ||
       canary.adapterVersion !== runtimeConfig.adapterVersion ||
       canary.retentionPolicyHash !== runtimeConfig.retentionPolicyHash ||
+      canary.dsnRoutingTargetVersion !==
+        OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION ||
+      canary.dsnRoutingTargetGeneration !==
+        (inbox?.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
+      !/^[a-f0-9]{64}$/.test(canary.dsnRoutingTargetHash ?? "") ||
       !site ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       (site.autopilotRolloutEpoch ?? 0) !== canary.rolloutEpoch ||
@@ -2134,6 +2285,9 @@ export const getInboundRelayDsnCanaryCandidate = internalQuery({
       relayConfigurationHash: canary.relayConfigurationHash,
       adapterVersion: canary.adapterVersion,
       retentionPolicyHash: canary.retentionPolicyHash,
+      dsnRoutingTargetHash: canary.dsnRoutingTargetHash!,
+      dsnRoutingTargetVersion: canary.dsnRoutingTargetVersion!,
+      dsnRoutingTargetGeneration: canary.dsnRoutingTargetGeneration!,
     };
   },
 });
@@ -2160,6 +2314,9 @@ export const recordInboundRelayDsnCanaryReceipt = internalMutation({
     relayConfigurationHash: v.string(),
     adapterVersion: v.string(),
     retentionPolicyHash: v.string(),
+    dsnRoutingTargetHash: v.string(),
+    dsnRoutingTargetVersion: v.number(),
+    dsnRoutingTargetGeneration: v.number(),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -2179,6 +2336,16 @@ export const recordInboundRelayDsnCanaryReceipt = internalMutation({
     const configurationHash = inboundRelayConfigurationHash(runtimeConfig);
     const configuredDomain = normalizeInboundRelayDomain(runtimeConfig.domain);
     const fromEmail = args.fromEmail.trim().toLowerCase();
+    const expectedDsnRoutingTarget = inbox
+      ? await inboundRelayDsnRoutingTarget({
+          siteId: String(args.siteId),
+          inboxId: String(args.inboxId),
+          generation:
+            inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+          relayDomain: runtimeConfig.domain,
+          secret: runtimeConfig.dsnTargetSecret,
+        })
+      : null;
     if (
       !canary ||
       canary.siteId !== args.siteId ||
@@ -2192,6 +2359,10 @@ export const recordInboundRelayDsnCanaryReceipt = internalMutation({
       canary.relayConfigurationHash !== args.relayConfigurationHash ||
       canary.adapterVersion !== args.adapterVersion ||
       canary.retentionPolicyHash !== args.retentionPolicyHash ||
+      canary.dsnRoutingTargetHash !== args.dsnRoutingTargetHash ||
+      canary.dsnRoutingTargetVersion !== args.dsnRoutingTargetVersion ||
+      canary.dsnRoutingTargetGeneration !==
+        args.dsnRoutingTargetGeneration ||
       !["claimed", "accepted", "unverified"].includes(
         canary.deliveryStatus,
       ) ||
@@ -2199,6 +2370,11 @@ export const recordInboundRelayDsnCanaryReceipt = internalMutation({
       configurationHash !== args.relayConfigurationHash ||
       runtimeConfig.adapterVersion !== args.adapterVersion ||
       runtimeConfig.retentionPolicyHash !== args.retentionPolicyHash ||
+      !expectedDsnRoutingTarget ||
+      expectedDsnRoutingTarget.hash !== args.dsnRoutingTargetHash ||
+      expectedDsnRoutingTarget.version !== args.dsnRoutingTargetVersion ||
+      args.dsnRoutingTargetGeneration !==
+        (inbox?.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
       canary.expiresAt <= now ||
       args.receivedAt < canary.issuedAt - 60_000 ||
       args.receivedAt > canary.expiresAt ||
@@ -2239,6 +2415,10 @@ export const recordInboundRelayDsnCanaryReceipt = internalMutation({
       inboundRelayDsnRoutingEvidenceHash: args.evidenceHash,
       inboundRelayDsnRoutingAdapterVersion: args.adapterVersion,
       inboundRelayDsnRoutingRetentionPolicyHash: args.retentionPolicyHash,
+      inboundRelayDsnRoutingTargetHash: args.dsnRoutingTargetHash,
+      inboundRelayDsnRoutingTargetVersion: args.dsnRoutingTargetVersion,
+      inboundRelayDsnRoutingTargetGeneration:
+        args.dsnRoutingTargetGeneration,
       inboundLastCompletedAt: now,
       inboundLastError: undefined,
       updatedAt: now,
@@ -2312,6 +2492,14 @@ export const getInboundRelayCandidate = internalQuery({
       !/^[a-f0-9]{64}$/.test(
         message.inboundRelayOutboundMessageIdHash ?? "",
       ) ||
+      !/^[a-f0-9]{64}$/.test(
+        message.inboundRelayDsnRoutingTargetHash ?? "",
+      ) ||
+      message.inboundRelayDsnRoutingTargetVersion !==
+        OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION ||
+      !Number.isSafeInteger(
+        message.inboundRelayDsnRoutingTargetGeneration,
+      ) ||
       ![
         "sending",
         "delivery_unverified",
@@ -2339,6 +2527,12 @@ export const getInboundRelayCandidate = internalQuery({
         sentAt: chronologyAt!,
         outboundRfcMessageIdHash:
           message.inboundRelayOutboundMessageIdHash!,
+        dsnRoutingTargetHash:
+          message.inboundRelayDsnRoutingTargetHash!,
+        dsnRoutingTargetVersion:
+          message.inboundRelayDsnRoutingTargetVersion!,
+        dsnRoutingTargetGeneration:
+          message.inboundRelayDsnRoutingTargetGeneration!,
         aliasHash,
         aliasDomain: configuredDomain,
         rolloutEpoch: message.inboundRelayRolloutEpoch,
@@ -2360,6 +2554,11 @@ export const getInboundRelayCandidate = internalQuery({
       sentAt: chronologyAt!,
       outboundRfcMessageIdHash:
         message.inboundRelayOutboundMessageIdHash!,
+      dsnRoutingTargetHash: message.inboundRelayDsnRoutingTargetHash!,
+      dsnRoutingTargetVersion:
+        message.inboundRelayDsnRoutingTargetVersion!,
+      dsnRoutingTargetGeneration:
+        message.inboundRelayDsnRoutingTargetGeneration!,
       aliasHash,
       aliasDomain: configuredDomain,
       rolloutEpoch: message.inboundRelayRolloutEpoch,
@@ -2391,6 +2590,9 @@ export const recordInboundRelayReceipt = internalMutation({
     rolloutEpoch: v.number(),
     inboxConfigurationVersion: v.number(),
     senderDomain: v.string(),
+    dsnRoutingTargetHash: v.string(),
+    dsnRoutingTargetVersion: v.number(),
+    dsnRoutingTargetGeneration: v.number(),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -2448,11 +2650,21 @@ export const recordInboundRelayReceipt = internalMutation({
       message.inboundRelayInboxConfigurationVersion !==
         args.inboxConfigurationVersion ||
       message.inboundRelaySenderDomain !== normalizeDomain(args.senderDomain) ||
+      message.inboundRelayDsnRoutingTargetHash !==
+        args.dsnRoutingTargetHash ||
+      message.inboundRelayDsnRoutingTargetVersion !==
+        args.dsnRoutingTargetVersion ||
+      message.inboundRelayDsnRoutingTargetGeneration !==
+        args.dsnRoutingTargetGeneration ||
       !/^[a-f0-9]{64}$/.test(args.aliasHash) ||
       !/^[a-f0-9]{64}$/.test(args.eventKey) ||
       !/^[a-f0-9]{64}$/.test(args.payloadHash) ||
       !/^[a-f0-9]{64}$/.test(args.evidenceHash) ||
       !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash) ||
+      !/^[a-f0-9]{64}$/.test(args.dsnRoutingTargetHash) ||
+      args.dsnRoutingTargetVersion !==
+        OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION ||
+      !Number.isSafeInteger(args.dsnRoutingTargetGeneration) ||
       !normalizeRfcMessageId(args.inboundMessageId) ||
       !Number.isSafeInteger(args.receivedAt) ||
       args.receivedAt <
@@ -2615,6 +2827,9 @@ export const recordInboundRelayReceipt = internalMutation({
       rolloutEpoch: args.rolloutEpoch,
       inboxConfigurationVersion: args.inboxConfigurationVersion,
       senderDomain: normalizeDomain(args.senderDomain),
+      dsnRoutingTargetHash: args.dsnRoutingTargetHash,
+      dsnRoutingTargetVersion: args.dsnRoutingTargetVersion,
+      dsnRoutingTargetGeneration: args.dsnRoutingTargetGeneration,
       processedAt: now,
     });
     await ctx.db.patch(inbox._id, {

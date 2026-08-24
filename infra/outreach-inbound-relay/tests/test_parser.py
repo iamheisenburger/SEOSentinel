@@ -212,6 +212,8 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(decoded["dsn"]["source"], "message/delivery-status")
         self.assertEqual(decoded["dsn"]["originalMessageId"], OUTBOUND_ID)
         self.assertEqual(decoded["dsn"]["status"], "5.1.1")
+        self.assertEqual(decoded["dsn"]["routingRecipientHash"], sha256_hex(DSN_ALIAS))
+        self.assertNotIn(DSN_ALIAS, body.decode())
         self.assertEqual(decoded["text"], "")
         self.assertNotIn("Original body must be discarded", body.decode())
 

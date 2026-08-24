@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   OUTREACH_INBOUND_RELAY_MAX_BODY_BYTES,
   OUTREACH_INBOUND_RELAY_CANARY_COOLDOWN_MS,
+  OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
   classifyInboundRelay,
   classifyInboundRelayDsnCanary,
   inboundRelayAliasAddress,
@@ -13,6 +14,8 @@ import {
   inboundRelayCanaryEvidenceReceipt,
   inboundRelayConfigurationHash,
   inboundRelayConfigured,
+  inboundRelayDsnRoutingReady,
+  inboundRelayDsnRoutingTarget,
   inboundRelayEvidenceReceipt,
   inboundRelayEmailHash,
   inboundRelayMessageIdHash,
@@ -25,6 +28,9 @@ import {
 const NOW = Date.UTC(2026, 7, 23, 15, 0, 0);
 const SENT_AT = NOW - 60_000;
 const SECRET = "relay-test-secret-that-is-longer-than-thirty-two-bytes";
+const DSN_TARGET_SECRET =
+  "independent-dsn-target-secret-longer-than-thirty-two-bytes";
+const DSN_TARGET_HASH = "d".repeat(64);
 const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
 const OUTBOUND_ID = `<pentra.${TOKEN.toLowerCase()}@sender.example>`;
 const ADAPTER_VERSION = "relay-adapter-2026.08.23";
@@ -32,6 +38,7 @@ const RETENTION_POLICY_HASH = "9".repeat(64);
 const RUNTIME_CONFIG = {
   domain: "inbound.pentra.example",
   secrets: [SECRET],
+  dsnTargetSecret: DSN_TARGET_SECRET,
   adapterVersion: ADAPTER_VERSION,
   retentionPolicyHash: RETENTION_POLICY_HASH,
   retentionAudited: true,
@@ -74,6 +81,9 @@ const candidate = {
   toDomain: "example.org",
   sentAt: SENT_AT,
   outboundRfcMessageIdHash: inboundRelayMessageIdHash(OUTBOUND_ID),
+  dsnRoutingTargetHash: DSN_TARGET_HASH,
+  dsnRoutingTargetVersion: OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
+  dsnRoutingTargetGeneration: 1,
 };
 
 test("relay configuration and per-message aliases fail closed", () => {
@@ -82,6 +92,10 @@ test("relay configuration and per-message aliases fail closed", () => {
   assert.match(inboundRelayConfigurationHash(RUNTIME_CONFIG)!, /^[a-f0-9]{64}$/);
   assert.equal(inboundRelayConfigured({ ...RUNTIME_CONFIG, domain: "bad domain" }), false);
   assert.equal(inboundRelayConfigured({ ...RUNTIME_CONFIG, secrets: ["short"] }), false);
+  assert.equal(
+    inboundRelayConfigured({ ...RUNTIME_CONFIG, dsnTargetSecret: "short" }),
+    false,
+  );
   assert.equal(inboundRelayConfigured({ ...RUNTIME_CONFIG, retentionAudited: false }), false);
   assert.equal(inboundRelayConfigured({ ...RUNTIME_CONFIG, adapterVersion: undefined }), false);
   const alias = inboundRelayAliasAddress(TOKEN, "INBOUND.PENTRA.EXAMPLE");
@@ -92,6 +106,81 @@ test("relay configuration and per-message aliases fail closed", () => {
     OUTBOUND_ID,
   );
   assert.equal(inboundRelayAliasAddress("guessable", "inbound.pentra.example"), null);
+});
+
+test("per-inbox DSN targets are independent, stable capabilities", async () => {
+  const args = {
+    siteId: "site-a",
+    inboxId: "inbox-a",
+    generation: 1,
+    relayDomain: "inbound.pentra.example",
+    secret: DSN_TARGET_SECRET,
+  };
+  const first = await inboundRelayDsnRoutingTarget(args);
+  const repeated = await inboundRelayDsnRoutingTarget(args);
+  const changedInbox = await inboundRelayDsnRoutingTarget({
+    ...args,
+    inboxId: "inbox-b",
+  });
+  const rotated = await inboundRelayDsnRoutingTarget({
+    ...args,
+    generation: 2,
+  });
+  assert.ok(first);
+  assert.deepEqual(repeated, first);
+  assert.match(first.address, /^dsn-[a-f0-9]{48}@inbound\.pentra\.example$/);
+  assert.match(first.hash, /^[a-f0-9]{64}$/);
+  assert.notEqual(changedInbox?.address, first.address);
+  assert.notEqual(rotated?.address, first.address);
+  assert.equal(
+    await inboundRelayDsnRoutingTarget({ ...args, secret: "short" }),
+    null,
+  );
+});
+
+test("a legacy inbox becomes ready only after the canary seal persists generation 1", () => {
+  const legacyInbox = {
+    configurationVersion: 4,
+    senderDomain: "sender.example",
+    inboundRelayDsnRoutingVerifiedAt: NOW,
+    inboundRelayDsnRoutingConfigurationVersion: 4,
+    inboundRelayDsnRoutingRolloutEpoch: 3,
+    inboundRelayDsnRoutingSenderDomain: "sender.example",
+    inboundRelayDsnRoutingRelayConfigurationHash:
+      inboundRelayConfigurationHash(RUNTIME_CONFIG),
+    inboundRelayDsnRoutingAdapterVersion: ADAPTER_VERSION,
+    inboundRelayDsnRoutingRetentionPolicyHash: RETENTION_POLICY_HASH,
+    inboundRelayDsnRoutingTargetHash: DSN_TARGET_HASH,
+    inboundRelayDsnRoutingTargetVersion:
+      OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
+    inboundRelayDsnRoutingEvidenceHash: "e".repeat(64),
+  };
+  const readiness = (inbox: Record<string, unknown>) =>
+    inboundRelayDsnRoutingReady({
+      inbox,
+      now: NOW,
+      rolloutEpoch: 3,
+      runtimeConfig: RUNTIME_CONFIG,
+    });
+
+  assert.equal(readiness(legacyInbox), false);
+  assert.equal(
+    readiness({
+      ...legacyInbox,
+      inboundRelayDsnRoutingTargetGeneration: 1,
+    }),
+    true,
+  );
+
+  const backend = readFileSync("convex/outreach.ts", "utf8");
+  const successfulSeal = backend.slice(
+    backend.indexOf("export const recordInboundRelayDsnCanaryReceipt"),
+    backend.indexOf("const inboundRelayKindValidator"),
+  );
+  assert.match(
+    successfulSeal,
+    /inboundRelayDsnRoutingTargetGeneration:\s*args\.dsnRoutingTargetGeneration/,
+  );
 });
 
 test("HMAC covers exact bytes, timestamp and event id with bounded skew", async () => {
@@ -159,6 +248,7 @@ test("a hard-DSN canary is exact-ID, exact-recipient and bodyless", () => {
     },
     dsn: {
       source: "message/delivery-status",
+      routingRecipientHash: DSN_TARGET_HASH,
       action: "failed",
       status: "5.1.1",
       finalRecipient: "pentra-bounce@reject.example",
@@ -170,10 +260,21 @@ test("a hard-DSN canary is exact-ID, exact-recipient and bodyless", () => {
     outboundRfcMessageIdHash: inboundRelayMessageIdHash(OUTBOUND_ID),
     issuedAt: SENT_AT,
     expiresAt: NOW + 60_000,
+    dsnRoutingTargetHash: DSN_TARGET_HASH,
+    dsnRoutingTargetVersion: OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
+    dsnRoutingTargetGeneration: 1,
   };
   assert.deepEqual(
     classifyInboundRelayDsnCanary({ payload: bounce, candidate: canary, now: NOW }),
     { fromEmail: "mailer-daemon@mx.example" },
+  );
+  assert.equal(
+    classifyInboundRelayDsnCanary({
+      payload: bounce,
+      candidate: { ...canary, dsnRoutingTargetHash: "e".repeat(64) },
+      now: NOW,
+    }),
+    null,
   );
   assert.equal(
     classifyInboundRelayDsnCanary({
@@ -187,6 +288,7 @@ test("a hard-DSN canary is exact-ID, exact-recipient and bodyless", () => {
         },
         dsn: {
           source: "message/delivery-status",
+          routingRecipientHash: DSN_TARGET_HASH,
           action: "failed",
           status: "5.1.1",
           finalRecipient: "attacker@example.org",
@@ -206,6 +308,9 @@ test("a hard-DSN canary is exact-ID, exact-recipient and bodyless", () => {
     aliasHash: "b".repeat(64),
     inboundMessageId: "<dsn@example.org>",
     outboundMessageIdHash: inboundRelayMessageIdHash(OUTBOUND_ID),
+    dsnRoutingTargetHash: DSN_TARGET_HASH,
+    dsnRoutingTargetVersion: OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
+    dsnRoutingTargetGeneration: 1,
     receivedAt: NOW,
     adapterVersion: ADAPTER_VERSION,
     retentionPolicyHash: RETENTION_POLICY_HASH,
@@ -271,6 +376,7 @@ test("hard bounce needs an authenticated daemon, structured DSN and exact recipi
     },
     dsn: {
       source: "message/delivery-status",
+      routingRecipientHash: DSN_TARGET_HASH,
       action: "failed",
       status: "5.1.1",
       finalRecipient: "editor@example.org",
@@ -292,6 +398,7 @@ test("hard bounce needs an authenticated daemon, structured DSN and exact recipi
         },
         dsn: {
           source: "message/delivery-status",
+          routingRecipientHash: DSN_TARGET_HASH,
           action: "failed",
           status: "4.2.0",
           finalRecipient: "editor@example.org",
@@ -350,15 +457,39 @@ test("durable relay ingestion is bodyless, replay-safe, tenant-gated and receivi
   assert.match(schema, /outreach_inbound_relay_receipts/);
   assert.match(schema, /outreach_inbound_relay_canaries/);
   assert.match(schema, /inboundRelayOutboundMessageIdHash/);
+  assert.match(schema, /inboundRelayDsnRoutingTargetHash/);
+  assert.match(schema, /inboundRelayDsnRoutingTargetGeneration/);
+  assert.doesNotMatch(schema, /inboundRelayDsnRoutingTargetAddress: v/);
   assert.doesNotMatch(schema, /inboundRelayOutboundMessageId: v/);
   assert.doesNotMatch(schema, /relay(?:Subject|Body)|inbound(?:Message)?Body/i);
   assert.match(delivery, /relayAliasToken[\s\S]*relayMessageToken/);
   assert.match(delivery, /sendInboundRelayDsnCanary/);
   assert.match(delivery, /OUTREACH_INBOUND_RELAY_CANARY_RECIPIENT/);
   assert.match(backend, /inboundRelayDsnRoutingReady/);
+  assert.match(backend, /rotateInboundRelayDsnRoutingTarget = mutation/);
+  assert.match(backend, /inboundRelayDsnRoutingTargetHash/);
+  assert.match(backend, /inboundRelayDsnRoutingTargetGeneration/);
+  const ownerInbox = backend.slice(
+    backend.indexOf("export const getInbox = query"),
+    backend.indexOf("export const connectGmailInboxInternal"),
+  );
+  assert.match(ownerInbox, /requireSiteOwner\(ctx, siteId\)/);
+  assert.match(ownerInbox, /siteExecutionAuthorized\(ctx, site\)/);
+  assert.match(ownerInbox, /inboundRelayDsnRoutingTarget/);
   assert.match(backend, /OUTREACH_INBOUND_RELAY_CANARY_COOLDOWN_MS/);
   assert.match(backend, /already been attempted for this inbox today/);
   assert.match(backend, /\["claimed", "accepted", "unverified"\]\.includes/);
   assert.match(delivery, /Reply-To/);
   assert.match(delivery, /Message-ID/);
+  const rotation = backend.slice(
+    backend.indexOf("export const rotateInboundRelayDsnRoutingTarget"),
+    backend.indexOf("export const setInboxMode"),
+  );
+  assert.doesNotMatch(rotation, /deliver\(|messages\/send|scheduler/);
+  const parser = readFileSync(
+    "infra/outreach-inbound-relay/src/parser.py",
+    "utf8",
+  );
+  assert.match(parser, /routingRecipientHash/);
+  assert.match(parser, /sha256_hex\(proof_alias\[1\]\)/);
 });

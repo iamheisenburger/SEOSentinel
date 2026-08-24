@@ -7,6 +7,7 @@ import {
   Check,
   CheckCircle2,
   Clock3,
+  Copy,
   ExternalLink,
   Inbox,
   Link2,
@@ -15,6 +16,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  RefreshCw,
   XCircle,
 } from "lucide-react";
 
@@ -98,6 +100,9 @@ export default function BacklinksPage() {
   const approveMessage = useMutation(api.outreach.approveMessage);
   const discardMessage = useMutation(api.outreach.discardMessage);
   const setComplianceProfile = useMutation(api.outreach.setInboxComplianceProfile);
+  const rotateDsnRoutingTarget = useMutation(
+    api.outreach.rotateInboundRelayDsnRoutingTarget,
+  );
   const suppressRecipient = useMutation(api.outreach.suppress);
   const resolveUnverified = useMutation(api.outreach.resolveUnverifiedDelivery);
 
@@ -122,6 +127,10 @@ export default function BacklinksPage() {
   const inboxNeedsReconnect = !inbox ||
     !Boolean(inbox.credentialsPresent) ||
     ["disconnected", "suspended"].includes(String(inbox.status));
+  const dsnRoutingAddress =
+    typeof inbox?.inboundRelayDsnRoutingTargetAddress === "string"
+      ? inbox.inboundRelayDsnRoutingTargetAddress
+      : "";
   const isLoading = Boolean(site?._id) &&
     (opportunities === undefined || messages === undefined || inbox === undefined);
 
@@ -303,6 +312,51 @@ export default function BacklinksPage() {
                 routing into the audited receiving-only relay. Inbound bodies and attachments are
                 discarded after transient parsing; Pentra stores only evidence digests.
               </p>
+              {dsnRoutingAddress && (
+                <div className="mt-3 rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.05] p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-[#38BDF8]">
+                    Workspace delivery-status route
+                  </p>
+                  <code className="mt-1 block break-all text-[11px] text-[#BAE6FD]">
+                    {dsnRoutingAddress}
+                  </code>
+                  <p className="mt-2 text-[10px] leading-relaxed text-[#707589]">
+                    Route structured delivery-status notifications for this exact sender to this
+                    address. It is unique to this inbox and stays stable across routine reconnects,
+                    profile edits, plan parking, and relay signing-key rotation.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => runOperation("copy-dsn-route", async () => {
+                        await navigator.clipboard.writeText(dsnRoutingAddress);
+                        setNotice({ tone: "success", text: "Workspace routing target copied." });
+                      })}
+                      loading={pending === "copy-dsn-route"}
+                      icon={<Copy className="h-3.5 w-3.5" />}
+                    >
+                      Copy target
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => runOperation("rotate-dsn-route", async () => {
+                        if (!window.confirm("Rotate this inbox's Workspace routing target? This revokes the old target for readiness and new sends, and bounce routing must be verified again. Already-sent messages remain bound to the target used when they were sent.")) return;
+                        await rotateDsnRoutingTarget({ siteId: site._id });
+                        setNotice({
+                          tone: "success",
+                          text: "Routing target rotated. Update Workspace, then verify bounce routing again.",
+                        });
+                      })}
+                      loading={pending === "rotate-dsn-route"}
+                      icon={<RefreshCw className="h-3.5 w-3.5" />}
+                    >
+                      Rotate target
+                    </Button>
+                  </div>
+                </div>
+              )}
               {inbox && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <ReadinessBadge label="Gmail OAuth" ready={Boolean(inbox.credentialsPresent)} />

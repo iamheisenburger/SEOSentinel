@@ -328,6 +328,7 @@ def _build_payload(
     proof_alias = parse_relay_alias(recipient, relay_domain)
     if not proof_alias or proof_alias[0] != recipient_kind:
         raise RelayInputError("proof_alias")
+    routing_recipient_hash = sha256_hex(proof_alias[1])
     from_values = message.get_all("From", [])
     if len(from_values) != 1:
         raise RelayInputError("from_binding")
@@ -359,6 +360,10 @@ def _build_payload(
         dsn = _dsn_status(parts)
         original_message_id, recipient = _recover_dsn_binding(parts, relay_domain)
         dsn["originalMessageId"] = original_message_id
+        # Keep the intake alias non-routing and private while allowing the
+        # signed application receipt to prove that Workspace used the exact
+        # per-inbox target the owner was shown.
+        dsn["routingRecipientHash"] = routing_recipient_hash
         dsn["source"] = "message/delivery-status"
         text = ""
     else:

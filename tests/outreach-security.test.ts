@@ -172,3 +172,39 @@ test("a missing inbox sanitizes to null rather than an empty shell", () => {
   assert.equal(sanitizeInboxForClient(null, NOW), null);
   assert.equal(sanitizeInboxForClient(undefined, NOW), null);
 });
+
+test("only an active owner projection can reveal its derived DSN route", () => {
+  const target = `dsn-${"a".repeat(48)}@reply.pentra.example`;
+  const active = sanitizeInboxForClient(
+    {
+      provider: "gmail",
+      status: "warming",
+      oauthRefreshToken: "refresh-token",
+      inboundRelayDsnRoutingTargetHash: "b".repeat(64),
+      inboundRelayDsnRoutingTargetGeneration: 7,
+    },
+    NOW,
+    true,
+    false,
+    false,
+    target,
+  );
+  assert.equal(active?.inboundRelayDsnRoutingTargetAddress, target);
+  assert.equal(active?.inboundRelayDsnRoutingTargetReady, false);
+  assert.equal("inboundRelayDsnRoutingTargetHash" in active!, false);
+  assert.equal("inboundRelayDsnRoutingTargetGeneration" in active!, false);
+
+  const disconnected = sanitizeInboxForClient(
+    {
+      provider: "gmail",
+      status: "disconnected",
+      oauthRefreshToken: "refresh-token",
+    },
+    NOW,
+    true,
+    false,
+    false,
+    target,
+  );
+  assert.equal(disconnected?.inboundRelayDsnRoutingTargetAddress, undefined);
+});

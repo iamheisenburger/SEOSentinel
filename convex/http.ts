@@ -37,6 +37,8 @@ function inboundRelayRuntimeConfig() {
       process.env.OUTREACH_INBOUND_RELAY_SECRET,
       process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
     ],
+    dsnTargetSecret:
+      process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
     adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
     retentionPolicyHash:
       process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
@@ -254,6 +256,10 @@ http.route({
           outboundRfcMessageIdHash: canary.outboundRfcMessageIdHash,
           issuedAt: canary.issuedAt,
           expiresAt: canary.expiresAt,
+          dsnRoutingTargetHash: canary.dsnRoutingTargetHash,
+          dsnRoutingTargetVersion: canary.dsnRoutingTargetVersion,
+          dsnRoutingTargetGeneration:
+            canary.dsnRoutingTargetGeneration,
         },
         now: Date.now(),
       });
@@ -268,6 +274,9 @@ http.route({
         aliasHash,
         inboundMessageId: payload.messageId,
         outboundMessageIdHash: canary.outboundRfcMessageIdHash,
+        dsnRoutingTargetHash: canary.dsnRoutingTargetHash,
+        dsnRoutingTargetVersion: canary.dsnRoutingTargetVersion,
+        dsnRoutingTargetGeneration: canary.dsnRoutingTargetGeneration,
         receivedAt: payload.receivedAt,
         adapterVersion: payload.adapterVersion,
         retentionPolicyHash: payload.retentionPolicyHash,
@@ -292,6 +301,9 @@ http.route({
           relayConfigurationHash: canary.relayConfigurationHash,
           adapterVersion: canary.adapterVersion,
           retentionPolicyHash: canary.retentionPolicyHash,
+          dsnRoutingTargetHash: canary.dsnRoutingTargetHash,
+          dsnRoutingTargetVersion: canary.dsnRoutingTargetVersion,
+          dsnRoutingTargetGeneration: canary.dsnRoutingTargetGeneration,
         },
       );
       return json({
@@ -317,6 +329,9 @@ http.route({
         toDomain: candidate.toDomain,
         sentAt: candidate.sentAt,
         outboundRfcMessageIdHash: candidate.outboundRfcMessageIdHash,
+        dsnRoutingTargetHash: candidate.dsnRoutingTargetHash,
+        dsnRoutingTargetVersion: candidate.dsnRoutingTargetVersion,
+        dsnRoutingTargetGeneration: candidate.dsnRoutingTargetGeneration,
       },
       now: Date.now(),
     });
@@ -336,6 +351,9 @@ http.route({
       receivedAt: payload.receivedAt,
       subjectDigest,
       bodyDigest,
+      ...(payload.dsn
+        ? { dsnRoutingTargetHash: payload.dsn.routingRecipientHash }
+        : {}),
     }));
     const result = await ctx.runMutation(
       internal.outreach.recordInboundRelayReceipt,
@@ -360,6 +378,9 @@ http.route({
         rolloutEpoch: candidate.rolloutEpoch,
         inboxConfigurationVersion: candidate.inboxConfigurationVersion,
         senderDomain: candidate.senderDomain,
+        dsnRoutingTargetHash: candidate.dsnRoutingTargetHash,
+        dsnRoutingTargetVersion: candidate.dsnRoutingTargetVersion,
+        dsnRoutingTargetGeneration: candidate.dsnRoutingTargetGeneration,
       },
     );
     return json({
