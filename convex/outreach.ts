@@ -42,6 +42,7 @@ import {
   autonomousOutreachConsentActive,
   autonomousOutreachReconciliationComplete,
   autonomousOutreachRuntimeEnabled,
+  outreachMessageOwnerMatches,
 } from "./lib/outreachAutonomy.ts";
 import {
   outboundIdentityReservationActive,
@@ -1087,16 +1088,24 @@ export const rotateInboundRelayDsnRoutingTarget = mutation({
 export const setInboxMode = mutation({
   args: { siteId: v.id("sites"), mode: v.string() },
   handler: async (ctx, { siteId, mode }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     if (mode !== "approval") {
       throw new Error("Automatic outreach delivery is disabled; use owner-approved one-message sends");
     }
     const inbox = await inboxForSite(ctx, siteId);
     if (!inbox) throw new Error("No outreach inbox is connected for this site");
+    const ownerAccountKey = accountDeletionKey(site.userId!);
+    if (inbox.credentialOwnerAccountKey !== ownerAccountKey) {
+      throw new Error("The Gmail credential belongs to another account");
+    }
     const inFlight = await ctx.db
       .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "sending"),
+      .withIndex("by_site_owner_lineage_status", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("ownerAccountKey", ownerAccountKey)
+          .eq("ownerLineageUnresolvedAt", undefined)
+          .eq("status", "sending"),
       )
       .first();
     const disabledAt = Date.now();
@@ -1654,15 +1663,39 @@ export const migrateOutreachDurabilityInternal = internalMutation({
       .withIndex("by_site_domain", (q) => q.eq("siteId", migrationSite._id))
       .paginate({ cursor: receipt.rowCursor ?? null, numItems: 50 });
     for (const message of page.page) {
+      const messageInbox = message.inboxId
+        ? await ctx.db.get(message.inboxId)
+        : null;
+      const exactMessageOwnerAccountKey =
+        message.ownerAccountKey ??
+        message.deliveryOwnerAccountKey ??
+        (messageInbox?.siteId === migrationSite._id
+          ? messageInbox.credentialOwnerAccountKey
+          : undefined);
+      if (!message.ownerAccountKey) {
+        if (exactMessageOwnerAccountKey) {
+          await ctx.db.patch(message._id, {
+            ownerAccountKey: exactMessageOwnerAccountKey,
+            ownerLineageUnresolvedAt: undefined,
+            updatedAt: Math.max(message.updatedAt, Date.now()),
+          });
+        } else if (!message.ownerLineageUnresolvedAt) {
+          // A no-inbox pre-lineage draft contains raw recipient/body data but
+          // has no immutable account proof. Keep it hidden and immutable for
+          // operator review; never infer ownership from the account currently
+          // enumerating the site.
+          await ctx.db.patch(message._id, {
+            ownerLineageUnresolvedAt: Date.now(),
+            updatedAt: Math.max(message.updatedAt, Date.now()),
+          });
+        }
+      }
       const acceptedAt = message.sentAt ?? (
         message.status === "delivery_unverified"
           ? message.deliveryClaimedAt
           : undefined
       );
       if (!acceptedAt) continue;
-      const messageInbox = message.inboxId
-        ? await ctx.db.get(message.inboxId)
-        : null;
       const settlementAccountKey =
         message.deliveryOwnerAccountKey ??
         (messageInbox?.siteId === migrationSite._id
@@ -1781,6 +1814,8 @@ export const reconcileAutonomousInitialMessagesInternal = internalMutation({
       !inbox ||
       inbox.siteId !== siteId ||
       inbox.mode !== "live" ||
+      !site.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       inbox.autonomyReconciliationGeneration !== generation ||
       !autonomousOutreachConsentActive(inbox, site.userId)
     ) {
@@ -1795,6 +1830,7 @@ export const reconcileAutonomousInitialMessagesInternal = internalMutation({
       return { completed: false, stopped: "release_paused" as const };
     }
     const timestamp = Date.now();
+    const ownerAccountKey = inbox.credentialOwnerAccountKey;
     const scheduleNext = async () => {
       await ctx.scheduler.runAfter(
         0,
@@ -1805,9 +1841,11 @@ export const reconcileAutonomousInitialMessagesInternal = internalMutation({
     if ((inbox.autonomyReconciliationStage ?? "approved") === "approved") {
       const rows = await ctx.db
         .query("outreach_messages")
-        .withIndex("by_site_status_approval_kind_sequence_scheduled", (q) =>
+        .withIndex("by_site_owner_lineage_status_approval_kind_sequence_scheduled", (q) =>
           q
             .eq("siteId", siteId)
+            .eq("ownerAccountKey", ownerAccountKey)
+            .eq("ownerLineageUnresolvedAt", undefined)
             .eq("status", "approved")
             .eq("approvalKind", "account_autopilot")
         )
@@ -1843,8 +1881,12 @@ export const reconcileAutonomousInitialMessagesInternal = internalMutation({
 
     const drafts = await ctx.db
       .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "draft")
+      .withIndex("by_site_owner_lineage_status", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("ownerAccountKey", ownerAccountKey)
+          .eq("ownerLineageUnresolvedAt", undefined)
+          .eq("status", "draft")
       )
       .take(50);
     const configurationVersion = inbox.configurationVersion ?? 0;
@@ -2424,13 +2466,18 @@ export const listMessages = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, { siteId, status, limit }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
+    const ownerAccountKey = accountDeletionKey(site.userId!);
     const take = Math.max(1, Math.min(limit ?? 50, 200));
     if (status) {
       return ctx.db
         .query("outreach_messages")
-        .withIndex("by_site_status", (q) =>
-          q.eq("siteId", siteId).eq("status", status),
+        .withIndex("by_site_owner_lineage_status", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("ownerAccountKey", ownerAccountKey)
+            .eq("ownerLineageUnresolvedAt", undefined)
+            .eq("status", status),
         )
         .order("desc")
         .take(take);
@@ -2452,7 +2499,13 @@ export const listMessages = query({
       statuses.map((s) =>
         ctx.db
           .query("outreach_messages")
-          .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", s))
+          .withIndex("by_site_owner_lineage_status", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("ownerAccountKey", ownerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", s)
+          )
           .order("desc")
           .take(take),
       ),
@@ -2498,6 +2551,8 @@ export const insertDraft = internalMutation({
     if (!siteExecutionActive(site)) {
       throw new Error("Site not found");
     }
+    if (!site.userId) throw new Error("Outreach tenant owner is unavailable");
+    const ownerAccountKey = accountDeletionKey(site.userId);
     if (!opportunity || opportunity.siteId !== args.siteId) {
       throw new Error("Authority opportunity not found for site");
     }
@@ -2520,6 +2575,7 @@ export const insertDraft = internalMutation({
         throw new Error("Inbox not found for site");
       }
       if (
+        draftInbox.credentialOwnerAccountKey !== ownerAccountKey ||
         args.inboxConfigurationVersion !== undefined &&
         args.inboxConfigurationVersion !==
           (draftInbox.configurationVersion ?? 0)
@@ -2549,6 +2605,7 @@ export const insertDraft = internalMutation({
       "sent",
       "replied",
     ];
+    const REFRESHABLE = [...LIVE, "blocked"];
     const now = Date.now();
 
     const [sameOpportunity, sameThread] = await Promise.all([
@@ -2561,6 +2618,17 @@ export const insertDraft = internalMutation({
         .withIndex("by_thread", (q) => q.eq("threadKey", args.threadKey))
         .collect(),
     ]);
+
+    const ownershipConflict = [...sameOpportunity, ...sameThread].some(
+      (message) =>
+        REFRESHABLE.includes(message.status) &&
+        !outreachMessageOwnerMatches(message, ownerAccountKey),
+    );
+    if (ownershipConflict) {
+      throw new Error(
+        "Existing outreach message ownership is unresolved or belongs to another account",
+      );
+    }
 
     // One live message per opportunity: re-running discovery must not queue
     // the same email twice.
@@ -2579,6 +2647,8 @@ export const insertDraft = internalMutation({
       if (refreshesStaleDraft) {
         await ctx.db.patch(liveForOpportunity._id, {
           ...args,
+          ownerAccountKey,
+          ownerLineageUnresolvedAt: undefined,
           approvedAt: undefined,
           approvedInboxId: undefined,
           approvedInboxConfigurationVersion: undefined,
@@ -2629,6 +2699,8 @@ export const insertDraft = internalMutation({
     const authorizeRecord = automaticallyAuthorized && !heldBehindThread;
     const record = {
       ...args,
+      ownerAccountKey,
+      ownerLineageUnresolvedAt: undefined,
       toEmail: args.toEmail.trim().toLowerCase(),
       toDomain: outreachOrganisationDomain(args.toDomain),
       status: heldBehindThread
@@ -2693,7 +2765,14 @@ export const approveMessage = mutation({
       throw new Error("This site is parked outside the current plan allowance");
     }
     const message = await ctx.db.get(messageId);
-    if (!message || message.siteId !== siteId) throw new Error("Message not found for site");
+    const ownerAccountKey = accountDeletionKey(site.userId!);
+    if (
+      !message ||
+      message.siteId !== siteId ||
+      !outreachMessageOwnerMatches(message, ownerAccountKey)
+    ) {
+      throw new Error("Message not found for site");
+    }
     if (message.sequenceStep !== 0) {
       throw new Error(
         "Follow-up approval is disabled in the initial-send authority release.",
@@ -2759,9 +2838,18 @@ export const approveMessage = mutation({
 export const discardMessage = mutation({
   args: { siteId: v.id("sites"), messageId: v.id("outreach_messages") },
   handler: async (ctx, { siteId, messageId }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     const message = await ctx.db.get(messageId);
-    if (!message || message.siteId !== siteId) throw new Error("Message not found for site");
+    if (
+      !message ||
+      message.siteId !== siteId ||
+      !outreachMessageOwnerMatches(
+        message,
+        accountDeletionKey(site.userId!),
+      )
+    ) {
+      throw new Error("Message not found for site");
+    }
     if (message.sentAt) throw new Error("A sent message cannot be discarded");
     if (["sending", "delivery_unverified"].includes(message.status)) {
       throw new Error(
@@ -2841,10 +2929,23 @@ export const claimApprovedDelivery = internalMutation({
       throw new Error("Delivery attempt identifier is invalid");
     }
 
+    const claimSite = await ctx.db.get(siteId);
+    if (!claimSite?.userId) {
+      return {
+        claimed: false as const,
+        reason: "Tenant is unavailable or parked outside the current plan allowance.",
+      };
+    }
+    const claimOwnerAccountKey = accountDeletionKey(claimSite.userId);
+
     const unresolved = await ctx.db
       .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "delivery_unverified"),
+      .withIndex("by_site_owner_lineage_status", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("ownerAccountKey", claimOwnerAccountKey)
+          .eq("ownerLineageUnresolvedAt", undefined)
+          .eq("status", "delivery_unverified"),
       )
       .first();
     if (unresolved) {
@@ -2856,7 +2957,13 @@ export const claimApprovedDelivery = internalMutation({
 
     const inFlight = await ctx.db
       .query("outreach_messages")
-      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "sending"))
+      .withIndex("by_site_owner_lineage_status", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("ownerAccountKey", claimOwnerAccountKey)
+          .eq("ownerLineageUnresolvedAt", undefined)
+          .eq("status", "sending")
+      )
       .take(2);
     if (inFlight.length > 0) {
       const expired = inFlight.find(
@@ -3164,6 +3271,10 @@ export const claimApprovedDelivery = internalMutation({
     if (
       !message ||
       message.siteId !== siteId ||
+      !outreachMessageOwnerMatches(
+        message,
+        inbox.credentialOwnerAccountKey,
+      ) ||
       message.status !== "approved" ||
       (message.scheduledAt ?? 0) > now
     ) {
@@ -3505,6 +3616,11 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
     if (!siteExecutionActive(site) || inboxes.length !== 1) return null;
     const inbox = inboxes[0];
     if (
+      !site.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) return null;
+    const ownerAccountKey = inbox.credentialOwnerAccountKey;
+    if (
       release === "automatic" &&
       (!autonomousOutreachRuntimeEnabled(
         process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
@@ -3516,9 +3632,11 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
     const message = release === "automatic"
       ? await ctx.db
           .query("outreach_messages")
-          .withIndex("by_site_status_autonomy_consent_sequence_scheduled", (q) =>
+          .withIndex("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", (q) =>
             q
               .eq("siteId", siteId)
+              .eq("ownerAccountKey", ownerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
               .eq("status", "approved")
               .eq("approvalKind", "account_autopilot")
               .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
@@ -3537,9 +3655,11 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
           .first()
       : await ctx.db
           .query("outreach_messages")
-          .withIndex("by_site_status_approval_kind_sequence_scheduled", (q) =>
+          .withIndex("by_site_owner_lineage_status_approval_kind_sequence_scheduled", (q) =>
             q
               .eq("siteId", siteId)
+              .eq("ownerAccountKey", ownerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
               .eq("status", "approved")
               .eq("approvalKind", "owner_message")
               .eq("sequenceStep", 0)
@@ -3627,13 +3747,19 @@ export const retireInvalidApprovedDeliveryEvidenceInternal = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
-    const [message, opportunity] = await Promise.all([
+    const [site, message, opportunity] = await Promise.all([
+      ctx.db.get(args.siteId),
       ctx.db.get(args.messageId),
       ctx.db.get(args.opportunityId),
     ]);
     if (
+      !site?.userId ||
       !message ||
       message.siteId !== args.siteId ||
+      !outreachMessageOwnerMatches(
+        message,
+        accountDeletionKey(site.userId),
+      ) ||
       message.opportunityId !== args.opportunityId ||
       message.status !== "approved" ||
       message.sequenceStep !== 0 ||
@@ -3973,7 +4099,14 @@ export const resolveUnverifiedDelivery = mutation({
   handler: async (ctx, { siteId, messageId, resolution }) => {
     const site = await requireSiteOwner(ctx, siteId);
     const message = await ctx.db.get(messageId);
-    if (!message || message.siteId !== siteId) {
+    if (
+      !message ||
+      message.siteId !== siteId ||
+      !outreachMessageOwnerMatches(
+        message,
+        accountDeletionKey(site.userId!),
+      )
+    ) {
       throw new Error("Message not found for site");
     }
     const settlementInbox = message.inboxId
@@ -5732,15 +5865,26 @@ async function cancelQueuedThread(
   receiptMessageId: Id<"outreach_messages">,
   kind: "reply" | "unsubscribe" | "bounce",
 ) {
-  const queued = await ctx.db
-    .query("outreach_messages")
-    .withIndex("by_thread", (q) => q.eq("threadKey", threadKey))
-    .take(50);
+  const [receiptMessage, queued] = await Promise.all([
+    ctx.db.get(receiptMessageId),
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_thread", (q) => q.eq("threadKey", threadKey))
+      .take(50),
+  ]);
+  const receiptOwnerAccountKey = receiptMessage?.ownerAccountKey ??
+    receiptMessage?.deliveryOwnerAccountKey;
+  if (
+    !receiptMessage ||
+    receiptMessage.siteId !== siteId ||
+    !receiptOwnerAccountKey
+  ) return;
   const timestamp = Date.now();
   for (const message of queued) {
     if (
       message.siteId !== siteId ||
       message._id === receiptMessageId ||
+      !outreachMessageOwnerMatches(message, receiptOwnerAccountKey) ||
       !["draft", "blocked", "approved"].includes(message.status)
     ) continue;
     await ctx.db.patch(message._id, {
@@ -5847,7 +5991,10 @@ async function addSuppression(
         .take(200);
   const timestamp = Date.now();
   for (const message of queued) {
-    if (!["draft", "blocked", "approved"].includes(message.status)) continue;
+    if (
+      !outreachMessageOwnerMatches(message, ownerAccountKey) ||
+      !["draft", "blocked", "approved"].includes(message.status)
+    ) continue;
     await ctx.db.patch(message._id, {
       status: "skipped",
       blockedReason: `${value} is permanently suppressed (${reason}).`,

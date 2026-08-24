@@ -149,6 +149,12 @@ test("verified deletion scrubs outreach owned through a foreign current site", (
   assert.ok((schema.match(/ownerLineageUnresolvedAt: v\.optional/g) ?? []).length >= 2);
   assert.ok((schema.match(/index\("by_site_owner_unresolved"/g) ?? []).length >= 2);
   assert.match(finalize, /outreach_foreign_owner_messages/);
+  const foreignMessageStage = sites.slice(
+    sites.indexOf('case "outreach_foreign_owner_messages"'),
+    sites.indexOf('case "outreach_foreign_owner_contacts"'),
+  );
+  assert.match(foreignMessageStage, /withIndex\("by_owner"/);
+  assert.match(foreignMessageStage, /withIndex\("by_delivery_owner"/);
   assert.match(finalize, /outreach_foreign_owner_contacts/);
   assert.match(finalize, /outreach_foreign_owner_suppressions/);
   assert.match(finalize, /outreach_foreign_owner_inboxes/);

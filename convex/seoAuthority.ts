@@ -17,6 +17,8 @@ import {
   siteExecutionActive,
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import { accountDeletionKey } from "./lib/accountDeletion";
+import { outreachMessageOwnerMatches } from "./lib/outreachAutonomy";
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -464,10 +466,12 @@ async function messageBelongsToAuthorityOpportunity(
   message: Doc<"outreach_messages">,
   siteId: Id<"sites">,
   opportunityId: Id<"seo_authority_opportunities">,
+  ownerAccountKey: string,
 ): Promise<boolean> {
   if (
     message.siteId !== siteId ||
-    message.opportunityId !== opportunityId
+    message.opportunityId !== opportunityId ||
+    !outreachMessageOwnerMatches(message, ownerAccountKey)
   ) return false;
   if (!message.inboxId) return true;
   const inbox = await ctx.db.get(message.inboxId);
@@ -487,7 +491,8 @@ export const markAcquired = internalMutation({
   },
   handler: async (ctx, { siteId, opportunityId, acquiredLinkUrl }) => {
     const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!siteExecutionActive(site) || !site.userId) throw new Error("Site not found");
+    const ownerAccountKey = accountDeletionKey(site.userId);
     const opportunity = await ctx.db.get(opportunityId);
     if (!opportunity || opportunity.siteId !== siteId) {
       throw new Error("Authority opportunity not found for site");
@@ -512,6 +517,7 @@ export const markAcquired = internalMutation({
           message,
           siteId,
           opportunityId,
+          ownerAccountKey,
         ))
       ) continue;
       await ctx.db.patch(message._id, {
@@ -535,7 +541,7 @@ export const markAcquiredLinkLost = internalMutation({
   },
   handler: async (ctx, { siteId, opportunityId }) => {
     const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!siteExecutionActive(site) || !site.userId) throw new Error("Site not found");
     const opportunity = await ctx.db.get(opportunityId);
     if (!opportunity || opportunity.siteId !== siteId) {
       throw new Error("Authority opportunity not found for site");
@@ -569,7 +575,8 @@ export const rejectUnconfirmed = internalMutation({
   },
   handler: async (ctx, { siteId, verifiedBefore, types, articleId }) => {
     const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!siteExecutionActive(site) || !site.userId) throw new Error("Site not found");
+    const ownerAccountKey = accountDeletionKey(site.userId);
     const timestamp = Date.now();
     let rejected = 0;
     for (const status of ["verified", "outreach_prepared"]) {
@@ -601,6 +608,7 @@ export const rejectUnconfirmed = internalMutation({
               message,
               siteId,
               row._id,
+              ownerAccountKey,
             ))
           ) continue;
           await ctx.db.patch(message._id, {

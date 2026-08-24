@@ -12,7 +12,23 @@ export const OUTREACH_AUTONOMY_CONSENT_VERSION = 2;
 
 /** Additive compliance-ledger backfills and every fleet/claim gate must agree
  * on this exact version or completed tenants can be stranded indefinitely. */
-export const OUTREACH_DURABILITY_MIGRATION_VERSION = 2;
+export const OUTREACH_DURABILITY_MIGRATION_VERSION = 3;
+
+/** Raw recipient and message-body data belongs to the account that created
+ * the draft, before any provider claim exists. Additive-rollout rows whose
+ * lineage is unresolved remain invisible and immutable until exact proof is
+ * migrated; a current site owner is never treated as proof by itself. */
+export function outreachMessageOwnerMatches(
+  message: {
+    ownerAccountKey?: string;
+    ownerLineageUnresolvedAt?: number;
+  },
+  accountKey: string,
+): boolean {
+  return Boolean(accountKey) &&
+    message.ownerLineageUnresolvedAt === undefined &&
+    message.ownerAccountKey === accountKey;
+}
 
 export const OUTREACH_AUTONOMY_CONSENT_TEXT =
   "I authorize Pentra to send evidence-grounded one-to-one initial commercial business outreach messages automatically from this dedicated secondary-domain Gmail inbox. This authorization does not permit automated follow-ups. Sends remain subject to warm-up, daily caps, permanent suppression, and bounce/reply monitoring. Disabling autonomy stops new delivery claims; one attempt already claimed by the provider boundary may settle once. I confirm the sender identity and physical address are accurate, that I am responsible for a lawful basis in each recipient jurisdiction, and that this use complies with my mailbox provider’s terms; I accept the sending-domain and mailbox-reputation risk.";

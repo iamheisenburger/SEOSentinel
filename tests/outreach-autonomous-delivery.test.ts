@@ -8,9 +8,11 @@ import {
   OUTREACH_AUTONOMY_CONSENT_VERSION,
   OUTREACH_AUTONOMY_POLICY_HASH,
   OUTREACH_DURABILITY_MIGRATION_VERSION,
+  outreachMessageOwnerMatches,
 } from "../convex/lib/outreachAutonomy.ts";
 
 const backend = readFileSync("convex/outreach.ts", "utf8");
+const authorityBackend = readFileSync("convex/seoAuthority.ts", "utf8");
 const action = readFileSync("convex/actions/outreach.ts", "utf8");
 const fleet = readFileSync("convex/actions/outreachFleet.ts", "utf8");
 const sites = readFileSync("convex/sites.ts", "utf8");
@@ -116,7 +118,7 @@ test("activation is resumable and claims remain closed until migration and recon
   assert.match(claim, /outreachDurabilityMigrationComplete\(ctx, site\)/);
   assert.match(sites, /autonomyReconciliationPending/);
   assert.match(fleet, /state\.autonomyReconciliationPending === true/);
-  assert.equal(OUTREACH_DURABILITY_MIGRATION_VERSION, 2);
+  assert.equal(OUTREACH_DURABILITY_MIGRATION_VERSION, 3);
   assert.match(sites, /OUTREACH_DURABILITY_MIGRATION_VERSION/);
   assert.doesNotMatch(sites, /durabilityMigration\?\.version === 1/);
   const ensure = backend.slice(
@@ -391,8 +393,91 @@ test("recipient rows retain immutable owner lineage across defensive owner drift
   assert.match(suppressionList, /\.eq\("ownerLineageUnresolvedAt", undefined\)/);
 });
 
+test("every raw outreach message is owner-bound before claim and hidden across owner drift", () => {
+  const list = backend.slice(
+    backend.indexOf("export const listMessages"),
+    backend.indexOf("export const insertDraft"),
+  );
+  const insert = backend.slice(
+    backend.indexOf("export const insertDraft"),
+    backend.indexOf("export const approveMessage"),
+  );
+  const approve = backend.slice(
+    backend.indexOf("export const approveMessage"),
+    backend.indexOf("export const discardMessage"),
+  );
+  const discard = backend.slice(
+    backend.indexOf("export const discardMessage"),
+    backend.indexOf("const dnsEvidenceValidator"),
+  );
+  const review = backend.slice(
+    backend.indexOf("export const resolveUnverifiedDelivery"),
+    backend.indexOf("export const recordReply"),
+  );
+  const evidence = backend.slice(
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+    backend.indexOf("export const retireInvalidApprovedDeliveryEvidenceInternal"),
+  );
+  const migration = backend.slice(
+    backend.indexOf("export const migrateOutreachDurabilityInternal"),
+    backend.indexOf("export const reconcileAutonomousInitialMessagesInternal"),
+  );
+  assert.match(schema, /outreach_messages: defineTable\([\s\S]*ownerAccountKey: v\.optional/);
+  assert.match(schema, /outreach_messages: defineTable\([\s\S]*ownerLineageUnresolvedAt/);
+  assert.match(schema, /by_site_owner_lineage_status/);
+  assert.match(schema, /\.index\("by_owner", \["ownerAccountKey"\]\)/);
+  assert.match(list, /withIndex\("by_site_owner_lineage_status"/);
+  assert.match(list, /\.eq\("ownerAccountKey", ownerAccountKey\)/);
+  assert.match(list, /\.eq\("ownerLineageUnresolvedAt", undefined\)/);
+  assert.match(insert, /ownerAccountKey/);
+  assert.match(insert, /ownershipConflict/);
+  assert.match(insert, /outreachMessageOwnerMatches\(message, ownerAccountKey\)/);
+  assert.match(approve, /outreachMessageOwnerMatches\(message, ownerAccountKey\)/);
+  assert.match(discard, /outreachMessageOwnerMatches/);
+  assert.match(review, /outreachMessageOwnerMatches/);
+  assert.ok((evidence.match(/\.eq\("ownerAccountKey", ownerAccountKey\)/g) ?? []).length >= 2);
+  assert.match(migration, /exactMessageOwnerAccountKey/);
+  assert.match(migration, /ownerLineageUnresolvedAt: Date\.now\(\)/);
+  const cancellation = backend.slice(
+    backend.indexOf("async function cancelQueuedThread"),
+    backend.indexOf("async function writableOutreachOwnerAccountKey"),
+  );
+  const suppression = backend.slice(
+    backend.indexOf("async function addSuppression"),
+    backend.indexOf("export const suppress = mutation"),
+  );
+  const opportunityCancellation = authorityBackend.slice(
+    authorityBackend.indexOf("async function messageBelongsToAuthorityOpportunity"),
+    authorityBackend.indexOf("export const getVerifiedBySource"),
+  );
+  assert.match(cancellation, /outreachMessageOwnerMatches/);
+  assert.match(suppression, /outreachMessageOwnerMatches/);
+  assert.match(opportunityCancellation, /outreachMessageOwnerMatches/);
+  for (const status of ["draft", "sent", "delivery_unverified"]) {
+    assert.equal(
+      outreachMessageOwnerMatches({ ownerAccountKey: "account-a" }, "account-a"),
+      true,
+      `${status} should remain visible and mutable to its immutable owner`,
+    );
+    assert.equal(
+      outreachMessageOwnerMatches({ ownerAccountKey: "account-a" }, "account-b"),
+      false,
+      `${status} must be hidden and immutable after site owner drift`,
+    );
+    assert.equal(
+      outreachMessageOwnerMatches(
+        { ownerAccountKey: "account-a", ownerLineageUnresolvedAt: 1 },
+        "account-a",
+      ),
+      false,
+      `${status} with unresolved lineage must fail closed`,
+    );
+  }
+});
+
 test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {
-  assert.match(sites, /by_site_status_autonomy_consent_sequence_scheduled/);
+  assert.match(sites, /by_site_owner_lineage_status_autonomy_consent_sequence_scheduled/);
+  assert.match(sites, /\.eq\("ownerAccountKey", siteOwnerAccountKey\)/);
   assert.match(sites, /\.eq\("sequenceStep", 0\)/);
   assert.match(sites, /autonomousOutreachReconciliationComplete\(inbox\)/);
   assert.match(fleet, /hasDueAutomaticMessages === true/);
@@ -400,6 +485,7 @@ test("fleet selection is due-only, exact-consent, sequence-zero and preflighted"
   assert.match(fleet, /sendAutomaticOutreachInternal/);
   assert.match(crons, /outreach-autonomous-delivery-fleet/);
   assert.match(schema, /by_site_status_autonomy_consent_sequence_scheduled/);
+  assert.match(schema, /by_site_owner_lineage_status_autonomy_consent_sequence_scheduled/);
 });
 
 test("a permanently invalid oldest row is retired instead of starving later work", () => {

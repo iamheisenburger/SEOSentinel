@@ -2597,13 +2597,28 @@ async function accountReceiptRowsForStage(
 ) {
   const name = ACCOUNT_DELETION_RECEIPT_STAGES[stage];
   switch (name) {
-    case "outreach_foreign_owner_messages":
-      return ctx.db
-        .query("outreach_messages")
-        .withIndex("by_delivery_owner", (q) =>
-          q.eq("deliveryOwnerAccountKey", accountDeletionKey(userId))
-        )
-        .take(10);
+    case "outreach_foreign_owner_messages": {
+      const ownerAccountKey = accountDeletionKey(userId);
+      const [createdByOwner, deliveredByOwner] = await Promise.all([
+        ctx.db
+          .query("outreach_messages")
+          .withIndex("by_owner", (q) =>
+            q.eq("ownerAccountKey", ownerAccountKey)
+          )
+          .take(10),
+        ctx.db
+          .query("outreach_messages")
+          .withIndex("by_delivery_owner", (q) =>
+            q.eq("deliveryOwnerAccountKey", ownerAccountKey)
+          )
+          .take(10),
+      ]);
+      const unique = new Map<string, Doc<"outreach_messages">>();
+      for (const message of [...createdByOwner, ...deliveredByOwner]) {
+        unique.set(String(message._id), message);
+      }
+      return [...unique.values()].slice(0, 10);
+    }
     case "outreach_foreign_owner_contacts":
       return ctx.db
         .query("outreach_contacts")
@@ -3289,6 +3304,9 @@ async function outreachFleetState(
   site: Doc<"sites">,
 ) {
   const siteId = site._id;
+  const siteOwnerAccountKey = site.userId
+    ? accountDeletionKey(site.userId)
+    : undefined;
   const inboxes = await ctx.db
     .query("outreach_inboxes")
     .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -3339,18 +3357,26 @@ async function outreachFleetState(
         q.eq("siteId", siteId).eq("status", "verified")
       )
       .first(),
-    ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "approved")
-      )
-      .first(),
-    activeAutonomyConsent && inbox
+    siteOwnerAccountKey
       ? ctx.db
           .query("outreach_messages")
-          .withIndex("by_site_status_autonomy_consent_sequence_scheduled", (q) =>
+          .withIndex("by_site_owner_lineage_status", (q) =>
             q
               .eq("siteId", siteId)
+              .eq("ownerAccountKey", siteOwnerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", "approved")
+          )
+          .first()
+      : Promise.resolve(null),
+    activeAutonomyConsent && inbox && siteOwnerAccountKey
+      ? ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("ownerAccountKey", siteOwnerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
               .eq("status", "approved")
               .eq("approvalKind", "account_autopilot")
               .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
@@ -3379,24 +3405,42 @@ async function outreachFleetState(
         q.eq("siteId", siteId).eq("status", "acquired")
       )
       .first(),
-    ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "sent")
-      )
-      .first(),
-    ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "delivery_reviewed_sent")
-      )
-      .first(),
-    ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "replied")
-      )
-      .first(),
+    siteOwnerAccountKey
+      ? ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_owner_lineage_status", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("ownerAccountKey", siteOwnerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", "sent")
+          )
+          .first()
+      : Promise.resolve(null),
+    siteOwnerAccountKey
+      ? ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_owner_lineage_status", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("ownerAccountKey", siteOwnerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", "delivery_reviewed_sent")
+          )
+          .first()
+      : Promise.resolve(null),
+    siteOwnerAccountKey
+      ? ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_owner_lineage_status", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("ownerAccountKey", siteOwnerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", "replied")
+          )
+          .first()
+      : Promise.resolve(null),
   ]);
   const signedRelayReady = Boolean(
     inbox &&

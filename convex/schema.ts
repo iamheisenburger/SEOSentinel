@@ -1557,6 +1557,11 @@ export default defineSchema({
   // not go out, instead of silence.
   outreach_messages: defineTable({
     siteId: v.id("sites"),
+    // Immutable raw-message ownership exists from draft creation, before any
+    // delivery claim. A later defensive site-owner drift must not expose or
+    // mutate another account's recipient, body or provider history.
+    ownerAccountKey: v.optional(v.string()),
+    ownerLineageUnresolvedAt: v.optional(v.number()),
     inboxId: v.optional(v.id("outreach_inboxes")),
     opportunityId: v.id("seo_authority_opportunities"),
     toEmail: v.string(),
@@ -1631,6 +1636,12 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_status", ["siteId", "status"])
+    .index("by_site_owner_lineage_status", [
+      "siteId",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+      "status",
+    ])
     .index("by_site_status_autonomy_consent_scheduled", [
       "siteId",
       "status",
@@ -1647,6 +1658,15 @@ export default defineSchema({
       "sequenceStep",
       "scheduledAt",
     ])
+    .index("by_site_owner_lineage_status_approval_kind_sequence_scheduled", [
+      "siteId",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+      "status",
+      "approvalKind",
+      "sequenceStep",
+      "scheduledAt",
+    ])
     .index("by_site_status_autonomy_consent_sequence_scheduled", [
       "siteId",
       "status",
@@ -1657,7 +1677,20 @@ export default defineSchema({
       "sequenceStep",
       "scheduledAt",
     ])
+    .index("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", [
+      "siteId",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+      "status",
+      "approvalKind",
+      "approvalConsentVersion",
+      "approvalConsentPolicyHash",
+      "approvalConsentAcceptedAt",
+      "sequenceStep",
+      "scheduledAt",
+    ])
     .index("by_opportunity", ["opportunityId"])
+    .index("by_owner", ["ownerAccountKey"])
     .index("by_delivery_owner", ["deliveryOwnerAccountKey"])
     .index("by_inbox", ["inboxId"])
     .index("by_site_domain", ["siteId", "toDomain"])

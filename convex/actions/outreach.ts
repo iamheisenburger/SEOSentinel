@@ -288,6 +288,24 @@ async function prepareHandler(
       }),
     };
   }
+  if (inbox) {
+    const durability = await ctx.runMutation(
+      internal.outreach.ensureOutreachDurabilityMigrationInternal,
+      { siteId },
+    );
+    if (!durability.complete) {
+      return {
+        ...result,
+        ...summarizeOutreachPreparationBudget({
+          budget,
+          considered: 0,
+          offered: 0,
+          hasMore: opportunityRows.length > 0,
+          unsettledCurrent: false,
+        }),
+      };
+    }
+  }
   if (
     inbox?.mode === "live" &&
     inbox.autonomyReconciliationStatus !== "complete"
