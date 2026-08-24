@@ -30,6 +30,28 @@ export function outreachMessageOwnerMatches(
     message.ownerAccountKey === accountKey;
 }
 
+/** A pre-owner-lineage row that never had an inbox or provider claim cannot
+ * be attributed safely, but it also must not poison the opportunity/thread
+ * forever. It may be terminally scrubbed; anything with delivery evidence or
+ * an inbox binding stays on the exact-proof migration/settlement path. */
+export function legacyUnownedPresendMessageMayBeQuarantined(message: {
+  ownerAccountKey?: string;
+  inboxId?: unknown;
+  deliveryOwnerAccountKey?: string;
+  deliveryAttemptId?: string;
+  deliveryClaimedAt?: number;
+  sentAt?: number;
+  status: string;
+}): boolean {
+  return !message.ownerAccountKey &&
+    !message.inboxId &&
+    !message.deliveryOwnerAccountKey &&
+    !message.deliveryAttemptId &&
+    message.deliveryClaimedAt === undefined &&
+    message.sentAt === undefined &&
+    ["draft", "blocked", "approved"].includes(message.status);
+}
+
 export const OUTREACH_AUTONOMY_CONSENT_TEXT =
   "I authorize Pentra to send evidence-grounded one-to-one initial commercial business outreach messages automatically from this dedicated secondary-domain Gmail inbox. This authorization does not permit automated follow-ups. Sends remain subject to warm-up, daily caps, permanent suppression, and bounce/reply monitoring. Disabling autonomy stops new delivery claims; one attempt already claimed by the provider boundary may settle once. I confirm the sender identity and physical address are accurate, that I am responsible for a lawful basis in each recipient jurisdiction, and that this use complies with my mailbox provider’s terms; I accept the sending-domain and mailbox-reputation risk.";
 

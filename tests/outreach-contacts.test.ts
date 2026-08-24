@@ -7,9 +7,30 @@ import {
   isContactableAddress,
   isSameOrganisation,
   isSameOrganisationHost,
+  legacyUnresolvedContactMayBeReplaced,
   outreachOrganisationDomain,
   selectBestContact,
 } from "../convex/lib/outreachContacts.ts";
+
+test("fresh discovery replaces only an ownerless unresolved legacy contact", () => {
+  assert.equal(
+    legacyUnresolvedContactMayBeReplaced({ ownerLineageUnresolvedAt: 1 }),
+    true,
+  );
+  assert.equal(
+    legacyUnresolvedContactMayBeReplaced({
+      ownerAccountKey: "account-a",
+      ownerLineageUnresolvedAt: 1,
+    }),
+    false,
+    "an account-bound row can never be adopted by another owner",
+  );
+  assert.equal(
+    legacyUnresolvedContactMayBeReplaced({}),
+    false,
+    "an ordinary legacy row still requires the migration proof path",
+  );
+});
 
 test("machine and legal addresses are never contactable", () => {
   for (const email of [

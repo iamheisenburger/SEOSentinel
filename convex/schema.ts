@@ -1690,6 +1690,7 @@ export default defineSchema({
       "scheduledAt",
     ])
     .index("by_opportunity", ["opportunityId"])
+    .index("by_site_created", ["siteId", "createdAt"])
     .index("by_owner", ["ownerAccountKey"])
     .index("by_delivery_owner", ["deliveryOwnerAccountKey"])
     .index("by_inbox", ["inboxId"])

@@ -42,6 +42,7 @@ import {
   autonomousOutreachConsentActive,
   autonomousOutreachReconciliationComplete,
   autonomousOutreachRuntimeEnabled,
+  legacyUnownedPresendMessageMayBeQuarantined,
   outreachMessageOwnerMatches,
 } from "./lib/outreachAutonomy.ts";
 import {
@@ -101,7 +102,10 @@ import {
   outreachSuppressionTombstoneIdentity,
   type OutreachSuppressionKind,
 } from "./lib/outreachSuppression.ts";
-import { outreachOrganisationDomain } from "./lib/outreachContacts.ts";
+import {
+  legacyUnresolvedContactMayBeReplaced,
+  outreachOrganisationDomain,
+} from "./lib/outreachContacts.ts";
 import {
   adoptDurablePacingReceiptOwner,
   effectiveDurablePacingState,
@@ -1660,9 +1664,48 @@ export const migrateOutreachDurabilityInternal = internalMutation({
 
     const page = await ctx.db
       .query("outreach_messages")
-      .withIndex("by_site_domain", (q) => q.eq("siteId", migrationSite._id))
+      // This cursor is intentionally independent of every field the v3
+      // migration scrubs or backfills. Mutating recipient/domain/owner indexes
+      // while paginating them could skip or revisit legacy rows.
+      .withIndex("by_site_created", (q) => q.eq("siteId", migrationSite._id))
       .paginate({ cursor: receipt.rowCursor ?? null, numItems: 50 });
     for (const message of page.page) {
+      if (legacyUnownedPresendMessageMayBeQuarantined(message)) {
+        const timestamp = Date.now();
+        // This row predates immutable ownership and has no mailbox/provider
+        // proof. Do not adopt its raw recipient data into the current account.
+        // Scrub and terminalize it so a later exact-owner re-verification can
+        // create one fresh draft without the hidden legacy row poisoning the
+        // opportunity or recipient thread.
+        await ctx.db.patch(message._id, {
+          ownerLineageUnresolvedAt:
+            message.ownerLineageUnresolvedAt ?? timestamp,
+          toEmail: "redacted@invalid.local",
+          toDomain: "invalid.local",
+          subject: "",
+          body: "",
+          threadKey: `quarantined:${message._id}`,
+          complianceIssues: undefined,
+          blockedReason: undefined,
+          pacingReason: undefined,
+          opportunityEvidenceHash: undefined,
+          opportunitySourceUrl: undefined,
+          opportunityTargetUrl: undefined,
+          approvedAt: undefined,
+          approvedInboxId: undefined,
+          approvedInboxConfigurationVersion: undefined,
+          approvalKind: undefined,
+          approvalConsentVersion: undefined,
+          approvalConsentPolicyHash: undefined,
+          approvalConsentAcceptedAt: undefined,
+          scheduledAt: undefined,
+          status: "failed",
+          failureReason:
+            "A pre-lineage unsent draft was quarantined without adopting its unresolved recipient ownership.",
+          updatedAt: Math.max(message.updatedAt, timestamp),
+        });
+        continue;
+      }
       const messageInbox = message.inboxId
         ? await ctx.db.get(message.inboxId)
         : null;
@@ -5903,7 +5946,10 @@ async function cancelQueuedThread(
 async function writableOutreachOwnerAccountKey(
   ctx: MutationCtx,
   site: Doc<"sites">,
-): Promise<string> {
+): Promise<{
+  ownerAccountKey: string;
+  hasExactOwnerInbox: boolean;
+}> {
   if (!site.userId) throw new Error("Outreach tenant owner is unavailable");
   const ownerAccountKey = accountDeletionKey(site.userId);
   const inboxes = await ctx.db
@@ -5924,7 +5970,10 @@ async function writableOutreachOwnerAccountKey(
       "Reconnect the current owner's Gmail inbox before writing outreach recipient data",
     );
   }
-  return ownerAccountKey;
+  return {
+    ownerAccountKey,
+    hasExactOwnerInbox: inboxes.length === 1,
+  };
 }
 
 async function addSuppression(
@@ -6132,7 +6181,8 @@ export const upsertContact = internalMutation({
     if (!siteExecutionActive(site)) {
       throw new Error("Site not found");
     }
-    const ownerAccountKey = await writableOutreachOwnerAccountKey(ctx, site);
+    const { ownerAccountKey, hasExactOwnerInbox } =
+      await writableOutreachOwnerAccountKey(ctx, site);
     const email = args.email.trim().toLowerCase();
     const domain = outreachOrganisationDomain(args.domain);
     const now = Date.now();
@@ -6141,6 +6191,35 @@ export const upsertContact = internalMutation({
       .withIndex("by_site_email", (q) => q.eq("siteId", args.siteId).eq("email", email))
       .unique();
     if (existing) {
+      if (legacyUnresolvedContactMayBeReplaced(existing)) {
+        if (!hasExactOwnerInbox) {
+          throw new Error(
+            "Reconnect the current owner's Gmail inbox before replacing unresolved contact evidence",
+          );
+        }
+        // Fresh, tenant-bound public discovery is a new evidence boundary, not
+        // permission to adopt the ownerless row's old PII or contact history.
+        // Replace every mutable field and clear the unresolved marker/history.
+        await ctx.db.patch(existing._id, {
+          ownerAccountKey,
+          ownerLineageUnresolvedAt: undefined,
+          domain,
+          email,
+          name: args.name,
+          role: args.role,
+          discoveredFromUrl: args.discoveredFromUrl,
+          discoveryMethod: args.discoveryMethod,
+          verifiedAt: now,
+          lastContactedAt: undefined,
+          createdAt: now,
+          updatedAt: now,
+        });
+        return {
+          contactId: existing._id,
+          created: false,
+          replacedLegacyUnresolved: true,
+        };
+      }
       if (existing.ownerLineageUnresolvedAt) {
         throw new Error(
           "Outreach contact ownership is unresolved; operator review is required",

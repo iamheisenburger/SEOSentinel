@@ -8,6 +8,7 @@ import {
   OUTREACH_AUTONOMY_CONSENT_VERSION,
   OUTREACH_AUTONOMY_POLICY_HASH,
   OUTREACH_DURABILITY_MIGRATION_VERSION,
+  legacyUnownedPresendMessageMayBeQuarantined,
   outreachMessageOwnerMatches,
 } from "../convex/lib/outreachAutonomy.ts";
 
@@ -448,6 +449,7 @@ test("every raw outreach message is owner-bound before claim and hidden across o
   assert.match(schema, /outreach_messages: defineTable\([\s\S]*ownerAccountKey: v\.optional/);
   assert.match(schema, /outreach_messages: defineTable\([\s\S]*ownerLineageUnresolvedAt/);
   assert.match(schema, /by_site_owner_lineage_status/);
+  assert.match(schema, /\.index\("by_site_created", \["siteId", "createdAt"\]\)/);
   assert.match(schema, /\.index\("by_owner", \["ownerAccountKey"\]\)/);
   assert.match(list, /withIndex\("by_site_owner_lineage_status"/);
   assert.match(list, /\.eq\("ownerAccountKey", ownerAccountKey\)/);
@@ -461,6 +463,11 @@ test("every raw outreach message is owner-bound before claim and hidden across o
   assert.ok((evidence.match(/\.eq\("ownerAccountKey", ownerAccountKey\)/g) ?? []).length >= 2);
   assert.match(migration, /exactMessageOwnerAccountKey/);
   assert.match(migration, /ownerLineageUnresolvedAt: Date\.now\(\)/);
+  assert.match(migration, /legacyUnownedPresendMessageMayBeQuarantined/);
+  assert.match(migration, /withIndex\("by_site_created"/);
+  assert.match(migration, /toEmail: "redacted@invalid\.local"/);
+  assert.match(migration, /threadKey: `quarantined:\$\{message\._id\}`/);
+  assert.match(migration, /status: "failed"/);
   const cancellation = backend.slice(
     backend.indexOf("async function cancelQueuedThread"),
     backend.indexOf("async function writableOutreachOwnerAccountKey"),
@@ -476,6 +483,22 @@ test("every raw outreach message is owner-bound before claim and hidden across o
   assert.match(cancellation, /outreachMessageOwnerMatches/);
   assert.match(suppression, /outreachMessageOwnerMatches/);
   assert.match(opportunityCancellation, /outreachMessageOwnerMatches/);
+  const contactUpsert = backend.slice(
+    backend.indexOf("export const upsertContact"),
+    backend.indexOf("export const getContactCooldownInternal"),
+  );
+  assert.match(contactUpsert, /legacyUnresolvedContactMayBeReplaced/);
+  assert.match(contactUpsert, /if \(!hasExactOwnerInbox\)/);
+  assert.match(contactUpsert, /ownerLineageUnresolvedAt: undefined/);
+  assert.match(contactUpsert, /lastContactedAt: undefined/);
+  assert.match(contactUpsert, /name: args\.name/);
+  assert.doesNotMatch(
+    contactUpsert.slice(
+      contactUpsert.indexOf("if (legacyUnresolvedContactMayBeReplaced"),
+      contactUpsert.indexOf("if (existing.ownerLineageUnresolvedAt"),
+    ),
+    /existing\.name|existing\.role|existing\.lastContactedAt/,
+  );
   for (const status of ["draft", "sent", "delivery_unverified"]) {
     assert.equal(
       outreachMessageOwnerMatches({ ownerAccountKey: "account-a" }, "account-a"),
@@ -496,6 +519,27 @@ test("every raw outreach message is owner-bound before claim and hidden across o
       `${status} with unresolved lineage must fail closed`,
     );
   }
+  assert.equal(
+    legacyUnownedPresendMessageMayBeQuarantined({ status: "blocked" }),
+    true,
+    "a legacy no-inbox blocked draft is terminally released, not adopted",
+  );
+  assert.equal(
+    legacyUnownedPresendMessageMayBeQuarantined({
+      status: "draft",
+      inboxId: "inbox-a",
+    }),
+    false,
+    "an inbox-bound draft requires exact owner proof",
+  );
+  assert.equal(
+    legacyUnownedPresendMessageMayBeQuarantined({
+      status: "delivery_unverified",
+      deliveryAttemptId: "attempt-a",
+    }),
+    false,
+    "an ambiguous provider attempt is never treated as an unsent draft",
+  );
 });
 
 test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {

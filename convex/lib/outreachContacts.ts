@@ -25,6 +25,17 @@ export type ContactCandidate = {
   score: number;
 };
 
+/** An additive-rollout contact with no proven owner may be replaced only at
+ * the fresh public-evidence write boundary. Existing metadata/history is not
+ * adopted; a row already bound to any account never crosses ownership. */
+export function legacyUnresolvedContactMayBeReplaced(contact: {
+  ownerAccountKey?: string;
+  ownerLineageUnresolvedAt?: number;
+}): boolean {
+  return !contact.ownerAccountKey &&
+    contact.ownerLineageUnresolvedAt !== undefined;
+}
+
 /**
  * Addresses that exist on a page but are never a human editor: automated
  * senders, vendor tracking addresses, and legal/abuse desks that will treat
