@@ -98,6 +98,7 @@ import {
 import { outreachOrganisationDomain } from "./lib/outreachContacts.ts";
 import {
   adoptDurablePacingReceiptOwner,
+  effectiveDurablePacingState,
   outreachMailboxKey,
   readDurableContactReceipt,
   readDurablePacingReceipt,
@@ -487,6 +488,15 @@ export const getInbox = query({
   handler: async (ctx, { siteId }) => {
     const site = await requireSiteOwner(ctx, siteId);
     const inbox = await inboxForSite(ctx, siteId);
+    if (
+      inbox &&
+      (!site.userId ||
+        inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId))
+    ) {
+      // Do not expose even the prior owner's sender address or derived relay
+      // route to a later site owner. Reconnection replaces this stale binding.
+      return null;
+    }
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     const legacyDrainRequired = inbox
       ? (await pendingLegacyUnboundMessageCount(ctx, inbox._id)) > 0
@@ -787,10 +797,18 @@ export const setInboxComplianceProfile = mutation({
     physicalMailingAddress: v.string(),
   },
   handler: async (ctx, { siteId, fromName, physicalMailingAddress }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     await assertNoActiveDelivery(ctx, siteId);
     const inbox = await inboxForSite(ctx, siteId);
     if (!inbox) throw new Error("Connect the secondary-domain Gmail inbox first");
+    if (
+      !site.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      throw new Error(
+        "The Gmail credential belongs to a previous site owner; reconnect it before editing the sender profile",
+      );
+    }
     const safeName = fromName.replace(/[\r\n<>]/g, " ").replace(/\s+/g, " ").trim();
     const safeAddress = physicalMailingAddress
       .replace(/[\r\n]+/g, ", ")
@@ -847,6 +865,8 @@ export const rotateInboundRelayDsnRoutingTarget = mutation({
     const inbox = await inboxForSite(ctx, siteId);
     if (
       !inbox ||
+      !site.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       inbox.provider !== "gmail" ||
       ["disconnected", "suspended"].includes(inbox.status) ||
       !(inbox.oauthRefreshToken || inbox.oauthAccessToken)
@@ -973,6 +993,14 @@ export const enableAutonomousOutreach = mutation({
     ) {
       throw new Error(
         "The outreach inbox or sender profile changed. Review the current configuration before consenting.",
+      );
+    }
+    if (
+      !site.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      throw new Error(
+        "The Gmail credential belongs to a previous site owner; reconnect it before enabling autonomy.",
       );
     }
     if (
@@ -1103,6 +1131,81 @@ export const enableAutonomousOutreach = mutation({
       authorizedDrafts: 0,
       reconciliationPending: true,
     };
+  },
+});
+
+/** Bootstrap the account-wide legacy STOP/contact/pacing materialization for
+ * every delivery mode. Manual approval is not allowed to bypass compliance
+ * history that predates the durable ledgers on a sibling site. */
+export const ensureOutreachDurabilityMigrationInternal = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const [site, inboxes] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db
+        .query("outreach_inboxes")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(2),
+    ]);
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.userId ||
+      inboxes.length !== 1 ||
+      inboxes[0].credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      return { complete: false as const, reason: "tenant_unavailable" as const };
+    }
+    const inbox = inboxes[0];
+    const timestamp = Date.now();
+    const accountKey = accountDeletionKey(site.userId);
+    const receipt = await ctx.db
+      .query("outreach_durability_migrations")
+      .withIndex("by_account", (q) => q.eq("accountKey", accountKey))
+      .first();
+    if (
+      receipt?.version === OUTREACH_DURABILITY_MIGRATION_VERSION &&
+      receipt.status === "complete"
+    ) {
+      return { complete: true as const };
+    }
+    if (!receipt) {
+      await ctx.db.insert("outreach_durability_migrations", {
+        accountKey,
+        userId: site.userId,
+        version: OUTREACH_DURABILITY_MIGRATION_VERSION,
+        status: "pending",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    } else if (
+      receipt.version !== OUTREACH_DURABILITY_MIGRATION_VERSION ||
+      receipt.userId !== site.userId
+    ) {
+      await ctx.db.patch(receipt._id, {
+        userId: site.userId,
+        version: OUTREACH_DURABILITY_MIGRATION_VERSION,
+        status: "pending",
+        siteCursor: undefined,
+        nextSiteCursor: undefined,
+        sitesDoneAfterActive: undefined,
+        activeSiteId: undefined,
+        rowStage: undefined,
+        rowCursor: undefined,
+        completedAt: undefined,
+        updatedAt: timestamp,
+      });
+    }
+    await ctx.scheduler.runAfter(
+      0,
+      internal.outreach.migrateOutreachDurabilityInternal,
+      {
+        siteId,
+        inboxId: inbox._id,
+        generation: inbox.autonomyReconciliationGeneration ?? 0,
+      },
+    );
+    return { complete: false as const, reason: "migration_pending" as const };
   },
 });
 
@@ -1558,24 +1661,54 @@ export const getInboxInternal = internalQuery({
     const site = await ctx.db.get(siteId);
     if (!(await siteExecutionAuthorized(ctx, site))) return null;
     const inbox = await inboxForSite(ctx, siteId);
-    return inbox
-      ? {
-          ...inbox,
-          siteRolloutEpoch: site?.autopilotRolloutEpoch ?? 0,
-          automaticDeliveryAuthorized: Boolean(
-            site &&
-              inbox.credentialOwnerAccountKey ===
-                accountDeletionKey(site.userId!) &&
-              autonomousOutreachRuntimeEnabled(
-                process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
-              ) &&
-              autonomousOutreachConsentActive(inbox, site.userId) &&
-              autonomousOutreachReconciliationComplete(inbox) &&
-              (await outreachDurabilityMigrationComplete(ctx, site)) &&
-              isSeoGrowthActuationEligible(site),
-          ),
-        }
-      : null;
+    if (
+      !inbox ||
+      !site?.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      // This query returns provider credentials to Node actions. A site owner
+      // change must therefore fail before any canary, send, or Gmail-read
+      // action can obtain the prior owner's refresh token.
+      return null;
+    }
+    const timestamp = Date.now();
+    const durablePacing = await readDurablePacingReceipt(
+      ctx,
+      site,
+      inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+    );
+    const activeDurablePacing =
+      durablePacing && durablePacing.retainUntil > timestamp
+        ? durablePacing
+        : null;
+    const durableOwnerMatches = Boolean(
+      !activeDurablePacing ||
+        activeDurablePacing.accountKey === accountDeletionKey(site.userId),
+    );
+    if (!durableOwnerMatches) return null;
+    const effectivePacing = effectiveDurablePacingState({
+      now: timestamp,
+      fromEmail: inbox.fromEmail,
+      inboxWarmupStartedAt: inbox.warmupStartedAt,
+      inboxSentToday: inbox.sentToday,
+      inboxSentTodayDay: inbox.sentTodayDay,
+      inboxLastSentAt: inbox.lastSentAt,
+      durable: activeDurablePacing ?? undefined,
+    });
+    return {
+      ...inbox,
+      ...effectivePacing,
+      siteRolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      automaticDeliveryAuthorized: Boolean(
+        autonomousOutreachRuntimeEnabled(
+          process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+        ) &&
+          autonomousOutreachConsentActive(inbox, site.userId) &&
+          autonomousOutreachReconciliationComplete(inbox) &&
+          (await outreachDurabilityMigrationComplete(ctx, site)) &&
+          isSeoGrowthActuationEligible(site),
+      ),
+    };
   },
 });
 
@@ -1649,7 +1782,12 @@ export const listLegacyInboundFleetPage = internalQuery({
           .withIndex("by_site", (q) => q.eq("siteId", inbox.siteId))
           .take(2),
       ]);
-      if (inboxes.length !== 1 || inboxes[0]._id !== inbox._id) continue;
+      if (
+        !site?.userId ||
+        inboxes.length !== 1 ||
+        inboxes[0]._id !== inbox._id ||
+        inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+      ) continue;
       const policy = await outreachSettlementPolicy(ctx, site);
       if (policy.maximumDeliveryBoundaryAt === 0) continue;
       const [candidate] = await legacyUnboundMessages(ctx, inbox._id, {
@@ -1742,9 +1880,19 @@ export const getLegacyInboundOwnership = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
-    return (await outreachSettlementLifecycleActive(ctx, site))
-      ? { userId: site!.userId }
-      : null;
+    if (!(await outreachSettlementLifecycleActive(ctx, site))) return null;
+    const inboxes = await ctx.db
+      .query("outreach_inboxes")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .take(2);
+    if (
+      inboxes.length !== 1 ||
+      inboxes[0].credentialOwnerAccountKey !==
+        accountDeletionKey(site!.userId!)
+    ) {
+      return null;
+    }
+    return { userId: site!.userId };
   },
 });
 
@@ -1755,6 +1903,12 @@ export const markInboxVerified = internalMutation({
     if (!siteExecutionActive(site)) throw new Error("Site not found");
     const inbox = await ctx.db.get(inboxId);
     if (!inbox || inbox.siteId !== siteId) throw new Error("Inbox not found for site");
+    if (
+      !site?.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      throw new Error("The Gmail credential does not belong to the current site owner");
+    }
     await assertNoActiveDelivery(ctx, siteId);
     if (
       !inbox.spfVerifiedAt ||
@@ -2292,6 +2446,13 @@ export const claimApprovedDelivery = internalMutation({
         reason: "Tenant is unavailable or parked outside the current plan allowance.",
       };
     }
+    if (!(await outreachDurabilityMigrationComplete(ctx, site))) {
+      return {
+        claimed: false as const,
+        reason:
+          "Account-wide legacy suppression and contact history has not finished reconciling.",
+      };
+    }
     if (
       release === "automatic" &&
       (!autonomousOutreachRuntimeEnabled(
@@ -2370,8 +2531,7 @@ export const claimApprovedDelivery = internalMutation({
       (release === "approved" && !["approval", "live"].includes(inbox.mode)) ||
       (release === "automatic" &&
         (!autonomousOutreachConsentActive(inbox, site.userId) ||
-          !autonomousOutreachReconciliationComplete(inbox) ||
-          !(await outreachDurabilityMigrationComplete(ctx, site))))
+          !autonomousOutreachReconciliationComplete(inbox)))
     ) {
       return {
         claimed: false as const,
@@ -2461,6 +2621,41 @@ export const claimApprovedDelivery = internalMutation({
       }
     }
 
+    // A migration or deletion sweep can materialize older sender-domain
+    // reputation after this inbox connected. Read the global receipt inside
+    // this mutation and merge it monotonically before the authoritative pacing
+    // decision. The indexed read also serializes against a concurrent receipt
+    // update, so the action preflight can never be the only cap boundary.
+    const durablePacing = await readDurablePacingReceipt(
+      ctx,
+      site,
+      inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+    );
+    const activeDurablePacing =
+      durablePacing && durablePacing.retainUntil > now
+        ? durablePacing
+        : null;
+    if (
+      activeDurablePacing &&
+      activeDurablePacing.accountKey !== accountDeletionKey(site.userId!)
+    ) {
+      return {
+        claimed: false as const,
+        reason:
+          "The sender domain remains reserved to another account's reputation window.",
+      };
+    }
+    const effectivePacing = effectiveDurablePacingState({
+      now,
+      fromEmail: inbox.fromEmail,
+      inboxWarmupStartedAt: inbox.warmupStartedAt,
+      inboxSentToday: inbox.sentToday,
+      inboxSentTodayDay: inbox.sentTodayDay,
+      inboxLastSentAt: inbox.lastSentAt,
+      durable: activeDurablePacing ?? undefined,
+    });
+    const effectiveInbox = { ...inbox, ...effectivePacing };
+
     const senderIssues = senderClaimIssues({
       siteDomain: site.domain,
       provider: inbox.provider,
@@ -2504,7 +2699,11 @@ export const claimApprovedDelivery = internalMutation({
       };
     }
 
-    const pacing = outreachSendDecision({ inbox, now, release });
+    const pacing = outreachSendDecision({
+      inbox: effectiveInbox,
+      now,
+      release,
+    });
     if (!pacing.allowed) return { claimed: false as const, reason: pacing.reason };
 
     const message = await ctx.db.get(opportunityEvidence.messageId);
@@ -2786,6 +2985,7 @@ export const claimApprovedDelivery = internalMutation({
     }
 
     await ctx.db.patch(inbox._id, {
+      ...effectivePacing,
       dnsCheckedAt: dnsEvidence.checkedAt,
       spfVerifiedAt: dnsEvidence.checkedAt,
       dkimVerifiedAt: dnsEvidence.checkedAt,
@@ -2828,7 +3028,7 @@ export const claimApprovedDelivery = internalMutation({
     return {
       claimed: true as const,
       attemptId,
-      inbox,
+      inbox: effectiveInbox,
       message,
       leaseExpiresAt: now + OUTREACH_DELIVERY_LEASE_MS,
     };
@@ -3381,8 +3581,10 @@ export const createInboundRelayDsnCanary = internalMutation({
     if (
       !site ||
       !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.userId ||
       !inbox ||
       inbox.siteId !== args.siteId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       inbox.provider !== "gmail" ||
       ["disconnected", "suspended"].includes(inbox.status) ||
       (inbox.configurationVersion ?? 0) !== args.inboxConfigurationVersion ||
@@ -3615,6 +3817,8 @@ export const getInboundRelayDsnCanaryCandidate = internalQuery({
         (inbox?.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
       !/^[a-f0-9]{64}$/.test(canary.dsnRoutingTargetHash ?? "") ||
       !site ||
+      !site.userId ||
+      inbox?.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       (site.autopilotRolloutEpoch ?? 0) !== canary.rolloutEpoch ||
       !inbox ||
@@ -3735,6 +3939,8 @@ export const recordInboundRelayDsnCanaryReceipt = internalMutation({
       args.receivedAt < canary.issuedAt - 60_000 ||
       args.receivedAt > canary.expiresAt ||
       !site ||
+      !site.userId ||
+      inbox?.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       (site.autopilotRolloutEpoch ?? 0) !== args.rolloutEpoch ||
       !inbox ||
@@ -4260,6 +4466,33 @@ export const claimInboundSync = internalMutation({
       return { claimed: false as const, reason: "Exactly one outreach inbox is required." };
     }
     const inbox = inboxes[0];
+    if (
+      !site?.userId ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      // A legacy read grant belongs to the account that connected it. Clear
+      // stale credentials before returning so a new site owner can never read
+      // the prior owner's mailbox through this settlement-only path.
+      await ctx.db.patch(inbox._id, {
+        status: "disconnected",
+        mode: "approval",
+        oauthAccessToken: undefined,
+        oauthRefreshToken: undefined,
+        oauthExpiresAt: undefined,
+        oauthScopes: undefined,
+        verifiedAt: undefined,
+        inboundSyncLeaseId: undefined,
+        inboundSyncLeaseExpiresAt: undefined,
+        configurationVersion: (inbox.configurationVersion ?? 0) + 1,
+        lastError:
+          "The site owner changed; reconnect Gmail before any mailbox access.",
+        updatedAt: now,
+      });
+      return {
+        claimed: false as const,
+        reason: "The Gmail credential does not belong to the current tenant owner.",
+      };
+    }
     if (
       inbox.provider !== "gmail" ||
       !inbox.oauthScopes?.split(/\s+/).includes(

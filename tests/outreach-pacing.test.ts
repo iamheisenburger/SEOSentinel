@@ -18,6 +18,7 @@ import {
   warmupDailyCap,
 } from "../convex/lib/outreachPacing.ts";
 import {
+  effectiveDurablePacingState,
   mergeDurablePacingState,
   outreachRecipientDomainKey,
 } from "../convex/lib/outreachDurability.ts";
@@ -150,6 +151,56 @@ test("a late older settlement cannot rewind the durable day or counter", () => {
   assert.equal(merged.sentToday, 5);
   assert.equal(merged.lastSentAt, NOW);
   assert.equal(merged.mailboxKey, "mailbox-current");
+});
+
+test("a durable sender receipt written after connect controls preflight and claim pacing", () => {
+  const effective = effectiveDurablePacingState({
+    now: NOW,
+    fromEmail: "new-alias@sender.example",
+    inboxWarmupStartedAt: NOW,
+    inboxSentToday: 1,
+    inboxSentTodayDay: utcDayKey(NOW),
+    inboxLastSentAt: NOW - OUTREACH_MIN_SEND_INTERVAL_MS - 1,
+    durable: {
+      mailboxKey: "different-mailbox-digest",
+      warmupStartedAt: NOW - 60 * DAY,
+      sentToday: WARMUP_INITIAL_DAILY_CAP,
+      sentTodayDay: utcDayKey(NOW),
+      lastSentAt: NOW - 1_000,
+      updatedAt: NOW - 1_000,
+    },
+  });
+  assert.equal(effective.warmupStartedAt, NOW, "a new mailbox keeps cold warm-up");
+  assert.equal(effective.sentToday, WARMUP_INITIAL_DAILY_CAP);
+  assert.equal(effective.lastSentAt, NOW - 1_000);
+  const decision = outreachSendDecision({
+    inbox: {
+      provider: "gmail",
+      status: "warming",
+      mode: "live",
+      dailySendCap: DEFAULT_DAILY_SEND_CAP,
+      ...effective,
+    },
+    now: NOW,
+  });
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reason, /Daily send cap reached/);
+
+  const spacingOnly = outreachSendDecision({
+    inbox: {
+      provider: "gmail",
+      status: "active",
+      mode: "live",
+      dailySendCap: DEFAULT_DAILY_SEND_CAP,
+      warmupStartedAt: NOW - 60 * DAY,
+      sentToday: 1,
+      sentTodayDay: utcDayKey(NOW),
+      lastSentAt: effective.lastSentAt,
+    },
+    now: NOW,
+  });
+  assert.equal(spacingOnly.allowed, false);
+  assert.match(spacingOnly.reason, /spacing/);
 });
 
 test("recipient cooldown identity follows an organisation across subdomains", () => {

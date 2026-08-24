@@ -92,6 +92,55 @@ export type DurablePacingState = {
   updatedAt: number;
 };
 
+/** Merge a possibly newer global sender receipt into the inbox snapshot used
+ * by both the action preflight and the serializable send claim. Domain-level
+ * count/spacing always take the maximum. Mailbox warm-up is inherited only by
+ * the exact same mailbox, so rotating aliases cannot borrow mature warm-up. */
+export function effectiveDurablePacingState(args: {
+  now: number;
+  fromEmail: string;
+  inboxWarmupStartedAt?: number;
+  inboxSentToday?: number;
+  inboxSentTodayDay?: string;
+  inboxLastSentAt?: number;
+  durable?: DurablePacingState;
+}): {
+  warmupStartedAt?: number;
+  sentToday: number;
+  sentTodayDay: string;
+  lastSentAt?: number;
+} {
+  const today = utcDayKey(args.now);
+  const inboxToday = args.inboxSentTodayDay === today
+    ? args.inboxSentToday ?? 0
+    : 0;
+  const durableToday = args.durable?.sentTodayDay === today
+    ? args.durable.sentToday
+    : 0;
+  const sameMailbox = Boolean(
+    args.durable &&
+      args.durable.mailboxKey === outreachMailboxKey(args.fromEmail),
+  );
+  const warmupCandidates = [
+    args.inboxWarmupStartedAt,
+    sameMailbox ? args.durable?.warmupStartedAt : undefined,
+  ].filter((value): value is number =>
+    Number.isFinite(value) && (value ?? 0) > 0
+  );
+  const lastSentAt = Math.max(
+    args.inboxLastSentAt ?? 0,
+    args.durable?.lastSentAt ?? 0,
+  );
+  return {
+    warmupStartedAt: warmupCandidates.length > 0
+      ? Math.min(...warmupCandidates)
+      : undefined,
+    sentToday: Math.max(inboxToday, durableToday),
+    sentTodayDay: today,
+    lastSentAt: lastSentAt > 0 ? lastSentAt : undefined,
+  };
+}
+
 /** Monotonic merge used by direct, reviewed, relay-proven and legacy receipt
  * materialization. A late receipt can add to its own current day, but can
  * never rewind a newer UTC day, mailbox lineage, count or last-send time. */

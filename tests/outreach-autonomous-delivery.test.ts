@@ -125,12 +125,72 @@ test("automatic delivery uses exact current consent, strict send-only credential
   assert.match(claim, /autonomousGmailCredentialIssues/);
   assert.match(claim, /credentialOwnerAccountKey/);
   assert.match(claim, /isSeoGrowthActuationEligible\(site\)/);
-  assert.match(claim, /outreachSendDecision\(\{ inbox, now, release \}\)/);
+  assert.match(claim, /readDurablePacingReceipt/);
+  assert.match(claim, /effectiveDurablePacingState/);
+  assert.match(claim, /inbox: effectiveInbox/);
   assert.match(claim, /reserveDurableContactClaim/);
   assert.match(claim, /status: "sending"/);
   assert.match(action, /sendHandler\(ctx, siteId, "automatic"\)/);
   assert.match(action, /export const sendAutomaticOutreachInternal = internalAction/);
   assert.doesNotMatch(action, /export const sendAutomaticOutreach = action/);
+});
+
+test("every provider-credential boundary rejects a changed site owner", () => {
+  const publicInbox = backend.slice(
+    backend.indexOf("export const getInbox = query"),
+    backend.indexOf("export const connectGmailInboxInternal"),
+  );
+  const internalInbox = backend.slice(
+    backend.indexOf("export const getInboxInternal"),
+    backend.indexOf("export const getGmailReconnectReadinessInternal"),
+  );
+  const canary = backend.slice(
+    backend.indexOf("export const createInboundRelayDsnCanary"),
+    backend.indexOf("export const finalizeInboundRelayDsnCanaryDelivery"),
+  );
+  const canaryCandidate = backend.slice(
+    backend.indexOf("export const getInboundRelayDsnCanaryCandidate"),
+    backend.indexOf("export const recordInboundRelayDsnCanaryReceipt"),
+  );
+  const canaryReceipt = backend.slice(
+    backend.indexOf("export const recordInboundRelayDsnCanaryReceipt"),
+    backend.indexOf("const inboundRelayKindValidator"),
+  );
+  const legacyFleet = backend.slice(
+    backend.indexOf("export const listLegacyInboundFleetPage"),
+    backend.indexOf("export const getLegacyInboundFleetState"),
+  );
+  const inboundClaim = backend.slice(
+    backend.indexOf("export const claimInboundSync"),
+    backend.indexOf("export const bindInboundProviderThread"),
+  );
+  assert.match(publicInbox, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(publicInbox, /return null/);
+  assert.match(internalInbox, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(canary, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(canaryCandidate, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(canaryReceipt, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(legacyFleet, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(inboundClaim, /credentialOwnerAccountKey !== accountDeletionKey/);
+  assert.match(inboundClaim, /oauthRefreshToken: undefined/);
+  assert.match(inboundClaim, /status: "disconnected"/);
+});
+
+test("manual and automatic delivery wait for account-wide legacy compliance migration", () => {
+  const send = action.slice(
+    action.indexOf("async function sendHandler"),
+    action.indexOf("export const sendApprovedOutreach"),
+  );
+  const claim = backend.slice(
+    backend.indexOf("export const claimApprovedDelivery"),
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+  );
+  assert.match(send, /ensureOutreachDurabilityMigrationInternal/);
+  assert.match(send, /if \(!durability\.complete\)/);
+  assert.match(
+    claim,
+    /if \(!\(await outreachDurabilityMigrationComplete\(ctx, site\)\)\)/,
+  );
 });
 
 test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {

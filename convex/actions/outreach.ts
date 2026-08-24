@@ -1001,6 +1001,17 @@ async function sendHandler(
   if (!inboxSnapshot) {
     return { ...result, stopped: "No outreach inbox is connected for this tenant." };
   }
+  const durability = await ctx.runMutation(
+    internal.outreach.ensureOutreachDurabilityMigrationInternal,
+    { siteId },
+  );
+  if (!durability.complete) {
+    return {
+      ...result,
+      stopped:
+        "Account-wide legacy suppression and contact history is still being reconciled. Nothing was sent.",
+    };
+  }
 
   const relayDomain = process.env.OUTREACH_INBOUND_RELAY_DOMAIN;
   const relayConfigured = inboundRelayConfigured(inboundRelayRuntimeConfig());
