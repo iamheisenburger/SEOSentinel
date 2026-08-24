@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE = (ROOT / "template.yaml").read_text()
+GUARD = (ROOT / "src" / "guard.py").read_text()
+PARSER = (ROOT / "src" / "parser.py").read_text()
+
+
+class TemplateContractTests(unittest.TestCase):
+    def test_ses_classic_rule_is_us_east_1_tls_scanned_and_guarded_first(self) -> None:
+        self.assertIn("AWS::SES::ReceiptRule", TEMPLATE)
+        self.assertIn("AWS::SES::ReceiptRuleSet", TEMPLATE)
+        self.assertIn("!Ref AWS::Region, us-east-1", TEMPLATE)
+        self.assertIn("TlsPolicy: Require", TEMPLATE)
+        self.assertIn("ScanEnabled: true", TEMPLATE)
+        actions = TEMPLATE[
+            TEMPLATE.index("        Actions:\n") : TEMPLATE.index(
+                "  OperationsAlertTopic:"
+            )
+        ]
+        self.assertLess(actions.index("LambdaAction:"), actions.index("S3Action:"))
+        self.assertIn("InvocationType: RequestResponse", actions)
+        self.assertNotIn("SNSAction", actions)
+
+    def test_raw_bucket_is_private_unversioned_sse_s3_with_one_day_backstop(
+        self,
+    ) -> None:
+        self.assertIn("SSEAlgorithm: AES256", TEMPLATE)
+        self.assertIn("BlockPublicAcls: true", TEMPLATE)
+        self.assertIn("RestrictPublicBuckets: true", TEMPLATE)
+        self.assertNotIn("VersioningConfiguration", TEMPLATE)
+        self.assertIn("ExpirationInDays: 1", TEMPLATE)
+        self.assertIn("Prefix: raw/", TEMPLATE)
+
+    def test_queue_is_pointer_only_bounded_encrypted_and_dead_lettered(self) -> None:
+        self.assertIn("SqsManagedSseEnabled: true", TEMPLATE)
+        self.assertIn("MessageRetentionPeriod: 21600", TEMPLATE)
+        self.assertIn("MessageRetentionPeriod: 86400", TEMPLATE)
+        self.assertIn("maxReceiveCount: 24", TEMPLATE)
+        self.assertIn("Event: s3:ObjectCreated:Put", TEMPLATE)
+        self.assertIn("FunctionResponseTypes: [ReportBatchItemFailures]", TEMPLATE)
+
+    def test_no_component_has_outbound_ses_or_iam_authority(self) -> None:
+        self.assertIsNone(
+            re.search(r"ses:(?:Send|SendRaw|SendBounce)", TEMPLATE, re.IGNORECASE)
+        )
+        self.assertIsNone(re.search(r"Action:\s*(?:\[)?iam:", TEMPLATE, re.IGNORECASE))
+        self.assertNotIn("ses:Send", GUARD + PARSER)
+        self.assertNotIn('boto3.client("ses', GUARD + PARSER)
+
+    def test_retention_retries_privacy_and_rotation_are_explicit(self) -> None:
+        self.assertIn("Schedule: rate(5 minutes)", TEMPLATE)
+        self.assertIn("RAW_PURGE_AGE_SECONDS", GUARD)
+        self.assertIn("SweeperFreshnessAlarm:", TEMPLATE)
+        self.assertIn("SweeperErrorAlarm:", TEMPLATE)
+        self.assertIn("Threshold: 21600", TEMPLATE)
+        self.assertIn("TreatMissingData: breaching", TEMPLATE)
+        self.assertIn("status == 425", PARSER)
+        self.assertIn("500 <= status < 600", PARSER)
+        self.assertIn("400 <= status < 500", PARSER)
+        self.assertIn('document.get("signWith", "current")', PARSER)
+        self.assertNotIn("print(event", GUARD + PARSER)
+        self.assertNotIn("print(raw", GUARD + PARSER)
+
+    def test_budget_alerts_at_two_dollars_and_five_dollar_review(self) -> None:
+        account_budget = TEMPLATE[
+            TEMPLATE.index("  RelayAccountMonthlyBudget:") : TEMPLATE.index(
+                "  RelayTaggedInfrastructureBudget:"
+            )
+        ]
+        self.assertIn("Amount: 5", TEMPLATE)
+        self.assertIn("Threshold: 40", TEMPLATE)
+        self.assertIn("Threshold: 100", TEMPLATE)
+        self.assertEqual(TEMPLATE.count("NotificationType: ACTUAL"), 4)
+        self.assertNotIn("CostFilters:", account_budget)
+        self.assertIn("DedicatedRelayAccountOnly:", TEMPLATE)
+        self.assertIn('DedicatedRelayAccountAcknowledged, "true"', TEMPLATE)
+        self.assertIn("user:PentraComponent$inbound-relay", TEMPLATE)
+
+
+if __name__ == "__main__":
+    unittest.main()

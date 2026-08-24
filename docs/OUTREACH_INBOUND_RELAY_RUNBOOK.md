@@ -24,7 +24,7 @@ Do not claim automated bounce handling and do not release send-only outreach unt
 ## Owner-only external prerequisites
 
 1. A stable dedicated inbound relay domain, separate from tenant website, transactional-mail, and sender domains.
-2. Wildcard MX receipt for `reply-*` aliases in a receiving-only provider/worker with no Gmail, SMTP, Mailgun-send, Resend-send, or equivalent outbound credential.
+2. Wildcard MX receipt for exact `reply-*` human-reply aliases and `dsn-*` Workspace delivery-status aliases in a receiving-only provider/worker with no Gmail, SMTP, Mailgun-send, Resend-send, or equivalent outbound credential.
 3. The Google Workspace DSN routing rule described above for every outreach mailbox admitted to send-only mode.
 4. A fixed, operator-controlled recipient address that reliably produces a permanent structured `5.x.x` DSN. It is configured server-side; owners cannot supply or change the canary recipient.
 5. A randomly generated HMAC secret of at least 32 characters, installed without printing it in logs.
@@ -172,3 +172,39 @@ Reconnect is blocked while any eligible unbound sent/reviewed/replied message re
 5. Re-canary every inbox at least every 30 days and immediately after Workspace routing, adapter, retention or sender configuration changes.
 
 Monitor only aggregate status codes, latency, byte counts, adapter version, seal age and bodyless receipt counts. Never log secrets, OAuth tokens, raw inbound content, attachments, aliases, addresses, Message-IDs or full signed bodies.
+
+## Audited AWS SES classic adapter
+
+The repository's receiving-only reference implementation lives in
+`infra/outreach-inbound-relay/`. Its SAM stack is deliberately isolated from
+the Pentra application deployment and has no outbound SES/mail permission.
+
+The AWS route distinguishes two envelope aliases:
+
+- `reply-<independent-per-message-token>@<relay-domain>` receives a human reply;
+- `dsn-<independent-per-inbox-token>@<relay-domain>` receives only a
+  Google Workspace-routed delivery-status notification.
+
+The DSN alias is not a tenant selector. The adapter requires a structured
+`message/delivery-status` permanent failure, recovers the original exact Pentra
+Message-ID and `reply-*` alias from the returned-message part, and submits that
+recovered reply alias as `recipient`. Missing, duplicated, wrapped, body-guessed
+or conflicting evidence is terminal and creates no webhook.
+
+SES admission requires TLS, spam and virus `PASS`, plus SES `DMARC PASS` or its
+aligned `DKIM PASS`. Bare SPF is never sufficient. The synchronous guard runs
+before the raw S3 action and atomically enforces 10 accepted messages per alias
+per hour and 60 per trusted SES source IP per minute.
+
+Raw MIME is swept every five minutes at a five-hour-forty-five-minute threshold
+to preserve headroom before the six-hour privacy boundary, with age/heartbeat
+and Lambda-error alarms plus a one-day lifecycle backstop. SQS and its DLQ carry
+object pointers only. See the adapter README and exact retention-policy file
+for deployment, Workspace routing, rotation, audit, recovery and $2/$5
+budget-gate instructions. Because SES receipt charges cannot be cost-tagged,
+the adapter may be deployed only in a dedicated receiving-only AWS account;
+its unfiltered account-wide budget is authoritative and the tagged budget is
+diagnostic only. Passing unit tests or deploying the stack does not set
+`OUTREACH_INBOUND_RELAY_RETENTION_AUDITED=true`; that operator assertion still
+requires evidence from the real production route and the product's signed
+owner canary.

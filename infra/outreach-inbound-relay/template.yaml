@@ -1,0 +1,591 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Pentra receiving-only SES classic inbound relay (no outbound mail authority)
+
+Rules:
+  UsEast1Only:
+    Assertions:
+      - Assert: !Equals [!Ref AWS::Region, us-east-1]
+        AssertDescription: SES classic inbound receipt resources must be deployed in us-east-1.
+  DedicatedRelayAccountOnly:
+    Assertions:
+      - Assert: !Equals [!Ref DedicatedRelayAccountAcknowledged, "true"]
+        AssertDescription: Deploy only in a dedicated receiving-only AWS account so the account-wide budget covers untaggable SES receipt charges.
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: pentra-inbound-relay
+    AllowedPattern: ^[a-z0-9-]{3,40}$
+  RelayDomain:
+    Type: String
+    AllowedPattern: ^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$
+  RawBucketName:
+    Type: String
+    AllowedPattern: ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$
+    Description: Globally unique private bucket name; do not reuse an existing bucket.
+  PentraWebhookUrl:
+    Type: String
+    AllowedPattern: ^https://[a-z0-9.-]+\.convex\.site/webhooks/outreach-inbound$
+  HmacSecretArn:
+    Type: String
+    AllowedPattern: ^arn:[a-z0-9-]+:secretsmanager:us-east-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$
+    NoEcho: true
+  AdapterVersion:
+    Type: String
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$
+  RetentionPolicyHash:
+    Type: String
+    AllowedPattern: ^[a-f0-9]{64}$
+  AlertEmail:
+    Type: String
+    AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  ReceiptRuleEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  DedicatedRelayAccountAcknowledged:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Must be explicitly true only in an AWS account dedicated to this receiving-only relay.
+
+Conditions:
+  EnableReceiptRule: !Equals [!Ref ReceiptRuleEnabled, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    CodeUri: src/
+    MemorySize: 256
+    Tags:
+      PentraComponent: inbound-relay
+    Environment:
+      Variables:
+        RELAY_DOMAIN: !Ref RelayDomain
+        RAW_BUCKET_NAME: !Ref RawBucketName
+        STATE_TABLE_NAME: !Ref RelayStateTable
+
+Resources:
+  RelayStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  RelayDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 86400
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  RelayPointerQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 21600
+      VisibilityTimeout: 120
+      MaximumMessageSize: 65536
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RelayDeadLetterQueue.Arn
+        maxReceiveCount: 24
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  RelayPointerQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref RelayPointerQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3PointerNotificationsOnly
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt RelayPointerQueue.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:s3:::${RawBucketName}
+
+  RawMimeBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: RelayPointerQueuePolicy
+    Properties:
+      BucketName: !Ref RawBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: OneDayRawMimeBackstop
+            Status: Enabled
+            Prefix: raw/
+            ExpirationInDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Queue: !GetAtt RelayPointerQueue.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: raw/
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  RawMimeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RawMimeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt RawMimeBucket.Arn
+              - !Sub ${RawMimeBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: SesWritesRawMimeOnly
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${RawMimeBucket.Arn}/raw/*
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ses:us-east-1:${AWS::AccountId}:receipt-rule-set/${ResourcePrefix}-rules:receipt-rule/${ResourcePrefix}-inbound
+
+  GuardLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ResourcePrefix}-guard
+      RetentionInDays: 14
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  ParserLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ResourcePrefix}-parser
+      RetentionInDays: 14
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  SweeperLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ResourcePrefix}-sweeper
+      RetentionInDays: 14
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  GuardRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GuardMinimumAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${GuardLogGroup.Arn}:*
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:TransactWriteItems]
+                Resource: !GetAtt RelayStateTable.Arn
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  ParserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ParserMinimumAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${ParserLogGroup.Arn}:*
+              - Effect: Allow
+                Action: [s3:GetObject, s3:DeleteObject]
+                Resource: !Sub ${RawMimeBucket.Arn}/raw/*
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:DeleteItem]
+                Resource: !GetAtt RelayStateTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref HmacSecretArn
+              - Effect: Allow
+                Action:
+                  - sqs:ChangeMessageVisibility
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                Resource: !GetAtt RelayPointerQueue.Arn
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  SweeperRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SweeperMinimumAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${SweeperLogGroup.Arn}:*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt RawMimeBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: [raw/*]
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub ${RawMimeBucket.Arn}/raw/*
+              - Effect: Allow
+                Action: [dynamodb:Scan, dynamodb:DeleteItem]
+                Resource: !GetAtt RelayStateTable.Arn
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  ReceiptGuardFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: GuardLogGroup
+    Properties:
+      FunctionName: !Sub ${ResourcePrefix}-guard
+      Handler: guard.handler
+      Role: !GetAtt GuardRole.Arn
+      Timeout: 10
+      ReservedConcurrentExecutions: 5
+
+  MimeParserFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ParserLogGroup
+    Properties:
+      FunctionName: !Sub ${ResourcePrefix}-parser
+      Handler: parser.handler
+      Role: !GetAtt ParserRole.Arn
+      Timeout: 20
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          ADAPTER_VERSION: !Ref AdapterVersion
+          RETENTION_POLICY_HASH: !Ref RetentionPolicyHash
+          HMAC_SECRET_ARN: !Ref HmacSecretArn
+          PENTRA_WEBHOOK_URL: !Ref PentraWebhookUrl
+          QUEUE_URL: !Ref RelayPointerQueue
+      Events:
+        PointerQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt RelayPointerQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  RetentionSweeperFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SweeperLogGroup
+    Properties:
+      FunctionName: !Sub ${ResourcePrefix}-sweeper
+      Handler: sweeper.handler
+      Role: !GetAtt SweeperRole.Arn
+      Timeout: 60
+      ReservedConcurrentExecutions: 1
+      Events:
+        FiveMinuteSixHourRetention:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Enabled: true
+
+  AllowSesInvokeGuard:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ReceiptGuardFunction
+      Principal: ses.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:${AWS::Partition}:ses:us-east-1:${AWS::AccountId}:receipt-rule-set/${ResourcePrefix}-rules:receipt-rule/${ResourcePrefix}-inbound
+
+  ReceiptRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: !Sub ${ResourcePrefix}-rules
+
+  InboundReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn:
+      - AllowSesInvokeGuard
+      - RawMimeBucketPolicy
+    Properties:
+      RuleSetName: !Ref ReceiptRuleSet
+      Rule:
+        Name: !Sub ${ResourcePrefix}-inbound
+        Enabled: !If [EnableReceiptRule, true, false]
+        Recipients: [!Ref RelayDomain]
+        ScanEnabled: true
+        TlsPolicy: Require
+        Actions:
+          - LambdaAction:
+              FunctionArn: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ResourcePrefix}-guard
+              InvocationType: RequestResponse
+          - S3Action:
+              BucketName: !Ref RawMimeBucket
+              ObjectKeyPrefix: raw/
+          - StopAction:
+              Scope: RuleSet
+
+  OperationsAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Receiving relay pointer reached the DLQ; inspect redacted metrics before six-hour purge.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt RelayDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsAlertTopic]
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  QueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Receiving relay has a pointer older than thirty minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt RelayPointerQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1800
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsAlertTopic]
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  SweeperAgeMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref SweeperLogGroup
+      FilterPattern: '{ $.component = "sweeper" && $.oldestAgeSeconds = * }'
+      MetricTransformations:
+        - MetricNamespace: Pentra/InboundRelay
+          MetricName: !Sub ${ResourcePrefix}-oldest-raw-age-seconds
+          MetricValue: $.oldestAgeSeconds
+          DefaultValue: 0
+
+  SweeperFreshnessAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The raw-MIME sweeper missed its heartbeat or observed an object at the six-hour privacy boundary.
+      Namespace: Pentra/InboundRelay
+      MetricName: !Sub ${ResourcePrefix}-oldest-raw-age-seconds
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 21600
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref OperationsAlertTopic]
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  SweeperErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The raw-MIME retention sweeper Lambda returned an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref RetentionSweeperFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsAlertTopic]
+      Tags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  RelayAccountMonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub ${ResourcePrefix}-account-monthly-5-usd
+        BudgetLimit:
+          Amount: 5
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 40
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+      ResourceTags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+  RelayTaggedInfrastructureBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub ${ResourcePrefix}-tagged-infrastructure-monthly-5-usd
+        BudgetLimit:
+          Amount: 5
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        CostFilters:
+          TagKeyValue:
+            - user:PentraComponent$inbound-relay
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 40
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+      ResourceTags:
+        - Key: PentraComponent
+          Value: inbound-relay
+
+Outputs:
+  ReceiptRuleSetName:
+    Description: Review before explicitly activating this rule set; the stack does not activate it.
+    Value: !Ref ReceiptRuleSet
+  RawBucket:
+    Value: !Ref RawMimeBucket
+  PointerQueueArn:
+    Value: !GetAtt RelayPointerQueue.Arn
+  DeadLetterQueueArn:
+    Value: !GetAtt RelayDeadLetterQueue.Arn
+  AccountBudgetName:
+    Value: !Ref RelayAccountMonthlyBudget
+  TaggedInfrastructureBudgetName:
+    Value: !Ref RelayTaggedInfrastructureBudget
