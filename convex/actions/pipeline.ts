@@ -6937,10 +6937,53 @@ export const autopilotTick = internalAction({
     siteId: v.id("sites"),
     runId: v.optional(v.id("autopilot_runs")),
     trigger: v.optional(v.string()),
+    topicPlanCooldown: v.optional(v.object({
+      planJobId: v.id("jobs"),
+      rolloutEpoch: v.number(),
+      dueAt: v.number(),
+      claimNonce: v.string(),
+      continuationAttempt: v.number(),
+    })),
   },
-  handler: async (ctx, { siteId, runId }): Promise<{ processed: number }> => {
-    if (runId) {
-      await ctx.runMutation(internal.autopilot.markRunStarted, { runId });
+  handler: async (
+    ctx,
+    { siteId, runId, trigger, topicPlanCooldown },
+  ): Promise<{ processed: number }> => {
+    if (topicPlanCooldown) {
+      if (!runId || trigger !== "topic_plan_cooldown") {
+        throw new Error("Topic-plan cooldown wake is missing its exact run receipt");
+      }
+      const claimArgs = {
+        siteId,
+        runId,
+        planJobId: topicPlanCooldown.planJobId,
+        rolloutEpoch: topicPlanCooldown.rolloutEpoch,
+        dueAt: topicPlanCooldown.dueAt,
+        claimNonce: topicPlanCooldown.claimNonce,
+        continuationAttempt: topicPlanCooldown.continuationAttempt,
+      };
+      try {
+        const claim = await ctx.runMutation(
+          internal.autopilot.claimTopicPlanCooldownWake,
+          claimArgs,
+        );
+        if (!claim.claimed) return { processed: 0 };
+      } catch (error) {
+        const inspection = await ctx.runQuery(
+          internal.autopilot.inspectTopicPlanCooldownWakeClaim,
+          claimArgs,
+        );
+        if (inspection.state === "settled") return { processed: 0 };
+        if (inspection.state !== "claimed") throw error;
+      }
+    } else if (trigger === "topic_plan_cooldown") {
+      throw new Error("Topic-plan cooldown trigger is missing its fence");
+    } else if (runId) {
+      const start = await ctx.runMutation(
+        internal.autopilot.markRunStarted,
+        { runId },
+      );
+      if (!start.started) return { processed: 0 };
     }
     const finish = async (
       result: { processed: number },
@@ -6956,6 +6999,12 @@ export const autopilotTick = internalAction({
           detail,
           jobId,
           articleId,
+          ...(topicPlanCooldown
+            ? {
+                claimNonce: topicPlanCooldown.claimNonce,
+                continuationAttempt: topicPlanCooldown.continuationAttempt,
+              }
+            : {}),
         });
       }
       return result;
@@ -7082,7 +7131,18 @@ export const autopilotTick = internalAction({
         await ctx.scheduler.runAfter(
           0,
           internal.actions.pipeline.processNextJob as any,
-          { siteId, jobId: nextJob._id, runId },
+          {
+            siteId,
+            jobId: nextJob._id,
+            runId,
+            ...(topicPlanCooldown
+              ? {
+                  runClaimNonce: topicPlanCooldown.claimNonce,
+                  runContinuationAttempt:
+                    topicPlanCooldown.continuationAttempt,
+                }
+              : {}),
+          },
         );
         return { processed: 0 };
       }
@@ -7142,6 +7202,12 @@ export const autopilotTick = internalAction({
         await ctx.runMutation(internal.autopilot.markRunFailed, {
           runId,
           error: message,
+          ...(topicPlanCooldown
+            ? {
+                claimNonce: topicPlanCooldown.claimNonce,
+                continuationAttempt: topicPlanCooldown.continuationAttempt,
+              }
+            : {}),
         });
       }
       throw error;
@@ -7180,6 +7246,8 @@ export const processNextJob = internalAction({
     siteId: v.id("sites"),
     jobId: v.id("jobs"),
     runId: v.optional(v.id("autopilot_runs")),
+    runClaimNonce: v.optional(v.string()),
+    runContinuationAttempt: v.optional(v.number()),
   },
   handler: async (
     ctx: ActionCtx,
@@ -7187,6 +7255,8 @@ export const processNextJob = internalAction({
       siteId: Id<"sites">;
       jobId: Id<"jobs">;
       runId?: Id<"autopilot_runs">;
+      runClaimNonce?: string;
+      runContinuationAttempt?: number;
     },
   ): Promise<ProcessedJobResult> => {
     const execute = async (): Promise<ProcessedJobResult> => {
@@ -8128,6 +8198,8 @@ export const processNextJob = internalAction({
           detail: processedJobDetail(result),
           jobId: result.jobId,
           articleId: result.articleId,
+          claimNonce: args.runClaimNonce,
+          continuationAttempt: args.runContinuationAttempt,
         });
       }
       return result;
@@ -8138,6 +8210,8 @@ export const processNextJob = internalAction({
         await ctx.runMutation(internal.autopilot.markRunFailed, {
           runId: args.runId,
           error: message,
+          claimNonce: args.runClaimNonce,
+          continuationAttempt: args.runContinuationAttempt,
         });
       }
       throw error;

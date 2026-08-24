@@ -27,6 +27,18 @@ import {
 import {
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import { jobAuthorizedForExecution } from "./lib/jobRollout";
+import {
+  countsTowardTopicPlanRecentLimit,
+  topicPlanCooldownReceiptState,
+  topicPlanCooldownTerminalWriteAllowed,
+  topicPlanCooldownWatchdogDecision,
+  topicPlanCooldownWakeAt,
+  TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS,
+  TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS,
+  TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
+  TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+} from "./lib/planProviderBudget";
 
 const SITE_STAGGER_MS = 5_000;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
@@ -35,6 +47,7 @@ const PUBLIC_URL_VERIFIED_TRIGGER = "public_url_verified";
 const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
   "operator_recovery_of_public_url_verified:";
 const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
+const TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT = 50;
 
 async function upsertHealth(
   ctx: MutationCtx,
@@ -754,11 +767,359 @@ export const scheduleCadenceDeadline = internalMutation({
   },
 });
 
+// Claim the exact rolling-window wake before the action re-enters the ordinary
+// scheduler. The scheduler remains the only queue authority: it recomputes
+// current inventory, entitlement, article quota, account/fleet provider
+// budgets, and active work before it can reserve or call a provider.
+export const claimTopicPlanCooldownWake = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    planJobId: v.id("jobs"),
+    rolloutEpoch: v.number(),
+    dueAt: v.number(),
+    claimNonce: v.string(),
+    continuationAttempt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const timestamp = Date.now();
+    const [site, run, plan, pending, running] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.runId),
+      ctx.db.get(args.planJobId),
+      ctx.db.query("jobs").withIndex("by_site_status", (q) =>
+        q.eq("siteId", args.siteId).eq("status", "pending")
+      ).take(TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT + 1),
+      ctx.db.query("jobs").withIndex("by_site_status", (q) =>
+        q.eq("siteId", args.siteId).eq("status", "running")
+      ).take(TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT + 1),
+    ]);
+    const close = async (reason: string) => {
+      if (run?.siteId === args.siteId && run.status === "scheduled") {
+        await ctx.db.patch(args.runId, {
+          status: "completed",
+          completedAt: timestamp,
+          heartbeatAt: timestamp,
+          outcome: reason,
+          detail: `Topic-plan cooldown wake did not run: ${reason}.`,
+        });
+      }
+      return { claimed: false as const, reason };
+    };
+    const receiptState = topicPlanCooldownReceiptState({
+      run: run
+        ? {
+            siteId: String(run.siteId),
+            trigger: run.trigger,
+            claimNonce: run.claimNonce,
+            scheduledAt: run.scheduledAt,
+            status: run.status,
+          }
+        : null,
+      siteId: String(args.siteId),
+      planJobId: String(args.planJobId),
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+    });
+    if (receiptState !== "scheduled" && receiptState !== "claimed") {
+      return close("wake_receipt_incompatible");
+    }
+    if (
+      !Number.isInteger(args.rolloutEpoch) ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+      site.expectedClickSchedulingEnabled !== true
+    ) return close("autopilot_or_entitlement_ineligible");
+    if ((site.autopilotRolloutEpoch ?? 0) !== args.rolloutEpoch) {
+      return close("rollout_epoch_changed");
+    }
+    const expectedDueAt = plan ? topicPlanCooldownWakeAt(plan.createdAt) : null;
+    const payload = plan?.payload && typeof plan.payload === "object"
+      ? plan.payload as Record<string, unknown>
+      : {};
+    if (
+      !plan ||
+      plan.siteId !== args.siteId ||
+      plan.type !== "plan" ||
+      plan.rolloutEpoch !== args.rolloutEpoch ||
+      payload.manual === true ||
+      typeof payload.reason !== "string" ||
+      !payload.reason.startsWith("topic_") ||
+      !countsTowardTopicPlanRecentLimit(plan) ||
+      expectedDueAt !== args.dueAt ||
+      timestamp < args.dueAt
+    ) return close("plan_cooldown_fence_changed");
+    const recentPlans = await ctx.db.query("jobs")
+      .withIndex("by_site_type_created", (q) =>
+        q
+          .eq("siteId", args.siteId)
+          .eq("type", "plan")
+          .gte("createdAt", plan.createdAt)
+      )
+      .order("desc")
+      .take(TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT + 1);
+    if (recentPlans.length > TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT) {
+      return close("plan_history_overflow");
+    }
+    const latestCountedTopicPlan = recentPlans.find((job) => {
+      const candidatePayload = job.payload && typeof job.payload === "object"
+        ? job.payload as Record<string, unknown>
+        : {};
+      return candidatePayload.manual !== true &&
+        typeof candidatePayload.reason === "string" &&
+        candidatePayload.reason.startsWith("topic_") &&
+        countsTowardTopicPlanRecentLimit(job);
+    });
+    if (latestCountedTopicPlan?._id !== args.planJobId) {
+      return close("newer_topic_plan_exists");
+    }
+    const activeJob =
+      pending.length > TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT ||
+      running.length > TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT ||
+      [...pending, ...running].some((job) =>
+        jobAuthorizedForExecution(site, job)
+      );
+    // A continuation may re-enter only under the exact durable generation
+    // atomically assigned by the initial claim or its bounded watchdog.
+    if (receiptState === "claimed") {
+      if (
+        !Number.isInteger(args.continuationAttempt) ||
+        args.continuationAttempt !== run?.continuationAttempt
+      ) {
+        return {
+          claimed: false as const,
+          reason: "continuation_attempt_incompatible",
+        };
+      }
+      await ctx.db.patch(args.runId, { heartbeatAt: timestamp });
+      return { claimed: true as const, replayed: true as const, activeJob };
+    }
+    if (args.continuationAttempt !== undefined) {
+      return close("continuation_before_claim");
+    }
+    if (activeJob) return close("active_job");
+
+    const continuationAttempt = 1;
+    await ctx.db.patch(args.runId, {
+      status: "running",
+      startedAt: timestamp,
+      heartbeatAt: timestamp,
+      continuationAttempt,
+    });
+    await upsertHealth(ctx, args.siteId, {
+      lastRunId: args.runId,
+      heartbeatAt: timestamp,
+      status: "recovering",
+      detail:
+        "The exact topic-plan cooldown expired; Pentra is rechecking ordinary scheduler gates.",
+    });
+    const continuation = {
+      siteId: args.siteId,
+      runId: args.runId,
+      trigger: TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+      topicPlanCooldown: {
+        planJobId: args.planJobId,
+        rolloutEpoch: args.rolloutEpoch,
+        dueAt: args.dueAt,
+        claimNonce: args.claimNonce,
+        continuationAttempt,
+      },
+    };
+    const watchdog = {
+      siteId: args.siteId,
+      runId: args.runId,
+      planJobId: args.planJobId,
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+      expectedAttempt: continuationAttempt,
+    };
+    // Both schedules commit atomically with scheduled→running. The continuation
+    // action may execute at most once, while the exactly-once mutation watchdog
+    // durably replaces it after a crash before scheduler entry.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.pipeline.autopilotTick,
+      continuation,
+    );
+    await ctx.scheduler.runAfter(
+      TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS,
+      internal.autopilot.recoverTopicPlanCooldownContinuation,
+      watchdog,
+    );
+    return {
+      claimed: true as const,
+      dispatched: true as const,
+      continuationAttempt,
+    };
+  },
+});
+
+// Read-only exact receipt reinspection for the narrow case where the action
+// cannot tell whether its claim mutation committed before the response failed.
+export const inspectTopicPlanCooldownWakeClaim = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    planJobId: v.id("jobs"),
+    rolloutEpoch: v.number(),
+    dueAt: v.number(),
+    claimNonce: v.string(),
+    continuationAttempt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    const state = topicPlanCooldownReceiptState({
+      run: run
+        ? {
+            siteId: String(run.siteId),
+            trigger: run.trigger,
+            claimNonce: run.claimNonce,
+            scheduledAt: run.scheduledAt,
+            status: run.status,
+          }
+        : null,
+      siteId: String(args.siteId),
+      planJobId: String(args.planJobId),
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+    });
+    if (
+      state === "claimed" &&
+      args.continuationAttempt !== undefined &&
+      run?.continuationAttempt !== args.continuationAttempt
+    ) return { state: "missing" as const };
+    return { state: state === "scheduled" ? "unclaimed" as const : state };
+  },
+});
+
+// Exactly-once watchdog for an at-most-once action continuation. It never
+// queues paid work itself. Each bounded retry must re-enter the complete claim
+// fence and ordinary scheduler before any reservation or provider call.
+export const recoverTopicPlanCooldownContinuation = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    planJobId: v.id("jobs"),
+    rolloutEpoch: v.number(),
+    dueAt: v.number(),
+    claimNonce: v.string(),
+    expectedAttempt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const timestamp = Date.now();
+    const [run, site, plan] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.planJobId),
+    ]);
+    const receiptState = topicPlanCooldownReceiptState({
+      run: run
+        ? {
+            siteId: String(run.siteId),
+            trigger: run.trigger,
+            claimNonce: run.claimNonce,
+            scheduledAt: run.scheduledAt,
+            status: run.status,
+          }
+        : null,
+      siteId: String(args.siteId),
+      planJobId: String(args.planJobId),
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+    });
+    if (
+      receiptState !== "claimed" ||
+      !run ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+      site.expectedClickSchedulingEnabled !== true ||
+      (site.autopilotRolloutEpoch ?? 0) !== args.rolloutEpoch ||
+      !plan ||
+      plan.siteId !== args.siteId ||
+      plan.rolloutEpoch !== args.rolloutEpoch ||
+      topicPlanCooldownWakeAt(plan.createdAt) !== args.dueAt
+    ) return { recovered: false as const, reason: "watchdog_fence_changed" };
+
+    const decision = topicPlanCooldownWatchdogDecision({
+      receiptState,
+      currentAttempt: run.continuationAttempt,
+      expectedAttempt: args.expectedAttempt,
+      heartbeatAt: run.heartbeatAt,
+      now: timestamp,
+    });
+    if (decision.decision === "fence_changed") {
+      return { recovered: false as const, reason: "watchdog_fence_changed" };
+    }
+    if (decision.decision === "lease_live") {
+      await ctx.scheduler.runAt(
+        decision.retryAt,
+        internal.autopilot.recoverTopicPlanCooldownContinuation,
+        args,
+      );
+      return { recovered: false as const, reason: "continuation_lease_live" };
+    }
+    if (decision.decision === "exhausted") {
+      await ctx.db.patch(args.runId, {
+        heartbeatAt: timestamp,
+        detail:
+          "Bounded exact-wake continuation recovery exhausted; the ordinary fleet dispatcher remains the fail-closed fallback.",
+      });
+      return { recovered: false as const, reason: "recovery_exhausted" };
+    }
+
+    const continuationAttempt = decision.continuationAttempt;
+    await ctx.db.patch(args.runId, {
+      continuationAttempt,
+      heartbeatAt: timestamp,
+      detail:
+        `Recovering exact topic-plan cooldown continuation ${continuationAttempt}/${TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS}.`,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.pipeline.autopilotTick,
+      {
+        siteId: args.siteId,
+        runId: args.runId,
+        trigger: TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+        topicPlanCooldown: {
+          planJobId: args.planJobId,
+          rolloutEpoch: args.rolloutEpoch,
+          dueAt: args.dueAt,
+          claimNonce: args.claimNonce,
+          continuationAttempt,
+        },
+      },
+    );
+    await ctx.scheduler.runAfter(
+      TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS,
+      internal.autopilot.recoverTopicPlanCooldownContinuation,
+      { ...args, expectedAttempt: continuationAttempt },
+    );
+    return { recovered: true as const, continuationAttempt };
+  },
+});
+
 export const markRunStarted = internalMutation({
   args: { runId: v.id("autopilot_runs") },
   handler: async (ctx, { runId }) => {
     const run = await ctx.db.get(runId);
-    if (!run) return;
+    if (!run) return { started: false as const, reason: "run_missing" };
+    if (run.claimNonce) {
+      return { started: false as const, reason: "fenced_run" };
+    }
+    if (run.status !== "scheduled") {
+      return { started: false as const, reason: "run_not_scheduled" };
+    }
     const site = await ctx.db.get(run.siteId);
     const now = Date.now();
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
@@ -769,7 +1130,7 @@ export const markRunStarted = internalMutation({
         outcome: "site_parked",
         detail: "The site is not active under the current plan.",
       });
-      return;
+      return { started: false as const, reason: "site_parked" };
     }
     await ctx.db.patch(runId, {
       status: "running",
@@ -783,6 +1144,7 @@ export const markRunStarted = internalMutation({
       detail: "Autopilot tick is running.",
       ...(run.trigger === "natural" ? { lastNaturalStartedAt: now } : {}),
     });
+    return { started: true as const };
   },
 });
 
@@ -822,6 +1184,8 @@ export const recordTopicPortfolioAudit = internalMutation({
 export const markRunFinished = internalMutation({
   args: {
     runId: v.id("autopilot_runs"),
+    claimNonce: v.optional(v.string()),
+    continuationAttempt: v.optional(v.number()),
     outcome: v.string(),
     detail: v.optional(v.string()),
     jobId: v.optional(v.id("jobs")),
@@ -830,6 +1194,14 @@ export const markRunFinished = internalMutation({
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
     if (!run) return;
+    if (!topicPlanCooldownTerminalWriteAllowed({
+      runClaimNonce: run.claimNonce,
+      runContinuationAttempt: run.continuationAttempt,
+      claimNonce: args.claimNonce,
+      continuationAttempt: args.continuationAttempt,
+    })) {
+      return { updated: false as const, reason: "stale_continuation" };
+    }
     const runSite = await ctx.db.get(run.siteId);
     const now = Date.now();
     if (!runSite || !(await siteExecutionAuthorized(ctx, runSite))) {
@@ -840,7 +1212,7 @@ export const markRunFinished = internalMutation({
         outcome: "site_parked",
         detail: "The site is not active under the current plan.",
       });
-      return;
+      return { updated: true as const, reason: "site_parked" };
     }
     await ctx.db.patch(args.runId, {
       status: "completed",
@@ -1034,14 +1406,28 @@ export const markRunFinished = internalMutation({
     if (args.outcome === "job_processed") {
       await resolveAlert(ctx, run.siteId, "job_failed");
     }
+    return { updated: true as const };
   },
 });
 
 export const markRunFailed = internalMutation({
-  args: { runId: v.id("autopilot_runs"), error: v.string() },
-  handler: async (ctx, { runId, error }) => {
+  args: {
+    runId: v.id("autopilot_runs"),
+    error: v.string(),
+    claimNonce: v.optional(v.string()),
+    continuationAttempt: v.optional(v.number()),
+  },
+  handler: async (ctx, { runId, error, claimNonce, continuationAttempt }) => {
     const run = await ctx.db.get(runId);
     if (!run) return;
+    if (!topicPlanCooldownTerminalWriteAllowed({
+      runClaimNonce: run.claimNonce,
+      runContinuationAttempt: run.continuationAttempt,
+      claimNonce,
+      continuationAttempt,
+    })) {
+      return { updated: false as const, reason: "stale_continuation" };
+    }
     const now = Date.now();
     await ctx.db.patch(runId, {
       status: "failed",
@@ -1063,6 +1449,7 @@ export const markRunFailed = internalMutation({
       kind: run.trigger === "natural" ? "natural_run_failed" : `${run.trigger}_run_failed`,
       message: `${run.trigger} autopilot run failed: ${error}`,
     });
+    return { updated: true as const };
   },
 });
 

@@ -29,8 +29,13 @@ import {
   PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION,
   type AutomaticPlanYieldTarget,
   countsTowardTopicPlanRecentLimit,
+  evaluateBoundedRecentPlanWindow,
   evaluateAutomaticPlanContinuation,
   planRetryUsesCurrentReservationDay,
+  topicPlanCooldownClaimNonce,
+  topicPlanCooldownWakeAt,
+  TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
+  TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
 import { reservePlanProviderBudget } from "./lib/planProviderReservation";
@@ -1311,31 +1316,129 @@ export const queuePlanIfAbsent = internalMutation({
 
     let recentCount = 0;
     if (args.reason && args.since !== undefined && args.maximumRecent !== undefined) {
-      const recent = await ctx.db
+      const recentRows = await ctx.db
         .query("jobs")
         .withIndex("by_site_type_created", (q) =>
           q.eq("siteId", args.siteId).eq("type", "plan").gte("createdAt", args.since!),
         )
-        .take(50);
-      const count = recent.filter((job) => {
-        if (!countsTowardTopicPlanRecentLimit(job)) return false;
-        const payload = job.payload && typeof job.payload === "object"
-          ? (job.payload as Record<string, unknown>)
-          : {};
-        const payloadReason = typeof payload.reason === "string"
-          ? payload.reason
-          : "";
-        // All automatic topic-plan reasons share one tenant budget. Counting
-        // only the exact reason allowed business-fit, evidence, overlap, and
-        // horizon requests to bypass one another's paid recovery limit, while
-        // also giving each reason an artificially tiny independent window.
-        return args.reason?.startsWith("topic_") === true
-          ? payloadReason.startsWith("topic_")
-          : payloadReason === args.reason;
-      }).length;
-      recentCount = count;
-      if (recentCount >= args.maximumRecent) {
-        return { queued: false, reason: "recent_limit" as const, recent: recentCount };
+        .order("desc")
+        .take(TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT + 1);
+      const recentWindow = evaluateBoundedRecentPlanWindow({
+        rows: recentRows,
+        maximumRecent: args.maximumRecent,
+        isCounted: (job) => {
+          if (!countsTowardTopicPlanRecentLimit(job)) return false;
+          const payload = job.payload && typeof job.payload === "object"
+            ? (job.payload as Record<string, unknown>)
+            : {};
+          const payloadReason = typeof payload.reason === "string"
+            ? payload.reason
+            : "";
+          // All automatic topic-plan reasons share one tenant budget. Counting
+          // only the exact reason allowed business-fit, evidence, overlap, and
+          // horizon requests to bypass one another's paid recovery limit, while
+          // also giving each reason an artificially tiny independent window.
+          return args.reason?.startsWith("topic_") === true
+            ? payloadReason.startsWith("topic_")
+            : payloadReason === args.reason;
+        },
+      });
+      if (recentWindow.decision === "invalid_limit") {
+        return { queued: false, reason: "invalid_recent_limit" as const };
+      }
+      const countedRecent = recentWindow.counted;
+      recentCount = countedRecent.length;
+      // Payload reason and zero-spend release state are not indexed. Never
+      // infer unused capacity from a truncated window: a counted plan hidden
+      // behind non-counting rows could otherwise authorize another paid plan.
+      if (recentWindow.decision === "overflow") {
+        return {
+          queued: false,
+          reason: "recent_history_overflow" as const,
+          recentLowerBound: recentCount,
+          readLimit: TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
+        };
+      }
+      if (recentWindow.decision === "limited") {
+        const latestPlan: Doc<"jobs"> | undefined = countedRecent[0];
+        let cooldownWake:
+          | { scheduled: boolean; runId: Id<"autopilot_runs">; dueAt: number }
+          | undefined;
+        const dueAt = latestPlan
+          ? topicPlanCooldownWakeAt(latestPlan.createdAt)
+          : null;
+        const rolloutEpoch = site.autopilotRolloutEpoch ?? 0;
+        const claimNonce = latestPlan && dueAt !== null
+          ? topicPlanCooldownClaimNonce({
+              planJobId: String(latestPlan._id),
+              rolloutEpoch,
+              dueAt,
+            })
+          : null;
+        if (
+          automaticTopicPlan &&
+          site.expectedClickSchedulingEnabled === true &&
+          latestPlan?.siteId === args.siteId &&
+          dueAt !== null &&
+          claimNonce !== null &&
+          dueAt > timestamp
+        ) {
+          const existingWake = await ctx.db
+            .query("autopilot_runs")
+            .withIndex("by_site_scheduled", (q) =>
+              q.eq("siteId", args.siteId).eq("scheduledAt", dueAt)
+            )
+            .filter((q) =>
+              q.eq(q.field("trigger"), TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER)
+            )
+            .first();
+          if (existingWake) {
+            if (existingWake.claimNonce === claimNonce) {
+              cooldownWake = {
+                scheduled: false,
+                runId: existingWake._id,
+                dueAt,
+              };
+            }
+          } else {
+            const runId = await ctx.db.insert("autopilot_runs", {
+              siteId: args.siteId,
+              trigger: TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+              claimNonce,
+              scheduledAt: dueAt,
+              heartbeatAt: timestamp,
+              status: "scheduled",
+              detail:
+                "Exact topic-plan cooldown wake armed from the latest counted plan receipt.",
+            });
+            await ctx.scheduler.runAt(
+              dueAt,
+              internal.autopilot.claimTopicPlanCooldownWake,
+              {
+                siteId: args.siteId,
+                runId,
+                planJobId: latestPlan._id,
+                rolloutEpoch,
+                dueAt,
+                claimNonce,
+              },
+            );
+            cooldownWake = { scheduled: true, runId, dueAt };
+          }
+        }
+        return {
+          queued: false,
+          reason: "recent_limit" as const,
+          recent: recentCount,
+          ...(latestPlan ? { cooldownPlanJobId: latestPlan._id } : {}),
+          ...(cooldownWake
+            ? {
+                cooldownExpiresAt: cooldownWake.dueAt,
+                cooldownWakeScheduled: cooldownWake.scheduled,
+                cooldownWakeRunId: cooldownWake.runId,
+              }
+            : {}),
+        };
       }
     }
 

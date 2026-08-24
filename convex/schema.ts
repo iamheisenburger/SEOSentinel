@@ -712,6 +712,11 @@ export default defineSchema({
   autopilot_runs: defineTable({
     siteId: v.id("sites"),
     trigger: v.string(), // natural | manual | recovery
+    // Immutable execution fence for exact scheduled recovery wakes. This is
+    // not a credential; it binds one run to its plan, epoch, and due time.
+    claimNonce: v.optional(v.string()),
+    // Bounded durable continuation generation for exact scheduled wakes.
+    continuationAttempt: v.optional(v.number()),
     // Immutable idempotency receipt for an operator recovery of one exact
     // failed run. Unlike `detail`, this field is never rewritten when a run
     // starts or finishes.
