@@ -507,7 +507,12 @@ export async function recordDurablePacingReceiptForAccount(
 ): Promise<void> {
   if (!accountKey || !Number.isFinite(deliveredAt) || deliveredAt <= 0) return;
   if (await accountDeletionRequestedForKey(ctx, accountKey)) {
-    await recordUnlinkedDurablePacingReceipt(ctx, inbox, deliveredAt);
+    await recordUnlinkedDurablePacingReceipt(
+      ctx,
+      inbox,
+      deliveredAt,
+      increment,
+    );
     return;
   }
   const senderDomainKey = outreachSenderDomainKey(
@@ -585,6 +590,7 @@ export async function recordUnlinkedDurablePacingReceipt(
   ctx: MutationCtx,
   inbox: Doc<"outreach_inboxes">,
   deliveredAt: number,
+  increment = false,
 ): Promise<void> {
   if (!Number.isFinite(deliveredAt) || deliveredAt <= 0) return;
   const senderDomainKey = outreachSenderDomainKey(
@@ -603,7 +609,7 @@ export async function recordUnlinkedDurablePacingReceipt(
     inboxSentToday: inbox.sentToday ?? 0,
     inboxSentTodayDay: inbox.sentTodayDay ?? "",
     deliveredAt,
-    increment: false,
+    increment,
   });
   if (existing) {
     await ctx.db.patch(existing._id, {

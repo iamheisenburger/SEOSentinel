@@ -144,17 +144,30 @@ test("verified deletion scrubs outreach owned through a foreign current site", (
   assert.match(schema, /index\("by_credential_owner", \["credentialOwnerAccountKey"\]\)/);
   assert.match(schema, /index\("by_delivery_owner", \["deliveryOwnerAccountKey"\]\)/);
   assert.match(schema, /index\("by_inbox", \["inboxId"\]\)/);
+  assert.match(schema, /outreach_contacts: defineTable\([\s\S]*ownerAccountKey: v\.optional/);
+  assert.match(schema, /outreach_suppressions: defineTable\([\s\S]*ownerAccountKey: v\.optional/);
+  assert.ok((schema.match(/ownerLineageUnresolvedAt: v\.optional/g) ?? []).length >= 2);
+  assert.ok((schema.match(/index\("by_site_owner_unresolved"/g) ?? []).length >= 2);
   assert.match(finalize, /outreach_foreign_owner_messages/);
+  assert.match(finalize, /outreach_foreign_owner_contacts/);
+  assert.match(finalize, /outreach_foreign_owner_suppressions/);
   assert.match(finalize, /outreach_foreign_owner_inboxes/);
   assert.match(finalize, /scrubForeignAccountOutreachMessage/);
   assert.match(finalize, /deliveryLeaseExpiresAt/);
   assert.match(sites, /outreach_inbound_relay_receipts/);
   assert.match(sites, /outreach_inbound_relay_canaries/);
-  assert.match(finalize, /outreach_contacts/);
-  assert.match(finalize, /outreach_suppressions/);
-  assert.ok(
-    finalize.indexOf('query("outreach_contacts")') <
-      finalize.indexOf("ctx.db.delete(inbox._id)"),
+  assert.match(sites, /withIndex\("by_owner"/);
+  const foreignInboxBranch = finalize.slice(
+    finalize.indexOf('name === "outreach_foreign_owner_inboxes"'),
+    finalize.indexOf('name === "outreach_foreign_owner_contacts"'),
+  );
+  assert.match(foreignInboxBranch, /withIndex\("by_site_owner_unresolved"/);
+  assert.match(foreignInboxBranch, /\.eq\("ownerAccountKey", undefined\)/);
+  assert.match(foreignInboxBranch, /ownerLineageUnresolvedAt: unresolvedAt/);
+  assert.doesNotMatch(foreignInboxBranch, /withIndex\("by_site",/);
+  assert.doesNotMatch(
+    foreignInboxBranch,
+    /\.eq\("ownerAccountKey", accountDeletionKey\(receipt\.userId\)\)/,
   );
   assert.match(siteDeletion, /verifiedAccountDeletion/);
   assert.match(siteDeletion, /recordUnlinkedDurablePacingReceipt/);

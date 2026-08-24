@@ -1763,13 +1763,24 @@ export default defineSchema({
   // expires: an opt-out is permanent.
   outreach_suppressions: defineTable({
     siteId: v.id("sites"),
+    ownerAccountKey: v.optional(v.string()),
+    // Additive-rollout rows whose immutable owner cannot be proven are kept
+    // fail-closed for operator review. They must never be silently adopted by
+    // a later site owner merely because the old inbox has been removed.
+    ownerLineageUnresolvedAt: v.optional(v.number()),
     kind: v.string(), // domain | email
     value: v.string(), // normalized lowercase
     reason: v.string(), // unsubscribe | bounce | complaint | manual
     createdAt: v.number(),
   })
     .index("by_site_value", ["siteId", "value"])
-    .index("by_site", ["siteId"]),
+    .index("by_site", ["siteId"])
+    .index("by_site_owner_unresolved", [
+      "siteId",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+    ])
+    .index("by_owner", ["ownerAccountKey"]),
 
   // PII-minimized STOP/bounce/manual suppression receipts scoped to the
   // account-wide tenant scope. There is intentionally no siteId or mutable
@@ -1850,7 +1861,7 @@ export default defineSchema({
     nextSiteCursor: v.optional(v.string()),
     sitesDoneAfterActive: v.optional(v.boolean()),
     activeSiteId: v.optional(v.id("sites")),
-    rowStage: v.optional(v.string()), // suppressions | messages
+    rowStage: v.optional(v.string()), // suppressions | contacts | messages
     rowCursor: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -1865,6 +1876,8 @@ export default defineSchema({
   // info@ addresses.
   outreach_contacts: defineTable({
     siteId: v.id("sites"),
+    ownerAccountKey: v.optional(v.string()),
+    ownerLineageUnresolvedAt: v.optional(v.number()),
     domain: v.string(),
     email: v.string(),
     name: v.optional(v.string()),
@@ -1877,7 +1890,13 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_domain", ["siteId", "domain"])
-    .index("by_site_email", ["siteId", "email"]),
+    .index("by_site_email", ["siteId", "email"])
+    .index("by_site_owner_unresolved", [
+      "siteId",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+    ])
+    .index("by_owner", ["ownerAccountKey"]),
 
   // Private server-to-server outcome ingestion. The raw credential is shown
   // once when rotated and is never persisted; only its tenant-bound digest is

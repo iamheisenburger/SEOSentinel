@@ -334,6 +334,33 @@ test("manual and automatic delivery wait for account-wide legacy compliance migr
   assert.match(migration, /legacy_delivery_owner_unresolved/);
   assert.match(migration, /legacyDeliveryOwnerWasUnbound/);
   assert.match(migration, /materializeOutreachSuppressionTombstoneForAccount/);
+  assert.ok(
+    (migration.match(/credentialOwnerAccountKey === accountKey/g) ?? []).length >= 2,
+    "legacy contact/suppression ownership may only be adopted by the exact migrating account",
+  );
+  assert.match(migration, /ownerLineageUnresolvedAt/);
+});
+
+test("recipient rows retain immutable owner lineage across defensive owner drift", () => {
+  const addSuppression = backend.slice(
+    backend.indexOf("async function addSuppression"),
+    backend.indexOf("export const suppress = mutation"),
+  );
+  const contacts = backend.slice(
+    backend.indexOf("export const upsertContact"),
+    backend.indexOf("export const getContactCooldownInternal"),
+  );
+  const suppressionList = backend.slice(
+    backend.indexOf("export const listSuppressions"),
+    backend.indexOf("export const isSuppressedInternal"),
+  );
+  assert.match(schema, /outreach_contacts: defineTable[\s\S]*ownerLineageUnresolvedAt/);
+  assert.match(schema, /outreach_suppressions: defineTable[\s\S]*ownerLineageUnresolvedAt/);
+  assert.doesNotMatch(addSuppression, /writableOutreachOwnerAccountKey/);
+  assert.match(addSuppression, /materializeOutreachSuppressionTombstone/);
+  assert.match(contacts, /existing\.ownerLineageUnresolvedAt/);
+  assert.match(suppressionList, /\.eq\("ownerAccountKey", ownerAccountKey\)/);
+  assert.match(suppressionList, /\.eq\("ownerLineageUnresolvedAt", undefined\)/);
 });
 
 test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {
@@ -377,4 +404,11 @@ test("the release is tenant-generic, identity-isolated and logs no raw recipient
   );
   assert.doesNotMatch(fleet, /JSON\.stringify\(result\)/);
   assert.match(fleet, /numericCounts/);
+  assert.match(schema, /outreach_contacts: defineTable\([\s\S]*ownerAccountKey/);
+  assert.match(schema, /outreach_suppressions: defineTable\([\s\S]*ownerAccountKey/);
+  assert.match(backend, /writableOutreachOwnerAccountKey/);
+  assert.match(
+    backend,
+    /contact\.ownerAccountKey !== inbox\.credentialOwnerAccountKey/,
+  );
 });

@@ -166,6 +166,8 @@ test("verified deletion preserves only unlinked monotonic sender reputation", ()
   assert.match(helper, /accountKey: existing\.accountKey/);
   assert.match(helper, /tenantDomainKey: existing\.tenantDomainKey/);
   assert.match(helper, /mailboxKey: existing\.mailboxKey/);
+  assert.match(helper, /increment = false/);
+  assert.match(helper, /increment,/);
   assert.doesNotMatch(helper, /accountDeletionKey/);
 });
 

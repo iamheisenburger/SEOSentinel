@@ -1551,6 +1551,8 @@ const ACCOUNT_DELETION_RECEIPT_BATCH = 100;
 const ACCOUNT_DELETION_RETRY_MS = 60 * 1000;
 const ACCOUNT_DELETION_RECEIPT_STAGES = [
   "outreach_foreign_owner_messages",
+  "outreach_foreign_owner_contacts",
+  "outreach_foreign_owner_suppressions",
   "outreach_foreign_owner_inboxes",
   "outreach_durability_migrations",
   "outreach_sender_suppression_tombstones",
@@ -2214,9 +2216,12 @@ export const continueSiteDeletionInternal = internalMutation({
             .query("outreach_inboxes")
             .withIndex("by_site", (q) => q.eq("siteId", siteId))
             .take(2);
-          const settlementAccountKey = suppressionInboxes.length === 1
-            ? suppressionInboxes[0].credentialOwnerAccountKey
-            : undefined;
+          const settlementAccountKey = suppression.ownerAccountKey ?? (
+            !suppression.ownerLineageUnresolvedAt &&
+              suppressionInboxes.length === 1
+              ? suppressionInboxes[0].credentialOwnerAccountKey
+              : undefined
+          );
           if (!settlementAccountKey && !verifiedAccountDeletion) {
             throw new Error(
               "Outreach suppression history has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
@@ -2598,6 +2603,20 @@ async function accountReceiptRowsForStage(
           q.eq("deliveryOwnerAccountKey", accountDeletionKey(userId))
         )
         .take(10);
+    case "outreach_foreign_owner_contacts":
+      return ctx.db
+        .query("outreach_contacts")
+        .withIndex("by_owner", (q) =>
+          q.eq("ownerAccountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
+    case "outreach_foreign_owner_suppressions":
+      return ctx.db
+        .query("outreach_suppressions")
+        .withIndex("by_owner", (q) =>
+          q.eq("ownerAccountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
     case "outreach_foreign_owner_inboxes":
       return ctx.db
         .query("outreach_inboxes")
@@ -2787,33 +2806,55 @@ export const finalizeAccountDeletionInternal = internalMutation({
               await ctx.db.delete(canary._id);
             }
             if (canaries.length === 0) {
-              // An unsupported cross-owner site lineage cannot retain raw
-              // recipient discovery or opt-out PII from the deleted Gmail
-              // owner. Drain both site-local ledgers in bounded pages before
-              // removing the foreign credential row. Account-linked hashed
-              // tombstones are scrubbed by the later receipt stages.
-              const [contacts, suppressions] = await Promise.all([
-                ctx.db
-                  .query("outreach_contacts")
-                  .withIndex("by_site_email", (q) =>
-                    q.eq("siteId", inbox.siteId)
-                  )
-                  .take(20),
-                ctx.db
-                  .query("outreach_suppressions")
-                  .withIndex("by_site", (q) => q.eq("siteId", inbox.siteId))
-                  .take(20),
-              ]);
-              for (const contact of contacts) await ctx.db.delete(contact._id);
-              for (const suppression of suppressions) {
-                await ctx.db.delete(suppression._id);
+              // Pre-lineage rows cannot be attributed merely because this
+              // foreign inbox is the last historical credential on the site:
+              // current-owner rows may coexist on the same defensive state.
+              // Mark only unowned rows unresolved, preserve them for operator
+              // review, and make future silent adoption impossible.
+              const [unresolvedContacts, unresolvedSuppressions] =
+                await Promise.all([
+                  ctx.db
+                    .query("outreach_contacts")
+                    .withIndex("by_site_owner_unresolved", (q) =>
+                      q
+                        .eq("siteId", inbox.siteId)
+                        .eq("ownerAccountKey", undefined)
+                        .eq("ownerLineageUnresolvedAt", undefined)
+                    )
+                    .take(20),
+                  ctx.db
+                    .query("outreach_suppressions")
+                    .withIndex("by_site_owner_unresolved", (q) =>
+                      q
+                        .eq("siteId", inbox.siteId)
+                        .eq("ownerAccountKey", undefined)
+                        .eq("ownerLineageUnresolvedAt", undefined)
+                    )
+                    .take(20),
+                ]);
+              const unresolvedAt = now();
+              for (const contact of unresolvedContacts) {
+                await ctx.db.patch(contact._id, {
+                  ownerLineageUnresolvedAt: unresolvedAt,
+                  updatedAt: Math.max(contact.updatedAt, unresolvedAt),
+                });
               }
-              if (contacts.length === 0 && suppressions.length === 0) {
+              for (const suppression of unresolvedSuppressions) {
+                await ctx.db.patch(suppression._id, {
+                  ownerLineageUnresolvedAt: unresolvedAt,
+                });
+              }
+              if (
+                unresolvedContacts.length === 0 &&
+                unresolvedSuppressions.length === 0
+              ) {
                 await ctx.db.delete(inbox._id);
               }
             }
           }
         } else if (
+          name === "outreach_foreign_owner_contacts" ||
+          name === "outreach_foreign_owner_suppressions" ||
           name === "outreach_durability_migrations" ||
           name === "outreach_sender_suppression_tombstones" ||
           name === "outreach_tenant_contact_receipts"

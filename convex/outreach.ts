@@ -128,7 +128,7 @@ function inboundRelayRuntimeConfig() {
   };
 }
 
-const OUTREACH_DURABILITY_MIGRATION_VERSION = 1;
+const OUTREACH_DURABILITY_MIGRATION_VERSION = 2;
 
 async function outreachDurabilityMigrationComplete(
   ctx: QueryCtx | MutationCtx,
@@ -1507,11 +1507,18 @@ export const migrateOutreachDurabilityInternal = internalMutation({
           .take(2),
       ]);
       const suppressionOwnerAccountKey = migrationInboxes.length === 1
-        ? migrationInboxes[0].credentialOwnerAccountKey
+        && migrationInboxes[0].credentialOwnerAccountKey === accountKey
+        ? accountKey
         : undefined;
       for (const row of page.page) {
         if (row.kind === "domain" || row.kind === "email") {
-          if (!suppressionOwnerAccountKey) {
+          const rowOwnerAccountKey =
+            row.ownerAccountKey ?? (
+              row.ownerLineageUnresolvedAt
+                ? undefined
+                : suppressionOwnerAccountKey
+            );
+          if (!rowOwnerAccountKey) {
             const currentIdentity = migrationSite.userId
               ? outreachSuppressionTombstoneIdentity({
                   userId: migrationSite.userId,
@@ -1539,9 +1546,14 @@ export const migrateOutreachDurabilityInternal = internalMutation({
               stopped: "legacy_suppression_owner_unresolved",
             };
           }
+          if (!row.ownerAccountKey) {
+            await ctx.db.patch(row._id, {
+              ownerAccountKey: rowOwnerAccountKey,
+            });
+          }
           await materializeOutreachSuppressionTombstoneForAccount(
             ctx,
-            suppressionOwnerAccountKey,
+            rowOwnerAccountKey,
             row.kind,
             row.value,
             row.reason,
@@ -1550,7 +1562,52 @@ export const migrateOutreachDurabilityInternal = internalMutation({
         }
       }
       await ctx.db.patch(receipt._id, {
-        rowStage: page.isDone ? "messages" : "suppressions",
+        rowStage: page.isDone ? "contacts" : "suppressions",
+        rowCursor: page.isDone ? undefined : page.continueCursor,
+        updatedAt: Date.now(),
+      });
+      await scheduleSelf();
+      return { completed: false, processed: page.page.length };
+    }
+
+    if (receipt.rowStage === "contacts") {
+      const [page, migrationInboxes] = await Promise.all([
+        ctx.db
+          .query("outreach_contacts")
+          .withIndex("by_site_email", (q) =>
+            q.eq("siteId", migrationSite._id)
+          )
+          .paginate({ cursor: receipt.rowCursor ?? null, numItems: 50 }),
+        ctx.db
+          .query("outreach_inboxes")
+          .withIndex("by_site", (q) => q.eq("siteId", migrationSite._id))
+          .take(2),
+      ]);
+      const contactOwnerAccountKey = migrationInboxes.length === 1
+        && migrationInboxes[0].credentialOwnerAccountKey === accountKey
+        ? accountKey
+        : undefined;
+      for (const contact of page.page) {
+        if (!contact.ownerAccountKey) {
+          if (contactOwnerAccountKey && !contact.ownerLineageUnresolvedAt) {
+            await ctx.db.patch(contact._id, {
+              ownerAccountKey: contactOwnerAccountKey,
+              updatedAt: Math.max(contact.updatedAt, Date.now()),
+            });
+          } else if (!contact.ownerLineageUnresolvedAt) {
+            // A foreign/ownerless additive-rollout inbox cannot prove which
+            // historical account discovered this raw recipient. Preserve the
+            // row for operator review but make silent future adoption
+            // impossible.
+            await ctx.db.patch(contact._id, {
+              ownerLineageUnresolvedAt: Date.now(),
+              updatedAt: Math.max(contact.updatedAt, Date.now()),
+            });
+          }
+        }
+      }
+      await ctx.db.patch(receipt._id, {
+        rowStage: page.isDone ? "messages" : "contacts",
         rowCursor: page.isDone ? undefined : page.continueCursor,
         updatedAt: Date.now(),
       });
@@ -3259,6 +3316,7 @@ export const claimApprovedDelivery = internalMutation({
     ]);
     if (
       !contact ||
+      contact.ownerAccountKey !== inbox.credentialOwnerAccountKey ||
       outreachOrganisationDomain(contact.domain) !==
         outreachOrganisationDomain(message.toDomain) ||
       !contact.discoveredFromUrl ||
@@ -3495,7 +3553,11 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
         q.eq("siteId", siteId).eq("email", message.toEmail),
       )
       .unique();
-    if (!contact || !contact.discoveredFromUrl) {
+    if (
+      !contact ||
+      contact.ownerAccountKey !== inbox.credentialOwnerAccountKey ||
+      !contact.discoveredFromUrl
+    ) {
       return permanentlyInvalid("contact_changed");
     }
     return {
@@ -5660,6 +5722,33 @@ async function cancelQueuedThread(
   }
 }
 
+async function writableOutreachOwnerAccountKey(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+): Promise<string> {
+  if (!site.userId) throw new Error("Outreach tenant owner is unavailable");
+  const ownerAccountKey = accountDeletionKey(site.userId);
+  const inboxes = await ctx.db
+    .query("outreach_inboxes")
+    .withIndex("by_site", (q) => q.eq("siteId", site._id))
+    .take(2);
+  if (inboxes.length > 1) {
+    throw new Error("Exactly one outreach inbox is required");
+  }
+  if (
+    inboxes.length === 1 &&
+    inboxes[0].credentialOwnerAccountKey !== ownerAccountKey
+  ) {
+    // Never let a new/current owner append recipient PII into a stale Gmail
+    // owner's local ledger. Undefined additive-rollout ownership also remains
+    // fail-closed until the exact-mailbox adoption protocol proves it.
+    throw new Error(
+      "Reconnect the current owner's Gmail inbox before writing outreach recipient data",
+    );
+  }
+  return ownerAccountKey;
+}
+
 async function addSuppression(
   ctx: MutationCtx,
   siteId: Id<"sites">,
@@ -5672,6 +5761,9 @@ async function addSuppression(
       ? outreachOrganisationDomain(rawValue)
       : String(rawValue || "").trim().toLowerCase();
   if (!value) return;
+  const site = await ctx.db.get(siteId);
+  if (!site?.userId) throw new Error("Outreach tenant is unavailable");
+  const ownerAccountKey = accountDeletionKey(site.userId);
   const existing = await ctx.db
     .query("outreach_suppressions")
     .withIndex("by_site_value", (q) => q.eq("siteId", siteId).eq("value", value))
@@ -5679,6 +5771,7 @@ async function addSuppression(
   if (!existing) {
     await ctx.db.insert("outreach_suppressions", {
       siteId,
+      ownerAccountKey,
       kind,
       value,
       reason,
@@ -5689,19 +5782,17 @@ async function addSuppression(
   // The site-scoped row is useful for the current dashboard, but cannot be
   // the permanent STOP ledger because ordinary site deletion purges it. Keep
   // a PII-minimized account + canonical-tenant tombstone in the same
-  // transaction. This intentionally does not query a unique inbox, so a
-  // duplicate/corrupt inbox state can never roll back an opt-out.
-  const site = await ctx.db.get(siteId);
-  if (site) {
-    await materializeOutreachSuppressionTombstone(
-      ctx,
-      site,
-      kind,
-      value,
-      reason,
-      Date.now(),
-    );
-  }
+  // transaction. This intentionally does not query an inbox or try to adopt
+  // an unresolved/foreign local row: duplicate/corrupt ownership can never
+  // roll back an opt-out or silently move its raw lineage.
+  await materializeOutreachSuppressionTombstone(
+    ctx,
+    site,
+    kind,
+    value,
+    reason,
+    Date.now(),
+  );
 
   // Suppression is not merely a claim-time guard. Remove every bounded pre-send
   // row that already targets the opted-out address/domain so the dashboard and
@@ -5766,10 +5857,16 @@ export const suppressInternal = internalMutation({
 export const listSuppressions = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
+    const ownerAccountKey = accountDeletionKey(site.userId!);
     return ctx.db
       .query("outreach_suppressions")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .withIndex("by_site_owner_unresolved", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("ownerAccountKey", ownerAccountKey)
+          .eq("ownerLineageUnresolvedAt", undefined)
+      )
       .order("desc")
       .take(Math.max(1, Math.min(limit ?? 100, 500)));
   },
@@ -5854,6 +5951,7 @@ export const upsertContact = internalMutation({
     if (!siteExecutionActive(site)) {
       throw new Error("Site not found");
     }
+    const ownerAccountKey = await writableOutreachOwnerAccountKey(ctx, site);
     const email = args.email.trim().toLowerCase();
     const domain = outreachOrganisationDomain(args.domain);
     const now = Date.now();
@@ -5862,7 +5960,19 @@ export const upsertContact = internalMutation({
       .withIndex("by_site_email", (q) => q.eq("siteId", args.siteId).eq("email", email))
       .unique();
     if (existing) {
+      if (existing.ownerLineageUnresolvedAt) {
+        throw new Error(
+          "Outreach contact ownership is unresolved; operator review is required",
+        );
+      }
+      if (
+        existing.ownerAccountKey &&
+        existing.ownerAccountKey !== ownerAccountKey
+      ) {
+        throw new Error("Outreach contact belongs to another account lineage");
+      }
       await ctx.db.patch(existing._id, {
+        ownerAccountKey,
         name: args.name ?? existing.name,
         role: args.role ?? existing.role,
         discoveredFromUrl: args.discoveredFromUrl,
@@ -5874,6 +5984,7 @@ export const upsertContact = internalMutation({
     }
     const contactId = await ctx.db.insert("outreach_contacts", {
       siteId: args.siteId,
+      ownerAccountKey,
       domain,
       email,
       name: args.name,
