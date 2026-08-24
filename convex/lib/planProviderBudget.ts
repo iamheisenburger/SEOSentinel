@@ -24,6 +24,8 @@ export const AUTOMATIC_PLAN_TOPIC_CAPACITY = 10;
 // reservation's already-funded second execution to rotate discovery once.
 // Cumulative output remains capped at the original ten-topic plan capacity.
 export const AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD = 7;
+export const AUTOMATIC_PLAN_YIELD_TARGET_VERSION = 1;
+export const PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION = 1;
 export const UNDERFILLED_PLAN_CONTINUATION_RECOVERY_VERSION = 1;
 export const AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD = 1_000_000;
 export const AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES = 1;
@@ -32,6 +34,19 @@ export const AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD =
   (AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES + 1);
 export const AUTOMATIC_PLAN_PROVIDER_COST_CEILING_USD =
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD / 1_000_000;
+
+/** Exact shared-ledger trigger bound to the plan payload that owns it. */
+export function topicPlanProviderReservationTriggerFromPayload(
+  payload: unknown,
+): string {
+  const record = payload && typeof payload === "object"
+    ? payload as Record<string, unknown>
+    : {};
+  const migrationVersion = record.expectedClickPlanMigrationVersion;
+  return Number.isInteger(migrationVersion) && (migrationVersion as number) > 0
+    ? `expected_click_plan_migration_v${migrationVersion}`
+    : "topic_plan";
+}
 
 export type AutomaticPlanContinuationDecision =
   | {
@@ -50,6 +65,164 @@ export type AutomaticPlanContinuationDecision =
         | "reservation_day_expired";
     };
 
+/** Exact durable result count for the mutation that commits ordinary plan
+ * inventory. Execution two is either a legacy transient retry (no prior
+ * accepted count) or the one reserved underfill continuation (exact marker).
+ */
+export function atomicPlanPersistenceCumulativeCount(args: {
+  workerExecution: number;
+  acceptedTopicCount: number;
+  continuation?: {
+    version: unknown;
+    firstExecutionCount: unknown;
+    remainingTopicCapacity: unknown;
+  };
+}): number | null {
+  if (
+    !Number.isInteger(args.acceptedTopicCount) ||
+    args.acceptedTopicCount < 0 ||
+    ![1, 2].includes(args.workerExecution)
+  ) return null;
+  if (args.workerExecution === 1) {
+    return !args.continuation &&
+        args.acceptedTopicCount <= AUTOMATIC_PLAN_TOPIC_CAPACITY
+      ? args.acceptedTopicCount
+      : null;
+  }
+  if (!args.continuation) {
+    return args.acceptedTopicCount <= AUTOMATIC_PLAN_TOPIC_CAPACITY
+      ? args.acceptedTopicCount
+      : null;
+  }
+  const firstExecutionCount = args.continuation.firstExecutionCount;
+  if (
+    args.continuation.version !== 1 ||
+    !Number.isInteger(firstExecutionCount) ||
+    (firstExecutionCount as number) <= 0 ||
+    (firstExecutionCount as number) >= AUTOMATIC_PLAN_TOPIC_CAPACITY ||
+    args.continuation.remainingTopicCapacity !==
+      AUTOMATIC_PLAN_TOPIC_CAPACITY - (firstExecutionCount as number)
+  ) return null;
+  const cumulative = (firstExecutionCount as number) +
+    args.acceptedTopicCount;
+  return cumulative <= AUTOMATIC_PLAN_TOPIC_CAPACITY ? cumulative : null;
+}
+
+export type AutomaticPlanYieldTarget = {
+  version: typeof AUTOMATIC_PLAN_YIELD_TARGET_VERSION;
+  targetBufferShortfall: number;
+  verifiedHorizonShortfall: number;
+  articleQuotaHeadroom: number;
+  requiredVerifiedYield: number;
+};
+
+/**
+ * Read the immutable automatic-plan target written by the queue transaction.
+ * Execution, watchdog recovery, and checkpoint activation all share this
+ * parser so none can accept a different job shape or widen a paid plan later.
+ */
+export function automaticPlanYieldTargetFromPayload(
+  payloadValue: unknown,
+): AutomaticPlanYieldTarget | null {
+  const payload = payloadValue && typeof payloadValue === "object"
+    ? payloadValue as Record<string, unknown>
+    : {};
+  const marker = payload.planYieldTarget &&
+      typeof payload.planYieldTarget === "object"
+    ? payload.planYieldTarget as Record<string, unknown>
+    : {};
+  const reason = typeof payload.reason === "string" ? payload.reason : "";
+  const fields = [
+    marker.targetBufferShortfall,
+    marker.verifiedHorizonShortfall,
+    marker.articleQuotaHeadroom,
+    marker.requiredVerifiedYield,
+  ];
+  if (
+    payload.manual === true ||
+    !reason.startsWith("topic_") ||
+    payload.growthParentArticleId !== undefined ||
+    payload.growthSeed !== undefined ||
+    payload.growthActionFingerprint !== undefined ||
+    payload.expectedClickPlanMigrationVersion !== undefined ||
+    marker.version !== AUTOMATIC_PLAN_YIELD_TARGET_VERSION ||
+    fields.some((value) => !Number.isInteger(value) || (value as number) < 0) ||
+    (marker.requiredVerifiedYield as number) < 1 ||
+    (marker.requiredVerifiedYield as number) > AUTOMATIC_PLAN_TOPIC_CAPACITY ||
+    (marker.requiredVerifiedYield as number) >
+      (marker.articleQuotaHeadroom as number) ||
+    (marker.requiredVerifiedYield as number) !== Math.min(
+      AUTOMATIC_PLAN_TOPIC_CAPACITY,
+      marker.articleQuotaHeadroom as number,
+      Math.max(
+        marker.targetBufferShortfall as number,
+        marker.verifiedHorizonShortfall as number,
+      ),
+    )
+  ) return null;
+  return marker as AutomaticPlanYieldTarget;
+}
+
+/** The initial durable checkpoint rollout is explicitly job-bound and admits
+ * one provider execution. A frozen target without this queue-time marker is a
+ * legacy automatic plan and must retain its prior behavior. */
+export function automaticSingleExecutionCheckpointTargetFromPayload(
+  payloadValue: unknown,
+): AutomaticPlanYieldTarget | null {
+  const payload = payloadValue && typeof payloadValue === "object"
+    ? payloadValue as Record<string, unknown>
+    : {};
+  if (
+    payload.planCheckpointModeVersion !==
+      PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION
+  ) return null;
+  return automaticPlanYieldTargetFromPayload(payloadValue);
+}
+
+/**
+ * Freeze the amount of verified inventory one paid plan is allowed to pursue.
+ *
+ * The queue transaction supplies canonical buffer/horizon counts and current
+ * account article headroom. Execution must consume this persisted result
+ * rather than widening the target after provider work has started.
+ */
+export function automaticPlanYieldTarget(args: {
+  targetBufferShortfall: number;
+  verifiedHorizonShortfall: number;
+  articleQuotaHeadroom: number;
+}): AutomaticPlanYieldTarget {
+  const targetBufferShortfall = Math.max(
+    0,
+    Math.floor(Number.isFinite(args.targetBufferShortfall)
+      ? args.targetBufferShortfall
+      : 0),
+  );
+  const verifiedHorizonShortfall = Math.max(
+    0,
+    Math.floor(Number.isFinite(args.verifiedHorizonShortfall)
+      ? args.verifiedHorizonShortfall
+      : 0),
+  );
+  const articleQuotaHeadroom = Math.max(
+    0,
+    Math.floor(Number.isFinite(args.articleQuotaHeadroom)
+      ? args.articleQuotaHeadroom
+      : 0),
+  );
+  const requiredVerifiedYield = Math.min(
+    AUTOMATIC_PLAN_TOPIC_CAPACITY,
+    articleQuotaHeadroom,
+    Math.max(targetBufferShortfall, verifiedHorizonShortfall),
+  );
+  return {
+    version: AUTOMATIC_PLAN_YIELD_TARGET_VERSION,
+    targetBufferShortfall,
+    verifiedHorizonShortfall,
+    articleQuotaHeadroom,
+    requiredVerifiedYield,
+  };
+}
+
 /**
  * Decide whether one successful but underfilled automatic plan may consume
  * the second execution already included in its immutable $2 reservation.
@@ -62,6 +235,7 @@ export type AutomaticPlanContinuationDecision =
 export function evaluateAutomaticPlanContinuation(args: {
   automaticTopicPlan: boolean;
   savedTopicCount: number;
+  requiredVerifiedYield?: number;
   workerAttempts: number;
   continuationAlreadyQueued: boolean;
   reservationDay?: string;
@@ -77,7 +251,16 @@ export function evaluateAutomaticPlanContinuation(args: {
   ) {
     return { allowed: false, reason: "first_execution_not_successful" };
   }
-  if (args.savedTopicCount >= AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD) {
+  const requiredVerifiedYield = args.requiredVerifiedYield === undefined
+    ? AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD
+    : Math.min(
+        AUTOMATIC_PLAN_TOPIC_CAPACITY,
+        Math.max(0, Math.floor(args.requiredVerifiedYield)),
+      );
+  if (
+    requiredVerifiedYield === 0 ||
+    args.savedTopicCount >= requiredVerifiedYield
+  ) {
     return { allowed: false, reason: "verified_yield_sufficient" };
   }
   if (args.continuationAlreadyQueued) {
@@ -96,8 +279,12 @@ export function evaluateAutomaticPlanContinuation(args: {
   }
   return {
     allowed: true,
-    remainingTopicCapacity:
-      AUTOMATIC_PLAN_TOPIC_CAPACITY - args.savedTopicCount,
+    remainingTopicCapacity: args.requiredVerifiedYield === undefined
+      ? AUTOMATIC_PLAN_TOPIC_CAPACITY - args.savedTopicCount
+      : Math.min(
+          requiredVerifiedYield - args.savedTopicCount,
+          AUTOMATIC_PLAN_TOPIC_CAPACITY - args.savedTopicCount,
+        ),
     workerExecution: 2,
   };
 }
@@ -131,6 +318,8 @@ export function countsTowardTopicPlanRecentLimit(
     [
       "provider_balance_insufficient",
       "provider_balance_preflight_unavailable",
+      "plan_cancelled_before_execution",
+      "plan_reservation_day_expired_before_execution",
     ].includes(job.providerReservationReleaseReason ?? "")
   );
 }

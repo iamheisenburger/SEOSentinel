@@ -14,6 +14,8 @@ import { z } from "zod";
 import OpenAI from "openai";
 import { dataForSeoLanguageCode } from "../lib/dataForSeoLocale.ts";
 import { topicDiscoverySeedBatches } from "../lib/autopilotBuffer.ts";
+import { computeAuthorityKeywordDifficultyCeiling } from
+  "../lib/authorityDifficulty.ts";
 import { safeFetchPublicText } from "../lib/safeOutbound.ts";
 import {
   DATAFORSEO_AUTHORITY_SOURCE,
@@ -145,6 +147,7 @@ function getDataForSEOCredentials(): { login: string; password: string } | null 
 async function dataForSEORequest(
   endpoint: string,
   body: any[],
+  timeoutMs = 20_000,
 ): Promise<any> {
   const creds = getDataForSEOCredentials();
   if (!creds) throw new Error("DataForSEO credentials not configured");
@@ -158,7 +161,7 @@ async function dataForSEORequest(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {
@@ -513,33 +516,7 @@ export async function getDomainAuthority(
  * Returns a number 0-100.
  */
 export function computeMaxKD(metrics: DomainMetrics | null): number {
-  if (!metrics) return 15; // Unknown authority must never be treated as established.
-
-  const dr = Math.max(0, metrics.domainRank);
-  const referringDomains = Math.max(0, metrics.referringDomains);
-
-  // DataForSEO keyword difficulty already measures the backlink strength of
-  // the current top ten. A weak domain therefore needs a ceiling well below
-  // its own domain-rank score, not the old 30-45 floor that sent new sites
-  // against entrenched page-one results.
-  const rankCeiling =
-    dr <= 10 ? 10
-      : dr <= 20 ? 15
-        : dr <= 30 ? 20
-          : dr <= 40 ? 30
-            : dr <= 50 ? 40
-              : dr <= 65 ? 55
-                : dr <= 80 ? 70
-                  : 85;
-  const referringDomainCeiling =
-    referringDomains < 10 ? 15
-      : referringDomains < 25 ? 20
-        : referringDomains < 50 ? 30
-          : referringDomains < 100 ? 40
-            : referringDomains < 250 ? 55
-              : referringDomains < 500 ? 70
-                : 85;
-  return Math.min(rankCeiling, referringDomainCeiling);
+  return computeAuthorityKeywordDifficultyCeiling(metrics);
 }
 
 // ── Keyword Metrics ──
@@ -1289,6 +1266,11 @@ async function analyzeSERPFromAPI(
       language_code: languageCode,
       depth: 10,
     }],
+    // A live organic SERP can legitimately take longer than lightweight Labs
+    // endpoints. This is still one attempt and one provider call: only its
+    // response window is widened so a slow task is not misreported as empty
+    // evidence and never retried implicitly here.
+    45_000,
   );
 
   const results: SerpResult[] = [];

@@ -104,6 +104,20 @@ test("reconciliation preserves independent disqualification and SERP overlap", (
     hasReservingArticle: false,
     hasActiveArticleJob: false,
   }), "cannibalizing");
+  assert.equal(reconciledTopicStatus({
+    currentStatus: "plan_checkpoint",
+    checkpointExecutionLocked: true,
+    hasLinkedArticles: false,
+    hasReservingArticle: false,
+    hasActiveArticleJob: false,
+  }), "plan_checkpoint");
+  assert.equal(reconciledTopicStatus({
+    currentStatus: "disqualified",
+    checkpointExecutionLocked: true,
+    hasLinkedArticles: false,
+    hasReservingArticle: false,
+    hasActiveArticleJob: false,
+  }), "disqualified");
 });
 
 test("migration is explicitly tenant-scoped, paginated, dry-runnable, and idempotent", () => {

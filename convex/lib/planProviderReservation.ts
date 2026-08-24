@@ -10,6 +10,7 @@ import {
   EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
   evaluatePlanProviderReservationCapacity,
   hasExplicitPlanProviderReservation,
+  topicPlanProviderReservationTriggerFromPayload,
 } from "./planProviderBudget";
 import { reserveSharedProviderBudget } from "./providerSpendReservation";
 import {
@@ -261,9 +262,14 @@ export async function reservePlanProviderBudget(
     siteId: site._id,
     userId: site.userId,
     purpose: "topic_plan",
-    trigger: options
-      ? `expected_click_plan_migration_v${options.expectedClickMigrationVersion}`
-      : "topic_plan",
+    trigger: topicPlanProviderReservationTriggerFromPayload(
+      options
+        ? {
+            expectedClickPlanMigrationVersion:
+              options.expectedClickMigrationVersion,
+          }
+        : undefined,
+    ),
     reservedMicroUsd: AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
     timestamp,
   });

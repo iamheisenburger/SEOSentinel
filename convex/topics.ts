@@ -25,6 +25,18 @@ import {
   dataForSeoLanguageCode,
   dataForSeoLocationCode,
 } from "./lib/dataForSeoLocale";
+import {
+  planCheckpointTopicDeletionLocked,
+  planCheckpointTopicExecutionLocked,
+} from "./lib/planCandidateCheckpoint";
+import { jobAuthorizedForExecution } from "./lib/jobRollout";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
+import {
+  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  atomicPlanPersistenceCumulativeCount,
+  planRetryUsesCurrentReservationDay,
+  topicPlanProviderReservationTriggerFromPayload,
+} from "./lib/planProviderBudget";
 
 const now = () => Date.now();
 
@@ -63,7 +75,10 @@ export const listBySite = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     await requireSiteOwner(ctx, siteId);
-    return listBySiteHandler(ctx, siteId);
+    const topics = await listBySiteHandler(ctx, siteId);
+    return topics.filter((topic) =>
+      !planCheckpointTopicExecutionLocked(topic)
+    );
   },
 });
 
@@ -93,7 +108,9 @@ async function inventoryAuditHandler(
       byStatus[status] = (byStatus[status] ?? 0) + 1;
     }
     const portfolioTopics = topics.filter((topic) =>
-      !["cannibalizing", "disqualified"].includes(topic.status ?? "planned")
+      !["cannibalizing", "disqualified", "plan_checkpoint"].includes(
+        topic.status ?? "planned",
+      ) && !topic.planCheckpointTerminalFailureCode
     );
     const expectedClickPortfolio = evaluateStoredExpectedClickPortfolio({
       topics: portfolioTopics.map((topic) => ({
@@ -133,6 +150,7 @@ async function inventoryAuditHandler(
       !["used", "queued", "cannibalizing", "disqualified"].includes(
         topic.status ?? "planned",
       ) &&
+      !planCheckpointTopicExecutionLocked(topic) &&
       Number.isFinite(topic.searchVolume) &&
       Number.isFinite(topic.keywordDifficulty) &&
       topic.keywordDifficultyMeasured === true &&
@@ -208,6 +226,7 @@ export const get = query({
     const topic = await ctx.db.get(topicId);
     if (!topic) return null;
     await requireSiteOwner(ctx, topic.siteId);
+    if (planCheckpointTopicExecutionLocked(topic)) return null;
     return topic;
   },
 });
@@ -284,6 +303,14 @@ export const getSerpCorpusAudit = internalQuery({
 export const upsertMany = internalMutation({
   args: {
     siteId: v.id("sites"),
+    planExecution: v.optional(v.object({
+      jobId: v.id("jobs"),
+      workerToken: v.string(),
+      workerExecution: v.number(),
+      expectedClickSchedulingEnabled: v.boolean(),
+      commitNonce: v.string(),
+      rejectZeroAccepted: v.boolean(),
+    })),
     growthParentArticleId: v.optional(v.id("articles")),
     growthActionFingerprint: v.optional(v.string()),
     topics: v.array(
@@ -338,11 +365,61 @@ export const upsertMany = internalMutation({
   },
   handler: async (
     ctx,
-    { siteId, topics, growthParentArticleId, growthActionFingerprint },
+    {
+      siteId,
+      topics,
+      planExecution,
+      growthParentArticleId,
+      growthActionFingerprint,
+    },
   ) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.deletionStatus) {
       throw new Error("Site not found");
+    }
+    let owningPlanJob: Doc<"jobs"> | null = null;
+    if (planExecution) {
+      const timestamp = now();
+      const job = await ctx.db.get(planExecution.jobId);
+      const reservation = job?.providerSpendReservationId
+        ? await ctx.db.get(job.providerSpendReservationId)
+        : null;
+      if (
+        !job || job.siteId !== siteId || job.type !== "plan" ||
+        job.status !== "running" ||
+        job.workerToken !== planExecution.workerToken ||
+        (job.leaseExpiresAt ?? 0) <= timestamp ||
+        (job.workerAttempts ?? 0) + 1 !== planExecution.workerExecution ||
+        site.expectedClickSchedulingEnabled !==
+          planExecution.expectedClickSchedulingEnabled ||
+        !jobAuthorizedForExecution(site, job) ||
+        !(await siteExecutionAuthorized(ctx, site)) ||
+        job.providerReservationReleasedAt !== undefined ||
+        job.providerCostCeilingMicroUsd !==
+          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+        job.providerCostReservedMicroUsd !==
+          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+        !planRetryUsesCurrentReservationDay(
+          job.providerCostReservationDay,
+          timestamp,
+        ) ||
+        !reservation ||
+        reservation.siteId !== siteId ||
+        reservation.userId !== site.userId ||
+        reservation.purpose !== "topic_plan" ||
+        reservation.trigger !==
+          topicPlanProviderReservationTriggerFromPayload(job.payload) ||
+        reservation.reservedMicroUsd !==
+          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+        reservation.reservationDay !== job.providerCostReservationDay ||
+        reservation.createdAt !== job.createdAt ||
+        reservation.releasedAt !== undefined
+      ) {
+        throw new Error(
+          "Plan topic persistence lost its exact tenant, lease, rollout, or reservation contract",
+        );
+      }
+      owningPlanJob = job;
     }
     if (growthParentArticleId) {
       const parent = await ctx.db.get(growthParentArticleId);
@@ -418,6 +495,12 @@ export const upsertMany = internalMutation({
         auditedContentHash: article.auditedContentHash,
       })),
     ).map((topic) => topic.primaryKeyword);
+    // A paid checkpoint row is immutable planning/attempt history. It is not
+    // ordinary durable content coverage, but exact or similar upserts must not
+    // revive/replace it under a new row and thereby erase the no-replay fence.
+    const checkpointCoverageKeywords = existing
+      .filter(planCheckpointTopicDeletionLocked)
+      .map((topic) => topic.primaryKeyword);
     const reservingTopicIds = new Set<string>();
     for (const article of articleSummaries) {
       if (article.siteId !== siteId || !articleReservesTopicIntent(article)) {
@@ -506,7 +589,10 @@ export const upsertMany = internalMutation({
           updatedAt: existingTopic.updatedAt,
         })),
         reservingTopicIds,
-        additionalReservingKeywords: summaryCoverageKeywords,
+        additionalReservingKeywords: [
+          ...summaryCoverageKeywords,
+          ...checkpointCoverageKeywords,
+        ],
         acceptedBatchKeywords: acceptedKeywordKeys,
       });
       if (decision.kind === "blocked") {
@@ -642,6 +728,77 @@ export const upsertMany = internalMutation({
       acceptedKeywordKeys.push(normalizedKw);
     }
 
+    const accepted = inserted + revived;
+    if (planExecution?.rejectZeroAccepted && accepted === 0) {
+      // Throwing inside this mutation rolls back every insert/revival above.
+      // A verified plan can therefore never commit a false zero-yield success.
+      throw new Error(
+        "Verified planning produced no new scheduler-eligible topics; refusing to report a false replenishment success.",
+      );
+    }
+    if (planExecution && owningPlanJob) {
+      const committedAt = now();
+      const payload = owningPlanJob.payload &&
+          typeof owningPlanJob.payload === "object"
+        ? owningPlanJob.payload as Record<string, unknown>
+        : {};
+      const continuation = payload.underfilledPlanContinuation &&
+          typeof payload.underfilledPlanContinuation === "object"
+        ? payload.underfilledPlanContinuation as Record<string, unknown>
+        : null;
+      const cumulativeTopicCount = atomicPlanPersistenceCumulativeCount({
+        workerExecution: planExecution.workerExecution,
+        acceptedTopicCount: accepted,
+        ...(continuation
+          ? {
+              continuation: {
+                version: continuation.version,
+                firstExecutionCount: continuation.firstExecutionCount,
+                remainingTopicCapacity: continuation.remainingTopicCapacity,
+              },
+            }
+          : {}),
+      });
+      if (cumulativeTopicCount === null) {
+        throw new Error(
+          "Plan topic persistence lost its exact continuation count contract",
+        );
+      }
+      await ctx.db.patch(owningPlanJob._id, {
+        status: "done",
+        result: {
+          count: cumulativeTopicCount,
+          planPersistenceCommit: {
+            version: 1,
+            commitNonce: planExecution.commitNonce,
+            workerExecution: planExecution.workerExecution,
+            expectedClickSchedulingEnabled:
+              planExecution.expectedClickSchedulingEnabled,
+            acceptedTopicCount: accepted,
+            cumulativeTopicCount,
+            inserted,
+            revived,
+            skipped,
+            acceptedKeywordKeys,
+            committedAt,
+          },
+          providerBudget: {
+            reservedMicroUsd: owningPlanJob.providerCostReservedMicroUsd,
+            ceilingMicroUsd: owningPlanJob.providerCostCeilingMicroUsd,
+            reservationDay: owningPlanJob.providerCostReservationDay,
+            workerExecution: planExecution.workerExecution,
+          },
+        },
+        error: undefined,
+        stepProgress: undefined,
+        nextAttemptAt: undefined,
+        workerToken: undefined,
+        heartbeatAt: undefined,
+        leaseExpiresAt: undefined,
+        updatedAt: committedAt,
+      });
+    }
+
     if (skipped > 0) {
       console.log(
         `Topics upsert: ${inserted} inserted, ${revived} revived, ` +
@@ -663,6 +820,11 @@ export const remove = mutation({
     const topic = await ctx.db.get(topicId);
     if (!topic) return;
     await requireSiteOwner(ctx, topic.siteId);
+    if (planCheckpointTopicDeletionLocked(topic)) {
+      throw new Error(
+        "Plan checkpoint topics are immutable paid-attempt history",
+      );
+    }
     await ctx.db.delete(topicId);
   },
 });
@@ -670,6 +832,12 @@ export const remove = mutation({
 export const removeInternal = internalMutation({
   args: { topicId: v.id("topic_clusters") },
   handler: async (ctx, { topicId }) => {
+    const topic = await ctx.db.get(topicId);
+    if (topic && planCheckpointTopicDeletionLocked(topic)) {
+      throw new Error(
+        "Plan checkpoint topics may only be purged by tenant deletion",
+      );
+    }
     await ctx.db.delete(topicId);
   },
 });
@@ -684,6 +852,10 @@ export const updateStatus = internalMutation({
       "pending", "queued", "planned", "used", "cannibalizing", "disqualified",
     ]);
     if (!allowed.has(status)) throw new Error("Invalid topic status");
+    const topic = await ctx.db.get(topicId);
+    if (topic && planCheckpointTopicExecutionLocked(topic)) {
+      throw new Error("Plan checkpoint topic lifecycle is immutable");
+    }
     await ctx.db.patch(topicId, { status, updatedAt: now() });
   },
 });
@@ -768,6 +940,7 @@ export const recordBusinessFitAuditsInternal = internalMutation({
     for (const audit of audits) {
       const topic = await ctx.db.get(audit.topicId);
       if (!topic || topic.siteId !== siteId) continue;
+      if (planCheckpointTopicExecutionLocked(topic)) continue;
       if (["used", "queued", "cannibalizing"].includes(topic.status ?? "")) {
         continue;
       }
@@ -859,13 +1032,16 @@ export const removeUsed = mutation({
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .collect();
     let deleted = 0;
+    let protectedCheckpoints = 0;
     for (const topic of all) {
-      if (topic.status === "used") {
+      if (planCheckpointTopicDeletionLocked(topic)) {
+        protectedCheckpoints += 1;
+      } else if (topic.status === "used") {
         await ctx.db.delete(topic._id);
         deleted++;
       }
     }
-    return { deleted };
+    return { deleted, protectedCheckpoints };
   },
 });
 
@@ -935,12 +1111,15 @@ export const removeUnused = mutation({
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .collect();
     let deleted = 0;
+    let protectedCheckpoints = 0;
     for (const topic of all) {
-      if (topic.status !== "used") {
+      if (planCheckpointTopicDeletionLocked(topic)) {
+        protectedCheckpoints += 1;
+      } else if (topic.status !== "used") {
         await ctx.db.delete(topic._id);
         deleted++;
       }
     }
-    return { deleted };
+    return { deleted, protectedCheckpoints };
   },
 });

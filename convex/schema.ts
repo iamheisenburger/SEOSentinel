@@ -302,6 +302,38 @@ export default defineSchema({
     cadenceMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
     cadenceMicroSeedFingerprint: v.optional(v.string()),
 
+    // Automatic planners durably stage exact measured candidates before the
+    // first live SERP call. `plan_checkpoint` is intentionally outside the
+    // scheduler/planned-recovery lifecycle until the owning plan is terminal.
+    planCheckpointVersion: v.optional(v.number()),
+    planCheckpointId: v.optional(v.id("plan_candidate_checkpoints")),
+    planCheckpointJobId: v.optional(v.id("jobs")),
+    planCheckpointWorkerExecution: v.optional(v.number()),
+    planCheckpointSeedManifestHash: v.optional(v.string()),
+    planCheckpointCandidateFingerprint: v.optional(v.string()),
+    planCheckpointCandidateOrdinal: v.optional(v.number()),
+    // Preserve the staged value used by the immutable fingerprint. Live SERP
+    // analysis may later recommend and apply a different article type without
+    // changing the paid candidate's identity.
+    planCheckpointCandidateArticleType: v.optional(v.string()),
+    planCheckpointSerpAttemptedAt: v.optional(v.number()),
+    planCheckpointSerpReceipt: v.optional(v.object({
+      version: v.number(),
+      candidateFingerprint: v.string(),
+      seedManifestHash: v.string(),
+      workerExecution: v.number(),
+      normalizedUrlFingerprint: v.string(),
+      observedAt: v.number(),
+      locationCode: v.number(),
+      languageCode: v.string(),
+      results: v.array(v.object({ position: v.number(), url: v.string() })),
+      businessIntentAligned: v.literal(true),
+      attainable: v.literal(true),
+      cannibalizationClear: v.literal(true),
+    })),
+    planCheckpointTerminalFailureCode: v.optional(v.string()),
+    planCheckpointActivatedAt: v.optional(v.number()),
+
     // A measured growth action may commission a support topic for one exact
     // published page. These fields are tenant-scoped routing metadata, not an
     // inferred cluster label. They let article generation and final linking
@@ -606,6 +638,49 @@ export default defineSchema({
     .index("by_site_status_attempt", ["siteId", "status", "nextAttemptAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
     .index("by_status", ["status"]),
+
+  // One immutable pre-SERP manifest per automatic plan execution. Candidate
+  // rows live in topic_clusters so inline success and terminal recovery update
+  // the same IDs; this row binds their order to the paid seed window.
+  plan_candidate_checkpoints: defineTable({
+    siteId: v.id("sites"),
+    userId: v.string(),
+    planJobId: v.id("jobs"),
+    workerExecution: v.number(),
+    // inline_sealed is verified but deliberately non-consumable until the
+    // owning plan is marked done in the same mutation that promotes its rows.
+    status: v.string(), // active | inline_sealed | inline_completed | activated | empty | terminal_blocked
+    policyVersion: v.number(),
+    rolloutEpoch: v.number(),
+    providerSpendReservationId: v.id("provider_spend_reservations"),
+    providerCostCeilingMicroUsd: v.number(),
+    providerCostReservedMicroUsd: v.number(),
+    reservationDay: v.string(),
+    requiredVerifiedYield: v.number(),
+    replenishmentSequence: v.number(),
+    locationCode: v.number(),
+    languageCode: v.string(),
+    candidateCapacity: v.number(),
+    seedBatches: v.array(v.array(v.string())),
+    seedManifestHash: v.string(),
+    candidateTopicIds: v.array(v.id("topic_clusters")),
+    candidateFingerprints: v.array(v.string()),
+    inlineCompletedTopicIds: v.optional(v.array(v.id("topic_clusters"))),
+    terminallyExcludedTopicIds: v.optional(v.array(v.id("topic_clusters"))),
+    activatedTopicIds: v.optional(v.array(v.id("topic_clusters"))),
+    // Exact action-response recovery receipt for the mutation that promoted
+    // sealed rows and completed the owning plan in one transaction.
+    inlineSuccessCommitNonce: v.optional(v.string()),
+    activationScheduledAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    activatedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_plan_execution", ["planJobId", "workerExecution"])
+    .index("by_plan_job", ["planJobId"])
+    .index("by_site_status", ["siteId", "status"])
+    .index("by_site_created", ["siteId", "createdAt"]),
 
   // Immutable paid-execution receipts for article generation and quality/link
   // recovery. Rows are account-scoped rather than site-scoped on purpose: a

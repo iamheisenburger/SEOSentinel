@@ -54,6 +54,14 @@ import {
   inboundRelayConfigured,
   inboundRelayDsnRoutingReady,
 } from "./lib/outreachInboundRelay.ts";
+import { terminallyClosePlanCheckpoints } from
+  "./planCandidateCheckpoints";
+import { releaseSharedProviderReservation } from
+  "./lib/providerSpendReservation";
+import {
+  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  topicPlanProviderReservationTriggerFromPayload,
+} from "./lib/planProviderBudget";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -336,8 +344,10 @@ async function cancelAutonomousJobsForEpochTransition(
   siteId: Id<"sites">,
   reason: string,
   includeManual = false,
+  autonomousPlansOnly = false,
 ): Promise<number> {
-  const [pending, running] = await Promise.all([
+  const [site, pending, running] = await Promise.all([
+    ctx.db.get(siteId),
     ctx.db
       .query("jobs")
       .withIndex("by_site_status", (q) =>
@@ -353,8 +363,60 @@ async function cancelAutonomousJobsForEpochTransition(
   ]);
   let cancelled = 0;
   for (const job of [...pending, ...running]) {
-    if (!includeManual && !shouldCancelForEpochTransition(job)) continue;
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    if (autonomousPlansOnly) {
+      // Either direction of the expected-click toggle changes the paid plan
+      // contract. No non-manual plan—legacy, migration, growth, or checkpoint
+      // marked—may cross that boundary with its old authorization snapshot.
+      const expectedClickMigration =
+        payload.expectedClickPlanMigrationVersion !== undefined;
+      if (
+        job.type !== "plan" ||
+        (payload.manual === true && !expectedClickMigration)
+      ) continue;
+    } else if (!includeManual && !shouldCancelForEpochTransition(job)) {
+      continue;
+    }
     const cancelledAt = now();
+    let releasedPlanReservation = false;
+    if (
+      job.status === "pending" && job.type === "plan" &&
+      (job.workerAttempts ?? 0) === 0 && !job.workerToken &&
+      !job.providerReservationReleasedAt && job.providerSpendReservationId
+    ) {
+      const reservation = await ctx.db.get(job.providerSpendReservationId);
+      const expectedReservationTrigger =
+        topicPlanProviderReservationTriggerFromPayload(payload);
+      const exactUntouchedReservation = reservation &&
+        site?.userId &&
+        reservation.siteId === siteId &&
+        reservation.userId === site.userId &&
+        reservation.purpose === "topic_plan" &&
+        reservation.trigger === expectedReservationTrigger &&
+        reservation.createdAt === job.createdAt &&
+        reservation.reservationDay === job.providerCostReservationDay &&
+        reservation.reservedMicroUsd ===
+          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+        job.providerCostReservedMicroUsd ===
+          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+        job.providerCostCeilingMicroUsd ===
+          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+        reservation.releasedAt === undefined;
+      if (exactUntouchedReservation) {
+        releasedPlanReservation = (await releaseSharedProviderReservation(
+          ctx,
+          {
+            reservationId: job.providerSpendReservationId,
+            siteId,
+            purpose: "topic_plan",
+            reason: "plan_cancelled_before_execution",
+            timestamp: cancelledAt,
+          },
+        )).released;
+      }
+    }
     if (job.status === "running") {
       const attempt = await ctx.db
         .query("article_generation_attempts")
@@ -386,9 +448,6 @@ async function cancelAutonomousJobsForEpochTransition(
         await ctx.db.delete(reservation._id);
       }
     }
-    const payload = job.payload && typeof job.payload === "object"
-      ? (job.payload as Record<string, unknown>)
-      : {};
     if (payload.topicId) {
       const topicId = ctx.db.normalizeId("topic_clusters", String(payload.topicId));
       const topic = topicId ? await ctx.db.get(topicId) : null;
@@ -404,8 +463,42 @@ async function cancelAutonomousJobsForEpochTransition(
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,
       nextAttemptAt: undefined,
+      ...(releasedPlanReservation
+        ? {
+            providerReservationReleasedAt: cancelledAt,
+            providerReservationReleaseReason:
+              "plan_cancelled_before_execution",
+          }
+        : {}),
       updatedAt: cancelledAt,
     });
+    if (
+      releasedPlanReservation &&
+      typeof payload.expectedClickPlanMigrationVersion === "number"
+    ) {
+      const site = await ctx.db.get(siteId);
+      if (
+        site?.expectedClickPlanMigrationJobId === job._id &&
+        site.expectedClickPlanMigrationVersion ===
+          payload.expectedClickPlanMigrationVersion &&
+        site.expectedClickPlanMigrationReservedAt === job.createdAt
+      ) {
+        await ctx.db.patch(siteId, {
+          expectedClickPlanMigrationVersion: undefined,
+          expectedClickPlanMigrationJobId: undefined,
+          expectedClickPlanMigrationReservedAt: undefined,
+          updatedAt: cancelledAt,
+        });
+      }
+    }
+    if (job.type === "plan") {
+      await terminallyClosePlanCheckpoints(
+        ctx,
+        job._id,
+        cancelledAt,
+        "plan_checkpoint_cancelled_by_epoch_transition",
+      );
+    }
     cancelled += 1;
   }
   return cancelled;
@@ -1471,6 +1564,7 @@ const SITE_DELETION_STAGES = [
   "autopilot_health",
   "autopilot_runs",
   "article_summaries",
+  "plan_candidate_checkpoints",
   "jobs",
   "topic_clusters",
   "pages",
@@ -1862,6 +1956,8 @@ async function deletionRowsForStage(
       return ctx.db.query("expected_click_evidence_jobs").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "cadence_micro_seed_jobs":
       return ctx.db.query("cadence_micro_seed_jobs").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "plan_candidate_checkpoints":
+      return ctx.db.query("plan_candidate_checkpoints").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "provider_spend_reservations":
       return ctx.db.query("provider_spend_reservations").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "legacy_publication_receipt_adoptions":
@@ -3357,11 +3453,22 @@ export const setExpectedClickScheduling = internalMutation({
   handler: async (ctx, { siteId, enabled }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.deletionStatus) throw new Error("Site not found");
+    const changed = site.expectedClickSchedulingEnabled !== enabled;
+    let cancelledJobs = 0;
+    if (changed) {
+      cancelledJobs = await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        siteId,
+        "Expected-click scheduling contract changed",
+        false,
+        true,
+      );
+    }
     await ctx.db.patch(siteId, {
       expectedClickSchedulingEnabled: enabled,
       updatedAt: now(),
     });
-    return { enabled };
+    return { enabled, cancelledJobs };
   },
 });
 

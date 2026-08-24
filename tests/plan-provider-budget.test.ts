@@ -10,12 +10,63 @@ import {
   AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD,
   UNDERFILLED_PLAN_CONTINUATION_RECOVERY_VERSION,
   automaticPlanAllowanceForArticleHeadroom,
+  atomicPlanPersistenceCumulativeCount,
+  automaticPlanYieldTarget,
+  automaticPlanYieldTargetFromPayload,
   classifyPlanFailure,
   countsTowardTopicPlanRecentLimit,
   evaluateAutomaticPlanContinuation,
   evaluatePlanProviderReservationCapacity,
   planRetryUsesCurrentReservationDay,
+  topicPlanProviderReservationTriggerFromPayload,
 } from "../convex/lib/planProviderBudget.ts";
+
+test("atomic plan receipts retain exact execution and cumulative counts", () => {
+  assert.equal(atomicPlanPersistenceCumulativeCount({
+    workerExecution: 1,
+    acceptedTopicCount: 5,
+  }), 5);
+  assert.equal(atomicPlanPersistenceCumulativeCount({
+    workerExecution: 2,
+    acceptedTopicCount: 4,
+  }), 4, "a transient retry has no prior accepted output");
+  assert.equal(atomicPlanPersistenceCumulativeCount({
+    workerExecution: 2,
+    acceptedTopicCount: 2,
+    continuation: {
+      version: 1,
+      firstExecutionCount: 5,
+      remainingTopicCapacity: 5,
+    },
+  }), 7);
+  assert.equal(atomicPlanPersistenceCumulativeCount({
+    workerExecution: 2,
+    acceptedTopicCount: 6,
+    continuation: {
+      version: 1,
+      firstExecutionCount: 5,
+      remainingTopicCapacity: 5,
+    },
+  }), null);
+  assert.equal(atomicPlanPersistenceCumulativeCount({
+    workerExecution: 3,
+    acceptedTopicCount: 1,
+  }), null);
+});
+
+test("plan reservation triggers bind ordinary and migration payloads exactly", () => {
+  assert.equal(topicPlanProviderReservationTriggerFromPayload(undefined),
+    "topic_plan");
+  assert.equal(topicPlanProviderReservationTriggerFromPayload({
+    reason: "topic_horizon_replenishment",
+  }), "topic_plan");
+  assert.equal(topicPlanProviderReservationTriggerFromPayload({
+    expectedClickPlanMigrationVersion: 1,
+  }), "expected_click_plan_migration_v1");
+  assert.equal(topicPlanProviderReservationTriggerFromPayload({
+    expectedClickPlanMigrationVersion: "1",
+  }), "topic_plan");
+});
 
 test("automatic plan reservation covers at most two provider executions", () => {
   assert.equal(AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD, 1_000_000);
@@ -36,23 +87,37 @@ test("one successful underfilled plan can consume only its reserved second execu
     evaluateAutomaticPlanContinuation({
       automaticTopicPlan: true,
       savedTopicCount: 1,
+      requiredVerifiedYield: 7,
       workerAttempts: 0,
       continuationAlreadyQueued: false,
       reservationDay,
       executionAt,
     }),
-    { allowed: true, remainingTopicCapacity: 9, workerExecution: 2 },
+    { allowed: true, remainingTopicCapacity: 6, workerExecution: 2 },
   );
   assert.deepEqual(
     evaluateAutomaticPlanContinuation({
       automaticTopicPlan: true,
       savedTopicCount: 6,
+      requiredVerifiedYield: 7,
       workerAttempts: 0,
       continuationAlreadyQueued: false,
       reservationDay,
       executionAt,
     }),
-    { allowed: true, remainingTopicCapacity: 4, workerExecution: 2 },
+    { allowed: true, remainingTopicCapacity: 1, workerExecution: 2 },
+  );
+  assert.deepEqual(
+    evaluateAutomaticPlanContinuation({
+      automaticTopicPlan: true,
+      savedTopicCount: 1,
+      requiredVerifiedYield: 3,
+      workerAttempts: 0,
+      continuationAlreadyQueued: false,
+      reservationDay,
+      executionAt,
+    }),
+    { allowed: true, remainingTopicCapacity: 2, workerExecution: 2 },
   );
 });
 
@@ -60,6 +125,7 @@ test("continuation never makes failure, retry, manual work, or stale budget free
   const base = {
     automaticTopicPlan: true,
     savedTopicCount: 1,
+    requiredVerifiedYield: 7,
     workerAttempts: 0,
     continuationAlreadyQueued: false,
     reservationDay: "2026-08-23",
@@ -98,6 +164,54 @@ test("continuation never makes failure, retry, manual work, or stale budget free
     }),
     { allowed: false, reason: "reservation_day_expired" },
   );
+});
+
+test("queue-time yield target is horizon-aware, quota-capped, and immutable", () => {
+  assert.deepEqual(automaticPlanYieldTarget({
+    targetBufferShortfall: 2,
+    verifiedHorizonShortfall: 6,
+    articleQuotaHeadroom: 8,
+  }), {
+    version: 1,
+    targetBufferShortfall: 2,
+    verifiedHorizonShortfall: 6,
+    articleQuotaHeadroom: 8,
+    requiredVerifiedYield: 6,
+  });
+  assert.equal(automaticPlanYieldTarget({
+    targetBufferShortfall: 0,
+    verifiedHorizonShortfall: 0,
+    articleQuotaHeadroom: 10,
+  }).requiredVerifiedYield, 0);
+  assert.equal(automaticPlanYieldTarget({
+    targetBufferShortfall: 3,
+    verifiedHorizonShortfall: 7,
+    articleQuotaHeadroom: 2,
+  }).requiredVerifiedYield, 2);
+
+  const payload = {
+    reason: "topic_horizon_replenishment",
+    planYieldTarget: automaticPlanYieldTarget({
+      targetBufferShortfall: 3,
+      verifiedHorizonShortfall: 7,
+      articleQuotaHeadroom: 10,
+    }),
+  };
+  assert.deepEqual(
+    automaticPlanYieldTargetFromPayload(payload),
+    payload.planYieldTarget,
+  );
+  assert.equal(automaticPlanYieldTargetFromPayload({
+    ...payload,
+    manual: true,
+  }), null);
+  assert.equal(automaticPlanYieldTargetFromPayload({
+    ...payload,
+    planYieldTarget: {
+      ...payload.planYieldTarget,
+      requiredVerifiedYield: 10,
+    },
+  }), null);
 });
 
 test("paid plan allowance cannot exceed remaining ten-topic article headroom", () => {
@@ -243,6 +357,11 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
   assert.match(jobs, /authorizeUnderfilledPlanContinuationExecution/);
   assert.match(jobs, /recoverCompletedUnderfilledPlanContinuation/);
   assert.match(jobs, /underfilledPlanContinuation/);
+  assert.match(jobs, /outstandingArticleJobs/);
+  assert.match(
+    jobs,
+    /maximumArticles - activeUsage\.length - outstandingArticleJobs/,
+  );
   assert.match(jobs, /workerAttempts: 1/);
   assert.match(jobs, /Plan worker lease expired after provider work may have started/);
   assert.match(jobs, /plan_spend_ambiguous/);
@@ -252,8 +371,24 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
   );
   assert.match(jobs, /trigger: "underfilled_plan_settled"/);
 
+  const balanceAbort = jobs.slice(
+    jobs.indexOf("export const abortPlanForProviderBalance"),
+    jobs.indexOf("export const queuePublicationIfAbsent"),
+  );
+  assert.match(balanceAbort, /reservation\.userId === site\.userId/);
+  assert.match(
+    balanceAbort,
+    /topicPlanProviderReservationTriggerFromPayload\(payload\)/,
+  );
+  assert.ok((balanceAbort.match(/AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD/g) ?? [])
+    .length >= 3);
+  assert.match(
+    balanceAbort,
+    /expectedClickPlanMigrationReservedAt === job\.createdAt/,
+  );
+
   assert.match(pipeline, /Budgeted plan provider reservation is missing or invalid/);
-  assert.match(pipeline, /Paid plan retry crossed its UTC reservation day/);
+  assert.match(pipeline, /Paid plan execution crossed its UTC reservation day/);
   assert.match(pipeline, /planRetryUsesCurrentReservationDay/);
   assert.match(pipeline, /classifyPlanFailure\(message\)/);
   assert.ok(
@@ -273,6 +408,10 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
   );
   assert.match(pipeline, /\(job\.workerAttempts \?\? 0\) !== 1/);
   assert.match(pipeline, /cumulativeCount/);
+  assert.match(
+    pipeline,
+    /Checkpoint plan is missing its immutable verified-yield target;[\s\S]*refusing provider work/,
+  );
   assert.match(
     pipeline,
     /reason: "owner_requested_plan",[\s\S]*manual: true/,
@@ -353,14 +492,19 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
     pipeline.indexOf("if (job.type === \"links\")"),
   );
   assert.ok(
-    paidBoundary.indexOf("assertDataForSeoAccountBalance") <
-      paidBoundary.indexOf("authorizeUnderfilledPlanContinuationExecution"),
-    "the continuation rechecks quota after the free wallet preflight",
+    paidBoundary.indexOf("automaticSingleExecutionCheckpointTargetFromPayload") <
+      paidBoundary.indexOf("assertDataForSeoAccountBalance"),
+    "checkpoint target validation precedes every paid provider boundary",
   );
   assert.ok(
     paidBoundary.indexOf("authorizeUnderfilledPlanContinuationExecution") <
+      paidBoundary.indexOf("assertDataForSeoAccountBalance"),
+    "the continuation rechecks quota before the provider wallet boundary",
+  );
+  assert.ok(
+    paidBoundary.indexOf("assertDataForSeoAccountBalance") <
       paidBoundary.indexOf("handlePlan"),
-    "the continuation rechecks quota before any paid planning work",
+    "the wallet preflight remains before any paid planning work",
   );
   const completedRecovery = jobs.slice(
     jobs.indexOf("export const recoverCompletedUnderfilledPlanContinuation"),

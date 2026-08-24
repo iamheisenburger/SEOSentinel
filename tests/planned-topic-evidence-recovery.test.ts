@@ -22,6 +22,8 @@ import {
   uniqueExactPlannedTargets,
   verifiedKeywordPlanningActive,
 } from "../convex/lib/plannedTopicEvidenceRecovery.ts";
+import { planSerpResultFingerprint } from
+  "../convex/lib/planCandidateCheckpoint.ts";
 import {
   coveredIntentTopics,
   evaluateTopicBusinessFit,
@@ -240,6 +242,73 @@ test("phase admission accepts legacy SERP provenance but preserves strict invent
       hasCurrentPositiveDemand: true,
     }).eligible, false, `${name} evidence`);
   }
+});
+
+test("checkpoint SERP attempts are never adopted or replayed by planned recovery", () => {
+  const attemptedAt = now - 2_000;
+  const results = [1, 2, 3, 4, 5].map((position) => ({
+    position,
+    url: `https://result-${position}.example/page`,
+  }));
+  const normalizedUrlFingerprint = planSerpResultFingerprint(results);
+  assert.ok(normalizedUrlFingerprint);
+  const checkpointTopic = {
+    ...topic,
+    planCheckpointSerpAttemptedAt: attemptedAt,
+    planCheckpointCandidateFingerprint: "candidate-fingerprint",
+    planCheckpointSeedManifestHash: "seed-manifest",
+    planCheckpointWorkerExecution: 1,
+    planCheckpointSerpReceipt: {
+      version: 1,
+      candidateFingerprint: "candidate-fingerprint",
+      seedManifestHash: "seed-manifest",
+      workerExecution: 1,
+      normalizedUrlFingerprint: normalizedUrlFingerprint!,
+      observedAt: attemptedAt + 1_000,
+      locationCode: 2840,
+      languageCode: "en",
+      results,
+      businessIntentAligned: true,
+      attainable: true,
+      cannibalizationClear: true,
+    },
+  };
+  assert.equal(plannedTopicDemandAdmission({
+    site: site as never,
+    topic: checkpointTopic as never,
+    hasLinkedArticle: false,
+    hasActiveArticleJob: false,
+  }).reason, "plan_checkpoint_serp_already_attempted");
+  assert.equal(plannedTopicEvidenceAdmission({
+    site: site as never,
+    topic: checkpointTopic as never,
+    hasLinkedArticle: false,
+    hasActiveArticleJob: false,
+    hasCurrentPositiveDemand: true,
+    timestamp: now,
+  }).reason, "plan_checkpoint_serp_already_attempted");
+  assert.equal(plannedTopicEvidenceAdmission({
+    site: site as never,
+    topic: {
+      ...checkpointTopic,
+      planCheckpointSerpReceipt: undefined,
+    } as never,
+    hasLinkedArticle: false,
+    hasActiveArticleJob: false,
+    hasCurrentPositiveDemand: true,
+    timestamp: now,
+  }).reason, "plan_checkpoint_serp_already_attempted");
+  assert.equal(plannedTopicEvidenceAdmission({
+    site: site as never,
+    topic: {
+      ...checkpointTopic,
+      planCheckpointTerminalFailureCode: "semantic_failure",
+    } as never,
+    hasLinkedArticle: false,
+    hasActiveArticleJob: false,
+    hasCurrentPositiveDemand: true,
+    timestamp: now,
+  }).reason, "plan_checkpoint_terminal");
 });
 
 test("planned recovery and micro admission cannot trust legacy SERPs past lexical coverage", () => {

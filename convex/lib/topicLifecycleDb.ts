@@ -4,6 +4,8 @@ import {
   articleReservesTopicIntent,
   reconciledTopicStatus,
 } from "./topicLifecycle.ts";
+import { planCheckpointTopicExecutionLocked } from
+  "./planCandidateCheckpoint.ts";
 
 function jobRecord(job: Doc<"jobs">): Record<string, unknown> {
   return job.payload && typeof job.payload === "object"
@@ -79,6 +81,7 @@ export async function reconcileTopicLifecycle(
   const nextStatus = reconciledTopicStatus({
     currentStatus: previousStatus,
     businessFitEligible: topic.businessFitEligible,
+    checkpointExecutionLocked: planCheckpointTopicExecutionLocked(topic),
     hasLinkedArticles: linkedArticles.length > 0,
     hasReservingArticle: reservingArticles.length > 0,
     hasActiveArticleJob: activeArticleJobs.length > 0,

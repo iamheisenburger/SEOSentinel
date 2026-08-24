@@ -142,7 +142,7 @@ test("migration discounts only legacy plan counters, never shared fleet spend", 
   );
   assert.match(
     reservation,
-    /expected_click_plan_migration_v\$\{options\.expectedClickMigrationVersion\}/,
+    /topicPlanProviderReservationTriggerFromPayload\([\s\S]*expectedClickPlanMigrationVersion:/,
   );
   assert.doesNotMatch(reservation, /SHARED_PROVIDER_.*CEILING.*=/);
 });

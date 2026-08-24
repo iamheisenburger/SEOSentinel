@@ -65,5 +65,9 @@ test("expected-click scheduling is an internal per-tenant canary", () => {
   );
   assert.match(setter, /internalMutation/);
   assert.match(setter, /expectedClickSchedulingEnabled: enabled/);
+  assert.match(setter, /cancelAutonomousJobsForEpochTransition/);
+  assert.match(setter, /false,\s*true/);
+  assert.doesNotMatch(setter, /autopilotRolloutEpoch/);
+  assert.match(setter, /Expected-click scheduling contract changed/);
   assert.doesNotMatch(setter, /mutation\(\{/);
 });

@@ -696,7 +696,9 @@ export const scheduleCadence = internalAction({
       businessModelSignals,
     } = tenantTopicBusinessSignals(site);
     const revalidatable = topics.filter((topic: Doc<"topic_clusters">) =>
-      !["used", "queued", "cannibalizing"].includes(topic.status ?? "")
+      !["used", "queued", "cannibalizing", "plan_checkpoint"].includes(
+        topic.status ?? "",
+      ) && !topic.planCheckpointTerminalFailureCode
     );
     const businessFitAudits: TopicBusinessFitAudit[] = revalidatable.map(
       (topic: Doc<"topic_clusters">) => {

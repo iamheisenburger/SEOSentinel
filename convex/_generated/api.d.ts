@@ -36,10 +36,12 @@ import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfil
 import type * as expectedClickEvidenceBackfill from "../expectedClickEvidenceBackfill.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
+import type * as planCandidateCheckpoints from "../planCandidateCheckpoints.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_articleGenerationAttempt from "../lib/articleGenerationAttempt.js";
 import type * as lib_articleQuality from "../lib/articleQuality.js";
 import type * as lib_authorityDiscoveryBudget from "../lib/authorityDiscoveryBudget.js";
+import type * as lib_authorityDifficulty from "../lib/authorityDifficulty.js";
 import type * as lib_autopilotAlerts from "../lib/autopilotAlerts.js";
 import type * as lib_autopilotBuffer from "../lib/autopilotBuffer.js";
 import type * as lib_autopilotCadence from "../lib/autopilotCadence.js";
@@ -73,6 +75,7 @@ import type * as lib_outreachPreparationBudget from "../lib/outreachPreparationB
 import type * as lib_outreachSecurity from "../lib/outreachSecurity.js";
 import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
 import type * as lib_planProviderBudget from "../lib/planProviderBudget.js";
+import type * as lib_planCandidateCheckpoint from "../lib/planCandidateCheckpoint.js";
 import type * as lib_planProviderReservation from "../lib/planProviderReservation.js";
 import type * as lib_planSiteAllowance from "../lib/planSiteAllowance.js";
 import type * as lib_plannedTopicEvidenceRecovery from "../lib/plannedTopicEvidenceRecovery.js";
@@ -140,10 +143,12 @@ declare const fullApi: ApiFromModules<{
   expectedClickEvidenceBackfill: typeof expectedClickEvidenceBackfill;
   http: typeof http;
   jobs: typeof jobs;
+  planCandidateCheckpoints: typeof planCandidateCheckpoints;
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/articleGenerationAttempt": typeof lib_articleGenerationAttempt;
   "lib/articleQuality": typeof lib_articleQuality;
   "lib/authorityDiscoveryBudget": typeof lib_authorityDiscoveryBudget;
+  "lib/authorityDifficulty": typeof lib_authorityDifficulty;
   "lib/autopilotAlerts": typeof lib_autopilotAlerts;
   "lib/autopilotBuffer": typeof lib_autopilotBuffer;
   "lib/autopilotCadence": typeof lib_autopilotCadence;
@@ -177,6 +182,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outreachSecurity": typeof lib_outreachSecurity;
   "lib/outreachTargetLive": typeof lib_outreachTargetLive;
   "lib/planProviderBudget": typeof lib_planProviderBudget;
+  "lib/planCandidateCheckpoint": typeof lib_planCandidateCheckpoint;
   "lib/planProviderReservation": typeof lib_planProviderReservation;
   "lib/planSiteAllowance": typeof lib_planSiteAllowance;
   "lib/plannedTopicEvidenceRecovery": typeof lib_plannedTopicEvidenceRecovery;

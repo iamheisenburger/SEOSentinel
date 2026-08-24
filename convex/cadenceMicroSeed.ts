@@ -583,7 +583,10 @@ async function inspectReadiness(
   const locationCode = dataForSeoLocationCode(site.targetCountry);
   const languageCode = dataForSeoLanguageCode(site.language);
   const portfolio = evaluateStoredExpectedClickPortfolio({
-    topics: topics.map((topic) => ({
+    topics: topics.filter((topic) =>
+      topic.status !== "plan_checkpoint" &&
+      !topic.planCheckpointTerminalFailureCode
+    ).map((topic) => ({
       topicId: String(topic._id),
       keyword: topic.primaryKeyword,
       searchVolume: topic.searchVolume,
@@ -620,9 +623,16 @@ async function inspectReadiness(
       label: topic.label,
       ...businessSignals,
     });
-    return !["used", "queued", "cannibalizing", "disqualified"].includes(
+    return ![
+      "used",
+      "queued",
+      "cannibalizing",
+      "disqualified",
+      "plan_checkpoint",
+    ].includes(
       topic.status ?? "planned",
-    ) && fit.eligible && topic.businessFitEligible === true &&
+    ) && !topic.planCheckpointTerminalFailureCode &&
+      fit.eligible && topic.businessFitEligible === true &&
       Number.isFinite(topic.searchVolume) &&
       Number.isFinite(topic.keywordDifficulty) &&
       topic.keywordDifficultyMeasured === true &&

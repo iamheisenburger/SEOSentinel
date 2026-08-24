@@ -483,6 +483,7 @@ function evidenceCandidateInventory(args: {
       hasLinkedArticle: linkedArticles.length > 0,
       hasActiveArticleJob: args.activeArticleTopicIds.has(String(topic._id)),
       hasCurrentPositiveDemand: currentPositiveDemand,
+      timestamp: args.timestamp,
     });
     if (!admission.eligible || !admission.fingerprint) {
       if (admission.reason === "current_positive_demand_required") {
@@ -1647,6 +1648,7 @@ async function currentSelectedTopic(
           languageCode: dataForSeoLanguageCode(site.language),
           now: timestamp,
         }),
+      timestamp,
     });
     if (
       !siteGate.allowed ||

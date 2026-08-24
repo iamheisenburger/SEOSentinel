@@ -55,7 +55,9 @@ export const PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD = Object.freeze({
 
 export type ProviderReservationReleaseReason =
   | "provider_balance_insufficient"
-  | "provider_balance_preflight_unavailable";
+  | "provider_balance_preflight_unavailable"
+  | "plan_cancelled_before_execution"
+  | "plan_reservation_day_expired_before_execution";
 
 export type SharedProviderPurpose =
   | "topic_plan"

@@ -397,6 +397,12 @@ type PlannedTopicFingerprint = Pick<
   | "businessFitVersion"
   | "businessFitReasons"
   | "disqualifiedReason"
+  | "planCheckpointSerpAttemptedAt"
+  | "planCheckpointSerpReceipt"
+  | "planCheckpointCandidateFingerprint"
+  | "planCheckpointSeedManifestHash"
+  | "planCheckpointWorkerExecution"
+  | "planCheckpointTerminalFailureCode"
 >;
 
 /** Exact raw JSON is deliberate: no compact non-cryptographic hash collision
@@ -448,6 +454,17 @@ export function plannedTopicRecoveryFingerprint(args: {
     businessFitVersion: args.topic.businessFitVersion,
     businessFitReasons: args.topic.businessFitReasons ?? [],
     disqualifiedReason: args.topic.disqualifiedReason,
+    planCheckpointSerpAttemptedAt:
+      args.topic.planCheckpointSerpAttemptedAt,
+    planCheckpointSerpReceipt: args.topic.planCheckpointSerpReceipt,
+    planCheckpointCandidateFingerprint:
+      args.topic.planCheckpointCandidateFingerprint,
+    planCheckpointSeedManifestHash:
+      args.topic.planCheckpointSeedManifestHash,
+    planCheckpointWorkerExecution:
+      args.topic.planCheckpointWorkerExecution,
+    planCheckpointTerminalFailureCode:
+      args.topic.planCheckpointTerminalFailureCode,
   });
 }
 
@@ -466,6 +483,21 @@ function plannedTopicPhaseAdmission(
   if (topic.siteId !== site._id) return { eligible: false, reason: "wrong_tenant" };
   if (topic.status !== "planned") {
     return { eligible: false, reason: "topic_not_planned" };
+  }
+  if (topic.planCheckpointTerminalFailureCode) {
+    return { eligible: false, reason: "plan_checkpoint_terminal" };
+  }
+  const checkpointSerpStarted = Number.isFinite(
+    topic.planCheckpointSerpAttemptedAt,
+  );
+  if (
+    phase === "demand" &&
+    (checkpointSerpStarted || topic.planCheckpointSerpReceipt !== undefined)
+  ) {
+    return {
+      eligible: false,
+      reason: "plan_checkpoint_serp_already_attempted",
+    };
   }
   if (args.hasLinkedArticle) {
     return { eligible: false, reason: "linked_article_exists" };
@@ -520,12 +552,22 @@ export function plannedTopicDemandAdmission(
 export function plannedTopicEvidenceAdmission(
   args: PlannedTopicPhaseAdmissionArgs & {
     hasCurrentPositiveDemand: boolean;
+    timestamp?: number;
   },
 ): PlannedTopicAdmission {
   const admission = plannedTopicPhaseAdmission(args, "evidence");
   if (!admission.eligible) return admission;
   if (!args.hasCurrentPositiveDemand) {
     return { eligible: false, reason: "current_positive_demand_required" };
+  }
+  if (
+    Number.isFinite(args.topic.planCheckpointSerpAttemptedAt) ||
+    args.topic.planCheckpointSerpReceipt !== undefined
+  ) {
+    return {
+      eligible: false,
+      reason: "plan_checkpoint_serp_already_attempted",
+    };
   }
   return admission;
 }

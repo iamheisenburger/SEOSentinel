@@ -10,6 +10,7 @@ export type TopicReservationArticle = {
 export type TopicLifecycleInput = {
   currentStatus?: string;
   businessFitEligible?: boolean;
+  checkpointExecutionLocked?: boolean;
   hasLinkedArticles: boolean;
   hasReservingArticle: boolean;
   hasActiveArticleJob: boolean;
@@ -179,6 +180,9 @@ export function articleReservesTopicIntent(
 export function reconciledTopicStatus(
   input: TopicLifecycleInput,
 ): string {
+  if (input.checkpointExecutionLocked) {
+    return input.currentStatus ?? "planned";
+  }
   if (input.hasReservingArticle) return "used";
   if (input.hasActiveArticleJob) return "queued";
   if (
