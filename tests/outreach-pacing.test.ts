@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -26,6 +27,7 @@ import {
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
+const durabilitySource = readFileSync("convex/lib/outreachDurability.ts", "utf8");
 
 test("a brand new inbox starts at the small warm-up volume", () => {
   assert.equal(
@@ -152,6 +154,19 @@ test("a late older settlement cannot rewind the durable day or counter", () => {
   assert.equal(merged.sentToday, 5);
   assert.equal(merged.lastSentAt, NOW);
   assert.equal(merged.mailboxKey, "mailbox-current");
+});
+
+test("verified deletion preserves only unlinked monotonic sender reputation", () => {
+  const helper = durabilitySource.slice(
+    durabilitySource.indexOf(
+      "export async function recordUnlinkedDurablePacingReceipt",
+    ),
+  );
+  assert.match(helper, /withIndex\("by_sender"/);
+  assert.match(helper, /accountKey: existing\.accountKey/);
+  assert.match(helper, /tenantDomainKey: existing\.tenantDomainKey/);
+  assert.match(helper, /mailboxKey: existing\.mailboxKey/);
+  assert.doesNotMatch(helper, /accountDeletionKey/);
 });
 
 test("a durable sender receipt written after connect controls preflight and claim pacing", () => {

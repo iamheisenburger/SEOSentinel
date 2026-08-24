@@ -74,6 +74,7 @@ import {
 import {
   recordDurableContactReceiptForAccount,
   recordDurablePacingReceiptForAccount,
+  recordUnlinkedDurablePacingReceipt,
 } from "./lib/outreachDurability.ts";
 import {
   materializeOutreachSuppressionTombstoneForAccount,
@@ -1549,6 +1550,8 @@ const ACCOUNT_DELETION_SITE_PAGE_SIZE = 5;
 const ACCOUNT_DELETION_RECEIPT_BATCH = 100;
 const ACCOUNT_DELETION_RETRY_MS = 60 * 1000;
 const ACCOUNT_DELETION_RECEIPT_STAGES = [
+  "outreach_foreign_owner_messages",
+  "outreach_foreign_owner_inboxes",
   "outreach_durability_migrations",
   "outreach_sender_suppression_tombstones",
   "outreach_tenant_contact_receipts",
@@ -2072,6 +2075,10 @@ export const continueSiteDeletionInternal = internalMutation({
     if (site.deletionStatus !== "running") {
       throw new Error("Site deletion is not active");
     }
+    const verifiedAccountDeletion = Boolean(
+      site.accountDeletionRequestedAt &&
+        site.deletionRequestedBy === "verified_account_deletion",
+    );
     const safeStage = Math.max(0, Math.floor(stage));
     if (safeStage >= SITE_DELETION_STAGES.length) {
       // A provider action may have captured this tenant before deletion was
@@ -2145,7 +2152,7 @@ export const continueSiteDeletionInternal = internalMutation({
             (messageInbox?.siteId === siteId
               ? messageInbox.credentialOwnerAccountKey
               : undefined);
-          if (!settlementAccountKey) {
+          if (!settlementAccountKey && !verifiedAccountDeletion) {
             throw new Error(
               "Outreach history has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
             );
@@ -2155,35 +2162,47 @@ export const continueSiteDeletionInternal = internalMutation({
           // site-scoped evidence is removed. Ordinary site deletion also
           // permanently retires previously-contacted recipients, closing the
           // delayed STOP race without retaining an inbound alias.
-          await recordDurableContactReceiptForAccount(
-            ctx,
-            settlementAccountKey,
-            message.toDomain,
-            acceptedAt,
-          );
-          await materializeOutreachSuppressionTombstoneForAccount(
-            ctx,
-            settlementAccountKey,
-            "domain",
-            message.toDomain,
-            "manual",
-            acceptedAt,
-          );
-          await materializeOutreachSuppressionTombstoneForAccount(
-            ctx,
-            settlementAccountKey,
-            "email",
-            message.toEmail,
-            "manual",
-            acceptedAt,
-          );
-          if (messageInbox && messageInbox.siteId === siteId) {
-            await recordDurablePacingReceiptForAccount(
+          if (settlementAccountKey) {
+            await recordDurableContactReceiptForAccount(
               ctx,
               settlementAccountKey,
+              message.toDomain,
+              acceptedAt,
+            );
+            await materializeOutreachSuppressionTombstoneForAccount(
+              ctx,
+              settlementAccountKey,
+              "domain",
+              message.toDomain,
+              "manual",
+              acceptedAt,
+            );
+            await materializeOutreachSuppressionTombstoneForAccount(
+              ctx,
+              settlementAccountKey,
+              "email",
+              message.toEmail,
+              "manual",
+              acceptedAt,
+            );
+            if (messageInbox && messageInbox.siteId === siteId) {
+              await recordDurablePacingReceiptForAccount(
+                ctx,
+                settlementAccountKey,
+                messageInbox,
+                acceptedAt,
+                false,
+              );
+            }
+          } else if (messageInbox && messageInbox.siteId === siteId) {
+            // A verified full-account erasure must not deadlock or attach an
+            // unproven legacy send to the deleting/current account. Scrub the
+            // raw recipient/body row and retain only the unlinked global
+            // sender-domain pacing fence disclosed in the privacy policy.
+            await recordUnlinkedDurablePacingReceipt(
+              ctx,
               messageInbox,
               acceptedAt,
-              false,
             );
           }
         }
@@ -2198,37 +2217,47 @@ export const continueSiteDeletionInternal = internalMutation({
           const settlementAccountKey = suppressionInboxes.length === 1
             ? suppressionInboxes[0].credentialOwnerAccountKey
             : undefined;
-          if (!settlementAccountKey) {
+          if (!settlementAccountKey && !verifiedAccountDeletion) {
             throw new Error(
               "Outreach suppression history has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
             );
           }
-          await materializeOutreachSuppressionTombstoneForAccount(
-            ctx,
-            settlementAccountKey,
-            suppression.kind,
-            suppression.value,
-            suppression.reason,
-            suppression.createdAt,
-          );
+          if (settlementAccountKey) {
+            await materializeOutreachSuppressionTombstoneForAccount(
+              ctx,
+              settlementAccountKey,
+              suppression.kind,
+              suppression.value,
+              suppression.reason,
+              suppression.createdAt,
+            );
+          }
         }
         await ctx.db.delete(suppression._id);
       } else if (SITE_DELETION_STAGES[safeStage] === "outreach_inboxes") {
         const inbox = row as Doc<"outreach_inboxes">;
         if (inbox.lastSentAt) {
           const settlementAccountKey = inbox.credentialOwnerAccountKey;
-          if (!settlementAccountKey) {
+          if (!settlementAccountKey && !verifiedAccountDeletion) {
             throw new Error(
               "Outreach inbox pacing has unresolved immutable ownership; prove the exact legacy mailbox owner before deletion",
             );
           }
-          await recordDurablePacingReceiptForAccount(
-            ctx,
-            settlementAccountKey,
-            inbox,
-            inbox.lastSentAt,
-            false,
-          );
+          if (settlementAccountKey) {
+            await recordDurablePacingReceiptForAccount(
+              ctx,
+              settlementAccountKey,
+              inbox,
+              inbox.lastSentAt,
+              false,
+            );
+          } else {
+            await recordUnlinkedDurablePacingReceipt(
+              ctx,
+              inbox,
+              inbox.lastSentAt,
+            );
+          }
         }
         await ctx.db.delete(inbox._id);
       } else if (SITE_DELETION_STAGES[safeStage] === "usage_log") {
@@ -2562,6 +2591,20 @@ async function accountReceiptRowsForStage(
 ) {
   const name = ACCOUNT_DELETION_RECEIPT_STAGES[stage];
   switch (name) {
+    case "outreach_foreign_owner_messages":
+      return ctx.db
+        .query("outreach_messages")
+        .withIndex("by_delivery_owner", (q) =>
+          q.eq("deliveryOwnerAccountKey", accountDeletionKey(userId))
+        )
+        .take(10);
+    case "outreach_foreign_owner_inboxes":
+      return ctx.db
+        .query("outreach_inboxes")
+        .withIndex("by_credential_owner", (q) =>
+          q.eq("credentialOwnerAccountKey", accountDeletionKey(userId))
+        )
+        .take(1);
     case "outreach_durability_migrations":
       return ctx.db
         .query("outreach_durability_migrations")
@@ -2608,6 +2651,41 @@ async function accountReceiptRowsForStage(
     default:
       return [];
   }
+}
+
+async function scrubForeignAccountOutreachMessage(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+  timestamp: number,
+): Promise<"deleted" | "progress" | "lease_wait"> {
+  if (
+    message.status === "sending" &&
+    (message.deliveryLeaseExpiresAt ?? 0) > timestamp
+  ) {
+    return "lease_wait";
+  }
+  const relayReceipts = await ctx.db
+    .query("outreach_inbound_relay_receipts")
+    .withIndex("by_site_message", (q) =>
+      q.eq("siteId", message.siteId).eq("messageId", message._id)
+    )
+    .take(10);
+  for (const relayReceipt of relayReceipts) {
+    await ctx.db.delete(relayReceipt._id);
+  }
+  if (relayReceipts.length >= 10) return "progress";
+
+  const inbox = message.inboxId ? await ctx.db.get(message.inboxId) : null;
+  const acceptedAt = message.sentAt ?? (
+    ["sending", "delivery_unverified"].includes(message.status)
+      ? message.deliveryClaimedAt
+      : undefined
+  );
+  if (acceptedAt && inbox && inbox.siteId === message.siteId) {
+    await recordUnlinkedDurablePacingReceipt(ctx, inbox, acceptedAt);
+  }
+  await ctx.db.delete(message._id);
+  return "deleted";
 }
 
 export const finalizeAccountDeletionInternal = internalMutation({
@@ -2669,9 +2747,48 @@ export const finalizeAccountDeletionInternal = internalMutation({
       const tombstoneUserId = accountDeletionTombstoneUserId(
         receipt.accountKey,
       );
+      const name = ACCOUNT_DELETION_RECEIPT_STAGES[stage];
+      let externalLeaseWait = false;
       for (const row of rows) {
-        const name = ACCOUNT_DELETION_RECEIPT_STAGES[stage];
-        if (
+        if (name === "outreach_foreign_owner_messages") {
+          const result = await scrubForeignAccountOutreachMessage(
+            ctx,
+            row as Doc<"outreach_messages">,
+            now(),
+          );
+          externalLeaseWait ||= result === "lease_wait";
+        } else if (name === "outreach_foreign_owner_inboxes") {
+          const inbox = row as Doc<"outreach_inboxes">;
+          const inboxMessages = await ctx.db
+            .query("outreach_messages")
+            .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
+            .take(20);
+          for (const message of inboxMessages) {
+            const result = await scrubForeignAccountOutreachMessage(
+              ctx,
+              message,
+              now(),
+            );
+            externalLeaseWait ||= result === "lease_wait";
+          }
+          if (inboxMessages.length === 0) {
+            const canaries = await ctx.db
+              .query("outreach_inbound_relay_canaries")
+              .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
+              .take(20);
+            for (const canary of canaries) {
+              if (
+                canary.deliveryStatus === "claimed" &&
+                (canary.deliveryLeaseExpiresAt ?? 0) > now()
+              ) {
+                externalLeaseWait = true;
+                continue;
+              }
+              await ctx.db.delete(canary._id);
+            }
+            if (canaries.length === 0) await ctx.db.delete(inbox._id);
+          }
+        } else if (
           name === "outreach_durability_migrations" ||
           name === "outreach_sender_suppression_tombstones" ||
           name === "outreach_tenant_contact_receipts"
@@ -2719,7 +2836,7 @@ export const finalizeAccountDeletionInternal = internalMutation({
         updatedAt: now(),
       });
       await ctx.scheduler.runAfter(
-        0,
+        externalLeaseWait ? ACCOUNT_DELETION_RETRY_MS : 0,
         internal.sites.finalizeAccountDeletionInternal,
         { receiptId },
       );

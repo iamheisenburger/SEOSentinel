@@ -1,4 +1,5 @@
 import { sha256Hex } from "./publicationArtifact.ts";
+import { accountDeletionRequestedForKey } from "./accountDeletion.ts";
 import {
   OUTREACH_ACCOUNT_TENANT_SCOPE_KEY,
   outreachTenantScope,
@@ -116,6 +117,7 @@ export async function materializeOutreachSuppressionTombstoneForAccount(
   reason: string,
   createdAt: number,
 ): Promise<void> {
+  if (await accountDeletionRequestedForKey(ctx, accountKey)) return;
   const valueKey = outreachSuppressionValueKey(kind, value);
   const identity = accountKey && valueKey
     ? {

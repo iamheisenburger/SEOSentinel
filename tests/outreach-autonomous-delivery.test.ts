@@ -276,6 +276,13 @@ test("delivery settlement remains bound to the immutable claiming account", () =
   assert.match(deletion, /materializeOutreachSuppressionTombstoneForAccount/);
   assert.match(deletion, /const settlementAccountKey = inbox\.credentialOwnerAccountKey/);
   assert.match(deletion, /unresolved immutable ownership/);
+  assert.match(deletion, /site\.deletionRequestedBy === "verified_account_deletion"/);
+  assert.match(deletion, /recordUnlinkedDurablePacingReceipt/);
+  assert.match(deletion, /if \(!settlementAccountKey && !verifiedAccountDeletion\)/);
+  assert.match(
+    deletion,
+    /else if \(messageInbox && messageInbox\.siteId === siteId\)[\s\S]{0,600}recordUnlinkedDurablePacingReceipt/,
+  );
 });
 
 test("legacy inbound rows bind immutable ownership inside the current-owner lease", () => {

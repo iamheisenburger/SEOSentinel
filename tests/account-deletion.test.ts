@@ -135,6 +135,48 @@ test("completion retains only scrubbed billing and abuse receipts", () => {
   assert.match(finalize, /ctx\.db\.delete\(entitlement\._id\)/);
 });
 
+test("verified deletion scrubs outreach owned through a foreign current site", () => {
+  const sites = source("convex/sites.ts");
+  const schema = source("convex/schema.ts");
+  const finalize = exportedBlock(sites, "finalizeAccountDeletionInternal");
+  const siteDeletion = exportedBlock(sites, "continueSiteDeletionInternal");
+
+  assert.match(schema, /index\("by_credential_owner", \["credentialOwnerAccountKey"\]\)/);
+  assert.match(schema, /index\("by_delivery_owner", \["deliveryOwnerAccountKey"\]\)/);
+  assert.match(schema, /index\("by_inbox", \["inboxId"\]\)/);
+  assert.match(finalize, /outreach_foreign_owner_messages/);
+  assert.match(finalize, /outreach_foreign_owner_inboxes/);
+  assert.match(finalize, /scrubForeignAccountOutreachMessage/);
+  assert.match(finalize, /deliveryLeaseExpiresAt/);
+  assert.match(sites, /outreach_inbound_relay_receipts/);
+  assert.match(sites, /outreach_inbound_relay_canaries/);
+  assert.match(siteDeletion, /verifiedAccountDeletion/);
+  assert.match(siteDeletion, /recordUnlinkedDurablePacingReceipt/);
+  assert.doesNotMatch(
+    siteDeletion,
+    /settlementAccountKey[\s\S]{0,180}accountDeletionKey\(site\.userId\)/,
+  );
+});
+
+test("deleted account keys cannot be resurrected by late outreach settlement", () => {
+  const accountDeletion = source("convex/lib/accountDeletion.ts");
+  const durability = source("convex/lib/outreachDurability.ts");
+  const suppression = source("convex/lib/outreachSuppression.ts");
+  const outreach = source("convex/outreach.ts");
+
+  assert.match(accountDeletion, /accountDeletionRequestedForKey/);
+  assert.match(accountDeletion, /account_deletion_receipts/);
+  assert.match(durability, /accountDeletionRequestedForKey\(ctx, accountKey\)/);
+  assert.match(durability, /recordUnlinkedDurablePacingReceipt/);
+  assert.match(suppression, /accountDeletionRequestedForKey\(ctx, accountKey\)/);
+  const relay = exportedBlock(outreach, "recordInboundRelayReceipt");
+  assert.match(relay, /settlementOwnerDeleting/);
+  assert.ok(
+    relay.indexOf("settlementOwnerDeleting") <
+      relay.indexOf('ctx.db.insert("outreach_inbound_relay_receipts"'),
+  );
+});
+
 test("account deletion recovery resumes an interrupted running site purge", () => {
   const sites = source("convex/sites.ts");
   const finalize = exportedBlock(sites, "finalizeAccountDeletionInternal");

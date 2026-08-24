@@ -1545,6 +1545,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site", ["siteId"])
+    .index("by_credential_owner", ["credentialOwnerAccountKey"])
     // Outbound mailbox and domain reputation are tenant-scoped resources.
     // These indexes let every connect, opt-in and send claim fail closed if
     // another active tenant is already using either identity.
@@ -1657,6 +1658,8 @@ export default defineSchema({
       "scheduledAt",
     ])
     .index("by_opportunity", ["opportunityId"])
+    .index("by_delivery_owner", ["deliveryOwnerAccountKey"])
+    .index("by_inbox", ["inboxId"])
     .index("by_site_domain", ["siteId", "toDomain"])
     .index("by_site_domain_status_sent", [
       "siteId",

@@ -88,7 +88,10 @@ import {
   normalizeInboundRelayDomain,
   normalizeRfcMessageId,
 } from "./lib/outreachInboundRelay.ts";
-import { accountDeletionKey } from "./lib/accountDeletion.ts";
+import {
+  accountDeletionKey,
+  accountDeletionRequestedForKey,
+} from "./lib/accountDeletion.ts";
 import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
 import {
   materializeOutreachSuppressionTombstone,
@@ -4509,12 +4512,16 @@ export const getInboundRelayCandidate = internalQuery({
       message,
       inbox && inbox.siteId === message.siteId ? inbox : null,
     );
+    const settlementOwnerDeleting = settlementAccountKey
+      ? await accountDeletionRequestedForKey(ctx, settlementAccountKey)
+      : true;
     if (
       !site ||
       !(await relaySettlementAuthorized(ctx, site, settlementBoundaryAt)) ||
       !inbox ||
       inbox.siteId !== message.siteId ||
       !settlementAccountKey ||
+      settlementOwnerDeleting ||
       message.inboundRelayAliasDomain !== configuredDomain ||
       message.inboundRelayInboxConfigurationVersion === undefined ||
       message.inboundRelayRolloutEpoch === undefined ||
@@ -4653,6 +4660,9 @@ export const recordInboundRelayReceipt = internalMutation({
     const settlementAccountKey = message
       ? immutableDeliveryOwnerAccountKey(message, inbox)
       : undefined;
+    const settlementOwnerDeleting = settlementAccountKey
+      ? await accountDeletionRequestedForKey(ctx, settlementAccountKey)
+      : true;
     if (
       !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
       !configuredDomain ||
@@ -4669,6 +4679,7 @@ export const recordInboundRelayReceipt = internalMutation({
       message.siteId !== args.siteId ||
       message.inboxId !== args.inboxId ||
       !settlementAccountKey ||
+      settlementOwnerDeleting ||
       args.deliveryOwnerAccountKey !== settlementAccountKey ||
       !/^[a-f0-9]{64}$/.test(args.deliveryOwnerAccountKey) ||
       ![

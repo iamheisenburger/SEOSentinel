@@ -1,4 +1,7 @@
-import { accountDeletionKey } from "./accountDeletion.ts";
+import {
+  accountDeletionKey,
+  accountDeletionRequestedForKey,
+} from "./accountDeletion.ts";
 import { normalizeDomain } from "./outreachPacing.ts";
 import { sha256Hex } from "./publicationArtifact.ts";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -290,6 +293,7 @@ export async function recordDurableContactReceiptForAccount(
   expectedAttemptId?: string,
 ): Promise<void> {
   if (!accountKey || !Number.isFinite(contactedAt) || contactedAt <= 0) return;
+  if (await accountDeletionRequestedForKey(ctx, accountKey)) return;
   const identity = outreachContactReceiptIdentityForAccount({
     accountKey,
     recipientDomain,
@@ -345,6 +349,9 @@ export async function reserveDurableContactClaim(
     recipientDomain,
   });
   if (!identity) return { reserved: false };
+  if (await accountDeletionRequestedForKey(ctx, identity.accountKey)) {
+    return { reserved: false };
+  }
   const existing = await ctx.db
     .query("outreach_tenant_contact_receipts")
     .withIndex("by_account_tenant_recipient", (q) =>
@@ -403,6 +410,7 @@ export async function releaseDurableContactClaimForAccount(
   attemptId: string,
   now: number,
 ): Promise<void> {
+  if (await accountDeletionRequestedForKey(ctx, accountKey)) return;
   const identity = outreachContactReceiptIdentityForAccount({
     accountKey,
     recipientDomain,
@@ -498,6 +506,10 @@ export async function recordDurablePacingReceiptForAccount(
   increment = true,
 ): Promise<void> {
   if (!accountKey || !Number.isFinite(deliveredAt) || deliveredAt <= 0) return;
+  if (await accountDeletionRequestedForKey(ctx, accountKey)) {
+    await recordUnlinkedDurablePacingReceipt(ctx, inbox, deliveredAt);
+    return;
+  }
   const senderDomainKey = outreachSenderDomainKey(
     inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
   );
@@ -556,6 +568,61 @@ export async function recordDurablePacingReceiptForAccount(
   }
   await ctx.db.insert("outreach_sender_pacing_receipts", {
     ...identity,
+    ...merged,
+    retainUntil: deliveredAt + OUTREACH_SENDER_REPUTATION_RETENTION_MS,
+    createdAt: deliveredAt,
+  });
+}
+
+/**
+ * Preserve only the globally hashed sender-reputation fence while a verified
+ * full-account deletion scrubs an additive-rollout inbox whose historical
+ * account owner cannot be proven. The row deliberately has no account or
+ * tenant linkage. Historical deletion may raise domain count/spacing, but it
+ * can never adopt, relink, or replace an existing mailbox owner/lineage.
+ */
+export async function recordUnlinkedDurablePacingReceipt(
+  ctx: MutationCtx,
+  inbox: Doc<"outreach_inboxes">,
+  deliveredAt: number,
+): Promise<void> {
+  if (!Number.isFinite(deliveredAt) || deliveredAt <= 0) return;
+  const senderDomainKey = outreachSenderDomainKey(
+    inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+  );
+  const mailboxKey = outreachMailboxKey(inbox.fromEmail);
+  if (!senderDomainKey || !mailboxKey) return;
+  const existing = await ctx.db
+    .query("outreach_sender_pacing_receipts")
+    .withIndex("by_sender", (q) => q.eq("senderDomainKey", senderDomainKey))
+    .first();
+  const merged = mergeDurablePacingState({
+    existing: existing ?? undefined,
+    mailboxKey,
+    inboxWarmupStartedAt: inbox.warmupStartedAt,
+    inboxSentToday: inbox.sentToday ?? 0,
+    inboxSentTodayDay: inbox.sentTodayDay ?? "",
+    deliveredAt,
+    increment: false,
+  });
+  if (existing) {
+    await ctx.db.patch(existing._id, {
+      ...merged,
+      // Deletion-time discovery is not an ownership-transfer protocol.
+      accountKey: existing.accountKey,
+      tenantDomainKey: existing.tenantDomainKey,
+      mailboxKey: existing.mailboxKey,
+      warmupStartedAt: existing.warmupStartedAt,
+      retainUntil: Math.max(
+        existing.retainUntil ?? 0,
+        deliveredAt + OUTREACH_SENDER_REPUTATION_RETENTION_MS,
+      ),
+      updatedAt: Math.max(existing.updatedAt, deliveredAt),
+    });
+    return;
+  }
+  await ctx.db.insert("outreach_sender_pacing_receipts", {
+    senderDomainKey,
     ...merged,
     retainUntil: deliveredAt + OUTREACH_SENDER_REPUTATION_RETENTION_MS,
     createdAt: deliveredAt,
