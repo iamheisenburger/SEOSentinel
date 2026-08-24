@@ -129,6 +129,15 @@ disabled. The stack deliberately does not activate its rule set because SES has
 one active rule set per region and replacing it without reviewing existing
 rules can drop mail.
 
+The stack deliberately does not reserve function concurrency. AWS accounts
+with a regional concurrency quota of 10 must leave all 10 executions unreserved,
+so any function-level reservation makes the stack undeployable. Work remains
+bounded without reservations: the parser's SQS event source has batch size 1
+and maximum concurrency 2; the sweeper has one five-minute schedule and a
+60-second timeout; and the synchronous guard atomically enforces its DynamoDB
+alias and trusted-source rate limits. Confirm the account has enough unreserved
+capacity for the receiving path, because a throttled guard fails closed.
+
 ## Release sequence
 
 1. Review `RETENTION_POLICY.md` and calculate its SHA-256 digest. Configure the

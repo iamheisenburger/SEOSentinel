@@ -39,12 +39,20 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("Prefix: raw/", TEMPLATE)
 
     def test_queue_is_pointer_only_bounded_encrypted_and_dead_lettered(self) -> None:
+        parser = TEMPLATE[
+            TEMPLATE.index("  MimeParserFunction:") : TEMPLATE.index(
+                "  RetentionSweeperFunction:"
+            )
+        ]
         self.assertIn("SqsManagedSseEnabled: true", TEMPLATE)
         self.assertIn("MessageRetentionPeriod: 21600", TEMPLATE)
         self.assertIn("MessageRetentionPeriod: 86400", TEMPLATE)
         self.assertIn("maxReceiveCount: 24", TEMPLATE)
         self.assertIn("Event: s3:ObjectCreated:Put", TEMPLATE)
-        self.assertIn("FunctionResponseTypes: [ReportBatchItemFailures]", TEMPLATE)
+        self.assertIn("FunctionResponseTypes: [ReportBatchItemFailures]", parser)
+        self.assertIn("BatchSize: 1", parser)
+        self.assertIn("MaximumConcurrency: 2", parser)
+        self.assertNotIn("ReservedConcurrentExecutions", TEMPLATE)
 
     def test_no_component_has_outbound_ses_or_iam_authority(self) -> None:
         self.assertIsNone(
@@ -55,8 +63,17 @@ class TemplateContractTests(unittest.TestCase):
         self.assertNotIn('boto3.client("ses', GUARD + PARSER)
 
     def test_retention_retries_privacy_and_rotation_are_explicit(self) -> None:
-        self.assertIn("Schedule: rate(5 minutes)", TEMPLATE)
+        sweeper = TEMPLATE[
+            TEMPLATE.index("  RetentionSweeperFunction:") : TEMPLATE.index(
+                "  AllowSesInvokeGuard:"
+            )
+        ]
+        self.assertIn("Timeout: 60", sweeper)
+        self.assertEqual(sweeper.count("Type: Schedule"), 1)
+        self.assertIn("Schedule: rate(5 minutes)", sweeper)
         self.assertIn("RAW_PURGE_AGE_SECONDS", GUARD)
+        self.assertIn("_counter_update(table_name, alias_key, 10", GUARD)
+        self.assertIn("_counter_update(table_name, source_key, 60", GUARD)
         self.assertIn("SweeperFreshnessAlarm:", TEMPLATE)
         self.assertIn("SweeperErrorAlarm:", TEMPLATE)
         self.assertIn("Threshold: 21600", TEMPLATE)

@@ -17,6 +17,14 @@ const sesBudget = template.slice(
   template.indexOf("  RelaySesServiceMonthlyBudget:"),
   template.indexOf("  RelayTaggedInfrastructureBudget:"),
 );
+const parserFunction = template.slice(
+  template.indexOf("  MimeParserFunction:"),
+  template.indexOf("  RetentionSweeperFunction:"),
+);
+const sweeperFunction = template.slice(
+  template.indexOf("  RetentionSweeperFunction:"),
+  template.indexOf("  AllowSesInvokeGuard:"),
+);
 
 test("SES relay remains receiving-only, pointer-only and fail-closed", () => {
   assert.match(template, /InvocationType: RequestResponse/);
@@ -28,6 +36,7 @@ test("SES relay remains receiving-only, pointer-only and fail-closed", () => {
   assert.doesNotMatch(template, /SNSAction/);
   assert.doesNotMatch(template, /ses:(?:Send|SendRaw|SendBounce)/i);
   assert.doesNotMatch(template, /Action:\s*(?:\[)?iam:/i);
+  assert.doesNotMatch(template, /ReservedConcurrentExecutions/);
   assert.doesNotMatch(`${guard}\n${parser}`, /boto3\.client\(["']ses/);
 });
 
@@ -46,7 +55,13 @@ test("SES relay retention, retry and cost fences are source-controlled", () => {
   assert.match(template, /MessageRetentionPeriod: 21600/);
   assert.match(template, /MessageRetentionPeriod: 86400/);
   assert.match(template, /ExpirationInDays: 1/);
-  assert.match(template, /Schedule: rate\(5 minutes\)/);
+  assert.match(parserFunction, /BatchSize: 1/);
+  assert.match(parserFunction, /MaximumConcurrency: 2/);
+  assert.match(sweeperFunction, /Timeout: 60/);
+  assert.equal(sweeperFunction.match(/Type: Schedule/g)?.length, 1);
+  assert.match(sweeperFunction, /Schedule: rate\(5 minutes\)/);
+  assert.match(guard, /_counter_update\(table_name, alias_key, 10/);
+  assert.match(guard, /_counter_update\(table_name, source_key, 60/);
   assert.match(template, /SweeperFreshnessAlarm:/);
   assert.match(template, /SweeperErrorAlarm:/);
   assert.match(template, /RelaySesServiceMonthlyBudget:/);

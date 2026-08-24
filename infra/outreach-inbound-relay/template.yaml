@@ -331,7 +331,6 @@ Resources:
       Handler: guard.handler
       Role: !GetAtt GuardRole.Arn
       Timeout: 10
-      ReservedConcurrentExecutions: 5
 
   MimeParserFunction:
     Type: AWS::Serverless::Function
@@ -341,7 +340,6 @@ Resources:
       Handler: parser.handler
       Role: !GetAtt ParserRole.Arn
       Timeout: 20
-      ReservedConcurrentExecutions: 2
       Environment:
         Variables:
           ADAPTER_VERSION: !Ref AdapterVersion
@@ -367,7 +365,6 @@ Resources:
       Handler: sweeper.handler
       Role: !GetAtt SweeperRole.Arn
       Timeout: 60
-      ReservedConcurrentExecutions: 1
       Events:
         FiveMinuteSixHourRetention:
           Type: Schedule
