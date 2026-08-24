@@ -40,6 +40,17 @@ test("SES relay remains receiving-only, pointer-only and fail-closed", () => {
   assert.doesNotMatch(`${guard}\n${parser}`, /boto3\.client\(["']ses/);
 });
 
+test("relay guard has the exact granular DynamoDB transaction permissions", () => {
+  const guardRole = template.slice(
+    template.indexOf("  GuardRole:"),
+    template.indexOf("  ParserRole:"),
+  );
+  assert.match(guardRole, /dynamodb:GetItem/);
+  assert.match(guardRole, /dynamodb:PutItem/);
+  assert.match(guardRole, /dynamodb:UpdateItem/);
+  assert.doesNotMatch(guardRole, /dynamodb:(?:DeleteItem|Scan|TransactWriteItems)/);
+});
+
 test("SES relay binds both alias classes and structured returned-message DSNs", () => {
   assert.match(common, /reply\|dsn/);
   assert.match(common, /dmarcVerdict/);

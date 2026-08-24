@@ -245,7 +245,10 @@ Resources:
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub ${GuardLogGroup.Arn}:*
               - Effect: Allow
-                Action: [dynamodb:GetItem, dynamodb:TransactWriteItems]
+                # TransactWriteItems is the API operation, but DynamoDB IAM
+                # authorizes each transaction member by its concrete action.
+                # The guard writes one proof and updates two bounded counters.
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
                 Resource: !GetAtt RelayStateTable.Arn
       Tags:
         - Key: PentraComponent

@@ -62,6 +62,17 @@ class TemplateContractTests(unittest.TestCase):
         self.assertNotIn("ses:Send", GUARD + PARSER)
         self.assertNotIn('boto3.client("ses', GUARD + PARSER)
 
+    def test_guard_has_only_the_granular_dynamodb_transaction_permissions(self) -> None:
+        guard_role = TEMPLATE[
+            TEMPLATE.index("  GuardRole:") : TEMPLATE.index("  ParserRole:")
+        ]
+        self.assertIn("dynamodb:GetItem", guard_role)
+        self.assertIn("dynamodb:PutItem", guard_role)
+        self.assertIn("dynamodb:UpdateItem", guard_role)
+        self.assertNotIn("dynamodb:DeleteItem", guard_role)
+        self.assertNotIn("dynamodb:Scan", guard_role)
+        self.assertNotIn("dynamodb:TransactWriteItems", guard_role)
+
     def test_retention_retries_privacy_and_rotation_are_explicit(self) -> None:
         sweeper = TEMPLATE[
             TEMPLATE.index("  RetentionSweeperFunction:") : TEMPLATE.index(
