@@ -16,6 +16,64 @@ import { autonomousOutreachConsentActive } from "./outreachAutonomy.ts";
 
 export type StoredInbox = Record<string, unknown> | null | undefined;
 
+/** A disconnected identity is reusable only after its tenant is fully live
+ * and has no unresolved external delivery boundary. Deletion keeps the
+ * identity reserved until the inbox row itself is purged. */
+export function outboundIdentityReservationActive(args: {
+  inboxStatus?: string;
+  siteExists: boolean;
+  siteDeletionPending?: boolean;
+  accountDeletionPending?: boolean;
+  hasSendingDelivery?: boolean;
+  hasUnverifiedDelivery?: boolean;
+}): boolean {
+  if (args.inboxStatus !== "disconnected") return true;
+  return !args.siteExists ||
+    Boolean(
+      args.siteDeletionPending ||
+        args.accountDeletionPending ||
+        args.hasSendingDelivery ||
+        args.hasUnverifiedDelivery,
+    );
+}
+
+export function reconnectPacingState(args: {
+  reconnectsSameMailbox: boolean;
+  preservesSenderReputation: boolean;
+  now: number;
+  existingWarmupStartedAt?: number;
+  existingSentToday?: number;
+  existingSentTodayDay?: string;
+  existingLastSentAt?: number;
+}): {
+  warmupStartedAt: number;
+  sentToday: number;
+  sentTodayDay: string;
+  lastSentAt?: number;
+} {
+  if (!args.preservesSenderReputation) {
+    return {
+      warmupStartedAt: args.now,
+      sentToday: 0,
+      sentTodayDay: utcDayKey(args.now),
+      lastSentAt: undefined,
+    };
+  }
+  return {
+    // Mailbox reputation is address-specific even when the sending domain's
+    // aggregate cap/spacing must carry across aliases.
+    warmupStartedAt: args.reconnectsSameMailbox
+      ? args.existingWarmupStartedAt ?? args.now
+      : args.now,
+    sentToday:
+      args.existingSentTodayDay === utcDayKey(args.now)
+        ? args.existingSentToday ?? 0
+        : 0,
+    sentTodayDay: utcDayKey(args.now),
+    lastSentAt: args.existingLastSentAt,
+  };
+}
+
 export function resolveGmailReconnectProfile(args: {
   requestedFromName?: string;
   existingFromName?: string;
@@ -44,6 +102,7 @@ export function sanitizeInboxForClient(
   relayDsnRoutingTargetAddress?: string,
   autonomousDeliveryReleaseAvailable = false,
   autonomousConsentOwnerId?: string,
+  autonomousExecutionReady = false,
 ): Record<string, unknown> | null {
   if (!inbox) return null;
   const dailySendCap =
@@ -79,6 +138,10 @@ export function sanitizeInboxForClient(
     ? relayDsnRoutingTargetAddress!.toLowerCase()
     : undefined;
   const inboundMonitoringReady = relayReady || legacyGmailReadReady;
+  const storedAutonomyConsentActive = autonomousOutreachConsentActive(
+    inbox,
+    autonomousConsentOwnerId,
+  );
 
   return {
     _id: inbox._id,
@@ -91,10 +154,16 @@ export function sanitizeInboxForClient(
     complianceConfirmedAt: inbox.complianceConfirmedAt,
     status: inbox.status,
     mode: inbox.mode,
+    configurationVersion:
+      typeof inbox.configurationVersion === "number"
+        ? inbox.configurationVersion
+        : 0,
     autonomousDeliveryReleaseAvailable,
+    autonomousConsentActive: storedAutonomyConsentActive,
     autonomousDeliveryEnabled:
       autonomousDeliveryReleaseAvailable &&
-      autonomousOutreachConsentActive(inbox, autonomousConsentOwnerId),
+      storedAutonomyConsentActive &&
+      autonomousExecutionReady,
     autonomyConsentVersion: inbox.autonomyConsentVersion,
     autonomyConsentPolicyHash: inbox.autonomyConsentPolicyHash,
     autonomyConsentAcceptedAt: inbox.autonomyConsentAcceptedAt,

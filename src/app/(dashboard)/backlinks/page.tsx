@@ -1,7 +1,7 @@
 "use client";
 
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
 import {
   OUTREACH_AUTONOMY_CONSENT_TEXT,
   OUTREACH_AUTONOMY_CONSENT_VERSION,
@@ -98,6 +99,15 @@ export default function BacklinksPage() {
     api.outreach.getInbox,
     site?._id ? { siteId: site._id } : "skip",
   );
+  const autonomyConsentConfigurationKey = [
+    String(site?._id ?? ""),
+    String(inbox?._id ?? ""),
+    String(inbox?.configurationVersion ?? ""),
+  ].join(":");
+  useEffect(() => {
+    setAutonomyConsentAccepted(false);
+    setAutonomyDailyCap(5);
+  }, [autonomyConsentConfigurationKey]);
 
   const analyzeBacklinks = useAction(api.actions.backlinks.analyzeBacklinks);
   const prepareOutreach = useAction(api.actions.outreach.prepareOutreach);
@@ -147,6 +157,10 @@ export default function BacklinksPage() {
     typeof inbox?.inboundRelayDsnRoutingTargetAddress === "string"
       ? inbox.inboundRelayDsnRoutingTargetAddress
       : "";
+  const storedAutonomyConsentActive = Boolean(
+    inbox?.autonomousConsentActive,
+  );
+  const effectiveAutonomyLive = Boolean(inbox?.autonomousDeliveryEnabled);
   const isLoading = Boolean(site?._id) &&
     (opportunities === undefined || messages === undefined || inbox === undefined);
 
@@ -498,17 +512,23 @@ export default function BacklinksPage() {
                     Authority autopilot
                   </h3>
                   <span className={`rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
-                    Boolean(inbox.autonomousDeliveryEnabled)
+                    effectiveAutonomyLive
                       ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
+                      : storedAutonomyConsentActive
+                        ? "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]"
                       : "border-white/[0.08] bg-white/[0.03] text-[#707589]"
                   }`}>
-                    {Boolean(inbox.autonomousDeliveryEnabled) ? "live" : "off"}
+                    {effectiveAutonomyLive
+                      ? "live"
+                      : storedAutonomyConsentActive
+                        ? "paused"
+                        : "off"}
                   </span>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
                   {OUTREACH_AUTONOMY_CONSENT_TEXT}
                 </p>
-                {!Boolean(inbox.autonomousDeliveryEnabled) && (
+                {!storedAutonomyConsentActive && (
                   <label className="mt-3 flex items-start gap-2 text-[11px] text-[#B8BBC7]">
                     <input
                       type="checkbox"
@@ -523,7 +543,7 @@ export default function BacklinksPage() {
                 )}
               </div>
               <div className="flex shrink-0 items-end gap-2">
-                {!Boolean(inbox.autonomousDeliveryEnabled) && (
+                {!storedAutonomyConsentActive && (
                   <label className="block">
                     <span className="mb-1 block text-[9px] font-medium uppercase tracking-wider text-[#565A6E]">
                       Daily cap
@@ -540,7 +560,7 @@ export default function BacklinksPage() {
                     />
                   </label>
                 )}
-                {Boolean(inbox.autonomousDeliveryEnabled) ? (
+                {storedAutonomyConsentActive ? (
                   <Button
                     size="sm"
                     variant="secondary"
@@ -572,6 +592,10 @@ export default function BacklinksPage() {
                     onClick={() => runOperation("enable-autonomy", async () => {
                       const result = await enableAutonomousOutreach({
                         siteId: site._id,
+                        expectedInboxId: inbox._id as Id<"outreach_inboxes">,
+                        expectedInboxConfigurationVersion: Number(
+                          inbox.configurationVersion ?? 0,
+                        ),
                         consentVersion: OUTREACH_AUTONOMY_CONSENT_VERSION,
                         consentPolicyHash: OUTREACH_AUTONOMY_POLICY_HASH,
                         dailySendCap: autonomyDailyCap,
@@ -594,7 +618,9 @@ export default function BacklinksPage() {
             </div>
             {!Boolean(inbox.autonomousDeliveryReleaseAvailable) && (
               <p className="mt-2 text-[10px] text-[#FBBF24]">
-                This environment has not released autonomous delivery.
+                {storedAutonomyConsentActive
+                  ? "Autonomous delivery is paused by the environment, but your stored authorization remains active. Use Disable to prevent it from resuming when the release switch returns."
+                  : "This environment has not released autonomous delivery."}
               </p>
             )}
           </div>

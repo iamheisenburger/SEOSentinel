@@ -12,6 +12,35 @@ export const OUTREACH_OPPORTUNITY_EVIDENCE_MAX_AGE_MS =
 
 /** The source page is fetched immediately before the serializable send claim. */
 export const OUTREACH_LIVE_OPPORTUNITY_EVIDENCE_MAX_AGE_MS = 60 * 1000;
+const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+const GMAIL_AUTONOMOUS_ALLOWED_SCOPES = new Set([
+  GMAIL_SEND_SCOPE,
+  "openid",
+  "email",
+  "https://www.googleapis.com/auth/userinfo.email",
+]);
+
+export function autonomousGmailCredentialIssues(args: {
+  oauthScopes?: string;
+  hasRefreshToken: boolean;
+}): string[] {
+  const scopes = String(args.oauthScopes ?? "").split(/\s+/).filter(Boolean);
+  const issues: string[] = [];
+  if (
+    !scopes.includes(GMAIL_SEND_SCOPE) ||
+    !scopes.every((scope) => GMAIL_AUTONOMOUS_ALLOWED_SCOPES.has(scope))
+  ) {
+    issues.push(
+      "Autonomous outreach requires the exact send-only Gmail authorization.",
+    );
+  }
+  if (!args.hasRefreshToken) {
+    issues.push(
+      "Autonomous outreach requires durable offline Gmail access; reconnect the inbox.",
+    );
+  }
+  return issues;
+}
 
 export type DeliveryLeaseState =
   | "available"
@@ -209,4 +238,19 @@ export function sanitizeDeliveryFailure(reason: unknown): string {
     return "Gmail did not confirm delivery before the request timeout; manual review is required.";
   }
   return "Gmail delivery failed without a verified receipt; manual review is required.";
+}
+
+/** Gmail can return a 5xx after accepting a request at an internal boundary.
+ * Treat every server-side response as ambiguous: quarantine the exact claim
+ * and require review instead of ever replaying it. */
+export function gmailHttpFailureDisposition(status: number): {
+  unverified: boolean;
+  suspend: boolean;
+} {
+  return {
+    unverified:
+      [408, 409, 425, 429].includes(status) ||
+      (Number.isInteger(status) && status >= 500 && status <= 599),
+    suspend: status === 401 || status === 403,
+  };
 }

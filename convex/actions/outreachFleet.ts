@@ -24,6 +24,7 @@ export type OutreachFleetSiteState = {
   inboxMode?: string;
   inboxVerified: boolean;
   autonomyConsentActive?: boolean;
+  autonomyReconciliationPending?: boolean;
   hasVerifiedOpportunities: boolean;
   hasApprovedMessages: boolean;
   hasDueAutomaticMessages?: boolean;
@@ -65,7 +66,8 @@ export function planOutreachFleetSite(
       prepare:
         state.autopilotEnabled &&
         ["warm", "live"].includes(state.autopilotRolloutMode ?? "observe") &&
-        state.hasVerifiedOpportunities &&
+        (state.hasVerifiedOpportunities ||
+          state.autonomyReconciliationPending === true) &&
         state.hasInbox &&
         CONNECTED_INBOX_STATUSES.has(state.inboxStatus ?? ""),
       deliver: false,
@@ -405,7 +407,27 @@ export const runSite = internalAction({
     }
 
     const result = { siteId, phase, prepare, delivery, verification, monitoring };
-    console.log("[outreach-fleet] tenant run", JSON.stringify(result));
+    // Result reasons can contain prospect domains or addresses. Central logs
+    // receive only stable stage/count metadata, never recipient evidence.
+    const numericCounts = (value: unknown) => {
+      if (!value || typeof value !== "object") return undefined;
+      const row = value as Record<string, unknown>;
+      return Object.fromEntries(
+        ["considered", "drafted", "blocked", "skipped", "sent", "failed"]
+          .filter((key) => typeof row[key] === "number")
+          .map((key) => [key, row[key]]),
+      );
+    };
+    console.log("[outreach-fleet] tenant run", JSON.stringify({
+      siteId,
+      phase,
+      stages: {
+        prepare: numericCounts(prepare),
+        delivery: numericCounts(delivery),
+        verification: numericCounts(verification),
+        monitoring: numericCounts(monitoring),
+      },
+    }));
     return result;
   },
 });

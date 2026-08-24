@@ -1473,6 +1473,12 @@ export default defineSchema({
     autonomyConsentInboxConfigurationVersion: v.optional(v.number()),
     autonomyLastEnabledAt: v.optional(v.number()),
     autonomyDisabledAt: v.optional(v.number()),
+    // Consent activation reconciles the entire pre-existing approval queue in
+    // bounded pages. Claims remain closed until the exact generation finishes.
+    autonomyReconciliationStatus: v.optional(v.string()), // pending | complete | paused
+    autonomyReconciliationStage: v.optional(v.string()), // approved | draft
+    autonomyReconciliationCursor: v.optional(v.string()),
+    autonomyReconciliationGeneration: v.optional(v.number()),
     dailySendCap: v.optional(v.number()),
     warmupStartedAt: v.optional(v.number()),
     sentToday: v.optional(v.number()),
@@ -1483,6 +1489,9 @@ export default defineSchema({
     oauthRefreshToken: v.optional(v.string()),
     oauthExpiresAt: v.optional(v.number()),
     oauthScopes: v.optional(v.string()),
+    // Non-reversible owner binding. A site ownership change can never inherit
+    // the prior owner's Gmail refresh token.
+    credentialOwnerAccountKey: v.optional(v.string()),
     senderDomain: v.optional(v.string()),
     dkimSelector: v.optional(v.string()),
     dnsCheckedAt: v.optional(v.number()),
@@ -1601,9 +1610,6 @@ export default defineSchema({
     // The custom outbound Message-ID uses a separate random token. Persist
     // only its digest, so neither it nor the receiving alias is reconstructible.
     inboundRelayOutboundMessageIdHash: v.optional(v.string()),
-    // Follow-ups need the recipient-visible RFC Message-ID of their immediate
-    // predecessor for Gmail threading. It is not an alias or credential.
-    inReplyToRfcMessageId: v.optional(v.string()),
     inboundRelayRolloutEpoch: v.optional(v.number()),
     inboundRelayInboxConfigurationVersion: v.optional(v.number()),
     inboundRelaySenderDomain: v.optional(v.string()),
@@ -1623,8 +1629,31 @@ export default defineSchema({
       "approvalConsentAcceptedAt",
       "scheduledAt",
     ])
+    .index("by_site_status_approval_kind_sequence_scheduled", [
+      "siteId",
+      "status",
+      "approvalKind",
+      "sequenceStep",
+      "scheduledAt",
+    ])
+    .index("by_site_status_autonomy_consent_sequence_scheduled", [
+      "siteId",
+      "status",
+      "approvalKind",
+      "approvalConsentVersion",
+      "approvalConsentPolicyHash",
+      "approvalConsentAcceptedAt",
+      "sequenceStep",
+      "scheduledAt",
+    ])
     .index("by_opportunity", ["opportunityId"])
     .index("by_site_domain", ["siteId", "toDomain"])
+    .index("by_site_domain_status_sent", [
+      "siteId",
+      "toDomain",
+      "status",
+      "sentAt",
+    ])
     .index("by_site_email", ["siteId", "toEmail"])
     .index("by_site_provider_thread", ["siteId", "providerThreadId"])
     .index("by_relay_alias_hash", ["inboundRelayAliasHash"])
@@ -1728,6 +1757,94 @@ export default defineSchema({
   })
     .index("by_site_value", ["siteId", "value"])
     .index("by_site", ["siteId"]),
+
+  // PII-minimized STOP/bounce/manual suppression receipts scoped to the
+  // account-wide tenant scope. There is intentionally no siteId or mutable
+  // domain: deletion, recreation, and domain edits must not erase an opt-out.
+  outreach_sender_suppression_tombstones: defineTable({
+    accountKey: v.string(),
+    tenantDomainKey: v.string(),
+    kind: v.string(), // domain | email
+    valueKey: v.string(),
+    reason: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_account_tenant_value", [
+      "accountKey",
+      "tenantDomainKey",
+      "kind",
+      "valueKey",
+    ])
+    .index("by_account_tenant", ["accountKey", "tenantDomainKey"])
+    .index("by_account", ["accountKey"]),
+
+  // PII-minimized account-tenant recipient-domain cooldown receipt. This row
+  // has no siteId, so deletion/domain changes cannot reset the 90-day fence.
+  outreach_tenant_contact_receipts: defineTable({
+    accountKey: v.string(),
+    tenantDomainKey: v.string(),
+    recipientDomainKey: v.string(),
+    lastContactedAt: v.optional(v.number()),
+    reservationAttemptId: v.optional(v.string()),
+    reservationExpiresAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_account_tenant_recipient", [
+      "accountKey",
+      "tenantDomainKey",
+      "recipientDomainKey",
+    ])
+    .index("by_account_tenant", ["accountKey", "tenantDomainKey"])
+    .index("by_account", ["accountKey"])
+    .index("by_updated", ["updatedAt"]),
+
+  // Aggregate sending-domain reputation survives ordinary site deletion.
+  // The mailbox digest gates address-specific warm-up; daily count and spacing
+  // remain domain-scoped so changing aliases cannot reset either fence.
+  outreach_sender_pacing_receipts: defineTable({
+    accountKey: v.optional(v.string()),
+    tenantDomainKey: v.optional(v.string()),
+    senderDomainKey: v.string(),
+    mailboxKey: v.string(),
+    warmupStartedAt: v.number(),
+    sentToday: v.number(),
+    sentTodayDay: v.string(),
+    lastSentAt: v.optional(v.number()),
+    retainUntil: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_sender", ["senderDomainKey"])
+    .index("by_account_tenant_sender", [
+      "accountKey",
+      "tenantDomainKey",
+      "senderDomainKey",
+    ])
+    .index("by_account_tenant", ["accountKey", "tenantDomainKey"])
+    .index("by_account", ["accountKey"])
+    .index("by_retain_until", ["retainUntil"]),
+
+  // Additive rollout checkpoint. Automatic claims remain closed until every
+  // legacy site row in the account has been materialized into the durable
+  // suppression/contact/pacing ledgers in bounded resumable pages.
+  outreach_durability_migrations: defineTable({
+    accountKey: v.string(),
+    userId: v.string(),
+    version: v.number(),
+    status: v.string(), // pending | complete
+    siteCursor: v.optional(v.string()),
+    nextSiteCursor: v.optional(v.string()),
+    sitesDoneAfterActive: v.optional(v.boolean()),
+    activeSiteId: v.optional(v.id("sites")),
+    rowStage: v.optional(v.string()), // suppressions | messages
+    rowCursor: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_account", ["accountKey"])
+    .index("by_status_updated", ["status", "updatedAt"]),
 
   // A contact address is only usable when it was observed on a real public
   // page. discoveredFromUrl is the receipt; a contact without one is not

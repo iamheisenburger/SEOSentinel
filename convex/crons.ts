@@ -122,4 +122,13 @@ crons.interval(
   { phase: "inbound" },
 );
 
+// Global sender-domain reputation is retained only for its documented safety
+// window; the mutation paginates so cleanup cannot create an unbounded cron.
+crons.daily(
+  "outreach-sender-reputation-prune",
+  { hourUTC: 2, minuteUTC: 15 },
+  internal.outreach.pruneExpiredSenderPacingReceiptsInternal,
+  {},
+);
+
 export default crons;

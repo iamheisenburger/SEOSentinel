@@ -2,10 +2,13 @@
 
 ## Release boundary
 
-Pentra uses each tenant's own dedicated secondary-domain Gmail mailbox. A
-prospect message is released either by an owner-triggered one-message action or,
-when the separately audited authority-autopilot release is enabled, by that
-tenant owner's exact current account consent. Tenants never share an outbound
+Pentra uses each tenant's own dedicated secondary-domain Gmail mailbox. Manual
+mode remains distinct: a prospect message is released only after an owner
+approves and triggers that one message. When the separately audited
+authority-autopilot release is enabled, the tenant owner's exact current,
+versioned tenant-level consent can instead authorize one verified initial
+outreach email for each eligible opportunity. It never authorizes an automated
+follow-up. Tenants never share an outbound
 identity or sending-domain reputation. New OAuth connections request
 `gmail.send`, `openid`, and `email`; they do not request mailbox-read access.
 The receiving adapter has no outbound-email capability and the webhook cannot
@@ -72,17 +75,24 @@ OUTREACH_INBOUND_RELAY_SECRET_NEXT=<next-at-least-32-random-characters>
 ## Authority-autopilot release (disabled by default)
 
 `OUTREACH_AUTONOMOUS_DELIVERY_ENABLED=true` exposes the owner opt-in and allows
-the internal fleet to release at most one due consent-authorized message per
-tenant per pass. It does not make an inbox eligible by itself. The current
+the internal fleet to release at most one due consent-authorized initial
+message per tenant per pass. It does not make an inbox eligible by itself. The current
 tenant owner must accept the exact versioned policy for the current inbox and
 sender-profile configuration, choose a cap of 1–10 messages per UTC day, have
 an executing growth rollout, and pass the current hard-DSN canary. Each claim
 then rechecks live SPF/DKIM/DMARC, the public opportunity and contact evidence,
 suppression, warm-up, 30-minute spacing, daily cap, plan/lifecycle state and the
-exact consent receipt before Gmail is called. A verified send receipt may
-schedule at most two Gmail-threaded follow-ups (days 4 and 9 from the initial
-message); any reply, STOP, hard bounce, rejected opportunity or verified live
-backlink retires the remaining sequence.
+exact consent receipt before Gmail is called. Authority autopilot never
+schedules an automated follow-up. A reply, exact-recipient STOP, structured hard
+bounce, rejected opportunity or verified live backlink settles or retires the
+single-message opportunity as applicable. Manual owner-approved messages remain
+a separate mode and are not released under autonomous consent.
+
+Disabling authority autopilot immediately blocks new delivery claims. It does
+not erase an external provider attempt that was atomically claimed before the
+disable transition: that exact attempt may settle once as accepted, failed or
+delivery-unverified so Pentra records reality, but disablement cannot create a
+retry, replacement or follow-up.
 
 Keep this flag **false** until all of the following external gates have retained
 evidence:
@@ -99,8 +109,8 @@ evidence:
    is not a substitute for reputation monitoring.
 4. An independent security review and a staged real-provider end-to-end test
    have covered opt-in, disable races, DNS loss, stale evidence, reply, STOP,
-   hard bounce, both follow-ups, link acquisition, token expiry and ambiguous
-   Gmail outcomes.
+   hard bounce, the no-follow-up boundary, link acquisition, token expiry and
+   ambiguous Gmail outcomes.
 
 There is deliberately no claim that a send, response, backlink, ranking or
 revenue result is guaranteed. The code can guarantee only the authorization,
@@ -207,7 +217,17 @@ The adapter must be explicitly configured to retry `425`; many generic webhook p
 
 Alias and outbound Message-ID tokens are independent. Pentra stores only their SHA-256 digests, so database state cannot reconstruct the receiving alias. Raw MIME, attachments, subject and body never cross the durable mutation boundary. Accepted receipts contain bounded identifiers/digests and state; ignored mail is not stored. At most one receipt per accepted outcome kind can exist for a prospect message.
 
-Event IDs and inbound Message-IDs are atomically deduplicated. Reuse with different payload evidence is rejected as a collision. Before settlement, Pentra rechecks exact tenant, site, inbox, original configuration, rollout epoch, sender domain, alias domain, delivery boundary, deletion tombstone and plan-transition rules. Parking blocks new sends but cannot erase a STOP/reply for a send claimed before transition. Deletion and domain conflict always fail closed.
+Event IDs and inbound Message-IDs are atomically deduplicated. Reuse with different payload evidence is rejected as a collision. Before settlement, Pentra rechecks exact tenant, site, inbox, original configuration, rollout epoch, sender domain, alias domain, delivery boundary, deletion tombstone and plan-transition rules. Parking or disabling authority autopilot blocks new claims but cannot erase the settlement, STOP, reply or bounce for an exact provider attempt claimed before the transition. That attempt may settle once and cannot create a retry or follow-up. Deletion and domain conflict always fail closed.
+
+Pseudonymous account-wide recipient/domain suppression and contact-cooldown
+records survive ordinary site deletion. This prevents site deletion or
+recreation from causing duplicate contact or bypassing an exact-recipient STOP.
+A verified full-account deletion purges those account-wide records through the
+resumable deletion process. Separately, a non-reversible global hashed sender
+reputation and pacing record may be unlinked from the account and retained for
+no more than 90 days across account deletion or sender transfer, preventing a
+delete/reconnect/transfer from resetting warm-up or pacing. It contains no raw
+address, message content, OAuth credential or reusable site content.
 
 ## Legacy readonly migration
 

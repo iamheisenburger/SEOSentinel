@@ -12,6 +12,7 @@
  */
 
 import { normalizeDomain } from "./outreachPacing.ts";
+import { outreachOrganisationDomain } from "./outreachContacts.ts";
 
 /** Bump when the message shapes change so sent copy stays auditable. */
 export const OUTREACH_DRAFT_VERSION = 1;
@@ -109,7 +110,7 @@ function pagePath(url: string): string {
  * domain joins the existing thread instead of starting a parallel one.
  */
 export function outreachThreadKey(siteId: string, sourceDomain: string): string {
-  return `${siteId}:${normalizeDomain(sourceDomain)}`;
+  return `${siteId}:${outreachOrganisationDomain(sourceDomain)}`;
 }
 
 /**

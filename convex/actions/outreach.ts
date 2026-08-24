@@ -38,6 +38,7 @@ import {
   contactEligibility,
   normalizeDomain,
   outreachComplianceIssues,
+  outreachSendDecision,
 } from "../lib/outreachPacing";
 import {
   authorityEvidenceReceipt,
@@ -47,7 +48,10 @@ import {
 } from "../lib/linkReceipts";
 import {
   OUTREACH_OPPORTUNITY_EVIDENCE_MAX_AGE_MS as OUTREACH_OPPORTUNITY_MAX_AGE_MS,
+  autonomousGmailCredentialIssues,
+  gmailHttpFailureDisposition,
 } from "../lib/outreachDelivery";
+import { autonomousOutreachRuntimeEnabled } from "../lib/outreachAutonomy";
 import { verifiedAuthorityTarget } from "../lib/publicationLive";
 import { fetchLiveAuthorityTarget } from "../lib/outreachTargetLive";
 import {
@@ -259,16 +263,59 @@ async function prepareHandler(
     result.reasons[reason] = (result.reasons[reason] ?? 0) + 1;
   };
 
-  const [opportunityRows, inbox, suppressions, history] = await Promise.all([
+  const [opportunityRows, inbox] = await Promise.all([
     // The extra row proves whether the bounded result left queue work behind.
     ctx.runQuery(internal.seoAuthority.listVerifiedInternal, {
       siteId,
       limit: budget.opportunityLimit + 1,
     }),
     ctx.runQuery(internal.outreach.getInboxInternal, { siteId }),
-    ctx.runQuery(internal.outreach.getSuppressionsInternal, { siteId }),
-    ctx.runQuery(internal.outreach.getContactHistory, { siteId }),
   ]);
+  if (
+    inbox?.mode === "live" &&
+    !autonomousOutreachRuntimeEnabled(
+      process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+    )
+  ) {
+    return {
+      ...result,
+      ...summarizeOutreachPreparationBudget({
+        budget,
+        considered: 0,
+        offered: 0,
+        hasMore: opportunityRows.length > 0,
+        unsettledCurrent: false,
+      }),
+    };
+  }
+  if (
+    inbox?.mode === "live" &&
+    inbox.autonomyReconciliationStatus !== "complete"
+  ) {
+    if (
+      typeof inbox._id === "string" &&
+      typeof inbox.autonomyReconciliationGeneration === "number"
+    ) {
+      await ctx.runMutation(
+        internal.outreach.migrateOutreachDurabilityInternal,
+        {
+          siteId,
+          inboxId: inbox._id,
+          generation: inbox.autonomyReconciliationGeneration,
+        },
+      );
+    }
+    return {
+      ...result,
+      ...summarizeOutreachPreparationBudget({
+        budget,
+        considered: 0,
+        offered: 0,
+        hasMore: opportunityRows.length > 0,
+        unsettledCurrent: false,
+      }),
+    };
+  }
   const hasMore = opportunityRows.length > budget.opportunityLimit;
   const opportunities = opportunityRows.slice(0, budget.opportunityLimit);
 
@@ -294,16 +341,34 @@ async function prepareHandler(
       continue;
     }
 
+    const lastContactedAt = await ctx.runQuery(
+      internal.outreach.getContactCooldownInternal,
+      { siteId, domain: opportunity.sourceDomain },
+    );
     const eligibility = contactEligibility({
       sourceDomain: opportunity.sourceDomain,
       now,
-      history,
-      suppressedDomains: suppressions.domains,
-      suppressedEmails: suppressions.emails,
+      history: lastContactedAt
+        ? [{ domain: opportunity.sourceDomain, lastContactedAt }]
+        : undefined,
     });
     if (!eligibility.eligible) {
       result.skipped++;
       note(eligibility.reason);
+      continue;
+    }
+    if (inbox && await ctx.runQuery(
+      internal.outreach.isSuppressedInternal,
+      {
+        siteId,
+        kind: "domain",
+        value: opportunity.sourceDomain,
+      },
+    )) {
+      result.skipped++;
+      note(
+        "This recipient domain is permanently suppressed for the current tenant brand.",
+      );
       continue;
     }
 
@@ -362,6 +427,20 @@ async function prepareHandler(
     const contact = contactResult.status === "found"
       ? contactResult.contact
       : null;
+    if (
+      inbox &&
+      contact &&
+      await ctx.runQuery(
+      internal.outreach.isSuppressedInternal,
+        { siteId, kind: "email", value: contact.email },
+      )
+    ) {
+      result.skipped++;
+      note(
+        "This recipient address is permanently suppressed for the current tenant brand.",
+      );
+      continue;
+    }
 
     // For a broken-link opportunity the stored context is the dead URL.
     const draft = draftOutreachMessage({
@@ -427,6 +506,17 @@ async function prepareHandler(
       blockedReason,
     });
 
+    if (stored.status === "paused") {
+      result.skipped++;
+      note("Authority autopilot was paused before this draft could be stored.");
+      continue;
+    }
+    if (stored.status === "stale_evidence") {
+      result.skipped++;
+      note("Authority evidence changed before the draft could be stored; it will be reconsidered from the fresh receipt.");
+      continue;
+    }
+
     // The stored status is authoritative: the mutation may hold a message
     // behind another one already in flight to the same domain.
     if (stored.status === "blocked") {
@@ -440,10 +530,6 @@ async function prepareHandler(
       continue;
     }
     result.drafted++;
-    await ctx.runMutation(internal.seoAuthority.markOutreachPrepared, {
-      siteId,
-      opportunityId: opportunity._id,
-    });
   }
 
   return {
@@ -488,7 +574,6 @@ function rfc822(args: {
   fromEmail: string;
   replyTo?: string;
   messageId?: string;
-  inReplyTo?: string;
   toEmail: string;
   subject: string;
   body: string;
@@ -516,8 +601,6 @@ function rfc822(args: {
   const replyTo = safeEmail(args.replyTo);
   const messageId = String(args.messageId ?? "").trim().toLowerCase();
   if (messageId && !/^<[^<>\s]+@[^<>\s]+>$/.test(messageId)) return null;
-  const inReplyTo = String(args.inReplyTo ?? "").trim().toLowerCase();
-  if (inReplyTo && !/^<[^<>\s]+@[^<>\s]+>$/.test(inReplyTo)) return null;
   const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
   const headers = [
     `From: ${from}`,
@@ -525,20 +608,26 @@ function rfc822(args: {
     `Subject: ${subject}`,
     replyTo ? `Reply-To: ${replyTo}` : "",
     messageId ? `Message-ID: ${messageId}` : "",
-    inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
-    inReplyTo ? `References: ${inReplyTo}` : "",
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
   ].filter(Boolean);
   return `${headers.join("\r\n")}\r\n\r\n${args.body}`;
 }
 
-async function refreshGoogleAccessToken(refreshToken: string): Promise<string | null> {
+type GoogleTokenRefresh =
+  | { ok: true; accessToken: string }
+  | { ok: false; hardAuthFailure: boolean };
+
+async function refreshGoogleAccessToken(
+  refreshToken: string,
+): Promise<GoogleTokenRefresh> {
   // Gmail refresh tokens are bound to the dedicated outreach OAuth client;
   // using the GSC client here would fail and would also defeat scope isolation.
   const clientId = process.env.OUTREACH_GOOGLE_CLIENT_ID;
   const clientSecret = process.env.OUTREACH_GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret || !refreshToken) return null;
+  if (!clientId || !clientSecret || !refreshToken) {
+    return { ok: false, hardAuthFailure: true };
+  }
   let res: Response;
   try {
     res = await fetch("https://oauth2.googleapis.com/token", {
@@ -553,11 +642,28 @@ async function refreshGoogleAccessToken(refreshToken: string): Promise<string | 
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
-    return null;
+    return { ok: false, hardAuthFailure: false };
   }
-  if (!res.ok) return null;
+  if (!res.ok) {
+    let error = "";
+    try {
+      const body = await res.json();
+      error = typeof body?.error === "string" ? body.error : "";
+    } catch {
+      error = "";
+    }
+    return {
+      ok: false,
+      hardAuthFailure:
+        [400, 401, 403].includes(res.status) &&
+        ["invalid_grant", "invalid_client", "unauthorized_client"]
+          .includes(error),
+    };
+  }
   const data = await res.json();
-  return typeof data.access_token === "string" ? data.access_token : null;
+  return typeof data.access_token === "string"
+    ? { ok: true, accessToken: data.access_token }
+    : { ok: false, hardAuthFailure: false };
 }
 
 type DeliveryOutcome = {
@@ -646,6 +752,7 @@ async function liveOpportunityEvidence(
   siteId: Id<"sites">,
   release: "approved" | "automatic",
 ): Promise<{
+  status: "ready";
   messageId: Id<"outreach_messages">;
   opportunityId: Id<"seo_authority_opportunities">;
   evidenceHash: string;
@@ -655,12 +762,36 @@ async function liveOpportunityEvidence(
   contactCheckedAt: number;
   targetReceiptUrl?: string;
   targetCheckedAt?: number;
+} | {
+  status: "permanent_invalid";
+  messageId: Id<"outreach_messages">;
+  opportunityId: Id<"seo_authority_opportunities">;
+  evidenceHash: string;
+  reason: "source_changed" | "target_missing" | "contact_changed";
 } | null> {
   const pending = await ctx.runQuery(
     internal.outreach.getApprovedDeliveryEvidenceInternal,
     { siteId, release },
   );
   if (!pending) return null;
+  if ("permanentInvalidReason" in pending) {
+    return {
+      status: "permanent_invalid",
+      messageId: pending.messageId,
+      opportunityId: pending.opportunityId,
+      evidenceHash: pending.evidenceHash,
+      reason: pending.permanentInvalidReason,
+    };
+  }
+  const permanentInvalid = (
+    reason: "source_changed" | "target_missing" | "contact_changed",
+  ) => ({
+    status: "permanent_invalid" as const,
+    messageId: pending.messageId,
+    opportunityId: pending.opportunityId,
+    evidenceHash: pending.evidenceHash,
+    reason,
+  });
   try {
     const requested = await validatePublicHttpsUrl(pending.sourceUrl);
     const fetched = await safeFetchPublicText(requested.href, {
@@ -668,7 +799,9 @@ async function liveOpportunityEvidence(
       timeoutMs: 12_000,
     });
     const finalHost = new URL(fetched.url).hostname;
-    if (!isSameOrganisationHost(finalHost, requested.hostname)) return null;
+    if (!isSameOrganisationHost(finalHost, requested.hostname)) {
+      return permanentInvalid("source_changed");
+    }
     const evidenceMatches = pending.type === "broken_link"
       ? hasExactAnchorHref({
           html: fetched.text,
@@ -684,12 +817,12 @@ async function liveOpportunityEvidence(
             context: pending.context,
           })
         : false;
-    if (!evidenceMatches) return null;
+    if (!evidenceMatches) return permanentInvalid("source_changed");
 
     let targetReceiptUrl: string | undefined;
     let targetCheckedAt: number | undefined;
     if (pending.type === "broken_link") {
-      if (!pending.targetTitle) return null;
+      if (!pending.targetTitle) return permanentInvalid("target_missing");
       const targetReceipt = await fetchLiveAuthorityTarget({
         targetUrl: pending.targetUrl,
         title: pending.targetTitle,
@@ -713,10 +846,11 @@ async function liveOpportunityEvidence(
         siteDomain: pending.sourceDomain,
       }).some((candidate) => candidate.email === pending.toEmail)
     ) {
-      return null;
+      return permanentInvalid("contact_changed");
     }
     const checkedAt = Date.now();
     return {
+      status: "ready",
       messageId: pending.messageId,
       opportunityId: pending.opportunityId,
       evidenceHash: createHash("sha256").update(authorityEvidenceReceipt({
@@ -754,23 +888,29 @@ async function deliver(
     body: string;
     replyTo?: string;
     outboundRfcMessageId?: string;
-    providerThreadId?: string;
-    inReplyToRfcMessageId?: string;
   },
 ): Promise<DeliveryOutcome> {
   if (inbox.provider === "gmail") {
-    const accessToken = inbox.oauthRefreshToken
+    const refreshed = inbox.oauthRefreshToken
       ? await refreshGoogleAccessToken(inbox.oauthRefreshToken)
-      : inbox.oauthAccessToken;
+      : null;
+    const accessToken = refreshed?.ok
+      ? refreshed.accessToken
+      : inbox.oauthRefreshToken
+        ? undefined
+        : inbox.oauthAccessToken;
     if (!accessToken) {
-      return { ok: false, error: "Gmail access token unavailable", suspend: true };
+      return {
+        ok: false,
+        error: "Gmail access token unavailable",
+        suspend: refreshed?.ok === false && refreshed.hardAuthFailure,
+      };
     }
     const messageBody = rfc822({
         fromName: inbox.fromName,
         fromEmail: inbox.fromEmail,
         replyTo: message.replyTo ?? inbox.replyToEmail,
         messageId: message.outboundRfcMessageId,
-        inReplyTo: message.inReplyToRfcMessageId,
         toEmail: message.toEmail,
         subject: message.subject,
         body: message.body,
@@ -795,9 +935,6 @@ async function deliver(
           },
           body: JSON.stringify({
             raw,
-            ...(message.providerThreadId
-              ? { threadId: message.providerThreadId }
-              : {}),
           }),
           signal: AbortSignal.timeout(20_000),
         },
@@ -811,13 +948,15 @@ async function deliver(
     }
     const text = await res.text();
     if (!res.ok) {
+      const disposition = gmailHttpFailureDisposition(res.status);
       return {
         ok: false,
         // Provider bodies can contain account-specific diagnostics. Persist a
         // stable status only; never copy a third-party response into tenant
         // records, logs, or the dashboard.
         error: `Gmail delivery failed with HTTP ${res.status}`,
-        suspend: res.status === 401 || res.status === 403,
+        suspend: disposition.suspend,
+        unverified: disposition.unverified,
       };
     }
     let providerMessageId: string | undefined;
@@ -886,6 +1025,28 @@ async function sendHandler(
           : "The signed inbound relay is not configured, so replies and opt-outs cannot be handled safely. Nothing was sent.",
     };
   }
+  if (
+    release === "automatic" &&
+    (!inboxSnapshot.automaticDeliveryAuthorized ||
+      autonomousGmailCredentialIssues({
+        oauthScopes: inboxSnapshot.oauthScopes,
+        hasRefreshToken: Boolean(inboxSnapshot.oauthRefreshToken),
+      }).length > 0)
+  ) {
+    return {
+      ...result,
+      stopped:
+        "The current tenant consent, rollout, or exact send-only Gmail authorization does not permit automatic delivery.",
+    };
+  }
+  const pacingPreflight = outreachSendDecision({
+    inbox: inboxSnapshot,
+    now: Date.now(),
+    release,
+  });
+  if (!pacingPreflight.allowed) {
+    return { ...result, stopped: pacingPreflight.reason };
+  }
 
   const relayAliasToken = relayReady
     ? randomBytes(24).toString("base64url")
@@ -934,17 +1095,45 @@ async function sendHandler(
   // Resolve the sender's DNS immediately before the serializable claim. The
   // mutation rejects evidence older than one minute and reloads every tenant,
   // sender, message, opportunity, suppression and pacing record itself.
-  const [dnsEvidence, opportunityEvidence] = await Promise.all([
+  const [dnsEvidence, opportunityEvidenceResult] = await Promise.all([
     liveDnsEvidence(inboxSnapshot),
     liveOpportunityEvidence(ctx, siteId, release),
   ]);
-  if (!opportunityEvidence) {
+  if (!opportunityEvidenceResult) {
     return {
       ...result,
       stopped:
         "The approved source evidence, replacement page, or published contact could not be reverified. Run a fresh authority scan before sending.",
     };
   }
+  if (opportunityEvidenceResult.status === "permanent_invalid") {
+    await ctx.runMutation(
+      internal.outreach.retireInvalidApprovedDeliveryEvidenceInternal,
+      {
+        siteId,
+        messageId: opportunityEvidenceResult.messageId,
+        opportunityId: opportunityEvidenceResult.opportunityId,
+        evidenceHash: opportunityEvidenceResult.evidenceHash,
+        reason: opportunityEvidenceResult.reason,
+      },
+    );
+    return {
+      ...result,
+      stopped:
+        "The oldest approved authority evidence became permanently invalid and was retired; the next eligible message can proceed on the next run.",
+    };
+  }
+  const opportunityEvidence = {
+    messageId: opportunityEvidenceResult.messageId,
+    opportunityId: opportunityEvidenceResult.opportunityId,
+    evidenceHash: opportunityEvidenceResult.evidenceHash,
+    checkedAt: opportunityEvidenceResult.checkedAt,
+    contactEmail: opportunityEvidenceResult.contactEmail,
+    contactReceiptUrl: opportunityEvidenceResult.contactReceiptUrl,
+    contactCheckedAt: opportunityEvidenceResult.contactCheckedAt,
+    targetReceiptUrl: opportunityEvidenceResult.targetReceiptUrl,
+    targetCheckedAt: opportunityEvidenceResult.targetCheckedAt,
+  };
   const attemptId = randomUUID();
   let claim;
   try {
@@ -972,8 +1161,6 @@ async function sendHandler(
       body: claim.message.body,
       replyTo: relayBinding?.aliasAddress,
       outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
-      providerThreadId: claim.deliveryThreadId,
-      inReplyToRfcMessageId: claim.message.inReplyToRfcMessageId,
     });
   } catch {
     outcome = {
@@ -1439,9 +1626,14 @@ async function syncInboundHandler(
     return { ...result, stopped };
   };
 
-  const accessToken = claim.inbox.oauthRefreshToken
+  const refreshed = claim.inbox.oauthRefreshToken
     ? await refreshGoogleAccessToken(claim.inbox.oauthRefreshToken)
-    : claim.inbox.oauthAccessToken;
+    : null;
+  const accessToken = refreshed?.ok
+    ? refreshed.accessToken
+    : claim.inbox.oauthRefreshToken
+      ? undefined
+      : claim.inbox.oauthAccessToken;
   if (!accessToken) {
     return fail(
       "gmail_authorization_unavailable",

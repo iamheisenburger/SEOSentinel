@@ -111,14 +111,14 @@ test("Gmail connection is server-side, DNS-gated and never accepts Resend", () =
   );
   assert.doesNotMatch(connect, /did not grant Gmail reply-monitoring permission/);
   assert.match(connect, /existingRefreshHasLegacyRead/);
-  assert.match(connect, /reconnectsSameMailbox/);
+  assert.match(connect, /reconnectsCurrentMailbox/);
   assert.match(
     connect,
-    /!args\.oauthRefreshToken[\s\S]*!reconnectsSameMailbox[\s\S]*!existingRefreshIsStrictOutbound/,
+    /!args\.oauthRefreshToken[\s\S]*!reconnectsCurrentMailbox[\s\S]*!existingRefreshIsStrictOutbound/,
   );
   assert.match(
     connect,
-    /reconnectsSameMailbox[\s\S]*inboundRelayDsnRoutingTargetGeneration/,
+    /reconnectsCurrentMailbox[\s\S]*inboundRelayDsnRoutingTargetGeneration/,
   );
 
   const delivery = readFileSync("convex/actions/outreach.ts", "utf8");

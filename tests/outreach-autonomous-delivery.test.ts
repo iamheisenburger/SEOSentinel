@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+
+import {
+  OUTREACH_AUTONOMY_CONSENT_TEXT,
+  OUTREACH_AUTONOMY_CONSENT_VERSION,
+  OUTREACH_AUTONOMY_POLICY_HASH,
+} from "../convex/lib/outreachAutonomy.ts";
 
 const backend = readFileSync("convex/outreach.ts", "utf8");
 const action = readFileSync("convex/actions/outreach.ts", "utf8");
@@ -8,23 +15,30 @@ const fleet = readFileSync("convex/actions/outreachFleet.ts", "utf8");
 const sites = readFileSync("convex/sites.ts", "utf8");
 const crons = readFileSync("convex/crons.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
-const authority = readFileSync("convex/seoAuthority.ts", "utf8");
+const autonomy = readFileSync("convex/lib/outreachAutonomy.ts", "utf8");
 
-test("one-time autonomy is explicit, versioned, inbox-bound and kill-switchable", () => {
+test("the v2 initial-only consent receipt has an exact audited hash", () => {
+  assert.equal(OUTREACH_AUTONOMY_CONSENT_VERSION, 2);
+  assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /initial commercial business outreach/i);
+  assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /does not permit automated follow-ups/i);
+  assert.equal(
+    createHash("sha256").update(OUTREACH_AUTONOMY_CONSENT_TEXT).digest("hex"),
+    OUTREACH_AUTONOMY_POLICY_HASH,
+  );
+});
+
+test("one-time autonomy is inbox-bound, freshly accepted after disable, and kill-switchable", () => {
   const enable = backend.slice(
     backend.indexOf("export const enableAutonomousOutreach"),
-    backend.indexOf("export const disconnectInbox"),
+    backend.indexOf("export const migrateOutreachDurabilityInternal"),
   );
-  assert.match(enable, /OUTREACH_AUTONOMOUS_DELIVERY_ENABLED/);
+  assert.match(enable, /expectedInboxId/);
+  assert.match(enable, /expectedInboxConfigurationVersion/);
   assert.match(enable, /OUTREACH_AUTONOMY_CONSENT_VERSION/);
   assert.match(enable, /OUTREACH_AUTONOMY_POLICY_HASH/);
-  assert.match(enable, /confirmsAutomaticSending/);
-  assert.match(enable, /confirmsBusinessRecipientsAndLawfulBasis/);
-  assert.match(enable, /confirmsSenderIdentityAndAddress/);
-  assert.match(enable, /acceptsMailboxReputationRisk/);
-  assert.match(enable, /autonomyConsentInboxConfigurationVersion/);
-  assert.match(enable, /inboundRelayDsnRoutingReady/);
-  assert.match(enable, /OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP/);
+  assert.match(enable, /inbox\.autonomyDisabledAt < inbox\.autonomyConsentAcceptedAt/);
+  assert.match(enable, /autonomyReconciliationStatus: "pending"/);
+  assert.match(enable, /migrateOutreachDurabilityInternal/);
 
   const disable = backend.slice(
     backend.indexOf("export const setInboxMode"),
@@ -32,88 +46,128 @@ test("one-time autonomy is explicit, versioned, inbox-bound and kill-switchable"
   );
   assert.match(disable, /mode !== "approval"/);
   assert.match(disable, /autonomyDisabledAt/);
-  assert.match(disable, /approvalKind", "account_autopilot"/);
+  assert.match(disable, /autonomyReconciliationStatus: "paused"/);
   assert.doesNotMatch(
     disable,
     /assertNoActiveDelivery/,
-    "a kill switch must stop new claims even while one already-claimed send settles",
+    "disable must stop new claims while one already-claimed attempt may settle",
   );
 });
 
-test("owner approval and account-autopilot authorization cannot cross release paths", () => {
+test("all creation, approval, selection and claim paths hard-deny follow-ups", () => {
+  const insert = backend.slice(
+    backend.indexOf("export const insertDraft"),
+    backend.indexOf("export const approveMessage"),
+  );
+  const approve = backend.slice(
+    backend.indexOf("export const approveMessage"),
+    backend.indexOf("export const discardMessage"),
+  );
   const claim = backend.slice(
     backend.indexOf("export const claimApprovedDelivery"),
     backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
   );
-  assert.match(claim, /deliveryReleaseValidator/);
-  assert.match(claim, /autonomousMessageAuthorizationMatches/);
-  assert.match(claim, /message\.approvalKind === "account_autopilot"/);
-  assert.match(claim, /release === "automatic" && !inboundRelay/);
-  assert.match(claim, /isSeoGrowthActuationEligible\(site\)/);
-  assert.match(claim, /message\.scheduledAt/);
-  assert.match(claim, /outreachSendDecision\(\{ inbox, now, release \}\)/);
+  const evidence = backend.slice(
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+    backend.indexOf("export const retireInvalidApprovedDeliveryEvidenceInternal"),
+  );
+  const completion = backend.slice(
+    backend.indexOf("export const completeDeliveryAttempt"),
+    backend.indexOf("export const failDeliveryAttempt"),
+  );
 
-  assert.match(action, /sendHandler\(ctx, siteId, "approved"\)/);
+  assert.match(insert, /args\.sequenceStep !== 0/);
+  assert.match(approve, /message\.sequenceStep !== 0/);
+  assert.match(claim, /message\.sequenceStep !== 0/);
+  assert.ok((evidence.match(/\.eq\("sequenceStep", 0\)/g) ?? []).length >= 2);
+  assert.doesNotMatch(completion, /ctx\.db\.insert\("outreach_messages"/);
+  assert.doesNotMatch(completion, /draftFollowUp|nextFollowUpAt|shouldCreateFollowUp/);
+  assert.doesNotMatch(action, /In-Reply-To|References|message\.providerThreadId/);
+  assert.doesNotMatch(schema, /deliveryExpectedThreadId|inReplyToRfcMessageId/);
+});
+
+test("activation is resumable and claims remain closed until migration and reconciliation complete", () => {
+  const migration = backend.slice(
+    backend.indexOf("export const migrateOutreachDurabilityInternal"),
+    backend.indexOf("export const reconcileAutonomousInitialMessagesInternal"),
+  );
+  const reconciliation = backend.slice(
+    backend.indexOf("export const reconcileAutonomousInitialMessagesInternal"),
+    backend.indexOf("export const setInboxDailyCap"),
+  );
+  const claim = backend.slice(
+    backend.indexOf("export const claimApprovedDelivery"),
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+  );
+
+  assert.match(migration, /\.paginate\(/);
+  assert.match(migration, /scheduleSelf/);
+  assert.match(migration, /scheduleReconciliation/);
+  assert.match(reconciliation, /\.take\(50\)/);
+  assert.match(reconciliation, /await scheduleNext\(\)/);
+  assert.match(reconciliation, /autonomyReconciliationStatus: "complete"/);
+  assert.match(claim, /autonomousOutreachReconciliationComplete\(inbox\)/);
+  assert.match(claim, /outreachDurabilityMigrationComplete\(ctx, site\)/);
+  assert.match(sites, /autonomyReconciliationPending/);
+  assert.match(fleet, /state\.autonomyReconciliationPending === true/);
+});
+
+test("automatic delivery uses exact current consent, strict send-only credentials and atomic pacing", () => {
+  const claim = backend.slice(
+    backend.indexOf("export const claimApprovedDelivery"),
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+  );
+  assert.match(claim, /autonomousMessageAuthorizationMatches/);
+  assert.match(claim, /autonomousGmailCredentialIssues/);
+  assert.match(claim, /credentialOwnerAccountKey/);
+  assert.match(claim, /isSeoGrowthActuationEligible\(site\)/);
+  assert.match(claim, /outreachSendDecision\(\{ inbox, now, release \}\)/);
+  assert.match(claim, /reserveDurableContactClaim/);
+  assert.match(claim, /status: "sending"/);
   assert.match(action, /sendHandler\(ctx, siteId, "automatic"\)/);
   assert.match(action, /export const sendAutomaticOutreachInternal = internalAction/);
   assert.doesNotMatch(action, /export const sendAutomaticOutreach = action/);
 });
 
-test("fleet delivery is due-only, tenant-isolated and rechecked before Gmail", () => {
-  assert.match(sites, /by_site_status_autonomy_consent_scheduled/);
-  assert.match(sites, /approvalKind", "account_autopilot"/);
-  assert.match(sites, /autonomousOutreachConsentActive\(inbox, site\.userId\)/);
+test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {
+  assert.match(sites, /by_site_status_autonomy_consent_sequence_scheduled/);
+  assert.match(sites, /\.eq\("sequenceStep", 0\)/);
+  assert.match(sites, /autonomousOutreachReconciliationComplete\(inbox\)/);
   assert.match(fleet, /hasDueAutomaticMessages === true/);
   assert.match(fleet, /internal\.sites\.getOutreachFleetState/);
   assert.match(fleet, /sendAutomaticOutreachInternal/);
   assert.match(crons, /outreach-autonomous-delivery-fleet/);
-  assert.match(crons, /phase: "delivery"/);
-  assert.match(schema, /by_site_status_autonomy_consent_scheduled/);
+  assert.match(schema, /by_site_status_autonomy_consent_sequence_scheduled/);
 });
 
-test("a verified receipt atomically creates at most two threaded follow-ups", () => {
-  const completion = backend.slice(
-    backend.indexOf("export const completeDeliveryAttempt"),
-    backend.indexOf("export const failDeliveryAttempt"),
+test("a permanently invalid oldest row is retired instead of starving later work", () => {
+  const evidence = backend.slice(
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+    backend.indexOf("export const retireInvalidApprovedDeliveryEvidenceInternal"),
   );
-  assert.match(completion, /message\.sequenceStep < MAX_SEQUENCE_STEP/);
-  assert.match(completion, /nextFollowUpAt/);
-  assert.match(completion, /draftFollowUp/);
-  assert.match(completion, /sameOpportunity\.some\(\(row\) => row\.sequenceStep === nextStep\)/);
-  assert.match(completion, /inReplyToRfcMessageId: safeOutboundRfcMessageId/);
-  assert.match(backend, /predecessorIdentityMatches/);
-  assert.match(backend, /inboundRelayMessageIdHash\(predecessorRfcMessageId\)/);
-  assert.match(action, /In-Reply-To/);
-  assert.match(action, /References/);
-  assert.match(action, /threadId: message\.providerThreadId/);
-  assert.match(action, /outboundRfcMessageId: relayBinding\?\.outboundRfcMessageId/);
-});
-
-test("reply, STOP, bounce, lost evidence and acquired links retire queued sends", () => {
-  assert.match(backend, /async function cancelQueuedThread/);
-  assert.ok(
-    backend.match(/await cancelQueuedThread\(/g)?.length === 2,
-    "both signed-relay and legacy Gmail receipts cancel the sequence",
+  const retirement = backend.slice(
+    backend.indexOf("export const retireInvalidApprovedDeliveryEvidenceInternal"),
+    backend.indexOf("async function settleAcceptedDeliveryCounter"),
   );
-  assert.match(backend, /The recipient replied before this message became due/);
-  assert.match(authority, /The exact backlink was acquired before this message became due/);
-  assert.match(authority, /The authority opportunity was not reconfirmed/);
+  assert.match(evidence, /permanentInvalidReason/);
+  assert.match(evidence, /permanentlyInvalid\("source_changed"\)/);
+  assert.match(evidence, /permanentlyInvalid\("target_missing"\)/);
+  assert.match(evidence, /permanentlyInvalid\("contact_changed"\)/);
+  assert.match(action, /retireInvalidApprovedDeliveryEvidenceInternal/);
+  assert.match(retirement, /status: "failed"/);
 });
 
-test("the release is tenant-generic and never shares an outbound identity", () => {
-  const changedSurface = [backend, action, fleet, sites, crons, schema].join("\n");
+test("the release is tenant-generic, identity-isolated and logs no raw recipient result", () => {
+  const changedSurface = [backend, action, fleet, sites, crons, schema, autonomy].join("\n");
   assert.doesNotMatch(changedSurface, /leadpilot/i);
   assert.match(backend, /Exactly one outreach inbox must be connected for this tenant/);
-  assert.match(backend, /siteDomain: site\.domain/);
-  assert.match(action, /inbox\.fromEmail/);
+  assert.match(backend, /async function outboundIdentityUsedByAnotherTenant/);
   assert.match(schema, /\.index\("by_from_email", \["fromEmail"\]\)/);
   assert.match(schema, /\.index\("by_sender_domain", \["senderDomain"\]\)/);
-  assert.match(backend, /async function outboundIdentityUsedByAnotherTenant/);
-  assert.match(backend, /sameMailbox\.length === scanLimit/);
-  assert.match(backend, /sameDomain\.length === scanLimit/);
   assert.ok(
     (backend.match(/await outboundIdentityUsedByAnotherTenant\(/g) ?? []).length >= 3,
-    "connect, one-time opt-in and every delivery claim must reject shared identities",
+    "connect, consent and claim must reject a shared outbound identity",
   );
-  assert.match(backend, /row\.siteId !== siteId && row\.status !== "disconnected"/);
+  assert.doesNotMatch(fleet, /JSON\.stringify\(result\)/);
+  assert.match(fleet, /numericCounts/);
 });

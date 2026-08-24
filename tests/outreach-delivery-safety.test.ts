@@ -5,7 +5,9 @@ import test from "node:test";
 import {
   OUTREACH_DELIVERY_LEASE_MS,
   approvalMatchesInbox,
+  autonomousGmailCredentialIssues,
   deliveryLeaseState,
+  gmailHttpFailureDisposition,
   liveDnsEvidenceIssues,
   opportunityEvidenceIsFresh,
   outreachDeletionGate,
@@ -14,6 +16,34 @@ import {
 } from "../convex/lib/outreachDelivery.ts";
 
 const NOW = Date.UTC(2026, 7, 20, 12, 0, 0);
+
+test("autonomous Gmail credentials are durable and exactly send-only", () => {
+  const send = "https://www.googleapis.com/auth/gmail.send";
+  assert.deepEqual(autonomousGmailCredentialIssues({
+    oauthScopes: `${send} openid email`,
+    hasRefreshToken: true,
+  }), []);
+  assert.ok(autonomousGmailCredentialIssues({
+    oauthScopes: `${send} https://www.googleapis.com/auth/gmail.readonly`,
+    hasRefreshToken: true,
+  }).length > 0);
+  assert.ok(autonomousGmailCredentialIssues({
+    oauthScopes: send,
+    hasRefreshToken: false,
+  }).some((issue) => /offline/i.test(issue)));
+});
+
+test("every plausibly ambiguous Gmail HTTP response is quarantined", () => {
+  for (const status of [408, 409, 425, 429, 500, 503, 599]) {
+    assert.equal(gmailHttpFailureDisposition(status).unverified, true, String(status));
+  }
+  for (const status of [400, 401, 403, 404, 422]) {
+    assert.equal(gmailHttpFailureDisposition(status).unverified, false, String(status));
+  }
+  assert.equal(gmailHttpFailureDisposition(401).suspend, true);
+  assert.equal(gmailHttpFailureDisposition(403).suspend, true);
+  assert.equal(gmailHttpFailureDisposition(429).suspend, false);
+});
 
 test("opportunity evidence must still be fresh when delivery is claimed", () => {
   assert.equal(opportunityEvidenceIsFresh({ verifiedAt: NOW, now: NOW }), true);
@@ -96,10 +126,23 @@ test("an expired lease becomes unverified and the same message never returns to 
     backend.indexOf("export const failDeliveryAttempt"),
   );
   assert.doesNotMatch(completion, /ctx\.db\.patch\(messageId, \{\s*status: "approved"/);
-  assert.match(
+  assert.doesNotMatch(
     completion,
-    /ctx\.db\.insert\("outreach_messages", \{[\s\S]*status: "approved"/,
-    "only a distinct, future follow-up may be queued after a verified receipt",
+    /ctx\.db\.insert\("outreach_messages"/,
+    "the initial-only release must never queue follow-up work after settlement",
+  );
+});
+
+test("every post-send settlement preserves newer terminal authority evidence", () => {
+  const backend = readFileSync("convex/outreach.ts", "utf8");
+  assert.equal(
+    backend.match(/outreachDeliverySettlementDecision\(\{/g)?.length,
+    3,
+    "provider receipt, owner-reviewed receipt, and signed-relay proof must share the terminal-state fence",
+  );
+  assert.equal(
+    backend.match(/settlementLifecycle\.shouldMarkContacted/g)?.length,
+    3,
   );
 });
 

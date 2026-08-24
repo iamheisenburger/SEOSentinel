@@ -7,6 +7,7 @@ import {
   isContactableAddress,
   isSameOrganisation,
   isSameOrganisationHost,
+  outreachOrganisationDomain,
   selectBestContact,
 } from "../convex/lib/outreachContacts.ts";
 
@@ -41,6 +42,32 @@ test("only addresses belonging to the target organisation qualify", () => {
     false,
     "sharing a public suffix is not an organisation relationship",
   );
+});
+
+test("hosted publishing tenants never inherit the platform operator's contact", () => {
+  for (const [tenant, platform] of [
+    ["alice.substack.com", "substack.com"],
+    ["alice.github.io", "github.io"],
+    ["alice.pages.dev", "pages.dev"],
+  ]) {
+    assert.equal(isSameOrganisationHost(tenant, platform), false);
+    assert.equal(isSameOrganisation(`support@${platform}`, tenant), false);
+  }
+  assert.equal(
+    isSameOrganisationHost("about.alice.substack.com", "alice.substack.com"),
+    true,
+  );
+  assert.equal(
+    isSameOrganisationHost("alice.substack.com", "bob.substack.com"),
+    false,
+  );
+});
+
+test("recipient identity collapses first-party subdomains but preserves hosted tenants", () => {
+  assert.equal(outreachOrganisationDomain("blog.example.com"), "example.com");
+  assert.equal(outreachOrganisationDomain("news.example.com"), "example.com");
+  assert.equal(outreachOrganisationDomain("alice.substack.com"), "alice.substack.com");
+  assert.equal(outreachOrganisationDomain("bob.substack.com"), "bob.substack.com");
 });
 
 test("extraction keeps the site's own editor and drops third parties", () => {

@@ -1,4 +1,5 @@
 import { getDomain } from "tldts";
+import { outreachOrganisationDomain } from "./outreachContacts.ts";
 
 /**
  * Authority outreach pacing, warm-up and compliance.
@@ -26,10 +27,6 @@ export const DEFAULT_DAILY_SEND_CAP = 30;
 export const OUTREACH_MIN_SEND_INTERVAL_MS = 30 * 60 * 1000;
 /** Never contact the same domain more often than this, across all campaigns. */
 export const DOMAIN_CONTACT_COOLDOWN_DAYS = 90;
-/** Follow-up cadence in days after the initial send. */
-export const FOLLOW_UP_SCHEDULE_DAYS = [4, 9];
-export const MAX_SEQUENCE_STEP = FOLLOW_UP_SCHEDULE_DAYS.length;
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type OutreachInboxState = {
@@ -51,6 +48,49 @@ export type OutreachSendDecision = {
   effectiveDailyCap: number;
   version: number;
 };
+
+export type OutreachDeliverySettlementDecision = {
+  opportunityBindingMatchesClaim: boolean;
+  lifecycleMatchesClaim: boolean;
+  shouldMarkContacted: boolean;
+};
+
+/**
+ * Decide what a verified provider receipt may still change after the external
+ * send window. A fresh authority scan can mark the opportunity acquired or
+ * rejected while Gmail is settling; those newer terminal facts always win.
+ */
+export function outreachDeliverySettlementDecision(args: {
+  sequenceStep: number;
+  messageSiteId: string;
+  opportunitySiteId?: string;
+  messageEvidenceHash?: string;
+  opportunityEvidenceHash?: string;
+  messageSourceUrl?: string;
+  opportunitySourceUrl?: string;
+  messageTargetUrl?: string;
+  opportunityTargetUrl?: string;
+  opportunityStatus?: string;
+}): OutreachDeliverySettlementDecision {
+  const validStep = args.sequenceStep === 0;
+  const opportunityBindingMatchesClaim = Boolean(
+    args.messageSiteId &&
+      args.opportunitySiteId === args.messageSiteId &&
+      args.messageEvidenceHash &&
+      args.opportunityEvidenceHash === args.messageEvidenceHash &&
+      args.messageSourceUrl &&
+      args.opportunitySourceUrl === args.messageSourceUrl &&
+      args.messageTargetUrl &&
+      args.opportunityTargetUrl === args.messageTargetUrl,
+  );
+  const lifecycleMatchesClaim = opportunityBindingMatchesClaim && validStep &&
+    args.opportunityStatus === "outreach_prepared";
+  return {
+    opportunityBindingMatchesClaim,
+    lifecycleMatchesClaim,
+    shouldMarkContacted: lifecycleMatchesClaim,
+  };
+}
 
 export function utcDayKey(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -231,11 +271,12 @@ export function contactEligibility(args: {
   suppressedEmails?: string[];
   toEmail?: string;
 }): { eligible: boolean; reason: string } {
-  const domain = normalizeDomain(args.sourceDomain);
+  const domain = outreachOrganisationDomain(args.sourceDomain);
   if (!domain) {
     return { eligible: false, reason: "Opportunity has no resolvable domain." };
   }
-  const suppressedDomains = (args.suppressedDomains ?? []).map(normalizeDomain);
+  const suppressedDomains = (args.suppressedDomains ?? [])
+    .map(outreachOrganisationDomain);
   if (suppressedDomains.includes(domain)) {
     return {
       eligible: false,
@@ -246,9 +287,11 @@ export function contactEligibility(args: {
   if (email && (args.suppressedEmails ?? []).some((e) => e.trim().toLowerCase() === email)) {
     return { eligible: false, reason: `${email} is suppressed.` };
   }
-  const previous = (args.history ?? []).find(
-    (entry) => normalizeDomain(entry.domain) === domain,
-  );
+  const previous = (args.history ?? [])
+    .filter((entry) => outreachOrganisationDomain(entry.domain) === domain)
+    .reduce<ContactHistoryEntry | undefined>((latest, entry) =>
+      !latest || entry.lastContactedAt > latest.lastContactedAt ? entry : latest,
+    undefined);
   if (previous) {
     const days = (args.now - previous.lastContactedAt) / DAY_MS;
     if (days < DOMAIN_CONTACT_COOLDOWN_DAYS) {
@@ -268,27 +311,6 @@ export function normalizeDomain(value: string): string {
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
     .split("/")[0];
-}
-
-/**
- * When the next follow-up is due, or null when the sequence is complete.
- * A replied or suppressed thread must never schedule another message.
- */
-export function nextFollowUpAt(args: {
-  sequenceStep: number;
-  lastSentAt: number;
-  replied?: boolean;
-}): number | null {
-  if (args.replied) return null;
-  const nextStep = args.sequenceStep + 1;
-  if (nextStep > MAX_SEQUENCE_STEP) return null;
-  const cumulativeDays = FOLLOW_UP_SCHEDULE_DAYS[nextStep - 1];
-  const priorCumulativeDays = args.sequenceStep === 0
-    ? 0
-    : FOLLOW_UP_SCHEDULE_DAYS[args.sequenceStep - 1];
-  const offsetDays = cumulativeDays - priorCumulativeDays;
-  if (!Number.isFinite(offsetDays) || offsetDays <= 0) return null;
-  return args.lastSentAt + offsetDays * DAY_MS;
 }
 
 /**

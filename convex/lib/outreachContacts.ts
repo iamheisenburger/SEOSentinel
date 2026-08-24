@@ -1,3 +1,5 @@
+import { getDomain } from "tldts";
+
 /**
  * Contact discovery from public pages.
  *
@@ -102,12 +104,65 @@ function normalizeHost(value: string): string {
     .replace(/\.$/, "");
 }
 
+const SHARED_PUBLISHING_HOSTS = new Set([
+  "substack.com",
+  "medium.com",
+  "wordpress.com",
+  "blogspot.com",
+  "github.io",
+  "pages.dev",
+  "vercel.app",
+  "netlify.app",
+  "webflow.io",
+  "wixsite.com",
+]);
+
+function sharedPublishingBoundary(host: string): string | undefined {
+  return [...SHARED_PUBLISHING_HOSTS].find(
+    (root) => host === root || host.endsWith(`.${root}`),
+  );
+}
+
+/** Canonical recipient-organisation key for cooldowns, thread grouping and
+ * STOPs. Ordinary first-party subdomains collapse to their registrable domain;
+ * hosted publishing tenants retain the tenant label and never collapse to the
+ * shared platform operator. */
+export function outreachOrganisationDomain(value: string): string {
+  const host = normalizeHost(value);
+  if (!host) return "";
+  const sharedRoot = sharedPublishingBoundary(host);
+  if (sharedRoot) {
+    if (host === sharedRoot) return sharedRoot;
+    const tenantLabel = host
+      .slice(0, -(sharedRoot.length + 1))
+      .split(".")
+      .filter(Boolean)
+      .pop();
+    return tenantLabel ? `${tenantLabel}.${sharedRoot}` : host;
+  }
+  return getDomain(host, { allowPrivateDomains: true }) ?? host;
+}
+
 /** Exact apex/subdomain relationship; never a naive shared public suffix. */
 export function isSameOrganisationHost(left: string, right: string): boolean {
   const a = normalizeHost(left);
   const b = normalizeHost(right);
   if (!a || !b) return false;
-  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+  if (a === b) return true;
+  // Different tenants on a hosted publishing platform are never the same
+  // organisation, even when the platform is absent from a local PSL build.
+  // Nested hosts owned by the same hosted tenant remain usable.
+  const aShared = sharedPublishingBoundary(a);
+  const bShared = sharedPublishingBoundary(b);
+  if (aShared || bShared) {
+    if (!aShared || aShared !== bShared) return false;
+    const aOrganisation = outreachOrganisationDomain(a);
+    const bOrganisation = outreachOrganisationDomain(b);
+    return aOrganisation !== aShared && aOrganisation === bOrganisation;
+  }
+  const aBoundary = getDomain(a, { allowPrivateDomains: true });
+  const bBoundary = getDomain(b, { allowPrivateDomains: true });
+  return Boolean(aBoundary && bBoundary && aBoundary === bBoundary);
 }
 
 /** True when the address belongs to the target site rather than a third party. */

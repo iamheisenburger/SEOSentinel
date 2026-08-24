@@ -4,20 +4,23 @@ import test from "node:test";
 import {
   DEFAULT_DAILY_SEND_CAP,
   DOMAIN_CONTACT_COOLDOWN_DAYS,
-  MAX_SEQUENCE_STEP,
   OUTREACH_PACING_VERSION,
   OUTREACH_MIN_SEND_INTERVAL_MS,
   WARMUP_DAYS,
   WARMUP_INITIAL_DAILY_CAP,
   contactEligibility,
-  nextFollowUpAt,
   normalizeDomain,
   outreachComplianceIssues,
+  outreachDeliverySettlementDecision,
   outreachSendDecision,
   outreachSenderReadinessIssues,
   utcDayKey,
   warmupDailyCap,
 } from "../convex/lib/outreachPacing.ts";
+import {
+  mergeDurablePacingState,
+  outreachRecipientDomainKey,
+} from "../convex/lib/outreachDurability.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
@@ -113,6 +116,53 @@ test("yesterday's counter cannot authorise or block today", () => {
   assert.equal(decision.allowed, true, "a stale day counter must reset");
 });
 
+test("the first post-rollout receipt preserves the legacy inbox count", () => {
+  const merged = mergeDurablePacingState({
+    mailboxKey: "mailbox-a",
+    inboxWarmupStartedAt: NOW - 30 * DAY,
+    inboxSentToday: 4,
+    inboxSentTodayDay: utcDayKey(NOW),
+    deliveredAt: NOW,
+    increment: true,
+  });
+  assert.equal(merged.sentToday, 5);
+  assert.equal(merged.sentTodayDay, utcDayKey(NOW));
+});
+
+test("a late older settlement cannot rewind the durable day or counter", () => {
+  const merged = mergeDurablePacingState({
+    existing: {
+      mailboxKey: "mailbox-current",
+      warmupStartedAt: NOW - 30 * DAY,
+      sentToday: 5,
+      sentTodayDay: utcDayKey(NOW),
+      lastSentAt: NOW,
+      updatedAt: NOW,
+    },
+    mailboxKey: "mailbox-old",
+    inboxWarmupStartedAt: NOW - 60 * DAY,
+    inboxSentToday: 9,
+    inboxSentTodayDay: utcDayKey(NOW - DAY),
+    deliveredAt: NOW - DAY,
+    increment: true,
+  });
+  assert.equal(merged.sentTodayDay, utcDayKey(NOW));
+  assert.equal(merged.sentToday, 5);
+  assert.equal(merged.lastSentAt, NOW);
+  assert.equal(merged.mailboxKey, "mailbox-current");
+});
+
+test("recipient cooldown identity follows an organisation across subdomains", () => {
+  assert.equal(
+    outreachRecipientDomainKey("blog.example.com"),
+    outreachRecipientDomainKey("news.example.com"),
+  );
+  assert.notEqual(
+    outreachRecipientDomainKey("alice.substack.com"),
+    outreachRecipientDomainKey("bob.substack.com"),
+  );
+});
+
 test("messages are spaced even after explicit approval", () => {
   const decision = outreachSendDecision({
     inbox: {
@@ -174,7 +224,10 @@ test("suppression and prior contact block a domain", () => {
   const recent = contactEligibility({
     sourceDomain: "example.com",
     now: NOW,
-    history: [{ domain: "example.com", lastContactedAt: NOW - 10 * DAY }],
+    history: [
+      { domain: "example.com", lastContactedAt: NOW - 95 * DAY },
+      { domain: "news.example.com", lastContactedAt: NOW - 10 * DAY },
+    ],
   });
   assert.equal(recent.eligible, false);
   assert.match(recent.reason, /cooldown/);
@@ -189,16 +242,73 @@ test("suppression and prior contact block a domain", () => {
   assert.equal(expired.eligible, true);
 });
 
-test("follow-ups stop after the sequence and after any reply", () => {
-  const first = nextFollowUpAt({ sequenceStep: 0, lastSentAt: NOW });
-  assert.equal(first, NOW + 4 * DAY);
-  assert.equal(
-    nextFollowUpAt({ sequenceStep: 1, lastSentAt: first! }),
-    NOW + 9 * DAY,
-    "the second follow-up lands nine days after the initial, not nine days after the first follow-up",
+function completeAfterAuthorityInterleaving(
+  opportunityStatus: string,
+  opportunityEvidenceHash = "evidence-a",
+): { opportunityStatus: string } {
+  const decision = outreachDeliverySettlementDecision({
+    sequenceStep: 0,
+    messageSiteId: "site-a",
+    opportunitySiteId: "site-a",
+    messageEvidenceHash: "evidence-a",
+    opportunityEvidenceHash,
+    messageSourceUrl: "https://example.com/source",
+    opportunitySourceUrl: "https://example.com/source",
+    messageTargetUrl: "https://tenant.example/target",
+    opportunityTargetUrl: "https://tenant.example/target",
+    opportunityStatus,
+  });
+  return {
+    opportunityStatus: decision.shouldMarkContacted
+      ? "contacted"
+      : opportunityStatus,
+  };
+}
+
+test("claim -> markAcquired -> complete preserves acquired and creates no follow-up", () => {
+  assert.deepEqual(completeAfterAuthorityInterleaving("acquired"), {
+    opportunityStatus: "acquired",
+  });
+});
+
+test("claim -> rejectUnconfirmed -> complete preserves rejected and creates no follow-up", () => {
+  assert.deepEqual(completeAfterAuthorityInterleaving("rejected"), {
+    opportunityStatus: "rejected",
+  });
+});
+
+test("an unchanged initial-send lifecycle settles once and creates no future work", () => {
+  assert.deepEqual(completeAfterAuthorityInterleaving("outreach_prepared"), {
+    opportunityStatus: "contacted",
+  });
+  assert.deepEqual(
+    outreachDeliverySettlementDecision({
+      sequenceStep: 1,
+      messageSiteId: "site-a",
+      opportunitySiteId: "site-a",
+      messageEvidenceHash: "evidence-a",
+      opportunityEvidenceHash: "evidence-a",
+      messageSourceUrl: "https://example.com/source",
+      opportunitySourceUrl: "https://example.com/source",
+      messageTargetUrl: "https://tenant.example/target",
+      opportunityTargetUrl: "https://tenant.example/target",
+      opportunityStatus: "contacted",
+    }),
+    {
+      opportunityBindingMatchesClaim: true,
+      lifecycleMatchesClaim: false,
+      shouldMarkContacted: false,
+    },
   );
-  assert.equal(nextFollowUpAt({ sequenceStep: 0, lastSentAt: NOW, replied: true }), null);
-  assert.equal(nextFollowUpAt({ sequenceStep: MAX_SEQUENCE_STEP, lastSentAt: NOW }), null);
+});
+
+test("claim -> refreshed opportunity evidence -> complete records no lifecycle or follow-up", () => {
+  assert.deepEqual(
+    completeAfterAuthorityInterleaving("outreach_prepared", "evidence-b"),
+    {
+      opportunityStatus: "outreach_prepared",
+    },
+  );
 });
 
 test("compliance blocks unsafe or unfinished messages", () => {

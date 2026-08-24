@@ -1,6 +1,6 @@
 import { internalMutation, internalQuery, query } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import {
   authorityDiscoveryPolicyFor,
@@ -459,6 +459,21 @@ export const listByStatusInternal = internalQuery({
       .take(Math.max(1, Math.min(limit ?? 50, 200))),
 });
 
+async function messageBelongsToAuthorityOpportunity(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+  siteId: Id<"sites">,
+  opportunityId: Id<"seo_authority_opportunities">,
+): Promise<boolean> {
+  if (
+    message.siteId !== siteId ||
+    message.opportunityId !== opportunityId
+  ) return false;
+  if (!message.inboxId) return true;
+  const inbox = await ctx.db.get(message.inboxId);
+  return Boolean(inbox && inbox.siteId === siteId);
+}
+
 /**
  * A link is only acquired once the exact live link has been observed on the
  * exact page. The caller supplies the page it saw; this records it as the
@@ -490,7 +505,15 @@ export const markAcquired = internalMutation({
       .withIndex("by_opportunity", (q) => q.eq("opportunityId", opportunityId))
       .take(20);
     for (const message of queued) {
-      if (!["draft", "blocked", "approved"].includes(message.status)) continue;
+      if (
+        !["draft", "blocked", "approved"].includes(message.status) ||
+        !(await messageBelongsToAuthorityOpportunity(
+          ctx,
+          message,
+          siteId,
+          opportunityId,
+        ))
+      ) continue;
       await ctx.db.patch(message._id, {
         status: "skipped",
         blockedReason:
@@ -571,7 +594,15 @@ export const rejectUnconfirmed = internalMutation({
           .withIndex("by_opportunity", (q) => q.eq("opportunityId", row._id))
           .take(20);
         for (const message of queued) {
-          if (!["draft", "blocked", "approved"].includes(message.status)) continue;
+          if (
+            !["draft", "blocked", "approved"].includes(message.status) ||
+            !(await messageBelongsToAuthorityOpportunity(
+              ctx,
+              message,
+              siteId,
+              row._id,
+            ))
+          ) continue;
           await ctx.db.patch(message._id, {
             status: "skipped",
             blockedReason:

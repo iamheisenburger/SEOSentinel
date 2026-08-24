@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  draftFollowUp,
   draftOutreachMessage,
   isUsableMentionContext,
   outreachThreadKey,
@@ -89,16 +88,6 @@ test("incomplete evidence produces no draft at all", () => {
   assert.equal(draftOutreachMessage({ ...MENTION, context: "" }), null);
   assert.equal(draftOutreachMessage({ ...BROKEN, senderName: " " }), null);
   assert.equal(draftOutreachMessage({ ...BROKEN, type: "purchased_link" }), null);
-});
-
-test("follow-ups exist for two steps only and the last one says so", () => {
-  const first = draftFollowUp({ evidence: BROKEN, sequenceStep: 1 });
-  const last = draftFollowUp({ evidence: BROKEN, sequenceStep: 2 });
-  assert.ok(first && last);
-  assert.match(first.subject, /^Re: /);
-  assert.match(last.body, /will not follow up again/);
-  assert.equal(draftFollowUp({ evidence: BROKEN, sequenceStep: 3 }), null);
-  assert.equal(draftFollowUp({ evidence: BROKEN, sequenceStep: 0 }), null);
 });
 
 test("scraped navigation chrome is not a mention worth quoting", () => {

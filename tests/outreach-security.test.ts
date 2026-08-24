@@ -1,11 +1,104 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sanitizeInboxForClient } from "../convex/lib/outreachSecurity.ts";
+import {
+  outboundIdentityReservationActive,
+  reconnectPacingState,
+  sanitizeInboxForClient,
+} from "../convex/lib/outreachSecurity.ts";
 import { utcDayKey } from "../convex/lib/outreachPacing.ts";
+import {
+  OUTREACH_AUTONOMY_CONSENT_VERSION,
+  OUTREACH_AUTONOMY_POLICY_HASH,
+} from "../convex/lib/outreachAutonomy.ts";
 
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;
+
+test("mailbox and sender-domain pacing have separate reconnect semantics", () => {
+  const sameDomainNewMailbox = reconnectPacingState({
+    reconnectsSameMailbox: false,
+    preservesSenderReputation: true,
+    now: NOW,
+    existingWarmupStartedAt: NOW - 30 * DAY,
+    existingSentToday: 4,
+    existingSentTodayDay: utcDayKey(NOW),
+    existingLastSentAt: NOW - 1_000,
+  });
+  assert.equal(sameDomainNewMailbox.warmupStartedAt, NOW);
+  assert.equal(sameDomainNewMailbox.sentToday, 4);
+  assert.equal(sameDomainNewMailbox.lastSentAt, NOW - 1_000);
+
+  const newDomain = reconnectPacingState({
+    reconnectsSameMailbox: false,
+    preservesSenderReputation: false,
+    now: NOW,
+    existingSentToday: 4,
+    existingSentTodayDay: utcDayKey(NOW),
+    existingLastSentAt: NOW - 1_000,
+  });
+  assert.equal(newDomain.warmupStartedAt, NOW);
+  assert.equal(newDomain.sentToday, 0);
+  assert.equal(newDomain.lastSentAt, undefined);
+});
+
+test("deletion and unresolved delivery keep a disconnected identity reserved", () => {
+  assert.equal(outboundIdentityReservationActive({
+    inboxStatus: "disconnected",
+    siteExists: true,
+  }), false);
+  assert.equal(outboundIdentityReservationActive({
+    inboxStatus: "disconnected",
+    siteExists: true,
+    siteDeletionPending: true,
+  }), true);
+  assert.equal(outboundIdentityReservationActive({
+    inboxStatus: "disconnected",
+    siteExists: true,
+    hasUnverifiedDelivery: true,
+  }), true);
+});
+
+test("stored consent remains visible while effective autonomous delivery is paused", () => {
+  const inbox = {
+    provider: "gmail",
+    status: "active",
+    mode: "live",
+    autonomyConsentVersion: OUTREACH_AUTONOMY_CONSENT_VERSION,
+    autonomyConsentPolicyHash: OUTREACH_AUTONOMY_POLICY_HASH,
+    autonomyConsentAcceptedAt: NOW,
+    autonomyConsentAcceptedBy: "user_owner",
+    autonomyConsentInboxConfigurationVersion: 3,
+    configurationVersion: 3,
+  };
+  const envOff = sanitizeInboxForClient(
+    inbox,
+    NOW,
+    false,
+    false,
+    false,
+    undefined,
+    false,
+    "user_owner",
+    true,
+  );
+  assert.equal(envOff?.autonomousConsentActive, true);
+  assert.equal(envOff?.autonomousDeliveryEnabled, false);
+
+  const parked = sanitizeInboxForClient(
+    inbox,
+    NOW,
+    false,
+    false,
+    false,
+    undefined,
+    true,
+    "user_owner",
+    false,
+  );
+  assert.equal(parked?.autonomousConsentActive, true);
+  assert.equal(parked?.autonomousDeliveryEnabled, false);
+});
 
 test("inbox records never expose mailbox credentials", () => {
   const sanitized = sanitizeInboxForClient(

@@ -39,7 +39,10 @@ import {
   liveAutopilotReadiness,
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
-import { outreachDeletionGate } from "./lib/outreachDelivery";
+import {
+  autonomousGmailCredentialIssues,
+  outreachDeletionGate,
+} from "./lib/outreachDelivery";
 import {
   selectPlanEntitledSiteIds,
   siteExecutionActive,
@@ -56,8 +59,10 @@ import {
 } from "./lib/outreachInboundRelay.ts";
 import {
   autonomousOutreachConsentActive,
+  autonomousOutreachReconciliationComplete,
   autonomousOutreachRuntimeEnabled,
 } from "./lib/outreachAutonomy.ts";
+import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
 import { terminallyClosePlanCheckpoints } from
   "./planCandidateCheckpoints";
 import { releaseSharedProviderReservation } from
@@ -66,6 +71,12 @@ import {
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
+import {
+  recordDurableContactReceipt,
+  recordDurablePacingReceipt,
+} from "./lib/outreachDurability.ts";
+import { materializeOutreachSuppressionTombstone } from
+  "./lib/outreachSuppression.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -1537,6 +1548,10 @@ const ACCOUNT_DELETION_SITE_PAGE_SIZE = 5;
 const ACCOUNT_DELETION_RECEIPT_BATCH = 100;
 const ACCOUNT_DELETION_RETRY_MS = 60 * 1000;
 const ACCOUNT_DELETION_RECEIPT_STAGES = [
+  "outreach_durability_migrations",
+  "outreach_sender_suppression_tombstones",
+  "outreach_tenant_contact_receipts",
+  "outreach_sender_pacing_receipts",
   "article_generation_attempts",
   "provider_spend_reservations",
   "usage_log",
@@ -2066,7 +2081,81 @@ export const continueSiteDeletionInternal = internalMutation({
     }
     const rows = await deletionRowsForStage(ctx, siteId, safeStage);
     for (const row of rows) {
-      if (SITE_DELETION_STAGES[safeStage] === "usage_log") {
+      if (SITE_DELETION_STAGES[safeStage] === "outreach_messages") {
+        const message = row as Doc<"outreach_messages">;
+        const acceptedAt = message.sentAt ?? (
+          message.status === "delivery_unverified"
+            ? message.deliveryClaimedAt
+            : undefined
+        );
+        if (acceptedAt) {
+          // Legacy rows predate the durable ledgers. Materialize the exact
+          // compliance/reputation state in the same transaction before the
+          // site-scoped evidence is removed. Ordinary site deletion also
+          // permanently retires previously-contacted recipients, closing the
+          // delayed STOP race without retaining an inbound alias.
+          await recordDurableContactReceipt(
+            ctx,
+            site,
+            message.toDomain,
+            acceptedAt,
+          );
+          await materializeOutreachSuppressionTombstone(
+            ctx,
+            site,
+            "domain",
+            message.toDomain,
+            "manual",
+            acceptedAt,
+          );
+          await materializeOutreachSuppressionTombstone(
+            ctx,
+            site,
+            "email",
+            message.toEmail,
+            "manual",
+            acceptedAt,
+          );
+          if (message.inboxId) {
+            const messageInbox = await ctx.db.get(message.inboxId);
+            if (messageInbox && messageInbox.siteId === siteId) {
+              await recordDurablePacingReceipt(
+                ctx,
+                site,
+                messageInbox,
+                acceptedAt,
+                false,
+              );
+            }
+          }
+        }
+        await ctx.db.delete(message._id);
+      } else if (SITE_DELETION_STAGES[safeStage] === "outreach_suppressions") {
+        const suppression = row as Doc<"outreach_suppressions">;
+        if (suppression.kind === "domain" || suppression.kind === "email") {
+          await materializeOutreachSuppressionTombstone(
+            ctx,
+            site,
+            suppression.kind,
+            suppression.value,
+            suppression.reason,
+            suppression.createdAt,
+          );
+        }
+        await ctx.db.delete(suppression._id);
+      } else if (SITE_DELETION_STAGES[safeStage] === "outreach_inboxes") {
+        const inbox = row as Doc<"outreach_inboxes">;
+        if (inbox.lastSentAt) {
+          await recordDurablePacingReceipt(
+            ctx,
+            site,
+            inbox,
+            inbox.lastSentAt,
+            false,
+          );
+        }
+        await ctx.db.delete(inbox._id);
+      } else if (SITE_DELETION_STAGES[safeStage] === "usage_log") {
         // Preserve the owner's immutable billing-period consumption so
         // deleting and recreating a site cannot reset article/provider
         // entitlement. Remove every reference to the deleted tenant's
@@ -2397,6 +2486,34 @@ async function accountReceiptRowsForStage(
 ) {
   const name = ACCOUNT_DELETION_RECEIPT_STAGES[stage];
   switch (name) {
+    case "outreach_durability_migrations":
+      return ctx.db
+        .query("outreach_durability_migrations")
+        .withIndex("by_account", (q) =>
+          q.eq("accountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
+    case "outreach_sender_suppression_tombstones":
+      return ctx.db
+        .query("outreach_sender_suppression_tombstones")
+        .withIndex("by_account", (q) =>
+          q.eq("accountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
+    case "outreach_tenant_contact_receipts":
+      return ctx.db
+        .query("outreach_tenant_contact_receipts")
+        .withIndex("by_account", (q) =>
+          q.eq("accountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
+    case "outreach_sender_pacing_receipts":
+      return ctx.db
+        .query("outreach_sender_pacing_receipts")
+        .withIndex("by_account", (q) =>
+          q.eq("accountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
     case "article_generation_attempts":
       return ctx.db
         .query("article_generation_attempts")
@@ -2478,7 +2595,21 @@ export const finalizeAccountDeletionInternal = internalMutation({
       );
       for (const row of rows) {
         const name = ACCOUNT_DELETION_RECEIPT_STAGES[stage];
-        if (name === "article_generation_attempts") {
+        if (
+          name === "outreach_durability_migrations" ||
+          name === "outreach_sender_suppression_tombstones" ||
+          name === "outreach_tenant_contact_receipts"
+        ) {
+          await ctx.db.delete(row._id);
+        } else if (name === "outreach_sender_pacing_receipts") {
+          // Sender-domain reputation is global and must not be refunded by
+          // moving the mailbox to another account. Remove only the deleted
+          // account link; the hashed short-lived pacing state remains.
+          await ctx.db.patch(
+            row._id as Id<"outreach_sender_pacing_receipts">,
+            { accountKey: undefined, tenantDomainKey: undefined },
+          );
+        } else if (name === "article_generation_attempts") {
           const attempt = row as Doc<"article_generation_attempts">;
           await ctx.db.patch(attempt._id, {
             userId: tombstoneUserId,
@@ -2903,10 +3034,27 @@ async function outreachFleetState(
     .withIndex("by_site", (q) => q.eq("siteId", siteId))
     .take(2);
   const inbox = inboxes.length === 1 ? inboxes[0] : undefined;
+  const durabilityMigration = site.userId
+    ? await ctx.db
+        .query("outreach_durability_migrations")
+        .withIndex("by_account", (q) =>
+          q.eq("accountKey", accountDeletionKey(site.userId!))
+        )
+        .first()
+    : null;
   const activeAutonomyConsent = Boolean(
     autonomousOutreachRuntimeEnabled(
       process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
-    ) && autonomousOutreachConsentActive(inbox, site.userId),
+    ) &&
+      autonomousOutreachConsentActive(inbox, site.userId) &&
+      autonomousOutreachReconciliationComplete(inbox) &&
+      durabilityMigration?.version === 1 &&
+      durabilityMigration.status === "complete" &&
+      isSeoGrowthActuationEligible(site) &&
+      autonomousGmailCredentialIssues({
+        oauthScopes: inbox?.oauthScopes,
+        hasRefreshToken: Boolean(inbox?.oauthRefreshToken),
+      }).length === 0,
   );
   const queriedAt = Date.now();
   const [
@@ -2934,7 +3082,7 @@ async function outreachFleetState(
     activeAutonomyConsent && inbox
       ? ctx.db
           .query("outreach_messages")
-          .withIndex("by_site_status_autonomy_consent_scheduled", (q) =>
+          .withIndex("by_site_status_autonomy_consent_sequence_scheduled", (q) =>
             q
               .eq("siteId", siteId)
               .eq("status", "approved")
@@ -2948,6 +3096,7 @@ async function outreachFleetState(
                 "approvalConsentAcceptedAt",
                 inbox.autonomyConsentAcceptedAt,
               )
+              .eq("sequenceStep", 0)
               .lte("scheduledAt", queriedAt),
           )
           .first()
@@ -3025,6 +3174,10 @@ async function outreachFleetState(
     inboxMode: inbox?.mode,
     inboxVerified: Boolean(inbox?.verifiedAt),
     autonomyConsentActive: activeAutonomyConsent,
+    autonomyReconciliationPending: Boolean(
+      inbox?.mode === "live" &&
+        inbox.autonomyReconciliationStatus !== "complete",
+    ),
     hasVerifiedOpportunities: Boolean(verifiedOpportunity),
     hasApprovedMessages: Boolean(approvedMessage),
     hasDueAutomaticMessages: Boolean(dueAutomaticMessage),
