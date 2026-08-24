@@ -18,6 +18,7 @@ import {
   warmupDailyCap,
 } from "../convex/lib/outreachPacing.ts";
 import {
+  durablePacingReceiptOwnership,
   effectiveDurablePacingState,
   mergeDurablePacingState,
   outreachRecipientDomainKey,
@@ -201,6 +202,29 @@ test("a durable sender receipt written after connect controls preflight and clai
   });
   assert.equal(spacingOnly.allowed, false);
   assert.match(spacingOnly.reason, /spacing/);
+});
+
+test("late historical materialization cannot steal a newer sender owner", () => {
+  const ownership = durablePacingReceiptOwnership({
+    existingAccountKey: "account-b",
+    existingTenantDomainKey: "tenant-b",
+    incomingAccountKey: "account-a",
+    incomingTenantDomainKey: "tenant-a",
+  });
+  assert.deepEqual(ownership, {
+    accountKey: "account-b",
+    tenantDomainKey: "tenant-b",
+    preservesExistingOwner: true,
+  });
+  assert.equal(
+    durablePacingReceiptOwnership({
+      existingAccountKey: "account-a",
+      existingTenantDomainKey: "tenant-a",
+      incomingAccountKey: "account-a",
+      incomingTenantDomainKey: "tenant-a",
+    }).preservesExistingOwner,
+    false,
+  );
 });
 
 test("recipient cooldown identity follows an organisation across subdomains", () => {

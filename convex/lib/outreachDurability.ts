@@ -8,6 +8,9 @@ import { outreachOrganisationDomain } from "./outreachContacts.ts";
 
 export const OUTREACH_SENDER_REPUTATION_RETENTION_MS =
   90 * 24 * 60 * 60 * 1000;
+export const OUTREACH_ACCOUNT_TENANT_SCOPE_KEY = sha256Hex(
+  "pentra-outreach-account-tenant-scope:v1",
+);
 
 /**
  * Stable, PII-minimized scope for outreach compliance and reputation state.
@@ -26,9 +29,7 @@ export function outreachTenantScope(args: {
   if (!args.userId) return null;
   return {
     accountKey: accountDeletionKey(args.userId),
-    tenantDomainKey: sha256Hex(
-      "pentra-outreach-account-tenant-scope:v1",
-    ),
+    tenantDomainKey: OUTREACH_ACCOUNT_TENANT_SCOPE_KEY,
   };
 }
 
@@ -67,6 +68,24 @@ export function outreachContactReceiptIdentity(args: {
   return scope && recipientDomainKey ? { ...scope, recipientDomainKey } : null;
 }
 
+export function outreachContactReceiptIdentityForAccount(args: {
+  accountKey: string;
+  recipientDomain: string;
+}): {
+  accountKey: string;
+  tenantDomainKey: string;
+  recipientDomainKey: string;
+} | null {
+  const recipientDomainKey = outreachRecipientDomainKey(args.recipientDomain);
+  return args.accountKey && recipientDomainKey
+    ? {
+        accountKey: args.accountKey,
+        tenantDomainKey: OUTREACH_ACCOUNT_TENANT_SCOPE_KEY,
+        recipientDomainKey,
+      }
+    : null;
+}
+
 export function outreachPacingReceiptIdentity(args: {
   userId: string;
   tenantDomain: string;
@@ -91,6 +110,33 @@ export type DurablePacingState = {
   lastSentAt?: number;
   updatedAt: number;
 };
+
+export function durablePacingReceiptOwnership(args: {
+  existingAccountKey?: string;
+  existingTenantDomainKey?: string;
+  incomingAccountKey: string;
+  incomingTenantDomainKey: string;
+}): {
+  accountKey: string;
+  tenantDomainKey?: string;
+  preservesExistingOwner: boolean;
+} {
+  const preservesExistingOwner = Boolean(
+    args.existingAccountKey &&
+      args.existingAccountKey !== args.incomingAccountKey,
+  );
+  return preservesExistingOwner
+    ? {
+        accountKey: args.existingAccountKey!,
+        tenantDomainKey: args.existingTenantDomainKey,
+        preservesExistingOwner: true,
+      }
+    : {
+        accountKey: args.incomingAccountKey,
+        tenantDomainKey: args.incomingTenantDomainKey,
+        preservesExistingOwner: false,
+      };
+}
 
 /** Merge a possibly newer global sender receipt into the inbox snapshot used
  * by both the action preflight and the serializable send claim. Domain-level
@@ -223,9 +269,25 @@ export async function recordDurableContactReceipt(
   expectedAttemptId?: string,
 ): Promise<void> {
   if (!site.userId || !Number.isFinite(contactedAt) || contactedAt <= 0) return;
-  const identity = outreachContactReceiptIdentity({
-    userId: site.userId,
-    tenantDomain: site.domain,
+  return recordDurableContactReceiptForAccount(
+    ctx,
+    accountDeletionKey(site.userId),
+    recipientDomain,
+    contactedAt,
+    expectedAttemptId,
+  );
+}
+
+export async function recordDurableContactReceiptForAccount(
+  ctx: MutationCtx,
+  accountKey: string,
+  recipientDomain: string,
+  contactedAt: number,
+  expectedAttemptId?: string,
+): Promise<void> {
+  if (!accountKey || !Number.isFinite(contactedAt) || contactedAt <= 0) return;
+  const identity = outreachContactReceiptIdentityForAccount({
+    accountKey,
     recipientDomain,
   });
   if (!identity) return;
@@ -320,7 +382,37 @@ export async function releaseDurableContactClaim(
   attemptId: string,
   now: number,
 ): Promise<void> {
-  const existing = await readDurableContactReceipt(ctx, site, recipientDomain);
+  if (!site.userId) return;
+  return releaseDurableContactClaimForAccount(
+    ctx,
+    accountDeletionKey(site.userId),
+    recipientDomain,
+    attemptId,
+    now,
+  );
+}
+
+export async function releaseDurableContactClaimForAccount(
+  ctx: MutationCtx,
+  accountKey: string,
+  recipientDomain: string,
+  attemptId: string,
+  now: number,
+): Promise<void> {
+  const identity = outreachContactReceiptIdentityForAccount({
+    accountKey,
+    recipientDomain,
+  });
+  if (!identity) return;
+  const existing = await ctx.db
+    .query("outreach_tenant_contact_receipts")
+    .withIndex("by_account_tenant_recipient", (q) =>
+      q
+        .eq("accountKey", identity.accountKey)
+        .eq("tenantDomainKey", identity.tenantDomainKey)
+        .eq("recipientDomainKey", identity.recipientDomainKey)
+    )
+    .first();
   if (!existing || existing.reservationAttemptId !== attemptId) return;
   await ctx.db.patch(existing._id, {
     reservationAttemptId: undefined,
@@ -385,11 +477,33 @@ export async function recordDurablePacingReceipt(
   increment = true,
 ): Promise<void> {
   if (!site.userId || !Number.isFinite(deliveredAt) || deliveredAt <= 0) return;
-  const identity = outreachPacingReceiptIdentity({
-    userId: site.userId,
-    tenantDomain: site.domain,
-    senderDomain: inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
-  });
+  return recordDurablePacingReceiptForAccount(
+    ctx,
+    accountDeletionKey(site.userId),
+    inbox,
+    deliveredAt,
+    increment,
+  );
+}
+
+export async function recordDurablePacingReceiptForAccount(
+  ctx: MutationCtx,
+  accountKey: string,
+  inbox: Doc<"outreach_inboxes">,
+  deliveredAt: number,
+  increment = true,
+): Promise<void> {
+  if (!accountKey || !Number.isFinite(deliveredAt) || deliveredAt <= 0) return;
+  const senderDomainKey = outreachSenderDomainKey(
+    inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+  );
+  const identity = senderDomainKey
+    ? {
+        accountKey,
+        tenantDomainKey: OUTREACH_ACCOUNT_TENANT_SCOPE_KEY,
+        senderDomainKey,
+      }
+    : null;
   const mailboxKey = outreachMailboxKey(inbox.fromEmail);
   if (!identity || !mailboxKey) return;
   const existing = await ctx.db
@@ -408,10 +522,26 @@ export async function recordDurablePacingReceipt(
     increment,
   });
   if (existing) {
+    // Migration and deletion may discover old sends after another account has
+    // legitimately adopted this globally unique sender. Historical evidence
+    // may only raise monotonic pacing; ownership/mailbox lineage can move only
+    // through the explicit OAuth connect/adoption protocol.
+    const ownership = durablePacingReceiptOwnership({
+      existingAccountKey: existing.accountKey,
+      existingTenantDomainKey: existing.tenantDomainKey,
+      incomingAccountKey: identity.accountKey!,
+      incomingTenantDomainKey: identity.tenantDomainKey!,
+    });
     await ctx.db.patch(existing._id, {
-      accountKey: identity.accountKey,
-      tenantDomainKey: identity.tenantDomainKey,
+      accountKey: ownership.accountKey,
+      tenantDomainKey: ownership.tenantDomainKey,
       ...merged,
+      ...(ownership.preservesExistingOwner
+        ? {
+            mailboxKey: existing.mailboxKey,
+            warmupStartedAt: existing.warmupStartedAt,
+          }
+        : {}),
       retainUntil: Math.max(
         existing.retainUntil ?? 0,
         deliveredAt + OUTREACH_SENDER_REPUTATION_RETENTION_MS,

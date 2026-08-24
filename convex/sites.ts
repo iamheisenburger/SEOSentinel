@@ -72,11 +72,13 @@ import {
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
 import {
-  recordDurableContactReceipt,
-  recordDurablePacingReceipt,
+  recordDurableContactReceiptForAccount,
+  recordDurablePacingReceiptForAccount,
 } from "./lib/outreachDurability.ts";
-import { materializeOutreachSuppressionTombstone } from
-  "./lib/outreachSuppression.ts";
+import {
+  materializeOutreachSuppressionTombstone,
+  materializeOutreachSuppressionTombstoneForAccount,
+} from "./lib/outreachSuppression.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -2089,44 +2091,55 @@ export const continueSiteDeletionInternal = internalMutation({
             : undefined
         );
         if (acceptedAt) {
+          const messageInbox = message.inboxId
+            ? await ctx.db.get(message.inboxId)
+            : null;
+          const settlementAccountKey =
+            message.deliveryOwnerAccountKey ??
+            (messageInbox?.siteId === siteId
+              ? messageInbox.credentialOwnerAccountKey
+              : undefined) ??
+            (site.userId ? accountDeletionKey(site.userId) : undefined);
+          if (!settlementAccountKey) {
+            throw new Error(
+              "Outreach history lost its immutable account owner during deletion",
+            );
+          }
           // Legacy rows predate the durable ledgers. Materialize the exact
           // compliance/reputation state in the same transaction before the
           // site-scoped evidence is removed. Ordinary site deletion also
           // permanently retires previously-contacted recipients, closing the
           // delayed STOP race without retaining an inbound alias.
-          await recordDurableContactReceipt(
+          await recordDurableContactReceiptForAccount(
             ctx,
-            site,
+            settlementAccountKey,
             message.toDomain,
             acceptedAt,
           );
-          await materializeOutreachSuppressionTombstone(
+          await materializeOutreachSuppressionTombstoneForAccount(
             ctx,
-            site,
+            settlementAccountKey,
             "domain",
             message.toDomain,
             "manual",
             acceptedAt,
           );
-          await materializeOutreachSuppressionTombstone(
+          await materializeOutreachSuppressionTombstoneForAccount(
             ctx,
-            site,
+            settlementAccountKey,
             "email",
             message.toEmail,
             "manual",
             acceptedAt,
           );
-          if (message.inboxId) {
-            const messageInbox = await ctx.db.get(message.inboxId);
-            if (messageInbox && messageInbox.siteId === siteId) {
-              await recordDurablePacingReceipt(
-                ctx,
-                site,
-                messageInbox,
-                acceptedAt,
-                false,
-              );
-            }
+          if (messageInbox && messageInbox.siteId === siteId) {
+            await recordDurablePacingReceiptForAccount(
+              ctx,
+              settlementAccountKey,
+              messageInbox,
+              acceptedAt,
+              false,
+            );
           }
         }
         await ctx.db.delete(message._id);
@@ -2146,9 +2159,17 @@ export const continueSiteDeletionInternal = internalMutation({
       } else if (SITE_DELETION_STAGES[safeStage] === "outreach_inboxes") {
         const inbox = row as Doc<"outreach_inboxes">;
         if (inbox.lastSentAt) {
-          await recordDurablePacingReceipt(
+          const settlementAccountKey =
+            inbox.credentialOwnerAccountKey ??
+            (site.userId ? accountDeletionKey(site.userId) : undefined);
+          if (!settlementAccountKey) {
+            throw new Error(
+              "Outreach inbox lost its immutable account owner during deletion",
+            );
+          }
+          await recordDurablePacingReceiptForAccount(
             ctx,
-            site,
+            settlementAccountKey,
             inbox,
             inbox.lastSentAt,
             false,

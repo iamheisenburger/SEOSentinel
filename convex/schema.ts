@@ -1521,6 +1521,7 @@ export default defineSchema({
     inboundSyncWindowStartedAt: v.optional(v.number()),
     inboundSyncPageToken: v.optional(v.string()),
     inboundSyncLeaseId: v.optional(v.string()),
+    inboundSyncOwnerAccountKey: v.optional(v.string()),
     inboundSyncLeaseExpiresAt: v.optional(v.number()),
     inboundLastError: v.optional(v.string()),
     // A send-only Gmail inbox may release outreach only after a real hard-DSN
@@ -1587,6 +1588,10 @@ export default defineSchema({
     approvalConsentAcceptedAt: v.optional(v.number()),
     // The mutation that sets `sending` is the only delivery claim. Gmail
     // outcomes are accepted only for the exact attempt while its lease lives.
+    // The one-way account key is immutable settlement lineage: a later site
+    // ownership change cannot move cooldown, bounce or STOP state to another
+    // customer account.
+    deliveryOwnerAccountKey: v.optional(v.string()),
     deliveryAttemptId: v.optional(v.string()),
     deliveryClaimedAt: v.optional(v.number()),
     deliveryLeaseExpiresAt: v.optional(v.number()),

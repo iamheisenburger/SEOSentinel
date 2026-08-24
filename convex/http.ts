@@ -381,6 +381,7 @@ http.route({
         dsnRoutingTargetHash: candidate.dsnRoutingTargetHash,
         dsnRoutingTargetVersion: candidate.dsnRoutingTargetVersion,
         dsnRoutingTargetGeneration: candidate.dsnRoutingTargetGeneration,
+        deliveryOwnerAccountKey: candidate.deliveryOwnerAccountKey,
       },
     );
     return json({

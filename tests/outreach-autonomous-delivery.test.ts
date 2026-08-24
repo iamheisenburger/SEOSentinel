@@ -15,6 +15,7 @@ const fleet = readFileSync("convex/actions/outreachFleet.ts", "utf8");
 const sites = readFileSync("convex/sites.ts", "utf8");
 const crons = readFileSync("convex/crons.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
+const http = readFileSync("convex/http.ts", "utf8");
 const autonomy = readFileSync("convex/lib/outreachAutonomy.ts", "utf8");
 
 test("the v2 initial-only consent receipt has an exact audited hash", () => {
@@ -174,6 +175,77 @@ test("every provider-credential boundary rejects a changed site owner", () => {
   assert.match(inboundClaim, /credentialOwnerAccountKey !== accountDeletionKey/);
   assert.match(inboundClaim, /oauthRefreshToken: undefined/);
   assert.match(inboundClaim, /status: "disconnected"/);
+});
+
+test("legacy owner rollout reconnects only through a fresh scrubbed OAuth grant", () => {
+  const connect = backend.slice(
+    backend.indexOf("export const connectGmailInboxInternal"),
+    backend.indexOf("export const setInboxComplianceProfile"),
+  );
+  const readiness = backend.slice(
+    backend.indexOf("export const getGmailReconnectReadinessInternal"),
+    backend.indexOf("export const listLegacyInboundFleetPage"),
+  );
+  assert.match(readiness, /credentialOwnerAccountKey !== ownerKey/);
+  assert.match(readiness, /freshGrantRequired: true/);
+  assert.match(connect, /cannot be transferred/);
+  assert.match(connect, /quarantineLegacyUnownedDeliveryBeforeReconnect/);
+  assert.match(
+    connect,
+    /physicalMailingAddress: existingOwnerMatches\s*\? existing\?\.physicalMailingAddress\s*: undefined/,
+  );
+  assert.match(
+    connect,
+    /complianceConfirmedAt: existingOwnerMatches\s*\? existing\?\.complianceConfirmedAt\s*: undefined/,
+  );
+  assert.match(connect, /oauthRefreshToken: args\.oauthRefreshToken/);
+  assert.match(connect, /autonomyConsentAcceptedBy: undefined/);
+  assert.match(connect, /inboundSyncLeaseId: undefined/);
+});
+
+test("delivery settlement remains bound to the immutable claiming account", () => {
+  const claim = backend.slice(
+    backend.indexOf("export const claimApprovedDelivery"),
+    backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
+  );
+  const settlement = backend.slice(
+    backend.indexOf("function immutableDeliveryOwnerAccountKey"),
+    backend.indexOf("export const getInboundRelayCandidate"),
+  );
+  const relay = backend.slice(
+    backend.indexOf("export const getInboundRelayCandidate"),
+    backend.indexOf("export const getInboundRelayFleetPage"),
+  );
+  assert.match(schema, /deliveryOwnerAccountKey: v\.optional\(v\.string\(\)\)/);
+  assert.match(claim, /deliveryOwnerAccountKey: inbox\.credentialOwnerAccountKey/);
+  assert.match(settlement, /recordDurableContactReceiptForAccount/);
+  assert.match(settlement, /recordDurablePacingReceiptForAccount/);
+  assert.match(settlement, /releaseDurableContactClaimForAccount/);
+  assert.match(settlement, /Only the account that claimed this Gmail delivery/);
+  assert.match(settlement, /status: "delivery_unverified",\s*\/\/[^]*sentAt: now/);
+  assert.match(relay, /args\.deliveryOwnerAccountKey !== settlementAccountKey/);
+  assert.match(relay, /inboundProvesAmbiguousDelivery && !message\.sentAt/);
+  assert.match(relay, /materializeOutreachSuppressionTombstoneForAccount/);
+  assert.match(http, /deliveryOwnerAccountKey: candidate\.deliveryOwnerAccountKey/);
+});
+
+test("legacy inbound rows bind immutable ownership inside the current-owner lease", () => {
+  const evidence = backend.slice(
+    backend.indexOf("export const getInboundCandidatesForEvidence"),
+    backend.indexOf("export const completeInboundSync"),
+  );
+  assert.match(
+    evidence,
+    /message\.deliveryOwnerAccountKey === undefined/,
+  );
+  assert.match(
+    evidence,
+    /deliveryOwnerAccountKey: inbox\.inboundSyncOwnerAccountKey/,
+  );
+  assert.match(
+    evidence,
+    /inbox\.credentialOwnerAccountKey !== inbox\.inboundSyncOwnerAccountKey/,
+  );
 });
 
 test("manual and automatic delivery wait for account-wide legacy compliance migration", () => {

@@ -1,5 +1,8 @@
 import { sha256Hex } from "./publicationArtifact.ts";
-import { outreachTenantScope } from "./outreachDurability.ts";
+import {
+  OUTREACH_ACCOUNT_TENANT_SCOPE_KEY,
+  outreachTenantScope,
+} from "./outreachDurability.ts";
 import { outreachOrganisationDomain } from "./outreachContacts.ts";
 import type { MutationCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
@@ -94,6 +97,33 @@ export async function materializeOutreachSuppressionTombstone(
     kind,
     value,
   });
+  if (!identity) return;
+  return materializeOutreachSuppressionTombstoneForAccount(
+    ctx,
+    identity.accountKey,
+    kind,
+    value,
+    reason,
+    createdAt,
+  );
+}
+
+export async function materializeOutreachSuppressionTombstoneForAccount(
+  ctx: MutationCtx,
+  accountKey: string,
+  kind: OutreachSuppressionKind,
+  value: string,
+  reason: string,
+  createdAt: number,
+): Promise<void> {
+  const valueKey = outreachSuppressionValueKey(kind, value);
+  const identity = accountKey && valueKey
+    ? {
+        accountKey,
+        tenantDomainKey: OUTREACH_ACCOUNT_TENANT_SCOPE_KEY,
+        valueKey,
+      }
+    : null;
   if (!identity) return;
   const existing = await ctx.db
     .query("outreach_sender_suppression_tombstones")

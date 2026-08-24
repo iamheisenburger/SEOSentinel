@@ -92,6 +92,7 @@ import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
 import {
   materializeOutreachSuppressionTombstone,
+  materializeOutreachSuppressionTombstoneForAccount,
   outreachSuppressionTombstoneIdentity,
   type OutreachSuppressionKind,
 } from "./lib/outreachSuppression.ts";
@@ -102,9 +103,9 @@ import {
   outreachMailboxKey,
   readDurableContactReceipt,
   readDurablePacingReceipt,
-  recordDurableContactReceipt,
-  recordDurablePacingReceipt,
-  releaseDurableContactClaim,
+  recordDurableContactReceiptForAccount,
+  recordDurablePacingReceiptForAccount,
+  releaseDurableContactClaimForAccount,
   reserveDurableContactClaim,
 } from "./lib/outreachDurability.ts";
 
@@ -295,6 +296,52 @@ async function assertNoActiveDelivery(
   );
   if (sending || unverified || activeCanary) {
     throw new Error("The inbox cannot change while outreach delivery is in progress");
+  }
+}
+
+/** Additive credential-owner rollout: an inbox without an owner key may be
+ * replaced only by a fresh OAuth grant. Never wait forever on an old
+ * delivery_unverified row, but do wait for a provider call whose lease is
+ * still live. Once its lease expires, quarantine it before replacing the
+ * credential so a late callback cannot mutate the new owner's mailbox state. */
+async function quarantineLegacyUnownedDeliveryBeforeReconnect(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  inboxId: Id<"outreach_inboxes">,
+): Promise<void> {
+  const now = Date.now();
+  const [sending, canaries] = await Promise.all([
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "sending")
+      )
+      .first(),
+    ctx.db
+      .query("outreach_inbound_relay_canaries")
+      .withIndex("by_inbox", (q) => q.eq("inboxId", inboxId))
+      .take(2),
+  ]);
+  if (
+    (sending && (sending.deliveryLeaseExpiresAt ?? 0) > now) ||
+    canaries.some(
+      (canary) =>
+        canary.deliveryStatus === "claimed" &&
+        (canary.deliveryLeaseExpiresAt ?? 0) > now,
+    )
+  ) {
+    throw new Error(
+      "The legacy inbox cannot be replaced while a provider attempt is still in flight",
+    );
+  }
+  if (sending) {
+    await ctx.db.patch(sending._id, {
+      status: "delivery_unverified",
+      deliveryLeaseExpiredAt: now,
+      failureReason:
+        "The legacy delivery lease expired before credential-owner migration. It remains quarantined and will not be retried.",
+      updatedAt: now,
+    });
   }
 }
 
@@ -580,7 +627,32 @@ export const connectGmailInboxInternal = internalMutation({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
-    await assertNoActiveDelivery(ctx, args.siteId);
+    const credentialOwnerAccountKey = accountDeletionKey(site.userId!);
+    const existing = await inboxForSite(ctx, args.siteId);
+    const existingOwnerMatches = Boolean(
+      existing?.credentialOwnerAccountKey === credentialOwnerAccountKey,
+    );
+    if (
+      existing?.credentialOwnerAccountKey &&
+      !existingOwnerMatches
+    ) {
+      // Site ownership transfer is not a supported outreach operation. A
+      // credential, profile and delayed settlement remain bound to the
+      // account that connected/claimed them; support must create a clean
+      // tenant rather than silently transferring Gmail authority.
+      throw new Error(
+        "This site's Gmail credential belongs to another account and cannot be transferred",
+      );
+    }
+    if (existing && !existing.credentialOwnerAccountKey) {
+      await quarantineLegacyUnownedDeliveryBeforeReconnect(
+        ctx,
+        args.siteId,
+        existing._id,
+      );
+    } else {
+      await assertNoActiveDelivery(ctx, args.siteId);
+    }
     const now = Date.now();
     if (
       args.oauthAccessToken.length < 10 ||
@@ -627,8 +699,6 @@ export const connectGmailInboxInternal = internalMutation({
       );
     }
 
-    const existing = await inboxForSite(ctx, args.siteId);
-    const credentialOwnerAccountKey = accountDeletionKey(site.userId!);
     let durablePacing = await readDurablePacingReceipt(
       ctx,
       site,
@@ -651,7 +721,7 @@ export const connectGmailInboxInternal = internalMutation({
       );
     }
     const existingRefreshHasLegacyRead = Boolean(
-      existing?.oauthScopes?.split(/\s+/).includes(
+      existingOwnerMatches && existing?.oauthScopes?.split(/\s+/).includes(
         "https://www.googleapis.com/auth/gmail.readonly",
       ),
     );
@@ -666,7 +736,9 @@ export const connectGmailInboxInternal = internalMutation({
     // historical mailbox digest may restore warm-up, but can never authorize
     // using another address's refresh token.
     const reconnectsCurrentMailbox = Boolean(
-      existing && existing.fromEmail.trim().toLowerCase() === fromEmail,
+      existingOwnerMatches &&
+        existing &&
+        existing.fromEmail.trim().toLowerCase() === fromEmail,
     );
     const restoresSameMailboxWarmup = Boolean(
       reconnectsCurrentMailbox ||
@@ -675,6 +747,7 @@ export const connectGmailInboxInternal = internalMutation({
     const preservesSenderReputation = Boolean(
       durablePacing ||
         (existing &&
+          existingOwnerMatches &&
           normalizeDomain(existing.senderDomain ?? "") === emailDomain),
     );
     if (
@@ -695,9 +768,13 @@ export const connectGmailInboxInternal = internalMutation({
     const dnsReady = args.spfVerified && args.dkimVerified && args.dmarcVerified;
     const reconnectProfile = resolveGmailReconnectProfile({
       requestedFromName: args.fromName,
-      existingFromName: existing?.fromName,
-      physicalMailingAddress: existing?.physicalMailingAddress,
-      complianceConfirmedAt: existing?.complianceConfirmedAt,
+      existingFromName: existingOwnerMatches ? existing?.fromName : undefined,
+      physicalMailingAddress: existingOwnerMatches
+        ? existing?.physicalMailingAddress
+        : undefined,
+      complianceConfirmedAt: existingOwnerMatches
+        ? existing?.complianceConfirmedAt
+        : undefined,
     });
     const complianceReady = reconnectProfile.complianceReady;
     const ready = dnsReady && complianceReady;
@@ -717,7 +794,7 @@ export const connectGmailInboxInternal = internalMutation({
           : durablePacing?.warmupStartedAt
         : undefined,
       existingSentToday: Math.max(
-        existing?.sentTodayDay === utcDayKey(now)
+        existingOwnerMatches && existing?.sentTodayDay === utcDayKey(now)
           ? existing.sentToday ?? 0
           : 0,
         durablePacing?.sentTodayDay === utcDayKey(now)
@@ -726,7 +803,7 @@ export const connectGmailInboxInternal = internalMutation({
       ),
       existingSentTodayDay: utcDayKey(now),
       existingLastSentAt: Math.max(
-        existing?.lastSentAt ?? 0,
+        existingOwnerMatches ? existing?.lastSentAt ?? 0 : 0,
         durablePacing?.lastSentAt ?? 0,
       ) || undefined,
     });
@@ -734,11 +811,20 @@ export const connectGmailInboxInternal = internalMutation({
       provider: "gmail",
       fromEmail,
       fromName: reconnectProfile.fromName,
+      replyToEmail: existingOwnerMatches ? existing?.replyToEmail : undefined,
+      physicalMailingAddress: existingOwnerMatches
+        ? existing?.physicalMailingAddress
+        : undefined,
+      complianceConfirmedAt: existingOwnerMatches
+        ? existing?.complianceConfirmedAt
+        : undefined,
       oauthAccessToken: args.oauthAccessToken,
       oauthRefreshToken: args.oauthRefreshToken ??
         (reconnectsCurrentMailbox ? existing?.oauthRefreshToken : undefined),
       oauthExpiresAt: args.oauthExpiresAt,
       oauthScopes: args.oauthScopes,
+      smtpPassword: undefined,
+      apiKey: undefined,
       credentialOwnerAccountKey,
       senderDomain: emailDomain,
       dkimSelector: args.dkimSelector,
@@ -752,7 +838,12 @@ export const connectGmailInboxInternal = internalMutation({
       mode: "approval",
       dailySendCap: Math.max(
         1,
-        Math.min(existing?.dailySendCap ?? DEFAULT_DAILY_SEND_CAP, DEFAULT_DAILY_SEND_CAP),
+        Math.min(
+          existingOwnerMatches
+            ? existing?.dailySendCap ?? DEFAULT_DAILY_SEND_CAP
+            : DEFAULT_DAILY_SEND_CAP,
+          DEFAULT_DAILY_SEND_CAP,
+        ),
       ),
       ...pacingState,
       lastError: !dnsReady
@@ -761,6 +852,11 @@ export const connectGmailInboxInternal = internalMutation({
           ? "Add the sender name and physical mailing address before outreach can send."
           : undefined,
       inboundLastError: undefined,
+      inboundSyncPageToken: undefined,
+      inboundSyncWindowStartedAt: undefined,
+      inboundSyncLeaseId: undefined,
+      inboundSyncOwnerAccountKey: undefined,
+      inboundSyncLeaseExpiresAt: undefined,
       inboundRelayDsnRoutingVerifiedAt: undefined,
       inboundRelayDsnRoutingConfigurationVersion: undefined,
       inboundRelayDsnRoutingRolloutEpoch: undefined,
@@ -772,6 +868,16 @@ export const connectGmailInboxInternal = internalMutation({
       inboundRelayDsnRoutingTargetHash: undefined,
       inboundRelayDsnRoutingTargetVersion: undefined,
       inboundRelayDsnRoutingTargetGeneration: dsnRoutingTargetGeneration,
+      autonomyConsentVersion: undefined,
+      autonomyConsentPolicyHash: undefined,
+      autonomyConsentAcceptedAt: undefined,
+      autonomyConsentAcceptedBy: undefined,
+      autonomyConsentInboxConfigurationVersion: undefined,
+      autonomyLastEnabledAt: undefined,
+      autonomyDisabledAt: undefined,
+      autonomyReconciliationStatus: undefined,
+      autonomyReconciliationGeneration: undefined,
+      autonomyReconciliationStage: undefined,
       updatedAt: now,
     };
 
@@ -1355,18 +1461,26 @@ export const migrateOutreachDurabilityInternal = internalMutation({
           : undefined
       );
       if (!acceptedAt) continue;
-      await recordDurableContactReceipt(
+      const settlementAccountKey =
+        message.deliveryOwnerAccountKey ?? accountKey;
+      if (!message.deliveryOwnerAccountKey) {
+        await ctx.db.patch(message._id, {
+          deliveryOwnerAccountKey: settlementAccountKey,
+          updatedAt: Math.max(message.updatedAt, acceptedAt),
+        });
+      }
+      await recordDurableContactReceiptForAccount(
         ctx,
-        migrationSite,
+        settlementAccountKey,
         message.toDomain,
         acceptedAt,
       );
       if (message.inboxId) {
         const inbox = await ctx.db.get(message.inboxId);
         if (inbox?.siteId === migrationSite._id) {
-          await recordDurablePacingReceipt(
+          await recordDurablePacingReceiptForAccount(
             ctx,
-            migrationSite,
+            settlementAccountKey,
             inbox,
             acceptedAt,
             false,
@@ -1637,6 +1751,7 @@ export const disconnectInbox = mutation({
       inboundSyncPageToken: undefined,
       inboundSyncWindowStartedAt: undefined,
       inboundSyncLeaseId: undefined,
+      inboundSyncOwnerAccountKey: undefined,
       inboundSyncLeaseExpiresAt: undefined,
       inboundRelayDsnRoutingVerifiedAt: undefined,
       inboundRelayDsnRoutingConfigurationVersion: undefined,
@@ -1720,6 +1835,50 @@ export const getGmailReconnectReadinessInternal = internalQuery({
       return { ready: false, reason: "Tenant is unavailable." };
     }
     const inbox = await inboxForSite(ctx, siteId);
+    const ownerKey = accountDeletionKey(site.userId!);
+    if (
+      inbox?.credentialOwnerAccountKey &&
+      inbox.credentialOwnerAccountKey !== ownerKey
+    ) {
+      return {
+        ready: false,
+        reason:
+          "This site's Gmail credential belongs to another account and cannot be transferred.",
+      };
+    }
+    if (inbox && !inbox.credentialOwnerAccountKey) {
+      // Additive rollout rows are never trusted or reused. A fresh send-only
+      // OAuth grant may replace the row after any live provider lease drains;
+      // old readonly/unverified state cannot strand reconnect indefinitely.
+      const [sending, canaries] = await Promise.all([
+        ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", "sending")
+          )
+          .first(),
+        ctx.db
+          .query("outreach_inbound_relay_canaries")
+          .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
+          .take(2),
+      ]);
+      const timestamp = Date.now();
+      if (
+        (sending && (sending.deliveryLeaseExpiresAt ?? 0) > timestamp) ||
+        canaries.some(
+          (canary) =>
+            canary.deliveryStatus === "claimed" &&
+            (canary.deliveryLeaseExpiresAt ?? 0) > timestamp,
+        )
+      ) {
+        return {
+          ready: false,
+          reason:
+            "The legacy inbox has a provider attempt still in flight. Reconnect after its bounded lease settles.",
+        };
+      }
+      return { ready: true, freshGrantRequired: true };
+    }
     if (
       !inbox ||
       !inbox.oauthScopes?.split(/\s+/).includes(
@@ -2995,6 +3154,7 @@ export const claimApprovedDelivery = internalMutation({
     });
     await ctx.db.patch(message._id, {
       status: "sending",
+      deliveryOwnerAccountKey: inbox.credentialOwnerAccountKey,
       deliveryAttemptId: attemptId,
       deliveryClaimedAt: now,
       deliveryLeaseExpiresAt: now + OUTREACH_DELIVERY_LEASE_MS,
@@ -3204,42 +3364,64 @@ export const retireInvalidApprovedDeliveryEvidenceInternal = internalMutation({
   },
 });
 
+function immutableDeliveryOwnerAccountKey(
+  message: Doc<"outreach_messages">,
+  inbox: Doc<"outreach_inboxes"> | null,
+): string | undefined {
+  return message.deliveryOwnerAccountKey ?? inbox?.credentialOwnerAccountKey;
+}
+
 async function settleAcceptedDeliveryCounter(
   ctx: MutationCtx,
   message: Doc<"outreach_messages">,
   siteId: Id<"sites">,
   deliveredAt: number,
-): Promise<void> {
-  if (!message.inboxId) return;
+): Promise<{ accountKey?: string; ownsCurrentSite: boolean }> {
+  if (!message.inboxId) return { ownsCurrentSite: false };
   const inbox = await ctx.db.get(message.inboxId);
-  if (!inbox || inbox.siteId !== siteId) return;
+  if (!inbox || inbox.siteId !== siteId) return { ownsCurrentSite: false };
   const site = await ctx.db.get(siteId);
-  if (!site) return;
+  if (!site) return { ownsCurrentSite: false };
+  const settlementAccountKey = immutableDeliveryOwnerAccountKey(message, inbox);
+  if (!settlementAccountKey) return { ownsCurrentSite: false };
+  const ownsCurrentSite = Boolean(
+    site.userId &&
+      settlementAccountKey === accountDeletionKey(site.userId) &&
+      inbox.credentialOwnerAccountKey === settlementAccountKey,
+  );
   const deliveredDay = utcDayKey(deliveredAt);
   const existingDay = inbox.sentTodayDay ?? "";
   const sameDay = existingDay === deliveredDay;
   const newerDay = deliveredDay > existingDay;
-  await ctx.db.patch(inbox._id, {
-    sentToday: sameDay
-      ? (inbox.sentToday ?? 0) + 1
-      : newerDay
-        ? 1
-        : inbox.sentToday ?? 0,
-    sentTodayDay: newerDay ? deliveredDay : existingDay || deliveredDay,
-    lastSentAt: Math.max(inbox.lastSentAt ?? 0, deliveredAt),
-    status: inbox.status === "connected" ? "warming" : inbox.status,
-    updatedAt: Math.max(inbox.updatedAt ?? 0, deliveredAt),
-  });
+  if (ownsCurrentSite) {
+    await ctx.db.patch(inbox._id, {
+      sentToday: sameDay
+        ? (inbox.sentToday ?? 0) + 1
+        : newerDay
+          ? 1
+          : inbox.sentToday ?? 0,
+      sentTodayDay: newerDay ? deliveredDay : existingDay || deliveredDay,
+      lastSentAt: Math.max(inbox.lastSentAt ?? 0, deliveredAt),
+      status: inbox.status === "connected" ? "warming" : inbox.status,
+      updatedAt: Math.max(inbox.updatedAt ?? 0, deliveredAt),
+    });
+  }
   await Promise.all([
-    recordDurableContactReceipt(
+    recordDurableContactReceiptForAccount(
       ctx,
-      site,
+      settlementAccountKey,
       message.toDomain,
       deliveredAt,
       message.deliveryAttemptId,
     ),
-    recordDurablePacingReceipt(ctx, site, inbox, deliveredAt),
+    recordDurablePacingReceiptForAccount(
+      ctx,
+      settlementAccountKey,
+      inbox,
+      deliveredAt,
+    ),
   ]);
+  return { accountKey: settlementAccountKey, ownsCurrentSite };
 }
 
 export const completeDeliveryAttempt = internalMutation({
@@ -3318,6 +3500,29 @@ export const completeDeliveryAttempt = internalMutation({
       });
       return { recorded: false, reason: "Gmail receipt was missing or invalid." };
     }
+    // The daily counter and its day key move together so a stale count can
+    // never authorise tomorrow's sends.
+    const settlement = await settleAcceptedDeliveryCounter(
+      ctx,
+      message,
+      siteId,
+      now,
+    );
+    if (!settlement.ownsCurrentSite) {
+      await ctx.db.patch(messageId, {
+        status: "delivery_unverified",
+        // The provider receipt proved acceptance and the durable pacing/contact
+        // settlement above has already been counted. Preserve only the
+        // chronology (never provider identifiers) so a later relay event
+        // cannot count the same accepted send a second time.
+        sentAt: now,
+        deliveryLeaseExpiredAt: now,
+        failureReason:
+          "Gmail accepted this attempt after the site owner changed. The original account's durable cooldown was preserved, but provider identifiers were not exposed to the new owner.",
+        updatedAt: now,
+      });
+      return { recorded: true, ownerChanged: true };
+    }
     await ctx.db.patch(messageId, {
       status: "sent",
       sentAt: now,
@@ -3325,10 +3530,6 @@ export const completeDeliveryAttempt = internalMutation({
       providerThreadId: safeProviderThreadId || undefined,
       updatedAt: now,
     });
-
-    // The daily counter and its day key move together so a stale count can
-    // never authorise tomorrow's sends.
-    await settleAcceptedDeliveryCounter(ctx, message, siteId, now);
 
     const opportunity = await ctx.db.get(message.opportunityId);
     const settlementLifecycle = outreachDeliverySettlementDecision({
@@ -3345,6 +3546,7 @@ export const completeDeliveryAttempt = internalMutation({
         opportunity?.siteId === siteId ? opportunity.status : undefined,
     });
     if (
+      settlement.ownsCurrentSite &&
       opportunity &&
       opportunity.siteId === siteId &&
       settlementLifecycle.shouldMarkContacted
@@ -3356,13 +3558,20 @@ export const completeDeliveryAttempt = internalMutation({
       });
     }
 
-    const contact = await ctx.db
-      .query("outreach_contacts")
-      .withIndex("by_site_email", (q) =>
-        q.eq("siteId", siteId).eq("email", message.toEmail),
-      )
-      .unique();
-    if (contact) await ctx.db.patch(contact._id, { lastContactedAt: now, updatedAt: now });
+    if (settlement.ownsCurrentSite) {
+      const contact = await ctx.db
+        .query("outreach_contacts")
+        .withIndex("by_site_email", (q) =>
+          q.eq("siteId", siteId).eq("email", message.toEmail),
+        )
+        .unique();
+      if (contact) {
+        await ctx.db.patch(contact._id, {
+          lastContactedAt: now,
+          updatedAt: now,
+        });
+      }
+    }
 
     return { recorded: true };
   },
@@ -3391,20 +3600,38 @@ export const failDeliveryAttempt = internalMutation({
       deliveryLeaseExpiredAt: unverified ? now : undefined,
       updatedAt: now,
     });
-    const site = await ctx.db.get(siteId);
-    if (site) {
+    const [site, inbox] = await Promise.all([
+      ctx.db.get(siteId),
+      message.inboxId ? ctx.db.get(message.inboxId) : null,
+    ]);
+    const settlementAccountKey = immutableDeliveryOwnerAccountKey(
+      message,
+      inbox && inbox.siteId === siteId ? inbox : null,
+    );
+    const ownsCurrentSite = Boolean(
+      site?.userId &&
+        settlementAccountKey === accountDeletionKey(site.userId),
+    );
+    if (!ownsCurrentSite) {
+      await ctx.db.patch(messageId, {
+        failureReason:
+          "The original account's Gmail attempt settled after the site owner changed; provider details were not exposed to the new owner.",
+        updatedAt: now,
+      });
+    }
+    if (settlementAccountKey) {
       if (bounced) {
-        await recordDurableContactReceipt(
+        await recordDurableContactReceiptForAccount(
           ctx,
-          site,
+          settlementAccountKey,
           message.toDomain,
           message.deliveryClaimedAt ?? now,
           attemptId,
         );
       } else if (!unverified) {
-        await releaseDurableContactClaim(
+        await releaseDurableContactClaimForAccount(
           ctx,
-          site,
+          settlementAccountKey,
           message.toDomain,
           attemptId,
           now,
@@ -3413,7 +3640,18 @@ export const failDeliveryAttempt = internalMutation({
     }
     // A bounce is an address that must never be tried again.
     if (bounced) {
-      await addSuppression(ctx, siteId, "email", message.toEmail, "bounce");
+      if (ownsCurrentSite) {
+        await addSuppression(ctx, siteId, "email", message.toEmail, "bounce");
+      } else if (settlementAccountKey) {
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          settlementAccountKey,
+          "email",
+          message.toEmail,
+          "bounce",
+          now,
+        );
+      }
     }
     return { recorded: true };
   },
@@ -3438,6 +3676,22 @@ export const resolveUnverifiedDelivery = mutation({
     if (!message || message.siteId !== siteId) {
       throw new Error("Message not found for site");
     }
+    const settlementInbox = message.inboxId
+      ? await ctx.db.get(message.inboxId)
+      : null;
+    const settlementAccountKey = immutableDeliveryOwnerAccountKey(
+      message,
+      settlementInbox?.siteId === siteId ? settlementInbox : null,
+    );
+    if (
+      !site.userId ||
+      !settlementAccountKey ||
+      settlementAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      throw new Error(
+        "Only the account that claimed this Gmail delivery may review its outcome",
+      );
+    }
     if (message.status !== "delivery_unverified") {
       throw new Error("Only an unverified delivery outcome can be reviewed");
     }
@@ -3452,9 +3706,9 @@ export const resolveUnverifiedDelivery = mutation({
         updatedAt: now,
       });
       if (message.deliveryAttemptId) {
-        await releaseDurableContactClaim(
+        await releaseDurableContactClaimForAccount(
           ctx,
-          site,
+          settlementAccountKey,
           message.toDomain,
           message.deliveryAttemptId,
           now,
@@ -3477,7 +3731,17 @@ export const resolveUnverifiedDelivery = mutation({
       updatedAt: now,
     });
     if (!previouslyCountedAcceptedReceipt) {
-      await settleAcceptedDeliveryCounter(ctx, message, siteId, now);
+      const settlement = await settleAcceptedDeliveryCounter(
+        ctx,
+        message,
+        siteId,
+        now,
+      );
+      if (!settlement.ownsCurrentSite) {
+        throw new Error(
+          "The delivery owner changed before the review could be recorded",
+        );
+      }
     }
     const opportunity = await ctx.db.get(message.opportunityId);
     const settlementLifecycle = outreachDeliverySettlementDecision({
@@ -4040,11 +4304,16 @@ export const getInboundRelayCandidate = internalQuery({
       ctx.db.get(message.siteId),
       message.inboxId ? ctx.db.get(message.inboxId) : null,
     ]);
+    const settlementAccountKey = immutableDeliveryOwnerAccountKey(
+      message,
+      inbox && inbox.siteId === message.siteId ? inbox : null,
+    );
     if (
       !site ||
       !(await relaySettlementAuthorized(ctx, site, settlementBoundaryAt)) ||
       !inbox ||
       inbox.siteId !== message.siteId ||
+      !settlementAccountKey ||
       message.inboundRelayAliasDomain !== configuredDomain ||
       message.inboundRelayInboxConfigurationVersion === undefined ||
       message.inboundRelayRolloutEpoch === undefined ||
@@ -4101,6 +4370,7 @@ export const getInboundRelayCandidate = internalQuery({
         inboxConfigurationVersion:
           message.inboundRelayInboxConfigurationVersion,
         senderDomain: message.inboundRelaySenderDomain,
+        deliveryOwnerAccountKey: settlementAccountKey,
       };
     }
     return {
@@ -4127,6 +4397,7 @@ export const getInboundRelayCandidate = internalQuery({
       inboxConfigurationVersion:
         message.inboundRelayInboxConfigurationVersion,
       senderDomain: message.inboundRelaySenderDomain,
+      deliveryOwnerAccountKey: settlementAccountKey,
     };
   },
 });
@@ -4155,6 +4426,7 @@ export const recordInboundRelayReceipt = internalMutation({
     dsnRoutingTargetHash: v.string(),
     dsnRoutingTargetVersion: v.number(),
     dsnRoutingTargetGeneration: v.number(),
+    deliveryOwnerAccountKey: v.string(),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -4177,6 +4449,9 @@ export const recordInboundRelayReceipt = internalMutation({
     const configuredDomain = normalizeInboundRelayDomain(
       process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
     );
+    const settlementAccountKey = message
+      ? immutableDeliveryOwnerAccountKey(message, inbox)
+      : undefined;
     if (
       !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
       !configuredDomain ||
@@ -4192,6 +4467,9 @@ export const recordInboundRelayReceipt = internalMutation({
       !message ||
       message.siteId !== args.siteId ||
       message.inboxId !== args.inboxId ||
+      !settlementAccountKey ||
+      args.deliveryOwnerAccountKey !== settlementAccountKey ||
+      !/^[a-f0-9]{64}$/.test(args.deliveryOwnerAccountKey) ||
       ![
         "delivery_unverified",
         "sent",
@@ -4293,9 +4571,14 @@ export const recordInboundRelayReceipt = internalMutation({
       "sending",
       "delivery_unverified",
     ].includes(message.status);
-    if (inboundProvesAmbiguousDelivery) {
+    const settlementOwnsCurrentSite = Boolean(
+      site.userId &&
+        settlementAccountKey === accountDeletionKey(site.userId) &&
+        inbox.credentialOwnerAccountKey === settlementAccountKey,
+    );
+    if (inboundProvesAmbiguousDelivery && !message.sentAt) {
       const deliveredAt = message.deliveryClaimedAt ?? args.receivedAt;
-      await settleAcceptedDeliveryCounter(
+      const settlement = await settleAcceptedDeliveryCounter(
         ctx,
         message,
         args.siteId,
@@ -4320,6 +4603,7 @@ export const recordInboundRelayReceipt = internalMutation({
             : undefined,
       });
       if (
+        settlement.ownsCurrentSite &&
         opportunity &&
         opportunity.siteId === args.siteId &&
         settlementLifecycle.shouldMarkContacted
@@ -4330,27 +4614,43 @@ export const recordInboundRelayReceipt = internalMutation({
           updatedAt: now,
         });
       }
-      const contact = await ctx.db
-        .query("outreach_contacts")
-        .withIndex("by_site_email", (q) =>
-          q.eq("siteId", args.siteId).eq("email", message.toEmail)
-        )
-        .unique();
-      if (contact) {
-        await ctx.db.patch(contact._id, {
-          lastContactedAt: deliveredAt,
+      if (settlement.ownsCurrentSite) {
+        const contact = await ctx.db
+          .query("outreach_contacts")
+          .withIndex("by_site_email", (q) =>
+            q.eq("siteId", args.siteId).eq("email", message.toEmail)
+          )
+          .unique();
+        if (contact) {
+          await ctx.db.patch(contact._id, {
+            lastContactedAt: deliveredAt,
+            updatedAt: now,
+          });
+        }
+        await ctx.db.patch(message._id, {
+          status: "delivery_reviewed_sent",
+          sentAt: deliveredAt,
+          deliveryReviewedAt: now,
+          deliveryReviewResolution: "inbound_relay_proof",
+          failureReason:
+            "An authenticated inbound relay receipt proved delivery after Gmail's direct receipt was ambiguous.",
+          updatedAt: now,
+        });
+      } else {
+        // The authenticated receipt proves the original account's send, but
+        // the current site owner must not receive provider/message details.
+        // sentAt is an idempotency marker for the already-recorded durable
+        // pacing/contact settlement; the quarantined status remains visible
+        // only to the unsupported transferred site lineage.
+        await ctx.db.patch(message._id, {
+          sentAt: deliveredAt,
+          deliveryReviewedAt: now,
+          deliveryReviewResolution: "inbound_relay_proof",
+          failureReason:
+            "An authenticated inbound relay receipt proved the original account's delivery after the site owner changed.",
           updatedAt: now,
         });
       }
-      await ctx.db.patch(message._id, {
-        status: "delivery_reviewed_sent",
-        sentAt: deliveredAt,
-        deliveryReviewedAt: now,
-        deliveryReviewResolution: "inbound_relay_proof",
-        failureReason:
-          "An authenticated inbound relay receipt proved delivery after Gmail's direct receipt was ambiguous.",
-        updatedAt: now,
-      });
     }
 
     {
@@ -4365,35 +4665,67 @@ export const recordInboundRelayReceipt = internalMutation({
         nextAt: args.receivedAt,
       });
       if (args.kind === "unsubscribe") {
-        await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
-        await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
+        if (settlementOwnsCurrentSite) {
+          await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+          await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
+        } else {
+          await materializeOutreachSuppressionTombstoneForAccount(
+            ctx,
+            settlementAccountKey,
+            "domain",
+            message.toDomain,
+            "unsubscribe",
+            args.receivedAt,
+          );
+          await materializeOutreachSuppressionTombstoneForAccount(
+            ctx,
+            settlementAccountKey,
+            "email",
+            message.toEmail,
+            "unsubscribe",
+            args.receivedAt,
+          );
+        }
       } else if (args.kind === "bounce") {
-        await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
+        if (settlementOwnsCurrentSite) {
+          await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
+        } else {
+          await materializeOutreachSuppressionTombstoneForAccount(
+            ctx,
+            settlementAccountKey,
+            "email",
+            message.toEmail,
+            "bounce",
+            args.receivedAt,
+          );
+        }
       }
-      await cancelQueuedThread(
-        ctx,
-        args.siteId,
-        message.threadKey,
-        message._id,
-        args.kind,
-      );
-      await ctx.db.patch(message._id, {
-        inboundCheckedAt: now,
-        ...(shouldPromote
-          ? {
-              status: args.kind === "bounce" ? "bounced" : "replied",
-              repliedAt:
-                args.kind === "bounce" ? message.repliedAt : args.receivedAt,
-              bouncedAt:
-                args.kind === "bounce" ? args.receivedAt : message.bouncedAt,
-              inboundReceiptHash: args.evidenceHash,
-              inboundReceiptKind: args.kind,
-              inboundReceiptAt: args.receivedAt,
-              inboundReceiptFrom: normalizedFrom,
-            }
-          : {}),
-        updatedAt: now,
-      });
+      if (settlementOwnsCurrentSite) {
+        await cancelQueuedThread(
+          ctx,
+          args.siteId,
+          message.threadKey,
+          message._id,
+          args.kind,
+        );
+        await ctx.db.patch(message._id, {
+          inboundCheckedAt: now,
+          ...(shouldPromote
+            ? {
+                status: args.kind === "bounce" ? "bounced" : "replied",
+                repliedAt:
+                  args.kind === "bounce" ? message.repliedAt : args.receivedAt,
+                bouncedAt:
+                  args.kind === "bounce" ? args.receivedAt : message.bouncedAt,
+                inboundReceiptHash: args.evidenceHash,
+                inboundReceiptKind: args.kind,
+                inboundReceiptAt: args.receivedAt,
+                inboundReceiptFrom: normalizedFrom,
+              }
+            : {}),
+          updatedAt: now,
+        });
+      }
     }
 
     await ctx.db.insert("outreach_inbound_relay_receipts", {
@@ -4482,6 +4814,7 @@ export const claimInboundSync = internalMutation({
         oauthScopes: undefined,
         verifiedAt: undefined,
         inboundSyncLeaseId: undefined,
+        inboundSyncOwnerAccountKey: undefined,
         inboundSyncLeaseExpiresAt: undefined,
         configurationVersion: (inbox.configurationVersion ?? 0) + 1,
         lastError:
@@ -4548,6 +4881,14 @@ export const claimInboundSync = internalMutation({
         toDomain: message.toDomain,
         sentAt: message.sentAt!,
       }));
+    for (const message of missingThreadRows) {
+      if (!message.deliveryOwnerAccountKey) {
+        await ctx.db.patch(message._id, {
+          deliveryOwnerAccountKey: inbox.credentialOwnerAccountKey,
+          updatedAt: Math.max(message.updatedAt, now),
+        });
+      }
+    }
     const syncWindowStartedAt = inbox.inboundSyncWindowStartedAt ?? now;
     const searchAfter = Math.max(
       now - OUTREACH_INBOUND_LOOKBACK_MS,
@@ -4556,6 +4897,7 @@ export const claimInboundSync = internalMutation({
     );
     await ctx.db.patch(inbox._id, {
       inboundSyncLeaseId: attemptId,
+      inboundSyncOwnerAccountKey: inbox.credentialOwnerAccountKey,
       inboundSyncLeaseExpiresAt: now + OUTREACH_INBOUND_LEASE_MS,
       inboundSyncWindowStartedAt: syncWindowStartedAt,
       inboundLastError: undefined,
@@ -4601,6 +4943,7 @@ export const bindInboundProviderThread = internalMutation({
       !inbox ||
       inbox.siteId !== args.siteId ||
       inbox.inboundSyncLeaseId !== args.attemptId ||
+      !inbox.inboundSyncOwnerAccountKey ||
       (inbox.inboundSyncLeaseExpiresAt ?? 0) <= Date.now() ||
       (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion
     ) {
@@ -4610,6 +4953,9 @@ export const bindInboundProviderThread = internalMutation({
       !message ||
       message.siteId !== args.siteId ||
       message.inboxId !== args.inboxId ||
+      message.deliveryOwnerAccountKey !== inbox.inboundSyncOwnerAccountKey ||
+      !site?.userId ||
+      accountDeletionKey(site.userId) !== inbox.inboundSyncOwnerAccountKey ||
       message.inboundRelayAliasHash !== undefined ||
       message.providerMessageId !== args.providerMessageId ||
       !validProviderReceiptId(args.providerThreadId)
@@ -4642,6 +4988,7 @@ export const getInboundCandidatesForEvidence = internalQuery({
       !inbox ||
       inbox.siteId !== args.siteId ||
       inbox.inboundSyncLeaseId !== args.attemptId ||
+      !inbox.inboundSyncOwnerAccountKey ||
       (inbox.inboundSyncLeaseExpiresAt ?? 0) <= Date.now() ||
       (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion
     ) {
@@ -4664,6 +5011,13 @@ export const getInboundCandidatesForEvidence = internalQuery({
           Boolean(
             message.siteId === args.siteId &&
             message.inboxId === args.inboxId &&
+            (message.deliveryOwnerAccountKey ===
+                inbox.inboundSyncOwnerAccountKey ||
+              // Additive rollout rows predate immutable delivery ownership.
+              // The exact current-owner inbound lease may inspect them, but
+              // recordInboundReceipt must bind them atomically before any
+              // state transition.
+              message.deliveryOwnerAccountKey === undefined) &&
             !message.inboundRelayAliasHash &&
             ["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(
               message.status,
@@ -4716,6 +5070,7 @@ export const recordInboundReceipt = internalMutation({
       !inbox ||
       inbox.siteId !== args.siteId ||
       inbox.inboundSyncLeaseId !== args.attemptId ||
+      !inbox.inboundSyncOwnerAccountKey ||
       (inbox.inboundSyncLeaseExpiresAt ?? 0) <= now ||
       (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion
     ) {
@@ -4725,6 +5080,8 @@ export const recordInboundReceipt = internalMutation({
       !message ||
       message.siteId !== args.siteId ||
       message.inboxId !== args.inboxId ||
+      (message.deliveryOwnerAccountKey !== undefined &&
+        message.deliveryOwnerAccountKey !== inbox.inboundSyncOwnerAccountKey) ||
       message.inboundRelayAliasHash !== undefined ||
       !["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(message.status)
     ) {
@@ -4756,6 +5113,22 @@ export const recordInboundReceipt = internalMutation({
       return { recorded: false as const, reason: "already_recorded" as const };
     }
 
+    if (!message.deliveryOwnerAccountKey) {
+      if (
+        !site?.userId ||
+        accountDeletionKey(site.userId) !== inbox.inboundSyncOwnerAccountKey ||
+        inbox.credentialOwnerAccountKey !== inbox.inboundSyncOwnerAccountKey
+      ) {
+        throw new Error(
+          "A legacy inbound receipt could not establish immutable delivery ownership",
+        );
+      }
+      await ctx.db.patch(message._id, {
+        deliveryOwnerAccountKey: inbox.inboundSyncOwnerAccountKey,
+        updatedAt: Math.max(message.updatedAt, now),
+      });
+    }
+
     const shouldPromote = shouldPromoteOutreachInbound({
       existingKind: message.inboundReceiptKind as
         | "reply"
@@ -4766,39 +5139,76 @@ export const recordInboundReceipt = internalMutation({
       nextKind: args.kind,
       nextAt: args.receivedAt,
     });
-    if (args.kind === "unsubscribe") {
-      await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
-      await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
-    } else if (args.kind === "bounce") {
-      await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
-    }
-    await cancelQueuedThread(
-      ctx,
-      args.siteId,
-      message.threadKey,
-      message._id,
-      args.kind,
+    const settlementOwnsCurrentSite = Boolean(
+      site?.userId &&
+        accountDeletionKey(site.userId) === inbox.inboundSyncOwnerAccountKey &&
+        inbox.credentialOwnerAccountKey === inbox.inboundSyncOwnerAccountKey,
     );
+    if (args.kind === "unsubscribe") {
+      if (settlementOwnsCurrentSite) {
+        await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+        await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
+      } else {
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          inbox.inboundSyncOwnerAccountKey,
+          "domain",
+          message.toDomain,
+          "unsubscribe",
+          args.receivedAt,
+        );
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          inbox.inboundSyncOwnerAccountKey,
+          "email",
+          message.toEmail,
+          "unsubscribe",
+          args.receivedAt,
+        );
+      }
+    } else if (args.kind === "bounce") {
+      if (settlementOwnsCurrentSite) {
+        await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
+      } else {
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          inbox.inboundSyncOwnerAccountKey,
+          "email",
+          message.toEmail,
+          "bounce",
+          args.receivedAt,
+        );
+      }
+    }
+    if (settlementOwnsCurrentSite) {
+      await cancelQueuedThread(
+        ctx,
+        args.siteId,
+        message.threadKey,
+        message._id,
+        args.kind,
+      );
 
-    await ctx.db.patch(message._id, {
-      ...(message.providerThreadId || args.kind === "bounce"
-        ? {}
-        : { providerThreadId: args.providerThreadId }),
-      inboundCheckedAt: now,
-      ...(shouldPromote
-        ? {
-            status: args.kind === "bounce" ? "bounced" : "replied",
-            repliedAt: args.kind === "bounce" ? message.repliedAt : args.receivedAt,
-            bouncedAt: args.kind === "bounce" ? args.receivedAt : message.bouncedAt,
-            inboundReceiptProviderMessageId: args.providerMessageId,
-            inboundReceiptHash: args.evidenceHash,
-            inboundReceiptKind: args.kind,
-            inboundReceiptAt: args.receivedAt,
-            inboundReceiptFrom: fromEmail,
-          }
-        : {}),
-      updatedAt: now,
-    });
+      await ctx.db.patch(message._id, {
+        ...(message.providerThreadId || args.kind === "bounce"
+          ? {}
+          : { providerThreadId: args.providerThreadId }),
+        inboundCheckedAt: now,
+        ...(shouldPromote
+          ? {
+              status: args.kind === "bounce" ? "bounced" : "replied",
+              repliedAt: args.kind === "bounce" ? message.repliedAt : args.receivedAt,
+              bouncedAt: args.kind === "bounce" ? args.receivedAt : message.bouncedAt,
+              inboundReceiptProviderMessageId: args.providerMessageId,
+              inboundReceiptHash: args.evidenceHash,
+              inboundReceiptKind: args.kind,
+              inboundReceiptAt: args.receivedAt,
+              inboundReceiptFrom: fromEmail,
+            }
+          : {}),
+        updatedAt: now,
+      });
+    }
     return { recorded: true as const, kind: args.kind };
   },
 });
@@ -4844,6 +5254,7 @@ export const completeInboundSync = internalMutation({
         : args.syncWindowStartedAt,
       inboundLastCompletedAt: now,
       inboundSyncLeaseId: undefined,
+      inboundSyncOwnerAccountKey: undefined,
       inboundSyncLeaseExpiresAt: undefined,
       inboundLastError: undefined,
       updatedAt: now,
@@ -4885,6 +5296,7 @@ export const failInboundSync = internalMutation({
     ]);
     await ctx.db.patch(inbox._id, {
       inboundSyncLeaseId: undefined,
+      inboundSyncOwnerAccountKey: undefined,
       inboundSyncLeaseExpiresAt: undefined,
       inboundLastError: allowed.has(args.reason)
         ? args.reason
