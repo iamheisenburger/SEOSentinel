@@ -18,7 +18,7 @@ type TokenResponse = {
   scope?: string;
 };
 
-export async function handleOutreachGmailCallback(req: NextRequest) {
+async function handleOutreachGmailCallback(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   const storedState = req.cookies.get("outreach_gmail_oauth_state")?.value;
