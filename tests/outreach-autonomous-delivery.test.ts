@@ -203,6 +203,24 @@ test("legacy owner rollout reconnects only through a fresh scrubbed OAuth grant"
   assert.match(connect, /inboundSyncLeaseId: undefined/);
 });
 
+test("an ownerless legacy readonly drain is adopted, never overwritten by send-only OAuth", () => {
+  const connect = backend.slice(
+    backend.indexOf("export const connectGmailInboxInternal"),
+    backend.indexOf("export const setInboxComplianceProfile"),
+  );
+  const drainAdoption = connect.slice(
+    connect.indexOf("if (legacyInboundDrainPending)"),
+    connect.indexOf("let durablePacing"),
+  );
+  assert.match(drainAdoption, /existing!\.fromEmail\.trim\(\)\.toLowerCase\(\) !== fromEmail/);
+  assert.match(drainAdoption, /credentialOwnerAccountKey/);
+  assert.match(drainAdoption, /physicalMailingAddress: undefined/);
+  assert.match(drainAdoption, /complianceConfirmedAt: undefined/);
+  assert.match(drainAdoption, /legacyDrainAdopted: true/);
+  assert.doesNotMatch(drainAdoption, /oauthRefreshToken:/);
+  assert.doesNotMatch(drainAdoption, /oauthScopes:/);
+});
+
 test("delivery settlement remains bound to the immutable claiming account", () => {
   const claim = backend.slice(
     backend.indexOf("export const claimApprovedDelivery"),
@@ -263,6 +281,21 @@ test("manual and automatic delivery wait for account-wide legacy compliance migr
     claim,
     /if \(!\(await outreachDurabilityMigrationComplete\(ctx, site\)\)\)/,
   );
+  const migration = backend.slice(
+    backend.indexOf("export const migrateOutreachDurabilityInternal"),
+    backend.indexOf("export const reconcileAutonomousInitialMessagesInternal"),
+  );
+  assert.match(
+    migration,
+    /message\.deliveryOwnerAccountKey \?\?[\s\S]*messageInbox\.credentialOwnerAccountKey/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /message\.deliveryOwnerAccountKey \?\? accountKey/,
+  );
+  assert.match(migration, /legacy_delivery_owner_unresolved/);
+  assert.match(migration, /legacyDeliveryOwnerWasUnbound/);
+  assert.match(migration, /materializeOutreachSuppressionTombstoneForAccount/);
 });
 
 test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {

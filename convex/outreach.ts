@@ -699,6 +699,73 @@ export const connectGmailInboxInternal = internalMutation({
       );
     }
 
+    const legacyInboundDrainPending = Boolean(
+      existing &&
+        !existingOwnerMatches &&
+        existing.oauthScopes?.split(/\s+/).includes(
+          "https://www.googleapis.com/auth/gmail.readonly",
+        ) &&
+        (existing.oauthRefreshToken || existing.oauthAccessToken) &&
+        (await pendingLegacyUnboundMessageCount(ctx, existing._id)) > 0,
+    );
+    if (legacyInboundDrainPending) {
+      if (existing!.fromEmail.trim().toLowerCase() !== fromEmail) {
+        throw new Error(
+          "Reconnect the exact legacy mailbox before its bounded reply and STOP drain can continue",
+        );
+      }
+      // A fresh strict OAuth callback proves control of the same mailbox, but
+      // it must not overwrite the only credential that can still observe
+      // pre-relay replies, STOPs and bounces. Bind that legacy read lane to the
+      // now-proven account, scrub the prior profile/consent, and keep outbound
+      // delivery impossible until the bounded 90-day drain is empty. The
+      // owner can repeat the send-only OAuth connection after the drain.
+      await ctx.db.patch(existing!._id, {
+        credentialOwnerAccountKey,
+        fromName: undefined,
+        replyToEmail: undefined,
+        physicalMailingAddress: undefined,
+        complianceConfirmedAt: undefined,
+        verifiedAt: undefined,
+        status: "connected",
+        mode: "approval",
+        configurationVersion: (existing!.configurationVersion ?? 0) + 1,
+        autonomyConsentVersion: undefined,
+        autonomyConsentPolicyHash: undefined,
+        autonomyConsentAcceptedAt: undefined,
+        autonomyConsentAcceptedBy: undefined,
+        autonomyConsentInboxConfigurationVersion: undefined,
+        autonomyLastEnabledAt: undefined,
+        autonomyDisabledAt: undefined,
+        autonomyReconciliationStatus: undefined,
+        autonomyReconciliationGeneration: undefined,
+        autonomyReconciliationStage: undefined,
+        autonomyReconciliationCursor: undefined,
+        inboundRelayDsnRoutingVerifiedAt: undefined,
+        inboundRelayDsnRoutingConfigurationVersion: undefined,
+        inboundRelayDsnRoutingRolloutEpoch: undefined,
+        inboundRelayDsnRoutingSenderDomain: undefined,
+        inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+        inboundRelayDsnRoutingEvidenceHash: undefined,
+        inboundRelayDsnRoutingAdapterVersion: undefined,
+        inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+        inboundRelayDsnRoutingTargetHash: undefined,
+        inboundRelayDsnRoutingTargetVersion: undefined,
+        inboundRelayDsnRoutingTargetGeneration:
+          (existing!.inboundRelayDsnRoutingTargetGeneration ?? 1) + 1,
+        lastError:
+          "Legacy Gmail reply and STOP monitoring remains active. Send-only reconnect is available after its bounded 90-day drain completes.",
+        updatedAt: now,
+      });
+      return {
+        inboxId: existing!._id,
+        reconnected: false,
+        ready: false,
+        inboundReady: true,
+        legacyDrainAdopted: true,
+      };
+    }
+
     let durablePacing = await readDurablePacingReceipt(
       ctx,
       site,
@@ -878,6 +945,7 @@ export const connectGmailInboxInternal = internalMutation({
       autonomyReconciliationStatus: undefined,
       autonomyReconciliationGeneration: undefined,
       autonomyReconciliationStage: undefined,
+      autonomyReconciliationCursor: undefined,
       updatedAt: now,
     };
 
@@ -1425,15 +1493,52 @@ export const migrateOutreachDurabilityInternal = internalMutation({
     }
 
     if ((receipt.rowStage ?? "suppressions") === "suppressions") {
-      const page = await ctx.db
-        .query("outreach_suppressions")
-        .withIndex("by_site", (q) => q.eq("siteId", migrationSite._id))
-        .paginate({ cursor: receipt.rowCursor ?? null, numItems: 50 });
+      const [page, migrationInboxes] = await Promise.all([
+        ctx.db
+          .query("outreach_suppressions")
+          .withIndex("by_site", (q) => q.eq("siteId", migrationSite._id))
+          .paginate({ cursor: receipt.rowCursor ?? null, numItems: 50 }),
+        ctx.db
+          .query("outreach_inboxes")
+          .withIndex("by_site", (q) => q.eq("siteId", migrationSite._id))
+          .take(2),
+      ]);
+      const suppressionOwnerAccountKey = migrationInboxes.length === 1
+        ? migrationInboxes[0].credentialOwnerAccountKey
+        : undefined;
       for (const row of page.page) {
         if (row.kind === "domain" || row.kind === "email") {
-          await materializeOutreachSuppressionTombstone(
+          if (!suppressionOwnerAccountKey) {
+            const currentIdentity = migrationSite.userId
+              ? outreachSuppressionTombstoneIdentity({
+                  userId: migrationSite.userId,
+                  tenantDomain: migrationSite.domain,
+                  kind: row.kind,
+                  value: row.value,
+                })
+              : null;
+            const alreadyDurable = currentIdentity
+              ? await ctx.db
+                  .query("outreach_sender_suppression_tombstones")
+                  .withIndex("by_account_tenant_value", (q) =>
+                    q
+                      .eq("accountKey", currentIdentity.accountKey)
+                      .eq("tenantDomainKey", currentIdentity.tenantDomainKey)
+                      .eq("kind", row.kind)
+                      .eq("valueKey", currentIdentity.valueKey)
+                  )
+                  .first()
+              : null;
+            if (alreadyDurable) continue;
+            return {
+              completed: false,
+              processed: 0,
+              stopped: "legacy_suppression_owner_unresolved",
+            };
+          }
+          await materializeOutreachSuppressionTombstoneForAccount(
             ctx,
-            migrationSite,
+            suppressionOwnerAccountKey,
             row.kind,
             row.value,
             row.reason,
@@ -1461,8 +1566,25 @@ export const migrateOutreachDurabilityInternal = internalMutation({
           : undefined
       );
       if (!acceptedAt) continue;
+      const messageInbox = message.inboxId
+        ? await ctx.db.get(message.inboxId)
+        : null;
       const settlementAccountKey =
-        message.deliveryOwnerAccountKey ?? accountKey;
+        message.deliveryOwnerAccountKey ??
+        (messageInbox?.siteId === migrationSite._id
+          ? messageInbox.credentialOwnerAccountKey
+          : undefined);
+      if (!settlementAccountKey) {
+        // Never guess the owner from the account currently enumerating the
+        // site. A fresh same-mailbox OAuth proof can bind an additive legacy
+        // inbox, after which this exact cursor is safely resumed.
+        return {
+          completed: false,
+          processed: 0,
+          stopped: "legacy_delivery_owner_unresolved",
+        };
+      }
+      const legacyDeliveryOwnerWasUnbound = !message.deliveryOwnerAccountKey;
       if (!message.deliveryOwnerAccountKey) {
         await ctx.db.patch(message._id, {
           deliveryOwnerAccountKey: settlementAccountKey,
@@ -1475,17 +1597,37 @@ export const migrateOutreachDurabilityInternal = internalMutation({
         message.toDomain,
         acceptedAt,
       );
-      if (message.inboxId) {
-        const inbox = await ctx.db.get(message.inboxId);
-        if (inbox?.siteId === migrationSite._id) {
-          await recordDurablePacingReceiptForAccount(
-            ctx,
-            settlementAccountKey,
-            inbox,
-            acceptedAt,
-            false,
-          );
-        }
+      if (legacyDeliveryOwnerWasUnbound) {
+        // Pre-lineage Gmail rows may contain an unseen STOP that only the
+        // bounded readonly drain can discover. Conservatively retire both the
+        // exact address and recipient organisation before any future outbound
+        // claim, so even a revoked/failed legacy read token cannot cause a
+        // compliance recontact.
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          settlementAccountKey,
+          "domain",
+          message.toDomain,
+          "manual",
+          acceptedAt,
+        );
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          settlementAccountKey,
+          "email",
+          message.toEmail,
+          "manual",
+          acceptedAt,
+        );
+      }
+      if (messageInbox?.siteId === migrationSite._id) {
+        await recordDurablePacingReceiptForAccount(
+          ctx,
+          settlementAccountKey,
+          messageInbox,
+          acceptedAt,
+          false,
+        );
       }
     }
     if (page.isDone) {
