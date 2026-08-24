@@ -50,6 +50,24 @@ import {
   accountDeletionKey,
   accountDeletionTombstoneUserId,
 } from "./lib/accountDeletion.ts";
+import {
+  inboundRelayConfigured,
+  inboundRelayDsnRoutingReady,
+} from "./lib/outreachInboundRelay.ts";
+
+function inboundRelayRuntimeConfig() {
+  return {
+    domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    secrets: [
+      process.env.OUTREACH_INBOUND_RELAY_SECRET,
+      process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+    ],
+    adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+    retentionPolicyHash:
+      process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+    retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+  };
+}
 
 const now = () => Date.now();
 const CADENCE_ALLOCATION_VERSION = 1;
@@ -263,6 +281,11 @@ async function demoteOutreachForDomainChange(
   ctx: MutationCtx,
   siteId: Id<"sites">,
 ): Promise<void> {
+  await gateInboundRelayCanaryExternalLease(
+    ctx,
+    siteId,
+    "change this site's domain",
+  );
   const inFlight = await ctx.db
     .query("outreach_messages")
     .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "sending"))
@@ -281,6 +304,14 @@ async function demoteOutreachForDomainChange(
       mode: "approval",
       verifiedAt: undefined,
       configurationVersion: (inbox.configurationVersion ?? 0) + 1,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
       lastError:
         "The tenant domain changed. Reconnect and verify the secondary-domain sender before reviewing new outreach.",
       updatedAt: timestamp,
@@ -439,6 +470,11 @@ async function reconcileCanonicalPlanSitePage(
     const parkingChanged = shouldPark !== Boolean(site.planParkedAt);
     const cadenceChanged = cadencePerWeek !== (site.cadencePerWeek ?? 0);
     if ((parkingChanged && shouldPark) || cadenceChanged) {
+      await gateInboundRelayCanaryExternalLease(
+        ctx,
+        site._id,
+        "change this site's plan allocation",
+      );
       await cancelAutonomousJobsForEpochTransition(
         ctx,
         site._id,
@@ -1405,6 +1441,8 @@ const ACCOUNT_DELETION_RECEIPT_STAGES = [
   "usage_log",
 ] as const;
 const SITE_DELETION_STAGES = [
+  "outreach_inbound_relay_canaries",
+  "outreach_inbound_relay_receipts",
   "outreach_messages",
   "outreach_contacts",
   "outreach_suppressions",
@@ -1436,6 +1474,35 @@ const SITE_DELETION_STAGES = [
   "usage_log",
 ] as const;
 
+async function gateInboundRelayCanaryExternalLease(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  operation: string,
+): Promise<void> {
+  const timestamp = now();
+  const canaries = await ctx.db
+    .query("outreach_inbound_relay_canaries")
+    .withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .take(2);
+  const claimed = canaries.filter(
+    (canary) => canary.deliveryStatus === "claimed",
+  );
+  if (claimed.some(
+    (canary) => (canary.deliveryLeaseExpiresAt ?? 0) > timestamp,
+  )) {
+    throw new Error(
+      `Cannot ${operation} while the owner-triggered Gmail routing canary is in progress`,
+    );
+  }
+  for (const canary of claimed) {
+    await ctx.db.patch(canary._id, {
+      deliveryStatus: "unverified",
+      deliveryLeaseExpiresAt: undefined,
+      deliveryFinalizedAt: timestamp,
+    });
+  }
+}
+
 async function gateSiteDeletionForOutreach(
   ctx: MutationCtx,
   siteId: Id<"sites">,
@@ -1448,6 +1515,7 @@ async function gateSiteDeletionForOutreach(
     }
 > {
   const timestamp = now();
+  await gateInboundRelayCanaryExternalLease(ctx, siteId, "delete this site");
   const [sending, unresolved] = await Promise.all([
     ctx.db
       .query("outreach_messages")
@@ -1625,6 +1693,11 @@ async function revokeSiteCredentialsForAccountDeletion(
   site: Doc<"sites">,
   timestamp: number,
 ) {
+  await gateInboundRelayCanaryExternalLease(
+    ctx,
+    site._id,
+    "delete this account",
+  );
   if (!site.accountDeletionRequestedAt) {
     await cancelAutonomousJobsForEpochTransition(
       ctx,
@@ -1735,6 +1808,10 @@ async function deletionRowsForStage(
 ): Promise<Array<{ _id: Id<TableNames> }>> {
   const name = SITE_DELETION_STAGES[stage];
   switch (name) {
+    case "outreach_inbound_relay_canaries":
+      return ctx.db.query("outreach_inbound_relay_canaries").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "outreach_inbound_relay_receipts":
+      return ctx.db.query("outreach_inbound_relay_receipts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_messages":
       return ctx.db.query("outreach_messages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_contacts":
@@ -2074,15 +2151,22 @@ export const finalizeAccountSiteDeletionInternal = internalMutation({
     const quiescentAt =
       (site.accountDeletionRequestedAt ?? timestamp) +
       SITE_DELETION_QUIESCENCE_MS;
-    const sending = await ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "sending")
-      )
-      .take(100);
+    const [sending, canaries] = await Promise.all([
+      ctx.db
+        .query("outreach_messages")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", "sending")
+        )
+        .take(100),
+      ctx.db
+        .query("outreach_inbound_relay_canaries")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(2),
+    ]);
     const latestExternalLease = Math.max(
       site.publicationLeaseExpiresAt ?? 0,
       ...sending.map((message) => message.deliveryLeaseExpiresAt ?? 0),
+      ...canaries.map((canary) => canary.deliveryLeaseExpiresAt ?? 0),
     );
     const safeAfter = Math.max(quiescentAt, latestExternalLease + 1_000);
     if (safeAfter > timestamp) {
@@ -2746,6 +2830,35 @@ async function outreachFleetState(
       .first(),
   ]);
   const inbox = inboxes.length === 1 ? inboxes[0] : undefined;
+  const signedRelayReady = Boolean(
+    inbox &&
+    inbox.provider === "gmail" &&
+    !["disconnected", "suspended"].includes(inbox.status) &&
+    inboundRelayConfigured(inboundRelayRuntimeConfig()) &&
+    inboundRelayDsnRoutingReady({
+      inbox,
+      now: Date.now(),
+      rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      runtimeConfig: inboundRelayRuntimeConfig(),
+    }),
+  );
+  const legacyGmailReadReady = Boolean(
+    inbox &&
+    inbox.provider === "gmail" &&
+    inbox.oauthScopes?.split(/\s+/).includes(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ) &&
+    (inbox.oauthRefreshToken || inbox.oauthAccessToken) &&
+    !["disconnected", "suspended"].includes(inbox.status),
+  );
+  const inboundMonitoringMode:
+    | "signed_relay"
+    | "legacy_gmail"
+    | "unavailable" = signedRelayReady
+      ? "signed_relay"
+      : legacyGmailReadReady
+        ? "legacy_gmail"
+        : "unavailable";
   return {
     siteId,
     autopilotEnabled: site.autopilotEnabled === true,
@@ -2761,15 +2874,8 @@ async function outreachFleetState(
     hasVerifiedOpportunities: Boolean(verifiedOpportunity),
     hasApprovedMessages: Boolean(approvedMessage),
     hasLinksToVerify: Boolean(contactedOpportunity || acquiredOpportunity),
-    inboundMonitoringReady: Boolean(
-      inbox &&
-      inbox.provider === "gmail" &&
-      inbox.oauthScopes?.split(/\s+/).includes(
-        "https://www.googleapis.com/auth/gmail.readonly",
-      ) &&
-      (inbox.oauthRefreshToken || inbox.oauthAccessToken) &&
-      !["disconnected", "suspended"].includes(inbox.status),
-    ),
+    inboundMonitoringReady: signedRelayReady || legacyGmailReadReady,
+    inboundMonitoringMode,
     hasMessagesToMonitor: [sentMessage, reviewedSentMessage, repliedMessage]
       .some((message) => Boolean(
         message?.providerMessageId || message?.providerThreadId,

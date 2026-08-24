@@ -109,6 +109,7 @@ test("link verification remains eligible after an inbox is disconnected", () => 
 test("inbound fleet reads replies but can never deliver email", () => {
   const plan = planOutreachFleetSite(state({
     inboundMonitoringReady: true,
+    inboundMonitoringMode: "legacy_gmail",
     hasMessagesToMonitor: true,
   }), "inbound");
   assert.deepEqual(plan, {
@@ -119,6 +120,7 @@ test("inbound fleet reads replies but can never deliver email", () => {
   });
   const disconnected = planOutreachFleetSite(state({
     inboundMonitoringReady: false,
+    inboundMonitoringMode: "unavailable",
     hasMessagesToMonitor: true,
   }), "inbound");
   assert.equal(disconnected.monitor, false);
@@ -129,6 +131,20 @@ test("inbound fleet reads replies but can never deliver email", () => {
   assert.match(source, /syncInboundRepliesInternal/);
   assert.match(crons, /outreach-inbound-fleet/);
   assert.match(crons, /phase: "inbound"/);
+});
+
+test("signed receiving relay never schedules Gmail reads or outbound delivery", () => {
+  const plan = planOutreachFleetSite(state({
+    inboundMonitoringReady: true,
+    inboundMonitoringMode: "signed_relay",
+    hasMessagesToMonitor: true,
+  }), "inbound");
+  assert.deepEqual(plan, {
+    prepare: false,
+    deliver: false,
+    verify: false,
+    monitor: false,
+  });
 });
 
 test("maintenance preparation is gated to an executing tenant rollout", () => {

@@ -3,9 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOwnedSite } from "@/lib/owned-site";
 import { createOAuthState } from "@/lib/oauth-state";
 import {
-  GMAIL_READONLY_SCOPE,
   GMAIL_SEND_SCOPE,
 } from "@/lib/outreach-gmail";
+import { callPentraInternal } from "@/lib/pentra-internal-api";
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
@@ -19,6 +19,21 @@ export async function GET(req: NextRequest) {
   const clientId = process.env.OUTREACH_GOOGLE_CLIENT_ID;
   if (!clientId) {
     return NextResponse.json({ error: "Outreach Google OAuth is not configured" }, { status: 500 });
+  }
+
+  try {
+    await callPentraInternal<{ ready: true }>(
+      "/internal/oauth/outreach-gmail/preflight",
+      { siteId },
+    );
+  } catch {
+    return NextResponse.json(
+      {
+        error:
+          "This legacy inbox still has sent messages that require bounded reply monitoring. Reconnect is blocked until that compatibility drain completes.",
+      },
+      { status: 409 },
+    );
   }
 
   let state: string;
@@ -35,7 +50,7 @@ export async function GET(req: NextRequest) {
     client_id: clientId,
     redirect_uri: callbackUrl,
     response_type: "code",
-    scope: `${GMAIL_SEND_SCOPE} ${GMAIL_READONLY_SCOPE} openid email`,
+    scope: `${GMAIL_SEND_SCOPE} openid email`,
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: "false",

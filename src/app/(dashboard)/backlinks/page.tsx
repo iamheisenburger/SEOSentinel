@@ -92,6 +92,7 @@ export default function BacklinksPage() {
   const analyzeBacklinks = useAction(api.actions.backlinks.analyzeBacklinks);
   const prepareOutreach = useAction(api.actions.outreach.prepareOutreach);
   const sendApproved = useAction(api.actions.outreach.sendApprovedOutreach);
+  const sendBounceCanary = useAction(api.actions.outreach.sendInboundRelayDsnCanary);
   const syncInbound = useAction(api.actions.outreach.syncInboundReplies);
   const verifyLinks = useAction(api.actions.outreach.verifyAcquiredLinks);
   const approveMessage = useMutation(api.outreach.approveMessage);
@@ -120,7 +121,6 @@ export default function BacklinksPage() {
   const approvedCount = counts.messageCounts.approved ?? 0;
   const inboxNeedsReconnect = !inbox ||
     !Boolean(inbox.credentialsPresent) ||
-    !Boolean(inbox.inboundMonitoringReady) ||
     ["disconnected", "suspended"].includes(String(inbox.status));
   const isLoading = Boolean(site?._id) &&
     (opportunities === undefined || messages === undefined || inbox === undefined);
@@ -185,23 +185,24 @@ export default function BacklinksPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            disabled={!Boolean(inbox?.inboundMonitoringReady)}
-            onClick={() => runOperation("inbound", async () => {
-              const result = await syncInbound({ siteId: site._id });
-              setNotice({
-                tone: result.stopped ? "error" : "success",
-                text: result.stopped
-                  ? result.stopped
-                  : `Checked ${result.checked} inbound message${result.checked === 1 ? "" : "s"}. ${result.replied} replies, ${result.optedOut} opt-outs, and ${result.bounced} hard bounces recorded.${result.partial ? " More Gmail pages remain queued for the next bounded sync." : ""}`,
-              });
-            })}
-            loading={pending === "inbound"}
-            icon={<Inbox className="h-3.5 w-3.5" />}
-          >
-            Check replies
-          </Button>
+          {String(inbox?.inboundMonitoringMode) === "legacy_gmail" && (
+            <Button
+              variant="secondary"
+              onClick={() => runOperation("inbound", async () => {
+                const result = await syncInbound({ siteId: site._id });
+                setNotice({
+                  tone: result.stopped ? "error" : "success",
+                  text: result.stopped
+                    ? result.stopped
+                    : `Checked ${result.checked} inbound message${result.checked === 1 ? "" : "s"}. ${result.replied} replies, ${result.optedOut} opt-outs, and ${result.bounced} hard bounces recorded.${result.partial ? " More Gmail pages remain queued for the next bounded sync." : ""}`,
+                });
+              })}
+              loading={pending === "inbound"}
+              icon={<Inbox className="h-3.5 w-3.5" />}
+            >
+              Check replies (legacy)
+            </Button>
+          )}
           <Button
             variant="secondary"
             onClick={() => runOperation("verify", async () => {
@@ -297,13 +298,22 @@ export default function BacklinksPage() {
                 </p>
               )}
               <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
-                Pentra reads only this dedicated outreach mailbox to detect replies, hard bounces,
-                and explicit opt-outs. Inbound message bodies are processed transiently and are not stored.
+                New connections grant Gmail send access only. Before any prospect message can be
+                released, an owner-triggered hard-bounce canary must prove this mailbox&apos;s Workspace
+                routing into the audited receiving-only relay. Inbound bodies and attachments are
+                discarded after transient parsing; Pentra stores only evidence digests.
               </p>
               {inbox && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <ReadinessBadge label="Gmail OAuth" ready={Boolean(inbox.credentialsPresent)} />
-                  <ReadinessBadge label="Reply monitoring" ready={Boolean(inbox.inboundMonitoringReady)} />
+                  <ReadinessBadge
+                    label={String(inbox.inboundMonitoringMode) === "legacy_gmail" ? "Legacy reply sync" : "Inbound relay"}
+                    ready={Boolean(inbox.inboundMonitoringReady)}
+                  />
+                  <ReadinessBadge
+                    label="Bounce routing canary"
+                    ready={Boolean(inbox.inboundRelayDsnRoutingReady)}
+                  />
                   <ReadinessBadge label="SPF" ready={Boolean(inbox.spfVerifiedAt)} />
                   <ReadinessBadge label="DKIM" ready={Boolean(inbox.dkimVerifiedAt)} />
                   <ReadinessBadge label="DMARC" ready={Boolean(inbox.dmarcVerifiedAt)} />
@@ -314,20 +324,44 @@ export default function BacklinksPage() {
                   )}
                   {Boolean(inbox.inboundLastCompletedAt) && (
                     <span className="self-center text-[10px] text-[#565A6E]">
-                      Inbox checked {formatTime(Number(inbox.inboundLastCompletedAt))}
+                      Inbound processed {formatTime(Number(inbox.inboundLastCompletedAt))}
                     </span>
                   )}
                 </div>
               )}
             </div>
           </div>
-          <Button
-            variant={inboxNeedsReconnect ? "primary" : "secondary"}
-            onClick={connectGmail}
-            icon={<Mail className="h-3.5 w-3.5" />}
-          >
-            {inboxNeedsReconnect ? (inbox ? "Reconnect Gmail" : "Connect Gmail") : "Refresh Gmail connection"}
-          </Button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {inbox &&
+              Boolean(inbox.inboundRelayConfigured) &&
+              !Boolean(inbox.inboundRelayDsnRoutingReady) &&
+              String(inbox.inboundMonitoringMode) !== "legacy_gmail" && (
+                <Button
+                  variant="secondary"
+                  loading={pending === "bounce-canary"}
+                  onClick={() => runOperation("bounce-canary", async () => {
+                    if (!window.confirm("Send exactly one routing canary to Pentra's fixed controlled rejection address? No prospect is contacted.")) return;
+                    const result = await sendBounceCanary({ siteId: site._id });
+                    setNotice({
+                      tone: result.accepted ? "success" : "error",
+                      text: result.accepted
+                        ? "Gmail accepted the canary. Outreach remains blocked until its exact signed hard-bounce receipt arrives."
+                        : result.reason,
+                    });
+                  })}
+                  icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                >
+                  Verify bounce routing
+                </Button>
+              )}
+            <Button
+              variant={inboxNeedsReconnect ? "primary" : "secondary"}
+              onClick={connectGmail}
+              icon={<Mail className="h-3.5 w-3.5" />}
+            >
+              {inboxNeedsReconnect ? (inbox ? "Reconnect Gmail" : "Connect Gmail") : "Refresh Gmail connection"}
+            </Button>
+          </div>
         </div>
         {inbox && (
           <form
@@ -440,7 +474,7 @@ export default function BacklinksPage() {
         ) : (
           <Button
             size="sm"
-            disabled={approvedCount === 0}
+            disabled={approvedCount === 0 || !Boolean(inbox?.inboundMonitoringReady)}
             loading={pending === "send"}
             onClick={() => runOperation("send", async () => {
               if (!window.confirm("Send exactly one approved email now? Pentra will not send the remaining approvals automatically.")) return;
@@ -678,7 +712,7 @@ export default function BacklinksPage() {
                   {message.bouncedAt && <span>Bounced {formatTime(message.bouncedAt)}</span>}
                   {message.inboundReceiptKind && message.inboundReceiptAt && (
                     <span className="text-[#4ADE80]">
-                      Gmail {labelStatus(String(message.inboundReceiptKind))} receipt sealed {formatTime(message.inboundReceiptAt)}
+                      Inbound {labelStatus(String(message.inboundReceiptKind))} receipt sealed {formatTime(message.inboundReceiptAt)}
                     </span>
                   )}
                   {message.status === "approved" && (

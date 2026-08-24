@@ -53,6 +53,7 @@ import type * as lib_expectedClickEvidenceBackfill from "../lib/expectedClickEvi
 import type * as lib_expectedClickMigrationRecovery from "../lib/expectedClickMigrationRecovery.js";
 import type * as lib_expectedClickPortfolio from "../lib/expectedClickPortfolio.js";
 import type * as lib_gscSearchAnalytics from "../lib/gscSearchAnalytics.js";
+import type * as lib_growthSupportDelivery from "../lib/growthSupportDelivery.js";
 import type * as lib_internalHttpAuth from "../lib/internalHttpAuth.js";
 import type * as lib_internalLinks from "../lib/internalLinks.js";
 import type * as lib_jobRollout from "../lib/jobRollout.js";
@@ -66,6 +67,7 @@ import type * as lib_outreachContacts from "../lib/outreachContacts.js";
 import type * as lib_outreachDelivery from "../lib/outreachDelivery.js";
 import type * as lib_outreachDrafting from "../lib/outreachDrafting.js";
 import type * as lib_outreachInbound from "../lib/outreachInbound.js";
+import type * as lib_outreachInboundRelay from "../lib/outreachInboundRelay.js";
 import type * as lib_outreachPacing from "../lib/outreachPacing.js";
 import type * as lib_outreachPreparationBudget from "../lib/outreachPreparationBudget.js";
 import type * as lib_outreachSecurity from "../lib/outreachSecurity.js";
@@ -155,6 +157,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expectedClickMigrationRecovery": typeof lib_expectedClickMigrationRecovery;
   "lib/expectedClickPortfolio": typeof lib_expectedClickPortfolio;
   "lib/gscSearchAnalytics": typeof lib_gscSearchAnalytics;
+  "lib/growthSupportDelivery": typeof lib_growthSupportDelivery;
   "lib/internalHttpAuth": typeof lib_internalHttpAuth;
   "lib/internalLinks": typeof lib_internalLinks;
   "lib/jobRollout": typeof lib_jobRollout;
@@ -168,6 +171,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outreachDelivery": typeof lib_outreachDelivery;
   "lib/outreachDrafting": typeof lib_outreachDrafting;
   "lib/outreachInbound": typeof lib_outreachInbound;
+  "lib/outreachInboundRelay": typeof lib_outreachInboundRelay;
   "lib/outreachPacing": typeof lib_outreachPacing;
   "lib/outreachPreparationBudget": typeof lib_outreachPreparationBudget;
   "lib/outreachSecurity": typeof lib_outreachSecurity;

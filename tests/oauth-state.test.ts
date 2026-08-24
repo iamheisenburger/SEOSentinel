@@ -109,7 +109,7 @@ test("OAuth callbacks revalidate current tenant ownership before external exchan
         ? 'callPentraInternal("/internal/oauth/github"'
         : provider === "gsc"
           ? 'callPentraInternal("/internal/oauth/gsc"'
-          : 'callPentraInternal<{ ready: boolean }>(\n      "/internal/oauth/outreach-gmail"',
+          : '"/internal/oauth/outreach-gmail"',
     );
     assert.ok(ownershipCheck >= 0);
     assert.ok(tokenExchange > ownershipCheck);
@@ -155,6 +155,6 @@ test("GSC and Gmail outreach use isolated clients and reject incremental scope m
   assert.match(gscAuth, /include_granted_scopes: "false"/);
   assert.match(outreachAuth, /include_granted_scopes: "false"/);
   assert.match(gscCallback, /hasOnlyGscGrowthScopes/);
-  assert.match(outreachCallback, /hasOnlyGmailOutreachScopes/);
+  assert.match(outreachCallback, /hasOnlyGmailOutboundScopes/);
   assert.doesNotMatch(gscCallback, /handleOutreachGmailCallback/);
 });

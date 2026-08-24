@@ -58,6 +58,34 @@ import {
   OUTREACH_INBOUND_OVERLAP_MS,
   shouldPromoteOutreachInbound,
 } from "./lib/outreachInbound.ts";
+import {
+  OUTREACH_INBOUND_RELAY_CANARY_COOLDOWN_MS,
+  OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS,
+  OUTREACH_INBOUND_RELAY_CANARY_TTL_MS,
+  inboundRelayAliasHash,
+  inboundRelayConfigurationHash,
+  inboundRelayConfigured,
+  inboundRelayDsnRoutingReady,
+  inboundRelayEmailHash,
+  inboundRelayMessageIdHash,
+  normalizeInboundRelayDomain,
+  normalizeRfcMessageId,
+} from "./lib/outreachInboundRelay.ts";
+import { accountDeletionKey } from "./lib/accountDeletion.ts";
+
+function inboundRelayRuntimeConfig() {
+  return {
+    domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    secrets: [
+      process.env.OUTREACH_INBOUND_RELAY_SECRET,
+      process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+    ],
+    adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+    retentionPolicyHash:
+      process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+    retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+  };
+}
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -82,17 +110,254 @@ async function inboxForSite(ctx: QueryCtx, siteId: Id<"sites">) {
     .unique();
 }
 
+async function pendingLegacyUnboundMessageCount(
+  ctx: QueryCtx,
+  inboxId: Id<"outreach_inboxes">,
+): Promise<number> {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const settledStatuses = ["sent", "delivery_reviewed_sent", "replied"];
+  const pending = await Promise.all([
+    ...settledStatuses.map((status) =>
+      ctx.db
+        .query("outreach_messages")
+        .withIndex("by_inbox_relay_status_sent", (q) =>
+          q
+            .eq("inboxId", inboxId)
+            .eq("inboundRelayAliasHash", undefined)
+            .eq("status", status)
+            .gte("sentAt", cutoff)
+        )
+        .first()
+    ),
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_inbox_relay_status_sent", (q) =>
+        q
+          .eq("inboxId", inboxId)
+          .eq("inboundRelayAliasHash", undefined)
+          .eq("status", "delivery_unverified")
+      )
+      .first(),
+  ]);
+  // This is an existence/preflight result, not a misleading total. One direct
+  // indexed hit is enough to prevent a reconnect from overwriting read access.
+  return pending.some(Boolean) ? 1 : 0;
+}
+
 async function assertNoActiveDelivery(
   ctx: MutationCtx,
   siteId: Id<"sites">,
 ): Promise<void> {
-  const sending = await ctx.db
-    .query("outreach_messages")
-    .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "sending"))
-    .first();
-  if (sending) {
+  const inbox = await inboxForSite(ctx, siteId);
+  const [sending, unverified, canaries] = await Promise.all([
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "sending"))
+      .first(),
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "delivery_unverified")
+      )
+      .first(),
+    inbox
+      ? ctx.db
+          .query("outreach_inbound_relay_canaries")
+          .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
+          .take(2)
+      : Promise.resolve([]),
+  ]);
+  const activeCanary = canaries.some(
+    (canary) =>
+      canary.deliveryStatus === "claimed" &&
+      (canary.deliveryLeaseExpiresAt ?? 0) > Date.now(),
+  );
+  if (sending || unverified || activeCanary) {
     throw new Error("The inbox cannot change while outreach delivery is in progress");
   }
+}
+
+async function outreachSettlementLifecycleActive(
+  ctx: QueryCtx,
+  site: Doc<"sites"> | null,
+): Promise<boolean> {
+  if (
+    !site?.userId ||
+    site.deletionStatus ||
+    site.accountDeletionRequestedAt ||
+    site.domainOwnershipConflictAt
+  ) {
+    return false;
+  }
+  const deletionReceipt = await ctx.db
+    .query("account_deletion_receipts")
+    .withIndex("by_account_key", (q) =>
+      q.eq("accountKey", accountDeletionKey(site.userId!))
+    )
+    .unique();
+  if (deletionReceipt) return false;
+  return true;
+}
+
+async function relaySettlementAuthorized(
+  ctx: QueryCtx,
+  site: Doc<"sites"> | null,
+  sentAt: number | undefined,
+): Promise<boolean> {
+  const policy = await outreachSettlementPolicy(ctx, site);
+  return Boolean(sentAt && policy.allows(sentAt));
+}
+
+async function outreachSettlementPolicy(
+  ctx: QueryCtx,
+  site: Doc<"sites"> | null,
+): Promise<{
+  allows: (deliveryBoundaryAt: number | undefined) => boolean;
+  maximumDeliveryBoundaryAt?: number;
+}> {
+  if (!(await outreachSettlementLifecycleActive(ctx, site))) {
+    return { allows: () => false, maximumDeliveryBoundaryAt: 0 };
+  }
+  if (await siteExecutionAuthorized(ctx, site)) {
+    return { allows: (deliveryBoundaryAt) => Boolean(deliveryBoundaryAt) };
+  }
+  const entitlement = await ctx.db
+    .query("account_plan_entitlements")
+    .withIndex("by_user", (q) => q.eq("userId", site!.userId!))
+    .unique();
+  const transitionStartedAt = Math.max(
+    site!.planAllowanceChangedAt ?? 0,
+    site!.planParkedAt ?? 0,
+    entitlement?.syncStartedAt ?? 0,
+  );
+  return {
+    maximumDeliveryBoundaryAt: transitionStartedAt,
+    allows: (deliveryBoundaryAt) => Boolean(
+      transitionStartedAt > 0 &&
+      deliveryBoundaryAt &&
+      deliveryBoundaryAt <= transitionStartedAt
+    ),
+  };
+}
+
+const LEGACY_INBOUND_SETTLED_STATUSES = [
+  "sent",
+  "delivery_reviewed_sent",
+  "replied",
+] as const;
+
+async function legacyUnboundMessages(
+  ctx: QueryCtx,
+  inboxId: Id<"outreach_inboxes">,
+  options: {
+    limit: number;
+    maximumDeliveryBoundaryAt?: number;
+  },
+): Promise<Array<Doc<"outreach_messages">>> {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  if (
+    options.maximumDeliveryBoundaryAt !== undefined &&
+    options.maximumDeliveryBoundaryAt < cutoff
+  ) {
+    return [];
+  }
+  const perStatus = Math.max(1, Math.min(40, options.limit));
+  const batches = await Promise.all(
+    LEGACY_INBOUND_SETTLED_STATUSES.flatMap((status) => {
+      if (options.maximumDeliveryBoundaryAt !== undefined) {
+        return [
+          ctx.db
+            .query("outreach_messages")
+            .withIndex("by_inbox_relay_status_claimed", (q) =>
+              q
+                .eq("inboxId", inboxId)
+                .eq("inboundRelayAliasHash", undefined)
+                .eq("status", status)
+                .gte("deliveryClaimedAt", cutoff)
+                .lte("deliveryClaimedAt", options.maximumDeliveryBoundaryAt!)
+            )
+            .order("desc")
+            .take(perStatus),
+          ctx.db
+            .query("outreach_messages")
+            .withIndex("by_inbox_relay_status_sent", (q) =>
+              q
+                .eq("inboxId", inboxId)
+                .eq("inboundRelayAliasHash", undefined)
+                .eq("status", status)
+                .gte("sentAt", cutoff)
+                .lte("sentAt", options.maximumDeliveryBoundaryAt!)
+            )
+            .order("desc")
+            .take(perStatus),
+        ];
+      }
+      return [
+        ctx.db
+          .query("outreach_messages")
+          .withIndex("by_inbox_relay_status_sent", (q) =>
+            q
+              .eq("inboxId", inboxId)
+              .eq("inboundRelayAliasHash", undefined)
+              .eq("status", status)
+              .gte("sentAt", cutoff)
+          )
+          .order("desc")
+          .take(perStatus),
+      ];
+    }),
+  );
+  const unique = new Map<string, Doc<"outreach_messages">>();
+  for (const message of batches.flat()) {
+    const boundary = message.deliveryClaimedAt ?? message.sentAt;
+    if (
+      message.sentAt &&
+      message.sentAt >= cutoff &&
+      (message.providerMessageId || message.providerThreadId) &&
+      (options.maximumDeliveryBoundaryAt === undefined ||
+        (boundary !== undefined &&
+          boundary <= options.maximumDeliveryBoundaryAt))
+    ) unique.set(message._id, message);
+  }
+  return [...unique.values()]
+    .sort((left, right) => (right.sentAt ?? 0) - (left.sentAt ?? 0))
+    .slice(0, options.limit);
+}
+
+async function legacyUnboundMessagesMissingThread(
+  ctx: QueryCtx,
+  inboxId: Id<"outreach_inboxes">,
+  maximumDeliveryBoundaryAt?: number,
+): Promise<Array<Doc<"outreach_messages">>> {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const batches = await Promise.all(
+    LEGACY_INBOUND_SETTLED_STATUSES.map((status) =>
+      ctx.db
+        .query("outreach_messages")
+        .withIndex("by_inbox_relay_thread_status_sent", (q) =>
+          q
+            .eq("inboxId", inboxId)
+            .eq("inboundRelayAliasHash", undefined)
+            .eq("providerThreadId", undefined)
+            .eq("status", status)
+            .gte("sentAt", cutoff)
+        )
+        .order("desc")
+        .take(10)
+    ),
+  );
+  return batches
+    .flat()
+    .filter((message) => {
+      const boundary = message.deliveryClaimedAt ?? message.sentAt;
+      return Boolean(
+        message.providerMessageId &&
+        (maximumDeliveryBoundaryAt === undefined ||
+          (boundary !== undefined && boundary <= maximumDeliveryBoundaryAt))
+      );
+    })
+    .sort((left, right) => (right.sentAt ?? 0) - (left.sentAt ?? 0))
+    .slice(0, 10);
 }
 
 // ── Inbox ──
@@ -100,8 +365,24 @@ async function assertNoActiveDelivery(
 export const getInbox = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
-    return sanitizeInboxForClient(await inboxForSite(ctx, siteId), Date.now());
+    const site = await requireSiteOwner(ctx, siteId);
+    const inbox = await inboxForSite(ctx, siteId);
+    const legacyDrainRequired = inbox
+      ? (await pendingLegacyUnboundMessageCount(ctx, inbox._id)) > 0
+      : false;
+    const runtimeConfig = inboundRelayRuntimeConfig();
+    return sanitizeInboxForClient(
+      inbox,
+      Date.now(),
+      inboundRelayConfigured(runtimeConfig),
+      inboundRelayDsnRoutingReady({
+        inbox,
+        now: Date.now(),
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        runtimeConfig,
+      }),
+      legacyDrainRequired,
+    );
   },
 });
 
@@ -148,11 +429,18 @@ export const connectGmailInboxInternal = internalMutation({
       fromEmail,
     });
     if (readinessIssues.length > 0) throw new Error(readinessIssues.join(" "));
-    if (!args.oauthScopes.split(/\s+/).includes("https://www.googleapis.com/auth/gmail.send")) {
-      throw new Error("Google did not grant Gmail send permission");
-    }
-    if (!args.oauthScopes.split(/\s+/).includes("https://www.googleapis.com/auth/gmail.readonly")) {
-      throw new Error("Google did not grant Gmail reply-monitoring permission");
+    const grantedScopes = args.oauthScopes.split(/\s+/).filter(Boolean);
+    const allowedScopes = new Set([
+      "https://www.googleapis.com/auth/gmail.send",
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ]);
+    if (
+      !grantedScopes.includes("https://www.googleapis.com/auth/gmail.send") ||
+      !grantedScopes.every((scope) => allowedScopes.has(scope))
+    ) {
+      throw new Error("Google did not return a strict send-only Gmail grant");
     }
     const emailDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
     if (!emailDomain || emailDomain !== normalizeDomain(args.senderDomain)) {
@@ -160,7 +448,30 @@ export const connectGmailInboxInternal = internalMutation({
     }
 
     const existing = await inboxForSite(ctx, args.siteId);
-    if (!args.oauthRefreshToken && !existing?.oauthRefreshToken) {
+    const existingRefreshHasLegacyRead = Boolean(
+      existing?.oauthScopes?.split(/\s+/).includes(
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ),
+    );
+    const existingScopes = existing?.oauthScopes?.split(/\s+/).filter(Boolean) ?? [];
+    const existingRefreshIsStrictOutbound = Boolean(
+      existing?.oauthRefreshToken &&
+      existingScopes.includes("https://www.googleapis.com/auth/gmail.send") &&
+      existingScopes.every((scope) => allowedScopes.has(scope)),
+    );
+    if (
+      existing &&
+      existingRefreshHasLegacyRead &&
+      (await pendingLegacyUnboundMessageCount(ctx, existing._id)) > 0
+    ) {
+      throw new Error(
+        "Legacy Gmail monitoring still has unbound sent messages; reconnect is blocked until its 90-day compatibility drain completes",
+      );
+    }
+    if (
+      !args.oauthRefreshToken &&
+      (!existing?.oauthRefreshToken || !existingRefreshIsStrictOutbound)
+    ) {
       throw new Error("Google did not provide durable offline mailbox access");
     }
     const dnsReady = args.spfVerified && args.dkimVerified && args.dmarcVerified;
@@ -172,6 +483,7 @@ export const connectGmailInboxInternal = internalMutation({
     });
     const complianceReady = reconnectProfile.complianceReady;
     const ready = dnsReady && complianceReady;
+    const inboundReady = false;
     const record = {
       provider: "gmail",
       fromEmail,
@@ -200,12 +512,20 @@ export const connectGmailInboxInternal = internalMutation({
           ? "Add the sender name and physical mailing address before outreach can send."
           : undefined,
       inboundLastError: undefined,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
       updatedAt: now,
     };
 
     if (existing) {
       await ctx.db.patch(existing._id, record);
-      return { inboxId: existing._id, reconnected: true, ready };
+      return { inboxId: existing._id, reconnected: true, ready, inboundReady };
     }
     const inboxId = await ctx.db.insert("outreach_inboxes", {
       ...record,
@@ -215,7 +535,7 @@ export const connectGmailInboxInternal = internalMutation({
       sentTodayDay: utcDayKey(now),
       createdAt: now,
     });
-    return { inboxId, reconnected: false, ready };
+    return { inboxId, reconnected: false, ready, inboundReady };
   },
 });
 
@@ -250,6 +570,14 @@ export const setInboxComplianceProfile = mutation({
       physicalMailingAddress: safeAddress,
       complianceConfirmedAt: now,
       configurationVersion: (inbox.configurationVersion ?? 0) + 1,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
       verifiedAt: dnsReady ? now : undefined,
       status: dnsReady ? "warming" : "connected",
       mode: "approval",
@@ -301,6 +629,14 @@ export const disconnectInbox = mutation({
       inboundSyncWindowStartedAt: undefined,
       inboundSyncLeaseId: undefined,
       inboundSyncLeaseExpiresAt: undefined,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
       configurationVersion: (inbox.configurationVersion ?? 0) + 1,
       updatedAt: Date.now(),
     });
@@ -312,8 +648,171 @@ export const getInboxInternal = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
-    return await siteExecutionAuthorized(ctx, site)
-      ? inboxForSite(ctx, siteId)
+    if (!(await siteExecutionAuthorized(ctx, site))) return null;
+    const inbox = await inboxForSite(ctx, siteId);
+    return inbox
+      ? { ...inbox, siteRolloutEpoch: site?.autopilotRolloutEpoch ?? 0 }
+      : null;
+  },
+});
+
+export const getGmailReconnectReadinessInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      return { ready: false, reason: "Tenant is unavailable." };
+    }
+    const inbox = await inboxForSite(ctx, siteId);
+    if (
+      !inbox ||
+      !inbox.oauthScopes?.split(/\s+/).includes(
+        "https://www.googleapis.com/auth/gmail.readonly",
+      )
+    ) {
+      return { ready: true };
+    }
+    const pending = await pendingLegacyUnboundMessageCount(ctx, inbox._id);
+    return pending > 0
+      ? {
+          ready: false,
+          pending,
+          reason:
+            "This legacy inbox still monitors sent messages without relay aliases. Reconnect is blocked until the bounded 90-day compatibility drain completes.",
+        }
+      : { ready: true };
+  },
+});
+
+/** Legacy readonly polling is retained only as post-send compliance
+ * settlement. Unlike growth work, it may finish replies for messages sent
+ * before plan parking/reconciliation, but never after deletion or conflict. */
+export const listLegacyInboundFleetPage = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) => {
+    const result = await ctx.db
+      .query("outreach_inboxes")
+      .paginate({ cursor: cursor ?? null, numItems: 25 });
+    const page: Array<{
+      siteId: Id<"sites">;
+      autopilotEnabled: boolean;
+      autopilotRolloutMode: string;
+      inboxConfigurationValid: boolean;
+      hasInbox: boolean;
+      inboxProvider?: string;
+      inboxStatus?: string;
+      inboxMode?: string;
+      inboxVerified: boolean;
+      hasVerifiedOpportunities: boolean;
+      hasApprovedMessages: boolean;
+      hasLinksToVerify: boolean;
+      inboundMonitoringReady: boolean;
+      inboundMonitoringMode: "legacy_gmail";
+      hasMessagesToMonitor: boolean;
+    }> = [];
+    for (const inbox of result.page) {
+      if (
+        inbox.provider !== "gmail" ||
+        !inbox.oauthScopes?.split(/\s+/).includes(
+          "https://www.googleapis.com/auth/gmail.readonly",
+        ) ||
+        !(inbox.oauthRefreshToken || inbox.oauthAccessToken) ||
+        ["disconnected", "suspended"].includes(inbox.status)
+      ) continue;
+      const [site, inboxes] = await Promise.all([
+        ctx.db.get(inbox.siteId),
+        ctx.db
+          .query("outreach_inboxes")
+          .withIndex("by_site", (q) => q.eq("siteId", inbox.siteId))
+          .take(2),
+      ]);
+      if (inboxes.length !== 1 || inboxes[0]._id !== inbox._id) continue;
+      const policy = await outreachSettlementPolicy(ctx, site);
+      if (policy.maximumDeliveryBoundaryAt === 0) continue;
+      const [candidate] = await legacyUnboundMessages(ctx, inbox._id, {
+        limit: 1,
+        maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
+      });
+      if (!candidate || !policy.allows(
+        candidate.deliveryClaimedAt ?? candidate.sentAt,
+      )) {
+        continue;
+      }
+      page.push({
+        siteId: inbox.siteId,
+        autopilotEnabled: false,
+        autopilotRolloutMode: "observe",
+        inboxConfigurationValid: true,
+        hasInbox: true,
+        inboxProvider: inbox.provider,
+        inboxStatus: inbox.status,
+        inboxMode: inbox.mode,
+        inboxVerified: Boolean(inbox.verifiedAt),
+        hasVerifiedOpportunities: false,
+        hasApprovedMessages: false,
+        hasLinksToVerify: false,
+        inboundMonitoringReady: true,
+        inboundMonitoringMode: "legacy_gmail",
+        hasMessagesToMonitor: true,
+      });
+    }
+    return { ...result, page };
+  },
+});
+
+export const getLegacyInboundFleetState = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const inboxes = await ctx.db
+      .query("outreach_inboxes")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .take(2);
+    if (inboxes.length !== 1) return null;
+    const inbox = inboxes[0];
+    if (
+      inbox.provider !== "gmail" ||
+      !inbox.oauthScopes?.split(/\s+/).includes(
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ) ||
+      !(inbox.oauthRefreshToken || inbox.oauthAccessToken) ||
+      ["disconnected", "suspended"].includes(inbox.status)
+    ) return null;
+    const site = await ctx.db.get(siteId);
+    const policy = await outreachSettlementPolicy(ctx, site);
+    if (policy.maximumDeliveryBoundaryAt === 0) return null;
+    const [candidate] = await legacyUnboundMessages(ctx, inbox._id, {
+      limit: 1,
+      maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
+    });
+    if (!candidate || !policy.allows(
+      candidate.deliveryClaimedAt ?? candidate.sentAt,
+    )) return null;
+    return {
+      siteId,
+      autopilotEnabled: false,
+      autopilotRolloutMode: "observe",
+      inboxConfigurationValid: true,
+      hasInbox: true,
+      inboxProvider: inbox.provider,
+      inboxStatus: inbox.status,
+      inboxMode: inbox.mode,
+      inboxVerified: Boolean(inbox.verifiedAt),
+      hasVerifiedOpportunities: false,
+      hasApprovedMessages: false,
+      hasLinksToVerify: false,
+      inboundMonitoringReady: true,
+      inboundMonitoringMode: "legacy_gmail" as const,
+      hasMessagesToMonitor: true,
+    };
+  },
+});
+
+export const getLegacyInboundOwnership = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    return (await outreachSettlementLifecycleActive(ctx, site))
+      ? { userId: site!.userId }
       : null;
   },
 });
@@ -652,6 +1151,13 @@ const liveOpportunityEvidenceValidator = v.object({
   targetCheckedAt: v.optional(v.number()),
 });
 
+const inboundRelayBindingValidator = v.object({
+  aliasAddress: v.string(),
+  aliasHash: v.string(),
+  aliasDomain: v.string(),
+  outboundRfcMessageId: v.string(),
+});
+
 /**
  * Atomically select and lease one approved message.
  *
@@ -666,10 +1172,18 @@ export const claimApprovedDelivery = internalMutation({
     release: v.literal("approved"),
     dnsEvidence: dnsEvidenceValidator,
     opportunityEvidence: liveOpportunityEvidenceValidator,
+    inboundRelay: v.optional(inboundRelayBindingValidator),
   },
   handler: async (
     ctx,
-    { siteId, attemptId, release, dnsEvidence, opportunityEvidence },
+    {
+      siteId,
+      attemptId,
+      release,
+      dnsEvidence,
+      opportunityEvidence,
+      inboundRelay,
+    },
   ) => {
     const now = Date.now();
     if (!/^[a-z0-9-]{20,100}$/i.test(attemptId)) {
@@ -747,6 +1261,57 @@ export const claimApprovedDelivery = internalMutation({
         claimed: false as const,
         reason: "This delivery was not released through the current owner-approved mode.",
       };
+    }
+
+    const configuredRelayDomain = normalizeInboundRelayDomain(
+      process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    );
+    const relayIsConfigured = inboundRelayConfigured(inboundRelayRuntimeConfig());
+    const legacyGmailReadReady = Boolean(
+      inbox.provider === "gmail" &&
+      inbox.oauthScopes?.split(/\s+/).includes(
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ) &&
+      (inbox.oauthRefreshToken || inbox.oauthAccessToken),
+    );
+    if (!inboundRelay && !legacyGmailReadReady) {
+      return {
+        claimed: false as const,
+        reason:
+          "The signed inbound relay is unavailable, so replies and opt-outs cannot be handled safely.",
+      };
+    }
+    if (inboundRelay) {
+      const aliasDomain = normalizeInboundRelayDomain(inboundRelay.aliasDomain);
+      const aliasAddress = inboundRelay.aliasAddress.trim().toLowerCase();
+      const outboundMessageId = normalizeRfcMessageId(
+        inboundRelay.outboundRfcMessageId,
+      );
+      if (
+        !relayIsConfigured ||
+        !configuredRelayDomain ||
+        aliasDomain !== configuredRelayDomain ||
+        !aliasAddress.endsWith(`@${configuredRelayDomain}`) ||
+        !/^reply-[a-z0-9_-]{32,64}@[a-z0-9.-]+$/i.test(aliasAddress) ||
+        inboundRelayAliasHash(aliasAddress) !== inboundRelay.aliasHash ||
+        !/^[a-f0-9]{64}$/.test(inboundRelay.aliasHash) ||
+        !outboundMessageId ||
+        !outboundMessageId.endsWith(
+          `@${normalizeDomain(inbox.senderDomain ?? "")}>`,
+        ) ||
+        !inboundRelayDsnRoutingReady({
+          inbox,
+          now,
+          rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+          runtimeConfig: inboundRelayRuntimeConfig(),
+        })
+      ) {
+        return {
+          claimed: false as const,
+          reason:
+            "The signed inbound relay binding or hard-bounce routing canary is invalid or unavailable.",
+        };
+      }
     }
 
     const senderIssues = senderClaimIssues({
@@ -982,6 +1547,23 @@ export const claimApprovedDelivery = internalMutation({
       deliveryLeaseExpiresAt: now + OUTREACH_DELIVERY_LEASE_MS,
       deliveryLeaseExpiredAt: undefined,
       failureReason: undefined,
+      ...(inboundRelay
+        ? {
+            inboundRelayAliasHash: inboundRelay.aliasHash,
+            inboundRelayAliasDomain: normalizeInboundRelayDomain(
+              inboundRelay.aliasDomain,
+            )!,
+            inboundRelayOutboundMessageIdHash: inboundRelayMessageIdHash(
+              inboundRelay.outboundRfcMessageId,
+            ),
+            inboundRelayRolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+            inboundRelayInboxConfigurationVersion:
+              inbox.configurationVersion ?? 0,
+            inboundRelaySenderDomain: normalizeDomain(
+              inbox.senderDomain ?? "",
+            ),
+          }
+        : {}),
       updatedAt: now,
     });
     return {
@@ -1269,7 +1851,782 @@ export const recordReply = internalMutation({
   },
 });
 
-// ── Inbound reply, bounce and opt-out receipts ──
+// ── Signed receiving-only relay receipts ──
+
+export const createInboundRelayDsnCanary = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    aliasHash: v.string(),
+    outboundMessageIdHash: v.string(),
+    testRecipientHash: v.string(),
+    relayDomain: v.string(),
+    senderDomain: v.string(),
+    rolloutEpoch: v.number(),
+    inboxConfigurationVersion: v.number(),
+    relayConfigurationHash: v.string(),
+    adapterVersion: v.string(),
+    retentionPolicyHash: v.string(),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    attemptId: v.string(),
+    deliveryLeaseExpiresAt: v.number(),
+    dnsEvidence: dnsEvidenceValidator,
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const [site, inbox, existingCanaries] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+      ctx.db
+        .query("outreach_inbound_relay_canaries")
+        .withIndex("by_inbox", (q) => q.eq("inboxId", args.inboxId))
+        .take(2),
+    ]);
+    const runtimeConfig = inboundRelayRuntimeConfig();
+    const configurationHash = inboundRelayConfigurationHash(runtimeConfig);
+    const relayDomain = normalizeInboundRelayDomain(args.relayDomain);
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !inbox ||
+      inbox.siteId !== args.siteId ||
+      inbox.provider !== "gmail" ||
+      ["disconnected", "suspended"].includes(inbox.status) ||
+      (inbox.configurationVersion ?? 0) !== args.inboxConfigurationVersion ||
+      (site.autopilotRolloutEpoch ?? 0) !== args.rolloutEpoch ||
+      normalizeDomain(inbox.senderDomain ?? "") !==
+        normalizeDomain(args.senderDomain) ||
+      !configurationHash ||
+      configurationHash !== args.relayConfigurationHash ||
+      relayDomain !== normalizeInboundRelayDomain(runtimeConfig.domain) ||
+      args.adapterVersion !== runtimeConfig.adapterVersion ||
+      args.retentionPolicyHash !== runtimeConfig.retentionPolicyHash ||
+      !/^[a-f0-9]{64}$/.test(args.aliasHash) ||
+      !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash) ||
+      !/^[a-f0-9]{64}$/.test(args.testRecipientHash) ||
+      args.testRecipientHash === inboundRelayEmailHash(inbox.fromEmail) ||
+      !Number.isSafeInteger(args.issuedAt) ||
+      Math.abs(now - args.issuedAt) > 60_000 ||
+      args.expiresAt - args.issuedAt !==
+        OUTREACH_INBOUND_RELAY_CANARY_TTL_MS ||
+      !/^[a-z0-9-]{20,100}$/i.test(args.attemptId) ||
+      args.deliveryLeaseExpiresAt - args.issuedAt !==
+        OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS ||
+      existingCanaries.length > 1
+    ) {
+      throw new Error("Inbound relay canary crossed a tenant or configuration boundary");
+    }
+    const senderIssues = senderClaimIssues({
+      siteDomain: site.domain,
+      provider: inbox.provider,
+      status: inbox.status,
+      fromEmail: inbox.fromEmail,
+      fromName: inbox.fromName,
+      physicalMailingAddress: inbox.physicalMailingAddress,
+      complianceConfirmedAt: inbox.complianceConfirmedAt,
+      verifiedAt: inbox.verifiedAt,
+      oauthScopes: inbox.oauthScopes,
+      hasCredential: Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken),
+      senderDomain: inbox.senderDomain,
+    });
+    const dnsIssues = liveDnsEvidenceIssues({
+      checkedAt: args.dnsEvidence.checkedAt,
+      now,
+      senderDomain: args.dnsEvidence.senderDomain,
+      expectedSenderDomain: inbox.senderDomain,
+      dkimSelector: args.dnsEvidence.dkimSelector,
+      expectedDkimSelector: inbox.dkimSelector,
+      spf: args.dnsEvidence.spf,
+      dkim: args.dnsEvidence.dkim,
+      dmarc: args.dnsEvidence.dmarc,
+    });
+    const allowedScopes = new Set([
+      "https://www.googleapis.com/auth/gmail.send",
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ]);
+    const grantedScopes = inbox.oauthScopes?.split(/\s+/).filter(Boolean) ?? [];
+    if (
+      senderIssues.length > 0 ||
+      dnsIssues.length > 0 ||
+      !grantedScopes.includes("https://www.googleapis.com/auth/gmail.send") ||
+      !grantedScopes.every((scope) => allowedScopes.has(scope))
+    ) {
+      throw new Error("The Gmail sender is not ready for a routing canary");
+    }
+    const existing = existingCanaries[0];
+    if (inboundRelayDsnRoutingReady({
+      inbox,
+      now,
+      rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      runtimeConfig,
+    })) {
+      throw new Error(
+        "Bounce routing is already verified for the current inbox configuration",
+      );
+    }
+    if (
+      existing &&
+      existing.issuedAt + OUTREACH_INBOUND_RELAY_CANARY_COOLDOWN_MS > now
+    ) {
+      throw new Error(
+        "A Gmail routing canary has already been attempted for this inbox today",
+      );
+    }
+    if (existing && !existing.verifiedAt && existing.expiresAt > now) {
+      throw new Error("A current inbound relay canary challenge is already pending");
+    }
+    const record = {
+      siteId: args.siteId,
+      inboxId: args.inboxId,
+      aliasHash: args.aliasHash,
+      outboundMessageIdHash: args.outboundMessageIdHash,
+      testRecipientHash: args.testRecipientHash,
+      relayDomain: relayDomain!,
+      senderDomain: normalizeDomain(args.senderDomain),
+      rolloutEpoch: args.rolloutEpoch,
+      inboxConfigurationVersion: args.inboxConfigurationVersion,
+      relayConfigurationHash: args.relayConfigurationHash,
+      adapterVersion: args.adapterVersion,
+      retentionPolicyHash: args.retentionPolicyHash,
+      issuedAt: args.issuedAt,
+      expiresAt: args.expiresAt,
+      deliveryStatus: "claimed",
+      deliveryAttemptId: args.attemptId,
+      deliveryClaimedAt: args.issuedAt,
+      deliveryLeaseExpiresAt: args.deliveryLeaseExpiresAt,
+      providerMessageIdHash: undefined,
+      deliveryFinalizedAt: undefined,
+      verifiedAt: undefined,
+      eventKey: undefined,
+      payloadHash: undefined,
+      evidenceHash: undefined,
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, record);
+      return { canaryId: existing._id, created: false as const };
+    }
+    const canaryId = await ctx.db.insert(
+      "outreach_inbound_relay_canaries",
+      record,
+    );
+    return { canaryId, created: true as const };
+  },
+});
+
+export const finalizeInboundRelayDsnCanaryDelivery = internalMutation({
+  args: {
+    canaryId: v.id("outreach_inbound_relay_canaries"),
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    attemptId: v.string(),
+    inboxConfigurationVersion: v.number(),
+    outcome: v.union(
+      v.literal("accepted"),
+      v.literal("unverified"),
+      v.literal("failed"),
+    ),
+    providerMessageIdHash: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const [canary, inbox] = await Promise.all([
+      ctx.db.get(args.canaryId),
+      ctx.db.get(args.inboxId),
+    ]);
+    if (
+      canary?.verifiedAt &&
+      canary.siteId === args.siteId &&
+      canary.inboxId === args.inboxId &&
+      canary.deliveryAttemptId === args.attemptId
+    ) {
+      return { recorded: false as const, dsnVerified: true as const };
+    }
+    if (
+      !canary ||
+      canary.siteId !== args.siteId ||
+      canary.inboxId !== args.inboxId ||
+      canary.deliveryStatus !== "claimed" ||
+      canary.deliveryAttemptId !== args.attemptId ||
+      !inbox ||
+      inbox.siteId !== args.siteId ||
+      (inbox.configurationVersion ?? 0) !== args.inboxConfigurationVersion ||
+      (args.outcome === "accepted") !==
+        Boolean(args.providerMessageIdHash) ||
+      (args.providerMessageIdHash !== undefined &&
+        !/^[a-f0-9]{64}$/.test(args.providerMessageIdHash))
+    ) {
+      throw new Error("Inbound relay canary delivery lost its exact claim");
+    }
+    await ctx.db.patch(canary._id, {
+      deliveryStatus: args.outcome,
+      deliveryLeaseExpiresAt: undefined,
+      providerMessageIdHash: args.providerMessageIdHash,
+      deliveryFinalizedAt: now,
+      ...(args.outcome === "failed" ? { expiresAt: now } : {}),
+    });
+    return { recorded: true as const };
+  },
+});
+
+export const getInboundRelayDsnCanaryCandidate = internalQuery({
+  args: {
+    aliasHash: v.string(),
+    aliasDomain: v.string(),
+  },
+  handler: async (ctx, { aliasHash, aliasDomain }) => {
+    const now = Date.now();
+    const runtimeConfig = inboundRelayRuntimeConfig();
+    const configurationHash = inboundRelayConfigurationHash(runtimeConfig);
+    const configuredDomain = normalizeInboundRelayDomain(runtimeConfig.domain);
+    if (
+      !configurationHash ||
+      !configuredDomain ||
+      normalizeInboundRelayDomain(aliasDomain) !== configuredDomain ||
+      !/^[a-f0-9]{64}$/.test(aliasHash)
+    ) return null;
+    const canaries = await ctx.db
+      .query("outreach_inbound_relay_canaries")
+      .withIndex("by_alias_hash", (q) => q.eq("aliasHash", aliasHash))
+      .take(2);
+    if (canaries.length !== 1) return null;
+    const canary = canaries[0];
+    const [site, inbox] = await Promise.all([
+      ctx.db.get(canary.siteId),
+      ctx.db.get(canary.inboxId),
+    ]);
+    if (
+      canary.verifiedAt ||
+      !["claimed", "accepted", "unverified"].includes(
+        canary.deliveryStatus,
+      ) ||
+      canary.expiresAt <= now ||
+      canary.relayDomain !== configuredDomain ||
+      canary.relayConfigurationHash !== configurationHash ||
+      canary.adapterVersion !== runtimeConfig.adapterVersion ||
+      canary.retentionPolicyHash !== runtimeConfig.retentionPolicyHash ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      (site.autopilotRolloutEpoch ?? 0) !== canary.rolloutEpoch ||
+      !inbox ||
+      inbox.siteId !== canary.siteId ||
+      inbox.provider !== "gmail" ||
+      ["disconnected", "suspended"].includes(inbox.status) ||
+      (inbox.configurationVersion ?? 0) !==
+        canary.inboxConfigurationVersion ||
+      normalizeDomain(inbox.senderDomain ?? "") !== canary.senderDomain
+    ) return null;
+    return {
+      canaryId: canary._id,
+      siteId: canary.siteId,
+      inboxId: canary.inboxId,
+      aliasHash: canary.aliasHash,
+      aliasDomain: canary.relayDomain,
+      testRecipientHash: canary.testRecipientHash,
+      outboundRfcMessageIdHash: canary.outboundMessageIdHash,
+      issuedAt: canary.issuedAt,
+      expiresAt: canary.expiresAt,
+      rolloutEpoch: canary.rolloutEpoch,
+      inboxConfigurationVersion: canary.inboxConfigurationVersion,
+      senderDomain: canary.senderDomain,
+      relayConfigurationHash: canary.relayConfigurationHash,
+      adapterVersion: canary.adapterVersion,
+      retentionPolicyHash: canary.retentionPolicyHash,
+    };
+  },
+});
+
+/** The only operation that can seal bounce routing. Callers cannot attest to
+ * readiness: they must present digests from a signed hard-DSN webhook bound to
+ * the active one-time challenge. */
+export const recordInboundRelayDsnCanaryReceipt = internalMutation({
+  args: {
+    canaryId: v.id("outreach_inbound_relay_canaries"),
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    aliasHash: v.string(),
+    aliasDomain: v.string(),
+    eventKey: v.string(),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    inboundMessageIdHash: v.string(),
+    fromEmail: v.string(),
+    receivedAt: v.number(),
+    rolloutEpoch: v.number(),
+    inboxConfigurationVersion: v.number(),
+    senderDomain: v.string(),
+    relayConfigurationHash: v.string(),
+    adapterVersion: v.string(),
+    retentionPolicyHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const [canary, site, inbox] = await Promise.all([
+      ctx.db.get(args.canaryId),
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+    ]);
+    if (canary?.verifiedAt) {
+      if (
+        canary.eventKey === args.eventKey &&
+        canary.payloadHash === args.payloadHash
+      ) return { recorded: false as const, replay: true as const };
+      throw new Error("Inbound relay canary was already sealed by different evidence");
+    }
+    const runtimeConfig = inboundRelayRuntimeConfig();
+    const configurationHash = inboundRelayConfigurationHash(runtimeConfig);
+    const configuredDomain = normalizeInboundRelayDomain(runtimeConfig.domain);
+    const fromEmail = args.fromEmail.trim().toLowerCase();
+    if (
+      !canary ||
+      canary.siteId !== args.siteId ||
+      canary.inboxId !== args.inboxId ||
+      canary.aliasHash !== args.aliasHash ||
+      canary.relayDomain !== configuredDomain ||
+      canary.relayDomain !== normalizeInboundRelayDomain(args.aliasDomain) ||
+      canary.rolloutEpoch !== args.rolloutEpoch ||
+      canary.inboxConfigurationVersion !== args.inboxConfigurationVersion ||
+      canary.senderDomain !== normalizeDomain(args.senderDomain) ||
+      canary.relayConfigurationHash !== args.relayConfigurationHash ||
+      canary.adapterVersion !== args.adapterVersion ||
+      canary.retentionPolicyHash !== args.retentionPolicyHash ||
+      !["claimed", "accepted", "unverified"].includes(
+        canary.deliveryStatus,
+      ) ||
+      !configurationHash ||
+      configurationHash !== args.relayConfigurationHash ||
+      runtimeConfig.adapterVersion !== args.adapterVersion ||
+      runtimeConfig.retentionPolicyHash !== args.retentionPolicyHash ||
+      canary.expiresAt <= now ||
+      args.receivedAt < canary.issuedAt - 60_000 ||
+      args.receivedAt > canary.expiresAt ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      (site.autopilotRolloutEpoch ?? 0) !== args.rolloutEpoch ||
+      !inbox ||
+      inbox.siteId !== args.siteId ||
+      inbox.provider !== "gmail" ||
+      ["disconnected", "suspended"].includes(inbox.status) ||
+      (inbox.configurationVersion ?? 0) !== args.inboxConfigurationVersion ||
+      normalizeDomain(inbox.senderDomain ?? "") !== normalizeDomain(args.senderDomain) ||
+      !/^[a-f0-9]{64}$/.test(args.aliasHash) ||
+      !/^[a-f0-9]{64}$/.test(args.eventKey) ||
+      !/^[a-f0-9]{64}$/.test(args.payloadHash) ||
+      !/^[a-f0-9]{64}$/.test(args.evidenceHash) ||
+      !/^[a-f0-9]{64}$/.test(args.inboundMessageIdHash) ||
+      !/^[^@\s<>\r\n]+@[^@\s<>\r\n]+\.[a-z]{2,24}$/i.test(fromEmail)
+    ) {
+      throw new Error("Inbound relay canary receipt crossed a tenant or configuration boundary");
+    }
+    await ctx.db.patch(canary._id, {
+      verifiedAt: now,
+      deliveryStatus: "dsn_verified",
+      deliveryLeaseExpiresAt: undefined,
+      eventKey: args.eventKey,
+      payloadHash: args.payloadHash,
+      evidenceHash: args.evidenceHash,
+    });
+    await ctx.db.patch(inbox._id, {
+      inboundRelayDsnRoutingVerifiedAt: now,
+      inboundRelayDsnRoutingConfigurationVersion:
+        args.inboxConfigurationVersion,
+      inboundRelayDsnRoutingRolloutEpoch: args.rolloutEpoch,
+      inboundRelayDsnRoutingSenderDomain: normalizeDomain(args.senderDomain),
+      inboundRelayDsnRoutingRelayConfigurationHash:
+        args.relayConfigurationHash,
+      inboundRelayDsnRoutingEvidenceHash: args.evidenceHash,
+      inboundRelayDsnRoutingAdapterVersion: args.adapterVersion,
+      inboundRelayDsnRoutingRetentionPolicyHash: args.retentionPolicyHash,
+      inboundLastCompletedAt: now,
+      inboundLastError: undefined,
+      updatedAt: now,
+    });
+    return { recorded: true as const };
+  },
+});
+
+const inboundRelayKindValidator = v.union(
+  v.literal("reply"),
+  v.literal("unsubscribe"),
+  v.literal("bounce"),
+  v.literal("ignored"),
+);
+
+const inboundRelayIgnoredReasons = new Set([
+  "automatic_message",
+  "invalid_sender",
+  "missing_reply_proof",
+  "recipient_mismatch",
+  "sender_authentication_failed",
+  "soft_or_invalid_dsn",
+  "timestamp_mismatch",
+]);
+
+/** Resolve an unguessable per-message alias to one bodyless candidate. This
+ * query is internal-only and returns no draft body or mailbox credential. */
+export const getInboundRelayCandidate = internalQuery({
+  args: {
+    aliasHash: v.string(),
+    aliasDomain: v.string(),
+  },
+  handler: async (ctx, { aliasHash, aliasDomain }) => {
+    const configuredDomain = normalizeInboundRelayDomain(
+      process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    );
+    if (
+      !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
+      !configuredDomain ||
+      normalizeInboundRelayDomain(aliasDomain) !== configuredDomain ||
+      !/^[a-f0-9]{64}$/.test(aliasHash)
+    ) {
+      return null;
+    }
+    const messages = await ctx.db
+      .query("outreach_messages")
+      .withIndex("by_relay_alias_hash", (q) =>
+        q.eq("inboundRelayAliasHash", aliasHash)
+      )
+      .take(2);
+    if (messages.length !== 1) return null;
+    const message = messages[0];
+    const settlementBoundaryAt =
+      message.deliveryClaimedAt ?? message.sentAt;
+    const chronologyAt = message.sentAt ?? message.deliveryClaimedAt;
+    const [site, inbox] = await Promise.all([
+      ctx.db.get(message.siteId),
+      message.inboxId ? ctx.db.get(message.inboxId) : null,
+    ]);
+    if (
+      !site ||
+      !(await relaySettlementAuthorized(ctx, site, settlementBoundaryAt)) ||
+      !inbox ||
+      inbox.siteId !== message.siteId ||
+      message.inboundRelayAliasDomain !== configuredDomain ||
+      message.inboundRelayInboxConfigurationVersion === undefined ||
+      message.inboundRelayRolloutEpoch === undefined ||
+      !message.inboundRelaySenderDomain ||
+      message.inboundRelaySenderDomain !==
+        normalizeDomain(message.inboundRelaySenderDomain) ||
+      !/^[a-f0-9]{64}$/.test(
+        message.inboundRelayOutboundMessageIdHash ?? "",
+      ) ||
+      ![
+        "sending",
+        "delivery_unverified",
+        "sent",
+        "delivery_reviewed_sent",
+        "replied",
+        "bounced",
+      ].includes(
+        message.status,
+      )
+    ) {
+      return null;
+    }
+    if (
+      message.status === "sending" &&
+      (message.deliveryLeaseExpiresAt ?? 0) > Date.now()
+    ) {
+      return {
+        state: "pending" as const,
+        siteId: message.siteId,
+        inboxId: inbox._id,
+        messageId: message._id,
+        toEmail: message.toEmail,
+        toDomain: message.toDomain,
+        sentAt: chronologyAt!,
+        outboundRfcMessageIdHash:
+          message.inboundRelayOutboundMessageIdHash!,
+        aliasHash,
+        aliasDomain: configuredDomain,
+        rolloutEpoch: message.inboundRelayRolloutEpoch,
+        inboxConfigurationVersion:
+          message.inboundRelayInboxConfigurationVersion,
+        senderDomain: message.inboundRelaySenderDomain,
+      };
+    }
+    return {
+      state:
+        ["sending", "delivery_unverified"].includes(message.status)
+          ? "ambiguous"
+          : "settled",
+      siteId: message.siteId,
+      inboxId: inbox._id,
+      messageId: message._id,
+      toEmail: message.toEmail,
+      toDomain: message.toDomain,
+      sentAt: chronologyAt!,
+      outboundRfcMessageIdHash:
+        message.inboundRelayOutboundMessageIdHash!,
+      aliasHash,
+      aliasDomain: configuredDomain,
+      rolloutEpoch: message.inboundRelayRolloutEpoch,
+      inboxConfigurationVersion:
+        message.inboundRelayInboxConfigurationVersion,
+      senderDomain: message.inboundRelaySenderDomain,
+    };
+  },
+});
+
+/** Atomically deduplicate and settle one signed relay event. The raw subject
+ * and body never cross this mutation boundary. */
+export const recordInboundRelayReceipt = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.id("outreach_messages"),
+    aliasHash: v.string(),
+    aliasDomain: v.string(),
+    eventKey: v.string(),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    inboundMessageId: v.string(),
+    outboundMessageIdHash: v.string(),
+    kind: inboundRelayKindValidator,
+    reason: v.optional(v.string()),
+    fromEmail: v.optional(v.string()),
+    receivedAt: v.number(),
+    rolloutEpoch: v.number(),
+    inboxConfigurationVersion: v.number(),
+    senderDomain: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const priorEvent = await ctx.db
+      .query("outreach_inbound_relay_receipts")
+      .withIndex("by_event_key", (q) => q.eq("eventKey", args.eventKey))
+      .unique();
+    if (priorEvent) {
+      if (priorEvent.payloadHash !== args.payloadHash) {
+        throw new Error("Inbound relay event identifier was reused with different evidence");
+      }
+      return { recorded: false as const, replay: true as const };
+    }
+
+    const [site, inbox, message] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+      ctx.db.get(args.messageId),
+    ]);
+    const configuredDomain = normalizeInboundRelayDomain(
+      process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    );
+    if (
+      !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
+      !configuredDomain ||
+      normalizeInboundRelayDomain(args.aliasDomain) !== configuredDomain ||
+      !site ||
+      !(await relaySettlementAuthorized(
+        ctx,
+        site,
+        message?.deliveryClaimedAt ?? message?.sentAt,
+      )) ||
+      !inbox ||
+      inbox.siteId !== args.siteId ||
+      !message ||
+      message.siteId !== args.siteId ||
+      message.inboxId !== args.inboxId ||
+      ![
+        "delivery_unverified",
+        "sent",
+        "delivery_reviewed_sent",
+        "replied",
+        "bounced",
+      ].includes(
+        message.status,
+      ) && !(
+        message.status === "sending" &&
+        (message.deliveryLeaseExpiresAt ?? 0) <= now
+      ) ||
+      message.inboundRelayAliasHash !== args.aliasHash ||
+      message.inboundRelayAliasDomain !== configuredDomain ||
+      message.inboundRelayOutboundMessageIdHash !==
+        args.outboundMessageIdHash ||
+      message.inboundRelayRolloutEpoch !== args.rolloutEpoch ||
+      message.inboundRelayInboxConfigurationVersion !==
+        args.inboxConfigurationVersion ||
+      message.inboundRelaySenderDomain !== normalizeDomain(args.senderDomain) ||
+      !/^[a-f0-9]{64}$/.test(args.aliasHash) ||
+      !/^[a-f0-9]{64}$/.test(args.eventKey) ||
+      !/^[a-f0-9]{64}$/.test(args.payloadHash) ||
+      !/^[a-f0-9]{64}$/.test(args.evidenceHash) ||
+      !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash) ||
+      !normalizeRfcMessageId(args.inboundMessageId) ||
+      !Number.isSafeInteger(args.receivedAt) ||
+      args.receivedAt <
+        (message.sentAt ?? message.deliveryClaimedAt ?? 0) - 60_000 ||
+      args.receivedAt > now + 5 * 60 * 1000 ||
+      (args.kind === "ignored" &&
+        (!args.reason || !inboundRelayIgnoredReasons.has(args.reason))) ||
+      (args.kind !== "ignored" && args.reason !== undefined)
+    ) {
+      throw new Error("Inbound relay receipt crossed a tenant or delivery boundary");
+    }
+
+    const normalizedFrom = args.fromEmail?.trim().toLowerCase();
+    if (
+      normalizedFrom &&
+      !/^[^@\s<>\r\n]+@[^@\s<>\r\n]+\.[a-z]{2,24}$/i.test(normalizedFrom)
+    ) {
+      throw new Error("Inbound relay sender is invalid");
+    }
+    if (args.kind !== "ignored" && !normalizedFrom) {
+      throw new Error("A classified inbound relay receipt requires a sender");
+    }
+    if (
+      args.kind === "unsubscribe" &&
+      normalizedFrom !== message.toEmail.trim().toLowerCase()
+    ) {
+      throw new Error("Only the exact recipient can issue a permanent opt-out");
+    }
+
+    // Ignored/ambiguous mail has no state transition and is intentionally not
+    // persisted. A leaked alias therefore cannot create unbounded audit rows.
+    // The five-minute signed-envelope window remains the retry bound.
+    if (args.kind === "ignored") {
+      return { recorded: false as const, ignored: true as const };
+    }
+
+    const priorMessageReceipt = await ctx.db
+      .query("outreach_inbound_relay_receipts")
+      .withIndex("by_message_inbound_id", (q) =>
+        q.eq("messageId", args.messageId).eq(
+          "inboundMessageId",
+          normalizeRfcMessageId(args.inboundMessageId),
+        )
+      )
+      .unique();
+    if (priorMessageReceipt) {
+      if (priorMessageReceipt.payloadHash !== args.payloadHash) {
+        throw new Error("Inbound message identifier was reused with different evidence");
+      }
+      return { recorded: false as const, replay: true as const };
+    }
+
+    const priorKinds = await ctx.db
+      .query("outreach_inbound_relay_receipts")
+      .withIndex("by_site_message", (q) =>
+        q.eq("siteId", args.siteId).eq("messageId", args.messageId)
+      )
+      .take(4);
+    if (priorKinds.some((receipt) => receipt.kind === args.kind)) {
+      return { recorded: false as const, duplicateKind: true as const };
+    }
+
+    const inboundProvesAmbiguousDelivery = [
+      "sending",
+      "delivery_unverified",
+    ].includes(message.status);
+    if (inboundProvesAmbiguousDelivery) {
+      const deliveredAt = message.deliveryClaimedAt ?? args.receivedAt;
+      const today = utcDayKey(now);
+      const current = inbox.sentTodayDay === today ? (inbox.sentToday ?? 0) : 0;
+      await ctx.db.patch(inbox._id, {
+        ...(utcDayKey(deliveredAt) === today
+          ? { sentToday: current + 1, sentTodayDay: today }
+          : {}),
+        lastSentAt: Math.max(inbox.lastSentAt ?? 0, deliveredAt),
+        status: inbox.status === "connected" ? "warming" : inbox.status,
+        updatedAt: now,
+      });
+      const opportunity = await ctx.db.get(message.opportunityId);
+      if (opportunity && opportunity.siteId === args.siteId) {
+        await ctx.db.patch(opportunity._id, {
+          status: "contacted",
+          contactedAt: deliveredAt,
+          updatedAt: now,
+        });
+      }
+      const contact = await ctx.db
+        .query("outreach_contacts")
+        .withIndex("by_site_email", (q) =>
+          q.eq("siteId", args.siteId).eq("email", message.toEmail)
+        )
+        .unique();
+      if (contact) {
+        await ctx.db.patch(contact._id, {
+          lastContactedAt: deliveredAt,
+          updatedAt: now,
+        });
+      }
+      await ctx.db.patch(message._id, {
+        status: "delivery_reviewed_sent",
+        sentAt: deliveredAt,
+        deliveryReviewedAt: now,
+        deliveryReviewResolution: "inbound_relay_proof",
+        failureReason:
+          "An authenticated inbound relay receipt proved delivery after Gmail's direct receipt was ambiguous.",
+        updatedAt: now,
+      });
+    }
+
+    {
+      const shouldPromote = shouldPromoteOutreachInbound({
+        existingKind: message.inboundReceiptKind as
+          | "reply"
+          | "unsubscribe"
+          | "bounce"
+          | undefined,
+        existingAt: message.inboundReceiptAt,
+        nextKind: args.kind,
+        nextAt: args.receivedAt,
+      });
+      if (args.kind === "unsubscribe") {
+        await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+        await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
+      } else if (args.kind === "bounce") {
+        await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
+      }
+      await ctx.db.patch(message._id, {
+        inboundCheckedAt: now,
+        ...(shouldPromote
+          ? {
+              status: args.kind === "bounce" ? "bounced" : "replied",
+              repliedAt:
+                args.kind === "bounce" ? message.repliedAt : args.receivedAt,
+              bouncedAt:
+                args.kind === "bounce" ? args.receivedAt : message.bouncedAt,
+              inboundReceiptHash: args.evidenceHash,
+              inboundReceiptKind: args.kind,
+              inboundReceiptAt: args.receivedAt,
+              inboundReceiptFrom: normalizedFrom,
+            }
+          : {}),
+        updatedAt: now,
+      });
+    }
+
+    await ctx.db.insert("outreach_inbound_relay_receipts", {
+      siteId: args.siteId,
+      inboxId: args.inboxId,
+      messageId: args.messageId,
+      eventKey: args.eventKey,
+      payloadHash: args.payloadHash,
+      evidenceHash: args.evidenceHash,
+      aliasHash: args.aliasHash,
+      inboundMessageId: normalizeRfcMessageId(args.inboundMessageId),
+      outboundMessageIdHash: args.outboundMessageIdHash,
+      kind: args.kind,
+      reason: undefined,
+      fromEmail: normalizedFrom,
+      receivedAt: args.receivedAt,
+      rolloutEpoch: args.rolloutEpoch,
+      inboxConfigurationVersion: args.inboxConfigurationVersion,
+      senderDomain: normalizeDomain(args.senderDomain),
+      processedAt: now,
+    });
+    await ctx.db.patch(inbox._id, {
+      inboundLastCompletedAt: now,
+      inboundLastError: undefined,
+      updatedAt: now,
+    });
+    return { recorded: true as const, kind: args.kind };
+  },
+});
+
+// ── Legacy Gmail readonly inbound receipts ──
 
 const inboundKindValidator = v.union(
   v.literal("reply"),
@@ -1297,8 +2654,8 @@ export const claimInboundSync = internalMutation({
       throw new Error("Inbound sync attempt identifier is invalid");
     }
     const site = await ctx.db.get(siteId);
-    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
-      return { claimed: false as const, reason: "Tenant is unavailable or parked." };
+    if (!(await outreachSettlementLifecycleActive(ctx, site))) {
+      return { claimed: false as const, reason: "Tenant is unavailable." };
     }
     const inboxes = await ctx.db
       .query("outreach_inboxes")
@@ -1328,34 +2685,33 @@ export const claimInboundSync = internalMutation({
       return { claimed: false as const, reason: "An inbound Gmail sync is already running." };
     }
 
-    const [sent, reviewedSent, replied] = await Promise.all([
-      ctx.db
-        .query("outreach_messages")
-        .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "sent"))
-        .order("desc")
-        .take(200),
-      ctx.db
-        .query("outreach_messages")
-        .withIndex("by_site_status", (q) =>
-          q.eq("siteId", siteId).eq("status", "delivery_reviewed_sent")
-        )
-        .order("desc")
-        .take(200),
-      ctx.db
-        .query("outreach_messages")
-        .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "replied"))
-        .order("desc")
-        .take(200),
+    const policy = await outreachSettlementPolicy(ctx, site);
+    if (policy.maximumDeliveryBoundaryAt === 0) {
+      return { claimed: false as const, reason: "Tenant is unavailable." };
+    }
+    const [settleableRows, missingThreadRows] = await Promise.all([
+      legacyUnboundMessages(ctx, inbox._id, {
+        limit: 1,
+        maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
+      }),
+      legacyUnboundMessagesMissingThread(
+        ctx,
+        inbox._id,
+        policy.maximumDeliveryBoundaryAt,
+      ),
     ]);
-    const cutoff = now - 90 * 24 * 60 * 60 * 1000;
-    const candidates = [...sent, ...reviewedSent, ...replied]
-      .filter(
-        (message) =>
-          (message.sentAt ?? 0) >= cutoff &&
-          Boolean(message.providerMessageId || message.providerThreadId),
+    if (
+      !settleableRows[0] ||
+      !policy.allows(
+        settleableRows[0].deliveryClaimedAt ?? settleableRows[0].sentAt,
       )
-      .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0))
-      .slice(0, 200)
+    ) {
+      return { claimed: false as const, reason: "No delivered outreach needs monitoring." };
+    }
+    const candidates = missingThreadRows
+      .filter((message) => policy.allows(
+        message.deliveryClaimedAt ?? message.sentAt,
+      ))
       .map((message) => ({
         messageId: message._id,
         providerMessageId: message.providerMessageId,
@@ -1364,10 +2720,6 @@ export const claimInboundSync = internalMutation({
         toDomain: message.toDomain,
         sentAt: message.sentAt!,
       }));
-    if (candidates.length === 0) {
-      return { claimed: false as const, reason: "No delivered outreach needs monitoring." };
-    }
-
     const syncWindowStartedAt = inbox.inboundSyncWindowStartedAt ?? now;
     const searchAfter = Math.max(
       now - OUTREACH_INBOUND_LOOKBACK_MS,
@@ -1410,7 +2762,13 @@ export const bindInboundProviderThread = internalMutation({
       ctx.db.get(args.inboxId),
       ctx.db.get(args.messageId),
     ]);
-    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!(await relaySettlementAuthorized(
+      ctx,
+      site,
+      message?.deliveryClaimedAt ?? message?.sentAt,
+    ))) {
+      throw new Error("Site not found");
+    }
     if (
       !inbox ||
       inbox.siteId !== args.siteId ||
@@ -1424,6 +2782,7 @@ export const bindInboundProviderThread = internalMutation({
       !message ||
       message.siteId !== args.siteId ||
       message.inboxId !== args.inboxId ||
+      message.inboundRelayAliasHash !== undefined ||
       message.providerMessageId !== args.providerMessageId ||
       !validProviderReceiptId(args.providerThreadId)
     ) {
@@ -1470,21 +2829,6 @@ export const getInboundCandidatesForEvidence = internalQuery({
         .take(10);
       for (const message of threaded) byId.set(message._id, message);
     }
-    for (const recipient of [...new Set(
-      args.failedRecipients
-        .slice(0, 10)
-        .map((value) => value.trim().toLowerCase())
-        .filter((value) => /^[^@\s]+@[^@\s]+\.[a-z]{2,24}$/i.test(value)),
-    )]) {
-      const addressed = await ctx.db
-        .query("outreach_messages")
-        .withIndex("by_site_email", (q) =>
-          q.eq("siteId", args.siteId).eq("toEmail", recipient)
-        )
-        .order("desc")
-        .take(10);
-      for (const message of addressed) byId.set(message._id, message);
-    }
     const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
     return [...byId.values()]
       .filter(
@@ -1492,6 +2836,7 @@ export const getInboundCandidatesForEvidence = internalQuery({
           Boolean(
             message.siteId === args.siteId &&
             message.inboxId === args.inboxId &&
+            !message.inboundRelayAliasHash &&
             ["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(
               message.status,
             ) &&
@@ -1532,7 +2877,13 @@ export const recordInboundReceipt = internalMutation({
       ctx.db.get(args.inboxId),
       ctx.db.get(args.messageId),
     ]);
-    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!(await relaySettlementAuthorized(
+      ctx,
+      site,
+      message?.deliveryClaimedAt ?? message?.sentAt,
+    ))) {
+      throw new Error("Site not found");
+    }
     if (
       !inbox ||
       inbox.siteId !== args.siteId ||
@@ -1546,6 +2897,7 @@ export const recordInboundReceipt = internalMutation({
       !message ||
       message.siteId !== args.siteId ||
       message.inboxId !== args.inboxId ||
+      message.inboundRelayAliasHash !== undefined ||
       !["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(message.status)
     ) {
       throw new Error("Inbound receipt crossed a tenant or delivery boundary");
@@ -1561,6 +2913,9 @@ export const recordInboundReceipt = internalMutation({
       args.receivedAt > now + 5 * 60 * 1000
     ) {
       throw new Error("Inbound Gmail receipt is invalid");
+    }
+    if (args.kind === "unsubscribe" && fromEmail !== message.toEmail) {
+      throw new Error("Only the exact recipient can issue a permanent opt-out");
     }
     if (
       message.providerThreadId &&
@@ -1627,7 +2982,9 @@ export const completeInboundSync = internalMutation({
       ctx.db.get(args.siteId),
       ctx.db.get(args.inboxId),
     ]);
-    if (!siteExecutionActive(site)) return { recorded: false };
+    if (!(await outreachSettlementLifecycleActive(ctx, site))) {
+      return { recorded: false };
+    }
     const now = Date.now();
     if (
       !inbox ||
@@ -1669,7 +3026,13 @@ export const failInboundSync = internalMutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
-    const inbox = await ctx.db.get(args.inboxId);
+    const [site, inbox] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+    ]);
+    if (!(await outreachSettlementLifecycleActive(ctx, site))) {
+      return { recorded: false };
+    }
     if (
       !inbox ||
       inbox.siteId !== args.siteId ||

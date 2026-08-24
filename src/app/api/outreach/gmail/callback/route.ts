@@ -4,8 +4,7 @@ import { getOwnedSite } from "@/lib/owned-site";
 import { verifyOAuthState } from "@/lib/oauth-state";
 import {
   hasGmailSendScope,
-  hasGmailReadScope,
-  hasOnlyGmailOutreachScopes,
+  hasOnlyGmailOutboundScopes,
   normalizeMailDomain,
   secondaryGmailSenderIssues,
 } from "@/lib/outreach-gmail";
@@ -19,7 +18,7 @@ type TokenResponse = {
   scope?: string;
 };
 
-export async function handleOutreachGmailCallback(req: NextRequest) {
+async function handleOutreachGmailCallback(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   const storedState = req.cookies.get("outreach_gmail_oauth_state")?.value;
@@ -76,16 +75,9 @@ export async function handleOutreachGmailCallback(req: NextRequest) {
   if (!hasGmailSendScope(scopes)) {
     return page("Gmail send permission was not granted.", false, 403);
   }
-  if (!hasGmailReadScope(scopes)) {
+  if (!hasOnlyGmailOutboundScopes(scopes)) {
     return page(
-      "Gmail read permission was not granted. Pentra needs it to detect replies, bounces, and opt-out requests without storing message bodies.",
-      false,
-      403,
-    );
-  }
-  if (!hasOnlyGmailOutreachScopes(scopes)) {
-    return page(
-      "Google returned permissions outside the dedicated outreach scope. Revoke Pentra's Google access and reconnect the outreach mailbox.",
+      "Google returned a legacy mailbox-read or unrelated permission. Revoke Pentra's Google access, then reconnect so the outreach mailbox grants send-only access.",
       false,
       403,
     );
@@ -122,7 +114,10 @@ export async function handleOutreachGmailCallback(req: NextRequest) {
   const senderDomain = normalizeMailDomain(email.split("@")[1] || "");
   const dns = await verifyGoogleWorkspaceDns({ senderDomain, dkimSelector: "google" });
   try {
-    const result = await callPentraInternal<{ ready: boolean }>(
+    const result = await callPentraInternal<{
+      ready: boolean;
+      inboundReady: boolean;
+    }>(
       "/internal/oauth/outreach-gmail",
       {
         siteId,
@@ -142,14 +137,21 @@ export async function handleOutreachGmailCallback(req: NextRequest) {
         dmarcVerified: dns.dmarc,
       },
     );
-    const message = result.ready
-      ? "Gmail connected. The inbox is ready in approval mode."
+    const message = result.ready && result.inboundReady
+      ? "Gmail connected. The inbox is ready in approval mode with signed inbound handling."
+      : result.ready
+        ? "Gmail connected in approval mode. Before any prospect message can be released, use Backlinks to send the fixed-recipient bounce-routing canary and wait for its signed hard-DSN receipt."
       : `Gmail connected, but sending remains blocked. ${
           dns.issues.length > 0
             ? dns.issues.join(" ")
             : "Add the sender name and physical mailing address in Pentra."
         }`;
-    const response = page(message, true, 200, result.ready);
+    const response = page(
+      message,
+      true,
+      200,
+      result.ready && result.inboundReady,
+    );
     response.cookies.delete("outreach_gmail_oauth_state");
     return response;
   } catch {

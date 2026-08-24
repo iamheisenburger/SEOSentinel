@@ -350,7 +350,12 @@ test("growth allocation learns from measured clusters without inventing new evid
 
   const articles = readFileSync("convex/articles.ts", "utf8");
   assert.match(articles, /exact external publication receipt/);
-  assert.match(articles, /automationStatus: "executed"/);
+  assert.match(articles, /supportDeliveryReceipt/);
+  assert.match(articles, /SUPPORT_DELIVERY_VERIFIED_STATUS/);
+  assert.match(
+    articles,
+    /growthAction\.publishedRevisionId \|\|[\s\S]{0,80}existingRevision/,
+  );
 });
 
 test("an uninitialized page rollup cannot be mistaken for zero visibility", () => {

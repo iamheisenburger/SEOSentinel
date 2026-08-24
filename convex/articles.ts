@@ -43,6 +43,10 @@ import {
   siteExecutionActive,
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import {
+  growthSupportDeliveryReceiptsMatch,
+  SUPPORT_DELIVERY_VERIFIED_STATUS,
+} from "./lib/growthSupportDelivery";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -1001,11 +1005,54 @@ export const completePublication = internalMutation({
           growthAction.articleId === topic.growthParentArticleId &&
           growthAction.status === "open"
         ) {
+          const existingRevision = await ctx.db
+            .query("published_article_revisions")
+            .withIndex("by_action", (q) =>
+              q.eq("growthActionId", growthAction._id)
+            )
+            .first();
+          const supportDeliveryReceipt = {
+            articleId,
+            method: receipt.method,
+            deliveryKey: receipt.deliveryKey,
+            contentHash: receipt.contentHash,
+            externalId: receipt.externalId,
+            status: receipt.status,
+            receivedAt: receipt.receivedAt,
+          };
+          const supportDeliveryReceiptConflict = Boolean(
+            growthAction.supportDeliveryReceipt &&
+            !growthSupportDeliveryReceiptsMatch(
+              growthAction.supportDeliveryReceipt,
+              supportDeliveryReceipt,
+            ),
+          );
+          const revisionSupportPhase =
+            growthAction.stage === "striking_distance" &&
+            growthAction.actionKind === "strengthen_cluster" &&
+            !growthAction.publishedRevisionId &&
+            !existingRevision &&
+            !supportDeliveryReceiptConflict;
           await ctx.db.patch(growthAction._id, {
-            automationStatus: "executed",
-            automationDetail:
-              "The verified support article was delivered and confirmed by an exact external publication receipt.",
-            automatedAt: completedAt,
+            ...(!growthAction.supportDeliveryReceipt
+              ? {
+                  supportDeliveryReceipt,
+                  supportDeliveryRecordedAt: completedAt,
+                }
+              : {}),
+            ...(growthAction.publishedRevisionId ||
+              existingRevision ||
+              supportDeliveryReceiptConflict
+              ? {}
+              : {
+                  automationStatus: revisionSupportPhase
+                    ? SUPPORT_DELIVERY_VERIFIED_STATUS
+                    : "executed",
+                  automationDetail: revisionSupportPhase
+                    ? "The support article has an exact external publication receipt; the still-open striking-distance page is eligible for one immutable revision assessment."
+                    : "The verified support article was delivered and confirmed by an exact external publication receipt.",
+                  automatedAt: revisionSupportPhase ? undefined : completedAt,
+                }),
             updatedAt: completedAt,
           });
         }

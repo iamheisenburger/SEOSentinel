@@ -21,7 +21,7 @@ import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { resolveCname, resolveTxt } from "node:dns/promises";
 import { safeFetchPublicText, validatePublicHttpsUrl } from "../lib/safeOutbound";
 import {
@@ -71,6 +71,32 @@ import {
   type OutreachInboundCandidate,
   type OutreachInboundEvidence,
 } from "../lib/outreachInbound";
+import {
+  OUTREACH_INBOUND_RELAY_CANARY_TTL_MS,
+  OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS,
+  inboundRelayAliasAddress,
+  inboundRelayAliasHash,
+  inboundRelayConfigurationHash,
+  inboundRelayConfigured,
+  inboundRelayDsnRoutingReady,
+  inboundRelayEmailHash,
+  inboundRelayMessageIdHash,
+  inboundRelayOutboundMessageId,
+} from "../lib/outreachInboundRelay";
+
+function inboundRelayRuntimeConfig() {
+  return {
+    domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    secrets: [
+      process.env.OUTREACH_INBOUND_RELAY_SECRET,
+      process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+    ],
+    adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+    retentionPolicyHash:
+      process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+    retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+  };
+}
 
 async function requireOwnedSite(ctx: ActionCtx, siteId: Id<"sites">) {
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
@@ -457,6 +483,7 @@ function rfc822(args: {
   fromName?: string;
   fromEmail: string;
   replyTo?: string;
+  messageId?: string;
   toEmail: string;
   subject: string;
   body: string;
@@ -482,12 +509,15 @@ function rfc822(args: {
     .slice(0, 200);
   if (!subject) return null;
   const replyTo = safeEmail(args.replyTo);
+  const messageId = String(args.messageId ?? "").trim().toLowerCase();
+  if (messageId && !/^<[^<>\s]+@[^<>\s]+>$/.test(messageId)) return null;
   const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
   const headers = [
     `From: ${from}`,
     `To: ${toEmail}`,
     `Subject: ${subject}`,
     replyTo ? `Reply-To: ${replyTo}` : "",
+    messageId ? `Message-ID: ${messageId}` : "",
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
   ].filter(Boolean);
@@ -708,7 +738,13 @@ async function deliver(
     oauthAccessToken?: string;
     apiKey?: string;
   },
-  message: { toEmail: string; subject: string; body: string },
+  message: {
+    toEmail: string;
+    subject: string;
+    body: string;
+    replyTo?: string;
+    outboundRfcMessageId?: string;
+  },
 ): Promise<DeliveryOutcome> {
   if (inbox.provider === "gmail") {
     const accessToken = inbox.oauthRefreshToken
@@ -720,7 +756,8 @@ async function deliver(
     const messageBody = rfc822({
         fromName: inbox.fromName,
         fromEmail: inbox.fromEmail,
-        replyTo: inbox.replyToEmail,
+        replyTo: message.replyTo ?? inbox.replyToEmail,
+        messageId: message.outboundRfcMessageId,
         toEmail: message.toEmail,
         subject: message.subject,
         body: message.body,
@@ -807,6 +844,60 @@ async function sendHandler(
     return { ...result, stopped: "No outreach inbox is connected for this tenant." };
   }
 
+  const relayDomain = process.env.OUTREACH_INBOUND_RELAY_DOMAIN;
+  const relayConfigured = inboundRelayConfigured(inboundRelayRuntimeConfig());
+  const relayReady = relayConfigured && inboundRelayDsnRoutingReady({
+    inbox: inboxSnapshot,
+    now: Date.now(),
+    rolloutEpoch: inboxSnapshot.siteRolloutEpoch ?? 0,
+    runtimeConfig: inboundRelayRuntimeConfig(),
+  });
+  const legacyGmailReadReady = Boolean(
+    inboxSnapshot.provider === "gmail" &&
+    inboxSnapshot.oauthScopes?.split(/\s+/).includes(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ),
+  );
+  if (!relayReady && !legacyGmailReadReady) {
+    return {
+      ...result,
+      stopped:
+        relayConfigured
+          ? "The signed inbound relay has not passed a current hard-bounce routing canary for this inbox. Nothing was sent."
+          : "The signed inbound relay is not configured, so replies and opt-outs cannot be handled safely. Nothing was sent.",
+    };
+  }
+
+  const relayAliasToken = relayReady
+    ? randomBytes(24).toString("base64url")
+    : undefined;
+  const relayMessageToken = relayReady
+    ? randomBytes(24).toString("base64url")
+    : undefined;
+  const relayAlias = relayAliasToken && relayDomain
+    ? inboundRelayAliasAddress(relayAliasToken, relayDomain)
+    : null;
+  const outboundRfcMessageId = relayMessageToken
+    ? inboundRelayOutboundMessageId({
+        token: relayMessageToken,
+        senderDomain: inboxSnapshot.senderDomain ?? "",
+      })
+    : null;
+  const relayBinding = relayAlias && outboundRfcMessageId
+    ? {
+        aliasAddress: relayAlias,
+        aliasHash: inboundRelayAliasHash(relayAlias),
+        aliasDomain: relayDomain!,
+        outboundRfcMessageId,
+      }
+    : undefined;
+  if (relayReady && !relayBinding) {
+    return {
+      ...result,
+      stopped: "The signed inbound relay configuration is invalid. Nothing was sent.",
+    };
+  }
+
   // Resolve the sender's DNS immediately before the serializable claim. The
   // mutation rejects evidence older than one minute and reloads every tenant,
   // sender, message, opportunity, suppression and pacing record itself.
@@ -830,6 +921,7 @@ async function sendHandler(
       release: "approved",
       dnsEvidence,
       opportunityEvidence,
+      inboundRelay: relayBinding,
     });
   } catch {
     return {
@@ -845,6 +937,8 @@ async function sendHandler(
       toEmail: claim.message.toEmail,
       subject: claim.message.subject,
       body: claim.message.body,
+      replyTo: relayBinding?.aliasAddress,
+      outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
     });
   } catch {
     outcome = {
@@ -948,6 +1042,132 @@ export const sendApprovedOutreach = action({
     // Deliberately one owner-approved message per click/action. This is not a
     // batch sender, and there is no automatic delivery path.
     return sendHandler(ctx, siteId);
+  },
+});
+
+/** Explicitly owner-trigger one fixed-recipient Gmail hard-DSN canary. This is
+ * separate from prospect delivery and has no cron/fleet caller. Gmail's send
+ * receipt never seals readiness; only the later signed structured DSN can. */
+export const sendInboundRelayDsnCanary = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    await requireOwnedSite(ctx, siteId);
+    const inbox = await ctx.runQuery(internal.outreach.getInboxInternal, { siteId });
+    if (!inbox || inbox.provider !== "gmail") {
+      throw new Error("A verified Gmail outreach inbox is required");
+    }
+    const runtimeConfig = inboundRelayRuntimeConfig();
+    const relayDomain = process.env.OUTREACH_INBOUND_RELAY_DOMAIN;
+    const relayConfigurationHash = inboundRelayConfigurationHash(runtimeConfig);
+    const testRecipient = emailAddressFromHeader(
+      process.env.OUTREACH_INBOUND_RELAY_CANARY_RECIPIENT,
+    );
+    if (!relayDomain || !relayConfigurationHash || !testRecipient) {
+      throw new Error("The audited inbound relay canary is not configured");
+    }
+    const aliasToken = randomBytes(24).toString("base64url");
+    const messageToken = randomBytes(24).toString("base64url");
+    const replyToAlias = inboundRelayAliasAddress(aliasToken, relayDomain);
+    const outboundRfcMessageId = inboundRelayOutboundMessageId({
+      token: messageToken,
+      senderDomain: inbox.senderDomain ?? "",
+    });
+    if (!replyToAlias || !outboundRfcMessageId) {
+      throw new Error("The inbound relay canary binding is invalid");
+    }
+    const issuedAt = Date.now();
+    const expiresAt = issuedAt + OUTREACH_INBOUND_RELAY_CANARY_TTL_MS;
+    const attemptId = randomUUID();
+    const dnsEvidence = await liveDnsEvidence(inbox);
+    const challenge = await ctx.runMutation(
+      internal.outreach.createInboundRelayDsnCanary,
+      {
+      siteId,
+      inboxId: inbox._id,
+      aliasHash: inboundRelayAliasHash(replyToAlias),
+      outboundMessageIdHash: inboundRelayMessageIdHash(outboundRfcMessageId),
+      testRecipientHash: inboundRelayEmailHash(testRecipient),
+      relayDomain,
+      senderDomain: inbox.senderDomain ?? "",
+      rolloutEpoch: inbox.siteRolloutEpoch ?? 0,
+      inboxConfigurationVersion: inbox.configurationVersion ?? 0,
+      relayConfigurationHash,
+      adapterVersion: runtimeConfig.adapterVersion ?? "",
+      retentionPolicyHash: runtimeConfig.retentionPolicyHash ?? "",
+      issuedAt,
+      expiresAt,
+      attemptId,
+      deliveryLeaseExpiresAt:
+        issuedAt + OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS,
+      dnsEvidence,
+      },
+    );
+    const outcome = await deliver(inbox, {
+      toEmail: testRecipient,
+      subject: "Pentra hard-bounce routing canary",
+      body:
+        "This owner-triggered delivery is a Pentra routing canary. The fixed controlled recipient is expected to reject it so the resulting structured DSN can verify inbound compliance handling.",
+      replyTo: replyToAlias,
+      outboundRfcMessageId,
+    });
+    try {
+      await ctx.runMutation(
+        internal.outreach.finalizeInboundRelayDsnCanaryDelivery,
+        {
+          canaryId: challenge.canaryId,
+          siteId,
+          inboxId: inbox._id,
+          attemptId,
+          inboxConfigurationVersion: inbox.configurationVersion ?? 0,
+          outcome: outcome.ok
+            ? "accepted"
+            : outcome.unverified
+              ? "unverified"
+              : "failed",
+          providerMessageIdHash: outcome.ok
+            ? createHash("sha256").update(outcome.providerMessageId!).digest("hex")
+            : undefined,
+        },
+      );
+    } catch {
+      return {
+        accepted: false as const,
+        verified: false as const,
+        retryAfter: expiresAt,
+        reason:
+          "Pentra could not seal the Gmail canary outcome. Outreach remains blocked and this challenge will not be retried automatically.",
+      };
+    }
+    if (!outcome.ok) {
+      if (outcome.suspend) {
+        try {
+          await ctx.runMutation(internal.outreach.recordInboxError, {
+            siteId,
+            inboxId: inbox._id,
+            expectedConfigurationVersion: inbox.configurationVersion ?? 0,
+            error: outcome.error ?? "Provider rejected the canary send",
+            suspend: true,
+          });
+        } catch {
+          // The challenge remains fail-closed and expires without a receipt.
+        }
+      }
+      return {
+        accepted: false as const,
+        verified: false as const,
+        retryAfter: expiresAt,
+        reason: outcome.unverified
+          ? "Gmail's canary outcome is ambiguous; Pentra will wait for the signed DSN and will not send another canary before this challenge expires."
+          : "Gmail did not accept the fixed-recipient canary.",
+      };
+    }
+    return {
+      accepted: true as const,
+      verified: false as const,
+      expiresAt,
+      message:
+        "Gmail accepted the canary. Outreach remains blocked until the receiving-only adapter returns the exact signed structured hard-DSN.",
+    };
   },
 });
 
@@ -1066,6 +1286,10 @@ function gmailInboundEvidence(message: GmailMessage): OutreachInboundEvidence | 
     fromEmail: emailAddressFromHeader(gmailHeader(message.payload, "From")),
     subject: gmailHeader(message.payload, "Subject").slice(0, 500),
     autoSubmitted: gmailHeader(message.payload, "Auto-Submitted").slice(0, 100),
+    authenticationResults: gmailHeader(
+      message.payload,
+      "Authentication-Results",
+    ).slice(0, 4_000),
     bodyText: payloadEvidence.bodyText,
     mimeTypes: payloadEvidence.mimeTypes,
     failedRecipients,
@@ -1332,7 +1556,13 @@ async function syncInboundHandler(
 export const syncInboundReplies = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<InboundSyncResult> => {
-    await requireOwnedSite(ctx, siteId);
+    const [ownership, identity] = await Promise.all([
+      ctx.runQuery(internal.outreach.getLegacyInboundOwnership, { siteId }),
+      ctx.auth.getUserIdentity(),
+    ]);
+    if (!ownership?.userId || !identity || identity.subject !== ownership.userId) {
+      throw new Error("Not authorized to access this site's outreach");
+    }
     return syncInboundHandler(ctx, siteId);
   },
 });
@@ -1340,8 +1570,8 @@ export const syncInboundReplies = action({
 export const syncInboundRepliesInternal = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<InboundSyncResult> => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-    if (!site) throw new Error("Site not found");
+    // claimInboundSync owns the narrow post-send lifecycle/transition fence;
+    // a full growth-authorization preflight would strand parked STOP replies.
     return syncInboundHandler(ctx, siteId);
   },
 });
