@@ -61,6 +61,7 @@ import {
   autonomousOutreachConsentActive,
   autonomousOutreachReconciliationComplete,
   autonomousOutreachRuntimeEnabled,
+  OUTREACH_DURABILITY_MIGRATION_VERSION,
 } from "./lib/outreachAutonomy.ts";
 import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
 import { terminallyClosePlanCheckpoints } from
@@ -3301,19 +3302,25 @@ async function outreachFleetState(
         )
         .first()
     : null;
-  const activeAutonomyConsent = Boolean(
+  const autonomyMigrationBootstrapEligible = Boolean(
     autonomousOutreachRuntimeEnabled(
       process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
     ) &&
       autonomousOutreachConsentActive(inbox, site.userId) &&
-      autonomousOutreachReconciliationComplete(inbox) &&
-      durabilityMigration?.version === 1 &&
-      durabilityMigration.status === "complete" &&
       isSeoGrowthActuationEligible(site) &&
       autonomousGmailCredentialIssues({
         oauthScopes: inbox?.oauthScopes,
         hasRefreshToken: Boolean(inbox?.oauthRefreshToken),
       }).length === 0,
+  );
+  const durabilityMigrationComplete = Boolean(
+    durabilityMigration?.version === OUTREACH_DURABILITY_MIGRATION_VERSION &&
+      durabilityMigration.status === "complete",
+  );
+  const activeAutonomyConsent = Boolean(
+    autonomyMigrationBootstrapEligible &&
+      autonomousOutreachReconciliationComplete(inbox) &&
+      durabilityMigrationComplete,
   );
   const queriedAt = Date.now();
   const [
@@ -3433,6 +3440,9 @@ async function outreachFleetState(
     inboxMode: inbox?.mode,
     inboxVerified: Boolean(inbox?.verifiedAt),
     autonomyConsentActive: activeAutonomyConsent,
+    autonomyDurabilityMigrationPending: Boolean(
+      autonomyMigrationBootstrapEligible && !durabilityMigrationComplete,
+    ),
     autonomyReconciliationPending: Boolean(
       inbox?.mode === "live" &&
         inbox.autonomyReconciliationStatus !== "complete",

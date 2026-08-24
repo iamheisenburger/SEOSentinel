@@ -37,6 +37,7 @@ import {
   OUTREACH_AUTONOMY_CONSENT_VERSION,
   OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP,
   OUTREACH_AUTONOMY_POLICY_HASH,
+  OUTREACH_DURABILITY_MIGRATION_VERSION,
   autonomousMessageAuthorizationMatches,
   autonomousOutreachConsentActive,
   autonomousOutreachReconciliationComplete,
@@ -127,8 +128,6 @@ function inboundRelayRuntimeConfig() {
     retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
   };
 }
-
-const OUTREACH_DURABILITY_MIGRATION_VERSION = 2;
 
 async function outreachDurabilityMigrationComplete(
   ctx: QueryCtx | MutationCtx,
@@ -1346,6 +1345,31 @@ export const ensureOutreachDurabilityMigrationInternal = internalMutation({
     ) {
       return { complete: true as const };
     }
+    let reconciliationGeneration =
+      inbox.autonomyReconciliationGeneration ?? 0;
+    const currentMigrationComplete = Boolean(
+      receipt?.version === OUTREACH_DURABILITY_MIGRATION_VERSION &&
+        receipt.userId === site.userId &&
+        receipt.status === "complete",
+    );
+    if (
+      inbox.mode === "live" &&
+      !currentMigrationComplete &&
+      inbox.autonomyReconciliationStatus === "complete"
+    ) {
+      // A newly bumped migration version must atomically close the old
+      // reconciliation generation before its backfill begins. Otherwise the
+      // narrow interval between migration completion and its scheduled sweep
+      // could authorize an approval reconciled under the prior contract.
+      reconciliationGeneration += 1;
+      await ctx.db.patch(inbox._id, {
+        autonomyReconciliationStatus: "pending",
+        autonomyReconciliationStage: "approved",
+        autonomyReconciliationCursor: undefined,
+        autonomyReconciliationGeneration: reconciliationGeneration,
+        updatedAt: timestamp,
+      });
+    }
     if (!receipt) {
       await ctx.db.insert("outreach_durability_migrations", {
         accountKey,
@@ -1379,7 +1403,7 @@ export const ensureOutreachDurabilityMigrationInternal = internalMutation({
       {
         siteId,
         inboxId: inbox._id,
-        generation: inbox.autonomyReconciliationGeneration ?? 0,
+        generation: reconciliationGeneration,
       },
     );
     return { complete: false as const, reason: "migration_pending" as const };
@@ -1539,7 +1563,17 @@ export const migrateOutreachDurabilityInternal = internalMutation({
                   )
                   .first()
               : null;
-            if (alreadyDurable) continue;
+            if (alreadyDurable && currentIdentity) {
+              // The exact account/tenant/kind/value tombstone is immutable
+              // proof that this additive-rollout raw row belongs to the same
+              // account. Bind it before progressing so a later owner cannot
+              // adopt or list the old recipient value.
+              await ctx.db.patch(row._id, {
+                ownerAccountKey: currentIdentity.accountKey,
+                ownerLineageUnresolvedAt: undefined,
+              });
+              continue;
+            }
             return {
               completed: false,
               processed: 0,

@@ -24,6 +24,7 @@ export type OutreachFleetSiteState = {
   inboxMode?: string;
   inboxVerified: boolean;
   autonomyConsentActive?: boolean;
+  autonomyDurabilityMigrationPending?: boolean;
   autonomyReconciliationPending?: boolean;
   hasVerifiedOpportunities: boolean;
   hasApprovedMessages: boolean;
@@ -39,6 +40,7 @@ export type OutreachFleetPlan = {
   deliver: boolean;
   verify: boolean;
   monitor?: boolean;
+  bootstrapDurability?: boolean;
   failClosedReason?: string;
 };
 
@@ -62,8 +64,11 @@ export function planOutreachFleetSite(
   }
 
   if (phase === "maintenance") {
+    const bootstrapDurability =
+      state.autonomyDurabilityMigrationPending === true;
     return {
       prepare:
+        !bootstrapDurability &&
         state.autopilotEnabled &&
         ["warm", "live"].includes(state.autopilotRolloutMode ?? "observe") &&
         (state.hasVerifiedOpportunities ||
@@ -74,6 +79,7 @@ export function planOutreachFleetSite(
       // Link receipts remain truthful even if the tenant later disconnects
       // its sending inbox.
       verify: state.hasLinksToVerify,
+      ...(bootstrapDurability ? { bootstrapDurability: true } : {}),
     };
   }
 
@@ -100,6 +106,15 @@ export function planOutreachFleetSite(
             failClosedReason:
               "Configure the signed inbound relay or retain the legacy Gmail monitoring grant.",
           }),
+    };
+  }
+
+  if (state.autonomyDurabilityMigrationPending === true) {
+    return {
+      prepare: false,
+      deliver: false,
+      verify: false,
+      bootstrapDurability: true,
     };
   }
 
@@ -217,7 +232,13 @@ export const dispatchFleet = internalAction({
     let failed = 0;
     for (const state of page.page) {
       const plan = planOutreachFleetSite(state, phase);
-      if (!plan.prepare && !plan.deliver && !plan.verify && !plan.monitor) {
+      if (
+        !plan.prepare &&
+        !plan.deliver &&
+        !plan.verify &&
+        !plan.monitor &&
+        !plan.bootstrapDurability
+      ) {
         skipped++;
         continue;
       }
@@ -297,6 +318,20 @@ export const runSite = internalAction({
     }
 
     const plan = planOutreachFleetSite(state, phase);
+    if (plan.bootstrapDurability) {
+      try {
+        // This mutation only creates/resumes the account compliance backfill.
+        // It neither fetches recipient pages nor crosses a mail provider.
+        await ctx.runMutation(
+          internal.outreach.ensureOutreachDurabilityMigrationInternal,
+          { siteId },
+        );
+      } catch {
+        console.error(
+          `[outreach-fleet] ${phase}/durability-bootstrap failed for tenant ${siteId}`,
+        );
+      }
+    }
     let prepare: StageRecord<PrepareResult> = notApplicable(
       plan.failClosedReason ?? "No verified opportunity is ready for drafting.",
     );

@@ -10,6 +10,10 @@
 
 export const OUTREACH_AUTONOMY_CONSENT_VERSION = 2;
 
+/** Additive compliance-ledger backfills and every fleet/claim gate must agree
+ * on this exact version or completed tenants can be stranded indefinitely. */
+export const OUTREACH_DURABILITY_MIGRATION_VERSION = 2;
+
 export const OUTREACH_AUTONOMY_CONSENT_TEXT =
   "I authorize Pentra to send evidence-grounded one-to-one initial commercial business outreach messages automatically from this dedicated secondary-domain Gmail inbox. This authorization does not permit automated follow-ups. Sends remain subject to warm-up, daily caps, permanent suppression, and bounce/reply monitoring. Disabling autonomy stops new delivery claims; one attempt already claimed by the provider boundary may settle once. I confirm the sender identity and physical address are accurate, that I am responsible for a lawful basis in each recipient jurisdiction, and that this use complies with my mailbox provider’s terms; I accept the sending-domain and mailbox-reputation risk.";
 

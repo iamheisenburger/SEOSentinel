@@ -7,6 +7,7 @@ import {
   OUTREACH_AUTONOMY_CONSENT_TEXT,
   OUTREACH_AUTONOMY_CONSENT_VERSION,
   OUTREACH_AUTONOMY_POLICY_HASH,
+  OUTREACH_DURABILITY_MIGRATION_VERSION,
 } from "../convex/lib/outreachAutonomy.ts";
 
 const backend = readFileSync("convex/outreach.ts", "utf8");
@@ -115,6 +116,20 @@ test("activation is resumable and claims remain closed until migration and recon
   assert.match(claim, /outreachDurabilityMigrationComplete\(ctx, site\)/);
   assert.match(sites, /autonomyReconciliationPending/);
   assert.match(fleet, /state\.autonomyReconciliationPending === true/);
+  assert.equal(OUTREACH_DURABILITY_MIGRATION_VERSION, 2);
+  assert.match(sites, /OUTREACH_DURABILITY_MIGRATION_VERSION/);
+  assert.doesNotMatch(sites, /durabilityMigration\?\.version === 1/);
+  const ensure = backend.slice(
+    backend.indexOf("export const ensureOutreachDurabilityMigrationInternal"),
+    backend.indexOf("export const migrateOutreachDurabilityInternal"),
+  );
+  assert.match(ensure, /currentMigrationComplete/);
+  assert.match(ensure, /autonomyReconciliationStatus: "pending"/);
+  assert.ok(
+    ensure.indexOf('autonomyReconciliationStatus: "pending"') <
+      ensure.indexOf("migrateOutreachDurabilityInternal"),
+    "a version bump must close old reconciliation before migration runs",
+  );
 });
 
 test("automatic delivery uses exact current consent, strict send-only credentials and atomic pacing", () => {
@@ -334,6 +349,19 @@ test("manual and automatic delivery wait for account-wide legacy compliance migr
   assert.match(migration, /legacy_delivery_owner_unresolved/);
   assert.match(migration, /legacyDeliveryOwnerWasUnbound/);
   assert.match(migration, /materializeOutreachSuppressionTombstoneForAccount/);
+  const exactDurableSuppression = migration.slice(
+    migration.indexOf("if (alreadyDurable && currentIdentity)"),
+    migration.indexOf('stopped: "legacy_suppression_owner_unresolved"'),
+  );
+  assert.match(
+    exactDurableSuppression,
+    /ownerAccountKey: currentIdentity\.accountKey/,
+  );
+  assert.ok(
+    exactDurableSuppression.indexOf("ownerAccountKey") <
+      exactDurableSuppression.indexOf("continue"),
+    "an exact durable STOP must bind the legacy raw row before migration advances",
+  );
   assert.ok(
     (migration.match(/credentialOwnerAccountKey === accountKey/g) ?? []).length >= 2,
     "legacy contact/suppression ownership may only be adopted by the exact migrating account",

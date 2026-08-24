@@ -65,6 +65,29 @@ test("only a due message under current tenant consent can enable fleet delivery"
   assert.match(crons, /outreach-autonomous-delivery-fleet/);
 });
 
+test("a durability version bump bootstraps without reaching delivery", () => {
+  const pending = state({
+    inboxMode: "live",
+    autonomyConsentActive: false,
+    autonomyDurabilityMigrationPending: true,
+    hasDueAutomaticMessages: false,
+  });
+  const deliveryPlan = planOutreachFleetSite(pending, "delivery");
+  assert.equal(deliveryPlan.bootstrapDurability, true);
+  assert.equal(deliveryPlan.deliver, false);
+  const maintenancePlan = planOutreachFleetSite(pending, "maintenance");
+  assert.equal(maintenancePlan.bootstrapDurability, true);
+  assert.equal(maintenancePlan.prepare, false);
+
+  const source = readFileSync("convex/actions/outreachFleet.ts", "utf8");
+  const bootstrap = source.slice(
+    source.indexOf("if (plan.bootstrapDurability)"),
+    source.indexOf("let prepare:"),
+  );
+  assert.match(bootstrap, /ensureOutreachDurabilityMigrationInternal/);
+  assert.doesNotMatch(bootstrap, /sendAutomaticOutreachInternal|fetch\(|deliver\(/);
+});
+
 test("maintenance prepares existing evidence and verifies links without discovery", () => {
   const plan = planOutreachFleetSite(state({
     inboxStatus: "connected",
