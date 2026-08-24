@@ -2786,7 +2786,32 @@ export const finalizeAccountDeletionInternal = internalMutation({
               }
               await ctx.db.delete(canary._id);
             }
-            if (canaries.length === 0) await ctx.db.delete(inbox._id);
+            if (canaries.length === 0) {
+              // An unsupported cross-owner site lineage cannot retain raw
+              // recipient discovery or opt-out PII from the deleted Gmail
+              // owner. Drain both site-local ledgers in bounded pages before
+              // removing the foreign credential row. Account-linked hashed
+              // tombstones are scrubbed by the later receipt stages.
+              const [contacts, suppressions] = await Promise.all([
+                ctx.db
+                  .query("outreach_contacts")
+                  .withIndex("by_site_email", (q) =>
+                    q.eq("siteId", inbox.siteId)
+                  )
+                  .take(20),
+                ctx.db
+                  .query("outreach_suppressions")
+                  .withIndex("by_site", (q) => q.eq("siteId", inbox.siteId))
+                  .take(20),
+              ]);
+              for (const contact of contacts) await ctx.db.delete(contact._id);
+              for (const suppression of suppressions) {
+                await ctx.db.delete(suppression._id);
+              }
+              if (contacts.length === 0 && suppressions.length === 0) {
+                await ctx.db.delete(inbox._id);
+              }
+            }
           }
         } else if (
           name === "outreach_durability_migrations" ||

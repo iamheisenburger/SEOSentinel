@@ -150,6 +150,12 @@ test("verified deletion scrubs outreach owned through a foreign current site", (
   assert.match(finalize, /deliveryLeaseExpiresAt/);
   assert.match(sites, /outreach_inbound_relay_receipts/);
   assert.match(sites, /outreach_inbound_relay_canaries/);
+  assert.match(finalize, /outreach_contacts/);
+  assert.match(finalize, /outreach_suppressions/);
+  assert.ok(
+    finalize.indexOf('query("outreach_contacts")') <
+      finalize.indexOf("ctx.db.delete(inbox._id)"),
+  );
   assert.match(siteDeletion, /verifiedAccountDeletion/);
   assert.match(siteDeletion, /recordUnlinkedDurablePacingReceipt/);
   assert.doesNotMatch(
