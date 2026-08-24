@@ -35,6 +35,178 @@ export const AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD =
 export const AUTOMATIC_PLAN_PROVIDER_COST_CEILING_USD =
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD / 1_000_000;
 
+// The fleet cron is intentionally coarse, but a tenant whose only blocker is
+// the rolling topic-plan window should not wait for another three-hour slot.
+// One second keeps the exact wake strictly outside the inclusive `gte`
+// recent-job query without meaningfully delaying recovery.
+export const TOPIC_PLAN_COOLDOWN_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const TOPIC_PLAN_COOLDOWN_WAKE_SAFETY_MS = 1_000;
+export const TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER = "topic_plan_cooldown";
+export const TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT = 200;
+export const TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS = 60_000;
+export const TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS = 3;
+
+export type BoundedRecentPlanWindow<T> =
+  | { decision: "available"; counted: T[] }
+  | { decision: "limited"; counted: T[] }
+  | { decision: "overflow"; counted: T[] }
+  | { decision: "invalid_limit"; counted: [] };
+
+/** Payload and zero-spend release state are not indexed, so callers read one
+ * sentinel row beyond a fixed bound. A truncated window may prove the limit
+ * is reached, but it may never prove capacity is available. */
+export function evaluateBoundedRecentPlanWindow<T>(args: {
+  rows: readonly T[];
+  maximumRecent: number;
+  isCounted: (row: T) => boolean;
+  readLimit?: number;
+}): BoundedRecentPlanWindow<T> {
+  const readLimit = args.readLimit ?? TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT;
+  if (
+    !Number.isSafeInteger(readLimit) ||
+    readLimit <= 0 ||
+    !Number.isSafeInteger(args.maximumRecent) ||
+    args.maximumRecent <= 0 ||
+    args.maximumRecent > readLimit
+  ) return { decision: "invalid_limit", counted: [] };
+  const overflow = args.rows.length > readLimit;
+  const counted = args.rows.slice(0, readLimit).filter(args.isCounted);
+  if (counted.length >= args.maximumRecent) {
+    return { decision: "limited", counted };
+  }
+  if (overflow) return { decision: "overflow", counted };
+  return { decision: "available", counted };
+}
+
+export function topicPlanCooldownWakeAt(planCreatedAt: number): number | null {
+  if (!Number.isFinite(planCreatedAt) || planCreatedAt < 0) return null;
+  const dueAt = planCreatedAt + TOPIC_PLAN_COOLDOWN_WINDOW_MS +
+    TOPIC_PLAN_COOLDOWN_WAKE_SAFETY_MS;
+  return Number.isSafeInteger(dueAt) ? dueAt : null;
+}
+
+/** Deterministic execution receipt. It is a fencing token, not a secret: the
+ * run, plan, rollout epoch, and exact due time must all independently match. */
+export function topicPlanCooldownClaimNonce(args: {
+  planJobId: string;
+  rolloutEpoch: number;
+  dueAt: number;
+}): string | null {
+  if (
+    !args.planJobId ||
+    !Number.isSafeInteger(args.rolloutEpoch) ||
+    args.rolloutEpoch < 0 ||
+    !Number.isSafeInteger(args.dueAt) ||
+    args.dueAt < 0
+  ) return null;
+  return [
+    TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+    args.planJobId,
+    args.rolloutEpoch,
+    args.dueAt,
+  ].join(":");
+}
+
+export type TopicPlanCooldownReceiptState =
+  | "missing"
+  | "scheduled"
+  | "claimed"
+  | "settled";
+
+/** Pure exact-receipt classification used both for the atomic claim and for a
+ * readback after an ambiguous mutation response. */
+export function topicPlanCooldownReceiptState(args: {
+  run: {
+    siteId: string;
+    trigger: string;
+    claimNonce?: string;
+    scheduledAt: number;
+    status: string;
+  } | null | undefined;
+  siteId: string;
+  planJobId: string;
+  rolloutEpoch: number;
+  dueAt: number;
+  claimNonce: string;
+}): TopicPlanCooldownReceiptState {
+  const expectedClaimNonce = topicPlanCooldownClaimNonce({
+    planJobId: args.planJobId,
+    rolloutEpoch: args.rolloutEpoch,
+    dueAt: args.dueAt,
+  });
+  const exactReceipt = Boolean(
+    args.run &&
+    expectedClaimNonce &&
+    args.run.siteId === args.siteId &&
+    args.run.trigger === TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER &&
+    args.run.claimNonce === expectedClaimNonce &&
+    args.claimNonce === expectedClaimNonce &&
+    args.run.scheduledAt === args.dueAt
+  );
+  if (!exactReceipt) return "missing";
+  if (args.run!.status === "scheduled") return "scheduled";
+  if (args.run!.status === "running") return "claimed";
+  if (args.run!.status === "completed" || args.run!.status === "failed") {
+    return "settled";
+  }
+  return "missing";
+}
+
+export type TopicPlanCooldownWatchdogDecision =
+  | { decision: "fence_changed" }
+  | { decision: "lease_live"; retryAt: number }
+  | { decision: "exhausted" }
+  | { decision: "recover"; continuationAttempt: number };
+
+/** Pure recovery decision for a committed claim whose at-most-once action may
+ * have died. Every retry remains bounded and must traverse the claim again. */
+export function topicPlanCooldownWatchdogDecision(args: {
+  receiptState: TopicPlanCooldownReceiptState;
+  currentAttempt?: number;
+  expectedAttempt: number;
+  heartbeatAt: number;
+  now: number;
+}): TopicPlanCooldownWatchdogDecision {
+  if (
+    args.receiptState !== "claimed" ||
+    !Number.isSafeInteger(args.expectedAttempt) ||
+    args.expectedAttempt <= 0 ||
+    args.currentAttempt !== args.expectedAttempt ||
+    !Number.isSafeInteger(args.heartbeatAt) ||
+    !Number.isSafeInteger(args.now)
+  ) return { decision: "fence_changed" };
+  const retryAt = args.heartbeatAt +
+    TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS;
+  if (!Number.isSafeInteger(retryAt)) return { decision: "fence_changed" };
+  if (retryAt > args.now) return { decision: "lease_live", retryAt };
+  if (
+    args.expectedAttempt >= TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS
+  ) return { decision: "exhausted" };
+  return {
+    decision: "recover",
+    continuationAttempt: args.expectedAttempt + 1,
+  };
+}
+
+/** Terminal writes from an action generation may settle only the exact run
+ * generation they own. Ordinary unfenced runs retain their existing path. */
+export function topicPlanCooldownTerminalWriteAllowed(args: {
+  runClaimNonce?: string;
+  runContinuationAttempt?: number;
+  claimNonce?: string;
+  continuationAttempt?: number;
+}): boolean {
+  if (!args.runClaimNonce) {
+    return args.claimNonce === undefined &&
+      args.continuationAttempt === undefined;
+  }
+  return Boolean(
+    args.claimNonce === args.runClaimNonce &&
+    Number.isSafeInteger(args.runContinuationAttempt) &&
+    args.runContinuationAttempt === args.continuationAttempt
+  );
+}
+
 /** Exact shared-ledger trigger bound to the plan payload that owns it. */
 export function topicPlanProviderReservationTriggerFromPayload(
   payload: unknown,
