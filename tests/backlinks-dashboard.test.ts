@@ -43,7 +43,10 @@ test("Backlinks workflow keeps approval, send, verification and blocked evidence
   assert.match(dashboard, /failureReason/);
   assert.match(dashboard, /Exact href observed on the requested page/);
   assert.match(dashboard, /Draft approved\. It has not been sent yet\./);
-  assert.match(dashboard, /Send next approved \(1 of/);
+  assert.match(dashboard, /Send next owner-approved \(1 of/);
+  assert.match(dashboard, /api\.outreach\.enableAutonomousOutreach/);
+  assert.match(dashboard, /Authority autopilot/);
+  assert.match(dashboard, /autonomousDeliveryReleaseAvailable/);
   assert.match(dashboard, /api\.actions\.outreach\.syncInboundReplies/);
   assert.match(dashboard, /Check replies/);
   assert.match(dashboard, /discarded after transient parsing; Pentra stores only evidence digests/);

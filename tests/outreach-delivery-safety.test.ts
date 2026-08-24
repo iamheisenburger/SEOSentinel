@@ -27,7 +27,7 @@ test("opportunity evidence must still be fresh when delivery is claimed", () => 
   const backend = readFileSync("convex/outreach.ts", "utf8");
   assert.match(
     backend,
-    /opportunityEvidenceIsFresh\(\{ verifiedAt: opportunity\.verifiedAt, now \}\)/,
+    /opportunityEvidenceIsFresh\(\{[\s\S]*verifiedAt: opportunity\.verifiedAt,[\s\S]*now,[\s\S]*\}\)/,
   );
 });
 
@@ -73,7 +73,7 @@ test("one active tenant lease blocks a concurrent delivery claim", () => {
   assert.match(backend, /Another outreach delivery is already in progress/);
 });
 
-test("an expired lease becomes unverified and can never return to approved automatically", () => {
+test("an expired lease becomes unverified and the same message never returns to approved", () => {
   assert.equal(deliveryLeaseState({
     status: "sending",
     attemptId: "attempt-one",
@@ -91,9 +91,15 @@ test("an expired lease becomes unverified and can never return to approved autom
   assert.match(backend, /resolveUnverifiedDelivery = mutation/);
   assert.match(backend, /confirmed_not_sent/);
   assert.match(backend, /delivery_reviewed_sent/);
-  assert.doesNotMatch(
-    backend.slice(backend.indexOf("export const completeDeliveryAttempt")),
-    /status: "approved"/,
+  const completion = backend.slice(
+    backend.indexOf("export const completeDeliveryAttempt"),
+    backend.indexOf("export const failDeliveryAttempt"),
+  );
+  assert.doesNotMatch(completion, /ctx\.db\.patch\(messageId, \{\s*status: "approved"/);
+  assert.match(
+    completion,
+    /ctx\.db\.insert\("outreach_messages", \{[\s\S]*status: "approved"/,
+    "only a distinct, future follow-up may be queued after a verified receipt",
   );
 });
 
@@ -230,7 +236,7 @@ test("Gmail is called only after the atomic claim and outcomes require the match
 
   const backend = readFileSync("convex/outreach.ts", "utf8");
   assert.match(backend, /message\.deliveryAttemptId !== attemptId/);
-  assert.match(backend, /opportunity\.status !== "outreach_prepared"/);
+  assert.match(backend, /opportunityLifecycleMatches/);
   assert.match(backend, /message\.opportunityEvidenceHash !== opportunity\.evidenceHash/);
   assert.match(backend, /message\.opportunitySourceUrl !== opportunity\.sourceUrl/);
   assert.match(backend, /message\.opportunityTargetUrl !== opportunity\.targetUrl/);
@@ -243,7 +249,7 @@ test("discard cannot race a sending lease and the public action sends at most on
   assert.match(backend, /\["sending", "delivery_unverified"\]\.includes\(message\.status\)/);
   const action = readFileSync("convex/actions/outreach.ts", "utf8");
   assert.match(action, /one owner-approved message per click\/action/);
-  assert.match(action, /return sendHandler\(ctx, siteId\)/);
+  assert.match(action, /return sendHandler\(ctx, siteId, "approved"\)/);
 });
 
 test("site domain changes demote the sender and invalidate approvals", () => {

@@ -63,7 +63,7 @@ crons.interval(
   {},
 );
 
-// Search outcomes are a tenant capability, not a LeadPilot-only canary. The
+// Search outcomes are a tenant capability, not a single-site-only canary. The
 // action paginates enabled sites and isolates per-site failures so one expired
 // credential cannot suppress every other customer's measurement loop.
 crons.daily(
@@ -100,6 +100,16 @@ crons.daily(
   { hourUTC: 14, minuteUTC: 30 },
   internal.actions.outreachFleet.dispatchFleet,
   { phase: "maintenance" },
+);
+
+// One due message per eligible tenant per pass. The fleet state is only a
+// scheduling hint; the action and serializable claim revalidate the exact
+// tenant consent, live evidence, sender DNS, relay, suppression and pacing.
+crons.interval(
+  "outreach-autonomous-delivery-fleet",
+  { minutes: 15 },
+  internal.actions.outreachFleet.dispatchFleet,
+  { phase: "delivery" },
 );
 
 // Reply/bounce monitoring is independent of outbound delivery. It reads only

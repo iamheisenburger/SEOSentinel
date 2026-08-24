@@ -42,6 +42,10 @@ export type OutreachEvidence = {
 const OPT_OUT_LINE =
   "If you would rather not hear from me again, just reply with STOP and I will not contact you.";
 
+function commercialDisclosure(brandName: string): string {
+  return `This is a commercial outreach message from ${brandName}.`;
+}
+
 /**
  * A signature reading "LeadPilot, LeadPilot" is an obvious template artefact.
  * When no human sender name is configured the brand signs alone.
@@ -137,6 +141,8 @@ export function draftOutreachMessage(evidence: OutreachEvidence): OutreachDraft 
         `Thanks,`,
         ...senderFooter(evidence),
         ``,
+        commercialDisclosure(brandName),
+        ``,
         OPT_OUT_LINE,
       ].join("\n"),
     };
@@ -163,6 +169,8 @@ export function draftOutreachMessage(evidence: OutreachEvidence): OutreachDraft 
         ``,
         `Thanks,`,
         ...senderFooter(evidence),
+        ``,
+        commercialDisclosure(brandName),
         ``,
         OPT_OUT_LINE,
       ].join("\n"),
@@ -199,6 +207,8 @@ export function draftFollowUp(args: {
       ``,
       `Thanks,`,
       ...senderFooter(args.evidence),
+      ``,
+      commercialDisclosure(args.evidence.brandName),
       ``,
       OPT_OUT_LINE,
     ].join("\n"),

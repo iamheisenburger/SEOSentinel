@@ -282,8 +282,12 @@ export function nextFollowUpAt(args: {
   if (args.replied) return null;
   const nextStep = args.sequenceStep + 1;
   if (nextStep > MAX_SEQUENCE_STEP) return null;
-  const offsetDays = FOLLOW_UP_SCHEDULE_DAYS[nextStep - 1];
-  if (!Number.isFinite(offsetDays)) return null;
+  const cumulativeDays = FOLLOW_UP_SCHEDULE_DAYS[nextStep - 1];
+  const priorCumulativeDays = args.sequenceStep === 0
+    ? 0
+    : FOLLOW_UP_SCHEDULE_DAYS[args.sequenceStep - 1];
+  const offsetDays = cumulativeDays - priorCumulativeDays;
+  if (!Number.isFinite(offsetDays) || offsetDays <= 0) return null;
   return args.lastSentAt + offsetDays * DAY_MS;
 }
 
@@ -295,6 +299,7 @@ export function outreachComplianceIssues(args: {
   body: string;
   toEmail: string;
   fromEmail?: string;
+  brandName: string;
   physicalMailingAddress?: string;
   unsubscribeUrl?: string;
 }): string[] {
@@ -318,6 +323,13 @@ export function outreachComplianceIssues(args: {
   }
   if (!args.unsubscribeUrl && !/unsubscribe|opt out|reply .{0,20}stop/i.test(body)) {
     issues.push("Message must offer a clear way to opt out.");
+  }
+  const brandName = String(args.brandName || "").trim();
+  if (
+    !brandName ||
+    !body.includes(`This is a commercial outreach message from ${brandName}.`)
+  ) {
+    issues.push("Message must identify itself as commercial outreach from the tenant brand.");
   }
   if (/\{\{|\}\}|\[FIRST_NAME\]|\[SITE\]/.test(body)) {
     issues.push("Message still contains unfilled template placeholders.");

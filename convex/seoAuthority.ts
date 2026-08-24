@@ -485,6 +485,19 @@ export const markAcquired = internalMutation({
       lastCheckedAt: timestamp,
       updatedAt: timestamp,
     });
+    const queued = await ctx.db
+      .query("outreach_messages")
+      .withIndex("by_opportunity", (q) => q.eq("opportunityId", opportunityId))
+      .take(20);
+    for (const message of queued) {
+      if (!["draft", "blocked", "approved"].includes(message.status)) continue;
+      await ctx.db.patch(message._id, {
+        status: "skipped",
+        blockedReason:
+          "The exact backlink was acquired before this message became due.",
+        updatedAt: timestamp,
+      });
+    }
   },
 });
 
@@ -553,6 +566,19 @@ export const rejectUnconfirmed = internalMutation({
           rejectedAt: timestamp,
           updatedAt: timestamp,
         });
+        const queued = await ctx.db
+          .query("outreach_messages")
+          .withIndex("by_opportunity", (q) => q.eq("opportunityId", row._id))
+          .take(20);
+        for (const message of queued) {
+          if (!["draft", "blocked", "approved"].includes(message.status)) continue;
+          await ctx.db.patch(message._id, {
+            status: "skipped",
+            blockedReason:
+              "The authority opportunity was not reconfirmed before this message became due.",
+            updatedAt: timestamp,
+          });
+        }
         rejected++;
       }
     }

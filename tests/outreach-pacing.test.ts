@@ -191,7 +191,12 @@ test("suppression and prior contact block a domain", () => {
 
 test("follow-ups stop after the sequence and after any reply", () => {
   const first = nextFollowUpAt({ sequenceStep: 0, lastSentAt: NOW });
-  assert.ok(first && first > NOW);
+  assert.equal(first, NOW + 4 * DAY);
+  assert.equal(
+    nextFollowUpAt({ sequenceStep: 1, lastSentAt: first! }),
+    NOW + 9 * DAY,
+    "the second follow-up lands nine days after the initial, not nine days after the first follow-up",
+  );
   assert.equal(nextFollowUpAt({ sequenceStep: 0, lastSentAt: NOW, replied: true }), null);
   assert.equal(nextFollowUpAt({ sequenceStep: MAX_SEQUENCE_STEP, lastSentAt: NOW }), null);
 });
@@ -201,21 +206,25 @@ test("compliance blocks unsafe or unfinished messages", () => {
     body: "Hi {{FIRST_NAME}}, short.",
     toEmail: "not-an-email",
     fromEmail: "",
+    brandName: "Tenant",
   });
   assert.ok(issues.some((i) => /too short/.test(i)));
   assert.ok(issues.some((i) => /valid email/.test(i)));
   assert.ok(issues.some((i) => /verified sender/.test(i)));
   assert.ok(issues.some((i) => /physical mailing address/.test(i)));
   assert.ok(issues.some((i) => /opt out/.test(i)));
+  assert.ok(issues.some((i) => /commercial outreach/.test(i)));
   assert.ok(issues.some((i) => /placeholders/.test(i)));
 
   const clean = outreachComplianceIssues({
     body:
       "Hi Sam, your guide to conversion testing links to a page that now 404s. " +
       "We published a replacement that covers the same ground if it is useful. " +
+      "This is a commercial outreach message from LeadPilot. " +
       "Reply STOP and I will not contact you again. 123 Market Street, San Francisco, CA 94105",
     toEmail: "sam@example.com",
     fromEmail: "hello@leadpilot.chat",
+    brandName: "LeadPilot",
     physicalMailingAddress: "123 Market Street, San Francisco, CA 94105",
   });
   assert.deepEqual(clean, []);

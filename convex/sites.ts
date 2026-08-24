@@ -54,6 +54,10 @@ import {
   inboundRelayConfigured,
   inboundRelayDsnRoutingReady,
 } from "./lib/outreachInboundRelay.ts";
+import {
+  autonomousOutreachConsentActive,
+  autonomousOutreachRuntimeEnabled,
+} from "./lib/outreachAutonomy.ts";
 import { terminallyClosePlanCheckpoints } from
   "./planCandidateCheckpoints";
 import { releaseSharedProviderReservation } from
@@ -2894,20 +2898,27 @@ async function outreachFleetState(
   site: Doc<"sites">,
 ) {
   const siteId = site._id;
+  const inboxes = await ctx.db
+    .query("outreach_inboxes")
+    .withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .take(2);
+  const inbox = inboxes.length === 1 ? inboxes[0] : undefined;
+  const activeAutonomyConsent = Boolean(
+    autonomousOutreachRuntimeEnabled(
+      process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+    ) && autonomousOutreachConsentActive(inbox, site.userId),
+  );
+  const queriedAt = Date.now();
   const [
-    inboxes,
     verifiedOpportunity,
     approvedMessage,
+    dueAutomaticMessage,
     contactedOpportunity,
     acquiredOpportunity,
     sentMessage,
     reviewedSentMessage,
     repliedMessage,
   ] = await Promise.all([
-    ctx.db
-      .query("outreach_inboxes")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .take(2),
     ctx.db
       .query("seo_authority_opportunities")
       .withIndex("by_site_status", (q) =>
@@ -2920,6 +2931,27 @@ async function outreachFleetState(
         q.eq("siteId", siteId).eq("status", "approved")
       )
       .first(),
+    activeAutonomyConsent && inbox
+      ? ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_status_autonomy_consent_scheduled", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("status", "approved")
+              .eq("approvalKind", "account_autopilot")
+              .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+              .eq(
+                "approvalConsentPolicyHash",
+                inbox.autonomyConsentPolicyHash,
+              )
+              .eq(
+                "approvalConsentAcceptedAt",
+                inbox.autonomyConsentAcceptedAt,
+              )
+              .lte("scheduledAt", queriedAt),
+          )
+          .first()
+      : Promise.resolve(null),
     ctx.db
       .query("seo_authority_opportunities")
       .withIndex("by_site_status", (q) =>
@@ -2951,7 +2983,6 @@ async function outreachFleetState(
       )
       .first(),
   ]);
-  const inbox = inboxes.length === 1 ? inboxes[0] : undefined;
   const signedRelayReady = Boolean(
     inbox &&
     inbox.provider === "gmail" &&
@@ -2993,8 +3024,10 @@ async function outreachFleetState(
     inboxStatus: inbox?.status,
     inboxMode: inbox?.mode,
     inboxVerified: Boolean(inbox?.verifiedAt),
+    autonomyConsentActive: activeAutonomyConsent,
     hasVerifiedOpportunities: Boolean(verifiedOpportunity),
     hasApprovedMessages: Boolean(approvedMessage),
+    hasDueAutomaticMessages: Boolean(dueAutomaticMessage),
     hasLinksToVerify: Boolean(contactedOpportunity || acquiredOpportunity),
     inboundMonitoringReady: signedRelayReady || legacyGmailReadReady,
     inboundMonitoringMode,

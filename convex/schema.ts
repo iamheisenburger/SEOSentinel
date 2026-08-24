@@ -1021,9 +1021,10 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_site", ["siteId"]),
 
-  // Authority work is evidence-bearing and human-authorized. Pentra may
-  // discover and verify a public opportunity autonomously, but it cannot mark
-  // outreach as sent or a link as acquired without an exact receipt.
+  // Authority work is evidence-bearing and tenant-authorized. Pentra may
+  // discover and verify a public opportunity autonomously; delivery requires
+  // either one-message owner approval or the exact current account-autopilot
+  // consent, and a link is acquired only with an exact live receipt.
   seo_authority_opportunities: defineTable({
     siteId: v.id("sites"),
     articleId: v.optional(v.id("articles")),
@@ -1462,9 +1463,16 @@ export default defineSchema({
     complianceConfirmedAt: v.optional(v.number()),
     // disconnected | connected | warming | active | suspended
     status: v.string(),
-    // approval is the only supported mode while automatic delivery is disabled.
-    // Legacy live rows remain fail-closed because no delivery cron exists.
+    // approval holds every message for one-message owner release. live is
+    // valid only with the matching tenant-scoped autonomy consent receipt.
     mode: v.string(),
+    autonomyConsentVersion: v.optional(v.number()),
+    autonomyConsentPolicyHash: v.optional(v.string()),
+    autonomyConsentAcceptedAt: v.optional(v.number()),
+    autonomyConsentAcceptedBy: v.optional(v.string()),
+    autonomyConsentInboxConfigurationVersion: v.optional(v.number()),
+    autonomyLastEnabledAt: v.optional(v.number()),
+    autonomyDisabledAt: v.optional(v.number()),
     dailySendCap: v.optional(v.number()),
     warmupStartedAt: v.optional(v.number()),
     sentToday: v.optional(v.number()),
@@ -1520,7 +1528,13 @@ export default defineSchema({
     inboundRelayDsnRoutingTargetGeneration: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_site", ["siteId"]),
+  })
+    .index("by_site", ["siteId"])
+    // Outbound mailbox and domain reputation are tenant-scoped resources.
+    // These indexes let every connect, opt-in and send claim fail closed if
+    // another active tenant is already using either identity.
+    .index("by_from_email", ["fromEmail"])
+    .index("by_sender_domain", ["senderDomain"]),
 
   // Every outbound message, including ones that were never sent. A blocked or
   // skipped draft is evidence too: it is how a tenant sees why outreach did
@@ -1551,6 +1565,12 @@ export default defineSchema({
     approvedAt: v.optional(v.number()),
     approvedInboxId: v.optional(v.id("outreach_inboxes")),
     approvedInboxConfigurationVersion: v.optional(v.number()),
+    // owner_message is a one-message approval. account_autopilot is bound to
+    // the exact one-time tenant consent receipt and may be fleet-delivered.
+    approvalKind: v.optional(v.string()),
+    approvalConsentVersion: v.optional(v.number()),
+    approvalConsentPolicyHash: v.optional(v.string()),
+    approvalConsentAcceptedAt: v.optional(v.number()),
     // The mutation that sets `sending` is the only delivery claim. Gmail
     // outcomes are accepted only for the exact attempt while its lease lives.
     deliveryAttemptId: v.optional(v.string()),
@@ -1581,6 +1601,9 @@ export default defineSchema({
     // The custom outbound Message-ID uses a separate random token. Persist
     // only its digest, so neither it nor the receiving alias is reconstructible.
     inboundRelayOutboundMessageIdHash: v.optional(v.string()),
+    // Follow-ups need the recipient-visible RFC Message-ID of their immediate
+    // predecessor for Gmail threading. It is not an alias or credential.
+    inReplyToRfcMessageId: v.optional(v.string()),
     inboundRelayRolloutEpoch: v.optional(v.number()),
     inboundRelayInboxConfigurationVersion: v.optional(v.number()),
     inboundRelaySenderDomain: v.optional(v.string()),
@@ -1591,6 +1614,15 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_status", ["siteId", "status"])
+    .index("by_site_status_autonomy_consent_scheduled", [
+      "siteId",
+      "status",
+      "approvalKind",
+      "approvalConsentVersion",
+      "approvalConsentPolicyHash",
+      "approvalConsentAcceptedAt",
+      "scheduledAt",
+    ])
     .index("by_opportunity", ["opportunityId"])
     .index("by_site_domain", ["siteId", "toDomain"])
     .index("by_site_email", ["siteId", "toEmail"])

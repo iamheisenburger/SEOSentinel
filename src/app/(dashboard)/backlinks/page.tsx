@@ -21,6 +21,12 @@ import {
 } from "lucide-react";
 
 import { api } from "../../../../convex/_generated/api";
+import {
+  OUTREACH_AUTONOMY_CONSENT_TEXT,
+  OUTREACH_AUTONOMY_CONSENT_VERSION,
+  OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP,
+  OUTREACH_AUTONOMY_POLICY_HASH,
+} from "../../../../convex/lib/outreachAutonomy";
 import { Button } from "@/components/ui/button";
 import { useActiveSite } from "@/contexts/site-context";
 
@@ -77,6 +83,8 @@ export default function BacklinksPage() {
   const [tab, setTab] = useState<Tab>("opportunities");
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [autonomyConsentAccepted, setAutonomyConsentAccepted] = useState(false);
+  const [autonomyDailyCap, setAutonomyDailyCap] = useState(5);
 
   const opportunities = useQuery(
     api.seoAuthority.listForSite,
@@ -100,6 +108,10 @@ export default function BacklinksPage() {
   const approveMessage = useMutation(api.outreach.approveMessage);
   const discardMessage = useMutation(api.outreach.discardMessage);
   const setComplianceProfile = useMutation(api.outreach.setInboxComplianceProfile);
+  const enableAutonomousOutreach = useMutation(
+    api.outreach.enableAutonomousOutreach,
+  );
+  const setInboxMode = useMutation(api.outreach.setInboxMode);
   const rotateDsnRoutingTarget = useMutation(
     api.outreach.rotateInboundRelayDsnRoutingTarget,
   );
@@ -123,7 +135,11 @@ export default function BacklinksPage() {
     () => new Map((messages ?? []).map((message) => [message.opportunityId, message])),
     [messages],
   );
-  const approvedCount = counts.messageCounts.approved ?? 0;
+  const ownerApprovedCount = (messages ?? []).filter(
+    (message) =>
+      message.status === "approved" &&
+      message.approvalKind !== "account_autopilot",
+  ).length;
   const inboxNeedsReconnect = !inbox ||
     !Boolean(inbox.credentialsPresent) ||
     ["disconnected", "suspended"].includes(String(inbox.status));
@@ -473,6 +489,116 @@ export default function BacklinksPage() {
             </Button>
           </form>
         )}
+        {inbox && (
+          <div className="mt-5 border-t border-white/[0.05] pt-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="max-w-3xl">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-[13px] font-semibold text-[#EDEEF1]">
+                    Authority autopilot
+                  </h3>
+                  <span className={`rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+                    Boolean(inbox.autonomousDeliveryEnabled)
+                      ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
+                      : "border-white/[0.08] bg-white/[0.03] text-[#707589]"
+                  }`}>
+                    {Boolean(inbox.autonomousDeliveryEnabled) ? "live" : "off"}
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
+                  {OUTREACH_AUTONOMY_CONSENT_TEXT}
+                </p>
+                {!Boolean(inbox.autonomousDeliveryEnabled) && (
+                  <label className="mt-3 flex items-start gap-2 text-[11px] text-[#B8BBC7]">
+                    <input
+                      type="checkbox"
+                      checked={autonomyConsentAccepted}
+                      onChange={(event) =>
+                        setAutonomyConsentAccepted(event.target.checked)
+                      }
+                      className="mt-0.5"
+                    />
+                    <span>I understand and accept this tenant-level authorization.</span>
+                  </label>
+                )}
+              </div>
+              <div className="flex shrink-0 items-end gap-2">
+                {!Boolean(inbox.autonomousDeliveryEnabled) && (
+                  <label className="block">
+                    <span className="mb-1 block text-[9px] font-medium uppercase tracking-wider text-[#565A6E]">
+                      Daily cap
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP}
+                      value={autonomyDailyCap}
+                      onChange={(event) =>
+                        setAutonomyDailyCap(Number(event.target.value))
+                      }
+                      className="h-8 w-20 rounded-lg border border-white/[0.08] bg-black/20 px-2 text-[12px] text-[#EDEEF1]"
+                    />
+                  </label>
+                )}
+                {Boolean(inbox.autonomousDeliveryEnabled) ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={pending === "disable-autonomy"}
+                    onClick={() => runOperation("disable-autonomy", async () => {
+                      const result = await setInboxMode({
+                        siteId: site._id,
+                        mode: "approval",
+                      });
+                      setNotice({
+                        tone: "success",
+                        text: result.inFlightMayComplete
+                          ? "Authority autopilot disabled. No new claim can start; the one message already claimed by Gmail may still complete."
+                          : "Authority autopilot disabled immediately. No queued automatic message can send.",
+                      });
+                    })}
+                  >
+                    Disable
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={
+                      !Boolean(inbox.autonomousDeliveryReleaseAvailable) ||
+                      !autonomyConsentAccepted ||
+                      !Boolean(inbox.inboundRelayDsnRoutingReady)
+                    }
+                    loading={pending === "enable-autonomy"}
+                    onClick={() => runOperation("enable-autonomy", async () => {
+                      const result = await enableAutonomousOutreach({
+                        siteId: site._id,
+                        consentVersion: OUTREACH_AUTONOMY_CONSENT_VERSION,
+                        consentPolicyHash: OUTREACH_AUTONOMY_POLICY_HASH,
+                        dailySendCap: autonomyDailyCap,
+                        confirmsAutomaticSending: true,
+                        confirmsBusinessRecipientsAndLawfulBasis: true,
+                        confirmsSenderIdentityAndAddress: true,
+                        acceptsMailboxReputationRisk: true,
+                      });
+                      setAutonomyConsentAccepted(false);
+                      setNotice({
+                        tone: "success",
+                        text: `Authority autopilot enabled at ${result.dailySendCap}/day. ${result.authorizedDrafts} existing safe draft${result.authorizedDrafts === 1 ? "" : "s"} authorized.`,
+                      });
+                    })}
+                  >
+                    Enable autopilot
+                  </Button>
+                )}
+              </div>
+            </div>
+            {!Boolean(inbox.autonomousDeliveryReleaseAvailable) && (
+              <p className="mt-2 text-[10px] text-[#FBBF24]">
+                This environment has not released autonomous delivery.
+              </p>
+            )}
+          </div>
+        )}
       </section>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -528,7 +654,7 @@ export default function BacklinksPage() {
         ) : (
           <Button
             size="sm"
-            disabled={approvedCount === 0 || !Boolean(inbox?.inboundMonitoringReady)}
+            disabled={ownerApprovedCount === 0 || !Boolean(inbox?.inboundMonitoringReady)}
             loading={pending === "send"}
             onClick={() => runOperation("send", async () => {
               if (!window.confirm("Send exactly one approved email now? Pentra will not send the remaining approvals automatically.")) return;
@@ -540,7 +666,7 @@ export default function BacklinksPage() {
             })}
             icon={<Send className="h-3.5 w-3.5" />}
           >
-            Send next approved (1 of {approvedCount})
+            Send next owner-approved (1 of {ownerApprovedCount})
           </Button>
         )}
       </div>
@@ -771,7 +897,11 @@ export default function BacklinksPage() {
                   )}
                   {message.status === "approved" && (
                     <span className="flex items-center gap-1 text-[#C4B5FD]">
-                      <Clock3 className="h-3 w-3" /> Approved and waiting for your send command
+                      <Clock3 className="h-3 w-3" />{
+                        message.approvalKind === "account_autopilot"
+                          ? ` Autopilot-authorized${message.scheduledAt ? ` for ${formatTime(message.scheduledAt)}` : ""}`
+                          : " Approved and waiting for your send command"
+                      }
                     </span>
                   )}
                   {message.status === "delivery_reviewed_sent" && (

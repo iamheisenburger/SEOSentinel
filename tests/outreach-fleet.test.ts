@@ -20,42 +20,49 @@ function state(
     inboxStatus: "active",
     inboxMode: "approval",
     inboxVerified: true,
+    autonomyConsentActive: false,
     hasVerifiedOpportunities: false,
     hasApprovedMessages: false,
+    hasDueAutomaticMessages: false,
     hasLinksToVerify: false,
+    inboundMonitoringReady: true,
+    inboundMonitoringMode: "signed_relay",
     ...overrides,
   };
 }
 
-test("approved drafts never enter automatic fleet delivery", () => {
+test("owner-approved drafts never enter automatic fleet delivery", () => {
   const plan = planOutreachFleetSite(state({
     inboxMode: "live",
     hasApprovedMessages: true,
   }), "delivery");
   assert.equal(plan.deliver, false);
-  assert.match(plan.failClosedReason ?? "", /Automatic outreach delivery is disabled/);
+  assert.match(plan.failClosedReason ?? "", /No due message/);
 });
 
-test("no inbox state can enable fleet delivery", () => {
-  assert.equal(planOutreachFleetSite(state({
+test("only a due message under current tenant consent can enable fleet delivery", () => {
+  const ready = {
     inboxMode: "live",
-    hasApprovedMessages: true,
-  }), "delivery").deliver, false);
-  assert.equal(planOutreachFleetSite(state({
-    inboxMode: "live",
-    hasApprovedMessages: true,
-    inboxVerified: false,
-  }), "delivery").deliver, false);
-  assert.equal(planOutreachFleetSite(state({
-    inboxMode: "live",
-    hasApprovedMessages: true,
-    inboxProvider: "resend",
-  }), "delivery").deliver, false);
-  assert.equal(planOutreachFleetSite(state({
-    inboxMode: "live",
-    hasApprovedMessages: true,
-    inboxStatus: "suspended",
-  }), "delivery").deliver, false);
+    autonomyConsentActive: true,
+    hasDueAutomaticMessages: true,
+  };
+  assert.equal(planOutreachFleetSite(state(ready), "delivery").deliver, true);
+  for (const unsafe of [
+    { ...ready, inboxVerified: false },
+    { ...ready, inboxProvider: "resend" },
+    { ...ready, inboxStatus: "suspended" },
+    { ...ready, inboundMonitoringReady: false },
+    { ...ready, inboundMonitoringMode: "legacy_gmail" as const },
+    { ...ready, autopilotRolloutMode: "observe" },
+    { ...ready, autonomyConsentActive: false },
+    { ...ready, hasDueAutomaticMessages: false },
+  ]) {
+    assert.equal(planOutreachFleetSite(state(unsafe), "delivery").deliver, false);
+  }
+  const source = readFileSync("convex/actions/outreachFleet.ts", "utf8");
+  const crons = readFileSync("convex/crons.ts", "utf8");
+  assert.match(source, /sendAutomaticOutreachInternal/);
+  assert.match(crons, /outreach-autonomous-delivery-fleet/);
 });
 
 test("maintenance prepares existing evidence and verifies links without discovery", () => {

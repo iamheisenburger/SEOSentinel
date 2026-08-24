@@ -23,8 +23,10 @@ export type OutreachFleetSiteState = {
   inboxStatus?: string;
   inboxMode?: string;
   inboxVerified: boolean;
+  autonomyConsentActive?: boolean;
   hasVerifiedOpportunities: boolean;
   hasApprovedMessages: boolean;
+  hasDueAutomaticMessages?: boolean;
   hasLinksToVerify: boolean;
   inboundMonitoringReady?: boolean;
   inboundMonitoringMode?: "signed_relay" | "legacy_gmail" | "unavailable";
@@ -41,9 +43,9 @@ export type OutreachFleetPlan = {
 
 const CONNECTED_INBOX_STATUSES = new Set(["connected", "warming", "active"]);
 /**
- * Fleet automation can prepare drafts, verify links, and read bounded inbound
- * receipts. Email delivery is always an explicit owner action against one
- * approved message; no cron or internal fleet phase may send through Gmail.
+ * Fleet automation prepares drafts, delivers one consent-authorized due
+ * message, verifies links, and reads bounded inbound receipts. Every delivery
+ * still crosses the tenant-scoped atomic claim and its live evidence gates.
  */
 export function planOutreachFleetSite(
   state: OutreachFleetSiteState,
@@ -99,12 +101,31 @@ export function planOutreachFleetSite(
     };
   }
 
+  const deliveryReady = Boolean(
+    state.autopilotEnabled &&
+      ["warm", "live"].includes(
+        state.autopilotRolloutMode ?? "observe",
+      ) &&
+      state.hasInbox &&
+      state.inboxProvider === "gmail" &&
+      ["warming", "active"].includes(state.inboxStatus ?? "") &&
+      state.inboxVerified &&
+      state.inboxMode === "live" &&
+      state.autonomyConsentActive === true &&
+      state.inboundMonitoringReady === true &&
+      state.inboundMonitoringMode === "signed_relay" &&
+      state.hasDueAutomaticMessages === true,
+  );
   return {
     prepare: false,
-    deliver: false,
+    deliver: deliveryReady,
     verify: false,
-    failClosedReason:
-      "Automatic outreach delivery is disabled; the tenant owner must release one approved message.",
+    ...(deliveryReady
+      ? {}
+      : {
+          failClosedReason:
+            "No due message has a current tenant autonomy, sender, relay, and rollout authorization.",
+        }),
   };
 }
 
@@ -277,7 +298,7 @@ export const runSite = internalAction({
     let prepare: StageRecord<PrepareResult> = notApplicable(
       plan.failClosedReason ?? "No verified opportunity is ready for drafting.",
     );
-    const delivery: StageRecord<SendResult> = notApplicable(
+    let delivery: StageRecord<SendResult> = notApplicable(
       plan.failClosedReason ?? "No approved message is ready for automatic delivery.",
     );
     let verification: StageRecord<VerifyResult> = notApplicable(
@@ -320,6 +341,42 @@ export const runSite = internalAction({
           execute: () => ctx.runAction(
             internal.actions.outreach.prepareOutreachInternal,
             { siteId, limit: 25 },
+          ),
+        });
+      }
+    }
+    if (plan.deliver) {
+      // Re-read immediately before any live DNS/page fetch. The mutation claim
+      // rechecks again after those reads and before Gmail is called.
+      let freshState: OutreachFleetSiteState | null = null;
+      try {
+        freshState = await ctx.runQuery(internal.sites.getOutreachFleetState, {
+          siteId,
+        });
+      } catch {
+        delivery = {
+          status: "failed",
+          attemptedAt: Date.now(),
+          completedAt: Date.now(),
+          failed: 1,
+          detail: "Tenant autonomy readiness could not be reverified.",
+        };
+      }
+      const freshPlan = freshState
+        ? planOutreachFleetSite(freshState, phase)
+        : null;
+      if (freshState && !freshPlan?.deliver) {
+        delivery = notApplicable(
+          "Authority autopilot was disabled or became unready before delivery.",
+        );
+      } else if (freshPlan?.deliver) {
+        delivery = await runStage({
+          siteId,
+          phase,
+          stage: "delivery",
+          execute: () => ctx.runAction(
+            internal.actions.outreach.sendAutomaticOutreachInternal,
+            { siteId },
           ),
         });
       }

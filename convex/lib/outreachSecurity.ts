@@ -12,6 +12,7 @@ import {
   utcDayKey,
   warmupDailyCap,
 } from "./outreachPacing.ts";
+import { autonomousOutreachConsentActive } from "./outreachAutonomy.ts";
 
 export type StoredInbox = Record<string, unknown> | null | undefined;
 
@@ -41,6 +42,8 @@ export function sanitizeInboxForClient(
   relayDsnRoutingReady = false,
   legacyDrainRequired = false,
   relayDsnRoutingTargetAddress?: string,
+  autonomousDeliveryReleaseAvailable = false,
+  autonomousConsentOwnerId?: string,
 ): Record<string, unknown> | null {
   if (!inbox) return null;
   const dailySendCap =
@@ -88,6 +91,13 @@ export function sanitizeInboxForClient(
     complianceConfirmedAt: inbox.complianceConfirmedAt,
     status: inbox.status,
     mode: inbox.mode,
+    autonomousDeliveryReleaseAvailable,
+    autonomousDeliveryEnabled:
+      autonomousDeliveryReleaseAvailable &&
+      autonomousOutreachConsentActive(inbox, autonomousConsentOwnerId),
+    autonomyConsentVersion: inbox.autonomyConsentVersion,
+    autonomyConsentPolicyHash: inbox.autonomyConsentPolicyHash,
+    autonomyConsentAcceptedAt: inbox.autonomyConsentAcceptedAt,
     dailySendCap,
     effectiveDailyCap: warmupDailyCap({ warmupStartedAt, now, targetCap: dailySendCap }),
     warmupStartedAt,

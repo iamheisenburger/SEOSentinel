@@ -398,6 +398,7 @@ async function prepareHandler(
       body: draft.body,
       toEmail,
       fromEmail: inbox?.fromEmail,
+      brandName,
       physicalMailingAddress: inbox?.physicalMailingAddress,
     });
     const blockedReason = !contact
@@ -487,6 +488,7 @@ function rfc822(args: {
   fromEmail: string;
   replyTo?: string;
   messageId?: string;
+  inReplyTo?: string;
   toEmail: string;
   subject: string;
   body: string;
@@ -514,6 +516,8 @@ function rfc822(args: {
   const replyTo = safeEmail(args.replyTo);
   const messageId = String(args.messageId ?? "").trim().toLowerCase();
   if (messageId && !/^<[^<>\s]+@[^<>\s]+>$/.test(messageId)) return null;
+  const inReplyTo = String(args.inReplyTo ?? "").trim().toLowerCase();
+  if (inReplyTo && !/^<[^<>\s]+@[^<>\s]+>$/.test(inReplyTo)) return null;
   const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
   const headers = [
     `From: ${from}`,
@@ -521,6 +525,8 @@ function rfc822(args: {
     `Subject: ${subject}`,
     replyTo ? `Reply-To: ${replyTo}` : "",
     messageId ? `Message-ID: ${messageId}` : "",
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
+    inReplyTo ? `References: ${inReplyTo}` : "",
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
   ].filter(Boolean);
@@ -638,6 +644,7 @@ async function liveDnsEvidence(inbox: {
 async function liveOpportunityEvidence(
   ctx: ActionCtx,
   siteId: Id<"sites">,
+  release: "approved" | "automatic",
 ): Promise<{
   messageId: Id<"outreach_messages">;
   opportunityId: Id<"seo_authority_opportunities">;
@@ -651,7 +658,7 @@ async function liveOpportunityEvidence(
 } | null> {
   const pending = await ctx.runQuery(
     internal.outreach.getApprovedDeliveryEvidenceInternal,
-    { siteId },
+    { siteId, release },
   );
   if (!pending) return null;
   try {
@@ -747,6 +754,8 @@ async function deliver(
     body: string;
     replyTo?: string;
     outboundRfcMessageId?: string;
+    providerThreadId?: string;
+    inReplyToRfcMessageId?: string;
   },
 ): Promise<DeliveryOutcome> {
   if (inbox.provider === "gmail") {
@@ -761,6 +770,7 @@ async function deliver(
         fromEmail: inbox.fromEmail,
         replyTo: message.replyTo ?? inbox.replyToEmail,
         messageId: message.outboundRfcMessageId,
+        inReplyTo: message.inReplyToRfcMessageId,
         toEmail: message.toEmail,
         subject: message.subject,
         body: message.body,
@@ -783,7 +793,12 @@ async function deliver(
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ raw }),
+          body: JSON.stringify({
+            raw,
+            ...(message.providerThreadId
+              ? { threadId: message.providerThreadId }
+              : {}),
+          }),
           signal: AbortSignal.timeout(20_000),
         },
       );
@@ -832,6 +847,7 @@ type SendResult = { sent: number; failed: number; stopped?: string };
 async function sendHandler(
   ctx: ActionCtx,
   siteId: Id<"sites">,
+  release: "approved" | "automatic",
 ): Promise<SendResult> {
   const result: SendResult = { sent: 0, failed: 0 };
   let inboxSnapshot;
@@ -920,7 +936,7 @@ async function sendHandler(
   // sender, message, opportunity, suppression and pacing record itself.
   const [dnsEvidence, opportunityEvidence] = await Promise.all([
     liveDnsEvidence(inboxSnapshot),
-    liveOpportunityEvidence(ctx, siteId),
+    liveOpportunityEvidence(ctx, siteId, release),
   ]);
   if (!opportunityEvidence) {
     return {
@@ -935,7 +951,7 @@ async function sendHandler(
     claim = await ctx.runMutation(internal.outreach.claimApprovedDelivery, {
       siteId,
       attemptId,
-      release: "approved",
+      release,
       dnsEvidence,
       opportunityEvidence,
       inboundRelay: relayBinding,
@@ -956,6 +972,8 @@ async function sendHandler(
       body: claim.message.body,
       replyTo: relayBinding?.aliasAddress,
       outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
+      providerThreadId: claim.deliveryThreadId,
+      inReplyToRfcMessageId: claim.message.inReplyToRfcMessageId,
     });
   } catch {
     outcome = {
@@ -974,6 +992,7 @@ async function sendHandler(
           attemptId,
           providerMessageId: outcome.providerMessageId,
           providerThreadId: outcome.providerThreadId,
+          outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
         },
       );
       if (completed.recorded) return { sent: 1, failed: 0 };
@@ -1056,10 +1075,20 @@ export const sendApprovedOutreach = action({
   args: { siteId: v.id("sites"), max: v.optional(v.number()) },
   handler: async (ctx, { siteId }): Promise<SendResult> => {
     await requireOwnedSite(ctx, siteId);
-    // Deliberately one owner-approved message per click/action. This is not a
-    // batch sender, and there is no automatic delivery path.
-    return sendHandler(ctx, siteId);
+    // Deliberately one owner-approved message per click/action. This public
+    // action cannot release tenant-autopilot messages; those use the internal
+    // fleet action and a separate atomic authorization path.
+    return sendHandler(ctx, siteId, "approved");
   },
+});
+
+/** Fleet-only release. The atomic claim revalidates the exact tenant consent,
+ * current rollout, due message, sender DNS, live source/contact evidence,
+ * signed inbound relay, suppression, pacing and delivery lease. */
+export const sendAutomaticOutreachInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<SendResult> =>
+    sendHandler(ctx, siteId, "automatic"),
 });
 
 /** Explicitly owner-trigger one fixed-recipient Gmail hard-DSN canary. This is

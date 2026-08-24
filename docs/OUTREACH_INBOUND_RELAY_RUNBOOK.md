@@ -2,7 +2,14 @@
 
 ## Release boundary
 
-Pentra uses a tenant's dedicated Gmail mailbox only for owner-triggered, one-message outreach sends. New OAuth connections request `gmail.send`, `openid`, and `email`; they do not request mailbox-read access. The receiving adapter has no outbound-email capability and the webhook cannot call any send path.
+Pentra uses each tenant's own dedicated secondary-domain Gmail mailbox. A
+prospect message is released either by an owner-triggered one-message action or,
+when the separately audited authority-autopilot release is enabled, by that
+tenant owner's exact current account consent. Tenants never share an outbound
+identity or sending-domain reputation. New OAuth connections request
+`gmail.send`, `openid`, and `email`; they do not request mailbox-read access.
+The receiving adapter has no outbound-email capability and the webhook cannot
+call any send path.
 
 A syntactically valid relay domain and HMAC secret do **not** release outreach. Every send-only inbox stays blocked until an owner explicitly sends Pentra's fixed-recipient hard-bounce canary through that exact Gmail connection and the current receiving adapter returns the exact signed structured DSN. The resulting seal binds:
 
@@ -51,6 +58,7 @@ OUTREACH_INBOUND_RELAY_ADAPTER_VERSION=relay-adapter-2026.08.23
 OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH=<64-lowercase-hex-sha256>
 OUTREACH_INBOUND_RELAY_RETENTION_AUDITED=true
 OUTREACH_INBOUND_RELAY_CANARY_RECIPIENT=<fixed-controlled-permanent-reject-address>
+OUTREACH_AUTONOMOUS_DELIVERY_ENABLED=false
 ```
 
 Optional HMAC rotation overlap:
@@ -60,6 +68,43 @@ OUTREACH_INBOUND_RELAY_SECRET_NEXT=<next-at-least-32-random-characters>
 ```
 
 `OUTREACH_INBOUND_RELAY_RETENTION_AUDITED=true` is an operator assertion backed by the completed external audit and retained evidence; it is not a substitute for that audit. Configuration creates no fleet-wide admission. Each inbox still needs its current durable DSN seal.
+
+## Authority-autopilot release (disabled by default)
+
+`OUTREACH_AUTONOMOUS_DELIVERY_ENABLED=true` exposes the owner opt-in and allows
+the internal fleet to release at most one due consent-authorized message per
+tenant per pass. It does not make an inbox eligible by itself. The current
+tenant owner must accept the exact versioned policy for the current inbox and
+sender-profile configuration, choose a cap of 1–10 messages per UTC day, have
+an executing growth rollout, and pass the current hard-DSN canary. Each claim
+then rechecks live SPF/DKIM/DMARC, the public opportunity and contact evidence,
+suppression, warm-up, 30-minute spacing, daily cap, plan/lifecycle state and the
+exact consent receipt before Gmail is called. A verified send receipt may
+schedule at most two Gmail-threaded follow-ups (days 4 and 9 from the initial
+message); any reply, STOP, hard bounce, rejected opportunity or verified live
+backlink retires the remaining sequence.
+
+Keep this flag **false** until all of the following external gates have retained
+evidence:
+
+1. Independent legal review has approved the launch jurisdictions and a
+   recipient-classification policy. A public business email is not by itself
+   proof of consent or a lawful basis, and Pentra cannot infer whether every
+   mailbox belongs to a corporate or individual subscriber.
+2. The tenant has confirmed its intended use is permitted by its mailbox
+   provider's current terms. A low software cap is not provider authorization.
+3. Postmaster/complaint monitoring and an operator suspension threshold exist
+   for the tenant's own sending domain. Gmail does not provide a universal
+   per-message complaint webhook at this volume, so reply/bounce/STOP handling
+   is not a substitute for reputation monitoring.
+4. An independent security review and a staged real-provider end-to-end test
+   have covered opt-in, disable races, DNS loss, stale evidence, reply, STOP,
+   hard bounce, both follow-ups, link acquisition, token expiry and ambiguous
+   Gmail outcomes.
+
+There is deliberately no claim that a send, response, backlink, ranking or
+revenue result is guaranteed. The code can guarantee only the authorization,
+evidence, pacing and fail-closed boundaries it controls.
 
 ## Owner-triggered DSN canary
 

@@ -56,11 +56,16 @@ test("every generated draft passes compliance unchanged", () => {
   for (const evidence of [BROKEN, MENTION]) {
     const draft = draftOutreachMessage(evidence);
     assert.ok(draft);
+    assert.match(
+      draft.body,
+      new RegExp(`This is a commercial outreach message from ${evidence.brandName}\\.`),
+    );
     assert.deepEqual(
       outreachComplianceIssues({
         body: draft.body,
         toEmail: "editor@example-blog.com",
         fromEmail: "sam@tenant.com",
+        brandName: evidence.brandName,
         physicalMailingAddress: evidence.physicalMailingAddress,
       }),
       [],

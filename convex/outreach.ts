@@ -23,13 +23,28 @@ import { v } from "convex/values";
 import {
   DEFAULT_DAILY_SEND_CAP,
   DOMAIN_CONTACT_COOLDOWN_DAYS,
+  MAX_SEQUENCE_STEP,
   contactEligibility,
+  nextFollowUpAt,
   normalizeDomain,
   outreachComplianceIssues,
   outreachSendDecision,
   outreachSenderReadinessIssues,
   utcDayKey,
 } from "./lib/outreachPacing.ts";
+import {
+  draftFollowUp,
+  draftOutreachMessage,
+  outreachThreadKey,
+} from "./lib/outreachDrafting.ts";
+import {
+  OUTREACH_AUTONOMY_CONSENT_VERSION,
+  OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP,
+  OUTREACH_AUTONOMY_POLICY_HASH,
+  autonomousMessageAuthorizationMatches,
+  autonomousOutreachConsentActive,
+  autonomousOutreachRuntimeEnabled,
+} from "./lib/outreachAutonomy.ts";
 import {
   resolveGmailReconnectProfile,
   sanitizeInboxForClient,
@@ -74,6 +89,7 @@ import {
   normalizeRfcMessageId,
 } from "./lib/outreachInboundRelay.ts";
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
+import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -112,6 +128,44 @@ async function inboxForSite(ctx: QueryCtx, siteId: Id<"sites">) {
     .query("outreach_inboxes")
     .withIndex("by_site", (q) => q.eq("siteId", siteId))
     .unique();
+}
+
+/**
+ * A tenant may never borrow another tenant's mailbox or sender-domain
+ * reputation. Disconnected rows release the identity; reconnect is still
+ * serialized against the same indexed reads, so two tenants cannot claim it
+ * concurrently.
+ */
+async function outboundIdentityUsedByAnotherTenant(
+  ctx: QueryCtx,
+  siteId: Id<"sites">,
+  fromEmail: string,
+  senderDomain: string,
+): Promise<boolean> {
+  const normalizedEmail = fromEmail.trim().toLowerCase();
+  const normalizedDomain = normalizeDomain(senderDomain);
+  if (!normalizedEmail || !normalizedDomain) return true;
+  const scanLimit = 20;
+  const [sameMailbox, sameDomain] = await Promise.all([
+    ctx.db
+      .query("outreach_inboxes")
+      .withIndex("by_from_email", (q) => q.eq("fromEmail", normalizedEmail))
+      .take(scanLimit),
+    ctx.db
+      .query("outreach_inboxes")
+      .withIndex("by_sender_domain", (q) =>
+        q.eq("senderDomain", normalizedDomain),
+      )
+      .take(scanLimit),
+  ]);
+  // A saturated identity range is abnormal. Do not scan without a bound or
+  // guess that a conflicting active tenant is absent; require reviewed cleanup.
+  if (sameMailbox.length === scanLimit || sameDomain.length === scanLimit) {
+    return true;
+  }
+  return [...sameMailbox, ...sameDomain].some(
+    (row) => row.siteId !== siteId && row.status !== "disconnected",
+  );
 }
 
 async function pendingLegacyUnboundMessageCount(
@@ -407,6 +461,10 @@ export const getInbox = query({
       routingCanaryReady,
       legacyDrainRequired,
       routingTarget?.address,
+      autonomousOutreachRuntimeEnabled(
+        process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+      ),
+      site.userId,
     );
   },
 });
@@ -470,6 +528,18 @@ export const connectGmailInboxInternal = internalMutation({
     const emailDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
     if (!emailDomain || emailDomain !== normalizeDomain(args.senderDomain)) {
       throw new Error("Sender-domain evidence does not match the connected mailbox");
+    }
+    if (
+      await outboundIdentityUsedByAnotherTenant(
+        ctx,
+        args.siteId,
+        fromEmail,
+        emailDomain,
+      )
+    ) {
+      throw new Error(
+        "This outbound mailbox or sender domain is already connected to another tenant",
+      );
     }
 
     const existing = await inboxForSite(ctx, args.siteId);
@@ -688,14 +758,283 @@ export const setInboxMode = mutation({
   args: { siteId: v.id("sites"), mode: v.string() },
   handler: async (ctx, { siteId, mode }) => {
     await requireSiteOwner(ctx, siteId);
-    await assertNoActiveDelivery(ctx, siteId);
     if (mode !== "approval") {
       throw new Error("Automatic outreach delivery is disabled; use owner-approved one-message sends");
     }
     const inbox = await inboxForSite(ctx, siteId);
     if (!inbox) throw new Error("No outreach inbox is connected for this site");
-    await ctx.db.patch(inbox._id, { mode, updatedAt: Date.now() });
-    return { mode };
+    const inFlight = await ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "sending"),
+      )
+      .first();
+    const disabledAt = Date.now();
+    await ctx.db.patch(inbox._id, {
+      mode,
+      autonomyDisabledAt: disabledAt,
+      updatedAt: disabledAt,
+    });
+    const automatic = await ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status_autonomy_consent_scheduled", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("status", "approved")
+          .eq("approvalKind", "account_autopilot"),
+      )
+      .take(200);
+    for (const message of automatic) {
+      await ctx.db.patch(message._id, {
+        status: message.sequenceStep === 0 ? "draft" : "skipped",
+        approvedAt: undefined,
+        approvedInboxId: undefined,
+        approvedInboxConfigurationVersion: undefined,
+        approvalKind: undefined,
+        approvalConsentVersion: undefined,
+        approvalConsentPolicyHash: undefined,
+        approvalConsentAcceptedAt: undefined,
+        blockedReason:
+          message.sequenceStep === 0
+            ? undefined
+            : "Authority autopilot was disabled before this follow-up became due.",
+        updatedAt: disabledAt,
+      });
+    }
+    return { mode, inFlightMayComplete: Boolean(inFlight) };
+  },
+});
+
+/**
+ * One tenant-owner consent replaces per-message clicks, not any safety gate.
+ * The receipt is bound to this exact Gmail/compliance configuration and the
+ * signed inbound relay. Reconnects and profile edits therefore fail closed.
+ */
+export const enableAutonomousOutreach = mutation({
+  args: {
+    siteId: v.id("sites"),
+    consentVersion: v.number(),
+    consentPolicyHash: v.string(),
+    dailySendCap: v.number(),
+    confirmsAutomaticSending: v.boolean(),
+    confirmsBusinessRecipientsAndLawfulBasis: v.boolean(),
+    confirmsSenderIdentityAndAddress: v.boolean(),
+    acceptsMailboxReputationRisk: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    if (!autonomousOutreachRuntimeEnabled(
+      process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+    )) {
+      throw new Error("Authority autopilot is not released in this environment");
+    }
+    const site = await requireSiteOwner(ctx, args.siteId);
+    if (!isSeoGrowthActuationEligible(site)) {
+      throw new Error("Pentra growth autopilot must be executing before outreach can run");
+    }
+    await assertNoActiveDelivery(ctx, args.siteId);
+    if (
+      args.consentVersion !== OUTREACH_AUTONOMY_CONSENT_VERSION ||
+      args.consentPolicyHash !== OUTREACH_AUTONOMY_POLICY_HASH ||
+      !args.confirmsAutomaticSending ||
+      !args.confirmsBusinessRecipientsAndLawfulBasis ||
+      !args.confirmsSenderIdentityAndAddress ||
+      !args.acceptsMailboxReputationRisk
+    ) {
+      throw new Error("Accept every current authority-autopilot consent statement");
+    }
+    const dailySendCap = Math.floor(args.dailySendCap);
+    if (
+      !Number.isSafeInteger(dailySendCap) ||
+      dailySendCap < 1 ||
+      dailySendCap > OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP
+    ) {
+      throw new Error(
+        `Authority autopilot is limited to 1-${OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP} messages per UTC day`,
+      );
+    }
+    const inbox = await inboxForSite(ctx, args.siteId);
+    if (!inbox) throw new Error("Connect the dedicated Gmail outreach inbox first");
+    if (
+      await outboundIdentityUsedByAnotherTenant(
+        ctx,
+        args.siteId,
+        inbox.fromEmail,
+        inbox.senderDomain ?? "",
+      )
+    ) {
+      throw new Error(
+        "This outbound mailbox or sender domain is already connected to another tenant",
+      );
+    }
+    const senderIssues = senderClaimIssues({
+      siteDomain: site.domain,
+      provider: inbox.provider,
+      status: inbox.status,
+      fromEmail: inbox.fromEmail,
+      fromName: inbox.fromName,
+      physicalMailingAddress: inbox.physicalMailingAddress,
+      complianceConfirmedAt: inbox.complianceConfirmedAt,
+      verifiedAt: inbox.verifiedAt,
+      oauthScopes: inbox.oauthScopes,
+      hasCredential: Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken),
+      senderDomain: inbox.senderDomain,
+    });
+    if (senderIssues.length > 0) throw new Error(senderIssues[0]);
+    if (
+      !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
+      !inboundRelayDsnRoutingReady({
+        inbox,
+        now: Date.now(),
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        runtimeConfig: inboundRelayRuntimeConfig(),
+      })
+    ) {
+      throw new Error(
+        "The signed reply/bounce/STOP relay must pass its current routing canary first",
+      );
+    }
+
+    const enabledAt = Date.now();
+    const configurationVersion = inbox.configurationVersion ?? 0;
+    const brandName = site.siteName || normalizeDomain(site.domain).split(".")[0];
+    const reusesCurrentConsentReceipt = Boolean(
+      inbox.autonomyConsentVersion === OUTREACH_AUTONOMY_CONSENT_VERSION &&
+        inbox.autonomyConsentPolicyHash === OUTREACH_AUTONOMY_POLICY_HASH &&
+        Number.isFinite(inbox.autonomyConsentAcceptedAt) &&
+        inbox.autonomyConsentAcceptedAt! > 0 &&
+        inbox.autonomyConsentAcceptedBy === site.userId &&
+        inbox.autonomyConsentInboxConfigurationVersion === configurationVersion &&
+        !inbox.autonomyDisabledAt,
+    );
+    const acceptedAt = reusesCurrentConsentReceipt
+      ? inbox.autonomyConsentAcceptedAt!
+      : enabledAt;
+    await ctx.db.patch(inbox._id, {
+      mode: "live",
+      dailySendCap,
+      autonomyConsentVersion: OUTREACH_AUTONOMY_CONSENT_VERSION,
+      autonomyConsentPolicyHash: OUTREACH_AUTONOMY_POLICY_HASH,
+      autonomyConsentAcceptedAt: acceptedAt,
+      autonomyConsentAcceptedBy: site.userId,
+      autonomyConsentInboxConfigurationVersion: configurationVersion,
+      autonomyLastEnabledAt: enabledAt,
+      autonomyDisabledAt: undefined,
+      updatedAt: enabledAt,
+    });
+
+    // Promote only already-safe initial drafts. Live source/contact evidence is
+    // still re-fetched immediately before every eventual provider claim.
+    const [drafts, priorAutomaticApprovals, suppressions] = await Promise.all([
+      ctx.db
+        .query("outreach_messages")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", args.siteId).eq("status", "draft"),
+        )
+        .order("asc")
+        .take(50),
+      ctx.db
+        .query("outreach_messages")
+        .withIndex("by_site_status_autonomy_consent_scheduled", (q) =>
+          q
+            .eq("siteId", args.siteId)
+            .eq("status", "approved")
+            .eq("approvalKind", "account_autopilot"),
+        )
+        .order("asc")
+        .take(50),
+      ctx.db
+        .query("outreach_suppressions")
+        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
+        .collect(),
+    ]);
+    const candidates = [
+      ...drafts,
+      ...priorAutomaticApprovals.filter((message) => message.sequenceStep === 0),
+    ];
+    for (const message of priorAutomaticApprovals) {
+      if (message.sequenceStep === 0) continue;
+      await ctx.db.patch(message._id, {
+        status: "skipped",
+        blockedReason:
+          "The tenant re-enabled authority autopilot before this follow-up became due; a stale sequence will not resume.",
+        updatedAt: enabledAt,
+      });
+    }
+    let authorizedDrafts = 0;
+    for (const message of candidates) {
+      const opportunity = await ctx.db.get(message.opportunityId);
+      const suppressed = suppressions.some((row) =>
+        (row.kind === "domain" && row.value === normalizeDomain(message.toDomain)) ||
+        (row.kind === "email" && row.value === message.toEmail.trim().toLowerCase()),
+      );
+      const regeneratedDraft = opportunity
+        ? draftOutreachMessage({
+            type: opportunity.type,
+            sourceUrl: opportunity.sourceUrl,
+            sourceDomain: opportunity.sourceDomain,
+            targetUrl: opportunity.targetUrl,
+            brokenUrl:
+              opportunity.type === "broken_link"
+                ? opportunity.context
+                : undefined,
+            anchorText: opportunity.anchorText,
+            context:
+              opportunity.type === "unlinked_mention"
+                ? opportunity.context
+                : undefined,
+            brandName,
+            senderName: inbox.fromName || brandName,
+            physicalMailingAddress: inbox.physicalMailingAddress,
+          })
+        : null;
+      const complianceIssues = regeneratedDraft
+        ? outreachComplianceIssues({
+            body: regeneratedDraft.body,
+            toEmail: message.toEmail,
+            fromEmail: inbox.fromEmail,
+            brandName,
+            physicalMailingAddress: inbox.physicalMailingAddress,
+          })
+        : ["The verified evidence cannot produce a current compliant draft."];
+      if (
+        suppressed ||
+        !regeneratedDraft ||
+        message.sequenceStep !== 0 ||
+        message.inboxId !== inbox._id ||
+        message.inboxConfigurationVersion !== configurationVersion ||
+        complianceIssues.length > 0 ||
+        !opportunity ||
+        opportunity.siteId !== args.siteId ||
+        opportunity.status !== "outreach_prepared" ||
+        !opportunityEvidenceIsFresh({ verifiedAt: opportunity.verifiedAt, now: enabledAt }) ||
+        message.opportunityEvidenceHash !== opportunity.evidenceHash ||
+        message.opportunitySourceUrl !== opportunity.sourceUrl ||
+        message.opportunityTargetUrl !== opportunity.targetUrl
+      ) continue;
+      await ctx.db.patch(message._id, {
+        subject: regeneratedDraft.subject,
+        body: regeneratedDraft.body,
+        complianceIssues: undefined,
+        status: "approved",
+        approvedAt: enabledAt,
+        approvedInboxId: inbox._id,
+        approvedInboxConfigurationVersion: configurationVersion,
+        approvalKind: "account_autopilot",
+        approvalConsentVersion: OUTREACH_AUTONOMY_CONSENT_VERSION,
+        approvalConsentPolicyHash: OUTREACH_AUTONOMY_POLICY_HASH,
+        approvalConsentAcceptedAt: acceptedAt,
+        scheduledAt: enabledAt,
+        updatedAt: enabledAt,
+      });
+      authorizedDrafts++;
+    }
+    return {
+      mode: "live" as const,
+      dailySendCap,
+      acceptedAt,
+      enabledAt,
+      authorizedDrafts,
+    };
   },
 });
 
@@ -1053,14 +1392,15 @@ export const insertDraft = internalMutation({
     if (!opportunity || opportunity.siteId !== args.siteId) {
       throw new Error("Authority opportunity not found for site");
     }
+    const draftInbox = args.inboxId ? await ctx.db.get(args.inboxId) : null;
     if (args.inboxId) {
-      const inbox = await ctx.db.get(args.inboxId);
-      if (!inbox || inbox.siteId !== args.siteId) {
+      if (!draftInbox || draftInbox.siteId !== args.siteId) {
         throw new Error("Inbox not found for site");
       }
       if (
         args.inboxConfigurationVersion !== undefined &&
-        args.inboxConfigurationVersion !== (inbox.configurationVersion ?? 0)
+        args.inboxConfigurationVersion !==
+          (draftInbox.configurationVersion ?? 0)
       ) {
         throw new Error("The draft sender profile changed before it was stored");
       }
@@ -1102,6 +1442,11 @@ export const insertDraft = internalMutation({
           approvedAt: undefined,
           approvedInboxId: undefined,
           approvedInboxConfigurationVersion: undefined,
+          approvalKind: undefined,
+          approvalConsentVersion: undefined,
+          approvalConsentPolicyHash: undefined,
+          approvalConsentAcceptedAt: undefined,
+          scheduledAt: undefined,
           updatedAt: now,
         });
         return {
@@ -1126,17 +1471,47 @@ export const insertDraft = internalMutation({
     );
     const heldBehindThread = Boolean(liveForThread) && args.status !== "blocked";
 
+    const automaticallyAuthorized = Boolean(
+      args.status === "draft" &&
+        draftInbox &&
+        autonomousOutreachRuntimeEnabled(
+          process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+        ) &&
+        autonomousOutreachConsentActive(draftInbox, site.userId) &&
+        (args.complianceIssues ?? []).length === 0 &&
+        !args.blockedReason,
+    );
+    const authorizeRecord = automaticallyAuthorized && !heldBehindThread;
     const record = {
       ...args,
       toEmail: args.toEmail.trim().toLowerCase(),
       toDomain: normalizeDomain(args.toDomain),
-      status: heldBehindThread ? "blocked" : args.status,
+      status: heldBehindThread
+        ? "blocked"
+        : authorizeRecord
+          ? "approved"
+          : args.status,
       blockedReason: heldBehindThread
         ? `Another message to ${normalizeDomain(args.toDomain)} is already in flight.`
         : args.blockedReason,
       // Written explicitly so a refreshed message clears a stale issue list
       // rather than keeping one it no longer has.
       complianceIssues: args.complianceIssues,
+      ...(authorizeRecord
+        ? {
+            approvedAt: now,
+            approvedInboxId: draftInbox!._id,
+            approvedInboxConfigurationVersion:
+              draftInbox!.configurationVersion ?? 0,
+            approvalKind: "account_autopilot",
+            approvalConsentVersion: draftInbox!.autonomyConsentVersion,
+            approvalConsentPolicyHash:
+              draftInbox!.autonomyConsentPolicyHash,
+            approvalConsentAcceptedAt:
+              draftInbox!.autonomyConsentAcceptedAt,
+            scheduledAt: now,
+          }
+        : {}),
     };
 
     // A previously blocked message is refreshed in place. That is what lets a
@@ -1192,6 +1567,7 @@ export const approveMessage = mutation({
       body: message.body,
       toEmail: message.toEmail,
       fromEmail: inbox.fromEmail,
+      brandName: site.siteName || normalizeDomain(site.domain).split(".")[0],
       physicalMailingAddress: inbox.physicalMailingAddress,
     });
     if (complianceIssues.length > 0) {
@@ -1203,6 +1579,11 @@ export const approveMessage = mutation({
       approvedAt,
       approvedInboxId: inbox._id,
       approvedInboxConfigurationVersion: configurationVersion,
+      approvalKind: "owner_message",
+      approvalConsentVersion: undefined,
+      approvalConsentPolicyHash: undefined,
+      approvalConsentAcceptedAt: undefined,
+      scheduledAt: approvedAt,
       updatedAt: approvedAt,
     });
     return { status: "approved" };
@@ -1257,6 +1638,11 @@ const inboundRelayBindingValidator = v.object({
   dsnRoutingTargetGeneration: v.number(),
 });
 
+const deliveryReleaseValidator = v.union(
+  v.literal("approved"),
+  v.literal("automatic"),
+);
+
 /**
  * Atomically select and lease one approved message.
  *
@@ -1268,7 +1654,7 @@ export const claimApprovedDelivery = internalMutation({
   args: {
     siteId: v.id("sites"),
     attemptId: v.string(),
-    release: v.literal("approved"),
+    release: deliveryReleaseValidator,
     dnsEvidence: dnsEvidenceValidator,
     opportunityEvidence: liveOpportunityEvidenceValidator,
     inboundRelay: v.optional(inboundRelayBindingValidator),
@@ -1348,6 +1734,18 @@ export const claimApprovedDelivery = internalMutation({
         reason: "Tenant is unavailable or parked outside the current plan allowance.",
       };
     }
+    if (
+      release === "automatic" &&
+      (!autonomousOutreachRuntimeEnabled(
+        process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+      ) ||
+        !isSeoGrowthActuationEligible(site))
+    ) {
+      return {
+        claimed: false as const,
+        reason: "Authority autopilot is not active for this tenant rollout.",
+      };
+    }
     if (inboxes.length !== 1) {
       return {
         claimed: false as const,
@@ -1355,10 +1753,38 @@ export const claimApprovedDelivery = internalMutation({
       };
     }
     const inbox = inboxes[0];
-    if (release !== "approved" || !["approval", "live"].includes(inbox.mode)) {
+    if (
+      await outboundIdentityUsedByAnotherTenant(
+        ctx,
+        siteId,
+        inbox.fromEmail,
+        inbox.senderDomain ?? "",
+      )
+    ) {
+      await ctx.db.patch(inbox._id, {
+        mode: "approval",
+        autonomyDisabledAt: now,
+        lastError:
+          "This outbound mailbox or sender domain is already connected to another tenant.",
+        updatedAt: now,
+      });
       return {
         claimed: false as const,
-        reason: "This delivery was not released through the current owner-approved mode.",
+        reason:
+          "The outbound mailbox or sender domain is already connected to another tenant.",
+      };
+    }
+    if (
+      (release === "approved" && !["approval", "live"].includes(inbox.mode)) ||
+      (release === "automatic" &&
+        !autonomousOutreachConsentActive(inbox, site.userId))
+    ) {
+      return {
+        claimed: false as const,
+        reason:
+          release === "automatic"
+            ? "The current tenant autonomy consent does not authorize delivery."
+            : "This delivery was not released through the current owner-approved mode.",
       };
     }
 
@@ -1373,6 +1799,13 @@ export const claimApprovedDelivery = internalMutation({
       ) &&
       (inbox.oauthRefreshToken || inbox.oauthAccessToken),
     );
+    if (release === "automatic" && !inboundRelay) {
+      return {
+        claimed: false as const,
+        reason:
+          "Automatic outreach requires the current signed reply/bounce/STOP relay.",
+      };
+    }
     if (!inboundRelay && !legacyGmailReadReady) {
       return {
         claimed: false as const,
@@ -1477,16 +1910,42 @@ export const claimApprovedDelivery = internalMutation({
       };
     }
 
-    const pacing = outreachSendDecision({ inbox, now, release: "approved" });
+    const pacing = outreachSendDecision({ inbox, now, release });
     if (!pacing.allowed) return { claimed: false as const, reason: pacing.reason };
 
-    const message = await ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "approved"))
-      .order("asc")
-      .first();
-    if (!message) {
-      return { claimed: false as const, reason: "No owner-approved message is ready." };
+    const message = await ctx.db.get(opportunityEvidence.messageId);
+    if (
+      !message ||
+      message.siteId !== siteId ||
+      message.status !== "approved" ||
+      (message.scheduledAt ?? 0) > now
+    ) {
+      return {
+        claimed: false as const,
+        reason:
+          release === "automatic"
+            ? "No consent-authorized message is due."
+            : "No owner-approved message is ready.",
+      };
+    }
+    const automaticAuthorizationMatches =
+      autonomousMessageAuthorizationMatches({
+        inbox,
+        ownerId: site.userId,
+        approvalKind: message.approvalKind,
+        approvalConsentVersion: message.approvalConsentVersion,
+        approvalConsentPolicyHash: message.approvalConsentPolicyHash,
+        approvalConsentAcceptedAt: message.approvalConsentAcceptedAt,
+      });
+    if (
+      (release === "automatic" && !automaticAuthorizationMatches) ||
+      (release === "approved" &&
+        message.approvalKind === "account_autopilot")
+    ) {
+      return {
+        claimed: false as const,
+        reason: "The message is not authorized by this release path.",
+      };
     }
 
     if (
@@ -1535,10 +1994,40 @@ export const claimApprovedDelivery = internalMutation({
       }
     }
     if (
+      message.sequenceStep > 0 &&
+      opportunity &&
+      ["acquired", "rejected"].includes(opportunity.status)
+    ) {
+      await ctx.db.patch(message._id, {
+        status: "skipped",
+        blockedReason:
+          opportunity.status === "acquired"
+            ? "The exact backlink was acquired before this follow-up became due."
+            : "The authority opportunity is no longer verified.",
+        updatedAt: now,
+      });
+      return {
+        claimed: false as const,
+        reason: "The authority opportunity no longer needs a follow-up.",
+      };
+    }
+    const opportunityLifecycleMatches = Boolean(
+      opportunity &&
+        (message.sequenceStep === 0
+          ? opportunity.status === "outreach_prepared" &&
+            opportunityEvidenceIsFresh({
+              verifiedAt: opportunity.verifiedAt,
+              now,
+            })
+          : opportunity.status === "contacted"),
+    );
+    if (
       !opportunity ||
       opportunity.siteId !== siteId ||
-      opportunity.status !== "outreach_prepared" ||
-      !opportunityEvidenceIsFresh({ verifiedAt: opportunity.verifiedAt, now }) ||
+      !Number.isSafeInteger(message.sequenceStep) ||
+      message.sequenceStep < 0 ||
+      message.sequenceStep > MAX_SEQUENCE_STEP ||
+      !opportunityLifecycleMatches ||
       opportunityEvidence.messageId !== message._id ||
       opportunityEvidence.opportunityId !== opportunity._id ||
       !Number.isFinite(opportunityEvidence.checkedAt) ||
@@ -1569,6 +2058,7 @@ export const claimApprovedDelivery = internalMutation({
       body: message.body,
       toEmail: message.toEmail,
       fromEmail: inbox.fromEmail,
+      brandName: site.siteName || normalizeDomain(site.domain).split(".")[0],
       physicalMailingAddress: inbox.physicalMailingAddress,
     });
     if (complianceIssues.length > 0 || (message.complianceIssues ?? []).length > 0) {
@@ -1631,11 +2121,57 @@ export const claimApprovedDelivery = internalMutation({
           row.sentAt,
       )
       .map((row) => ({ domain: row.toDomain, lastContactedAt: row.sentAt! }));
+    const threadMessages = priorDomainMessages.filter(
+      (row) => row.threadKey === message.threadKey && row._id !== message._id,
+    );
+    const threadHasInboundStop = threadMessages.some(
+      (row) =>
+        ["replied", "bounced"].includes(row.status) ||
+        ["reply", "unsubscribe", "bounce"].includes(
+          row.inboundReceiptKind ?? "",
+        ),
+    );
+    const predecessor = message.sequenceStep > 0
+      ? threadMessages.find(
+          (row) =>
+            row.sequenceStep === message.sequenceStep - 1 &&
+            ["sent", "delivery_reviewed_sent"].includes(row.status) &&
+            Boolean(row.sentAt),
+        )
+      : undefined;
+    const predecessorRfcMessageId = normalizeRfcMessageId(
+      message.inReplyToRfcMessageId,
+    );
+    const predecessorIdentityMatches = Boolean(
+      predecessor &&
+        predecessorRfcMessageId &&
+        predecessor.inboundRelayOutboundMessageIdHash &&
+        inboundRelayMessageIdHash(predecessorRfcMessageId) ===
+          predecessor.inboundRelayOutboundMessageIdHash,
+    );
+    if (
+      message.sequenceStep > 0 &&
+      (threadHasInboundStop ||
+        !predecessor?.providerThreadId ||
+        !predecessorIdentityMatches)
+    ) {
+      await ctx.db.patch(message._id, {
+        status: "skipped",
+        blockedReason: threadHasInboundStop
+          ? "The recipient replied, opted out, or bounced before this follow-up."
+          : "The prior Gmail thread and message-identity receipts are unavailable; Pentra will not send an unthreaded follow-up.",
+        updatedAt: now,
+      });
+      return {
+        claimed: false as const,
+        reason: "The follow-up sequence is no longer eligible.",
+      };
+    }
     const eligibility = contactEligibility({
       sourceDomain: message.toDomain,
       toEmail: message.toEmail,
       now,
-      history,
+      history: message.sequenceStep === 0 ? history : undefined,
       suppressedDomains: suppressions
         .filter((row) => row.kind === "domain")
         .map((row) => row.value),
@@ -1697,32 +2233,74 @@ export const claimApprovedDelivery = internalMutation({
       attemptId,
       inbox,
       message,
+      deliveryThreadId: predecessor?.providerThreadId,
       leaseExpiresAt: now + OUTREACH_DELIVERY_LEASE_MS,
     };
   },
 });
 
 export const getApprovedDeliveryEvidenceInternal = internalQuery({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
-    const message = await ctx.db
-      .query("outreach_messages")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "approved")
-      )
-      .order("asc")
-      .first();
+  args: { siteId: v.id("sites"), release: deliveryReleaseValidator },
+  handler: async (ctx, { siteId, release }) => {
+    const now = Date.now();
+    const [site, inboxes] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db
+        .query("outreach_inboxes")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(2),
+    ]);
+    if (!siteExecutionActive(site) || inboxes.length !== 1) return null;
+    const inbox = inboxes[0];
+    if (
+      release === "automatic" &&
+      (!autonomousOutreachRuntimeEnabled(
+        process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+      ) || !autonomousOutreachConsentActive(inbox, site.userId))
+    ) return null;
+    const message = release === "automatic"
+      ? await ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_status_autonomy_consent_scheduled", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("status", "approved")
+              .eq("approvalKind", "account_autopilot")
+              .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+              .eq(
+                "approvalConsentPolicyHash",
+                inbox.autonomyConsentPolicyHash,
+              )
+              .eq(
+                "approvalConsentAcceptedAt",
+                inbox.autonomyConsentAcceptedAt,
+              )
+              .lte("scheduledAt", now),
+          )
+          .order("asc")
+          .first()
+      : (await ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", "approved"),
+          )
+          .order("asc")
+          .take(100))
+          .find((candidate) =>
+            candidate.approvalKind !== "account_autopilot" &&
+            (candidate.scheduledAt ?? 0) <= now,
+          );
     if (!message) return null;
     const opportunity = await ctx.db.get(message.opportunityId);
     if (
       !opportunity ||
       opportunity.siteId !== siteId ||
-      opportunity.status !== "outreach_prepared"
+      (message.sequenceStep === 0
+        ? opportunity.status !== "outreach_prepared"
+        : opportunity.status !== "contacted")
     ) {
       return null;
     }
-    const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site)) return null;
     let targetTitle: string | undefined;
     if (opportunity.type === "broken_link") {
       if (!opportunity.articleId) return null;
@@ -1763,10 +2341,18 @@ export const completeDeliveryAttempt = internalMutation({
     attemptId: v.string(),
     providerMessageId: v.optional(v.string()),
     providerThreadId: v.optional(v.string()),
+    outboundRfcMessageId: v.optional(v.string()),
   },
   handler: async (
     ctx,
-    { siteId, messageId, attemptId, providerMessageId, providerThreadId },
+    {
+      siteId,
+      messageId,
+      attemptId,
+      providerMessageId,
+      providerThreadId,
+      outboundRfcMessageId,
+    },
   ) => {
     const message = await ctx.db.get(messageId);
     if (!message || message.siteId !== siteId) throw new Error("Message not found for site");
@@ -1793,6 +2379,27 @@ export const completeDeliveryAttempt = internalMutation({
     const safeProviderThreadId = providerThreadId
       ?.replace(/[^a-zA-Z0-9_-]/g, "")
       .slice(0, 200);
+    const safeOutboundRfcMessageId = normalizeRfcMessageId(
+      outboundRfcMessageId,
+    );
+    if (
+      message.inboundRelayOutboundMessageIdHash &&
+      (!safeOutboundRfcMessageId ||
+        inboundRelayMessageIdHash(safeOutboundRfcMessageId) !==
+          message.inboundRelayOutboundMessageIdHash)
+    ) {
+      await ctx.db.patch(messageId, {
+        status: "delivery_unverified",
+        deliveryLeaseExpiredAt: now,
+        failureReason:
+          "The Gmail receipt did not match the claimed outbound message identity. Manual review is required.",
+        updatedAt: now,
+      });
+      return {
+        recorded: false,
+        reason: "Outbound message identity was missing or invalid.",
+      };
+    }
     if (!safeProviderMessageId) {
       await ctx.db.patch(messageId, {
         status: "delivery_unverified",
@@ -1844,6 +2451,114 @@ export const completeDeliveryAttempt = internalMutation({
       )
       .unique();
     if (contact) await ctx.db.patch(contact._id, { lastContactedAt: now, updatedAt: now });
+
+    // A consent-authorized sequence is created in the same transaction as the
+    // verified Gmail receipt. A crash can therefore neither lose nor duplicate
+    // a follow-up. It remains only a due-time candidate: every delivery gate is
+    // re-run later, and any reply/STOP/bounce/link receipt cancels it.
+    if (
+      message.approvalKind === "account_autopilot" &&
+      message.sequenceStep < MAX_SEQUENCE_STEP &&
+      safeProviderThreadId &&
+      opportunity &&
+      opportunity.siteId === siteId &&
+      message.inboxId
+    ) {
+      const [site, inbox, sameOpportunity] = await Promise.all([
+        ctx.db.get(siteId),
+        ctx.db.get(message.inboxId),
+        ctx.db
+          .query("outreach_messages")
+          .withIndex("by_opportunity", (q) =>
+            q.eq("opportunityId", message.opportunityId),
+          )
+          .collect(),
+      ]);
+      const nextStep = message.sequenceStep + 1;
+      const scheduledAt = nextFollowUpAt({
+        sequenceStep: message.sequenceStep,
+        lastSentAt: now,
+      });
+      const consentStillMatches = autonomousMessageAuthorizationMatches({
+        inbox,
+        ownerId: site?.userId,
+        approvalKind: message.approvalKind,
+        approvalConsentVersion: message.approvalConsentVersion,
+        approvalConsentPolicyHash: message.approvalConsentPolicyHash,
+        approvalConsentAcceptedAt: message.approvalConsentAcceptedAt,
+      });
+      const brandName = site
+        ? site.siteName || normalizeDomain(site.domain).split(".")[0]
+        : "";
+      const draft = site && inbox && scheduledAt && consentStillMatches
+        ? draftFollowUp({
+            sequenceStep: nextStep,
+            evidence: {
+              type: opportunity.type,
+              sourceUrl: opportunity.sourceUrl,
+              sourceDomain: opportunity.sourceDomain,
+              targetUrl: opportunity.targetUrl,
+              brokenUrl:
+                opportunity.type === "broken_link"
+                  ? opportunity.context
+                  : undefined,
+              anchorText: opportunity.anchorText,
+              context:
+                opportunity.type === "unlinked_mention"
+                  ? opportunity.context
+                  : undefined,
+              brandName,
+              senderName: inbox.fromName || brandName,
+              physicalMailingAddress: inbox.physicalMailingAddress,
+            },
+          })
+        : null;
+      const complianceIssues = draft && inbox
+        ? outreachComplianceIssues({
+            body: draft.body,
+            toEmail: message.toEmail,
+            fromEmail: inbox.fromEmail,
+            brandName,
+            physicalMailingAddress: inbox.physicalMailingAddress,
+          })
+        : ["The follow-up consent or sender profile is unavailable."];
+      if (
+        draft &&
+        inbox &&
+        scheduledAt &&
+        complianceIssues.length === 0 &&
+        !sameOpportunity.some((row) => row.sequenceStep === nextStep)
+      ) {
+        await ctx.db.insert("outreach_messages", {
+          siteId,
+          inboxId: inbox._id,
+          opportunityId: opportunity._id,
+          toEmail: message.toEmail,
+          toDomain: message.toDomain,
+          subject: draft.subject,
+          body: draft.body,
+          status: "approved",
+          sequenceStep: nextStep,
+          threadKey: outreachThreadKey(siteId, opportunity.sourceDomain),
+          inboxConfigurationVersion: inbox.configurationVersion ?? 0,
+          opportunityEvidenceHash: opportunity.evidenceHash,
+          opportunitySourceUrl: opportunity.sourceUrl,
+          opportunityTargetUrl: opportunity.targetUrl,
+          approvedAt: now,
+          approvedInboxId: inbox._id,
+          approvedInboxConfigurationVersion:
+            inbox.configurationVersion ?? 0,
+          approvalKind: "account_autopilot",
+          approvalConsentVersion: inbox.autonomyConsentVersion,
+          approvalConsentPolicyHash: inbox.autonomyConsentPolicyHash,
+          approvalConsentAcceptedAt: inbox.autonomyConsentAcceptedAt,
+          inReplyToRfcMessageId: safeOutboundRfcMessageId,
+          scheduledAt,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
 
     return { recorded: true };
   },
@@ -2791,6 +3506,13 @@ export const recordInboundRelayReceipt = internalMutation({
       } else if (args.kind === "bounce") {
         await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
       }
+      await cancelQueuedThread(
+        ctx,
+        args.siteId,
+        message.threadKey,
+        message._id,
+        args.kind,
+      );
       await ctx.db.patch(message._id, {
         inboundCheckedAt: now,
         ...(shouldPromote
@@ -3159,6 +3881,13 @@ export const recordInboundReceipt = internalMutation({
     } else if (args.kind === "bounce") {
       await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
     }
+    await cancelQueuedThread(
+      ctx,
+      args.siteId,
+      message.threadKey,
+      message._id,
+      args.kind,
+    );
 
     await ctx.db.patch(message._id, {
       ...(message.providerThreadId || args.kind === "bounce"
@@ -3276,6 +4005,37 @@ export const failInboundSync = internalMutation({
 });
 
 // ── Suppression ──
+
+async function cancelQueuedThread(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  threadKey: string,
+  receiptMessageId: Id<"outreach_messages">,
+  kind: "reply" | "unsubscribe" | "bounce",
+) {
+  const queued = await ctx.db
+    .query("outreach_messages")
+    .withIndex("by_thread", (q) => q.eq("threadKey", threadKey))
+    .take(50);
+  const timestamp = Date.now();
+  for (const message of queued) {
+    if (
+      message.siteId !== siteId ||
+      message._id === receiptMessageId ||
+      !["draft", "blocked", "approved"].includes(message.status)
+    ) continue;
+    await ctx.db.patch(message._id, {
+      status: "skipped",
+      blockedReason:
+        kind === "reply"
+          ? "The recipient replied before this message became due."
+          : kind === "unsubscribe"
+            ? "The recipient opted out before this message became due."
+            : "The recipient address bounced before this message became due.",
+      updatedAt: timestamp,
+    });
+  }
+}
 
 async function addSuppression(
   ctx: MutationCtx,
