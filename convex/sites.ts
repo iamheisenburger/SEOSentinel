@@ -3320,10 +3320,20 @@ async function outreachFleetState(
         )
         .first()
     : null;
-  const autonomyMigrationBootstrapEligible = Boolean(
-    autonomousOutreachRuntimeEnabled(
+  // Raw-message ownership and compliance durability also protect the manual
+  // owner-approved path. Bootstrap this provider-free migration for every
+  // exact-current-owner executable inbox; autonomy consent is deliberately
+  // checked only by the separate delivery authorization below.
+  const durabilityMigrationBootstrapEligible = Boolean(
+    siteOwnerAccountKey &&
+      inbox?.credentialOwnerAccountKey === siteOwnerAccountKey &&
+      await siteExecutionAuthorized(ctx, site)
+  );
+  const autonomyAuthorizationEligible = Boolean(
+    durabilityMigrationBootstrapEligible &&
+      autonomousOutreachRuntimeEnabled(
       process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
-    ) &&
+      ) &&
       autonomousOutreachConsentActive(inbox, site.userId) &&
       isSeoGrowthActuationEligible(site) &&
       autonomousGmailCredentialIssues({
@@ -3336,7 +3346,7 @@ async function outreachFleetState(
       durabilityMigration.status === "complete",
   );
   const activeAutonomyConsent = Boolean(
-    autonomyMigrationBootstrapEligible &&
+    autonomyAuthorizationEligible &&
       autonomousOutreachReconciliationComplete(inbox) &&
       durabilityMigrationComplete,
   );
@@ -3485,7 +3495,7 @@ async function outreachFleetState(
     inboxVerified: Boolean(inbox?.verifiedAt),
     autonomyConsentActive: activeAutonomyConsent,
     autonomyDurabilityMigrationPending: Boolean(
-      autonomyMigrationBootstrapEligible && !durabilityMigrationComplete,
+      durabilityMigrationBootstrapEligible && !durabilityMigrationComplete,
     ),
     autonomyReconciliationPending: Boolean(
       inbox?.mode === "live" &&

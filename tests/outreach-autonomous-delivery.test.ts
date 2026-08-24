@@ -121,6 +121,29 @@ test("activation is resumable and claims remain closed until migration and recon
   assert.equal(OUTREACH_DURABILITY_MIGRATION_VERSION, 3);
   assert.match(sites, /OUTREACH_DURABILITY_MIGRATION_VERSION/);
   assert.doesNotMatch(sites, /durabilityMigration\?\.version === 1/);
+  const fleetState = sites.slice(
+    sites.indexOf("async function outreachFleetState"),
+    sites.indexOf("export const listOutreachFleetPage"),
+  );
+  const manualMigrationBootstrap = fleetState.slice(
+    fleetState.indexOf("const durabilityMigrationBootstrapEligible"),
+    fleetState.indexOf("const autonomyAuthorizationEligible"),
+  );
+  const autonomousAuthorization = fleetState.slice(
+    fleetState.indexOf("const autonomyAuthorizationEligible"),
+    fleetState.indexOf("const durabilityMigrationComplete"),
+  );
+  assert.match(manualMigrationBootstrap, /siteExecutionAuthorized\(ctx, site\)/);
+  assert.match(
+    manualMigrationBootstrap,
+    /inbox\?\.credentialOwnerAccountKey === siteOwnerAccountKey/,
+  );
+  assert.doesNotMatch(
+    manualMigrationBootstrap,
+    /autonomousOutreachConsentActive|autonomousOutreachRuntimeEnabled/,
+  );
+  assert.match(autonomousAuthorization, /autonomousOutreachConsentActive/);
+  assert.match(autonomousAuthorization, /autonomousOutreachRuntimeEnabled/);
   const ensure = backend.slice(
     backend.indexOf("export const ensureOutreachDurabilityMigrationInternal"),
     backend.indexOf("export const migrateOutreachDurabilityInternal"),
