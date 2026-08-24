@@ -8,9 +8,11 @@ reaches Convex.
 
 Do not deploy this stack in a tenant's website or sender domain. Use a dedicated
 relay subdomain/domain whose MX can point exclusively at SES classic inbound in
-`us-east-1`. Deploy it only in a dedicated AWS account with no unrelated
-workloads or outbound SES use. The explicit
-`DedicatedRelayAccountAcknowledged=true` parameter is required at deployment.
+`us-east-1`. An existing AWS account is supported only when an operator has
+inventoried every region and confirmed that the account has no other SES
+sending or receiving workload. Unrelated non-SES workloads may remain. The
+explicit `NoOtherSesWorkloadsAcknowledged=true` parameter is required at
+deployment.
 
 ## Data flow and security boundary
 
@@ -55,10 +57,14 @@ The stack does not purchase a domain, change DNS, create a mailbox, configure
 Google Workspace, activate a receipt rule set or send a canary. Each is a
 separate reviewed owner/operator action.
 
-- A dedicated receiving-only AWS account. SES classic receipt rules cannot be
-  cost-tagged, so the unfiltered account-wide budget is the authoritative
-  control that includes inbound message/chunk charges. Do not acknowledge the
-  deployment parameter in a shared account.
+- An AWS account with no other SES workload in any region. Before acknowledging
+  the deployment parameter, inventory SES sending, identities, configuration
+  sets and receipt rule sets account-wide and review recent SES cost. SES
+  classic receipt charges cannot be cost-tagged, so the service-filtered budget
+  covers all `Amazon Simple Email Service` spend in the account, including
+  inbound message/chunk charges. Do not acknowledge the parameter if any other
+  SES workload exists or is planned. Unrelated non-SES workloads do not affect
+  this gate.
 - A dedicated relay domain with verified SES receipt identity in `us-east-1`.
 - One globally unique, unused S3 bucket name.
 - A Pentra production webhook ending in `/webhooks/outreach-inbound`.
@@ -78,8 +84,9 @@ separate reviewed owner/operator action.
 - The `PentraComponent` cost-allocation tag activated in Billing before the
   tagged infrastructure budget is used for diagnostics. Cost-allocation
   activation can lag, and that filtered budget does not include untaggable SES
-  receipt charges. The unfiltered dedicated-account budget is authoritative.
-  AWS Budgets alerts are not a real-time hard cap.
+  receipt charges. The SES-service budget is authoritative for SES spend; the
+  no-other-SES assertion is what makes those charges attributable to this
+  relay. AWS Budgets alerts are not a real-time hard cap.
 
 ## Human reply and Workspace DSN routes
 
@@ -128,9 +135,10 @@ rules can drop mail.
    same digest and adapter version in both the SAM parameters and Pentra.
 2. Confirm the HMAC secret is present in Secrets Manager and Pentra without
    printing it. Keep the receipt rule disabled.
-3. Deploy the reviewed change set in the dedicated account and `us-east-1`,
-   explicitly acknowledging that account boundary. Confirm the unfiltered $5
-   monthly account budget exists, its 40% notification represents $2, its 100%
+3. Inventory every region and confirm the account has no other SES sending or
+   receiving workload, then deploy the reviewed change set in `us-east-1` with
+   `NoOtherSesWorkloadsAcknowledged=true`. Confirm the SES-service-filtered $5
+   monthly budget exists, its 40% notification represents $2, its 100%
    notification is the $5 cap-review, and the alert subscription is confirmed.
    Confirm the second tagged budget exists only as an infrastructure diagnostic.
 4. Verify bucket versioning is `Disabled`, default encryption is `AES256`, all
@@ -149,10 +157,11 @@ rules can drop mail.
 9. Repeat the DSN rule and owner canary per admitted outreach inbox. Keep all
    prospect sends blocked for any inbox without its current seal.
 
-At the authoritative account-wide $5 notification, review and disable the
+At the authoritative SES-service $5 notification, review and disable the
 receipt rule while investigating unexpected usage. The template cannot impose
 a reliable automatic monetary hard stop because AWS cost data and Budget
-notifications are delayed.
+notifications are delayed. If any other SES workload is later introduced,
+move this relay to an SES-isolated account before enabling its receipt rule.
 
 ## Retention audit and recovery
 

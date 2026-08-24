@@ -7,10 +7,10 @@ Rules:
     Assertions:
       - Assert: !Equals [!Ref AWS::Region, us-east-1]
         AssertDescription: SES classic inbound receipt resources must be deployed in us-east-1.
-  DedicatedRelayAccountOnly:
+  NoOtherSesWorkloadsOnly:
     Assertions:
-      - Assert: !Equals [!Ref DedicatedRelayAccountAcknowledged, "true"]
-        AssertDescription: Deploy only in a dedicated receiving-only AWS account so the account-wide budget covers untaggable SES receipt charges.
+      - Assert: !Equals [!Ref NoOtherSesWorkloadsAcknowledged, "true"]
+        AssertDescription: Deploy only after confirming this AWS account has no other SES sending or receiving workloads; the SES-service budget includes every SES charge in the account.
 
 Parameters:
   ResourcePrefix:
@@ -44,11 +44,11 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-  DedicatedRelayAccountAcknowledged:
+  NoOtherSesWorkloadsAcknowledged:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: Must be explicitly true only in an AWS account dedicated to this receiving-only relay.
+    Description: Must be explicitly true only after inventorying the account and confirming there are no other SES sending or receiving workloads in any region.
 
 Conditions:
   EnableReceiptRule: !Equals [!Ref ReceiptRuleEnabled, "true"]
@@ -510,16 +510,19 @@ Resources:
         - Key: PentraComponent
           Value: inbound-relay
 
-  RelayAccountMonthlyBudget:
+  RelaySesServiceMonthlyBudget:
     Type: AWS::Budgets::Budget
     Properties:
       Budget:
-        BudgetName: !Sub ${ResourcePrefix}-account-monthly-5-usd
+        BudgetName: !Sub ${ResourcePrefix}-ses-service-monthly-5-usd
         BudgetLimit:
           Amount: 5
           Unit: USD
         BudgetType: COST
         TimeUnit: MONTHLY
+        CostFilters:
+          Service:
+            - Amazon Simple Email Service
       NotificationsWithSubscribers:
         - Notification:
             NotificationType: ACTUAL
@@ -585,7 +588,7 @@ Outputs:
     Value: !GetAtt RelayPointerQueue.Arn
   DeadLetterQueueArn:
     Value: !GetAtt RelayDeadLetterQueue.Arn
-  AccountBudgetName:
-    Value: !Ref RelayAccountMonthlyBudget
+  SesServiceBudgetName:
+    Value: !Ref RelaySesServiceMonthlyBudget
   TaggedInfrastructureBudgetName:
     Value: !Ref RelayTaggedInfrastructureBudget

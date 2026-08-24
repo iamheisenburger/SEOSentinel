@@ -202,9 +202,11 @@ and Lambda-error alarms plus a one-day lifecycle backstop. SQS and its DLQ carry
 object pointers only. See the adapter README and exact retention-policy file
 for deployment, Workspace routing, rotation, audit, recovery and $2/$5
 budget-gate instructions. Because SES receipt charges cannot be cost-tagged,
-the adapter may be deployed only in a dedicated receiving-only AWS account;
-its unfiltered account-wide budget is authoritative and the tagged budget is
-diagnostic only. Passing unit tests or deploying the stack does not set
-`OUTREACH_INBOUND_RELAY_RETENTION_AUDITED=true`; that operator assertion still
-requires evidence from the real production route and the product's signed
-owner canary.
+the adapter may be deployed in an existing AWS account only after an operator
+inventories every region and confirms there are no other SES sending or
+receiving workloads. Its SES-service-filtered budget then covers all SES spend,
+including untaggable inbound receipt charges, while the tagged infrastructure
+budget remains diagnostic only. Passing unit tests or deploying the stack does
+not set `OUTREACH_INBOUND_RELAY_RETENTION_AUDITED=true`; that operator
+assertion still requires evidence from the real production route and the
+product's signed owner canary.

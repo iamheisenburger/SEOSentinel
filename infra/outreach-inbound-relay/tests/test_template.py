@@ -25,6 +25,8 @@ class TemplateContractTests(unittest.TestCase):
         self.assertLess(actions.index("LambdaAction:"), actions.index("S3Action:"))
         self.assertIn("InvocationType: RequestResponse", actions)
         self.assertNotIn("SNSAction", actions)
+        self.assertIn('Default: "false"', TEMPLATE)
+        self.assertIn("Enabled: !If [EnableReceiptRule, true, false]", TEMPLATE)
 
     def test_raw_bucket_is_private_unversioned_sse_s3_with_one_day_backstop(
         self,
@@ -67,18 +69,23 @@ class TemplateContractTests(unittest.TestCase):
         self.assertNotIn("print(raw", GUARD + PARSER)
 
     def test_budget_alerts_at_two_dollars_and_five_dollar_review(self) -> None:
-        account_budget = TEMPLATE[
-            TEMPLATE.index("  RelayAccountMonthlyBudget:") : TEMPLATE.index(
+        ses_budget = TEMPLATE[
+            TEMPLATE.index("  RelaySesServiceMonthlyBudget:") : TEMPLATE.index(
                 "  RelayTaggedInfrastructureBudget:"
             )
         ]
-        self.assertIn("Amount: 5", TEMPLATE)
-        self.assertIn("Threshold: 40", TEMPLATE)
-        self.assertIn("Threshold: 100", TEMPLATE)
+        self.assertIn("Amount: 5", ses_budget)
+        self.assertIn("Threshold: 40", ses_budget)
+        self.assertIn("Threshold: 100", ses_budget)
         self.assertEqual(TEMPLATE.count("NotificationType: ACTUAL"), 4)
-        self.assertNotIn("CostFilters:", account_budget)
-        self.assertIn("DedicatedRelayAccountOnly:", TEMPLATE)
-        self.assertIn('DedicatedRelayAccountAcknowledged, "true"', TEMPLATE)
+        self.assertIn("CostFilters:", ses_budget)
+        self.assertIn("Service:", ses_budget)
+        self.assertIn("Amazon Simple Email Service", ses_budget)
+        self.assertNotIn("TagKeyValue:", ses_budget)
+        self.assertIn("NoOtherSesWorkloadsOnly:", TEMPLATE)
+        self.assertIn('NoOtherSesWorkloadsAcknowledged, "true"', TEMPLATE)
+        self.assertNotIn("DedicatedRelayAccount", TEMPLATE)
+        self.assertNotIn("RelayAccountMonthlyBudget:", TEMPLATE)
         self.assertIn("user:PentraComponent$inbound-relay", TEMPLATE)
 
 

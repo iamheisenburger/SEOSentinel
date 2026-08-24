@@ -13,12 +13,18 @@ const retention = readFileSync(
   "infra/outreach-inbound-relay/RETENTION_POLICY.md",
   "utf8",
 );
+const sesBudget = template.slice(
+  template.indexOf("  RelaySesServiceMonthlyBudget:"),
+  template.indexOf("  RelayTaggedInfrastructureBudget:"),
+);
 
 test("SES relay remains receiving-only, pointer-only and fail-closed", () => {
   assert.match(template, /InvocationType: RequestResponse/);
   assert.match(template, /TlsPolicy: Require/);
   assert.match(template, /ScanEnabled: true/);
   assert.match(template, /Event: s3:ObjectCreated:Put/);
+  assert.match(template, /ReceiptRuleEnabled:[\s\S]*Default: "false"/);
+  assert.match(template, /Enabled: !If \[EnableReceiptRule, true, false\]/);
   assert.doesNotMatch(template, /SNSAction/);
   assert.doesNotMatch(template, /ses:(?:Send|SendRaw|SendBounce)/i);
   assert.doesNotMatch(template, /Action:\s*(?:\[)?iam:/i);
@@ -43,12 +49,18 @@ test("SES relay retention, retry and cost fences are source-controlled", () => {
   assert.match(template, /Schedule: rate\(5 minutes\)/);
   assert.match(template, /SweeperFreshnessAlarm:/);
   assert.match(template, /SweeperErrorAlarm:/);
-  assert.match(template, /RelayAccountMonthlyBudget:/);
+  assert.match(template, /RelaySesServiceMonthlyBudget:/);
   assert.match(template, /RelayTaggedInfrastructureBudget:/);
-  assert.match(template, /DedicatedRelayAccountOnly:/);
-  assert.match(template, /Amount: 5/);
-  assert.match(template, /Threshold: 40/);
-  assert.match(template, /Threshold: 100/);
+  assert.match(template, /NoOtherSesWorkloadsOnly:/);
+  assert.match(template, /NoOtherSesWorkloadsAcknowledged, "true"/);
+  assert.match(sesBudget, /CostFilters:[\s\S]*Service:/);
+  assert.match(sesBudget, /Amazon Simple Email Service/);
+  assert.doesNotMatch(sesBudget, /TagKeyValue:/);
+  assert.doesNotMatch(template, /DedicatedRelayAccount/);
+  assert.doesNotMatch(template, /RelayAccountMonthlyBudget:/);
+  assert.match(sesBudget, /Amount: 5/);
+  assert.match(sesBudget, /Threshold: 40/);
+  assert.match(sesBudget, /Threshold: 100/);
   assert.match(parser, /status == 425/);
   assert.match(parser, /500 <= status < 600/);
   assert.match(parser, /400 <= status < 500/);
