@@ -9,6 +9,7 @@ const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/webhooks/clerk-billing",
+  "/unsubscribe(.*)",
   "/sitemap.xml",
   "/robots.txt",
   "/blog(.*)",
@@ -43,7 +44,7 @@ export default clerkMiddleware(async (auth, request) => {
   const knownPrefixes = new Set([
     "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
     "pricing", "contact", "legal", "sign-in", "sign-up", "api", "_next", "blog",
-    "analytics", "backlinks",
+    "analytics", "backlinks", "unsubscribe",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);
   if (pathParts.length === 2 && !knownPrefixes.has(pathParts[0])) {
