@@ -1,0 +1,726 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Pentra tenant-isolated managed SES provision/send/event adapter
+
+Rules:
+  UsEast1Only:
+    Assertions:
+      - Assert: !Equals
+          - !Ref AWS::Region
+          - us-east-1
+        AssertDescription: The first managed SES release is reviewed only for us-east-1.
+  DedicatedSesAccountOnly:
+    Assertions:
+      - Assert: !Equals
+          - !Ref DedicatedSesAccountAcknowledged
+          - "true"
+        AssertDescription: Deploy only in the reviewed Pentra SES account after inventorying all existing SES workloads and quotas.
+  PurposeKeysMustBeDistinct:
+    Assertions:
+      - Assert: !Not
+          - !Equals
+            - !Ref HmacSecretArn
+            - !Ref DispositionSecretArn
+        AssertDescription: Request/event signing and reviewed no-replay disposition must use different Secrets Manager resources.
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: pentra-managed-ses-v1
+    AllowedValues: [pentra-managed-ses-v1]
+    Description: Immutable v1 stack namespace; deploy an incompatible transport beside it.
+  SenderDomain:
+    Type: String
+    Default: mail.pentra.dev
+    AllowedValues: [mail.pentra.dev]
+    Description: Pentra-controlled outbound domain; one platform DNS setup, never a customer domain.
+  RelayDomain:
+    Type: String
+    Default: reply.pentra.dev
+    AllowedValues: [reply.pentra.dev]
+    Description: Dedicated signed reply relay domain used by per-message reply aliases.
+  PentraWebhookUrl:
+    Type: String
+    AllowedPattern: ^https://[a-z0-9.-]+\.convex\.site/webhooks/outreach-managed-ses$
+  HmacSecretArn:
+    Type: String
+    AllowedPattern: ^arn:[a-z0-9-]+:secretsmanager:us-east-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$
+    NoEcho: true
+  DispositionSecretArn:
+    Type: String
+    AllowedPattern: ^arn:[a-z0-9-]+:secretsmanager:us-east-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$
+    NoEcho: true
+  AlertEmail:
+    Type: String
+    AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  DedicatedSesAccountAcknowledged:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    CodeUri: src/
+    MemorySize: 256
+    Timeout: 30
+    Tracing: PassThrough
+    Tags:
+      PentraComponent: managed-ses
+    Environment:
+      Variables:
+        STATE_TABLE_NAME: !Ref AdapterStateTable
+        HMAC_SECRET_ARN: !Ref HmacSecretArn
+        # Durable resource contract, not a build number. Incompatible
+        # transports deploy beside v1 so its resources remain releasable.
+        ADAPTER_VERSION: managed-ses-v1
+        SENDER_DOMAIN: !Ref SenderDomain
+        RELAY_DOMAIN: !Ref RelayDomain
+        UNSUBSCRIBE_ORIGIN: https://pentra.dev
+        IDENTITY_ARN: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}
+        CONFIGURATION_SET_NAME: !Ref ManagedConfigurationSet
+        CONFIGURATION_SET_ARN: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ManagedConfigurationSet}
+        EVENT_DESTINATION_NAME: !Sub ${ResourcePrefix}-eventbridge
+        EVENT_BUS_ARN: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+
+Resources:
+  ManagedEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      EmailIdentity: !Ref SenderDomain
+      DkimAttributes:
+        SigningEnabled: true
+      FeedbackAttributes:
+        EmailForwardingEnabled: false
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  ManagedConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${ResourcePrefix}-events
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  ManagedEventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ManagedConfigurationSet
+      EventDestination:
+        Name: !Sub ${ResourcePrefix}-eventbridge
+        Enabled: true
+        MatchingEventTypes:
+          - SEND
+          - DELIVERY
+          - BOUNCE
+          - COMPLAINT
+          - DELIVERY_DELAY
+          - REJECT
+          - RENDERING_FAILURE
+        EventBridgeDestination:
+          EventBusArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+
+  AdapterStateTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  AdapterApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub ${ResourcePrefix}-api
+      StageName: Prod
+      EndpointConfiguration:
+        Type: REGIONAL
+      TracingEnabled: false
+      MethodSettings:
+        - ResourcePath: /*
+          HttpMethod: "*"
+          DataTraceEnabled: false
+          LoggingLevel: OFF
+          MetricsEnabled: true
+          ThrottlingBurstLimit: 40
+          ThrottlingRateLimit: 20
+      Tags:
+        PentraComponent: managed-ses
+
+  AdapterFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ResourcePrefix}-adapter
+      RetentionInDays: 14
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  AdapterFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ManagedSesAdapterMinimumAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${AdapterFunctionLogGroup.Arn}:*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:TransactWriteItems
+                Resource: !GetAtt AdapterStateTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref HmacSecretArn
+                  - !Ref DispositionSecretArn
+              - Sid: CreateTaggedPentraTenant
+                Effect: Allow
+                Action:
+                  - ses:CreateTenant
+                  - ses:TagResource
+                Resource: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:tenant/pentra-*
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/PentraComponent: managed-ses
+              - Sid: OperatePentraTenantResources
+                Effect: Allow
+                Action:
+                  - ses:GetTenant
+                  - ses:ListTenantResources
+                  - ses:CreateTenantResourceAssociation
+                  - ses:DeleteTenantResourceAssociation
+                  - ses:PutTenantSuppressionAttributes
+                  - ses:DeleteTenant
+                  - ses:GetEmailIdentity
+                  - ses:GetConfigurationSet
+                  - ses:GetConfigurationSetEventDestinations
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:tenant/pentra-*
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ManagedConfigurationSet}
+              - Sid: VerifyDedicatedSesAccountReady
+                Effect: Allow
+                Action: ses:GetAccount
+                Resource: "*"
+              - Sid: SendOnlyThroughManagedIdentityConfigurationAndTenant
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ManagedConfigurationSet}
+                  - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:tenant/pentra-*
+                Condition:
+                  StringLike:
+                    ses:FromAddress: !Sub "*@${SenderDomain}"
+                    ses:TenantName: pentra-*
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  AdapterFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AdapterFunctionLogGroup
+    Properties:
+      FunctionName: !Sub ${ResourcePrefix}-adapter
+      Handler: adapter.handler
+      Role: !GetAtt AdapterFunctionRole.Arn
+      Environment:
+        Variables:
+          DISPOSITION_SECRET_ARN: !Ref DispositionSecretArn
+      Events:
+        Provision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdapterApi
+            Path: /v1/provision
+            Method: post
+        Status:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdapterApi
+            Path: /v1/status
+            Method: post
+        Send:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdapterApi
+            Path: /v1/send
+            Method: post
+        Disposition:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdapterApi
+            Path: /v1/disposition
+            Method: post
+        Release:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdapterApi
+            Path: /v1/release
+            Method: post
+
+  EventDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  EventQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 86400
+      VisibilityTimeout: 240
+      MaximumMessageSize: 16384
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EventDeadLetterQueue.Arn
+        maxReceiveCount: 24
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  EventRule:
+    Type: AWS::Events::Rule
+    DependsOn: ManagedEventDestination
+    Properties:
+      Name: !Sub ${ResourcePrefix}-sanitized-events
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ses
+        detail-type:
+          - Email Sent
+          - Email Delivered
+          - Email Bounced
+          - Email Complaint Received
+          - Email Delivery Delayed
+          - Email Rejected
+          - Email Rendering Failed
+        detail:
+          mail:
+            tags:
+              ses:configuration-set:
+                - !Ref ManagedConfigurationSet
+              pentraAdapter:
+                - managed-ses-v1
+      Targets:
+        - Id: SanitizedEventQueue
+          Arn: !GetAtt EventQueue.Arn
+          InputTransformer:
+            InputPathsMap:
+              eventType: $.detail-type
+              eventId: $.id
+              eventTime: $.time
+              messageId: $.detail.mail.messageId
+              attempt: $.detail.mail.tags.pentraAttempt
+            InputTemplate: >-
+              {"eventType":<eventType>,"eventId":<eventId>,"eventTime":<eventTime>,"messageId":<messageId>,"attempt":<attempt>}
+
+  EventQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref EventQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EventBridgeSanitizedEventsOnly
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt EventQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt EventRule.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  EventFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ResourcePrefix}-events
+      RetentionInDays: 14
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  EventFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ManagedSesEventMinimumAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${EventFunctionLogGroup.Arn}:*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:TransactWriteItems
+                Resource: !GetAtt AdapterStateTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref HmacSecretArn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt EventQueue.Arn
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  EventFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: EventFunctionLogGroup
+    Properties:
+      FunctionName: !Sub ${ResourcePrefix}-events
+      Handler: events.handler
+      Role: !GetAtt EventFunctionRole.Arn
+      Environment:
+        Variables:
+          PENTRA_WEBHOOK_URL: !Ref PentraWebhookUrl
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EventQueue.Arn
+            BatchSize: 1
+            MaximumBatchingWindowInSeconds: 0
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  LedgerMetricsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ResourcePrefix}-ledger-metrics
+      RetentionInDays: 14
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  LedgerMetricsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ManagedSesLedgerMetricsMinimumAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${LedgerMetricsFunctionLogGroup.Arn}:*"
+              - Effect: Allow
+                Action: dynamodb:DescribeTable
+                Resource: !GetAtt AdapterStateTable.Arn
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: Pentra/ManagedSES
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  LedgerMetricsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: LedgerMetricsFunctionLogGroup
+    Properties:
+      FunctionName: !Sub ${ResourcePrefix}-ledger-metrics
+      Handler: ledger_metrics.handler
+      Role: !GetAtt LedgerMetricsFunctionRole.Arn
+      Events:
+        Hourly:
+          Type: Schedule
+          Properties:
+            Name: !Sub ${ResourcePrefix}-ledger-metrics
+            Schedule: rate(1 hour)
+            Enabled: true
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${ResourcePrefix}-alarms
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+
+  EventQueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-event-age
+      AlarmDescription: Sanitized SES event has not reached Pentra within ten minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt EventQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 600
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  EventDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-event-dlq
+      AlarmDescription: Managed SES sanitized event dead-letter queue is not empty.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt EventDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AdapterErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-adapter-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AdapterFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  EventFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-event-function-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref EventFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  EventRuleFailedInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-event-rule-failed-invocations
+      AlarmDescription: SES EventBridge delivery to the sanitized queue failed.
+      Namespace: AWS/Events
+      MetricName: FailedInvocations
+      Dimensions:
+        - Name: RuleName
+          Value: !Ref EventRule
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AdapterApi5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-api-5xx
+      AlarmDescription: Managed SES adapter API returned a server error.
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub ${ResourcePrefix}-api
+        - Name: Stage
+          Value: Prod
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  StateTableItemCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-ledger-growth
+      AlarmDescription: Durable managed SES receipt ledger exceeded its reviewed item-count envelope.
+      Namespace: Pentra/ManagedSES
+      MetricName: DurableLedgerItemCount
+      Dimensions:
+        - Name: TableName
+          Value: !Ref AdapterStateTable
+      Statistic: Maximum
+      Period: 7200
+      EvaluationPeriods: 1
+      Threshold: 250000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  LedgerMetricsFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-ledger-metrics-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LedgerMetricsFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  ManagedSesBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetLimit:
+          Amount: 25
+          Unit: USD
+        BudgetName: !Sub ${ResourcePrefix}-monthly
+        BudgetType: COST
+        CostFilters:
+          Service:
+            - Amazon Simple Email Service
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 40
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref AlertEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref AlertEmail
+              SubscriptionType: EMAIL
+
+Outputs:
+  AdapterUrl:
+    Value: !Sub https://${AdapterApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod
+  AdapterVersion:
+    Value: managed-ses-v1
+  SenderDomain:
+    Value: !Ref SenderDomain
+  ConfigurationSetName:
+    Value: !Ref ManagedConfigurationSet
+  IdentityArn:
+    Value: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}
+  DkimTokenName1:
+    Value: !GetAtt ManagedEmailIdentity.DkimDNSTokenName1
+  DkimTokenValue1:
+    Value: !GetAtt ManagedEmailIdentity.DkimDNSTokenValue1
+  DkimTokenName2:
+    Value: !GetAtt ManagedEmailIdentity.DkimDNSTokenName2
+  DkimTokenValue2:
+    Value: !GetAtt ManagedEmailIdentity.DkimDNSTokenValue2
+  DkimTokenName3:
+    Value: !GetAtt ManagedEmailIdentity.DkimDNSTokenName3
+  DkimTokenValue3:
+    Value: !GetAtt ManagedEmailIdentity.DkimDNSTokenValue3
