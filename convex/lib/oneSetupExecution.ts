@@ -20,6 +20,32 @@ export function oneSetupConfigurationRevisionIsCurrent(args: {
 }
 
 /**
+ * Existing terminal work may be reconciled after plan parking or entitlement
+ * downgrade because this authorizes no external work. Tenant deletion remains
+ * a hard fence, as do owner/domain/contract drift. The plan fields are
+ * deliberately accepted but ignored to make that distinction testable.
+ */
+export function oneSetupTerminalReceiptSettlementAllowed(args: {
+  hasUser: boolean;
+  deletionStatus?: string;
+  accountDeletionRequestedAt?: number;
+  accountDeletionReceiptExists: boolean;
+  ownerMatches: boolean;
+  domainMatches: boolean;
+  contractMatches: boolean;
+  planParkedAt?: number;
+  entitlementCurrent?: boolean;
+}): boolean {
+  return args.hasUser &&
+    !args.deletionStatus &&
+    !args.accountDeletionRequestedAt &&
+    !args.accountDeletionReceiptExists &&
+    args.ownerMatches &&
+    args.domainMatches &&
+    args.contractMatches;
+}
+
+/**
  * Pure claim decision used by the durable mutation and interleaving tests.
  * An unexpired claimant owns the exact revision; an expired claimant may be
  * replaced, but a bound paid job is always resumed rather than recreated.

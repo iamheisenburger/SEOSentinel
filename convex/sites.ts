@@ -106,6 +106,11 @@ import {
   type OneSetupReadinessState,
 } from "./lib/oneSetup.ts";
 import {
+  ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+  oneSetupInitialPlanContextFingerprint,
+  oneSetupInitialPlanReceiptDecision,
+} from "./lib/oneSetupInitialPlan.ts";
+import {
   canonicalGscReceiptMutationFenceCurrent,
   oneSetupOutreachMailboxReceiptVerified,
   oneSetupPublisherReceiptVerified,
@@ -1503,6 +1508,18 @@ export const saveOneSetupRequest = mutation({
           (existing.domainRevisionSnapshot ?? 0) !== domainRevisionSnapshot ||
           existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION),
     );
+    const initialPlanContextFingerprint =
+      oneSetupInitialPlanContextFingerprint(site);
+    const initialPlanReceipt = oneSetupInitialPlanReceiptDecision({
+      storedVersion: existing?.initialPlanReceiptVersion,
+      storedGeneration: existing?.initialPlanGeneration,
+      storedContextFingerprint: existing?.initialPlanContextFingerprint,
+      storedJobId: existing?.initialPlanJobId
+        ? String(existing.initialPlanJobId)
+        : undefined,
+      currentContextFingerprint: initialPlanContextFingerprint,
+      hardReset: reset,
+    });
     const publisher = nextOneSetupCapability(
       existing?.publisher,
       args.publisherMode,
@@ -1535,6 +1552,15 @@ export const saveOneSetupRequest = mutation({
       contractVersion: ONE_SETUP_CONTRACT_VERSION,
       revision,
       configurationRevision,
+      initialPlanReceiptVersion: ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+      initialPlanGeneration: initialPlanReceipt.generation,
+      initialPlanContextFingerprint,
+      initialPlanJobId: initialPlanReceipt.adoptBoundJob
+        ? existing?.initialPlanJobId
+        : undefined,
+      initialPlanBoundAt: initialPlanReceipt.adoptBoundJob
+        ? existing?.initialPlanBoundAt
+        : undefined,
       automationMode: args.automationMode,
       requestedCadencePerWeek: args.requestedCadencePerWeek,
       publisher,

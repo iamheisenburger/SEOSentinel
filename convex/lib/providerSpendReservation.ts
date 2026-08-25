@@ -16,8 +16,8 @@ import {
  * spend from the same DataForSEO/OpenAI account. Every allowed attempt writes
  * one durable reservation in the same transaction as its source job/run,
  * preventing concurrent tenants or different features from oversubscribing
- * the shared provider account. Only a proven pre-paid-call balance failure may
- * append release metadata; the receipt itself is never deleted.
+ * the shared provider account. Only a proven exit before the first paid call
+ * may append release metadata; the receipt itself is never deleted.
  */
 // Conservative initial fleet guard: at most one complete $2 topic-plan
 // reservation plus two full authority scans per day, and no more than $35 of
@@ -57,7 +57,8 @@ export type ProviderReservationReleaseReason =
   | "provider_balance_insufficient"
   | "provider_balance_preflight_unavailable"
   | "plan_cancelled_before_execution"
-  | "plan_reservation_day_expired_before_execution";
+  | "plan_reservation_day_expired_before_execution"
+  | "one_setup_planning_context_superseded_before_execution";
 
 export type SharedProviderPurpose =
   | "topic_plan"

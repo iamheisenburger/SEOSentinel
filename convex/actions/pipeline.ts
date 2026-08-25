@@ -229,6 +229,35 @@ class PlanReservationDayExpiredError extends Error {
   }
 }
 
+class OneSetupInitialPlanSupersededError extends Error {
+  constructor(readonly reason: string) {
+    super(
+      "The saved setup planning context changed before paid topic planning " +
+      `(${reason}).`,
+    );
+    this.name = "OneSetupInitialPlanSupersededError";
+  }
+}
+
+async function assertCurrentOneSetupInitialPlan(
+  ctx: ActionCtx,
+  args: {
+    siteId: Id<"sites">;
+    jobId: Id<"jobs">;
+    workerToken: string;
+  },
+): Promise<void> {
+  const authorization = await ctx.runMutation(
+    internal.jobs.authorizeOneSetupInitialPlanWorker,
+    args,
+  );
+  if (authorization.authorized) return;
+  if (authorization.reason === "worker_lease_invalid") {
+    throw new Error("Plan worker lost its lease before provider authorization");
+  }
+  throw new OneSetupInitialPlanSupersededError(authorization.reason);
+}
+
 function assertPlanProviderReservation(job: Doc<"jobs">): void {
   if (
     job.providerCostCeilingMicroUsd !==
@@ -6064,6 +6093,11 @@ async function generatePlanHandler(
       if (!lease.owned) {
         throw new Error("Plan worker lost its current tenant entitlement");
       }
+      await assertCurrentOneSetupInitialPlan(ctx, {
+        siteId,
+        jobId,
+        workerToken,
+      });
       const workerExecution = (claimed.workerAttempts ?? 0) + 1;
       if (automaticTopicPlan && checkpointYieldTarget) {
         await ctx.runMutation(
@@ -6129,7 +6163,8 @@ async function generatePlanHandler(
       const msg = err instanceof Error ? err.message : "Unknown error";
       if (
         isDataForSeoBalancePreflightError(err) ||
-        err instanceof PlanReservationDayExpiredError
+        err instanceof PlanReservationDayExpiredError ||
+        err instanceof OneSetupInitialPlanSupersededError
       ) {
         await ctx.runMutation(internal.jobs.abortPlanForProviderBalance, {
           siteId,
@@ -6137,7 +6172,9 @@ async function generatePlanHandler(
           workerToken,
           releaseReason: err instanceof PlanReservationDayExpiredError
             ? "plan_reservation_day_expired_before_execution"
-            : providerBalanceReleaseReason(err),
+            : err instanceof OneSetupInitialPlanSupersededError
+              ? "one_setup_planning_context_superseded_before_execution"
+              : providerBalanceReleaseReason(err),
         });
       } else {
         await ctx.runMutation(internal.jobs.markFailed, {
@@ -7787,6 +7824,11 @@ export const processNextJob = internalAction({
       if (job.type === "plan") {
         assertPlanProviderReservation(job);
         await heartbeat();
+        await assertCurrentOneSetupInitialPlan(ctx, {
+          siteId: args.siteId,
+          jobId: job._id,
+          workerToken,
+        });
         const growthContext = payload?.growthParentArticleId &&
           payload.growthSeed &&
           payload.growthActionFingerprint
@@ -8520,7 +8562,8 @@ export const processNextJob = internalAction({
       if (job.type === "plan") {
         if (
           isDataForSeoBalancePreflightError(error) ||
-          error instanceof PlanReservationDayExpiredError
+          error instanceof PlanReservationDayExpiredError ||
+          error instanceof OneSetupInitialPlanSupersededError
         ) {
           const aborted = await ctx.runMutation(
             internal.jobs.abortPlanForProviderBalance,
@@ -8530,7 +8573,9 @@ export const processNextJob = internalAction({
               workerToken,
               releaseReason: error instanceof PlanReservationDayExpiredError
                 ? "plan_reservation_day_expired_before_execution"
-                : providerBalanceReleaseReason(error),
+                : error instanceof OneSetupInitialPlanSupersededError
+                  ? "one_setup_planning_context_superseded_before_execution"
+                  : providerBalanceReleaseReason(error),
             },
           );
           return {

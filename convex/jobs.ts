@@ -97,6 +97,14 @@ import {
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 import { ONBOARDING_WORKFLOW } from "./lib/onboardingClaim";
+import {
+  ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+  oneSetupInitialPlanContextFingerprint,
+  oneSetupInitialPlanJobBindingMatches,
+  oneSetupInitialPlanReceiptDecision,
+} from "./lib/oneSetupInitialPlan";
+import { oneSetupInitialPlanCurrency } from
+  "./lib/oneSetupInitialPlanDb";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
@@ -372,6 +380,41 @@ async function currentAutomaticPlanYieldTarget(
 
 function ownsJob(job: Doc<"jobs">, workerToken: string): boolean {
   return job.status === "running" && job.workerToken === workerToken;
+}
+
+function stableOneSetupInitialPlanRequestId(
+  job: Doc<"jobs">,
+): string | null {
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown>
+    : {};
+  if (
+    job.type !== "plan" ||
+    payload.manual !== true ||
+    payload.reason !== "one_setup_initial_plan" ||
+    typeof payload.oneSetupRequestId !== "string" ||
+    payload.oneSetupInitialPlanReceiptVersion !==
+      ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION ||
+    !Number.isSafeInteger(payload.oneSetupInitialPlanGeneration) ||
+    (payload.oneSetupInitialPlanGeneration as number) <= 0
+  ) return null;
+  return payload.oneSetupRequestId;
+}
+
+async function wakeCurrentOneSetupExecutionForTerminalPlan(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+): Promise<void> {
+  const rawRequestId = stableOneSetupInitialPlanRequestId(job);
+  const requestId = rawRequestId
+    ? ctx.db.normalizeId("managed_provisioning_requests", rawRequestId)
+    : null;
+  if (!requestId) return;
+  await ctx.scheduler.runAfter(
+    0,
+    internal.oneSetupExecutions.reconcileCurrentPlanJob,
+    { requestId, planJobId: job._id },
+  );
 }
 
 type PlanPersistenceCommit = {
@@ -715,6 +758,7 @@ export const resetStuckJobs = internalMutation({
             "Plan worker lease expired after provider work may have started; paid state is ambiguous and automatic replay is forbidden.",
         });
         await activateTerminalPlanCheckpoints(ctx, job._id, currentTime);
+        await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
         terminal += 1;
         if (job.siteId) {
           await raiseJobAlert(
@@ -1274,6 +1318,8 @@ export const queuePlanIfAbsent = internalMutation({
       throw new Error("Incomplete one-setup plan binding");
     }
     let setupExecution: Doc<"one_setup_executions"> | null = null;
+    let setupRequest: Doc<"managed_provisioning_requests"> | null = null;
+    let setupInitialPlanGeneration: number | undefined;
     if (
       args.oneSetupExecutionId &&
       args.oneSetupClaimNonce &&
@@ -1291,7 +1337,7 @@ export const queuePlanIfAbsent = internalMutation({
       }
       setupExecution = await ctx.db.get(args.oneSetupExecutionId);
       const timestamp = now();
-      const setupRequest = setupExecution
+      setupRequest = setupExecution
         ? await ctx.db.get(setupExecution.requestId)
         : null;
       if (
@@ -1315,14 +1361,31 @@ export const queuePlanIfAbsent = internalMutation({
             typeof boundJob.payload === "object"
           ? boundJob.payload as Record<string, unknown>
           : {};
+        const exactExecutionBinding =
+          String(boundPayload.oneSetupExecutionId ?? "") ===
+              String(setupExecution._id) &&
+          boundPayload.oneSetupConfigurationRevision ===
+            setupExecution.configurationRevision;
+        const stableRequestBinding = oneSetupInitialPlanJobBindingMatches({
+          requestId: String(setupRequest._id),
+          requestPlanJobId: setupRequest.initialPlanJobId
+            ? String(setupRequest.initialPlanJobId)
+            : undefined,
+          requestReceiptVersion: setupRequest.initialPlanReceiptVersion,
+          requestGeneration: setupRequest.initialPlanGeneration,
+          jobId: String(boundJob?._id ?? ""),
+          payloadRequestId: boundPayload.oneSetupRequestId,
+          payloadReceiptVersion:
+            boundPayload.oneSetupInitialPlanReceiptVersion,
+          payloadGeneration: boundPayload.oneSetupInitialPlanGeneration,
+        });
         if (
           !boundJob ||
           boundJob.siteId !== args.siteId ||
           boundJob.type !== "plan" ||
-          String(boundPayload.oneSetupExecutionId ?? "") !==
-            String(setupExecution._id) ||
-          boundPayload.oneSetupConfigurationRevision !==
-            setupExecution.configurationRevision
+          boundPayload.manual !== true ||
+          boundPayload.reason !== "one_setup_initial_plan" ||
+          (!exactExecutionBinding && !stableRequestBinding)
         ) {
           throw new Error("One-setup execution has an invalid plan binding");
         }
@@ -1331,6 +1394,68 @@ export const queuePlanIfAbsent = internalMutation({
           jobId: boundJob._id,
           reason: "setup_receipt" as const,
           jobStatus: boundJob.status,
+        };
+      }
+
+      const initialPlanContextFingerprint =
+        oneSetupInitialPlanContextFingerprint(site);
+      const initialPlanReceipt = oneSetupInitialPlanReceiptDecision({
+        storedVersion: setupRequest.initialPlanReceiptVersion,
+        storedGeneration: setupRequest.initialPlanGeneration,
+        storedContextFingerprint:
+          setupRequest.initialPlanContextFingerprint,
+        storedJobId: setupRequest.initialPlanJobId
+          ? String(setupRequest.initialPlanJobId)
+          : undefined,
+        currentContextFingerprint: initialPlanContextFingerprint,
+        hardReset: false,
+      });
+      setupInitialPlanGeneration = initialPlanReceipt.generation;
+      if (initialPlanReceipt.reset) {
+        await ctx.db.patch(setupRequest._id, {
+          initialPlanReceiptVersion: ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+          initialPlanGeneration: initialPlanReceipt.generation,
+          initialPlanContextFingerprint,
+          initialPlanJobId: undefined,
+          initialPlanBoundAt: undefined,
+        });
+      } else if (initialPlanReceipt.adoptBoundJob) {
+        const stableJob = await ctx.db.get(setupRequest.initialPlanJobId!);
+        const stablePayload = stableJob?.payload &&
+            typeof stableJob.payload === "object"
+          ? stableJob.payload as Record<string, unknown>
+          : {};
+        if (
+          !stableJob ||
+          stableJob.siteId !== args.siteId ||
+          stableJob.type !== "plan" ||
+          stablePayload.manual !== true ||
+          stablePayload.reason !== "one_setup_initial_plan" ||
+          !oneSetupInitialPlanJobBindingMatches({
+            requestId: String(setupRequest._id),
+            requestPlanJobId: String(setupRequest.initialPlanJobId),
+            requestReceiptVersion: setupRequest.initialPlanReceiptVersion,
+            requestGeneration: setupRequest.initialPlanGeneration,
+            jobId: String(stableJob?._id ?? ""),
+            payloadRequestId: stablePayload.oneSetupRequestId,
+            payloadReceiptVersion:
+              stablePayload.oneSetupInitialPlanReceiptVersion,
+            payloadGeneration: stablePayload.oneSetupInitialPlanGeneration,
+          })
+        ) {
+          throw new Error("Stable one-setup initial-plan receipt is invalid");
+        }
+        await ctx.db.patch(setupExecution._id, {
+          status: "plan_queued",
+          planJobId: stableJob._id,
+          blockerCode: undefined,
+          updatedAt: timestamp,
+        });
+        return {
+          queued: false,
+          jobId: stableJob._id,
+          reason: "setup_receipt" as const,
+          jobStatus: stableJob.status,
         };
       }
     }
@@ -1654,6 +1779,11 @@ export const queuePlanIfAbsent = internalMutation({
                 oneSetupExecutionId: setupExecution._id,
                 oneSetupConfigurationRevision:
                   setupExecution.configurationRevision,
+                oneSetupRequestId: setupRequest!._id,
+                oneSetupInitialPlanReceiptVersion:
+                  ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+                oneSetupInitialPlanGeneration:
+                  setupInitialPlanGeneration!,
               }
             : {}),
         }
@@ -1674,6 +1804,14 @@ export const queuePlanIfAbsent = internalMutation({
       updatedAt: timestamp,
     });
     if (setupExecution) {
+      await ctx.db.patch(setupRequest!._id, {
+        initialPlanReceiptVersion: ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+        initialPlanGeneration: setupInitialPlanGeneration!,
+        initialPlanContextFingerprint:
+          oneSetupInitialPlanContextFingerprint(site),
+        initialPlanJobId: jobId,
+        initialPlanBoundAt: timestamp,
+      });
       await ctx.db.patch(setupExecution._id, {
         status: "plan_queued",
         planJobId: jobId,
@@ -2015,7 +2153,7 @@ export const recoverExpectedClickPlanMigrationAfterPreflight = internalMutation(
 });
 
 /**
- * Abort a plan whose free provider-account preflight failed before paid work.
+ * Abort a plan whose free pre-provider fence failed before paid work.
  * Only a first execution can release capacity and roll back the migration
  * marker: after a prior worker failure, provider spend is ambiguous and the
  * original reservation remains consumed for audit safety.
@@ -2041,7 +2179,9 @@ export const abortPlanForProviderBalance = internalMutation({
     if (
       releaseReason !== "provider_balance_insufficient" &&
       releaseReason !== "provider_balance_preflight_unavailable" &&
-      releaseReason !== "plan_reservation_day_expired_before_execution"
+      releaseReason !== "plan_reservation_day_expired_before_execution" &&
+      releaseReason !==
+        "one_setup_planning_context_superseded_before_execution"
     ) {
       throw new Error("Unknown provider reservation release reason");
     }
@@ -2106,7 +2246,10 @@ export const abortPlanForProviderBalance = internalMutation({
     const failureMessage = releaseReason ===
         "plan_reservation_day_expired_before_execution"
       ? "The plan reservation expired before its first paid execution."
-      : "Provider account funding preflight blocked paid topic planning.";
+      : releaseReason ===
+          "one_setup_planning_context_superseded_before_execution"
+        ? "The saved setup planning context changed before paid topic planning."
+        : "Provider account funding preflight blocked paid topic planning.";
     const cadenceFailure = classifyCadenceFailure({
       message: releaseReason,
       now: timestamp,
@@ -2168,6 +2311,7 @@ export const abortPlanForProviderBalance = internalMutation({
           "plan_checkpoint_provider_preflight_blocked",
         )
       : await activateTerminalPlanCheckpoints(ctx, args.jobId, timestamp);
+    await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
     return {
       updated: true,
       released,
@@ -2385,6 +2529,45 @@ export const heartbeatWorker = internalMutation({
       updatedAt: currentTime,
     });
     return { owned: true, leaseExpiresAt: currentTime + JOB_LEASE_MS };
+  },
+});
+
+/**
+ * Last database fence before a plan action may cross its paid provider
+ * boundary. Ordinary and legacy one-setup plans are unchanged; a stable
+ * one-setup receipt must still be the request's current planning generation.
+ */
+export const authorizeOneSetupInitialPlanWorker = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const [site, job] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.jobId),
+    ]);
+    if (
+      !site ||
+      !job ||
+      job.siteId !== args.siteId ||
+      job.type !== "plan" ||
+      !ownsJob(job, args.workerToken)
+    ) {
+      return {
+        authorized: false as const,
+        reason: "worker_lease_invalid" as const,
+      };
+    }
+    const currency = await oneSetupInitialPlanCurrency(ctx, { site, job });
+    if (currency.kind === "stale") {
+      return {
+        authorized: false as const,
+        reason: currency.reason,
+      };
+    }
+    return { authorized: true as const, kind: currency.kind };
   },
 });
 
@@ -3383,6 +3566,7 @@ export const markDone = internalMutation({
       updatedAt: currentTime,
     });
     await reconcileJobTopicLifecycle(ctx, job);
+    await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
     return { updated: true };
   },
 });
@@ -3417,6 +3601,7 @@ export const markFailed = internalMutation({
     });
     if (job.type === "plan") {
       await terminallyClosePlanCheckpoints(ctx, jobId, currentTime);
+      await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
     }
     await reconcileJobTopicLifecycle(ctx, job);
     return { updated: true };
@@ -3487,6 +3672,7 @@ export const markRetryableFailure = internalMutation({
     });
     if (!willRetry && job.type === "plan") {
       await activateTerminalPlanCheckpoints(ctx, jobId, currentTime);
+      await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
     }
     await reconcileJobTopicLifecycle(ctx, job);
     if (!willRetry && job.siteId) {

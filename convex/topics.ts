@@ -1,6 +1,7 @@
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import {
   coveredIntentTopics,
@@ -30,6 +31,8 @@ import {
 } from "./lib/planCandidateCheckpoint";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
+import { oneSetupInitialPlanCurrency } from
+  "./lib/oneSetupInitialPlanDb";
 import { evaluateSchedulerReadyTopicInventory } from
   "./lib/schedulerTopicReadiness";
 import {
@@ -403,6 +406,9 @@ export const upsertMany = internalMutation({
       throw new Error("Site domain changed before topic persistence");
     }
     let owningPlanJob: Doc<"jobs"> | null = null;
+    let oneSetupRequestId:
+      | Doc<"managed_provisioning_requests">["_id"]
+      | undefined;
     if (planExecution) {
       const timestamp = now();
       const job = await ctx.db.get(planExecution.jobId);
@@ -445,6 +451,19 @@ export const upsertMany = internalMutation({
         );
       }
       owningPlanJob = job;
+      const setupCurrency = await oneSetupInitialPlanCurrency(ctx, {
+        site,
+        job,
+      });
+      if (setupCurrency.kind === "stale") {
+        throw new Error(
+          "One-setup initial plan was superseded before topic commit " +
+          `(${setupCurrency.reason})`,
+        );
+      }
+      if (setupCurrency.kind === "current") {
+        oneSetupRequestId = setupCurrency.requestId;
+      }
     }
     if (growthParentArticleId) {
       const parent = await ctx.db.get(growthParentArticleId);
@@ -826,6 +845,13 @@ export const upsertMany = internalMutation({
         leaseExpiresAt: undefined,
         updatedAt: committedAt,
       });
+      if (oneSetupRequestId) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.oneSetupExecutions.reconcileCurrentPlanJob,
+          { requestId: oneSetupRequestId, planJobId: owningPlanJob._id },
+        );
+      }
     }
 
     if (skipped > 0) {

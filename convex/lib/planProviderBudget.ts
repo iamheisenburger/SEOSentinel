@@ -477,10 +477,10 @@ type PlanProviderReservationEvidence = {
   providerReservationReleaseReason?: string;
 };
 
-/** A balance preflight release proves that the plan stopped before its first
- * paid provider request. It must not consume the tenant's one-per-window topic
- * replenishment allowance after funding is restored. Unknown or ambiguous
- * releases remain counted fail-closed. */
+/** A pre-provider release proves that the plan stopped before its first paid
+ * request. It must not consume the tenant's one-per-window topic replenishment
+ * allowance after funding or the current setup context is restored. Unknown
+ * or ambiguous releases remain counted fail-closed. */
 export function countsTowardTopicPlanRecentLimit(
   job: PlanProviderReservationEvidence,
 ): boolean {
@@ -492,6 +492,7 @@ export function countsTowardTopicPlanRecentLimit(
       "provider_balance_preflight_unavailable",
       "plan_cancelled_before_execution",
       "plan_reservation_day_expired_before_execution",
+      "one_setup_planning_context_superseded_before_execution",
     ].includes(job.providerReservationReleaseReason ?? "")
   );
 }

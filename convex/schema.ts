@@ -194,6 +194,15 @@ export default defineSchema({
     // Owner configuration generation. Unlike revision, this advances only on
     // an owner save and is never changed by leases or passive reconciliation.
     configurationRevision: v.optional(v.number()),
+    // Initial content planning is bound to the request/domain planning context,
+    // not to publisher, measurement, mailbox, cadence, or automation edits. A
+    // current configuration execution adopts this one immutable job receipt in
+    // every job state instead of reserving a second paid plan after a resave.
+    initialPlanReceiptVersion: v.optional(v.number()),
+    initialPlanGeneration: v.optional(v.number()),
+    initialPlanContextFingerprint: v.optional(v.string()),
+    initialPlanJobId: v.optional(v.id("jobs")),
+    initialPlanBoundAt: v.optional(v.number()),
     automationMode: v.union(
       v.literal("assisted"),
       v.literal("full"),
@@ -323,6 +332,11 @@ export default defineSchema({
     claimNonce: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
     planJobId: v.optional(v.id("jobs")),
+    // A provider-free durable watcher follows a stable adopted plan to its
+    // terminal receipt. Generation/attempt fence duplicate or stale wakes.
+    planSettlementWatchGeneration: v.optional(v.number()),
+    planSettlementWatchAttempt: v.optional(v.number()),
+    planSettlementNextAt: v.optional(v.number()),
     crawlCompletedAt: v.optional(v.number()),
     topicCount: v.optional(v.number()),
     blockerCode: v.optional(v.string()),

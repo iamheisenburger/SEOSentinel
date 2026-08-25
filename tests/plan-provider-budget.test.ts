@@ -301,7 +301,7 @@ test("a transient retry cannot spend after its UTC reservation day", () => {
   );
 });
 
-test("a proven zero-spend balance preflight failure does not consume recovery cadence", () => {
+test("a proven zero-spend pre-provider exit does not consume recovery cadence", () => {
   assert.equal(
     countsTowardTopicPlanRecentLimit({
       type: "plan",
@@ -316,6 +316,15 @@ test("a proven zero-spend balance preflight failure does not consume recovery ca
       providerReservationReleasedAt: 1_000,
       providerReservationReleaseReason:
         "provider_balance_preflight_unavailable",
+    }),
+    false,
+  );
+  assert.equal(
+    countsTowardTopicPlanRecentLimit({
+      type: "plan",
+      providerReservationReleasedAt: 1_000,
+      providerReservationReleaseReason:
+        "one_setup_planning_context_superseded_before_execution",
     }),
     false,
   );
