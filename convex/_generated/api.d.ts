@@ -57,6 +57,8 @@ import type * as lib_expectedClickDemandBackfill from "../lib/expectedClickDeman
 import type * as lib_expectedClickEvidenceBackfill from "../lib/expectedClickEvidenceBackfill.js";
 import type * as lib_expectedClickMigrationRecovery from "../lib/expectedClickMigrationRecovery.js";
 import type * as lib_expectedClickPortfolio from "../lib/expectedClickPortfolio.js";
+import type * as lib_expectedClickSkipReceipt from "../lib/expectedClickSkipReceipt.js";
+import type * as lib_expectedClickSkipReceiptStore from "../lib/expectedClickSkipReceiptStore.js";
 import type * as lib_growthSupportDelivery from "../lib/growthSupportDelivery.js";
 import type * as lib_gscSearchAnalytics from "../lib/gscSearchAnalytics.js";
 import type * as lib_internalHttpAuth from "../lib/internalHttpAuth.js";
@@ -188,6 +190,8 @@ declare const fullApi: ApiFromModules<{
   "lib/expectedClickEvidenceBackfill": typeof lib_expectedClickEvidenceBackfill;
   "lib/expectedClickMigrationRecovery": typeof lib_expectedClickMigrationRecovery;
   "lib/expectedClickPortfolio": typeof lib_expectedClickPortfolio;
+  "lib/expectedClickSkipReceipt": typeof lib_expectedClickSkipReceipt;
+  "lib/expectedClickSkipReceiptStore": typeof lib_expectedClickSkipReceiptStore;
   "lib/growthSupportDelivery": typeof lib_growthSupportDelivery;
   "lib/gscSearchAnalytics": typeof lib_gscSearchAnalytics;
   "lib/internalHttpAuth": typeof lib_internalHttpAuth;
