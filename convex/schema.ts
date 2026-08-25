@@ -188,6 +188,8 @@ export default defineSchema({
     siteId: v.id("sites"),
     ownerAccountKey: v.string(),
     domainSnapshot: v.string(),
+    // Exact canonical-domain epoch. Missing is accepted only for an
+    // unstamped legacy site; every new save records the current epoch.
     domainRevisionSnapshot: v.optional(v.number()),
     contractVersion: v.number(),
     revision: v.number(),
@@ -203,6 +205,14 @@ export default defineSchema({
     initialPlanContextFingerprint: v.optional(v.string()),
     initialPlanJobId: v.optional(v.id("jobs")),
     initialPlanBoundAt: v.optional(v.number()),
+    // A legacy receipt that cannot be proven unique is quarantined instead of
+    // authorizing a second provider reservation.
+    initialPlanQuarantineCode: v.optional(v.string()),
+    initialPlanQuarantinedAt: v.optional(v.number()),
+    // Count exact released pre-provider recoveries for bounded exponential
+    // backoff and persistent operator visibility. Paid/ambiguous failures never
+    // increment this counter or authorize a successor generation.
+    initialPlanRecoveryCount: v.optional(v.number()),
     automationMode: v.union(
       v.literal("assisted"),
       v.literal("full"),
@@ -305,6 +315,8 @@ export default defineSchema({
     configurationRevision: v.number(),
     ownerAccountKey: v.string(),
     domainSnapshot: v.string(),
+    // Exact copy of the request/site epoch; missing is legacy, never stamped 0.
+    domainRevisionSnapshot: v.optional(v.number()),
     automationMode: v.union(
       v.literal("assisted"),
       v.literal("full"),
@@ -331,6 +343,20 @@ export default defineSchema({
     ),
     claimNonce: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
+    // Exact lease watcher armed in the same transaction as every claim.
+    claimWatchGeneration: v.optional(v.number()),
+    claimWatchAttempt: v.optional(v.number()),
+    claimWatchNextAt: v.optional(v.number()),
+    // Deliberate provider-free retry wake (for example, J-old was still
+    // active while a genuinely new planning generation attempted to queue).
+    pendingResumeGeneration: v.optional(v.number()),
+    pendingResumeAttempt: v.optional(v.number()),
+    pendingResumeNextAt: v.optional(v.number()),
+    // Save-transaction bootstrap authorization has its own exact watcher so
+    // it cannot consume claim/pending recovery attempts or hide its wake from
+    // the readiness projection.
+    bootstrapAuthorizationWatchAttempt: v.optional(v.number()),
+    bootstrapAuthorizationNextAt: v.optional(v.number()),
     planJobId: v.optional(v.id("jobs")),
     // A provider-free durable watcher follows a stable adopted plan to its
     // terminal receipt. Generation/attempt fence duplicate or stale wakes.

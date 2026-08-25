@@ -85,6 +85,7 @@ import {
   terminallyClosePlanCheckpoints,
 } from "./planCandidateCheckpoints";
 import {
+  CADENCE_PROVIDER_RECHECK_MS,
   classifyCadenceFailure,
   deriveCadenceRecoveryStrategy,
 } from "./lib/cadenceLiveness";
@@ -92,6 +93,7 @@ import {
   articleMatchesCurrentDomain,
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
   takeCurrentDomainArticleSummaries,
   takeCurrentDomainTopics,
   topicMatchesCurrentDomain,
@@ -99,12 +101,18 @@ import {
 import { ONBOARDING_WORKFLOW } from "./lib/onboardingClaim";
 import {
   ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+  oneSetupDomainRevisionReceiptMatches,
   oneSetupInitialPlanContextFingerprint,
   oneSetupInitialPlanJobBindingMatches,
   oneSetupInitialPlanReceiptDecision,
+  oneSetupPaidBoundaryLifecycleAllowed,
 } from "./lib/oneSetupInitialPlan";
 import { oneSetupInitialPlanCurrency } from
   "./lib/oneSetupInitialPlanDb";
+import { oneSetupQueueDenialDisposition } from
+  "./lib/oneSetupExecution.ts";
+import { accountDeletionKey } from "./lib/accountDeletion.ts";
+import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
@@ -1305,7 +1313,7 @@ export const queuePlanIfAbsent = internalMutation({
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
-    if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!site) throw new Error("Site not found");
     const setupBindingValues = [
       args.oneSetupExecutionId,
       args.oneSetupClaimNonce,
@@ -1316,6 +1324,14 @@ export const queuePlanIfAbsent = internalMutation({
     ).length;
     if (setupBindingCount !== 0 && setupBindingCount !== setupBindingValues.length) {
       throw new Error("Incomplete one-setup plan binding");
+    }
+    const exactOneSetupBinding =
+      setupBindingCount === setupBindingValues.length;
+    // A parked site may still adopt and settle an already-paid exact setup
+    // receipt. All ordinary queue paths and every new setup reservation remain
+    // subject to the active/authorized gates below.
+    if (!exactOneSetupBinding && !siteExecutionActive(site)) {
+      throw new Error("Site not found");
     }
     let setupExecution: Doc<"one_setup_executions"> | null = null;
     let setupRequest: Doc<"managed_provisioning_requests"> | null = null;
@@ -1340,6 +1356,17 @@ export const queuePlanIfAbsent = internalMutation({
       setupRequest = setupExecution
         ? await ctx.db.get(setupExecution.requestId)
         : null;
+      const currentCanonicalDomainRevision =
+        siteCanonicalDomainRevision(site);
+      const legacyUnstampedAllowed = siteUsesLegacyDomainReceipts(site);
+      const deletionReceipt = site.userId
+        ? await ctx.db
+            .query("account_deletion_receipts")
+            .withIndex("by_account_key", (q) =>
+              q.eq("accountKey", accountDeletionKey(site.userId!))
+            )
+            .unique()
+        : null;
       if (
         !setupExecution ||
         !setupRequest ||
@@ -1351,9 +1378,36 @@ export const queuePlanIfAbsent = internalMutation({
           args.oneSetupConfigurationRevision ||
         setupExecution.claimNonce !== args.oneSetupClaimNonce ||
         (setupExecution.leaseExpiresAt ?? 0) <= timestamp ||
-        !["running", "plan_queued"].includes(setupExecution.status)
+        !["running", "plan_queued"].includes(setupExecution.status) ||
+        Boolean(site.deletionStatus) ||
+        site.accountDeletionRequestedAt !== undefined ||
+        Boolean(deletionReceipt) ||
+        setupExecution.ownerAccountKey !== setupRequest.ownerAccountKey ||
+        setupExecution.domainSnapshot !== setupRequest.domainSnapshot ||
+        setupRequest.domainSnapshot !== siteCanonicalDomain(site) ||
+        !site.userId ||
+        setupRequest.ownerAccountKey !== accountDeletionKey(site.userId) ||
+        setupRequest.contractVersion !== ONE_SETUP_CONTRACT_VERSION ||
+        !oneSetupDomainRevisionReceiptMatches({
+          currentCanonicalDomainRevision,
+          receiptDomainRevision: setupRequest.domainRevisionSnapshot,
+          legacyUnstampedAllowed,
+        }) ||
+        !oneSetupDomainRevisionReceiptMatches({
+          currentCanonicalDomainRevision,
+          receiptDomainRevision: setupExecution.domainRevisionSnapshot,
+          legacyUnstampedAllowed,
+        }) ||
+        setupExecution.domainRevisionSnapshot !==
+          setupRequest.domainRevisionSnapshot
       ) {
         throw new Error("One-setup execution claim is not current");
+      }
+      if (setupRequest.initialPlanQuarantineCode) {
+        return {
+          queued: false,
+          reason: setupRequest.initialPlanQuarantineCode,
+        };
       }
       if (setupExecution.planJobId) {
         const boundJob = await ctx.db.get(setupExecution.planJobId);
@@ -1361,11 +1415,6 @@ export const queuePlanIfAbsent = internalMutation({
             typeof boundJob.payload === "object"
           ? boundJob.payload as Record<string, unknown>
           : {};
-        const exactExecutionBinding =
-          String(boundPayload.oneSetupExecutionId ?? "") ===
-              String(setupExecution._id) &&
-          boundPayload.oneSetupConfigurationRevision ===
-            setupExecution.configurationRevision;
         const stableRequestBinding = oneSetupInitialPlanJobBindingMatches({
           requestId: String(setupRequest._id),
           requestPlanJobId: setupRequest.initialPlanJobId
@@ -1378,6 +1427,12 @@ export const queuePlanIfAbsent = internalMutation({
           payloadReceiptVersion:
             boundPayload.oneSetupInitialPlanReceiptVersion,
           payloadGeneration: boundPayload.oneSetupInitialPlanGeneration,
+          requestDomainRevisionSnapshot:
+            setupRequest.domainRevisionSnapshot,
+          payloadCanonicalDomainRevision:
+            boundPayload.oneSetupCanonicalDomainRevision,
+          currentCanonicalDomainRevision,
+          legacyUnstampedAllowed,
         });
         if (
           !boundJob ||
@@ -1385,10 +1440,15 @@ export const queuePlanIfAbsent = internalMutation({
           boundJob.type !== "plan" ||
           boundPayload.manual !== true ||
           boundPayload.reason !== "one_setup_initial_plan" ||
-          (!exactExecutionBinding && !stableRequestBinding)
+          !stableRequestBinding
         ) {
           throw new Error("One-setup execution has an invalid plan binding");
         }
+        await ctx.scheduler.runAfter(
+          0,
+          internal.oneSetupExecutions.reconcileCurrentPlanJob,
+          { requestId: setupRequest._id, planJobId: boundJob._id },
+        );
         return {
           queued: false,
           jobId: boundJob._id,
@@ -1418,6 +1478,9 @@ export const queuePlanIfAbsent = internalMutation({
           initialPlanContextFingerprint,
           initialPlanJobId: undefined,
           initialPlanBoundAt: undefined,
+          initialPlanQuarantineCode: undefined,
+          initialPlanQuarantinedAt: undefined,
+          initialPlanRecoveryCount: 0,
         });
       } else if (initialPlanReceipt.adoptBoundJob) {
         const stableJob = await ctx.db.get(setupRequest.initialPlanJobId!);
@@ -1441,6 +1504,12 @@ export const queuePlanIfAbsent = internalMutation({
             payloadReceiptVersion:
               stablePayload.oneSetupInitialPlanReceiptVersion,
             payloadGeneration: stablePayload.oneSetupInitialPlanGeneration,
+            requestDomainRevisionSnapshot:
+              setupRequest.domainRevisionSnapshot,
+            payloadCanonicalDomainRevision:
+              stablePayload.oneSetupCanonicalDomainRevision,
+            currentCanonicalDomainRevision,
+            legacyUnstampedAllowed,
           })
         ) {
           throw new Error("Stable one-setup initial-plan receipt is invalid");
@@ -1451,11 +1520,35 @@ export const queuePlanIfAbsent = internalMutation({
           blockerCode: undefined,
           updatedAt: timestamp,
         });
+        await ctx.scheduler.runAfter(
+          0,
+          internal.oneSetupExecutions.reconcileCurrentPlanJob,
+          { requestId: setupRequest._id, planJobId: stableJob._id },
+        );
         return {
           queued: false,
           jobId: stableJob._id,
           reason: "setup_receipt" as const,
           jobStatus: stableJob.status,
+        };
+      }
+      // The action claim may have preceded a plan park, entitlement downgrade,
+      // or deletion fence. Re-read the database-backed authorization inside
+      // this reservation transaction after all stable-receipt adoption exits.
+      // This read conflicts with a concurrent transition, so no new J or
+      // provider reservation can commit against stale claim-time authority.
+      if (!(await siteExecutionAuthorized(ctx, site))) {
+        const denial = oneSetupQueueDenialDisposition({
+          reason: "setup_execution_not_authorized",
+          now: timestamp,
+        });
+        return {
+          queued: false,
+          reason: "setup_execution_not_authorized" as const,
+          eligibleAt: denial.kind === "retry"
+            ? denial.eligibleAt
+            : undefined,
+          terminalBlocker: denial.kind === "blocked" ? true : undefined,
         };
       }
     }
@@ -1727,7 +1820,21 @@ export const queuePlanIfAbsent = internalMutation({
     // request cannot consume capacity.
     const reservation = await reservePlanProviderBudget(ctx, site, timestamp);
     if (!reservation.ok) {
-      return { queued: false, ...reservation };
+      const denial = setupExecution
+        ? oneSetupQueueDenialDisposition({
+          reason: reservation.reason,
+          now: timestamp,
+          retryAfterMs: reservation.retryAfterMs,
+        })
+        : null;
+      return {
+        queued: false,
+        ...reservation,
+        eligibleAt: denial?.kind === "retry"
+          ? denial.eligibleAt
+          : undefined,
+        terminalBlocker: denial?.kind === "blocked" ? true : undefined,
+      };
     }
     const {
       providerCostCeilingMicroUsd,
@@ -1784,6 +1891,8 @@ export const queuePlanIfAbsent = internalMutation({
                   ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
                 oneSetupInitialPlanGeneration:
                   setupInitialPlanGeneration!,
+                oneSetupCanonicalDomainRevision:
+                  siteCanonicalDomainRevision(site),
               }
             : {}),
         }
@@ -1809,6 +1918,7 @@ export const queuePlanIfAbsent = internalMutation({
         initialPlanGeneration: setupInitialPlanGeneration!,
         initialPlanContextFingerprint:
           oneSetupInitialPlanContextFingerprint(site),
+        domainRevisionSnapshot: siteCanonicalDomainRevision(site),
         initialPlanJobId: jobId,
         initialPlanBoundAt: timestamp,
       });
@@ -2253,6 +2363,15 @@ export const abortPlanForProviderBalance = internalMutation({
     const cadenceFailure = classifyCadenceFailure({
       message: releaseReason,
       now: timestamp,
+      // A raw legacy worker can lose its pre-provider currency race to the
+      // first v1 save that atomically enriches that same J. Persist an
+      // eligibility receipt so the migrated current binding may recover it;
+      // failedPlanRecoveryDecision separately proves that the saved request
+      // still owns this exact J/generation before permitting any successor.
+      retryAt: releaseReason ===
+          "one_setup_planning_context_superseded_before_execution"
+        ? timestamp + CADENCE_PROVIDER_RECHECK_MS
+        : undefined,
       explicitCode: releaseReason,
     });
     await ctx.db.patch(args.jobId, {
@@ -2534,8 +2653,8 @@ export const heartbeatWorker = internalMutation({
 
 /**
  * Last database fence before a plan action may cross its paid provider
- * boundary. Ordinary and legacy one-setup plans are unchanged; a stable
- * one-setup receipt must still be the request's current planning generation.
+ * boundary. Ordinary plans are unchanged; every one-setup plan must carry the
+ * request's current, migrated stable planning generation.
  */
 export const authorizeOneSetupInitialPlanWorker = internalMutation({
   args: {
@@ -2558,6 +2677,16 @@ export const authorizeOneSetupInitialPlanWorker = internalMutation({
       return {
         authorized: false as const,
         reason: "worker_lease_invalid" as const,
+      };
+    }
+    const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    if (!oneSetupPaidBoundaryLifecycleAllowed({
+      siteExecutionAuthorized: executionAuthorized,
+      accountDeletionRequestedAt: site.accountDeletionRequestedAt,
+    })) {
+      return {
+        authorized: false as const,
+        reason: "site_execution_not_authorized" as const,
       };
     }
     const currency = await oneSetupInitialPlanCurrency(ctx, { site, job });

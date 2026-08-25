@@ -107,9 +107,14 @@ import {
 } from "./lib/oneSetup.ts";
 import {
   ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+  oneSetupDomainRevisionReceiptMatches,
   oneSetupInitialPlanContextFingerprint,
+  oneSetupInitialPlanJobBindingMatches,
+  oneSetupLegacyInitialPlanJobBindingMatches,
   oneSetupInitialPlanReceiptDecision,
 } from "./lib/oneSetupInitialPlan.ts";
+import { oneSetupExecutionNextEligibleAt } from
+  "./lib/oneSetupExecution.ts";
 import {
   canonicalGscReceiptMutationFenceCurrent,
   oneSetupOutreachMailboxReceiptVerified,
@@ -1469,7 +1474,7 @@ export const saveOneSetupRequest = mutation({
   },
   handler: async (ctx, args) => {
     const site = await requireSiteOwner(ctx, args.siteId);
-    if (!site.userId || site.accountDeletionRequestedAt) {
+    if (!site.userId || site.accountDeletionRequestedAt !== undefined) {
       throw new Error("Site not found");
     }
     if (
@@ -1491,10 +1496,12 @@ export const saveOneSetupRequest = mutation({
       throw new Error("Save the site automation mode before submitting setup");
     }
 
-    const domainSnapshot = site.canonicalDomain ??
+    const domainSnapshot = siteCanonicalDomain(site) ??
       normalizedAuthorityDomain(site.domain);
     if (!domainSnapshot) throw new Error("The site domain is invalid");
     const domainRevisionSnapshot = siteCanonicalDomainRevision(site);
+    const legacyDomainReceiptsAllowed =
+      siteUsesLegacyDomainReceipts(site);
     const ownerAccountKey = accountDeletionKey(site.userId);
     const existing = await ctx.db
       .query("managed_provisioning_requests")
@@ -1505,11 +1512,155 @@ export const saveOneSetupRequest = mutation({
       existing &&
         (existing.ownerAccountKey !== ownerAccountKey ||
           existing.domainSnapshot !== domainSnapshot ||
-          (existing.domainRevisionSnapshot ?? 0) !== domainRevisionSnapshot ||
-          existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION),
+          existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION ||
+          !oneSetupDomainRevisionReceiptMatches({
+            currentCanonicalDomainRevision: domainRevisionSnapshot,
+            receiptDomainRevision: existing.domainRevisionSnapshot,
+            legacyUnstampedAllowed: legacyDomainReceiptsAllowed,
+          })),
     );
     const initialPlanContextFingerprint =
       oneSetupInitialPlanContextFingerprint(site);
+    let migratedLegacyPlanJob: Doc<"jobs"> | null = null;
+    let migratedStableDomainPlanJob: Doc<"jobs"> | null = null;
+    let legacyQuarantineCode: string | undefined;
+    const stableReceiptFields = existing
+      ? [
+          existing.initialPlanReceiptVersion,
+          existing.initialPlanGeneration,
+          existing.initialPlanContextFingerprint,
+          existing.initialPlanJobId,
+        ]
+      : [];
+    const stableReceiptUninitialized = Boolean(
+      existing && stableReceiptFields.every((value) => value === undefined),
+    );
+    const stableReceiptPartiallyInitialized = Boolean(
+      existing &&
+        !stableReceiptUninitialized &&
+        (
+          existing.initialPlanReceiptVersion !==
+              ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION ||
+          !Number.isSafeInteger(existing.initialPlanGeneration) ||
+          (existing.initialPlanGeneration ?? 0) <= 0 ||
+          !existing.initialPlanContextFingerprint
+        ),
+    );
+    if (existing && !reset && stableReceiptUninitialized) {
+      const priorConfigurationRevision = existing.configurationRevision ?? 0;
+      const priorExecutions = priorConfigurationRevision > 0
+        ? await ctx.db
+            .query("one_setup_executions")
+            .withIndex("by_request_configuration", (q) =>
+              q.eq("requestId", existing._id).eq(
+                "configurationRevision",
+                priorConfigurationRevision,
+              )
+            )
+            .take(2)
+        : [];
+      if (priorExecutions.length > 1) {
+        legacyQuarantineCode = "legacy_initial_plan_execution_ambiguous";
+      } else if (priorExecutions.length === 1) {
+        const priorExecution = priorExecutions[0];
+        if (priorExecution.planJobId) {
+          const priorJob = await ctx.db.get(priorExecution.planJobId);
+          const priorPayload = priorJob?.payload &&
+              typeof priorJob.payload === "object"
+            ? priorJob.payload as Record<string, unknown>
+            : {};
+          const proven = priorJob &&
+            oneSetupLegacyInitialPlanJobBindingMatches({
+              requestId: String(existing._id),
+              requestSiteId: String(existing.siteId),
+              requestOwnerAccountKey: existing.ownerAccountKey,
+              requestDomainSnapshot: existing.domainSnapshot,
+              requestContractVersion: existing.contractVersion,
+              siteId: String(site._id),
+              ownerAccountKey,
+              domainSnapshot,
+              contractVersion: ONE_SETUP_CONTRACT_VERSION,
+              executionId: String(priorExecution._id),
+              executionRequestId: String(priorExecution.requestId),
+              executionSiteId: String(priorExecution.siteId),
+              executionOwnerAccountKey: priorExecution.ownerAccountKey,
+              executionDomainSnapshot: priorExecution.domainSnapshot,
+              executionConfigurationRevision:
+                priorExecution.configurationRevision,
+              jobId: String(priorJob?._id ?? ""),
+              jobSiteId: priorJob?.siteId
+                ? String(priorJob.siteId)
+                : undefined,
+              jobType: priorJob?.type,
+              payloadManual: priorPayload.manual,
+              payloadReason: priorPayload.reason,
+              payloadExecutionId: priorPayload.oneSetupExecutionId,
+              payloadConfigurationRevision:
+                priorPayload.oneSetupConfigurationRevision,
+              payloadRequestId: priorPayload.oneSetupRequestId,
+              payloadReceiptVersion:
+                priorPayload.oneSetupInitialPlanReceiptVersion,
+              payloadGeneration:
+                priorPayload.oneSetupInitialPlanGeneration,
+              payloadCanonicalDomainRevision:
+                priorPayload.oneSetupCanonicalDomainRevision,
+              currentCanonicalDomainRevision: domainRevisionSnapshot,
+              legacyUnstampedAllowed: legacyDomainReceiptsAllowed,
+            });
+          if (proven) {
+            migratedLegacyPlanJob = priorJob;
+          } else {
+            legacyQuarantineCode = "legacy_initial_plan_receipt_unprovable";
+          }
+        }
+      }
+    } else if (existing && !reset && stableReceiptPartiallyInitialized) {
+      legacyQuarantineCode = "initial_plan_receipt_partial";
+    }
+    if (
+      existing &&
+      !reset &&
+      !stableReceiptUninitialized &&
+      !stableReceiptPartiallyInitialized &&
+      existing.initialPlanJobId &&
+      existing.domainRevisionSnapshot === undefined &&
+      legacyDomainReceiptsAllowed
+    ) {
+      const stableJob = await ctx.db.get(existing.initialPlanJobId);
+      const stablePayload = stableJob?.payload &&
+          typeof stableJob.payload === "object"
+        ? stableJob.payload as Record<string, unknown>
+        : {};
+      const stableDomainReceiptProven = Boolean(
+        stableJob &&
+        stableJob.siteId === site._id &&
+        stableJob.type === "plan" &&
+        stablePayload.manual === true &&
+        stablePayload.reason === "one_setup_initial_plan" &&
+        oneSetupInitialPlanJobBindingMatches({
+          requestId: String(existing._id),
+          requestPlanJobId: String(existing.initialPlanJobId),
+          requestReceiptVersion: existing.initialPlanReceiptVersion,
+          requestGeneration: existing.initialPlanGeneration,
+          jobId: String(stableJob._id),
+          payloadRequestId: stablePayload.oneSetupRequestId,
+          payloadReceiptVersion:
+            stablePayload.oneSetupInitialPlanReceiptVersion,
+          payloadGeneration:
+            stablePayload.oneSetupInitialPlanGeneration,
+          requestDomainRevisionSnapshot: existing.domainRevisionSnapshot,
+          payloadCanonicalDomainRevision:
+            stablePayload.oneSetupCanonicalDomainRevision,
+          currentCanonicalDomainRevision: domainRevisionSnapshot,
+          legacyUnstampedAllowed: legacyDomainReceiptsAllowed,
+        })
+      );
+      if (stableDomainReceiptProven) {
+        migratedStableDomainPlanJob = stableJob;
+      } else {
+        legacyQuarantineCode = "stable_initial_plan_domain_receipt_unprovable";
+      }
+    }
     const initialPlanReceipt = oneSetupInitialPlanReceiptDecision({
       storedVersion: existing?.initialPlanReceiptVersion,
       storedGeneration: existing?.initialPlanGeneration,
@@ -1520,6 +1671,10 @@ export const saveOneSetupRequest = mutation({
       currentContextFingerprint: initialPlanContextFingerprint,
       hardReset: reset,
     });
+    const initialPlanJobId = migratedLegacyPlanJob?._id ??
+      (initialPlanReceipt.adoptBoundJob ? existing?.initialPlanJobId : undefined);
+    const initialPlanQuarantineCode = legacyQuarantineCode ??
+      (initialPlanReceipt.reset ? undefined : existing?.initialPlanQuarantineCode);
     const publisher = nextOneSetupCapability(
       existing?.publisher,
       args.publisherMode,
@@ -1555,12 +1710,19 @@ export const saveOneSetupRequest = mutation({
       initialPlanReceiptVersion: ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
       initialPlanGeneration: initialPlanReceipt.generation,
       initialPlanContextFingerprint,
-      initialPlanJobId: initialPlanReceipt.adoptBoundJob
-        ? existing?.initialPlanJobId
+      initialPlanJobId,
+      initialPlanBoundAt: migratedLegacyPlanJob
+        ? timestamp
+        : initialPlanReceipt.adoptBoundJob
+          ? existing?.initialPlanBoundAt
+          : undefined,
+      initialPlanQuarantineCode,
+      initialPlanQuarantinedAt: initialPlanQuarantineCode
+        ? existing?.initialPlanQuarantinedAt ?? timestamp
         : undefined,
-      initialPlanBoundAt: initialPlanReceipt.adoptBoundJob
-        ? existing?.initialPlanBoundAt
-        : undefined,
+      initialPlanRecoveryCount: initialPlanReceipt.reset
+        ? 0
+        : existing?.initialPlanRecoveryCount ?? 0,
       automationMode: args.automationMode,
       requestedCadencePerWeek: args.requestedCadencePerWeek,
       publisher,
@@ -1587,10 +1749,38 @@ export const saveOneSetupRequest = mutation({
         createdAt: timestamp,
       });
     }
+    const enrichedPlanJob = migratedLegacyPlanJob ??
+      migratedStableDomainPlanJob;
+    if (enrichedPlanJob) {
+      const payload = enrichedPlanJob.payload &&
+          typeof enrichedPlanJob.payload === "object"
+        ? enrichedPlanJob.payload as Record<string, unknown>
+        : {};
+      await ctx.db.patch(enrichedPlanJob._id, {
+        payload: {
+          ...payload,
+          oneSetupRequestId: requestId,
+          oneSetupInitialPlanReceiptVersion:
+            ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
+          oneSetupInitialPlanGeneration: initialPlanReceipt.generation,
+          oneSetupCanonicalDomainRevision: domainRevisionSnapshot,
+        },
+        updatedAt: timestamp,
+      });
+    }
     await ctx.scheduler.runAfter(
       0,
       internal.managedProvisioning.dispatchRequest,
       { requestId, expectedRevision: revision },
+    );
+    // Arm the setup execution from the save transaction itself. The browser's
+    // public resume call is only an eager accelerator: losing the save
+    // response or closing the tab cannot leave this configuration without an
+    // exact execution, claim handoff, and mutation watchdog.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.oneSetupExecutions.bootstrapSavedExecution,
+      { requestId, configurationRevision },
     );
     return { requestId, revision, configurationRevision };
   },
@@ -1776,17 +1966,50 @@ export const getOneSetupReadiness = query({
           site.planFeatures ?? [],
         ),
       ]);
-    const domainSnapshot = site.canonicalDomain ??
-      normalizedAuthorityDomain(site.domain);
+    const domainSnapshot = siteCanonicalDomain(site);
     const ownerAccountKey = site.userId ? accountDeletionKey(site.userId) : null;
     const requestValid = Boolean(
       request &&
         ownerAccountKey &&
         request.ownerAccountKey === ownerAccountKey &&
         request.domainSnapshot === domainSnapshot &&
-        (request.domainRevisionSnapshot ?? 0) ===
-          siteCanonicalDomainRevision(site) &&
-        request.contractVersion === ONE_SETUP_CONTRACT_VERSION,
+        request.contractVersion === ONE_SETUP_CONTRACT_VERSION &&
+        oneSetupDomainRevisionReceiptMatches({
+          currentCanonicalDomainRevision: siteCanonicalDomainRevision(site),
+          receiptDomainRevision: request.domainRevisionSnapshot,
+          legacyUnstampedAllowed: siteUsesLegacyDomainReceipts(site),
+        }),
+    );
+    const currentExecution = requestValid &&
+        (request!.configurationRevision ?? 0) > 0
+      ? await ctx.db
+          .query("one_setup_executions")
+          .withIndex("by_request_configuration", (q) =>
+            q.eq("requestId", request!._id).eq(
+              "configurationRevision",
+              request!.configurationRevision ?? 0,
+            )
+          )
+          .unique()
+      : null;
+    const currentExecutionValid = Boolean(
+      currentExecution &&
+        currentExecution.siteId === site._id &&
+        currentExecution.ownerAccountKey === ownerAccountKey &&
+        currentExecution.domainSnapshot === domainSnapshot &&
+        currentExecution.domainRevisionSnapshot ===
+          request?.domainRevisionSnapshot,
+    );
+    const currentExecutionBlocker = currentExecutionValid
+      ? currentExecution!.blockerCode
+      : undefined;
+    const persistentProviderRecovery = Boolean(
+      currentExecutionBlocker?.startsWith("provider_") &&
+        (request?.initialPlanRecoveryCount ?? 0) >= 3,
+    );
+    const contentPlanActionRequired = Boolean(
+      currentExecutionValid &&
+        (currentExecution!.status === "blocked" || persistentProviderRecovery),
     );
     const publisherProgress = requestValid
       ? request!.publisher
@@ -1829,8 +2052,9 @@ export const getOneSetupReadiness = query({
         : requestValid
           ? "queued"
           : "action_required";
-    const planState: OneSetupReadinessState =
-      (schedulerReadiness?.schedulerReadyTopicIds.length ?? 0) > 0
+    const planState: OneSetupReadinessState = contentPlanActionRequired
+      ? "blocked"
+      : (schedulerReadiness?.schedulerReadyTopicIds.length ?? 0) > 0
       ? "ready"
       : requestValid
         ? "queued"
@@ -1871,7 +2095,24 @@ export const getOneSetupReadiness = query({
       actionMessage?: string;
     }> = [
       { key: "website", label: "Website analyzed", state: websiteState },
-      { key: "content_plan", label: "Content plan prepared", state: planState },
+      {
+        key: "content_plan",
+        label: "Content plan prepared",
+        state: planState,
+        actionRequiredBy: contentPlanActionRequired
+          ? currentExecutionBlocker?.startsWith("provider_")
+            ? "operator"
+            : "owner"
+          : undefined,
+        reasonCode: contentPlanActionRequired
+          ? currentExecutionBlocker
+          : undefined,
+        actionMessage: contentPlanActionRequired
+          ? persistentProviderRecovery
+            ? "Pentra is continuing bounded provider reinspection; persistent funding or provider availability needs operator attention."
+            : "The exact setup execution stopped safely and requires attention; no paid plan receipt was replayed."
+          : undefined,
+      },
       { key: "cadence", label: "Cadence reserved", state: cadenceState },
       {
         key: "automation",
@@ -1948,10 +2189,28 @@ export const getOneSetupReadiness = query({
             lastReconciledAt: request!.lastReconciledAt,
           }
         : null,
+      initialPlanExecution: currentExecutionValid
+        ? {
+          status: currentExecution!.status,
+          blockerCode: currentExecution!.blockerCode,
+          recoveryCount: request!.initialPlanRecoveryCount ?? 0,
+          nextEligibleAt: oneSetupExecutionNextEligibleAt({
+            planSettlementNextAt: currentExecution!.planSettlementNextAt,
+            bootstrapAuthorizationNextAt:
+              currentExecution!.bootstrapAuthorizationNextAt,
+            pendingResumeNextAt: currentExecution!.pendingResumeNextAt,
+            claimWatchNextAt: currentExecution!.claimWatchNextAt,
+          }),
+        }
+        : null,
       // This is a narrowly named publishing receipt. It must not be presented
       // as proof that outreach, ranking, or conversion outcomes are active.
       publishingRolloutLive: site.autopilotRolloutMode === "live",
-      updatedAt: Math.max(site.updatedAt, requestValid ? request!.updatedAt : 0),
+      updatedAt: Math.max(
+        site.updatedAt,
+        requestValid ? request!.updatedAt : 0,
+        currentExecutionValid ? currentExecution!.updatedAt : 0,
+      ),
     };
   },
 });

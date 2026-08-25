@@ -7,11 +7,15 @@ import {
   ONE_SETUP_INITIAL_PLAN_RECEIPT_VERSION,
   oneSetupInitialPlanContextFingerprint,
   oneSetupInitialPlanJobBindingMatches,
-  oneSetupPlanningDomain,
 } from "./oneSetupInitialPlan.ts";
+import {
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./siteDomainBinding.ts";
 
 export type OneSetupInitialPlanCurrency =
-  | { kind: "not_one_setup" | "legacy_one_setup" }
+  | { kind: "not_one_setup" }
   | {
       kind: "current";
       requestId: Id<"managed_provisioning_requests">;
@@ -20,10 +24,10 @@ export type OneSetupInitialPlanCurrency =
 
 /**
  * Validate the stable request/generation fence carried by a one-setup plan.
- * Legacy receipts remain executable for additive rollout compatibility. Any
- * partially-versioned receipt fails closed instead of silently becoming
- * legacy. The same check is used immediately before paid work and inside the
- * atomic topic/job commit.
+ * Legacy receipts become executable only after saveOneSetupRequest proves and
+ * atomically enriches their exact request/execution binding. An unstamped job
+ * is never directly authorized. The same check is used immediately before
+ * paid work and inside the atomic topic/job commit.
  */
 export async function oneSetupInitialPlanCurrency(
   ctx: QueryCtx | MutationCtx,
@@ -44,9 +48,10 @@ export async function oneSetupInitialPlanCurrency(
     payload.oneSetupRequestId,
     payload.oneSetupInitialPlanReceiptVersion,
     payload.oneSetupInitialPlanGeneration,
+    payload.oneSetupCanonicalDomainRevision,
   ];
   if (stableFields.every((value) => value === undefined)) {
-    return { kind: "legacy_one_setup" };
+    return { kind: "stale", reason: "legacy_receipt_unmigrated" };
   }
   if (
     stableFields.some((value) => value === undefined) ||
@@ -66,8 +71,10 @@ export async function oneSetupInitialPlanCurrency(
     return { kind: "stale", reason: "receipt_payload_invalid" };
   }
   const request = await ctx.db.get(requestId);
-  const currentDomain = args.site.canonicalDomain ??
-    oneSetupPlanningDomain(args.site.domain);
+  const currentDomain = siteCanonicalDomain(args.site);
+  const currentCanonicalDomainRevision =
+    siteCanonicalDomainRevision(args.site);
+  const legacyUnstampedAllowed = siteUsesLegacyDomainReceipts(args.site);
   if (
     !args.site.userId ||
     args.job.siteId !== args.site._id ||
@@ -90,6 +97,11 @@ export async function oneSetupInitialPlanCurrency(
     payloadRequestId: payload.oneSetupRequestId,
     payloadReceiptVersion: payload.oneSetupInitialPlanReceiptVersion,
     payloadGeneration: payload.oneSetupInitialPlanGeneration,
+    requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+    payloadCanonicalDomainRevision:
+      payload.oneSetupCanonicalDomainRevision,
+    currentCanonicalDomainRevision,
+    legacyUnstampedAllowed,
   })) {
     return { kind: "stale", reason: "receipt_generation_superseded" };
   }

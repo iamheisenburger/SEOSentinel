@@ -104,6 +104,8 @@ import {
   parseCadenceRecoveryStrategy,
   type CadenceRecoveryStrategy,
 } from "../lib/cadenceLiveness";
+import { oneSetupQueueDenialDisposition } from
+  "../lib/oneSetupExecution.ts";
 import {
   contentAnalysisMatchesCurrentDomain,
   siteCanonicalDomain,
@@ -6247,19 +6249,19 @@ type OneSetupResumeResult =
       topicCount?: number;
     };
 
-/**
- * Owner-configuration-bound setup orchestration. Every retry claims the same durable
- * execution and, once reserved, the same paid plan job. A missing browser
- * response can therefore resume or inspect work, never purchase a replay.
- */
-export const resumeOneSetupExecution = action({
-  args: {
-    siteId: v.id("sites"),
-    requestId: v.id("managed_provisioning_requests"),
-    configurationRevision: v.number(),
-  },
-  handler: async (ctx, args): Promise<OneSetupResumeResult> => {
-    await requireOwnedSite(ctx, args.siteId);
+type OneSetupResumeArgs = {
+  siteId: Id<"sites">;
+  requestId: Id<"managed_provisioning_requests">;
+  configurationRevision: number;
+  expectedExecutionId?: Id<"one_setup_executions">;
+  claimRecoveryAttempt?: number;
+  expectedClaimWatchGeneration?: number;
+};
+
+async function resumeOneSetupExecutionHandler(
+  ctx: ActionCtx,
+  args: OneSetupResumeArgs,
+): Promise<OneSetupResumeResult> {
     const claimNonce = randomUUID();
     const claim: {
       claimed: boolean;
@@ -6269,6 +6271,7 @@ export const resumeOneSetupExecution = action({
       planJobId?: Id<"jobs">;
       topicCount?: number;
       blockerCode?: string;
+      crawlCompletedAt?: number;
     } = await ctx.runMutation(internal.oneSetupExecutions.claim, {
       ...args,
       claimNonce,
@@ -6301,38 +6304,43 @@ export const resumeOneSetupExecution = action({
 
     let planJobId = claim.planJobId;
     if (!planJobId) {
-      const crawl = await ctx.runAction(
-        internal.actions.pipeline.repairOnboardingInternal,
-        { siteId: args.siteId },
-      );
-      if (crawl.pages <= 0) {
-        await ctx.runMutation(internal.oneSetupExecutions.releaseForRetry, {
-          executionId: claim.executionId,
-          claimNonce,
-          blockerCode: crawl.reason,
-        });
-        return {
-          state: "waiting",
-          executionId: claim.executionId,
-          reason: crawl.reason,
-        };
-      }
-      const crawlRecorded = await ctx.runMutation(
-        internal.oneSetupExecutions.recordCrawlCompleted,
-        { executionId: claim.executionId, claimNonce },
-      );
-      if (!crawlRecorded.updated) {
-        return {
-          state: "in_progress",
-          executionId: claim.executionId,
-          reason: "setup_execution_claim_changed",
-        };
+      if (!claim.crawlCompletedAt) {
+        const crawl = await ctx.runAction(
+          internal.actions.pipeline.repairOnboardingInternal,
+          { siteId: args.siteId },
+        );
+        if (crawl.pages <= 0) {
+          await ctx.runMutation(internal.oneSetupExecutions.releaseForRetry, {
+            executionId: claim.executionId,
+            claimNonce,
+            blockerCode: crawl.reason,
+          });
+          return {
+            state: "waiting",
+            executionId: claim.executionId,
+            reason: crawl.reason,
+          };
+        }
+        const crawlRecorded = await ctx.runMutation(
+          internal.oneSetupExecutions.recordCrawlCompleted,
+          { executionId: claim.executionId, claimNonce },
+        );
+        if (!crawlRecorded.updated) {
+          return {
+            state: "in_progress",
+            executionId: claim.executionId,
+            reason: "setup_execution_claim_changed",
+          };
+        }
       }
       const queued: {
         queued: boolean;
         jobId?: Id<"jobs">;
         reason?: string;
         jobStatus?: string;
+        retryAfterMs?: number;
+        eligibleAt?: number;
+        terminalBlocker?: boolean;
       } = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
         siteId: args.siteId,
         reason: "one_setup_initial_plan",
@@ -6345,11 +6353,35 @@ export const resumeOneSetupExecution = action({
       planJobId = exactPlanReceipt ? queued.jobId : undefined;
       if (!planJobId) {
         const reason = queued.reason ?? "plan_reservation_unavailable";
-        await ctx.runMutation(internal.oneSetupExecutions.releaseForRetry, {
-          executionId: claim.executionId,
-          claimNonce,
-          blockerCode: reason,
-        });
+        const denial = queued.terminalBlocker === true
+          ? { kind: "blocked" as const, blockerCode: reason }
+          : Number.isSafeInteger(queued.eligibleAt) &&
+              (queued.eligibleAt ?? 0) > 0
+            ? { kind: "retry" as const, eligibleAt: queued.eligibleAt! }
+            : oneSetupQueueDenialDisposition({
+              reason,
+              now: Date.now(),
+              retryAfterMs: queued.retryAfterMs,
+            });
+        const released = await ctx.runMutation(
+          internal.oneSetupExecutions.releaseForRetry,
+          {
+            executionId: claim.executionId,
+            claimNonce,
+            blockerCode: reason,
+            retryAt: denial.kind === "retry"
+              ? denial.eligibleAt
+              : undefined,
+            terminalBlocker: denial.kind === "blocked" ? true : undefined,
+          },
+        );
+        if (released.terminal) {
+          return {
+            state: "blocked",
+            executionId: claim.executionId,
+            blockerCode: reason,
+          };
+        }
         return {
           state: "waiting",
           executionId: claim.executionId,
@@ -6410,6 +6442,38 @@ export const resumeOneSetupExecution = action({
         ? "setup_execution_claim_changed"
         : "exact_plan_job_in_progress",
     };
+}
+
+/**
+ * Owner-configuration-bound setup orchestration. Every retry claims the same
+ * durable execution and, once reserved, the same paid plan job. A missing
+ * browser response can therefore resume or inspect work, never purchase a
+ * replay.
+ */
+export const resumeOneSetupExecution = action({
+  args: {
+    siteId: v.id("sites"),
+    requestId: v.id("managed_provisioning_requests"),
+    configurationRevision: v.number(),
+  },
+  handler: async (ctx, args): Promise<OneSetupResumeResult> => {
+    await requireOwnedSite(ctx, args.siteId);
+    return await resumeOneSetupExecutionHandler(ctx, args);
+  },
+});
+
+/** Scheduler-only continuation armed by the exact execution claim receipt. */
+export const resumeOneSetupExecutionInternal = internalAction({
+  args: {
+    siteId: v.id("sites"),
+    requestId: v.id("managed_provisioning_requests"),
+    configurationRevision: v.number(),
+    expectedExecutionId: v.id("one_setup_executions"),
+    claimRecoveryAttempt: v.number(),
+    expectedClaimWatchGeneration: v.number(),
+  },
+  handler: async (ctx, args): Promise<OneSetupResumeResult> => {
+    return await resumeOneSetupExecutionHandler(ctx, args);
   },
 });
 
