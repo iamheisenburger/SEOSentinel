@@ -14,9 +14,9 @@ import type { Id } from "../../../convex/_generated/dataModel";
 
 const STATUS_COPY = {
   ready: {
-    title: "Setup receipts verified",
+    title: "Setup complete",
     detail:
-      "Every setup dependency below has a canonical receipt. Production publishing and outreach still obey their separate rollout and consent gates.",
+      "Your required connections are verified. Pentra now follows the cadence and automation mode you selected.",
     color: "#22C55E",
   },
   in_progress: {
@@ -26,13 +26,13 @@ const STATUS_COPY = {
     color: "#0EA5E9",
   },
   action_required: {
-    title: "Setup needs your input",
+    title: "One step needs your approval",
     detail:
-      "One or more self-managed connections or pipeline steps still need an owner action.",
+      "Complete the step below once, then Pentra continues automatically.",
     color: "#F59E0B",
   },
   blocked: {
-    title: "Setup is blocked",
+    title: "Pentra needs help to continue",
     detail:
       "A plan, ownership, or provisioning fence must be resolved before setup can continue.",
     color: "#EF4444",
@@ -72,6 +72,9 @@ export function SetupReadiness({
   }
 
   const summary = STATUS_COPY[readiness.aggregate.status];
+  const actionStages = readiness.stages.filter(
+    (stage) => stage.actionRequiredBy && stage.actionMessage,
+  );
 
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
@@ -123,8 +126,41 @@ export function SetupReadiness({
           </p>
         )}
 
-      <div className={`mt-4 grid gap-2 ${compact ? "sm:grid-cols-2" : ""}`}>
-        {readiness.stages.map((stage) => {
+      {actionStages.length > 0 && (
+        <div className="mt-4 grid gap-2">
+          {actionStages.map((stage) => {
+            const stageCopy = STAGE_COPY[stage.state];
+            const Icon = stageCopy.icon;
+            return (
+              <div
+                key={stage.key}
+                className="rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-3 py-2.5"
+              >
+                <div className="flex items-center gap-2">
+                  <Icon className={`h-3.5 w-3.5 shrink-0 ${stageCopy.className}`} />
+                  <span className="flex-1 text-[11px] text-[#8B8FA3]">
+                    {stage.label}
+                  </span>
+                  <span className={`text-[10px] font-medium ${stageCopy.className}`}>
+                    {stage.actionRequiredBy === "owner" ? "Your action" : "Pentra action"}
+                  </span>
+                </div>
+                <p className="mt-2 pl-5 text-[10px] leading-relaxed text-[#73788F]">
+                  {stage.actionMessage}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <details className="group mt-4 rounded-lg border border-white/[0.04] bg-white/[0.015]">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-[10px] text-[#73788F] hover:text-[#A3A7B8]">
+          View setup details
+          <span>{readiness.aggregate.readyCount}/{readiness.aggregate.totalCount} verified</span>
+        </summary>
+        <div className={`grid gap-2 border-t border-white/[0.04] p-3 ${compact ? "sm:grid-cols-2" : ""}`}>
+          {readiness.stages.map((stage) => {
           const stageCopy = STAGE_COPY[stage.state];
           const Icon = stageCopy.icon;
           return (
@@ -157,13 +193,14 @@ export function SetupReadiness({
               )}
             </div>
           );
-        })}
-      </div>
+          })}
+        </div>
+      </details>
 
       <p className="mt-3 text-[10px] leading-relaxed text-[#565A6E]">
-        This panel reports setup readiness only. It does not claim an article was
-        published, an email was delivered, a backlink was acquired, or a ranking
-        improved.
+        Setup progress is separate from outcome reporting. Articles, deliveries,
+        acquired links, and ranking changes appear only after Pentra verifies
+        their production receipts.
       </p>
     </div>
   );

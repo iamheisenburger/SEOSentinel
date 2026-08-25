@@ -324,20 +324,43 @@ test("one-setup UX defaults to managed Full Autopilot and hides provider control
   assert.match(wizard, /useState<AutomationMode>\("full"\)/);
   assert.match(wizard, /Managed setup/);
   assert.match(wizard, /Connect existing/);
+  assert.match(wizard, /Enter your website and choose a cadence\. Pentra takes it from there\./);
+  assert.match(wizard, /Pentra-managed setup/);
+  assert.match(
+    wizard,
+    /Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts as each required connection is verified/,
+  );
+  assert.match(wizard, /Authority outreach activates after one sender consent/);
+  assert.match(wizard, /Advanced setup options/);
   assert.match(wizard, /Advanced connection controls/);
   assert.match(wizard, /hasSelfManaged/);
   assert.match(wizard, /Managed setup never asks you to edit DNS here/);
   assert.doesNotMatch(wizard, /repoOwner|repoName|App Password|webhookSecret/);
   assert.doesNotMatch(wizard, /LeadPilot/i);
   assert.doesNotMatch(wizard, /engine is running/i);
+  const primaryManagedSummary = wizard.indexOf("Pentra-managed setup");
+  const advancedSetup = wizard.indexOf("Advanced setup options");
+  const integrationChoices = wizard.indexOf("Integration ownership");
+  assert.ok(
+    primaryManagedSummary >= 0 &&
+      advancedSetup > primaryManagedSummary &&
+      integrationChoices > advancedSetup,
+    "the primary path must stay website + cadence while per-integration choices remain advanced",
+  );
 });
 
-test("readiness copy distinguishes setup receipts from production outcomes", () => {
-  assert.match(readinessUi, /canonical receipt/);
-  assert.match(readinessUi, /separate rollout and consent gates/);
-  assert.match(readinessUi, /does not claim an article was/);
-  assert.match(readinessUi, /a backlink was acquired/);
-  assert.match(readinessUi, /a ranking/);
+test("readiness keeps machinery collapsed and separates progress from outcomes", () => {
+  assert.match(readinessUi, /Setup complete/);
+  assert.match(readinessUi, /One step needs your approval/);
+  assert.match(readinessUi, /View setup details/);
+  assert.match(readinessUi, /Setup progress is separate from outcome reporting/);
+  assert.match(readinessUi, /acquired links/);
+  assert.match(readinessUi, /ranking changes/);
+  assert.ok(
+    readinessUi.indexOf("actionStages.length > 0") <
+      readinessUi.indexOf("View setup details"),
+    "the current owner/Pentra action must appear before collapsed internal detail",
+  );
   assert.doesNotMatch(readinessUi, /LeadPilot/i);
 });
 

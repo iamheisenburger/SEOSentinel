@@ -403,8 +403,7 @@ export function SetupWizard() {
           Set up Pentra once
         </h1>
         <p className="mx-auto mt-1 max-w-lg text-[12px] leading-relaxed text-[#565A6E]">
-          Enter your website, choose who handles each connection, and select a
-          cadence. Pentra tracks the rest in one readiness view.
+          Enter your website and choose a cadence. Pentra takes it from there.
         </p>
       </div>
 
@@ -425,41 +424,22 @@ export function SetupWizard() {
           }}
         />
 
-        <div className="mt-5 space-y-3">
-          {CAPABILITIES.map((capability) => {
-            const mode = capability.key === "publisher"
-              ? publisherMode
-              : capability.key === "measurement"
-                ? measurementMode
-                : outreachMode;
-            const setMode = capability.key === "publisher"
-              ? setPublisherMode
-              : capability.key === "measurement"
-                ? setMeasurementMode
-                : setOutreachMode;
-            const Icon = capability.icon;
-            return (
-              <div
-                key={capability.key}
-                className="rounded-xl border border-white/[0.05] bg-white/[0.015] p-4"
-              >
-                <div className="mb-3 flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.04]">
-                    <Icon className="h-3.5 w-3.5 text-[#8B8FA3]" />
-                  </div>
-                  <div>
-                    <p className="text-[12px] font-medium text-[#EDEEF1]">
-                      {capability.title}
-                    </p>
-                    <p className="text-[10px] text-[#565A6E]">
-                      {capability.detail}
-                    </p>
-                  </div>
-                </div>
-                <ModeChoice value={mode} onChange={setMode} />
-              </div>
-            );
-          })}
+        <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] p-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
+              <Sparkles className="h-4 w-4 text-[#38BDF8]" />
+            </div>
+            <div>
+              <p className="text-[12px] font-medium text-[#EDEEF1]">
+                Pentra-managed setup
+              </p>
+              <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
+                Publishing, search measurement, and a dedicated authority
+                mailbox enter one managed setup queue. Pentra asks for a
+                provider approval only when the provider requires it.
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="mt-5">
@@ -497,43 +477,86 @@ export function SetupWizard() {
             <div>
               <p className="text-[12px] font-medium text-[#4ADE80]">
                 {automationMode === "full"
-                  ? "Full Autopilot requested"
-                  : "Assisted review requested"}
+                  ? "Full Autopilot"
+                  : "Assisted review"}
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
                 {automationMode === "full"
-                  ? "Recommended. Pentra may run unattended only after every required connection, plan, cadence, rollout, and consent receipt is real. This choice does not itself authorize outreach."
-                  : "Assisted review keeps owner approval in the publishing path. Outreach still requires its own explicit authorization."}
+                  ? "Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts as each required connection is verified. Authority outreach activates after one sender consent."
+                  : "Pentra prepares work for your approval before publishing. Authority outreach remains separately controlled."}
               </p>
             </div>
           </div>
         </div>
 
-        <details className="group mt-3">
-          <summary className="flex cursor-pointer list-none items-center gap-2 py-2 text-[10px] text-[#565A6E] hover:text-[#8B8FA3]">
+        <details className="group mt-3 rounded-xl border border-white/[0.05] bg-white/[0.015]">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[10px] text-[#565A6E] hover:text-[#8B8FA3]">
             <Settings2 className="h-3 w-3" />
-            Advanced automation control
+            Advanced setup options
             <ChevronDown className="h-3 w-3 transition group-open:rotate-180" />
           </summary>
-          <div className="mt-1 grid grid-cols-2 gap-2 rounded-lg border border-white/[0.05] bg-white/[0.02] p-2">
-            {(["full", "assisted"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setAutomationMode(mode)}
-                className={`rounded-lg px-3 py-2 text-[10px] font-medium transition ${
-                  automationMode === mode
-                    ? "bg-[#0EA5E9]/15 text-[#38BDF8]"
-                    : "text-[#565A6E] hover:bg-white/[0.03]"
-                }`}
-              >
-                {mode === "full" ? "Full Autopilot" : "Assisted review"}
-              </button>
-            ))}
+          <div className="space-y-4 border-t border-white/[0.04] px-4 pb-4 pt-3">
+            <div>
+              <p className="mb-2 text-[10px] font-medium text-[#73788F]">
+                Integration ownership
+              </p>
+              <div className="space-y-3">
+                {CAPABILITIES.map((capability) => {
+                  const mode = capability.key === "publisher"
+                    ? publisherMode
+                    : capability.key === "measurement"
+                      ? measurementMode
+                      : outreachMode;
+                  const setMode = capability.key === "publisher"
+                    ? setPublisherMode
+                    : capability.key === "measurement"
+                      ? setMeasurementMode
+                      : setOutreachMode;
+                  const Icon = capability.icon;
+                  return (
+                    <div key={capability.key}>
+                      <div className="mb-2 flex items-center gap-2">
+                        <Icon className="h-3 w-3 text-[#8B8FA3]" />
+                        <span className="text-[10px] text-[#8B8FA3]">
+                          {capability.title}
+                        </span>
+                        <span className="text-[9px] text-[#565A6E]">
+                          {capability.detail}
+                        </span>
+                      </div>
+                      <ModeChoice value={mode} onChange={setMode} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-[10px] font-medium text-[#73788F]">
+                Content approval
+              </p>
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-white/[0.02] p-2">
+                {(["full", "assisted"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setAutomationMode(mode)}
+                    className={`rounded-lg px-3 py-2 text-[10px] font-medium transition ${
+                      automationMode === mode
+                        ? "bg-[#0EA5E9]/15 text-[#38BDF8]"
+                        : "text-[#565A6E] hover:bg-white/[0.03]"
+                    }`}
+                  >
+                    {mode === "full" ? "Full Autopilot" : "Assisted review"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-[9px] leading-relaxed text-[#565A6E]">
+              Automatic Medium and LinkedIn syndication is not available yet.
+            </p>
           </div>
-          <p className="mt-2 text-[9px] text-[#565A6E]">
-            Automatic Medium and LinkedIn syndication is not available yet.
-          </p>
         </details>
 
         <Button
