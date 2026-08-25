@@ -45,6 +45,28 @@ export default defineSchema({
     publicationAdapterVerifiedAt: v.optional(v.number()),
     publicationAdapterVersion: v.optional(v.string()),
     publicationAdapterConfigHash: v.optional(v.string()),
+    // Monotonic local epoch for the configured publication connection. Every
+    // destination or credential edit advances it and invalidates the exact
+    // proof below, including same-domain disconnect/reconnect races.
+    publisherConnectionGeneration: v.optional(v.number()),
+    publisherDestinationReceipt: v.optional(v.object({
+      version: v.number(),
+      status: v.union(v.literal("verified"), v.literal("revoked")),
+      method: v.union(
+        v.literal("github"),
+        v.literal("wordpress"),
+        v.literal("webhook"),
+      ),
+      destinationId: v.string(),
+      ownerAccountKey: v.string(),
+      canonicalDomain: v.string(),
+      domainRevision: v.number(),
+      configHash: v.string(),
+      connectionGeneration: v.number(),
+      adapterVersion: v.string(),
+      verifiedAt: v.number(),
+      revokedAt: v.optional(v.number()),
+    })),
 
     // ── AI-analyzed site profile (populated after crawl) ──
     siteName: v.optional(v.string()),
@@ -217,6 +239,17 @@ export default defineSchema({
       v.literal("assisted"),
       v.literal("full"),
     ),
+    // Exact standing authorization for unattended publication. It is bound to
+    // the tenant and canonical-domain epoch and can be invalidated by a policy
+    // version/hash bump without interpreting historical UI copy.
+    publisherAutopublishConsent: v.optional(v.object({
+      version: v.number(),
+      policyHash: v.string(),
+      acceptedAt: v.number(),
+      ownerAccountKey: v.string(),
+      canonicalDomain: v.string(),
+      domainRevision: v.number(),
+    })),
     requestedCadencePerWeek: v.number(),
     publisher: v.object({
       mode: v.union(v.literal("connect_existing"), v.literal("managed")),

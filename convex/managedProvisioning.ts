@@ -15,6 +15,7 @@ import {
   managedProvisioningIdentityIsCurrent,
   managedProvisioningLeaseIsCurrent,
   managedProvisioningRetryAt,
+  MANAGED_PROVIDER_PROGRESS_STALE_MS,
   MANAGED_PROVISIONING_LEASE_MS,
   normalizedOneSetupDomain,
   type OneSetupCapability,
@@ -24,6 +25,9 @@ import {
   siteUsesLegacyDomainReceipts,
 } from "./lib/siteDomainBinding.ts";
 import { sha256Hex } from "./lib/publicationArtifact.ts";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
+import { publisherAutopublishConsentCurrent } from
+  "./lib/publisherProvisioning.ts";
 
 const MANAGED_PROVISIONING_FLEET_BATCH = 25;
 const MANAGED_PROVISIONING_LEGACY_BATCH = 25;
@@ -68,6 +72,42 @@ function requestIdentityIsCurrent(args: {
     ),
     requestContractVersion: request.contractVersion,
   });
+}
+
+function publisherAuthorizationVerified(args: {
+  request: ManagedProvisioningRequest;
+  site: Doc<"sites">;
+  timestamp: number;
+}): boolean {
+  return oneSetupPublisherReceiptVerified(args.site, args.timestamp) &&
+    publisherAutopublishConsentCurrent({
+      request: args.request,
+      timestamp: args.timestamp,
+    });
+}
+
+function publisherLeaseContextIsCurrent(args: {
+  request: ManagedProvisioningRequest | null;
+  site: Doc<"sites"> | null;
+  expectedRevision: number;
+  leaseToken: string;
+  timestamp: number;
+}): boolean {
+  return Boolean(
+    args.request &&
+      managedProvisioningLeaseIsCurrent({
+        expectedRevision: args.expectedRevision,
+        actualRevision: args.request.revision,
+        expectedLeaseToken: args.leaseToken,
+        actualLeaseToken: args.request.leaseToken,
+        leaseExpiresAt: args.request.leaseExpiresAt,
+        timestamp: args.timestamp,
+      }) &&
+      requestIdentityIsCurrent({
+        request: args.request,
+        site: args.site,
+      }),
+  );
 }
 
 function capabilityAfterReconciliation(args: {
@@ -174,6 +214,165 @@ async function syncOperatorActionAlert(
   }
 }
 
+/** Internal-only credential-bearing context for one exact live lease. */
+export const getPublisherPreflightContext = internalQuery({
+  args: {
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRevision: v.number(),
+    leaseToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.requestId);
+    const site = request ? await ctx.db.get(request.siteId) : null;
+    const timestamp = Date.now();
+    if (!publisherLeaseContextIsCurrent({
+      request,
+      site,
+      expectedRevision: args.expectedRevision,
+      leaseToken: args.leaseToken,
+      timestamp,
+    }) || !request || !site || !(await siteExecutionAuthorized(ctx, site))) {
+      return null;
+    }
+    return { request, site, timestamp };
+  },
+});
+
+/** Provider progress remains on the same lease/revision. It cannot create a
+ * fresh lease, extend one, or transition the capability to ready. */
+export const markPublisherPreflightInProgress = internalMutation({
+  args: {
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRevision: v.number(),
+    leaseToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.requestId);
+    const site = request ? await ctx.db.get(request.siteId) : null;
+    const timestamp = Date.now();
+    if (!publisherLeaseContextIsCurrent({
+      request,
+      site,
+      expectedRevision: args.expectedRevision,
+      leaseToken: args.leaseToken,
+      timestamp,
+    }) || !request || !site) {
+      return { started: false as const, reason: "lease_lost" as const };
+    }
+    const publisher: ManagedProvisioningCapability = {
+      ...request.publisher,
+      state: "in_progress",
+      blockedReasonCode: undefined,
+      actionRequiredBy: undefined,
+      providerReportedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await ctx.db.patch(request._id, {
+      publisher,
+      aggregateState: aggregateOneSetupRequestState([
+        publisher,
+        request.searchMeasurement,
+        request.outreachMailbox,
+      ]),
+      updatedAt: timestamp,
+    });
+    return { started: true as const };
+  },
+});
+
+const PUBLISHER_PREFLIGHT_ACTIONS = {
+  publisher_autopublish_consent_required: "owner",
+  publisher_connection_required: "owner",
+  publisher_connection_verification_required: "owner",
+  managed_publisher_adapter_unavailable: "operator",
+} as const;
+
+/** Settle a preflight boundary against the exact lease and wake a durable
+ * retry. Supported adapters always return a structured owner action; only a
+ * genuinely unsupported adapter enters the operator queue. */
+export const settlePublisherPreflightActionRequired = internalMutation({
+  args: {
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRevision: v.number(),
+    leaseToken: v.string(),
+    reasonCode: v.union(
+      v.literal("publisher_autopublish_consent_required"),
+      v.literal("publisher_connection_required"),
+      v.literal("publisher_connection_verification_required"),
+      v.literal("managed_publisher_adapter_unavailable"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.requestId);
+    const site = request ? await ctx.db.get(request.siteId) : null;
+    const timestamp = Date.now();
+    if (!publisherLeaseContextIsCurrent({
+      request,
+      site,
+      expectedRevision: args.expectedRevision,
+      leaseToken: args.leaseToken,
+      timestamp,
+    }) || !request || !site) {
+      return { settled: false as const, reason: "lease_lost" as const };
+    }
+    const actionRequiredBy = PUBLISHER_PREFLIGHT_ACTIONS[args.reasonCode];
+    const publisher: ManagedProvisioningCapability = {
+      ...request.publisher,
+      state: actionRequiredBy === "owner"
+        ? "owner_action_required"
+        : "blocked",
+      blockedReasonCode: args.reasonCode,
+      actionRequiredBy,
+      providerReportedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const capabilities = [
+      publisher,
+      request.searchMeasurement,
+      request.outreachMailbox,
+    ] as const;
+    const aggregateState = aggregateOneSetupRequestState(capabilities);
+    const operatorReasonCodes = capabilities
+      .filter((capability) => capability.actionRequiredBy === "operator")
+      .map((capability) => capability.blockedReasonCode)
+      .filter((reasonCode): reasonCode is string => Boolean(reasonCode));
+    const revision = request.revision + 1;
+    const nextAttemptAt = managedProvisioningRetryAt(timestamp);
+    await ctx.db.patch(request._id, {
+      publisher,
+      aggregateState,
+      fulfillmentState: "waiting_action",
+      nextAttemptAt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operatorActionRequiredAt: operatorReasonCodes.length > 0
+        ? request.operatorActionRequiredAt ?? timestamp
+        : undefined,
+      revision,
+      updatedAt: timestamp,
+      completedAt: undefined,
+    });
+    await syncOperatorActionAlert(
+      ctx,
+      request,
+      operatorReasonCodes,
+      timestamp,
+      revision,
+    );
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.managedProvisioning.dispatchRequest,
+      { requestId: request._id, expectedRevision: revision },
+    );
+    return {
+      settled: true as const,
+      revision,
+      aggregateState,
+      actionRequiredBy,
+    };
+  },
+});
+
 /**
  * Atomic lease boundary for one exact owner/domain/contract/revision. A
  * duplicate exact wake is harmless, and a watchdog wake reclaims an expired
@@ -194,6 +393,28 @@ export const dispatchRequest = internalMutation({
     if (!requestIdentityIsCurrent({ request, site })) {
       await cancelStaleRequest(ctx, request, timestamp);
       return { claimed: false as const, reason: "lifecycle_fence" as const };
+    }
+    if (!site) throw new Error("Active provisioning site disappeared");
+    if (!(await siteExecutionAuthorized(ctx, site))) {
+      const nextAttemptAt = managedProvisioningRetryAt(timestamp);
+      await ctx.db.patch(request._id, {
+        fulfillmentState: "retry_wait",
+        nextAttemptAt,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        updatedAt: timestamp,
+        completedAt: undefined,
+      });
+      await ctx.scheduler.runAt(
+        nextAttemptAt,
+        internal.managedProvisioning.dispatchRequest,
+        { requestId: request._id, expectedRevision: request.revision },
+      );
+      return {
+        claimed: false as const,
+        reason: "execution_paused" as const,
+        nextAttemptAt,
+      };
     }
     if (
       request.fulfillmentState === "leased" &&
@@ -219,11 +440,27 @@ export const dispatchRequest = internalMutation({
       nextAttemptAt: leaseExpiresAt,
       updatedAt: timestamp,
     });
-    await ctx.scheduler.runAfter(0, internal.managedProvisioning.reconcileRequest, {
-      requestId: request._id,
-      expectedRevision: request.revision,
-      leaseToken,
+    const publisherReady = publisherAuthorizationVerified({
+      request,
+      site,
+      timestamp,
     });
+    const publisherProgressAt = request.publisher.providerReportedAt ??
+      request.publisher.updatedAt;
+    const publisherAdapterStalled = request.publisher.state === "in_progress" &&
+      publisherProgressAt > 0 &&
+      timestamp - publisherProgressAt > MANAGED_PROVIDER_PROGRESS_STALE_MS;
+    await ctx.scheduler.runAfter(
+      0,
+      publisherReady || publisherAdapterStalled
+        ? internal.managedProvisioning.reconcileRequest
+        : internal.publisher.preflightManagedPublisherInternal,
+      {
+        requestId: request._id,
+        expectedRevision: request.revision,
+        leaseToken,
+      },
+    );
     await ctx.scheduler.runAt(
       leaseExpiresAt + 1_000,
       internal.managedProvisioning.dispatchRequest,
@@ -282,7 +519,8 @@ export const reconcileRequest = internalMutation({
     const publisher = capabilityAfterReconciliation({
       capability: "publisher",
       current: request.publisher,
-      canonicalReceiptVerified: oneSetupPublisherReceiptVerified(site),
+      canonicalReceiptVerified: oneSetupPublisherReceiptVerified(site) &&
+        publisherAutopublishConsentCurrent({ request, timestamp }),
       timestamp,
     });
     const searchMeasurement = capabilityAfterReconciliation({

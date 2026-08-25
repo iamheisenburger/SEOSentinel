@@ -11,6 +11,7 @@ const SECRET_FIELD_NAMES = [
   "mediumToken",
   "linkedinAccessToken",
   "publicationAdapterConfigHash",
+  "publisherDestinationReceipt",
 ] as const;
 
 type SecretField = (typeof SECRET_FIELD_NAMES)[number];

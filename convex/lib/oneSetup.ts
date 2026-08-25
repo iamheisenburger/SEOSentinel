@@ -66,6 +66,17 @@ export function managedProvisioningDecision(args: {
   timestamp?: number;
 }): ManagedProvisioningDecision {
   if (args.canonicalReceiptVerified) return { state: "ready" };
+  if (
+    args.currentProgress?.state === "owner_action_required" &&
+    args.currentProgress.blockedReasonCode &&
+    args.currentProgress.actionRequiredBy === "owner"
+  ) {
+    return {
+      state: "owner_action_required",
+      blockedReasonCode: args.currentProgress.blockedReasonCode,
+      actionRequiredBy: "owner",
+    };
+  }
   if (args.mode === "connect_existing") {
     return {
       state: "owner_action_required",
@@ -142,6 +153,10 @@ export function managedProvisioningRetryAt(timestamp: number): number {
 const ONE_SETUP_ACTION_COPY: Record<string, string> = {
   publisher_connection_required:
     "Connect and verify a supported publishing destination in site settings.",
+  publisher_connection_verification_required:
+    "Reconnect or verify your publishing destination, then Pentra will continue automatically.",
+  publisher_autopublish_consent_required:
+    "Authorize automatic publishing for this website, or switch to assisted review.",
   search_measurement_connection_required:
     "Connect and authorize Google Search Console in site settings.",
   outreach_mailbox_connection_required:
@@ -239,6 +254,9 @@ export function oneSetupCapabilityReadiness(args: {
 }): OneSetupReadinessState {
   if (args.connectionVerified) return "ready";
   if (args.progress.state === "blocked") return "blocked";
+  if (args.progress.state === "owner_action_required") {
+    return "action_required";
+  }
   if (args.progress.mode === "connect_existing") return "action_required";
   if (args.progress.state === "in_progress" || args.progress.state === "ready") {
     return "in_progress";

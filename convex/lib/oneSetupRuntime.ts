@@ -16,6 +16,8 @@ import {
   siteCanonicalDomainRevision,
   siteUsesLegacyDomainReceipts,
 } from "./siteDomainBinding.ts";
+import { publisherStandingAutopublishConsentCurrent } from
+  "./publisherProvisioning.ts";
 
 export async function oneSetupPromotionBlockers(
   ctx: QueryCtx | MutationCtx,
@@ -51,6 +53,12 @@ export async function oneSetupPromotionBlockers(
   const blockers: string[] = [];
   if (!oneSetupPublisherReceiptVerified(site)) {
     blockers.push("one_setup_publisher_receipt_missing");
+  }
+  if (
+    site.approvalRequired !== true &&
+    !publisherStandingAutopublishConsentCurrent({ request })
+  ) {
+    blockers.push("one_setup_publisher_autopublish_consent_missing");
   }
   if (
     stage === "live" &&

@@ -2,6 +2,8 @@ import type { Doc } from "../_generated/dataModel";
 import { publicationDestinationBlockers } from "./autopilotReadiness.ts";
 import { autonomousGmailCredentialIssues } from "./outreachDelivery.ts";
 import { normalizedOneSetupDomain } from "./oneSetup.ts";
+import { publisherDestinationReceiptVerified } from
+  "./publisherProvisioning.ts";
 
 export const GSC_CANONICAL_RECEIPT_FRESH_MS = 72 * 60 * 60 * 1000;
 
@@ -80,8 +82,10 @@ export function hardGscOAuthFailure(args: {
 
 export function oneSetupPublisherReceiptVerified(
   site: Doc<"sites">,
+  timestamp = Date.now(),
 ): boolean {
-  return publicationDestinationBlockers(site).length === 0;
+  return publicationDestinationBlockers(site).length === 0 &&
+    publisherDestinationReceiptVerified({ site, timestamp });
 }
 
 export function oneSetupSearchMeasurementReceiptVerified(

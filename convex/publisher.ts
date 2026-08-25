@@ -68,6 +68,14 @@ import {
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
+import { accountDeletionKey } from "./lib/accountDeletion.ts";
+import {
+  expectedPublisherDestinationReceipt,
+  publisherAutopublishConsentCurrent,
+  publisherConnectionComplete,
+  publisherDestinationReceiptVerified,
+  supportedPublisherMethod,
+} from "./lib/publisherProvisioning.ts";
 
 const PUBLIC_URL_RETRY_DELAYS_MS = [
   30_000,
@@ -87,6 +95,7 @@ type FileContent = {
 };
 
 type BeforeExternalMutation = () => Promise<void>;
+type PublisherPreflightFence = () => Promise<void>;
 
 type ArticleRecord = {
   _id: Id<"articles">;
@@ -136,6 +145,8 @@ type SiteRecord = {
   _id: Id<"sites">;
   userId?: string;
   domain: string;
+  canonicalDomain?: string;
+  canonicalDomainRevision?: number;
   publishMethod?: string;
   approvalRequired?: boolean;
   repoOwner?: string;
@@ -150,6 +161,8 @@ type SiteRecord = {
   publicationAdapterVerifiedAt?: number;
   publicationAdapterVersion?: string;
   publicationAdapterConfigHash?: string;
+  publisherConnectionGeneration?: number;
+  publisherDestinationReceipt?: Doc<"sites">["publisherDestinationReceipt"];
   rendererVersion?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
@@ -355,7 +368,15 @@ async function getDefaultBranch({
     },
   });
   if (!res.ok) throw new Error(`GitHub repo not found: ${owner}/${repo} (${res.statusText})`);
-  const data = await res.json();
+  const data = await res.json() as {
+    default_branch?: unknown;
+    permissions?: { push?: unknown };
+  };
+  if (data.permissions?.push !== true) {
+    throw new Error(
+      "GitHub connection does not grant repository write access",
+    );
+  }
   const branch = data.default_branch;
   if (
     typeof branch !== "string" ||
@@ -374,43 +395,80 @@ async function getDefaultBranch({
  * can seal the repository's current default branch after a security upgrade;
  * ordinary tenants must still use the authenticated OAuth connection flow.
  */
-export const reverifyGithubConnectionInternal = internalAction({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
-    const site = (await ctx.runQuery(internal.sites.getFull, {
+async function reverifyGithubConnectionHandler(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+  options?: {
+    siteSnapshot?: SiteRecord;
+    beforeExternalRead?: PublisherPreflightFence;
+  },
+) {
+  const site = options?.siteSnapshot ??
+    (await ctx.runQuery(internal.sites.getFull, {
       siteId,
     })) as SiteRecord | null;
-    if (!site) throw new Error("Site not found");
-    if (site.publishMethod !== "github") {
-      throw new Error("Site is not configured for GitHub publication");
-    }
-    if (!site.githubToken) {
-      throw new Error("GitHub must be connected before it can be re-verified");
-    }
+  if (!site?.userId) throw new Error("Site not found");
+  if (site._id !== siteId) throw new Error("Publishing snapshot mismatch");
+  if ((site.publishMethod ?? "github") !== "github") {
+    throw new Error("Site is not configured for GitHub publication");
+  }
+  if (!site.githubToken) {
+    throw new Error("GitHub must be connected before it can be re-verified");
+  }
 
-    const repoOwner = safeGitHubRepositoryPart(site.repoOwner, "owner");
-    const repoName = safeGitHubRepositoryPart(
-      site.repoName,
-      "repository name",
-    );
-    if (!repoOwner || !repoName) {
-      throw new Error("GitHub owner and repository are required");
-    }
+  const repoOwner = safeGitHubRepositoryPart(site.repoOwner, "owner");
+  const repoName = safeGitHubRepositoryPart(
+    site.repoName,
+    "repository name",
+  );
+  if (!repoOwner || !repoName) {
+    throw new Error("GitHub owner and repository are required");
+  }
 
-    const repoDefaultBranch = await getDefaultBranch({
-      token: site.githubToken,
-      owner: repoOwner,
-      repo: repoName,
-    });
-    await ctx.runMutation(internal.sites.setGithubTokenInternal, {
+  await options?.beforeExternalRead?.();
+  const repoDefaultBranch = await getDefaultBranch({
+    token: site.githubToken,
+    owner: repoOwner,
+    repo: repoName,
+  });
+  const connection = await ctx.runMutation(
+    internal.sites.setGithubTokenInternal,
+    {
       siteId,
       githubToken: site.githubToken,
       repoOwner,
       repoName,
       repoDefaultBranch,
-    });
-    return { ok: true, repoDefaultBranch };
-  },
+      expectedCanonicalDomain: site.canonicalDomain ?? site.domain,
+      expectedDomainRevision: site.canonicalDomainRevision ?? 0,
+      expectedConnectionGeneration:
+        site.publisherConnectionGeneration ?? 0,
+    },
+  );
+  const verifiedAt = Date.now();
+  const receipt = expectedPublisherDestinationReceipt({
+    site: {
+      ...site,
+      publishMethod: "github",
+      repoDefaultBranch,
+      publisherConnectionGeneration:
+        connection.publisherConnectionGeneration,
+    } as Doc<"sites">,
+    ownerAccountKey: accountDeletionKey(site.userId),
+    verifiedAt,
+  });
+  if (!receipt) throw new Error("GitHub publication receipt is incomplete");
+  await ctx.runMutation(internal.sites.recordPublisherDestinationReceiptInternal, {
+    siteId,
+    receipt,
+  });
+  return { ok: true as const, repoDefaultBranch, verifiedAt };
+}
+
+export const reverifyGithubConnectionInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) =>
+    reverifyGithubConnectionHandler(ctx, siteId),
 });
 
 async function commitToMain({
@@ -863,12 +921,24 @@ async function publishToGitHub(
 async function verifyPublicationDestinationHandler(
   ctx: ActionCtx,
   siteId: Id<"sites">,
+  options?: {
+    siteSnapshot?: SiteRecord;
+    beforeExternalRead?: PublisherPreflightFence;
+  },
 ): Promise<{ ok: true; method: "wordpress" | "webhook"; verifiedAt: number }> {
-  const site = (await ctx.runQuery(internal.sites.getFull, { siteId })) as SiteRecord | null;
-  if (!site) throw new Error("Site not found");
+  const site = options?.siteSnapshot ??
+    (await ctx.runQuery(internal.sites.getFull, { siteId })) as SiteRecord | null;
+  if (!site?.userId) throw new Error("Site not found");
+  if (site._id !== siteId) throw new Error("Publishing snapshot mismatch");
   const configHash = publicationAdapterConfigHash(site);
   if (!configHash) throw new Error("Publishing connection is incomplete");
   const verifiedAt = Date.now();
+  const receipt = expectedPublisherDestinationReceipt({
+    site: site as Doc<"sites">,
+    ownerAccountKey: accountDeletionKey(site.userId),
+    verifiedAt,
+  });
+  if (!receipt) throw new Error("Publishing connection is incomplete");
 
   if (site.publishMethod === "wordpress") {
     if (!site.wpUrl || !site.wpUsername || !site.wpAppPassword) {
@@ -879,6 +949,7 @@ async function verifyPublicationDestinationHandler(
       `${site.wpUsername}:${site.wpAppPassword}`,
       "utf8",
     ).toString("base64");
+    await options?.beforeExternalRead?.();
     const response = await safeRequestPublicHttps(
       `${wpRoot.href.replace(/\/+$/, "")}/wp-json/wp/v2/users/me?context=edit`,
       {
@@ -914,6 +985,7 @@ async function verifyPublicationDestinationHandler(
     const signature = createHmac("sha256", site.webhookSecret)
       .update(`${timestamp}.${payload}`)
       .digest("hex");
+    await options?.beforeExternalRead?.();
     const response = await safeRequestPublicHttps(endpoint.href, {
       method: "POST",
       expectedHost: endpoint.hostname,
@@ -946,6 +1018,10 @@ async function verifyPublicationDestinationHandler(
     adapterVersion: PUBLICATION_ADAPTER_VERSION,
     verifiedAt,
   });
+  await ctx.runMutation(internal.sites.recordPublisherDestinationReceiptInternal, {
+    siteId,
+    receipt,
+  });
   return { ok: true, method: site.publishMethod, verifiedAt };
 }
 
@@ -963,6 +1039,134 @@ export const verifyPublicationDestination = action({
       throw new Error("Not authorized to verify this site");
     }
     return verifyPublicationDestinationHandler(ctx, siteId);
+  },
+});
+
+type ManagedPublisherPreflightContext = {
+  request: Doc<"managed_provisioning_requests">;
+  site: Doc<"sites">;
+  timestamp: number;
+};
+type ManagedPublisherPreflightResult = {
+  resumed: boolean;
+  reason: string;
+};
+
+/**
+ * Lease-fenced managed resume for every installed publication adapter. The
+ * action performs provider reads and writes only canonical destination proof;
+ * `managedProvisioning.reconcileRequest` remains the sole ready writer.
+ */
+export const preflightManagedPublisherInternal = internalAction({
+  args: {
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRevision: v.number(),
+    leaseToken: v.string(),
+  },
+  handler: async (ctx, args): Promise<ManagedPublisherPreflightResult> => {
+    const context = await ctx.runQuery(
+      internal.managedProvisioning.getPublisherPreflightContext,
+      args,
+    ) as ManagedPublisherPreflightContext | null;
+    if (!context) {
+      return { resumed: false as const, reason: "lease_lost" as const };
+    }
+    if (!publisherAutopublishConsentCurrent({ request: context.request })) {
+      await ctx.runMutation(
+        internal.managedProvisioning.settlePublisherPreflightActionRequired,
+        { ...args, reasonCode: "publisher_autopublish_consent_required" },
+      );
+      return { resumed: false as const, reason: "owner_consent" as const };
+    }
+
+    const configuredMethod = context.site.publishMethod ?? "github";
+    const method = supportedPublisherMethod(configuredMethod);
+    if (!method) {
+      const reasonCode = configuredMethod === "manual"
+        ? "publisher_connection_required" as const
+        : "managed_publisher_adapter_unavailable" as const;
+      await ctx.runMutation(
+        internal.managedProvisioning.settlePublisherPreflightActionRequired,
+        { ...args, reasonCode },
+      );
+      return { resumed: false as const, reason: reasonCode };
+    }
+    if (!publisherConnectionComplete(context.site)) {
+      await ctx.runMutation(
+        internal.managedProvisioning.settlePublisherPreflightActionRequired,
+        { ...args, reasonCode: "publisher_connection_required" },
+      );
+      return { resumed: false as const, reason: "owner_connection" as const };
+    }
+
+    const started = await ctx.runMutation(
+      internal.managedProvisioning.markPublisherPreflightInProgress,
+      args,
+    ) as { started: boolean };
+    if (!started.started) {
+      return { resumed: false as const, reason: "lease_lost" as const };
+    }
+    const assertPreflightLeaseCurrent: PublisherPreflightFence = async () => {
+      const liveContext = await ctx.runQuery(
+        internal.managedProvisioning.getPublisherPreflightContext,
+        args,
+      ) as ManagedPublisherPreflightContext | null;
+      if (!liveContext) throw new Error("Managed publisher lease lost");
+    };
+
+    try {
+      if (method === "github") {
+        await reverifyGithubConnectionHandler(ctx, context.site._id, {
+          siteSnapshot: context.site,
+          beforeExternalRead: assertPreflightLeaseCurrent,
+        });
+      } else {
+        await verifyPublicationDestinationHandler(ctx, context.site._id, {
+          siteSnapshot: context.site,
+          beforeExternalRead: assertPreflightLeaseCurrent,
+        });
+      }
+    } catch {
+      const liveContext = await ctx.runQuery(
+        internal.managedProvisioning.getPublisherPreflightContext,
+        args,
+      ) as ManagedPublisherPreflightContext | null;
+      if (!liveContext) {
+        return { resumed: false as const, reason: "lease_lost" as const };
+      }
+      await ctx.runMutation(
+        internal.managedProvisioning.settlePublisherPreflightActionRequired,
+        { ...args, reasonCode: "publisher_connection_verification_required" },
+      );
+      return {
+        resumed: false as const,
+        reason: "owner_verification" as const,
+      };
+    }
+
+    const verifiedContext = await ctx.runQuery(
+      internal.managedProvisioning.getPublisherPreflightContext,
+      args,
+    ) as ManagedPublisherPreflightContext | null;
+    if (
+      !verifiedContext ||
+      !publisherDestinationReceiptVerified({
+        site: verifiedContext.site,
+        ownerAccountKey: verifiedContext.request.ownerAccountKey,
+      })
+    ) {
+      return { resumed: false as const, reason: "lease_lost" as const };
+    }
+    const reconciled = await ctx.runMutation(
+      internal.managedProvisioning.reconcileRequest,
+      args,
+    ) as { reconciled: boolean; reason?: string };
+    return {
+      resumed: reconciled.reconciled,
+      reason: reconciled.reconciled
+        ? "reconciled"
+        : reconciled.reason ?? "lease_lost",
+    };
   },
 });
 

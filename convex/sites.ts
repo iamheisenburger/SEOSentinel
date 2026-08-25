@@ -139,6 +139,16 @@ import {
 } from "./lib/siteDomainBinding.ts";
 import { planCheckpointTopicExecutionLocked } from
   "./lib/planCandidateCheckpoint.ts";
+import {
+  expectedPublisherDestinationReceipt,
+  publisherAutopublishConsentCurrent,
+  publisherAutopublishConsentReceipt,
+  publisherStandingAutopublishConsentCurrent,
+  PUBLISHER_AUTOPUBLISH_CONSENT_POLICY_HASH,
+  PUBLISHER_AUTOPUBLISH_CONSENT_TEXT,
+  PUBLISHER_AUTOPUBLISH_CONSENT_VERSION,
+  PUBLISHER_DESTINATION_RECEIPT_VERSION,
+} from "./lib/publisherProvisioning.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -188,6 +198,20 @@ const DELIVERY_CONFIG_KEYS = new Set([
   "approvalRequired", "niche", "blogTheme", "siteSummary", "siteType",
   "targetAudienceSummary", "productUsage", "anchorKeywords", "keyFeatures",
   "painPoints",
+]);
+const PUBLISHER_CONNECTION_KEYS = new Set([
+  "domain",
+  "publishMethod",
+  "repoOwner",
+  "repoName",
+  "repoDefaultBranch",
+  "githubToken",
+  "wpUrl",
+  "wpUsername",
+  "wpAppPassword",
+  "webhookUrl",
+  "webhookSecret",
+  "urlStructure",
 ]);
 
 function normalizedAuthorityDomain(value: string): string | null {
@@ -697,6 +721,139 @@ function deliveryConfigChanged(
   return Object.entries(patch).some(
     ([key, value]) => DELIVERY_CONFIG_KEYS.has(key) && site[key] !== value,
   );
+}
+
+function publisherConnectionChanged(
+  site: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): boolean {
+  return Object.entries(patch).some(
+    ([key, value]) =>
+      PUBLISHER_CONNECTION_KEYS.has(key) && site[key] !== value,
+  );
+}
+
+function publisherConnectionInvalidationPatch(
+  site: Doc<"sites">,
+  changed: boolean,
+) {
+  return changed
+    ? {
+        publisherConnectionGeneration:
+          (site.publisherConnectionGeneration ?? 0) + 1,
+        publisherDestinationReceipt: undefined,
+      }
+    : {};
+}
+
+async function scheduleManagedPublisherResume(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  supersedeLease = false,
+) {
+  const request = await ctx.db
+    .query("managed_provisioning_requests")
+    .withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .unique();
+  if (!request || request.fulfillmentState === "cancelled") return;
+  const timestamp = now();
+  const liveLease = request.fulfillmentState === "leased" &&
+    (request.leaseExpiresAt ?? 0) > timestamp;
+  let expectedRevision = request.revision;
+  if (supersedeLease) {
+    const publisher: ManagedProvisioningCapability = {
+      ...request.publisher,
+      state: "requested",
+      blockedReasonCode: undefined,
+      actionRequiredBy: undefined,
+      providerReportedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    expectedRevision += 1;
+    await ctx.db.patch(request._id, {
+      publisher,
+      aggregateState: aggregateOneSetupRequestState([
+        publisher,
+        request.searchMeasurement,
+        request.outreachMailbox,
+      ]),
+      fulfillmentState: "queued",
+      nextAttemptAt: timestamp,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      revision: expectedRevision,
+      updatedAt: timestamp,
+      completedAt: undefined,
+    });
+  } else if (!liveLease) {
+    await ctx.db.patch(request._id, {
+      fulfillmentState: "queued",
+      nextAttemptAt: timestamp,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: timestamp,
+      completedAt: undefined,
+    });
+  } else {
+    // The active preflight will invoke canonical reconciliation itself. Its
+    // lease watchdog remains armed if the action dies after receipt storage.
+    return;
+  }
+  await ctx.scheduler.runAfter(0, internal.managedProvisioning.dispatchRequest, {
+    requestId: request._id,
+    expectedRevision,
+  });
+}
+
+function unattendedPublishingEnabled(args: {
+  autopilotEnabled?: boolean;
+  approvalRequired?: boolean;
+}): boolean {
+  return args.autopilotEnabled === true && args.approvalRequired !== true;
+}
+
+/** Every public site-settings surface shares this transition fence. Existing
+ * legacy rows remain editable, but creating a new unattended state requires
+ * the exact current One Setup contract and its standing consent receipt. */
+async function assertUnattendedPublishingTransitionAuthorized(
+  ctx: MutationCtx,
+  site: Doc<"sites"> | null,
+  next: { autopilotEnabled?: boolean; approvalRequired?: boolean },
+) {
+  if (
+    !unattendedPublishingEnabled(next) ||
+    unattendedPublishingEnabled(site ?? {})
+  ) return;
+  if (!site?.userId) {
+    throw new Error(
+      "Choose Full Autopilot in One Setup and authorize automatic publishing before turning off review",
+    );
+  }
+  const request = await ctx.db
+    .query("managed_provisioning_requests")
+    .withIndex("by_site", (q) => q.eq("siteId", site._id))
+    .unique();
+  const requestCurrent = Boolean(
+    request &&
+      request.ownerAccountKey === accountDeletionKey(site.userId) &&
+      request.domainSnapshot === siteCanonicalDomain(site) &&
+      request.contractVersion === ONE_SETUP_CONTRACT_VERSION &&
+      oneSetupDomainRevisionReceiptMatches({
+        currentCanonicalDomainRevision: siteCanonicalDomainRevision(site),
+        receiptDomainRevision: request.domainRevisionSnapshot,
+        legacyUnstampedAllowed: siteUsesLegacyDomainReceipts(site),
+      }),
+  );
+  if (
+    !request ||
+    !requestCurrent ||
+    request.automationMode !== "full" ||
+    !publisherStandingAutopublishConsentCurrent({ request })
+  ) {
+    throw new Error(
+      "Choose Full Autopilot in One Setup and authorize automatic publishing before turning off review",
+    );
+  }
 }
 
 function githubRepositoryChanged(
@@ -1470,6 +1627,7 @@ export const saveOneSetupRequest = mutation({
     searchMeasurementMode: ONE_SETUP_MODE_VALIDATOR,
     outreachMailboxMode: ONE_SETUP_MODE_VALIDATOR,
     automationMode: ONE_SETUP_AUTOMATION_MODE_VALIDATOR,
+    publisherAutopublishConsentAccepted: v.optional(v.boolean()),
     requestedCadencePerWeek: v.number(),
   },
   handler: async (ctx, args) => {
@@ -1489,11 +1647,16 @@ export const saveOneSetupRequest = mutation({
     if (Math.abs(siteRequestedCadence - args.requestedCadencePerWeek) > 1e-9) {
       throw new Error("Save the site cadence before submitting setup");
     }
-    if (
-      site.autopilotEnabled !== true ||
-      Boolean(site.approvalRequired) !== (args.automationMode === "assisted")
-    ) {
+    if (site.autopilotEnabled !== true) {
       throw new Error("Save the site automation mode before submitting setup");
+    }
+    if (
+      args.automationMode === "full" &&
+      args.publisherAutopublishConsentAccepted !== true
+    ) {
+      throw new Error(
+        "Authorize automatic publishing before enabling Full Autopilot",
+      );
     }
 
     const domainSnapshot = siteCanonicalDomain(site) ??
@@ -1508,6 +1671,24 @@ export const saveOneSetupRequest = mutation({
       .withIndex("by_site", (q) => q.eq("siteId", site._id))
       .unique();
     const timestamp = now();
+    const desiredApprovalRequired = args.automationMode === "assisted";
+    if (Boolean(site.approvalRequired) !== desiredApprovalRequired) {
+      await assertConfigUnlocked(ctx, site);
+      await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        site._id,
+        "one setup automation authorization changed",
+      );
+      await ctx.db.patch(site._id, {
+        approvalRequired: desiredApprovalRequired,
+        autopilotRolloutMode: "observe",
+        autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+        publicationAdapterVerifiedAt: undefined,
+        publicationAdapterVersion: undefined,
+        publicationAdapterConfigHash: undefined,
+        updatedAt: timestamp,
+      });
+    }
     const reset = Boolean(
       existing &&
         (existing.ownerAccountKey !== ownerAccountKey ||
@@ -1724,6 +1905,14 @@ export const saveOneSetupRequest = mutation({
         ? 0
         : existing?.initialPlanRecoveryCount ?? 0,
       automationMode: args.automationMode,
+      publisherAutopublishConsent: args.automationMode === "full"
+        ? publisherAutopublishConsentReceipt({
+            ownerAccountKey,
+            canonicalDomain: domainSnapshot,
+            domainRevision: domainRevisionSnapshot,
+            acceptedAt: timestamp,
+          })
+        : undefined,
       requestedCadencePerWeek: args.requestedCadencePerWeek,
       publisher,
       searchMeasurement,
@@ -1783,6 +1972,95 @@ export const saveOneSetupRequest = mutation({
       { requestId, configurationRevision },
     );
     return { requestId, revision, configurationRevision };
+  },
+});
+
+/** Explicit owner remediation for a legacy/full request whose versioned
+ * standing publication authorization is absent or stale. */
+export const acceptPublisherAutopublishConsent = mutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await requireSiteOwner(ctx, siteId);
+    if (!site.userId || site.accountDeletionRequestedAt !== undefined) {
+      throw new Error("Site not found");
+    }
+    const request = await ctx.db
+      .query("managed_provisioning_requests")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .unique();
+    const ownerAccountKey = accountDeletionKey(site.userId);
+    const canonicalDomain = siteCanonicalDomain(site);
+    const domainRevision = siteCanonicalDomainRevision(site);
+    if (
+      !request ||
+      request.automationMode !== "full" ||
+      request.ownerAccountKey !== ownerAccountKey ||
+      request.domainSnapshot !== canonicalDomain ||
+      !oneSetupDomainRevisionReceiptMatches({
+        currentCanonicalDomainRevision: domainRevision,
+        receiptDomainRevision: request.domainRevisionSnapshot,
+        legacyUnstampedAllowed: siteUsesLegacyDomainReceipts(site),
+      }) ||
+      request.contractVersion !== ONE_SETUP_CONTRACT_VERSION
+    ) {
+      throw new Error("No current Full Autopilot authorization is pending");
+    }
+    if (publisherAutopublishConsentCurrent({ request })) {
+      return {
+        accepted: true as const,
+        revision: request.revision,
+        consentVersion: PUBLISHER_AUTOPUBLISH_CONSENT_VERSION,
+      };
+    }
+    const timestamp = now();
+    const publisher: ManagedProvisioningCapability = {
+      ...request.publisher,
+      state: "requested",
+      blockedReasonCode: undefined,
+      actionRequiredBy: undefined,
+      providerReportedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const aggregateState = aggregateOneSetupRequestState([
+      publisher,
+      request.searchMeasurement,
+      request.outreachMailbox,
+    ]);
+    const operatorActionRequired = [
+      publisher,
+      request.searchMeasurement,
+      request.outreachMailbox,
+    ].some((capability) => capability.actionRequiredBy === "operator");
+    const revision = request.revision + 1;
+    await ctx.db.patch(request._id, {
+      publisherAutopublishConsent: publisherAutopublishConsentReceipt({
+        ownerAccountKey,
+        canonicalDomain: canonicalDomain!,
+        domainRevision,
+        acceptedAt: timestamp,
+      }),
+      publisher,
+      aggregateState,
+      fulfillmentState: "queued",
+      nextAttemptAt: timestamp,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operatorActionRequiredAt: operatorActionRequired
+        ? request.operatorActionRequiredAt ?? timestamp
+        : undefined,
+      revision,
+      updatedAt: timestamp,
+      completedAt: undefined,
+    });
+    await ctx.scheduler.runAfter(0, internal.managedProvisioning.dispatchRequest, {
+      requestId: request._id,
+      expectedRevision: revision,
+    });
+    return {
+      accepted: true as const,
+      revision,
+      consentVersion: PUBLISHER_AUTOPUBLISH_CONSENT_VERSION,
+    };
   },
 });
 
@@ -2025,6 +2303,20 @@ export const getOneSetupReadiness = query({
       : pendingOneSetupCapability("connect_existing");
 
     const publisherVerified = oneSetupPublisherReceiptVerified(site);
+    const autopublishConsentCurrent = Boolean(
+      requestValid && publisherAutopublishConsentCurrent({ request: request! }),
+    );
+    const fullConsentActionRequired = Boolean(
+      requestValid &&
+        request!.automationMode === "full" &&
+        !autopublishConsentCurrent,
+    );
+    const assistedReviewActionRequired = Boolean(
+      requestValid &&
+        request!.automationMode === "assisted" &&
+        site.autopilotEnabled === true &&
+        site.approvalRequired !== true,
+    );
     const measurementVerified =
       oneSetupSearchMeasurementReceiptVerified(site) &&
       gscConnectionMatchesCurrentDomain(site);
@@ -2085,7 +2377,8 @@ export const getOneSetupReadiness = query({
       ? "action_required"
       : site.autopilotEnabled === true &&
           Boolean(site.approvalRequired) ===
-            (request!.automationMode === "assisted")
+            (request!.automationMode === "assisted") &&
+          autopublishConsentCurrent
         ? "ready"
         : "action_required";
     const stages: Array<{
@@ -2096,6 +2389,11 @@ export const getOneSetupReadiness = query({
       actionRequiredBy?: OneSetupActionOwner;
       reasonCode?: string;
       actionMessage?: string;
+      actionKind?:
+        | "connect_publishing"
+        | "accept_publisher_autopublish"
+        | "review_publishing";
+      actionLabel?: string;
     }> = [
       { key: "website", label: "Website analyzed", state: websiteState },
       {
@@ -2121,6 +2419,30 @@ export const getOneSetupReadiness = query({
         key: "automation",
         label: "Automation mode authorized",
         state: automationState,
+        actionRequiredBy: fullConsentActionRequired ||
+            assistedReviewActionRequired
+          ? "owner"
+          : undefined,
+        reasonCode: fullConsentActionRequired
+          ? "publisher_autopublish_consent_required"
+          : assistedReviewActionRequired
+            ? "publisher_review_required"
+            : undefined,
+        actionMessage: fullConsentActionRequired
+          ? oneSetupActionMessage("publisher_autopublish_consent_required")
+          : assistedReviewActionRequired
+            ? "Turn on review before publishing, or restart setup and explicitly authorize Full Autopilot."
+            : undefined,
+        actionKind: fullConsentActionRequired
+          ? "accept_publisher_autopublish"
+          : assistedReviewActionRequired
+            ? "review_publishing"
+            : undefined,
+        actionLabel: fullConsentActionRequired
+          ? "Authorize automatic publishing"
+          : assistedReviewActionRequired
+            ? "Review publishing settings"
+            : undefined,
       },
       {
         key: "publisher",
@@ -2135,6 +2457,14 @@ export const getOneSetupReadiness = query({
         actionMessage: oneSetupActionMessage(
           publisherProgress.blockedReasonCode,
         ),
+        actionKind: publisherProgress.actionRequiredBy === "owner" &&
+            publisherProgress.blockedReasonCode?.startsWith("publisher_connection")
+          ? "connect_publishing"
+          : undefined,
+        actionLabel: publisherProgress.actionRequiredBy === "owner" &&
+            publisherProgress.blockedReasonCode?.startsWith("publisher_connection")
+          ? "Connect publishing"
+          : undefined,
       },
       {
         key: "search_measurement",
@@ -2181,6 +2511,15 @@ export const getOneSetupReadiness = query({
       requestedCadencePerWeek: requestValid
         ? request!.requestedCadencePerWeek
         : site.cadenceRequestedPerWeek ?? site.cadencePerWeek ?? 0,
+      publisherAutopublishConsent: {
+        required: Boolean(
+          requestValid && request!.automationMode === "full",
+        ),
+        current: autopublishConsentCurrent,
+        version: PUBLISHER_AUTOPUBLISH_CONSENT_VERSION,
+        policyHash: PUBLISHER_AUTOPUBLISH_CONSENT_POLICY_HASH,
+        text: PUBLISHER_AUTOPUBLISH_CONSENT_TEXT,
+      },
       aggregate,
       stages,
       fulfillment: requestValid
@@ -2323,6 +2662,70 @@ export const setPublicationAdapterVerificationInternal = internalMutation({
   },
 });
 
+/**
+ * Persist only the exact proof assembled around a successful provider
+ * preflight. Recomputing every tenant/configuration field in this mutation is
+ * the post-I/O CAS that rejects domain, owner, and connection interleavings.
+ */
+export const recordPublisherDestinationReceiptInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    receipt: v.object({
+      version: v.number(),
+      status: v.union(v.literal("verified"), v.literal("revoked")),
+      method: v.union(
+        v.literal("github"),
+        v.literal("wordpress"),
+        v.literal("webhook"),
+      ),
+      destinationId: v.string(),
+      ownerAccountKey: v.string(),
+      canonicalDomain: v.string(),
+      domainRevision: v.number(),
+      configHash: v.string(),
+      connectionGeneration: v.number(),
+      adapterVersion: v.string(),
+      verifiedAt: v.number(),
+      revokedAt: v.optional(v.number()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (
+      !site?.userId ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt
+    ) throw new Error("Site not found");
+    const expected = expectedPublisherDestinationReceipt({
+      site,
+      ownerAccountKey: accountDeletionKey(site.userId),
+      verifiedAt: args.receipt.verifiedAt,
+    });
+    const timestamp = now();
+    if (
+      !expected ||
+      args.receipt.version !== PUBLISHER_DESTINATION_RECEIPT_VERSION ||
+      args.receipt.status !== "verified" ||
+      args.receipt.revokedAt !== undefined ||
+      !Number.isFinite(args.receipt.verifiedAt) ||
+      args.receipt.verifiedAt <= 0 ||
+      args.receipt.verifiedAt > timestamp + 5 * 60 * 1000 ||
+      JSON.stringify(args.receipt) !== JSON.stringify(expected)
+    ) {
+      throw new Error("Publishing destination changed during verification");
+    }
+    await ctx.db.patch(site._id, {
+      publisherDestinationReceipt: expected,
+      updatedAt: timestamp,
+    });
+    await scheduleManagedPublisherResume(ctx, site._id);
+    return {
+      recorded: true as const,
+      connectionGeneration: expected.connectionGeneration,
+    };
+  },
+});
+
 export const patchInternal = internalMutation({
   args: {
     siteId: v.id("sites"),
@@ -2370,6 +2773,11 @@ export const patchInternal = internalMutation({
     const domainChanged =
       Object.prototype.hasOwnProperty.call(safePatch, "domain") &&
       nextDomain !== normalizedAuthorityDomain(site.domain);
+    clearStaleGitHubBranch(site, safePatch);
+    const publisherConnectionInvalidated = publisherConnectionChanged(
+      site,
+      safePatch,
+    );
     const invalidatesRollout = deliveryConfigChanged(site, safePatch);
     if (invalidatesRollout) await assertConfigUnlocked(ctx, site);
     if (invalidatesRollout) {
@@ -2392,6 +2800,10 @@ export const patchInternal = internalMutation({
             publicationAdapterConfigHash: undefined,
           }
         : {}),
+      ...publisherConnectionInvalidationPatch(
+        site,
+        publisherConnectionInvalidated,
+      ),
       ...(domainChanged
         ? {
             ...canonicalDomainTransitionPatch(site),
@@ -2405,6 +2817,9 @@ export const patchInternal = internalMutation({
         : {}),
       updatedAt: now(),
     });
+    if (publisherConnectionInvalidated) {
+      await scheduleManagedPublisherResume(ctx, siteId, true);
+    }
     if (domainChanged) await invalidateDomainCadenceState(ctx, siteId);
     await syncOrganicClickGoal(
       ctx,
@@ -2618,9 +3033,9 @@ export const upsert = mutation({
     }
 
     validateOrganicClickGoal(args.organicClickGoalMonthly);
-    const autopilotEnabled = args.autopilotEnabled ?? true;
+    const autopilotEnabled = args.autopilotEnabled;
     const inferToneNiche = args.inferToneNiche ?? true;
-    const approvalRequired = args.approvalRequired ?? false;
+    const approvalRequired = args.approvalRequired;
 
     const data = {
       domain,
@@ -2680,6 +3095,16 @@ export const upsert = mutation({
       const definedData = Object.fromEntries(
         Object.entries(data).filter(([, v]) => v !== undefined),
       ) as typeof data;
+      await assertUnattendedPublishingTransitionAuthorized(
+        ctx,
+        currentSite!,
+        {
+          autopilotEnabled:
+            definedData.autopilotEnabled ?? currentSite!.autopilotEnabled,
+          approvalRequired:
+            definedData.approvalRequired ?? currentSite!.approvalRequired,
+        },
+      );
       const authorityDomainChanged =
         normalizedAuthorityDomain(currentSite!.domain) !==
         normalizedAuthorityDomain(domain);
@@ -2687,6 +3112,10 @@ export const upsert = mutation({
         await demoteOutreachForDomainChange(ctx, args.id);
       }
       clearStaleGitHubBranch(currentSite!, definedData);
+      const publisherConnectionInvalidated = publisherConnectionChanged(
+        currentSite!,
+        definedData,
+      );
       const invalidatesRollout = deliveryConfigChanged(currentSite!, definedData);
       if (invalidatesRollout) await assertConfigUnlocked(ctx, currentSite!);
       if (invalidatesRollout) {
@@ -2716,6 +3145,10 @@ export const upsert = mutation({
               publicationAdapterConfigHash: undefined,
             }
           : {}),
+        ...publisherConnectionInvalidationPatch(
+          currentSite!,
+          publisherConnectionInvalidated,
+        ),
         ...(authorityDomainChanged
           ? {
               ...canonicalDomainTransitionPatch(currentSite!),
@@ -2727,6 +3160,9 @@ export const upsert = mutation({
             }
           : {}),
       });
+      if (publisherConnectionInvalidated) {
+        await scheduleManagedPublisherResume(ctx, args.id, true);
+      }
       if (authorityDomainChanged) {
         await invalidateDomainCadenceState(ctx, args.id);
       }
@@ -2755,7 +3191,15 @@ export const upsert = mutation({
         if (key === "updatedAt") continue;
         merged[key] = value ?? (existing as Record<string, unknown>)[key];
       }
+      await assertUnattendedPublishingTransitionAuthorized(ctx, existing, {
+        autopilotEnabled: merged.autopilotEnabled as boolean | undefined,
+        approvalRequired: merged.approvalRequired as boolean | undefined,
+      });
       clearStaleGitHubBranch(existing, merged);
+      const publisherConnectionInvalidated = publisherConnectionChanged(
+        existing,
+        merged,
+      );
       const authorityDomainChanged =
         normalizedAuthorityDomain(existing.domain) !==
         normalizedAuthorityDomain(String(merged.domain ?? existing.domain));
@@ -2791,6 +3235,10 @@ export const upsert = mutation({
               publicationAdapterConfigHash: undefined,
             }
           : {}),
+        ...publisherConnectionInvalidationPatch(
+          existing,
+          publisherConnectionInvalidated,
+        ),
         ...(authorityDomainChanged
           ? {
               ...canonicalDomainTransitionPatch(existing),
@@ -2802,6 +3250,9 @@ export const upsert = mutation({
             }
           : {}),
       });
+      if (publisherConnectionInvalidated) {
+        await scheduleManagedPublisherResume(ctx, existing._id, true);
+      }
       if (authorityDomainChanged) {
         await invalidateDomainCadenceState(ctx, existing._id);
       }
@@ -2815,12 +3266,20 @@ export const upsert = mutation({
     if (effectiveCadence === undefined) {
       throw new Error("A new site requires an account cadence allocation");
     }
+    const initialAutopilotEnabled = args.autopilotEnabled ?? true;
+    const initialApprovalRequired = args.approvalRequired ?? false;
+    await assertUnattendedPublishingTransitionAuthorized(ctx, null, {
+      autopilotEnabled: initialAutopilotEnabled,
+      approvalRequired: initialApprovalRequired,
+    });
     await reserveAccountCadence(ctx, cadenceSnapshot, effectiveCadence);
     const siteId = await ctx.db.insert("sites", {
       ...data,
       userId,
       planFeatures,
       language: args.language ?? "en",
+      autopilotEnabled: initialAutopilotEnabled,
+      approvalRequired: initialApprovalRequired,
       cadenceRequestedPerWeek: requestedCadence,
       cadencePerWeek: effectiveCadence,
       publishMethod: args.publishMethod ?? "github",
@@ -2830,6 +3289,7 @@ export const upsert = mutation({
       urlStructure: args.urlStructure ?? "/blog/[slug]",
       autopilotRolloutMode: "observe",
       autopilotRolloutEpoch: 0,
+      publisherConnectionGeneration: 0,
       canonicalDomainRevision: 0,
       createdAt: now(),
     });
@@ -2895,6 +3355,14 @@ export const updateSite = mutation({
     if (site.accountDeletionRequestedAt || accountDeletion) {
       throw new Error("This account has been deleted and cannot update sites");
     }
+    const nextAutopilotEnabled = fields.autopilotEnabled ??
+      site.autopilotEnabled;
+    const nextApprovalRequired = fields.approvalRequired ??
+      site.approvalRequired;
+    await assertUnattendedPublishingTransitionAuthorized(ctx, site, {
+      autopilotEnabled: nextAutopilotEnabled,
+      approvalRequired: nextApprovalRequired,
+    });
     validateOrganicClickGoal(fields.organicClickGoalMonthly);
     let cadenceSnapshot: AccountCadenceSnapshot | null = null;
     if (fields.cadencePerWeek !== undefined) {
@@ -2946,6 +3414,10 @@ export const updateSite = mutation({
       patch.cadenceRequestedPerWeek = requestedCadence;
     }
     clearStaleGitHubBranch(site, patch);
+    const publisherConnectionInvalidated = publisherConnectionChanged(
+      site,
+      patch,
+    );
     const invalidatesRollout = deliveryConfigChanged(site, patch);
     if (invalidatesRollout) await assertConfigUnlocked(ctx, site);
     if (invalidatesRollout) {
@@ -2966,7 +3438,14 @@ export const updateSite = mutation({
             publicationAdapterConfigHash: undefined,
           }
         : {}),
+      ...publisherConnectionInvalidationPatch(
+        site,
+        publisherConnectionInvalidated,
+      ),
     });
+    if (publisherConnectionInvalidated) {
+      await scheduleManagedPublisherResume(ctx, siteId, true);
+    }
     if (requestedCadence !== undefined && cadenceSnapshot) {
       await rebalanceAccountCadencesAfterRequest(ctx, cadenceSnapshot);
     }
@@ -3260,6 +3739,9 @@ async function requestSiteDeletion(
     githubToken: undefined,
     wpAppPassword: undefined,
     webhookSecret: undefined,
+    publisherConnectionGeneration:
+      (site.publisherConnectionGeneration ?? 0) + 1,
+    publisherDestinationReceipt: undefined,
     mediumToken: undefined,
     linkedinAccessToken: undefined,
     gscAccessToken: undefined,
@@ -3333,6 +3815,9 @@ async function revokeSiteCredentialsForAccountDeletion(
     githubToken: undefined,
     wpAppPassword: undefined,
     webhookSecret: undefined,
+    publisherConnectionGeneration:
+      (site.publisherConnectionGeneration ?? 0) + 1,
+    publisherDestinationReceipt: undefined,
     mediumToken: undefined,
     linkedinAccessToken: undefined,
     gscAccessToken: undefined,
@@ -5563,14 +6048,44 @@ export const setGithubTokenInternal = internalMutation({
     repoOwner: v.string(),
     repoName: v.string(),
     repoDefaultBranch: v.string(),
+    expectedCanonicalDomain: v.optional(v.string()),
+    expectedDomainRevision: v.optional(v.number()),
+    expectedConnectionGeneration: v.optional(v.number()),
   },
   handler: async (
     ctx,
-    { siteId, githubToken, repoOwner, repoName, repoDefaultBranch },
+    {
+      siteId,
+      githubToken,
+      repoOwner,
+      repoName,
+      repoDefaultBranch,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionGeneration,
+    },
   ) => {
     const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
+    }
+    const expectedFence = [
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionGeneration,
+    ];
+    if (
+      expectedFence.some((value) => value !== undefined) &&
+      (
+        expectedFence.some((value) => value === undefined) ||
+        normalizeCanonicalDomain(expectedCanonicalDomain!) !==
+          siteCanonicalDomain(site) ||
+        expectedDomainRevision !== siteCanonicalDomainRevision(site) ||
+        expectedConnectionGeneration !==
+          (site.publisherConnectionGeneration ?? 0)
+      )
+    ) {
+      throw new Error("Publishing connection changed during verification");
     }
     const currentRepoOwner = safeGitHubRepositoryPart(site.repoOwner, "owner");
     const currentRepoName = safeGitHubRepositoryPart(
@@ -5606,8 +6121,16 @@ export const setGithubTokenInternal = internalMutation({
             publicationAdapterConfigHash: undefined,
           }
         : {}),
+      ...publisherConnectionInvalidationPatch(site, invalidatesRollout),
       updatedAt: now(),
     });
+    if (invalidatesRollout) {
+      await scheduleManagedPublisherResume(ctx, site._id, true);
+    }
+    return {
+      publisherConnectionGeneration: (site.publisherConnectionGeneration ?? 0) +
+        (invalidatesRollout ? 1 : 0),
+    };
   },
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
   AlertCircle,
   Check,
@@ -8,6 +8,7 @@ import {
   Clock3,
   Loader2,
 } from "lucide-react";
+import { useState } from "react";
 
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -68,6 +69,36 @@ export function SetupReadiness({
   compact?: boolean;
 }) {
   const readiness = useQuery(api.sites.getOneSetupReadiness, { siteId });
+  const acceptAutopublishConsent = useMutation(
+    api.sites.acceptPublisherAutopublishConsent,
+  );
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function runOwnerAction(
+    kind:
+      | "connect_publishing"
+      | "accept_publisher_autopublish"
+      | "review_publishing",
+  ) {
+    if (kind === "connect_publishing" || kind === "review_publishing") {
+      window.location.assign(`/sites/${siteId}?tab=settings`);
+      return;
+    }
+    setPendingAction(kind);
+    setActionError(null);
+    try {
+      await acceptAutopublishConsent({ siteId });
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Automatic publishing could not be authorized.",
+      );
+    } finally {
+      setPendingAction(null);
+    }
+  }
 
   if (readiness === undefined) {
     return (
@@ -158,10 +189,35 @@ export function SetupReadiness({
                 <p className="mt-2 pl-5 text-[10px] leading-relaxed text-[#73788F]">
                   {stage.actionMessage}
                 </p>
+                {stage.actionKind === "accept_publisher_autopublish" && (
+                  <p className="mt-2 pl-5 text-[9px] leading-relaxed text-[#73788F]">
+                    {readiness.publisherAutopublishConsent.text}
+                  </p>
+                )}
+                {stage.actionRequiredBy === "owner" &&
+                  stage.actionKind &&
+                  stage.actionLabel && (
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      onClick={() => void runOwnerAction(stage.actionKind!)}
+                      className="ml-5 mt-3 rounded-md bg-[#0EA5E9] px-3 py-1.5 text-[10px] font-medium text-white transition hover:bg-[#0284C7] disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {pendingAction === stage.actionKind
+                        ? "Saving…"
+                        : stage.actionLabel}
+                    </button>
+                  )}
               </div>
             );
           })}
         </div>
+      )}
+
+      {actionError && (
+        <p className="mt-3 text-[10px] leading-relaxed text-[#F87171]">
+          {actionError}
+        </p>
       )}
 
       <details className="group mt-4 rounded-lg border border-white/[0.04] bg-white/[0.015]">

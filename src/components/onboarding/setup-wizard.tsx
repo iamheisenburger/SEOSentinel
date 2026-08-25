@@ -25,6 +25,8 @@ import {
   cadenceOptionsForMonthlyLimit,
   defaultCadenceForMonthlyLimit,
 } from "../../../convex/planLimits";
+import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from
+  "../../../convex/lib/publisherProvisioning";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
@@ -112,6 +114,8 @@ export function SetupWizard() {
   const [measurementMode, setMeasurementMode] = useState<SetupMode>("managed");
   const [outreachMode, setOutreachMode] = useState<SetupMode>("managed");
   const [automationMode, setAutomationMode] = useState<AutomationMode>("full");
+  const [autopublishConsentAccepted, setAutopublishConsentAccepted] =
+    useState(false);
   const [cadence, setCadence] = useState(0);
   const automaticCadence = useRef(0);
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
@@ -162,6 +166,8 @@ export function SetupWizard() {
           searchMeasurementMode: measurementMode,
           outreachMailboxMode: outreachMode,
           automationMode,
+          publisherAutopublishConsentAccepted:
+            automationMode === "full" && autopublishConsentAccepted,
           requestedCadencePerWeek: cadence,
         });
         setSetupReceipt(receipt);
@@ -235,6 +241,10 @@ export function SetupWizard() {
       setError("Choose an active cadence after your plan capacity finishes loading.");
       return;
     }
+    if (automationMode === "full" && !autopublishConsentAccepted) {
+      setError("Authorize automatic publishing, or choose Assisted review.");
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -246,7 +256,9 @@ export function SetupWizard() {
         clerkUserId: userId,
         cadencePerWeek: cadence,
         publishMethod: "manual",
-        approvalRequired: automationMode !== "full",
+        // Site creation stays review-safe. saveOneSetupRequest atomically
+        // applies Full Autopilot only with the versioned consent receipt.
+        approvalRequired: true,
         autopilotEnabled: true,
         inferToneNiche: true,
         language: "en",
@@ -487,6 +499,21 @@ export function SetupWizard() {
               </p>
             </div>
           </div>
+          {automationMode === "full" && (
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border border-white/[0.06] bg-black/10 p-3">
+              <input
+                type="checkbox"
+                checked={autopublishConsentAccepted}
+                onChange={(event) =>
+                  setAutopublishConsentAccepted(event.target.checked)
+                }
+                className="mt-0.5 h-4 w-4 rounded border-white/20 accent-[#0EA5E9]"
+              />
+              <span className="text-[10px] leading-relaxed text-[#A3A7B8]">
+                {PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}
+              </span>
+            </label>
+          )}
         </div>
 
         <details className="group mt-3 rounded-xl border border-white/[0.05] bg-white/[0.015]">
@@ -563,7 +590,12 @@ export function SetupWizard() {
           className="mt-5 w-full"
           onClick={() => void startSetup()}
           loading={busy}
-          disabled={!capacity?.ready || cadence <= 0 || !domain.trim()}
+          disabled={
+            !capacity?.ready ||
+            cadence <= 0 ||
+            !domain.trim() ||
+            (automationMode === "full" && !autopublishConsentAccepted)
+          }
           icon={<Globe className="h-3.5 w-3.5" />}
         >
           {busy ? "Starting setup…" : `Start one setup · ${cadenceLabel(cadence)}`}
