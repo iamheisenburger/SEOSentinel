@@ -10,6 +10,8 @@ import {
   planCheckpointTopicExecutionLocked,
   planSeedBatchManifestHash,
   planSerpResultFingerprint,
+  terminalCheckpointClosePartition,
+  terminalCheckpointPreclosePartition,
   terminalCheckpointCandidateDecision,
   type PlanCheckpointCandidate,
 } from "../convex/lib/planCandidateCheckpoint.ts";
@@ -198,6 +200,107 @@ test("inline SERP receipts are exact while terminal recovery never adopts begun 
     receiptValid: true,
     terminalFailureCode: "serp_business_intent_mismatch",
   }), "terminally_excluded");
+});
+
+test("zero-yield inline completion remains fully excluded after terminal close", () => {
+  const candidates = ["topic-1", "topic-2", "topic-3"] as const;
+  // completeInline's zero-yield state has already excluded every candidate.
+  // markFailed/terminallyClose must preserve that partition even though it
+  // has no newly closable checkpoint-status rows to add.
+  assert.deepEqual(terminalCheckpointClosePartition({
+    candidateIds: candidates,
+    priorTerminallyExcludedIds: candidates,
+    provenTerminallyExcludedIds: [],
+  }), candidates);
+  assert.deepEqual(terminalCheckpointPreclosePartition({
+    status: "inline_sealed",
+    candidateIds: candidates,
+    inlineCompletedIds: [],
+    terminallyExcludedIds: candidates,
+  }), {
+    priorTerminallyExcludedIds: candidates,
+    candidateIdsToExclude: [],
+  });
+  assert.deepEqual(terminalCheckpointPreclosePartition({
+    status: "inline_sealed",
+    candidateIds: candidates,
+    inlineCompletedIds: ["topic-1", "topic-3"],
+    terminallyExcludedIds: ["topic-2"],
+  }), {
+    priorTerminallyExcludedIds: ["topic-2"],
+    candidateIdsToExclude: ["topic-1", "topic-3"],
+  });
+  assert.deepEqual(terminalCheckpointPreclosePartition({
+    status: "active",
+    candidateIds: candidates,
+  }), {
+    priorTerminallyExcludedIds: [],
+    candidateIdsToExclude: candidates,
+  });
+  assert.deepEqual(terminalCheckpointClosePartition({
+    candidateIds: candidates,
+    priorTerminallyExcludedIds: ["topic-1"],
+    provenTerminallyExcludedIds: ["topic-2", "topic-3"],
+  }), candidates);
+  for (const corrupt of [
+    {
+      candidateIds: candidates,
+      priorTerminallyExcludedIds: ["topic-1"],
+      provenTerminallyExcludedIds: ["topic-2"],
+    },
+    {
+      candidateIds: candidates,
+      priorTerminallyExcludedIds: ["topic-1", "topic-1"],
+      provenTerminallyExcludedIds: ["topic-2", "topic-3"],
+    },
+    {
+      candidateIds: candidates,
+      priorTerminallyExcludedIds: ["foreign-topic"],
+      provenTerminallyExcludedIds: candidates,
+    },
+  ]) assert.equal(terminalCheckpointClosePartition(corrupt), null);
+  for (const corrupt of [
+    {
+      status: "active",
+      candidateIds: candidates,
+      inlineCompletedIds: [] as string[],
+    },
+    {
+      status: "inline_sealed",
+      candidateIds: candidates,
+      inlineCompletedIds: ["topic-1"],
+      terminallyExcludedIds: ["topic-2"],
+    },
+    {
+      status: "inline_sealed",
+      candidateIds: candidates,
+      inlineCompletedIds: ["topic-1", "topic-2"],
+      terminallyExcludedIds: ["topic-2", "topic-3"],
+    },
+    {
+      status: "inline_sealed",
+      candidateIds: candidates,
+      inlineCompletedIds: [],
+      terminallyExcludedIds: candidates,
+      activatedIds: [] as string[],
+    },
+  ]) assert.equal(terminalCheckpointPreclosePartition(corrupt), null);
+
+  const checkpoints = readFileSync(
+    "convex/planCandidateCheckpoints.ts",
+    "utf8",
+  );
+  const terminalClose = checkpoints.slice(
+    checkpoints.indexOf("export async function terminallyClosePlanCheckpoints"),
+    checkpoints.indexOf("export async function activateTerminalPlanCheckpoints"),
+  );
+  assert.match(terminalClose, /terminalCheckpointPreclosePartition/);
+  assert.match(terminalClose, /priorTerminallyExcludedIds/);
+  assert.match(terminalClose, /terminalCheckpointClosePartition/);
+  assert.match(terminalClose, /inlineCompletedTopicIds: \[\]/);
+  assert.match(terminalClose, /activatedTopicIds: \[\]/);
+  assert.match(terminalClose, /terminal partition is (corrupt|incomplete)/);
+  assert.match(terminalClose, /terminal owner binding is corrupt/);
 });
 
 test("checkpoint staging precedes SERP HTTP without changing legacy seed discovery", () => {

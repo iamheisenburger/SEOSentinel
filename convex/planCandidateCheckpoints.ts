@@ -34,6 +34,8 @@ import {
   planCheckpointCandidateFingerprint,
   planSeedBatchManifestHash,
   planSerpResultFingerprint,
+  terminalCheckpointClosePartition,
+  terminalCheckpointPreclosePartition,
   terminalCheckpointCandidateDecision,
   type PlanCheckpointCandidate,
 } from "./lib/planCandidateCheckpoint";
@@ -1646,35 +1648,100 @@ export async function terminallyClosePlanCheckpoints(
   const checkpoints = await ctx.db.query("plan_candidate_checkpoints")
     .withIndex("by_plan_job", (q) => q.eq("planJobId", jobId))
     .collect();
+  if (checkpoints.length > 1) {
+    throw new Error("Plan checkpoint terminal close found multiple receipts");
+  }
   let closed = 0;
   for (const checkpoint of checkpoints) {
     if (
       checkpoint.siteId !== job.siteId ||
       checkpoint.userId !== site.userId ||
       checkpoint.planJobId !== jobId
-    ) continue;
-    if (!["active", "inline_sealed"].includes(checkpoint.status)) continue;
-    const excluded: Id<"topic_clusters">[] = [];
+    ) throw new Error("Plan checkpoint terminal owner binding is corrupt");
+    if (!["active", "inline_sealed"].includes(checkpoint.status)) {
+      if (![
+        "inline_completed",
+        "activated",
+        "empty",
+        "terminal_blocked",
+      ].includes(checkpoint.status)) {
+        throw new Error("Plan checkpoint terminal status is corrupt");
+      }
+      continue;
+    }
+    if (
+      checkpoint.inlineSuccessCommitNonce !== undefined ||
+      checkpoint.activationScheduledAt !== undefined ||
+      checkpoint.completedAt !== undefined ||
+      checkpoint.activatedAt !== undefined
+    ) throw new Error("Plan checkpoint preclose timestamp is corrupt");
+    const preclose = terminalCheckpointPreclosePartition({
+      status: checkpoint.status,
+      candidateIds: checkpoint.candidateTopicIds,
+      inlineCompletedIds: checkpoint.inlineCompletedTopicIds,
+      terminallyExcludedIds: checkpoint.terminallyExcludedTopicIds,
+      activatedIds: checkpoint.activatedTopicIds,
+    });
+    if (!preclose) {
+      throw new Error("Plan checkpoint preclose partition is corrupt");
+    }
+    const priorExcluded = preclose.priorTerminallyExcludedIds;
+    const priorExcludedKeys = new Set(priorExcluded.map(String));
+    const candidateIdsToExclude = new Set(
+      preclose.candidateIdsToExclude.map(String),
+    );
+    const provenExcluded: Id<"topic_clusters">[] = [];
     for (const topicId of checkpoint.candidateTopicIds) {
       const topic = await ctx.db.get(topicId);
       const binding = topic
         ? exactCheckpointTopicBinding({ topic, checkpoint })
         : null;
       if (
-        topic?.siteId === job.siteId &&
-        topic.planCheckpointId === checkpoint._id &&
-        topic.planCheckpointJobId === jobId &&
-        binding &&
+        !topic || topic.siteId !== job.siteId ||
+        topic.planCheckpointId !== checkpoint._id ||
+        topic.planCheckpointJobId !== jobId || !binding
+      ) throw new Error("Plan checkpoint terminal partition is corrupt");
+      if (priorExcludedKeys.has(String(topicId))) {
+        if (
+          topic.status !== "disqualified" ||
+          !topic.planCheckpointTerminalFailureCode
+        ) {
+          throw new Error("Plan checkpoint prior exclusion is corrupt");
+        }
+      } else if (
+        candidateIdsToExclude.has(String(topicId)) &&
         topic.status === PLAN_CANDIDATE_CHECKPOINT_STATUS
       ) {
         await terminallyExcludeCandidate(ctx, topic, code, timestamp);
-        excluded.push(topicId);
+        provenExcluded.push(topicId);
+      } else if (
+        checkpoint.status !== "active" ||
+        !candidateIdsToExclude.has(String(topicId)) ||
+        topic.status !== "disqualified" ||
+        !topic.planCheckpointTerminalFailureCode
+      ) {
+        throw new Error("Plan checkpoint candidate is not terminally closable");
+      } else {
+        // A candidate may already have been excluded by a recorded SERP
+        // failure while the checkpoint itself was still active.
+        provenExcluded.push(topicId);
       }
+    }
+    const excluded = terminalCheckpointClosePartition({
+      candidateIds: checkpoint.candidateTopicIds,
+      priorTerminallyExcludedIds: priorExcluded,
+      provenTerminallyExcludedIds: provenExcluded,
+    });
+    if (!excluded) {
+      throw new Error("Plan checkpoint terminal partition is incomplete");
     }
     await ctx.db.patch(checkpoint._id, {
       status: "terminal_blocked",
+      inlineCompletedTopicIds: [],
+      activatedTopicIds: [],
       terminallyExcludedTopicIds: excluded,
       completedAt: timestamp,
+      activatedAt: undefined,
       updatedAt: timestamp,
     });
     closed += 1;

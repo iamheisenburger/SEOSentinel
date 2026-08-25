@@ -18,8 +18,17 @@ import {
 } from "../convex/lib/operatorSnapshot.ts";
 import { PLAN_CANDIDATE_CHECKPOINT_VERSION } from
   "../convex/lib/planCandidateCheckpoint.ts";
-import { AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD } from
+import {
+  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  topicPlanCooldownWakeAt,
+} from
   "../convex/lib/planProviderBudget.ts";
+import {
+  CADENCE_BALANCE_RECHECK_MS,
+  CADENCE_PROVIDER_RECHECK_MS,
+  nextUtcDayAt,
+  nextUtcMonthAt,
+} from "../convex/lib/cadenceLiveness.ts";
 
 const autopilot = readFileSync("convex/autopilot.ts", "utf8");
 const operatorProjection = readFileSync(
@@ -109,6 +118,7 @@ test("the entire snapshot projection excludes credentials, free-form content, id
   ];
   const job = operatorPlanJobReceipt({
     _id: "job-1",
+    type: "plan",
     status: "failed",
     createdAt: 10,
     updatedAt: 20,
@@ -146,16 +156,15 @@ test("the entire snapshot projection excludes credentials, free-form content, id
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
     reservationDay: "1970-01-01",
     status: "terminal_blocked",
-    activationScheduledAt: 11,
     completedAt: 12,
     activatedAt: undefined,
     createdAt: 10,
     updatedAt: 12,
     candidateTopicIds: ["topic-1", "topic-2"],
     candidateFingerprints: ["fingerprint-1", "fingerprint-2"],
-    inlineCompletedTopicIds: ["topic-1"],
+    inlineCompletedTopicIds: [],
     activatedTopicIds: [],
-    terminallyExcludedTopicIds: ["topic-2"],
+    terminallyExcludedTopicIds: ["topic-1", "topic-2"],
     userId: secretValues[2],
     seedBatches: [[secretValues[5]]],
   } as never;
@@ -221,9 +230,10 @@ test("the entire snapshot projection excludes credentials, free-form content, id
     siteUserId: secretValues[2],
     job: {
       _id: "job-1",
+      type: "plan",
       status: "failed",
       createdAt: 10,
-      updatedAt: 20,
+      updatedAt: 12,
       workerAttempts: 0,
       rolloutEpoch: 7,
       providerSpendReservationId: "reservation-1",
@@ -269,9 +279,9 @@ test("the entire snapshot projection excludes credentials, free-form content, id
     terminal: true,
   });
   assert.equal(checkpoint.candidateCount, 2);
-  assert.equal(checkpoint.inlineCompletedCount, 1);
+  assert.equal(checkpoint.inlineCompletedCount, 0);
   assert.equal(checkpoint.activatedCount, 0);
-  assert.equal(checkpoint.excludedCount, 1);
+  assert.equal(checkpoint.excludedCount, 2);
   assert.equal(run.continuationAttempt, 2);
   assert.equal(run.topicPlanSettlementAttempt, 3);
   assert.equal(run.trigger, "recovery");
@@ -512,7 +522,6 @@ test("checkpoint result counts require bounded duplicate-free candidate subsets"
     candidateTopicIds: candidateIds,
     candidateFingerprints: ["fingerprint-1", "fingerprint-2"],
     inlineCompletedTopicIds: ["topic-1"],
-    activatedTopicIds: [],
     terminallyExcludedTopicIds: ["topic-2"],
     completedAt: 20,
     createdAt: 10,
@@ -598,7 +607,6 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
     status: "inline_completed",
     inlineSuccessCommitNonce: "completion-1",
     inlineCompletedTopicIds: ["topic-1"],
-    activatedTopicIds: [],
     terminallyExcludedTopicIds: ["topic-2"],
     completedAt: 20,
   };
@@ -616,7 +624,19 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
         status: "activated",
         activatedTopicIds: ["topic-1"],
         terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
         activatedAt: 20,
+      },
+    },
+    {
+      jobStatus: "failed",
+      workerAttempts: 0,
+      checkpoint: {
+        status: "terminal_blocked",
+        inlineCompletedTopicIds: [],
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        completedAt: 20,
       },
     },
     {
@@ -761,11 +781,68 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
       label: "inline checkpoint after a consumed worker attempt",
     },
     {
+      job: { status: "done", workerAttempts: 0, result: inlineJobResult },
+      checkpoint: { ...inlineCheckpoint, activatedTopicIds: [] },
+      label: "inline checkpoint with an impossible activation array",
+    },
+    {
+      job: { status: "done", workerAttempts: 0, result: inlineJobResult },
+      checkpoint: { ...inlineCheckpoint, activationScheduledAt: 20 },
+      label: "inline checkpoint with impossible activation scheduling metadata",
+    },
+    {
+      job: {
+        status: "done",
+        workerAttempts: 0,
+        result: inlineJobResult,
+        updatedAt: 21,
+      },
+      checkpoint: inlineCheckpoint,
+      label: "inline checkpoint terminal time older than the job",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "empty",
+        candidateTopicIds: [],
+        candidateFingerprints: [],
+        inlineCompletedTopicIds: [],
+        completedAt: 10,
+        updatedAt: 10,
+      },
+      label: "empty checkpoint with a terminal result array",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "empty",
+        candidateTopicIds: [],
+        candidateFingerprints: [],
+        inlineSuccessCommitNonce: "impossible",
+        completedAt: 10,
+        updatedAt: 10,
+      },
+      label: "empty checkpoint with impossible inline success metadata",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "empty",
+        candidateTopicIds: [],
+        candidateFingerprints: [],
+        activationScheduledAt: 10,
+        completedAt: 10,
+        updatedAt: 10,
+      },
+      label: "empty checkpoint with impossible activation scheduling metadata",
+    },
+    {
       job: { status: "failed", workerAttempts: 1 },
       checkpoint: {
         status: "activated",
         activatedTopicIds: ["topic-1"],
         terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
         completedAt: 20,
         activatedAt: 20,
       },
@@ -775,8 +852,76 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
       job: { status: "failed", workerAttempts: 1 },
       checkpoint: {
         status: "activated",
+        inlineCompletedTopicIds: [],
         activatedTopicIds: ["topic-1"],
         terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
+        activatedAt: 20,
+      },
+      label: "positive activation with an impossible inline result array",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1, updatedAt: 21 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
+        activatedAt: 20,
+      },
+      label: "activated checkpoint terminal time older than the job",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activatedAt: 20,
+      },
+      label: "positive activation missing its scheduling receipt",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 19,
+        activatedAt: 20,
+      },
+      label: "positive activation with inexact scheduling time",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        activationScheduledAt: 20,
+        activatedAt: 20,
+      },
+      label: "zero activation with impossible scheduling metadata",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
+        inlineSuccessCommitNonce: "impossible",
+        activatedAt: 20,
+      },
+      label: "activation with impossible inline success metadata",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
         activatedAt: 20,
         candidateFingerprints: ["fingerprint-1", "fingerprint-1"],
       },
@@ -792,6 +937,51 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
       },
       label: "terminal time before checkpoint creation",
     },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "terminal_blocked",
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        completedAt: 20,
+      },
+      label: "semantic terminal close missing its inline result array",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0, updatedAt: 21 },
+      checkpoint: {
+        status: "terminal_blocked",
+        inlineCompletedTopicIds: [],
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        completedAt: 20,
+      },
+      label: "semantic terminal close older than the job",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "terminal_blocked",
+        inlineCompletedTopicIds: [],
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        activationScheduledAt: 20,
+        completedAt: 20,
+      },
+      label: "semantic terminal close with impossible scheduling metadata",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "terminal_blocked",
+        inlineCompletedTopicIds: [],
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        inlineSuccessCommitNonce: "impossible",
+        completedAt: 20,
+      },
+      label: "semantic terminal close with impossible inline success metadata",
+    },
   ]) {
     assert.equal(
       project(contradiction.job, contradiction.checkpoint).checkpointState,
@@ -799,7 +989,7 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
       contradiction.label,
     );
   }
-  for (const candidateCapacity of [undefined, 0, 3, 2.5]) {
+  for (const candidateCapacity of [undefined, 0, 1, 3, 2.5]) {
     assert.equal(
       project(
         { status: "failed", workerAttempts: 1 },
@@ -807,6 +997,7 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
           status: "activated",
           activatedTopicIds: ["topic-1"],
           terminallyExcludedTopicIds: ["topic-2"],
+          activationScheduledAt: 20,
           activatedAt: 20,
           candidateCapacity,
         },
@@ -853,6 +1044,7 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
         status: "activated",
         activatedTopicIds: ["topic-1"],
         terminallyExcludedTopicIds: ["topic-2"],
+        activationScheduledAt: 20,
         activatedAt: 20,
       },
     ).checkpointState,
@@ -1094,6 +1286,361 @@ test("released-before-paid-work rejects attempts, success, and validated checkpo
   };
   assert.equal(project({}, [checkpoint]), "invalid");
   assert.equal(project({}, [{ ...checkpoint, status: "active" }]), "invalid");
+});
+
+test("cadence failure projection accepts only exact terminal writer receipts", () => {
+  const recordedAt = Date.UTC(2026, 7, 25, 12, 0, 0);
+  const createdAt = recordedAt - 1_000;
+  const automaticPayload = {
+    reason: "topic_buffer_replenishment",
+    planCheckpointModeVersion: 1,
+    planYieldTarget: {
+      version: 1,
+      targetBufferShortfall: 1,
+      verifiedHorizonShortfall: 1,
+      articleQuotaHeadroom: 1,
+      requiredVerifiedYield: 1,
+    },
+  };
+  const baseJob = {
+    _id: "job-cadence",
+    type: "plan",
+    status: "failed",
+    createdAt,
+    updatedAt: recordedAt,
+    workerAttempts: 0,
+  };
+  const failure = (
+    category: string,
+    code: string,
+    retryable: boolean,
+    terminal: boolean,
+    eligibleAt?: number,
+  ) => ({
+    version: 1,
+    category,
+    code,
+    retryable,
+    terminal,
+    eligibleAt,
+    recordedAt,
+  });
+  const recheckAt = recordedAt + CADENCE_PROVIDER_RECHECK_MS;
+  const accepted = [
+    {
+      receipt: failure(
+        "semantic_zero_yield",
+        "strict_zero_yield",
+        false,
+        true,
+      ),
+      payload: { manual: true },
+      error: "No topic survived live SERP evidence",
+    },
+    {
+      receipt: failure(
+        "semantic_zero_yield",
+        "strict_zero_yield",
+        false,
+        true,
+        topicPlanCooldownWakeAt(createdAt)!,
+      ),
+      payload: automaticPayload,
+      error: "No topic survived live SERP evidence",
+    },
+    ...[
+      "provider_preflight_unavailable",
+      "provider_balance_preflight_unavailable",
+      "transient_provider_failure",
+      "one_setup_planning_context_superseded_before_execution",
+    ].map((code) => ({
+      receipt: failure(
+        "transient_provider",
+        code,
+        true,
+        false,
+        recheckAt,
+      ),
+      error: code === "provider_balance_preflight_unavailable"
+        ? "Provider account funding preflight blocked paid topic planning."
+        : code === "one_setup_planning_context_superseded_before_execution"
+          ? "The saved setup planning context changed before paid topic planning."
+          : code === "provider_preflight_unavailable"
+            ? "Provider preflight unavailable"
+            : "network timeout",
+    })),
+    {
+      receipt: failure(
+        "transient_provider",
+        "transient_provider_failure",
+        false,
+        true,
+      ),
+      workerAttempts: 1,
+      error: "Worker failure exhausted after 1 attempts: network timeout",
+    },
+    {
+      receipt: failure(
+        "provider_funding",
+        "provider_balance_insufficient",
+        false,
+        true,
+        recordedAt + CADENCE_BALANCE_RECHECK_MS,
+      ),
+      error: "insufficient balance",
+    },
+    {
+      receipt: failure(
+        "provider_funding",
+        "provider_balance_insufficient",
+        false,
+        true,
+        recordedAt + CADENCE_BALANCE_RECHECK_MS,
+      ),
+      error: "Provider account funding preflight blocked paid topic planning.",
+    },
+    ...[
+      "provider_reservation_day_expired",
+      "plan_reservation_day_expired_before_execution",
+    ].map((code) => ({
+      receipt: failure(
+        "budget_window",
+        code,
+        false,
+        true,
+        nextUtcDayAt(recordedAt)!,
+      ),
+      error: code === "plan_reservation_day_expired_before_execution"
+        ? "The plan reservation expired before its first paid execution."
+        : "reservation expired",
+    })),
+    {
+      receipt: failure(
+        "monthly_quota",
+        "monthly_generation_quota",
+        false,
+        true,
+        nextUtcMonthAt(recordedAt)!,
+      ),
+      error: "monthly generation quota",
+    },
+    {
+      receipt: failure(
+        "readiness",
+        "tenant_readiness_blocked",
+        false,
+        true,
+      ),
+      error: "tenant readiness blocked",
+    },
+    {
+      receipt: failure(
+        "entitlement",
+        "tenant_entitlement_blocked",
+        false,
+        true,
+      ),
+      error: "tenant entitlement blocked",
+    },
+    {
+      receipt: failure(
+        "terminal_invariant",
+        "terminal_planner_invariant",
+        false,
+        true,
+      ),
+      error: "unrecognized permanent planner fault",
+    },
+  ];
+  for (const row of accepted) {
+    const projection = operatorPlanJobReceipt({
+      ...baseJob,
+      payload: "payload" in row ? row.payload : undefined,
+      workerAttempts: "workerAttempts" in row
+        ? row.workerAttempts
+        : baseJob.workerAttempts,
+      error: row.error,
+      cadenceFailure: row.receipt,
+    } as never, "current");
+    assert.equal(
+      projection.cadenceFailureState,
+      "recorded",
+      `${row.receipt.category}/${row.receipt.code}`,
+    );
+    assert.equal(projection.cadenceFailure?.category, row.receipt.category);
+    assert.equal(projection.cadenceFailure?.code, row.receipt.code);
+    assert.equal(projection.cadenceFailure?.terminal, row.receipt.terminal);
+    assert.equal(
+      projection.cadenceFailure?.eligibleAt,
+      row.receipt.eligibleAt,
+    );
+  }
+
+  const longPendingCreatedAt = recordedAt - (25 * 60 * 60 * 1_000);
+  const elapsedSemanticCooldown = topicPlanCooldownWakeAt(
+    longPendingCreatedAt,
+  )!;
+  assert.ok(elapsedSemanticCooldown < recordedAt);
+  assert.equal(operatorPlanJobReceipt({
+    ...baseJob,
+    createdAt: longPendingCreatedAt,
+    payload: automaticPayload,
+    error: "No topic survived live SERP evidence",
+    cadenceFailure: {
+      ...failure(
+        "semantic_zero_yield",
+        "strict_zero_yield",
+        false,
+        true,
+        elapsedSemanticCooldown,
+      ),
+    },
+  } as never, "current").cadenceFailureState, "recorded");
+
+  const funding = failure(
+    "provider_funding",
+    "provider_balance_insufficient",
+    false,
+    true,
+    recordedAt + CADENCE_BALANCE_RECHECK_MS,
+  );
+  const project = (
+    jobPatch: Record<string, unknown>,
+    failurePatch: Record<string, unknown>,
+  ) => operatorPlanJobReceipt({
+    ...baseJob,
+    error: "insufficient balance",
+    ...jobPatch,
+    cadenceFailure: { ...funding, ...failurePatch },
+  } as never, "current").cadenceFailureState;
+  for (const [jobPatch, failurePatch, label] of [
+    [{ status: "done" }, {}, "done job"],
+    [{ type: "article" }, {}, "non-plan job"],
+    [{}, { version: 2 }, "wrong version"],
+    [{}, { recordedAt: recordedAt - 1 }, "stale recordedAt"],
+    [{}, { recordedAt: recordedAt + 1 }, "future recordedAt"],
+    [{}, { code: "terminal_planner_invariant" }, "category/code mismatch"],
+    [{}, { retryable: true }, "funding marked retryable"],
+    [{}, { terminal: false }, "funding marked nonterminal"],
+    [{}, { eligibleAt: undefined }, "missing funding deadline"],
+    [{}, { eligibleAt: recordedAt }, "unordered funding deadline"],
+    [{}, { eligibleAt: funding.eligibleAt! + 1 }, "inexact funding deadline"],
+  ] as const) {
+    assert.equal(project(jobPatch, failurePatch), "invalid", label);
+  }
+
+  const directTransient = failure(
+    "transient_provider",
+    "transient_provider_failure",
+    true,
+    false,
+    recheckAt,
+  );
+  for (const patch of [
+    { eligibleAt: undefined },
+    { eligibleAt: recheckAt + 1 },
+    { retryable: false },
+    { terminal: true },
+  ]) {
+    assert.equal(operatorPlanJobReceipt({
+      ...baseJob,
+      error: "network timeout",
+      cadenceFailure: { ...directTransient, ...patch },
+    } as never, "current").cadenceFailureState, "invalid");
+  }
+  assert.equal(operatorPlanJobReceipt({
+    ...baseJob,
+    workerAttempts: 1,
+    error: "Worker failure exhausted after 1 attempts: network timeout",
+    cadenceFailure: {
+      ...failure(
+        "transient_provider",
+        "transient_provider_failure",
+        false,
+        true,
+      ),
+      eligibleAt: recheckAt,
+    },
+  } as never, "current").cadenceFailureState, "invalid");
+  for (const jobPatch of [
+    {
+      workerAttempts: 0,
+      error: "Worker failure exhausted after 0 attempts: network timeout",
+    },
+    {
+      workerAttempts: undefined,
+      error: "Worker failure exhausted after undefined attempts: network timeout",
+    },
+    {
+      workerAttempts: 1,
+      error: "Worker failure exhausted after 2 attempts: network timeout",
+    },
+    {
+      workerAttempts: 1,
+      error: "Worker failure exhausted after 1 attempts: insufficient balance",
+    },
+  ]) {
+    assert.equal(operatorPlanJobReceipt({
+      ...baseJob,
+      ...jobPatch,
+      cadenceFailure: failure(
+        "transient_provider",
+        "transient_provider_failure",
+        false,
+        true,
+      ),
+    } as never, "current").cadenceFailureState, "invalid");
+  }
+  assert.equal(operatorPlanJobReceipt({
+    ...baseJob,
+    error: "No topic survived live SERP evidence",
+    cadenceFailure: failure(
+      "terminal_invariant",
+      "terminal_planner_invariant",
+      false,
+      true,
+    ),
+  } as never, "current").cadenceFailureState, "invalid");
+  assert.equal(operatorPlanJobReceipt({
+    ...baseJob,
+    error: "provider preflight unavailable",
+    cadenceFailure: failure(
+      "transient_provider",
+      "provider_balance_preflight_unavailable",
+      true,
+      false,
+      recheckAt,
+    ),
+  } as never, "current").cadenceFailureState, "invalid");
+  assert.equal(operatorPlanJobReceipt({
+    ...baseJob,
+    payload: automaticPayload,
+    error: "No topic survived live SERP evidence",
+    cadenceFailure: failure(
+      "semantic_zero_yield",
+      "strict_zero_yield",
+      false,
+      true,
+    ),
+  } as never, "current").cadenceFailureState, "invalid");
+  assert.equal(operatorPlanJobReceipt({
+    ...baseJob,
+    payload: { manual: true },
+    error: "No topic survived live SERP evidence",
+    cadenceFailure: failure(
+      "semantic_zero_yield",
+      "strict_zero_yield",
+      false,
+      true,
+      topicPlanCooldownWakeAt(createdAt)!,
+    ),
+  } as never, "current").cadenceFailureState, "invalid");
+  assert.throws(() => operatorPlanJobReceipt({
+    ...baseJob,
+    status: "pending",
+    error: "insufficient balance",
+    cadenceFailure: funding,
+  } as never, "current"), /terminal job/);
 });
 
 test("credential-shaped values are never echoed by string projections", () => {

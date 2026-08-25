@@ -8,7 +8,16 @@ import {
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
   TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
   automaticSingleExecutionCheckpointTargetFromPayload,
+  topicPlanCooldownWakeAt,
 } from "./planProviderBudget.ts";
+import {
+  CADENCE_BALANCE_RECHECK_MS,
+  CADENCE_LIVENESS_VERSION,
+  CADENCE_PROVIDER_RECHECK_MS,
+  classifyCadenceFailure,
+  nextUtcDayAt,
+  nextUtcMonthAt,
+} from "./cadenceLiveness.ts";
 
 export const OPERATOR_PLAN_RECEIPT_LIMIT = 8;
 export const OPERATOR_PLAN_CHECKPOINT_READ_LIMIT = 2;
@@ -202,6 +211,140 @@ function safeOperatorCode(
   return allowed.has(value) ? value : "unclassified";
 }
 
+type SafeCadenceFailure = {
+  category: string;
+  code: string;
+  eligibleAt?: number;
+  terminal: boolean;
+};
+
+/** Mirror the finite set of receipts emitted by the three terminal plan
+ * writers. A recognized category/code is not sufficient: timing and
+ * retryability must describe an actual writer branch on this exact job. */
+function operatorCadenceFailureReceipt(
+  job: Doc<"jobs">,
+): SafeCadenceFailure | null {
+  const failure = job.cadenceFailure;
+  if (!failure) return null;
+  const category = failure.category;
+  const code = failure.code;
+  const allowedFailureCodes = CADENCE_FAILURE_CODES.get(category);
+  if (
+    job.type !== "plan" || job.status !== "failed" ||
+    typeof job.error !== "string" ||
+    failure.version !== CADENCE_LIVENESS_VERSION ||
+    !CADENCE_FAILURE_CATEGORIES.has(category) ||
+    !allowedFailureCodes?.has(code) ||
+    !Number.isSafeInteger(job.createdAt) || job.createdAt < 0 ||
+    !Number.isSafeInteger(job.updatedAt) || job.updatedAt < job.createdAt ||
+    !Number.isSafeInteger(failure.recordedAt) ||
+    failure.recordedAt !== job.updatedAt
+  ) return null;
+
+  const exactEligibleAt = (
+    expected: number | undefined,
+    requireFuture = true,
+  ): boolean =>
+    expected === undefined
+      ? failure.eligibleAt === undefined
+      : Number.isSafeInteger(expected) &&
+        (!requireFuture || expected > failure.recordedAt) &&
+        failure.eligibleAt === expected;
+  let expectedEligibleAt: number | undefined;
+  let retryable = false;
+  let terminal = true;
+
+  switch (category) {
+    case "semantic_zero_yield": {
+      const payload = job.payload && typeof job.payload === "object" &&
+          !Array.isArray(job.payload)
+        ? job.payload as Record<string, unknown>
+        : {};
+      const automaticCheckpointPlan = payload.manual !== true &&
+        typeof payload.reason === "string" &&
+        payload.reason.startsWith("topic_") &&
+        automaticSingleExecutionCheckpointTargetFromPayload(job.payload) !==
+          null;
+      expectedEligibleAt = automaticCheckpointPlan
+        ? topicPlanCooldownWakeAt(job.createdAt) ?? undefined
+        : undefined;
+      break;
+    }
+    case "transient_provider":
+      if (
+        code === "transient_provider_failure" &&
+        failure.retryable === false && failure.terminal === true &&
+        failure.eligibleAt === undefined
+      ) {
+        // markRetryableFailure exhausts the job's bounded attempts and clears
+        // its same-job retry deadline.
+        if (
+          !Number.isSafeInteger(job.workerAttempts) ||
+          (job.workerAttempts ?? 0) < 1
+        ) return null;
+        const prefix = `Worker failure exhausted after ${job.workerAttempts} attempts: `;
+        if (!job.error.startsWith(prefix)) return null;
+        const classified = classifyCadenceFailure({
+          message: job.error.slice(prefix.length),
+          now: failure.recordedAt,
+          retryAt: failure.recordedAt + CADENCE_PROVIDER_RECHECK_MS,
+          explicitCode: "transient_provider_failure",
+        });
+        if (
+          classified.category !== category || classified.code !== code
+        ) return null;
+        return { category, code, eligibleAt: undefined, terminal: true };
+      }
+      retryable = true;
+      terminal = false;
+      expectedEligibleAt = failure.recordedAt + CADENCE_PROVIDER_RECHECK_MS;
+      break;
+    case "provider_funding":
+      expectedEligibleAt = failure.recordedAt + CADENCE_BALANCE_RECHECK_MS;
+      break;
+    case "budget_window":
+      expectedEligibleAt = nextUtcDayAt(failure.recordedAt);
+      break;
+    case "monthly_quota":
+      expectedEligibleAt = nextUtcMonthAt(failure.recordedAt);
+      break;
+    case "readiness":
+    case "entitlement":
+    case "terminal_invariant":
+      expectedEligibleAt = undefined;
+      break;
+    default:
+      return null;
+  }
+  if (
+    failure.retryable !== retryable || failure.terminal !== terminal ||
+    !exactEligibleAt(
+      expectedEligibleAt,
+      category !== "semantic_zero_yield",
+    )
+  ) return null;
+  const exactAbortError = code ===
+      "provider_balance_preflight_unavailable"
+    ? "Provider account funding preflight blocked paid topic planning."
+    : code === "plan_reservation_day_expired_before_execution"
+      ? "The plan reservation expired before its first paid execution."
+      : code === "one_setup_planning_context_superseded_before_execution"
+        ? "The saved setup planning context changed before paid topic planning."
+        : null;
+  if (exactAbortError !== null) {
+    if (job.error !== exactAbortError) return null;
+  } else {
+    const classified = classifyCadenceFailure({
+      message: job.error,
+      now: failure.recordedAt,
+    });
+    if (classified.category !== category || classified.code !== code) {
+      return null;
+    }
+  }
+  return { category, code, eligibleAt: failure.eligibleAt, terminal };
+}
+
 export function latestTerminalPlanJobs<
   T extends { createdAt: number; _creationTime: number },
 >(done: readonly T[], failed: readonly T[]): T[] {
@@ -222,21 +365,7 @@ export function operatorPlanJobReceipt(
   if (job.status !== "done" && job.status !== "failed") {
     throw new Error("Operator plan receipts require a terminal job");
   }
-  const category = job.cadenceFailure?.category;
-  const code = job.cadenceFailure?.code;
-  const allowedFailureCodes = category
-    ? CADENCE_FAILURE_CODES.get(category)
-    : undefined;
-  const safeFailure = job.cadenceFailure &&
-      category && CADENCE_FAILURE_CATEGORIES.has(category) &&
-      code && allowedFailureCodes?.has(code)
-    ? {
-        category,
-        code,
-        eligibleAt: job.cadenceFailure.eligibleAt,
-        terminal: job.cadenceFailure.terminal,
-      }
-    : undefined;
+  const safeFailure = operatorCadenceFailureReceipt(job) ?? undefined;
   const persistedTopicCount = operatorPersistedTopicCountReceipt(job);
   return {
     jobId: job._id,
@@ -445,6 +574,13 @@ export function operatorTerminalPlanReceipt(args: {
       checkpoint.terminallyExcludedTopicIds,
     ),
   );
+  const fullyExcludedPartitionMatches = Boolean(
+    checkpoint && operatorCheckpointIdsExactlyPartition(
+      checkpoint.candidateTopicIds,
+      [],
+      checkpoint.terminallyExcludedTopicIds,
+    ),
+  );
   const providerReservationPeriod = utcProviderReservationPeriod(
     args.job.createdAt,
   );
@@ -455,7 +591,10 @@ export function operatorTerminalPlanReceipt(args: {
           ? checkpoint.status === "inline_completed" &&
             args.job.workerAttempts === 0 &&
             completedAtMatchesCheckpoint &&
+            checkpoint.updatedAt === args.job.updatedAt &&
             checkpoint.activatedAt === undefined &&
+            checkpoint.activationScheduledAt === undefined &&
+            checkpoint.activatedTopicIds === undefined &&
             candidateCount > 0 &&
             inlineCompletedCount > 0 &&
             activatedCount === 0 &&
@@ -472,6 +611,11 @@ export function operatorTerminalPlanReceipt(args: {
                 completedAtMatchesCheckpoint &&
                 checkpoint.completedAt === checkpoint.createdAt &&
                 checkpoint.activatedAt === undefined &&
+                checkpoint.activationScheduledAt === undefined &&
+                checkpoint.inlineSuccessCommitNonce === undefined &&
+                checkpoint.inlineCompletedTopicIds === undefined &&
+                checkpoint.activatedTopicIds === undefined &&
+                checkpoint.terminallyExcludedTopicIds === undefined &&
                 candidateCount === 0 &&
                 inlineCompletedCount === 0 &&
                 activatedCount === 0 &&
@@ -479,21 +623,38 @@ export function operatorTerminalPlanReceipt(args: {
               : checkpoint.status === "activated"
                 ? args.job.workerAttempts === 1 &&
                   activatedAtMatchesCheckpoint &&
+                  checkpoint.updatedAt === args.job.updatedAt &&
                   checkpoint.completedAt === undefined &&
+                  checkpoint.inlineSuccessCommitNonce === undefined &&
                   candidateCount > 0 &&
+                  (activatedCount === 0 ||
+                    checkpoint.inlineCompletedTopicIds === undefined) &&
+                  (activatedCount > 0
+                    ? checkpoint.activationScheduledAt ===
+                      checkpoint.activatedAt
+                    : checkpoint.activationScheduledAt === undefined) &&
                   activatedPartitionMatches
                 : checkpoint.status === "terminal_blocked" &&
                   candidateCount > 0 &&
                   activatedCount === 0 &&
+                  checkpoint.activationScheduledAt === undefined &&
+                  checkpoint.inlineSuccessCommitNonce === undefined &&
                   checkpoint.terminallyExcludedTopicIds !== undefined &&
                   (
                     (
                       completedAtMatchesCheckpoint &&
+                      checkpoint.updatedAt === args.job.updatedAt &&
                       checkpoint.activatedAt === undefined &&
-                      args.job.workerAttempts === 0
+                      args.job.workerAttempts === 0 &&
+                      checkpoint.inlineCompletedTopicIds !== undefined &&
+                      checkpoint.inlineCompletedTopicIds.length === 0 &&
+                      checkpoint.activatedTopicIds !== undefined &&
+                      checkpoint.activatedTopicIds.length === 0 &&
+                      fullyExcludedPartitionMatches
                     ) ||
                     (
                       activatedAtMatchesCheckpoint &&
+                      checkpoint.updatedAt === args.job.updatedAt &&
                       checkpoint.completedAt === undefined &&
                       args.job.workerAttempts === 1 &&
                       activatedPartitionMatches
@@ -541,9 +702,8 @@ export function operatorTerminalPlanReceipt(args: {
       checkpoint.requiredVerifiedYield ===
         checkpointTarget.requiredVerifiedYield &&
       Number.isInteger(checkpoint.candidateCapacity) &&
-      checkpoint.candidateCapacity >= 1 &&
-      checkpoint.candidateCapacity <= checkpoint.requiredVerifiedYield &&
-      checkpoint.candidateCapacity <= checkpointTarget.requiredVerifiedYield &&
+      checkpoint.candidateCapacity === checkpoint.requiredVerifiedYield &&
+      checkpoint.candidateCapacity === checkpointTarget.requiredVerifiedYield &&
       checkpoint.candidateTopicIds.length <= checkpoint.candidateCapacity &&
       operatorCheckpointStatusAllowed(checkpoint.status) &&
       checkpointTerminalStateMatchesJob

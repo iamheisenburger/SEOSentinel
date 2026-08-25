@@ -4,6 +4,97 @@ export const PLAN_CANDIDATE_CHECKPOINT_VERSION = 1;
 export const PLAN_CANDIDATE_CHECKPOINT_STATUS = "plan_checkpoint";
 export const PLAN_CANDIDATE_CHECKPOINT_LIMIT = 10;
 
+/**
+ * Reconcile a terminal close without losing exclusions already sealed by the
+ * inline evaluator. The writer supplies the rows it just proved terminal; the
+ * returned list is always the immutable candidate order and therefore cannot
+ * turn a partial/corrupt close into a plausible count receipt.
+ */
+export function terminalCheckpointClosePartition<T extends string>(args: {
+  candidateIds: readonly T[];
+  priorTerminallyExcludedIds?: readonly T[];
+  provenTerminallyExcludedIds: readonly T[];
+}): T[] | null {
+  const candidates = new Set<T>(args.candidateIds);
+  if (
+    args.candidateIds.length === 0 ||
+    args.candidateIds.length > PLAN_CANDIDATE_CHECKPOINT_LIMIT ||
+    candidates.size !== args.candidateIds.length
+  ) return null;
+
+  const prior = args.priorTerminallyExcludedIds ?? [];
+  const proven = args.provenTerminallyExcludedIds;
+  const priorSet = new Set<T>(prior);
+  const provenSet = new Set<T>(proven);
+  if (
+    priorSet.size !== prior.length ||
+    provenSet.size !== proven.length ||
+    prior.some((id) => !candidates.has(id)) ||
+    proven.some((id) => !candidates.has(id))
+  ) return null;
+
+  const terminal = new Set<T>([...prior, ...proven]);
+  if (
+    terminal.size !== args.candidateIds.length ||
+    args.candidateIds.some((id) => !terminal.has(id))
+  ) return null;
+  return [...args.candidateIds];
+}
+
+/** Validate the only two nonterminal checkpoint shapes a terminal close may
+ * consume. In particular, an inline seal must already contain the exact
+ * disjoint partition written by completeInline; terminal cleanup may not
+ * manufacture missing receipt metadata from topic tombstones. */
+export function terminalCheckpointPreclosePartition<T extends string>(args: {
+  status: string;
+  candidateIds: readonly T[];
+  inlineCompletedIds?: readonly T[];
+  terminallyExcludedIds?: readonly T[];
+  activatedIds?: readonly T[];
+}): {
+  priorTerminallyExcludedIds: T[];
+  candidateIdsToExclude: T[];
+} | null {
+  const candidates = new Set<T>(args.candidateIds);
+  if (
+    args.candidateIds.length === 0 ||
+    args.candidateIds.length > PLAN_CANDIDATE_CHECKPOINT_LIMIT ||
+    candidates.size !== args.candidateIds.length
+  ) return null;
+  if (args.status === "active") {
+    if (
+      args.inlineCompletedIds !== undefined ||
+      args.terminallyExcludedIds !== undefined ||
+      args.activatedIds !== undefined
+    ) return null;
+    return {
+      priorTerminallyExcludedIds: [],
+      candidateIdsToExclude: [...args.candidateIds],
+    };
+  }
+  if (
+    args.status !== "inline_sealed" ||
+    args.inlineCompletedIds === undefined ||
+    args.terminallyExcludedIds === undefined ||
+    args.activatedIds !== undefined
+  ) return null;
+  const completed = new Set<T>(args.inlineCompletedIds);
+  const excluded = new Set<T>(args.terminallyExcludedIds);
+  if (
+    completed.size !== args.inlineCompletedIds.length ||
+    excluded.size !== args.terminallyExcludedIds.length ||
+    args.inlineCompletedIds.some((id) => !candidates.has(id)) ||
+    args.terminallyExcludedIds.some((id) => !candidates.has(id)) ||
+    args.inlineCompletedIds.some((id) => excluded.has(id)) ||
+    completed.size + excluded.size !== args.candidateIds.length ||
+    args.candidateIds.some((id) => !completed.has(id) && !excluded.has(id))
+  ) return null;
+  return {
+    priorTerminallyExcludedIds: [...args.terminallyExcludedIds],
+    candidateIdsToExclude: args.candidateIds.filter((id) => completed.has(id)),
+  };
+}
+
 export type PlanCheckpointTopicFence = {
   status?: string;
   planCheckpointId?: unknown;
