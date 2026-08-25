@@ -19,6 +19,14 @@ import {
 } from "./lib/planSiteAllowance";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { outreachMessageOwnerMatches } from "./lib/outreachAutonomy";
+import {
+  articleMatchesCurrentDomain,
+  normalizeCanonicalDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteGscConnectionRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./lib/siteDomainBinding";
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -33,6 +41,34 @@ async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   ) {
     throw new Error("Not authorized to access this site's authority opportunities");
   }
+  return site;
+}
+
+function authorityOpportunityMatchesCurrentDomain(
+  site: Doc<"sites">,
+  opportunity: Doc<"seo_authority_opportunities">,
+): boolean {
+  if (
+    opportunity.canonicalDomain !== undefined ||
+    opportunity.domainRevision !== undefined
+  ) {
+    return normalizeCanonicalDomain(opportunity.canonicalDomain ?? "") ===
+        siteCanonicalDomain(site) &&
+      opportunity.domainRevision === siteCanonicalDomainRevision(site);
+  }
+  return siteUsesLegacyDomainReceipts(site);
+}
+
+function authorityRunMatchesCurrentDomain(
+  site: Doc<"sites">,
+  run: Doc<"seo_authority_runs">,
+): boolean {
+  if (run.canonicalDomain !== undefined || run.domainRevision !== undefined) {
+    return normalizeCanonicalDomain(run.canonicalDomain ?? "") ===
+        siteCanonicalDomain(site) &&
+      run.domainRevision === siteCanonicalDomainRevision(site);
+  }
+  return siteUsesLegacyDomainReceipts(site);
 }
 
 function safeTrigger(value: string): AuthorityDiscoveryTrigger {
@@ -55,6 +91,8 @@ export const reserveDiscoveryRun = internalMutation({
     articleId: v.optional(v.id("articles")),
     trigger: v.string(),
     ownerUserId: v.optional(v.string()),
+    growthActionFingerprint: v.optional(v.string()),
+    growthMeasurementKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const trigger = safeTrigger(args.trigger);
@@ -69,9 +107,18 @@ export const reserveDiscoveryRun = internalMutation({
     if (trigger === "owner" && args.ownerUserId !== site.userId) {
       throw new Error("Authority discovery reservation crossed an owner boundary");
     }
+    const canonicalDomain = siteCanonicalDomain(site);
+    const domainRevision = siteCanonicalDomainRevision(site);
+    if (!canonicalDomain) {
+      return { allowed: false as const, reason: "site_unavailable" as const };
+    }
     if (args.articleId) {
       const article = await ctx.db.get(args.articleId);
-      if (!article || article.siteId !== args.siteId) {
+      if (
+        !article ||
+        article.siteId !== args.siteId ||
+        !articleMatchesCurrentDomain(site, article)
+      ) {
         throw new Error("Authority discovery reservation crossed an article boundary");
       }
     }
@@ -84,6 +131,36 @@ export const reserveDiscoveryRun = internalMutation({
       )
     ) {
       return { allowed: false as const, reason: "rollout_ineligible" as const };
+    }
+    if (trigger === "growth") {
+      const action = args.growthActionFingerprint
+        ? await ctx.db
+          .query("seo_growth_actions")
+          .withIndex("by_fingerprint", (q) =>
+            q.eq("fingerprint", args.growthActionFingerprint!)
+          )
+          .unique()
+        : null;
+      if (
+        !action ||
+        action.siteId !== args.siteId ||
+        action.articleId !== args.articleId ||
+        action.status !== "open" ||
+        !args.growthMeasurementKey ||
+        action.measurementKey !== args.growthMeasurementKey ||
+        action.measurementCanonicalDomain !== canonicalDomain ||
+        action.measurementDomainRevision !== domainRevision ||
+        action.measurementGscConnectionRevision !==
+          siteGscConnectionRevision(site) ||
+        action.measurementGscProperty !== site.gscProperty ||
+        action.measurementGscSyncEpoch !== site.gscSyncEpoch ||
+        action.measurementGscDataThrough !== site.gscDataThrough
+      ) {
+        return {
+          allowed: false as const,
+          reason: "growth_measurement_superseded" as const,
+        };
+      }
     }
 
     const policy = authorityDiscoveryPolicyFor({
@@ -98,12 +175,12 @@ export const reserveDiscoveryRun = internalMutation({
     }
 
     const timestamp = Date.now();
-    const running = await ctx.db
+    const running = (await ctx.db
       .query("seo_authority_runs")
       .withIndex("by_site_status", (q) =>
         q.eq("siteId", args.siteId).eq("status", "running")
       )
-      .collect();
+      .collect()).filter((run) => authorityRunMatchesCurrentDomain(site, run));
     let hasActiveReservation = false;
     for (const run of running) {
       if (run.expiresAt > timestamp) {
@@ -125,8 +202,8 @@ export const reserveDiscoveryRun = internalMutation({
         .query("seo_authority_runs")
         .withIndex("by_site_created", (q) => q.eq("siteId", args.siteId))
         .order("desc")
-        .take(20)
-    );
+        .take(100)
+    ).filter((run) => authorityRunMatchesCurrentDomain(site, run)).slice(0, 20);
     // A provider-account preflight performs no paid work and releases the
     // shared reservation. It therefore must not burn the tenant's 24-hour or
     // 30-day discovery allowance. The shared ledger applies a short global
@@ -159,6 +236,10 @@ export const reserveDiscoveryRun = internalMutation({
     const runId = await ctx.db.insert("seo_authority_runs", {
       siteId: args.siteId,
       userId: site.userId,
+      canonicalDomain,
+      domainRevision,
+      growthActionFingerprint: args.growthActionFingerprint,
+      growthMeasurementKey: args.growthMeasurementKey,
       articleId: args.articleId,
       trigger,
       mode: policy.mode,
@@ -180,6 +261,8 @@ export const reserveDiscoveryRun = internalMutation({
       allowed: true as const,
       runId,
       policy,
+      canonicalDomain,
+      domainRevision,
       providerSpendReservationId: shared.reservationId,
     };
   },
@@ -283,6 +366,7 @@ export const settleDiscoveryRun = internalMutation({
 export const upsertVerifiedBatch = internalMutation({
   args: {
     siteId: v.id("sites"),
+    runId: v.id("seo_authority_runs"),
     opportunities: v.array(v.object({
       articleId: v.optional(v.id("articles")),
       fingerprint: v.string(),
@@ -298,17 +382,60 @@ export const upsertVerifiedBatch = internalMutation({
       verifiedAt: v.number(),
     })),
   },
-  handler: async (ctx, { siteId, opportunities }) => {
-    const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site)) {
+  handler: async (ctx, { siteId, runId, opportunities }) => {
+    const [site, run] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db.get(runId),
+    ]);
+    const canonicalDomain = site ? siteCanonicalDomain(site) : null;
+    const domainRevision = site ? siteCanonicalDomainRevision(site) : -1;
+    if (
+      !siteExecutionActive(site) ||
+      !canonicalDomain ||
+      !run ||
+      run.siteId !== siteId ||
+      run.status !== "running" ||
+      normalizeCanonicalDomain(run.canonicalDomain ?? "") !== canonicalDomain ||
+      run.domainRevision !== domainRevision
+    ) {
       throw new Error("Site not found");
+    }
+    if (run.trigger === "growth") {
+      const action = run.growthActionFingerprint
+        ? await ctx.db
+          .query("seo_growth_actions")
+          .withIndex("by_fingerprint", (q) =>
+            q.eq("fingerprint", run.growthActionFingerprint!)
+          )
+          .unique()
+        : null;
+      if (
+        !action ||
+        action.siteId !== siteId ||
+        action.articleId !== run.articleId ||
+        action.status !== "open" ||
+        action.measurementKey !== run.growthMeasurementKey ||
+        action.measurementCanonicalDomain !== canonicalDomain ||
+        action.measurementDomainRevision !== domainRevision ||
+        action.measurementGscConnectionRevision !==
+          siteGscConnectionRevision(site) ||
+        action.measurementGscProperty !== site.gscProperty ||
+        action.measurementGscSyncEpoch !== site.gscSyncEpoch ||
+        action.measurementGscDataThrough !== site.gscDataThrough
+      ) {
+        throw new Error("Authority discovery growth measurement was superseded");
+      }
     }
     let inserted = 0;
     let updated = 0;
     for (const opportunity of opportunities) {
       if (opportunity.articleId) {
         const article = await ctx.db.get(opportunity.articleId);
-        if (!article || article.siteId !== siteId) {
+        if (
+          !article ||
+          article.siteId !== siteId ||
+          !articleMatchesCurrentDomain(site, article)
+        ) {
           throw new Error("Authority opportunity crossed a tenant boundary");
         }
       }
@@ -321,11 +448,16 @@ export const upsertVerifiedBatch = internalMutation({
       const patch = {
         ...opportunity,
         siteId,
+        canonicalDomain,
+        domainRevision,
         lastCheckedAt: opportunity.verifiedAt,
         updatedAt: opportunity.verifiedAt,
       };
       if (existing) {
-        if (existing.siteId !== siteId) {
+        if (
+          existing.siteId !== siteId ||
+          !authorityOpportunityMatchesCurrentDomain(site, existing)
+        ) {
           throw new Error("Authority fingerprint belongs to another tenant");
         }
         const messages = existing.status === "outreach_prepared"
@@ -383,17 +515,49 @@ export const upsertVerifiedBatch = internalMutation({
   },
 });
 
+async function listAuthorityByCurrentDomainStatus(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+  status: string,
+  limit: number,
+) {
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return [];
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const rows = await ctx.db
+      .query("seo_authority_opportunities")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", site._id).eq("status", status)
+      )
+      .order("desc")
+      .take(limit);
+    return rows.filter((row) =>
+      authorityOpportunityMatchesCurrentDomain(site, row)
+    );
+  }
+  return ctx.db
+    .query("seo_authority_opportunities")
+    .withIndex("by_site_domain_revision_status", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+        .eq("status", status)
+    )
+    .order("desc")
+    .take(limit);
+}
+
 export const listVerified = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
-    await requireSiteOwner(ctx, siteId);
-    return ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "verified"),
-      )
-      .order("desc")
-      .take(Math.max(1, Math.min(limit ?? 50, 100)));
+    const site = await requireSiteOwner(ctx, siteId);
+    return listAuthorityByCurrentDomainStatus(
+      ctx,
+      site,
+      "verified",
+      Math.max(1, Math.min(limit ?? 50, 100)),
+    );
   },
 });
 
@@ -408,7 +572,7 @@ export const listVerified = query({
 export const listForSite = query({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
   handler: async (ctx, { siteId, limit }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     const take = Math.max(1, Math.min(limit ?? 100, 200));
     const statuses = [
       "verified",
@@ -419,13 +583,7 @@ export const listForSite = query({
     ];
     const batches = await Promise.all(
       statuses.map((status) =>
-        ctx.db
-          .query("seo_authority_opportunities")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", siteId).eq("status", status),
-          )
-          .order("desc")
-          .take(take),
+        listAuthorityByCurrentDomainStatus(ctx, site, status, take)
       ),
     );
     return batches
@@ -437,14 +595,16 @@ export const listForSite = query({
 
 export const listVerifiedInternal = internalQuery({
   args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
-  handler: async (ctx, { siteId, limit }) =>
-    ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "verified"),
-      )
-      .order("desc")
-      .take(Math.max(1, Math.min(limit ?? 50, 200))),
+  handler: async (ctx, { siteId, limit }) => {
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) return [];
+    return listAuthorityByCurrentDomainStatus(
+      ctx,
+      site,
+      "verified",
+      Math.max(1, Math.min(limit ?? 50, 200)),
+    );
+  },
 });
 
 export const listByStatusInternal = internalQuery({
@@ -453,12 +613,16 @@ export const listByStatusInternal = internalQuery({
     status: v.string(),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, { siteId, status, limit }) =>
-    ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", status))
-      .order("desc")
-      .take(Math.max(1, Math.min(limit ?? 50, 200))),
+  handler: async (ctx, { siteId, status, limit }) => {
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) return [];
+    return listAuthorityByCurrentDomainStatus(
+      ctx,
+      site,
+      status,
+      Math.max(1, Math.min(limit ?? 50, 200)),
+    );
+  },
 });
 
 async function messageBelongsToAuthorityOpportunity(
@@ -494,7 +658,11 @@ export const markAcquired = internalMutation({
     if (!siteExecutionActive(site) || !site.userId) throw new Error("Site not found");
     const ownerAccountKey = accountDeletionKey(site.userId);
     const opportunity = await ctx.db.get(opportunityId);
-    if (!opportunity || opportunity.siteId !== siteId) {
+    if (
+      !opportunity ||
+      opportunity.siteId !== siteId ||
+      !authorityOpportunityMatchesCurrentDomain(site, opportunity)
+    ) {
       throw new Error("Authority opportunity not found for site");
     }
     const timestamp = Date.now();
@@ -543,7 +711,11 @@ export const markAcquiredLinkLost = internalMutation({
     const site = await ctx.db.get(siteId);
     if (!siteExecutionActive(site) || !site.userId) throw new Error("Site not found");
     const opportunity = await ctx.db.get(opportunityId);
-    if (!opportunity || opportunity.siteId !== siteId) {
+    if (
+      !opportunity ||
+      opportunity.siteId !== siteId ||
+      !authorityOpportunityMatchesCurrentDomain(site, opportunity)
+    ) {
       throw new Error("Authority opportunity not found for site");
     }
     if (opportunity.status !== "acquired") return;
@@ -580,10 +752,12 @@ export const rejectUnconfirmed = internalMutation({
     const timestamp = Date.now();
     let rejected = 0;
     for (const status of ["verified", "outreach_prepared"]) {
-      const rows = await ctx.db
-        .query("seo_authority_opportunities")
-        .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", status))
-        .collect();
+      const rows = await listAuthorityByCurrentDomainStatus(
+        ctx,
+        site,
+        status,
+        500,
+      );
       for (const row of rows) {
         if (row.verifiedAt >= verifiedBefore) continue;
         if (types && !types.includes(row.type)) continue;
@@ -630,12 +804,12 @@ export const getVerifiedBySource = internalQuery({
   handler: async (ctx, { siteId, sourceUrl }) => {
     const site = await ctx.db.get(siteId);
     if (!siteExecutionActive(site)) return null;
-    const candidates = await ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "verified"),
-      )
-      .take(100);
+    const candidates = await listAuthorityByCurrentDomainStatus(
+      ctx,
+      site,
+      "verified",
+      100,
+    );
     return candidates.find((candidate) => candidate.sourceUrl === sourceUrl) ?? null;
   },
 });
@@ -653,7 +827,11 @@ export const markOutreachPrepared = internalMutation({
     if (!siteExecutionActive(site)) {
       throw new Error("Site not found");
     }
-    if (!opportunity || opportunity.siteId !== siteId) {
+    if (
+      !opportunity ||
+      opportunity.siteId !== siteId ||
+      !authorityOpportunityMatchesCurrentDomain(site, opportunity)
+    ) {
       throw new Error("Authority opportunity not found for site");
     }
     if (opportunity.status !== "verified" && opportunity.status !== "outreach_prepared") {

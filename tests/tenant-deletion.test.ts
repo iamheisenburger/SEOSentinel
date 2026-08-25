@@ -98,17 +98,21 @@ test("credentials are revoked before resumable data deletion begins", () => {
   }
 });
 
-test("account reset preflights all site and article leases before scheduling", () => {
+test("account reset atomically preflights and fences every site before purge", () => {
   const reset = sites.slice(
     sites.indexOf("export const resetAll"),
     sites.indexOf("export const fixOrphanSites"),
   );
-  const firstSchedule = reset.indexOf("ctx.scheduler.runAfter");
+  const firstDeletionFence = reset.indexOf("requestSiteDeletion(");
   const articleLeaseCheck = reset.indexOf("leasedArticles.some");
+  const revisionAmbiguityCheck = reset.indexOf("assertConfigUnlocked(ctx, site)");
 
   assert.ok(articleLeaseCheck >= 0);
-  assert.ok(firstSchedule > articleLeaseCheck);
+  assert.ok(revisionAmbiguityCheck > articleLeaseCheck);
+  assert.ok(firstDeletionFence > revisionAmbiguityCheck);
   assert.match(reset, /Cannot reset data while an article publication lease exists/);
+  assert.doesNotMatch(reset, /requestSiteDeletionInternal/);
+  assert.match(reset, /Either every site is marked deletion-pending/);
 });
 
 test("deletion revokes every inbox and waits for captured actions to quiesce", () => {

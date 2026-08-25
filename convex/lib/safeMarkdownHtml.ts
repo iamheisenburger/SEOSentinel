@@ -7,6 +7,7 @@ import remarkRehype from "remark-rehype";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
 import { containsExecutableMdx } from "./articleQuality.ts";
+import { PUBLISHER_RENDERER_VERSION } from "./publicationReceipts.ts";
 export { PUBLISHER_RENDERER_VERSION } from "./publicationReceipts.ts";
 
 export function assertSafePublishableMarkdown(markdown: string): void {
@@ -50,6 +51,18 @@ export function assertSafePublishableMarkdown(markdown: string): void {
  * CMS and therefore cannot become an HTML/CSS injection channel.
  */
 export function renderSafePublicationHtml(markdown: string): string {
+  return renderSafePublicationHtmlForVersion(markdown, PUBLISHER_RENDERER_VERSION);
+}
+
+/** Keep every renderer that can still have an unresolved external delivery
+ * callable. Removing a case is a data migration, not an ordinary code cleanup. */
+export function renderSafePublicationHtmlForVersion(
+  markdown: string,
+  rendererVersion: string,
+): string {
+  if (rendererVersion !== "semantic-html-v1") {
+    throw new Error("Unsupported sealed publication renderer version");
+  }
   assertSafePublishableMarkdown(markdown);
   const schema = {
     ...defaultSchema,

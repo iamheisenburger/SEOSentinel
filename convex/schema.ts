@@ -8,6 +8,10 @@ export default defineSchema({
     // Canonical hostname used for tenant ownership/collision checks. Legacy
     // rows are backfilled before this becomes the sole lookup key.
     canonicalDomain: v.optional(v.string()),
+    // Monotonic tenant-local epoch. Legacy rows are epoch zero; every true
+    // canonical-domain transition advances it so old crawl/topic/GSC receipts
+    // cannot become authoritative again if a hostname is later reused.
+    canonicalDomainRevision: v.optional(v.number()),
     domainOwnershipConflictAt: v.optional(v.number()),
     niche: v.optional(v.string()),
     tone: v.optional(v.string()),
@@ -50,6 +54,8 @@ export default defineSchema({
     keyFeatures: v.optional(v.array(v.string())),
     pricingInfo: v.optional(v.string()), // pricing summary
     founders: v.optional(v.string()),
+    contentAnalysisCanonicalDomain: v.optional(v.string()),
+    contentAnalysisDomainRevision: v.optional(v.number()),
 
     // ── Target audience ──
     targetCountry: v.optional(v.string()),
@@ -114,6 +120,11 @@ export default defineSchema({
     gscAccessToken: v.optional(v.string()),
     gscRefreshToken: v.optional(v.string()),
     gscProperty: v.optional(v.string()), // e.g. "sc-domain:example.com"
+    gscCanonicalDomain: v.optional(v.string()),
+    gscDomainRevision: v.optional(v.number()),
+    // Monotonic same-domain connection epoch. It closes stale refreshes and
+    // OAuth callbacks after disconnect/reconnect without storing token hashes.
+    gscConnectionRevision: v.optional(v.number()),
     gscEmail: v.optional(v.string()),
     gscScopes: v.optional(v.string()),
     gscConnectedAt: v.optional(v.number()),
@@ -177,6 +188,7 @@ export default defineSchema({
     siteId: v.id("sites"),
     ownerAccountKey: v.string(),
     domainSnapshot: v.string(),
+    domainRevisionSnapshot: v.optional(v.number()),
     contractVersion: v.number(),
     revision: v.number(),
     // Owner configuration generation. Unlike revision, this advances only on
@@ -366,15 +378,31 @@ export default defineSchema({
   pages: defineTable({
     siteId: v.id("sites"),
     url: v.string(),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     slug: v.string(),
     title: v.optional(v.string()),
     keywords: v.optional(v.array(v.string())),
     summary: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_site", ["siteId"]),
+  })
+    .index("by_site", ["siteId"])
+    .index("by_site_domain_revision", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+    ])
+    .index("by_site_domain_revision_slug", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "slug",
+    ]),
 
   topic_clusters: defineTable({
     siteId: v.id("sites"),
+    planningCanonicalDomain: v.optional(v.string()),
+    planningDomainRevision: v.optional(v.number()),
     label: v.string(),
     primaryKeyword: v.string(),
     secondaryKeywords: v.array(v.string()),
@@ -508,6 +536,11 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site", ["siteId"])
+    .index("by_site_domain_revision", [
+      "siteId",
+      "planningCanonicalDomain",
+      "planningDomainRevision",
+    ])
     .index("by_site_growth_action_parent", [
       "siteId",
       "growthActionFingerprint",
@@ -516,6 +549,8 @@ export default defineSchema({
 
   articles: defineTable({
     siteId: v.id("sites"),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     topicId: v.optional(v.id("topic_clusters")),
     articleType: v.optional(v.string()), // standard | listicle | how-to | checklist | comparison | roundup | ultimate-guide
     status: v.string(), // draft | review | ready | published
@@ -626,10 +661,22 @@ export default defineSchema({
     gscLastCrawlTime: v.optional(v.string()),
     gscInspectedAt: v.optional(v.number()),
     gscInspectionError: v.optional(v.string()),
+    gscInspectionConnectionRevision: v.optional(v.number()),
+    gscInspectionProperty: v.optional(v.string()),
     publicationDeliveryHash: v.optional(v.string()),
+    publicationRolloutEpoch: v.optional(v.number()),
     publicationLeaseHash: v.optional(v.string()),
     publicationLeaseOwner: v.optional(v.string()),
     publicationLeaseStartedAt: v.optional(v.number()),
+    publicationAttemptedAt: v.optional(v.number()),
+    publicationAdapterVersionAtAttempt: v.optional(v.string()),
+    publicationAdapterConfigHashAtAttempt: v.optional(v.string()),
+    publicationRendererVersionAtAttempt: v.optional(v.string()),
+    publicationOutcomeUnverifiedAt: v.optional(v.number()),
+    publicationOutcomeDetail: v.optional(v.string()),
+    publicationAmbiguityDispositionAt: v.optional(v.number()),
+    publicationAmbiguityDispositionBy: v.optional(v.string()),
+    publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
 
     // ── Content SEO Score (computed after generation) ──
@@ -669,9 +716,21 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site", ["siteId"])
+    .index("by_site_domain_revision", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+    ])
+    .index("by_site_domain_revision_slug", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "slug",
+    ])
     .index("by_site_status_created", ["siteId", "status", "createdAt"])
     .index("by_site_slug", ["siteId", "slug"])
     .index("by_site_delivery_hash", ["siteId", "publicationDeliveryHash"])
+    .index("by_site_publication_lease", ["siteId", "publicationLeaseOwner"])
     .index("by_topic", ["topicId"]),
 
   // Compact projection used by list/dashboard/cron flows. Article bodies stay
@@ -679,6 +738,8 @@ export default defineSchema({
   article_summaries: defineTable({
     articleId: v.id("articles"),
     siteId: v.id("sites"),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     topicId: v.optional(v.id("topic_clusters")),
     articleType: v.optional(v.string()),
     status: v.string(),
@@ -726,6 +787,12 @@ export default defineSchema({
     gscLastCrawlTime: v.optional(v.string()),
     gscInspectedAt: v.optional(v.number()),
     gscInspectionError: v.optional(v.string()),
+    gscInspectionConnectionRevision: v.optional(v.number()),
+    gscInspectionProperty: v.optional(v.string()),
+    publicationAttemptedAt: v.optional(v.number()),
+    publicationOutcomeUnverifiedAt: v.optional(v.number()),
+    publicationAmbiguityDispositionAt: v.optional(v.number()),
+    publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
     entityCoverage: v.optional(v.number()),
     topicCompleteness: v.optional(v.number()),
@@ -740,6 +807,51 @@ export default defineSchema({
   })
     .index("by_article", ["articleId"])
     .index("by_site", ["siteId"])
+    .index("by_site_domain_revision", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+    ])
+    .index("by_site_domain_revision_created", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "articleCreatedAt",
+    ])
+    .index("by_site_domain_revision_status", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "status",
+    ])
+    .index("by_site_domain_revision_status_created", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "status",
+      "articleCreatedAt",
+    ])
+    .index("by_site_domain_revision_status_published", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "status",
+      "publishedAt",
+    ])
+    .index("by_site_domain_revision_status_audit_published", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "status",
+      "publicationAuditVersion",
+      "publishedAt",
+    ])
+    .index("by_site_domain_revision_slug", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "slug",
+    ])
     .index("by_site_created", ["siteId", "articleCreatedAt"])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_status_created", ["siteId", "status", "articleCreatedAt"])
@@ -754,6 +866,8 @@ export default defineSchema({
 
   jobs: defineTable({
     siteId: v.optional(v.id("sites")),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     type: v.string(), // onboarding | plan | article | links | scheduler
     status: v.string(), // pending | running | done | failed
     payload: v.optional(v.any()),
@@ -960,6 +1074,13 @@ export default defineSchema({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
     fingerprint: v.string(),
+    measurementKey: v.optional(v.string()),
+    measurementCanonicalDomain: v.optional(v.string()),
+    measurementDomainRevision: v.optional(v.number()),
+    measurementGscConnectionRevision: v.optional(v.number()),
+    measurementGscProperty: v.optional(v.string()),
+    measurementGscSyncEpoch: v.optional(v.string()),
+    measurementGscDataThrough: v.optional(v.string()),
     stage: v.string(),
     actionKind: v.string(),
     status: v.string(), // monitoring | open | resolved | dismissed
@@ -1036,6 +1157,7 @@ export default defineSchema({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
     growthActionId: v.optional(v.id("seo_growth_actions")),
+    growthMeasurementKey: v.optional(v.string()),
     actionFingerprint: v.string(),
     kind: v.union(
       v.literal("improve_snippet"),
@@ -1079,6 +1201,9 @@ export default defineSchema({
     leaseStartedAt: v.optional(v.number()),
     attempts: v.number(),
     attemptedAt: v.optional(v.number()),
+    adapterVersionAtAttempt: v.optional(v.string()),
+    adapterConfigHashAtAttempt: v.optional(v.string()),
+    rendererVersionAtAttempt: v.optional(v.string()),
     receipt: v.optional(v.object({
       method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
       revisionKey: v.string(),
@@ -1100,6 +1225,9 @@ export default defineSchema({
     liveVerifiedAt: v.optional(v.number()),
     failureCode: v.optional(v.string()),
     failureDetail: v.optional(v.string()),
+    ambiguityDispositionAt: v.optional(v.number()),
+    ambiguityDispositionBy: v.optional(v.string()),
+    ambiguityDispositionDetail: v.optional(v.string()),
     rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -1110,6 +1238,7 @@ export default defineSchema({
     .index("by_article_created", ["articleId", "createdAt"])
     .index("by_article_status_created", ["articleId", "status", "createdAt"])
     .index("by_status_next_verification", ["status", "liveVerificationNextAt"])
+    .index("by_site_lease_owner", ["siteId", "leaseOwner"])
     .index("by_action", ["growthActionId"]),
 
   // Read-only proof that a legacy Pentra GitHub publication still matches its
@@ -1207,6 +1336,8 @@ export default defineSchema({
   // consent, and a link is acquired only with an exact live receipt.
   seo_authority_opportunities: defineTable({
     siteId: v.id("sites"),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     articleId: v.optional(v.id("articles")),
     fingerprint: v.string(),
     type: v.string(), // unlinked_mention | broken_link
@@ -1231,6 +1362,12 @@ export default defineSchema({
   })
     .index("by_fingerprint", ["fingerprint"])
     .index("by_site_status", ["siteId", "status"])
+    .index("by_site_domain_revision_status", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "status",
+    ])
     .index("by_article_status", ["articleId", "status"]),
 
   // Every provider-backed discovery attempt reserves its complete bounded
@@ -1239,6 +1376,10 @@ export default defineSchema({
   seo_authority_runs: defineTable({
     siteId: v.id("sites"),
     userId: v.string(),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
+    growthActionFingerprint: v.optional(v.string()),
+    growthMeasurementKey: v.optional(v.string()),
     articleId: v.optional(v.id("articles")),
     trigger: v.string(), // owner | growth
     mode: v.string(), // entitled | manual_canary (bounded included Free policy)
@@ -1735,6 +1876,8 @@ export default defineSchema({
   // not go out, instead of silence.
   outreach_messages: defineTable({
     siteId: v.id("sites"),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     // Immutable raw-message ownership exists from draft creation, before any
     // delivery claim. A later defensive site-owner drift must not expose or
     // mutate another account's recipient, body or provider history.
@@ -1826,6 +1969,14 @@ export default defineSchema({
       "ownerLineageUnresolvedAt",
       "status",
     ])
+    .index("by_site_epoch_owner_status", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+      "status",
+    ])
     .index("by_site_status_autonomy_consent_scheduled", [
       "siteId",
       "status",
@@ -1851,6 +2002,17 @@ export default defineSchema({
       "sequenceStep",
       "scheduledAt",
     ])
+    .index("by_site_epoch_owner_approval_sequence_scheduled", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+      "status",
+      "approvalKind",
+      "sequenceStep",
+      "scheduledAt",
+    ])
     .index("by_site_status_autonomy_consent_sequence_scheduled", [
       "siteId",
       "status",
@@ -1863,6 +2025,20 @@ export default defineSchema({
     ])
     .index("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", [
       "siteId",
+      "ownerAccountKey",
+      "ownerLineageUnresolvedAt",
+      "status",
+      "approvalKind",
+      "approvalConsentVersion",
+      "approvalConsentPolicyHash",
+      "approvalConsentAcceptedAt",
+      "sequenceStep",
+      "scheduledAt",
+    ])
+    .index("by_site_epoch_owner_auto_sequence_scheduled", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
       "ownerAccountKey",
       "ownerLineageUnresolvedAt",
       "status",
@@ -2155,6 +2331,8 @@ export default defineSchema({
   // count that event twice or mutate it into a different outcome.
   outcome_receipts: defineTable({
     siteId: v.id("sites"),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     articleId: v.id("articles"),
     // The sealed public key is preserved so a conversion can finish its
     // original landing cohort after the article receives a newer revision.
@@ -2177,6 +2355,18 @@ export default defineSchema({
   })
     .index("by_site_event", ["siteId", "eventId"])
     .index("by_site_session", ["siteId", "sessionId"])
+    .index("by_site_domain_revision_event", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "eventId",
+    ])
+    .index("by_site_domain_revision_session", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "sessionId",
+    ])
     .index("by_site_occurred", ["siteId", "occurredAt"])
     .index("by_article_occurred", ["articleId", "occurredAt"]),
 
@@ -2185,6 +2375,8 @@ export default defineSchema({
   // receipt passes the tenant, credential, article, URL, goal and time gates.
   outcome_daily_rollups: defineTable({
     siteId: v.id("sites"),
+    canonicalDomain: v.optional(v.string()),
+    domainRevision: v.optional(v.number()),
     articleId: v.id("articles"),
     date: v.string(),
     goalKey: v.string(),
@@ -2207,7 +2399,21 @@ export default defineSchema({
       "goalKey",
       "date",
     ])
+    .index("by_site_domain_revision_article_goal_date", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "articleId",
+      "goalKey",
+      "date",
+    ])
     .index("by_site_date", ["siteId", "date"])
+    .index("by_site_domain_revision_date", [
+      "siteId",
+      "canonicalDomain",
+      "domainRevision",
+      "date",
+    ])
     .index("by_article_date", ["articleId", "date"]),
 
   maintenance_state: defineTable({

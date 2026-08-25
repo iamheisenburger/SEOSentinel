@@ -128,7 +128,7 @@ test("zero allocation is a stable paused state, never a failing cadence run", ()
   assert.match(autopilotTick, /cadenceSchedule\.mode === "cadence_paused"/);
   assert.ok(
     autopilotTick.indexOf('cadenceSchedule.mode === "cadence_paused"') <
-      autopilotTick.indexOf("handleOnboarding"),
+      autopilotTick.indexOf("executeClaimedCrawlAndAnalyze"),
   );
   assert.match(planPage, /if \(cadence <= 0\) return \[\]/);
   assert.match(planPage, /Publishing paused/);

@@ -1,6 +1,6 @@
 import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
   addSearchConsoleDays,
@@ -17,7 +17,6 @@ import {
 } from "./lib/searchPerformance";
 import { effectivePublishedAt } from "./lib/autopilotBuffer";
 import {
-  filterRowsForGscReceipts,
   isCompleteGscDateRange,
   mergeGscDateEpochReceipts,
 } from "./lib/gscSearchAnalytics";
@@ -26,9 +25,55 @@ import {
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
 import { v } from "convex/values";
+import {
+  articleMatchesCurrentDomain,
+  collectCurrentDomainPublishedSummariesSince,
+  gscConnectionMatchesCurrentDomain,
+  gscInspectionMatchesCurrentConnection,
+  normalizeCanonicalDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteGscConnectionRevision,
+  siteUsesLegacyGscRows,
+} from "./lib/siteDomainBinding";
+import {
+  takeCurrentGscPageRows,
+  takeCurrentGscQueryRows,
+} from "./lib/currentGscRows";
 
 const DAILY_SYNC_VERSION = 2;
 const SEO_WINDOWS_DAYS = [7, 14, 28, 56] as const;
+const DISCOVERY_GSC_READ_LIMIT = 5_000;
+const OWNER_GSC_READ_LIMIT = 5_000;
+
+function completeCurrentGscRows<Row>(
+  result: { rows: Row[]; exhausted: boolean },
+  label: string,
+): Row[] {
+  if (result.exhausted) {
+    throw new Error(`Current Search Console ${label} read limit exceeded`);
+  }
+  return result.rows;
+}
+
+function assertCurrentGscDomainBinding(
+  site: Doc<"sites">,
+  expectedCanonicalDomain: string,
+  expectedDomainRevision: number,
+  expectedConnectionRevision: number,
+  expectedProperty: string,
+) {
+  if (
+    !gscConnectionMatchesCurrentDomain(site) ||
+    normalizeCanonicalDomain(expectedCanonicalDomain) !==
+      siteCanonicalDomain(site) ||
+    expectedDomainRevision !== siteCanonicalDomainRevision(site) ||
+    expectedConnectionRevision !== siteGscConnectionRevision(site) ||
+    expectedProperty !== site.gscProperty
+  ) {
+    throw new Error("Search Console connection belongs to an earlier site domain");
+  }
+}
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId);
@@ -58,18 +103,24 @@ export const getDiscoverySignalsInternal = internalQuery({
   handler: async (ctx, { siteId, limit }) => {
     const site = await ctx.db.get(siteId);
     if (!siteExecutionActive(site)) throw new Error("Site not found");
+    if (!gscConnectionMatchesCurrentDomain(site)) return [];
     const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
       .toISOString()
       .split("T")[0];
     const receipts = site.gscDateEpochs ?? [];
-    const rawRows = receipts.length > 0
-      ? await ctx.db
-        .query("search_performance")
-        .withIndex("by_site_date", (q) =>
-          q.eq("siteId", siteId).gte("date", cutoff),
-        )
-        .collect()
-      : await ctx.db
+    if (!siteUsesLegacyGscRows(site) && receipts.length === 0) {
+      return [];
+    }
+    const currentRows = receipts.length > 0
+      ? await takeCurrentGscQueryRows(
+        ctx,
+        site,
+        DISCOVERY_GSC_READ_LIMIT,
+        { startDate: cutoff },
+      )
+      : undefined;
+    if (currentRows?.exhausted) return [];
+    const rows = currentRows?.rows ?? await ctx.db
         .query("search_performance")
         .withIndex("by_site_version_date", (q) =>
           q
@@ -78,9 +129,6 @@ export const getDiscoverySignalsInternal = internalQuery({
             .gte("date", cutoff),
         )
         .collect();
-    const rows = receipts.length > 0
-      ? filterRowsForGscReceipts(rawRows, receipts)
-      : rawRows;
     const byQuery = new Map<string, {
       query: string;
       clicks: number;
@@ -184,6 +232,10 @@ export const upsertBatch = internalMutation({
   args: {
     siteId: v.id("sites"),
     syncEpoch: v.string(),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
     rows: v.array(v.object({
       date: v.string(),
       query: v.string(),
@@ -194,11 +246,29 @@ export const upsertBatch = internalMutation({
       position: v.number(),
     })),
   },
-  handler: async (ctx, { siteId, syncEpoch, rows }) => {
+  handler: async (
+    ctx,
+    {
+      siteId,
+      syncEpoch,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+      rows,
+    },
+  ) => {
     const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
+    assertCurrentGscDomainBinding(
+      site,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+    );
     if (site.gscPendingSyncEpoch !== syncEpoch) {
       throw new Error("GSC sync epoch was superseded before query persistence");
     }
@@ -221,6 +291,10 @@ export const upsertPageBatch = internalMutation({
   args: {
     siteId: v.id("sites"),
     syncEpoch: v.string(),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
     rows: v.array(v.object({
       date: v.string(),
       page: v.string(),
@@ -237,11 +311,29 @@ export const upsertPageBatch = internalMutation({
       queryCoverageComplete: v.boolean(),
     })),
   },
-  handler: async (ctx, { siteId, syncEpoch, rows }) => {
+  handler: async (
+    ctx,
+    {
+      siteId,
+      syncEpoch,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+      rows,
+    },
+  ) => {
     const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
+    assertCurrentGscDomainBinding(
+      site,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+    );
     if (site.gscPendingSyncEpoch !== syncEpoch) {
       throw new Error("GSC sync epoch was superseded before page persistence");
     }
@@ -263,15 +355,39 @@ export const beginSyncEpoch = internalMutation({
   args: {
     siteId: v.id("sites"),
     syncEpoch: v.string(),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
     mode: v.union(v.literal("recent"), v.literal("backfill")),
     windowStart: v.string(),
     windowEnd: v.string(),
   },
-  handler: async (ctx, { siteId, syncEpoch, mode, windowStart, windowEnd }) => {
+  handler: async (
+    ctx,
+    {
+      siteId,
+      syncEpoch,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+      mode,
+      windowStart,
+      windowEnd,
+    },
+  ) => {
     const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
+    assertCurrentGscDomainBinding(
+      site,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+    );
     if (!syncEpoch) throw new Error("GSC sync epoch is required");
     if (addSearchConsoleDays(windowStart, 27) !== windowEnd) {
       throw new Error("A GSC sync phase must cover exactly 28 days");
@@ -312,6 +428,10 @@ export const completeSyncEpoch = internalMutation({
   args: {
     siteId: v.id("sites"),
     syncEpoch: v.string(),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
     mode: v.union(v.literal("recent"), v.literal("backfill")),
     windowStart: v.string(),
     windowEnd: v.string(),
@@ -325,6 +445,13 @@ export const completeSyncEpoch = internalMutation({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
+    assertCurrentGscDomainBinding(
+      site,
+      args.expectedCanonicalDomain,
+      args.expectedDomainRevision,
+      args.expectedConnectionRevision,
+      args.expectedProperty,
+    );
     if (site.gscPendingSyncEpoch !== args.syncEpoch) {
       throw new Error("GSC sync epoch was superseded before completion");
     }
@@ -430,7 +557,10 @@ export const pruneSyncEpoch = internalMutation({
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
-    if (!siteExecutionActive(site)) return { deleted: 0, scheduled: false };
+    // Retired measurement rows are storage cleanup, not tenant execution.
+    // Parking must not strand old-domain/old-connection epochs that can later
+    // consume read limits when the tenant is reactivated.
+    if (!site) return { deleted: 0, scheduled: false };
     const activeEpochByDate = new Map(
       (site.gscDateEpochs ?? []).map((receipt) => [
         receipt.date,
@@ -477,18 +607,16 @@ export const getTopQueries = query({
     if (receipts.length > 0 && site.gscDataThrough) {
       const dataThrough = site.gscDataThrough;
       const windowStart = addSearchConsoleDays(dataThrough, -27);
-      const candidates = await ctx.db
-        .query("search_performance")
-        .withIndex("by_site_date", (q) =>
-          q
-            .eq("siteId", siteId)
-            .gte("date", windowStart)
-            .lte("date", dataThrough),
-        )
-        .collect();
-      const recent = filterRowsForGscReceipts(candidates, receipts);
+      const recent = completeCurrentGscRows(
+        await takeCurrentGscQueryRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate: windowStart,
+          endDate: dataThrough,
+        }),
+        "top-query",
+      );
       return aggregateSearchQueries(recent).slice(0, limit ?? 20);
     }
+    if (!siteUsesLegacyGscRows(site)) return [];
     const latestDaily = await ctx.db
       .query("search_performance")
       .withIndex("by_site_version_date", (q) =>
@@ -539,28 +667,18 @@ export const getSummary = query({
     if (receipts.length > 0 && site.gscDataThrough) {
       const dataThrough = site.gscDataThrough;
       const windowStart = addSearchConsoleDays(dataThrough, -27);
-      const [pageCandidates, queryCandidates] = await Promise.all([
-        ctx.db
-          .query("search_page_daily")
-          .withIndex("by_site_date", (q) =>
-            q
-              .eq("siteId", siteId)
-              .gte("date", windowStart)
-              .lte("date", dataThrough),
-          )
-          .collect(),
-        ctx.db
-          .query("search_performance")
-          .withIndex("by_site_date", (q) =>
-            q
-              .eq("siteId", siteId)
-              .gte("date", windowStart)
-              .lte("date", dataThrough),
-          )
-          .collect(),
+      const [pageResult, queryResult] = await Promise.all([
+        takeCurrentGscPageRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate: windowStart,
+          endDate: dataThrough,
+        }),
+        takeCurrentGscQueryRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate: windowStart,
+          endDate: dataThrough,
+        }),
       ]);
-      const pageRows = filterRowsForGscReceipts(pageCandidates, receipts);
-      const queryRows = filterRowsForGscReceipts(queryCandidates, receipts);
+      const pageRows = completeCurrentGscRows(pageResult, "page-summary");
+      const queryRows = completeCurrentGscRows(queryResult, "query-summary");
       const pageSummary = summarizeSearchPagePerformance(pageRows);
       const querySummary = summarizeSearchPerformance(queryRows, site.domain);
       return {
@@ -581,6 +699,7 @@ export const getSummary = query({
         syncVersion: 3,
       };
     }
+    if (!siteUsesLegacyGscRows(site)) return null;
     const latestDaily = await ctx.db
       .query("search_performance")
       .withIndex("by_site_version_date", (q) =>
@@ -633,6 +752,9 @@ export const getByPage = query({
   handler: async (ctx, { siteId, pageUrl }) => {
     const site = await requireSiteOwner(ctx, siteId);
     const receipts = site.gscDateEpochs ?? [];
+    if (receipts.length === 0 && !siteUsesLegacyGscRows(site)) {
+      return [];
+    }
     const cutoff = receipts.length > 0 && site.gscDataThrough
       ? addSearchConsoleDays(site.gscDataThrough, -55)
       : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000)
@@ -645,12 +767,12 @@ export const getByPage = query({
       )
       .first();
     const candidates = receipts.length > 0
-      ? await ctx.db
-        .query("search_performance")
-        .withIndex("by_site_date", (q) =>
-          q.eq("siteId", siteId).gte("date", cutoff),
-        )
-        .collect()
+      ? completeCurrentGscRows(
+        await takeCurrentGscQueryRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate: cutoff,
+        }),
+        "page-query",
+      )
       : hasDailyRows
         ? await ctx.db
         .query("search_performance")
@@ -667,11 +789,7 @@ export const getByPage = query({
             q.eq("siteId", siteId).gte("date", cutoff),
           )
           .collect();
-    const all = receipts.length > 0
-      ? filterRowsForGscReceipts(candidates, receipts)
-      : candidates;
-
-    return all.filter((r) => {
+    return candidates.filter((r) => {
       if (!r.page) return false;
       return isSameSearchConsolePage(r.page, pageUrl);
     });
@@ -689,35 +807,30 @@ async function articleSeoScorecard(
   }
   const site = await ctx.db.get(article.siteId);
   if (!site) throw new Error("Site not found");
+  if (!articleMatchesCurrentDomain(site, article)) {
+    throw new Error("Article belongs to an earlier site domain");
+  }
 
   const publicationTime = effectivePublishedAt(article);
   const startDate = searchConsoleDate(publicationTime);
   const maximumEndDate = addSearchConsoleDays(startDate, 55);
   const receipts = site.gscDateEpochs ?? [];
   const usesReceiptHistory = receipts.length > 0;
-  const [latest, rowCandidates, authoritativeCandidates] = usesReceiptHistory
+  const mayUseLegacyRows = siteUsesLegacyGscRows(site);
+  const [latest, rows, authoritativeRows] = usesReceiptHistory
     ? await Promise.all([
         Promise.resolve(null),
-        ctx.db
-          .query("search_performance")
-          .withIndex("by_site_date", (q) =>
-            q
-              .eq("siteId", article.siteId)
-              .gte("date", startDate)
-              .lte("date", maximumEndDate),
-          )
-          .collect(),
-        ctx.db
-          .query("search_page_daily")
-          .withIndex("by_site_date", (q) =>
-            q
-              .eq("siteId", article.siteId)
-              .gte("date", startDate)
-              .lte("date", maximumEndDate),
-          )
-          .collect(),
+        takeCurrentGscQueryRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate,
+          endDate: maximumEndDate,
+        }).then((result) => completeCurrentGscRows(result, "scorecard-query")),
+        takeCurrentGscPageRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate,
+          endDate: maximumEndDate,
+        }).then((result) => completeCurrentGscRows(result, "scorecard-page")),
       ])
-    : await Promise.all([
+    : mayUseLegacyRows
+      ? await Promise.all([
         ctx.db
           .query("search_performance")
           .withIndex("by_site_version_date", (q) =>
@@ -738,13 +851,8 @@ async function articleSeoScorecard(
           )
           .collect(),
         Promise.resolve([]),
-      ]);
-  const rows = usesReceiptHistory
-    ? filterRowsForGscReceipts(rowCandidates, receipts)
-    : rowCandidates;
-  const authoritativeRows = usesReceiptHistory
-    ? filterRowsForGscReceipts(authoritativeCandidates, receipts)
-    : authoritativeCandidates;
+      ])
+      : [null, [], []];
 
   const pageUrl = publishedArticlePageUrl(
     site.domain,
@@ -873,6 +981,9 @@ async function articleSeoScorecard(
     };
   });
 
+  const currentInspection = gscInspectionMatchesCurrentConnection(site, article)
+    ? article
+    : undefined;
   return {
     articleId,
     title: article.title,
@@ -886,13 +997,13 @@ async function articleSeoScorecard(
     completeWindows: usesReceiptHistory ? site.gscCompleteWindows : undefined,
     syncVersion: usesReceiptHistory ? 3 : DAILY_SYNC_VERSION,
     indexInspection: {
-      verdict: article.gscIndexVerdict,
-      coverageState: article.gscCoverageState,
-      pageFetchState: article.gscPageFetchState,
-      robotsTxtState: article.gscRobotsTxtState,
-      lastCrawlTime: article.gscLastCrawlTime,
-      inspectedAt: article.gscInspectedAt,
-      error: article.gscInspectionError,
+      verdict: currentInspection?.gscIndexVerdict,
+      coverageState: currentInspection?.gscCoverageState,
+      pageFetchState: currentInspection?.gscPageFetchState,
+      robotsTxtState: currentInspection?.gscRobotsTxtState,
+      lastCrawlTime: currentInspection?.gscLastCrawlTime,
+      inspectedAt: currentInspection?.gscInspectedAt,
+      error: currentInspection?.gscInspectionError,
     },
     windows,
   };
@@ -926,15 +1037,11 @@ export const listPublishedForInspection = internalQuery({
     if (!siteExecutionActive(site)) return [];
     const publishedAfter = now -
       GSC_INSPECTION_COHORT_DAYS * 24 * 60 * 60 * 1000;
-    const articles = await ctx.db
-      .query("article_summaries")
-      .withIndex("by_site_status_published", (q) =>
-        q
-          .eq("siteId", siteId)
-          .eq("status", "published")
-          .gte("publishedAt", publishedAfter),
-      )
-      .collect();
+    const articles = await collectCurrentDomainPublishedSummariesSince(
+      ctx,
+      site,
+      publishedAfter,
+    );
     const openActions = await ctx.db
       .query("seo_growth_actions")
       .withIndex("by_site_status", (q) =>
@@ -959,7 +1066,9 @@ export const listPublishedForInspection = internalQuery({
         siteId: article.siteId,
         slug: article.slug,
         publishedAt: article.publishedAt ?? article.articleCreatedAt,
-        gscInspectedAt: article.gscInspectedAt,
+        gscInspectedAt: gscInspectionMatchesCurrentConnection(site, article)
+          ? article.gscInspectedAt
+          : undefined,
         openIndexingIncidentPriority: indexingIncidentPriority.get(
           String(article.articleId),
         ),
@@ -978,6 +1087,10 @@ export const listPublishedForInspection = internalQuery({
 export const recordUrlInspection = internalMutation({
   args: {
     articleId: v.id("articles"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
     verdict: v.optional(v.string()),
     coverageState: v.optional(v.string()),
     pageFetchState: v.optional(v.string()),
@@ -993,10 +1106,22 @@ export const recordUrlInspection = internalMutation({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
+    if (!articleMatchesCurrentDomain(site, article)) {
+      throw new Error("Article belongs to an earlier site domain");
+    }
+    assertCurrentGscDomainBinding(
+      site,
+      args.expectedCanonicalDomain,
+      args.expectedDomainRevision,
+      args.expectedConnectionRevision,
+      args.expectedProperty,
+    );
     const patch = args.error
       ? {
         gscInspectedAt: args.inspectedAt,
         gscInspectionError: args.error,
+        gscInspectionConnectionRevision: args.expectedConnectionRevision,
+        gscInspectionProperty: args.expectedProperty,
       }
       : {
         gscIndexVerdict: args.verdict,
@@ -1006,6 +1131,8 @@ export const recordUrlInspection = internalMutation({
         gscLastCrawlTime: args.lastCrawlTime,
         gscInspectedAt: args.inspectedAt,
         gscInspectionError: undefined,
+        gscInspectionConnectionRevision: args.expectedConnectionRevision,
+        gscInspectionProperty: args.expectedProperty,
       };
     await ctx.db.patch(args.articleId, patch);
     const summary = await ctx.db
@@ -1033,14 +1160,14 @@ export const getHistory = internalQuery({
       .split("T")[0];
     const receipts = site.gscDateEpochs ?? [];
     if (receipts.length > 0) {
-      const candidates = await ctx.db
-        .query("search_performance")
-        .withIndex("by_site_date", (q) =>
-          q.eq("siteId", siteId).gte("date", cutoff),
-        )
-        .collect();
-      return filterRowsForGscReceipts(candidates, receipts);
+      return completeCurrentGscRows(
+        await takeCurrentGscQueryRows(ctx, site, OWNER_GSC_READ_LIMIT, {
+          startDate: cutoff,
+        }),
+        "history",
+      );
     }
+    if (!siteUsesLegacyGscRows(site)) return [];
     const hasDailyRows = await ctx.db
       .query("search_performance")
       .withIndex("by_site_version_date", (q) =>

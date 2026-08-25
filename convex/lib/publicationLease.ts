@@ -66,3 +66,38 @@ export function ownsPublicationLease(
     state.publicationLeaseOwner === args.leaseOwner
   );
 }
+
+/** Pure concurrency contract for an explicit reviewed disposition. A stale
+ * attempt timestamp is never enough while a newer recovery owns the workflow:
+ * both the exact workflow lease and site lease must be expired, or neither
+ * lease may exist. */
+export function reviewedAmbiguityDispositionAllowed(args: {
+  attemptedAt?: number;
+  receiptPresent: boolean;
+  dispositionAt?: number;
+  workflowLeaseOwner?: string;
+  workflowLeaseStartedAt?: number;
+  siteLeaseOwner?: string;
+  siteLeaseExpiresAt?: number;
+  now: number;
+  leaseMs: number;
+}): boolean {
+  if (
+    !args.attemptedAt ||
+    args.receiptPresent ||
+    args.dispositionAt ||
+    args.attemptedAt + args.leaseMs > args.now
+  ) {
+    return false;
+  }
+  if (!args.workflowLeaseOwner) {
+    return !args.siteLeaseOwner;
+  }
+  return Boolean(
+    args.siteLeaseOwner === args.workflowLeaseOwner &&
+    args.workflowLeaseStartedAt &&
+    args.workflowLeaseStartedAt + args.leaseMs <= args.now &&
+    args.siteLeaseExpiresAt !== undefined &&
+    args.siteLeaseExpiresAt <= args.now,
+  );
+}

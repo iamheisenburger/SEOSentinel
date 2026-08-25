@@ -152,7 +152,9 @@ test("epoch completion and pruning are receipt-scoped and bounded", () => {
   assert.match(persistence, /gscDateEpochs: history\.receipts/);
   assert.match(persistence, /gscCompleteWindows: history\.completeWindows/);
   assert.match(persistence, /syncedDates: v\.array\(v\.string\(\)\)/);
-  assert.match(persistence, /filterRowsForGscReceipts/);
+  assert.match(persistence, /takeCurrentGscQueryRows/);
+  assert.match(persistence, /takeCurrentGscPageRows/);
+  assert.match(persistence, /completeCurrentGscRows/);
   assert.match(persistence, /activeEpochByDate\.get\(row\.date\) !== args\.syncEpoch/);
   assert.match(persistence, /numItems: EPOCH_PRUNE_BATCH/);
   assert.match(persistence, /cursor: result\.continueCursor/);

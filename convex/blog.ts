@@ -1,6 +1,13 @@
 import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
+import {
+  articleMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./lib/siteDomainBinding";
 
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
 
@@ -50,6 +57,94 @@ async function summariesAreComplete(ctx: QueryCtx): Promise<boolean> {
   return state?.status === "completed";
 }
 
+async function currentPublishedSummaries(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const rows = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status_published", (q) =>
+        q.eq("siteId", site._id).eq("status", "published")
+      )
+      .order("desc")
+      .collect();
+    return rows.filter((article) =>
+      articleMatchesCurrentDomain(site, article)
+    );
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return [];
+  return ctx.db
+    .query("article_summaries")
+    .withIndex("by_site_domain_revision_status_published", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+        .eq("status", "published")
+    )
+    .order("desc")
+    .collect();
+}
+
+async function currentPublishedArticles(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  const rows = siteUsesLegacyDomainReceipts(site)
+    ? await ctx.db
+      .query("articles")
+      .withIndex("by_site_status_created", (q) =>
+        q.eq("siteId", site._id).eq("status", "published")
+      )
+      .order("desc")
+      .collect()
+    : await ctx.db
+      .query("articles")
+      .withIndex("by_site_domain_revision", (q) =>
+        q
+          .eq("siteId", site._id)
+          .eq("canonicalDomain", siteCanonicalDomain(site) ?? "")
+          .eq("domainRevision", siteCanonicalDomainRevision(site))
+      )
+      .order("desc")
+      .collect();
+  return rows.filter((article) =>
+    article.status === "published" &&
+    articleMatchesCurrentDomain(site, article)
+  );
+}
+
+async function currentArticleBySlug(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+  slug: string,
+) {
+  const candidates = [slug, `/${slug}`];
+  for (const candidate of candidates) {
+    const article = siteUsesLegacyDomainReceipts(site)
+      ? await ctx.db
+        .query("articles")
+        .withIndex("by_site_slug", (q) =>
+          q.eq("siteId", site._id).eq("slug", candidate)
+        )
+        .first()
+      : await ctx.db
+        .query("articles")
+        .withIndex("by_site_domain_revision_slug", (q) =>
+          q
+            .eq("siteId", site._id)
+            .eq("canonicalDomain", siteCanonicalDomain(site) ?? "")
+            .eq("domainRevision", siteCanonicalDomainRevision(site))
+            .eq("slug", candidate)
+        )
+        .first();
+    if (article && articleMatchesCurrentDomain(site, article)) return article;
+  }
+  return null;
+}
+
 export const listPublishedByDomain = query({
   args: { domain: v.string() },
   handler: async (ctx, { domain }) => {
@@ -58,20 +153,8 @@ export const listPublishedByDomain = query({
 
     const useSummaries = await summariesAreComplete(ctx);
     const published = useSummaries
-      ? await ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status_published", (q) =>
-            q.eq("siteId", site._id).eq("status", "published"),
-          )
-          .order("desc")
-          .collect()
-      : await ctx.db
-          .query("articles")
-          .withIndex("by_site_status_created", (q) =>
-            q.eq("siteId", site._id).eq("status", "published"),
-          )
-          .order("desc")
-          .collect();
+      ? await currentPublishedSummaries(ctx, site)
+      : await currentPublishedArticles(ctx, site);
     return published.map((a) => ({
         _id: "articleId" in a ? a.articleId : a._id,
         title: a.title,
@@ -97,18 +180,8 @@ export const listPublishedSlugs = query({
 
     const useSummaries = await summariesAreComplete(ctx);
     const published = useSummaries
-      ? await ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", site._id).eq("status", "published"),
-          )
-          .collect()
-      : await ctx.db
-          .query("articles")
-          .withIndex("by_site_status_created", (q) =>
-            q.eq("siteId", site._id).eq("status", "published"),
-          )
-          .collect();
+      ? await currentPublishedSummaries(ctx, site)
+      : await currentPublishedArticles(ctx, site);
     const articles = published.map((a) => ({
         slug: normalizeSlug(a.slug || ""),
         updatedAt: "articleUpdatedAt" in a
@@ -126,42 +199,12 @@ export const getPublishedBySlug = query({
     if (!site) return null;
 
     const normalizedSlug = normalizeSlug(slug);
-    const useSummaries = await summariesAreComplete(ctx);
-    let article = null;
-    if (useSummaries) {
-      let summary = await ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_slug", (q) =>
-          q.eq("siteId", site._id).eq("slug", normalizedSlug),
-        )
-        .first();
-      if (!summary) {
-        summary = await ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_slug", (q) =>
-            q.eq("siteId", site._id).eq("slug", `/${normalizedSlug}`),
-          )
-          .first();
-      }
-      if (!summary || summary.status !== "published") return null;
-      article = await ctx.db.get(summary.articleId);
-    } else {
-      article = await ctx.db
-        .query("articles")
-        .withIndex("by_site_slug", (q) =>
-          q.eq("siteId", site._id).eq("slug", normalizedSlug),
-        )
-        .first();
-      if (!article) {
-        article = await ctx.db
-          .query("articles")
-          .withIndex("by_site_slug", (q) =>
-            q.eq("siteId", site._id).eq("slug", `/${normalizedSlug}`),
-          )
-          .first();
-      }
-    }
-    if (!article || article.status !== "published") return null;
+    const article = await currentArticleBySlug(ctx, site, normalizedSlug);
+    if (
+      !article ||
+      article.status !== "published" ||
+      !articleMatchesCurrentDomain(site, article)
+    ) return null;
 
     return {
       _id: article._id,

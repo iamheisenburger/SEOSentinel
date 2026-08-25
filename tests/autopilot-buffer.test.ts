@@ -257,7 +257,7 @@ test("every completed run reconciles the current sealed buffer count", () => {
   );
   assert.match(
     finishRun,
-    /const currentReady = await ctx\.db[\s\S]*const approvedBufferCount = currentReady\.filter\(isSealedReady\)\.length/,
+    /const currentReady = await takeCurrentDomainArticleSummariesByStatus\([\s\S]*const approvedBufferCount = currentReady\.filter\(isSealedReady\)\.length/,
   );
   assert.match(finishRun, /approvedBufferCount,/);
   assert.doesNotMatch(

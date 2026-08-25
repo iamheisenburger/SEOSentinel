@@ -12,6 +12,9 @@ type OAuthStatePayload = {
   userId: string;
   nonce: string;
   expiresAt: number;
+  expectedCanonicalDomain?: string;
+  expectedDomainRevision?: number;
+  expectedGscConnectionRevision?: number;
 };
 
 function stateSecret(): string {
@@ -43,7 +46,19 @@ export function createOAuthState(args: {
   userId: string;
   now?: number;
   nonce?: string;
+  expectedCanonicalDomain?: string;
+  expectedDomainRevision?: number;
+  expectedGscConnectionRevision?: number;
 }): string {
+  if (
+    (args.expectedCanonicalDomain === undefined) !==
+      (args.expectedDomainRevision === undefined) ||
+    (args.expectedCanonicalDomain === undefined) !==
+      (args.expectedGscConnectionRevision === undefined) ||
+    (args.expectedCanonicalDomain !== undefined && args.provider !== "gsc")
+  ) {
+    throw new Error("Canonical-domain OAuth state is valid only for GSC");
+  }
   const now = args.now ?? Date.now();
   const payload: OAuthStatePayload = {
     v: STATE_VERSION,
@@ -52,6 +67,18 @@ export function createOAuthState(args: {
     userId: args.userId,
     nonce: args.nonce ?? randomUUID(),
     expiresAt: now + STATE_TTL_MS,
+    ...(args.expectedCanonicalDomain !== undefined
+      ? { expectedCanonicalDomain: args.expectedCanonicalDomain }
+      : {}),
+    ...(args.expectedDomainRevision !== undefined
+      ? { expectedDomainRevision: args.expectedDomainRevision }
+      : {}),
+    ...(args.expectedGscConnectionRevision !== undefined
+      ? {
+        expectedGscConnectionRevision:
+          args.expectedGscConnectionRevision,
+      }
+      : {}),
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
     "base64url",
@@ -66,7 +93,12 @@ export function verifyOAuthState(
     userId: string;
     now?: number;
   },
-): { siteId: string } | null {
+): {
+  siteId: string;
+  expectedCanonicalDomain?: string;
+  expectedDomainRevision?: number;
+  expectedGscConnectionRevision?: number;
+} | null {
   if (!state || state.length > 2_048) return null;
   const parts = state.split(".");
   if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
@@ -98,5 +130,37 @@ export function verifyOAuthState(
   ) {
     return null;
   }
-  return { siteId: payload.siteId };
+  const hasExpectedDomain = payload.expectedCanonicalDomain !== undefined;
+  const hasExpectedRevision = payload.expectedDomainRevision !== undefined;
+  const hasExpectedConnectionRevision =
+    payload.expectedGscConnectionRevision !== undefined;
+  if (
+    hasExpectedDomain !== hasExpectedRevision ||
+    hasExpectedDomain !== hasExpectedConnectionRevision ||
+    (hasExpectedDomain && payload.provider !== "gsc") ||
+    (hasExpectedDomain &&
+      (
+        typeof payload.expectedCanonicalDomain !== "string" ||
+        !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+$/i.test(
+          payload.expectedCanonicalDomain,
+        ) ||
+        !Number.isSafeInteger(payload.expectedDomainRevision) ||
+        payload.expectedDomainRevision! < 0 ||
+        !Number.isSafeInteger(payload.expectedGscConnectionRevision) ||
+        payload.expectedGscConnectionRevision! < 0
+      ))
+  ) {
+    return null;
+  }
+  return {
+    siteId: payload.siteId,
+    ...(hasExpectedDomain
+      ? {
+          expectedCanonicalDomain: payload.expectedCanonicalDomain,
+          expectedDomainRevision: payload.expectedDomainRevision,
+          expectedGscConnectionRevision:
+            payload.expectedGscConnectionRevision,
+        }
+      : {}),
+  };
 }

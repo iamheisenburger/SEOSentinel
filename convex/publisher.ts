@@ -14,7 +14,7 @@ import {
 import {
   assertSafePublishableMarkdown,
   PUBLISHER_RENDERER_VERSION,
-  renderSafePublicationHtml,
+  renderSafePublicationHtmlForVersion,
 } from "./lib/safeMarkdownHtml";
 import {
   safeFetchPublicText,
@@ -30,11 +30,14 @@ import {
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import {
   PUBLICATION_AUDIT_VERSION,
+  assertSupportedPublicationAdapterVersion,
   classifyPentraMarkdownDestination,
   publicationAdapterConfigHash,
-  publicationArtifactHash,
+  publicationAdapterConfigHashForVersion,
+  publicationArtifactHashForAuditVersion,
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
+  publicationDeliveryDestinationHash,
   publicationDeliveryKey,
   safeGitHubRepositoryPart,
   sha256Hex,
@@ -51,6 +54,7 @@ import {
 } from "./lib/autopilotBuffer";
 import {
   classifyPublishedRevisionDestination,
+  MAX_PUBLISHED_REVISION_RECONCILIATION_ATTEMPTS,
   publishedRevisionDeliveryKey,
   verifyLegacyGitHubReceiptAdoptionProof,
   validatePublishedRevisionReceipt,
@@ -59,6 +63,11 @@ import {
   type PublishedRevisionArtifact,
   type PublishedRevisionReceipt,
 } from "./lib/publishedRevision";
+import {
+  articleMatchesCurrentDomain,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
+import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 
 const PUBLIC_URL_RETRY_DELAYS_MS = [
   30_000,
@@ -76,6 +85,8 @@ type FileContent = {
   path: string;
   content: string;
 };
+
+type BeforeExternalMutation = () => Promise<void>;
 
 type ArticleRecord = {
   _id: Id<"articles">;
@@ -106,6 +117,17 @@ type ArticleRecord = {
   status: string;
   createdAt: number;
   publicationDate?: number;
+  publicationDeliveryHash?: string;
+  publicationRolloutEpoch?: number;
+  publicationLeaseHash?: string;
+  publicationLeaseOwner?: string;
+  publicationAttemptedAt?: number;
+  publicationAdapterVersionAtAttempt?: string;
+  publicationAdapterConfigHashAtAttempt?: string;
+  publicationRendererVersionAtAttempt?: string;
+  publicationOutcomeUnverifiedAt?: number;
+  canonicalDomain?: string;
+  domainRevision?: number;
   sources?: { url: string; title?: string; excerpt?: string; contentHash?: string; capturedAt?: number }[];
   internalLinks?: { anchor: string; href: string }[];
 };
@@ -128,6 +150,7 @@ type SiteRecord = {
   publicationAdapterVerifiedAt?: number;
   publicationAdapterVersion?: string;
   publicationAdapterConfigHash?: string;
+  rendererVersion?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
   brandFontFamily?: string;
@@ -160,6 +183,86 @@ function assertProductionAdapterVerified(site: SiteRecord): void {
   ) {
     throw new Error("Publishing destination has not passed its signed production preflight");
   }
+}
+
+function assertAttemptedAdapterContract(
+  site: SiteRecord,
+  article: ArticleRecord,
+): void {
+  const method = article.publicationConfigSnapshot?.method;
+  if (method !== "wordpress" && method !== "webhook") return;
+  // Additive inference for attempts created before explicit contract fields:
+  // only the still-exact verified adapter and immutable renderer seal qualify.
+  const adapterVersion = article.publicationAdapterVersionAtAttempt ??
+    site.publicationAdapterVersion;
+  const adapterHash = article.publicationAdapterConfigHashAtAttempt ??
+    site.publicationAdapterConfigHash;
+  const rendererVersion = article.publicationRendererVersionAtAttempt ??
+    article.publicationConfigSnapshot?.rendererVersion;
+  if (
+    !adapterVersion ||
+    !adapterHash ||
+    !rendererVersion ||
+    rendererVersion !== article.publicationConfigSnapshot?.rendererVersion ||
+    site.publicationAdapterVersion !== adapterVersion ||
+    site.publicationAdapterConfigHash !== adapterHash ||
+    publicationAdapterConfigHashForVersion(site, adapterVersion) !== adapterHash
+  ) {
+    throw new Error(
+      "The unresolved publication no longer has its exact attempted adapter contract",
+    );
+  }
+  assertSupportedPublicationAdapterVersion(adapterVersion);
+  // This validates that the historical renderer is still intentionally
+  // supported without allocating or contacting the provider.
+  renderSafePublicationHtmlForVersion("", rendererVersion);
+}
+
+function sealedRevisionDeliveryConfig(article: ArticleRecord) {
+  if (!article.publicationConfigSnapshot || !article.publicationConfigHash) {
+    throw new Error("Published revision lost its sealed publication destination");
+  }
+  const config = publicationDeliveryConfig(article.publicationConfigSnapshot);
+  if (publicationDeliveryConfigHash(config) !== article.publicationConfigHash) {
+    throw new Error("Published revision destination seal is inconsistent");
+  }
+  return config;
+}
+
+function attemptedRevisionRendererVersion(
+  site: SiteRecord,
+  article: ArticleRecord,
+  revision: RevisionDoc,
+): string {
+  const sealed = sealedRevisionDeliveryConfig(article);
+  if (sealed.method !== revision.baseReceipt.method) {
+    throw new Error("Published revision method changed after its base receipt");
+  }
+  const rendererVersion = revision.rendererVersionAtAttempt ??
+    sealed.rendererVersion ??
+    PUBLISHER_RENDERER_VERSION;
+  renderSafePublicationHtmlForVersion("", rendererVersion);
+  if (sealed.method !== "wordpress" && sealed.method !== "webhook") {
+    return rendererVersion;
+  }
+  const adapterVersion = revision.adapterVersionAtAttempt ??
+    site.publicationAdapterVersion;
+  const adapterHash = revision.adapterConfigHashAtAttempt ??
+    site.publicationAdapterConfigHash;
+  if (
+    !adapterVersion ||
+    !adapterHash ||
+    !site.publicationAdapterVerifiedAt ||
+    site.publicationAdapterVersion !== adapterVersion ||
+    site.publicationAdapterConfigHash !== adapterHash ||
+    publicationAdapterConfigHashForVersion(site, adapterVersion) !== adapterHash
+  ) {
+    throw new Error(
+      "The unresolved revision no longer has its exact attempted adapter contract",
+    );
+  }
+  assertSupportedPublicationAdapterVersion(adapterVersion);
+  return rendererVersion;
 }
 
 function buildMdx(
@@ -319,6 +422,7 @@ async function commitToMain({
   file,
   deliveryKey,
   expectedCurrentContent,
+  beforeExternalMutation,
 }: {
   token: string;
   owner: string;
@@ -328,6 +432,7 @@ async function commitToMain({
   file: FileContent;
   deliveryKey: string;
   expectedCurrentContent?: string;
+  beforeExternalMutation: BeforeExternalMutation;
 }): Promise<{ commitUrl: string; sha: string }> {
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -375,6 +480,7 @@ async function commitToMain({
       file,
       fileSha: destination.fileSha,
       headers,
+      beforeExternalMutation,
     });
   }
 
@@ -461,6 +567,10 @@ async function commitToMain({
     throw new Error(`Failed to create commit: ${commitRes.statusText}`);
   const commit = await commitRes.json();
 
+  // Blob/tree/commit objects are inert until the branch ref moves. Persist
+  // the ambiguity fence immediately before that first externally visible
+  // publication mutation, after every deterministic/read-only preflight.
+  await beforeExternalMutation();
   const updateRefRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
     {
@@ -631,6 +741,7 @@ async function commitViaContentsApi({
   file,
   fileSha,
   headers,
+  beforeExternalMutation,
 }: {
   owner: string;
   repo: string;
@@ -639,8 +750,10 @@ async function commitViaContentsApi({
   file: FileContent;
   fileSha?: string;
   headers: Record<string, string>;
+  beforeExternalMutation: BeforeExternalMutation;
 }): Promise<{ commitUrl: string; sha: string }> {
   const encodedPath = file.path.split("/").map(encodeURIComponent).join("/");
+  await beforeExternalMutation();
   const putRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}`,
     {
@@ -674,6 +787,8 @@ async function publishToGitHub(
   publicationDate: number,
   deliveryKey: string,
   contentHash: string,
+  auditVersion: number,
+  beforeExternalMutation: BeforeExternalMutation,
 ): Promise<{ method: "github"; commitUrl: string; filePath: string; receipt: PublicationReceipt }> {
   const token = site.githubToken;
   if (!token) throw new Error("GitHub token not configured. Go to Settings → Publishing to add your GitHub personal access token.");
@@ -712,7 +827,13 @@ async function publishToGitHub(
   if (!filePath.startsWith(`${contentDir}/`) || filePath.includes("..")) {
     throw new Error("Refusing to write outside the sealed content directory");
   }
-  const mdx = buildMdx(article, site, publicationDate, deliveryKey);
+  const mdx = buildMdx(
+    article,
+    site,
+    publicationDate,
+    deliveryKey,
+    auditVersion,
+  );
 
   const { commitUrl, sha } = await commitToMain({
     token,
@@ -722,6 +843,7 @@ async function publishToGitHub(
     message: `Pentra publish ${deliveryKey}: ${article.title}`,
     file: { path: filePath, content: mdx },
     deliveryKey,
+    beforeExternalMutation,
   });
 
   const receipt: PublicationReceipt = {
@@ -849,6 +971,8 @@ async function publishToWordPress(
   article: ArticleRecord,
   deliveryKey: string,
   contentHash: string,
+  rendererVersion: string,
+  beforeExternalMutation: BeforeExternalMutation,
 ): Promise<{ method: "wordpress"; postUrl: string; postId: number; receipt: PublicationReceipt }> {
   if (!site.wpUrl || !site.wpUsername || !site.wpAppPassword) {
     throw new Error("WordPress credentials not configured (wpUrl, wpUsername, wpAppPassword)");
@@ -857,7 +981,10 @@ async function publishToWordPress(
   const wpRoot = await validatePublicHttpsUrl(site.wpUrl);
   const wpApiUrl = wpRoot.href.replace(/\/+$/, "");
   const credentials = Buffer.from(`${site.wpUsername}:${site.wpAppPassword}`).toString("base64");
-  const htmlContent = renderSafePublicationHtml(article.markdown);
+  const htmlContent = renderSafePublicationHtmlForVersion(
+    article.markdown,
+    rendererVersion,
+  );
   const slug = article.slug.replace(/^\//, "").replace(/\//g, "-");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
     throw new Error("Article slug is unsafe for WordPress publication");
@@ -911,6 +1038,7 @@ async function publishToWordPress(
     };
   }
 
+  await beforeExternalMutation();
   const response = await safeRequestPublicHttps(`${wpApiUrl}/wp-json/wp/v2/posts`, {
     method: "POST",
     expectedHost: wpRoot.hostname,
@@ -956,6 +1084,8 @@ async function publishToWebhook(
   deliveryKey: string,
   contentHash: string,
   publicationDate: number,
+  rendererVersion: string,
+  beforeExternalMutation: BeforeExternalMutation,
 ): Promise<{ method: "webhook"; status: number; response: string; receipt: PublicationReceipt }> {
   if (!site.webhookUrl || !site.webhookSecret) {
     throw new Error("Webhook URL and signing secret are required");
@@ -976,7 +1106,7 @@ async function publishToWebhook(
 
   const payload = JSON.stringify({
     event: "pentra.article.publish.v1",
-    rendererVersion: PUBLISHER_RENDERER_VERSION,
+    rendererVersion,
     deliveryKey,
     contentHash,
     title: article.title,
@@ -984,7 +1114,7 @@ async function publishToWebhook(
     urlPath,
     urlStructure: site.urlStructure ?? "/blog/[slug]",
     markdown: article.markdown,
-    html: renderSafePublicationHtml(article.markdown),
+    html: renderSafePublicationHtmlForVersion(article.markdown, rendererVersion),
     metaDescription: article.metaDescription ?? "",
     featuredImage: article.featuredImage ?? "",
     language: article.language ?? "en",
@@ -1009,6 +1139,7 @@ async function publishToWebhook(
     .digest("hex");
   headers["X-Pentra-Signature-256"] = `sha256=${signature}`;
 
+  await beforeExternalMutation();
   const response = await safeRequestPublicHttps(webhookEndpoint.href, {
     method: "POST",
     expectedHost: webhookEndpoint.hostname,
@@ -1079,12 +1210,13 @@ async function reviseGitHub(args: {
   site: SiteRecord;
   article: ArticleRecord;
   revision: RevisionDoc;
+  beforeExternalMutation: BeforeExternalMutation;
 }): Promise<PublishedRevisionReceipt> {
   const token = args.site.githubToken;
   const owner = args.site.repoOwner;
   const repo = args.site.repoName;
   const branch = args.site.repoDefaultBranch;
-  const contentDir = publicationDeliveryConfig(args.site).contentDir;
+  const contentDir = sealedRevisionDeliveryConfig(args.article).contentDir;
   if (!token || !owner || !repo || !branch || !contentDir) {
     throw new Error("GitHub revision destination is incomplete");
   }
@@ -1131,6 +1263,7 @@ async function reviseGitHub(args: {
     file: { path: filePath, content: nextContent },
     deliveryKey,
     expectedCurrentContent,
+    beforeExternalMutation: args.beforeExternalMutation,
   });
   return revisionReceipt({
     revision: args.revision,
@@ -1159,6 +1292,8 @@ async function reviseWebhook(args: {
   site: SiteRecord;
   article: ArticleRecord;
   revision: RevisionDoc;
+  rendererVersion: string;
+  beforeExternalMutation: BeforeExternalMutation;
 }): Promise<PublishedRevisionReceipt> {
   if (!args.site.webhookUrl || !args.site.webhookSecret) {
     throw new Error("Webhook revision destination is incomplete");
@@ -1174,7 +1309,7 @@ async function reviseWebhook(args: {
   const deliveryKey = publishedRevisionDeliveryKey(args.revision.revisionKey);
   const payload = JSON.stringify({
     event: "pentra.article.revise.v1",
-    rendererVersion: PUBLISHER_RENDERER_VERSION,
+    rendererVersion: args.rendererVersion,
     revisionKey: args.revision.revisionKey,
     deliveryKey,
     baseDeliveryKey: args.revision.baseReceipt.deliveryKey,
@@ -1185,7 +1320,10 @@ async function reviseWebhook(args: {
     title: next.title,
     slug: next.slug.replace(/^\//, ""),
     markdown: next.markdown,
-    html: renderSafePublicationHtml(next.markdown),
+    html: renderSafePublicationHtmlForVersion(
+      next.markdown,
+      args.rendererVersion,
+    ),
     metaTitle: next.metaTitle ?? "",
     metaDescription: next.metaDescription ?? "",
     internalLinks: next.internalLinks ?? [],
@@ -1199,6 +1337,7 @@ async function reviseWebhook(args: {
   const signature = createHmac("sha256", args.site.webhookSecret)
     .update(`${timestamp}.${payload}`)
     .digest("hex");
+  await args.beforeExternalMutation();
   const response = await safeRequestPublicHttps(endpoint.href, {
     method: "POST",
     expectedHost: endpoint.hostname,
@@ -1451,23 +1590,78 @@ export const executePublishedRevisionInternal = internalAction({
     );
     if (!context) throw new Error("Published revision tenant is unavailable");
     const { site, article, revision } = context;
-    if (
-      !site.autopilotEnabled ||
-      !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
-      site.deletionStatus
-    ) {
-      throw new Error("Published revision is blocked outside a warm/live tenant rollout");
+    if (revision.status === "verified" || revision.status === "rolled_back") {
+      return { status: "verified", idempotent: true };
     }
-    assertProductionAdapterVerified(site as SiteRecord);
+    if (revision.status === "verification_pending") {
+      return { status: "verification_pending", idempotent: true };
+    }
+    if (revision.status === "failed") {
+      return { status: "failed", idempotent: true };
+    }
+    if (
+      revision.status === "unverified" &&
+      revision.attempts >=
+        MAX_PUBLISHED_REVISION_RECONCILIATION_ATTEMPTS
+    ) {
+      return {
+        status: "unverified",
+        idempotent: true,
+        requiresOwnerReview: true,
+      };
+    }
+    const recoveringAttemptedDelivery = Boolean(revision.attemptedAt);
+    if (!recoveringAttemptedDelivery) {
+      if (
+        !site.autopilotEnabled ||
+        !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
+        site.deletionStatus
+      ) {
+        throw new Error("Published revision is blocked outside a warm/live tenant rollout");
+      }
+      assertProductionAdapterVerified(site as SiteRecord);
+    } else {
+      // A prior provider mutation is a receipt-reconciliation workflow, not a
+      // fresh growth authorization. It may inspect the exact destination
+      // under a later plan/measurement state, but the mutation callback below
+      // still requires current authorization before any new external write.
+      attemptedRevisionRendererVersion(
+        site as SiteRecord,
+        article as ArticleRecord,
+        revision,
+      );
+    }
     const leaseOwner = randomUUID();
     const claimed = await ctx.runMutation(
       internal.publishedRevisions.claimExecution,
       { revisionId, leaseOwner },
     );
     if (claimed.idempotent) return { status: "verified", idempotent: true };
+    if (claimed.retiredPristine) {
+      return {
+        status: "failed",
+        idempotent: false,
+        detail:
+          "The expired worker lease was retired because no provider mutation had started.",
+      };
+    }
+    if (claimed.reconciliationExhausted) {
+      return {
+        status: "unverified",
+        idempotent: false,
+        requiresOwnerReview: true,
+      };
+    }
 
-    let deliveryAttempted = false;
-    try {
+    let deliveryAttempted = Boolean(revision.attemptedAt);
+    let attemptMarkedForLease = false;
+    const beforeExternalMutation = async () => {
+      if (attemptMarkedForLease) return;
+      if (recoveringAttemptedDelivery) {
+        throw new Error(
+          "A prior provider attempt may only be reconciled by an exact read receipt; Pentra will not replay the mutation blindly.",
+        );
+      }
       if (revision.kind === "strengthen_cluster") {
         if (!revision.targetArticleId || !revision.targetUrl) {
           throw new Error("Internal-link revision lost its exact target receipt");
@@ -1487,7 +1681,9 @@ export const executePublishedRevisionInternal = internalAction({
           verifiedTarget.articleId !== revision.targetArticleId ||
           new URL(verifiedTarget.targetUrl).pathname !== revision.targetUrl
         ) {
-          throw new Error("Internal-link target is no longer an exact recently verified tenant page");
+          throw new Error(
+            "Internal-link target is no longer an exact recently verified tenant page",
+          );
         }
         const fetchedTarget = await safeFetchPublicText(verifiedTarget.targetUrl, {
           expectedHost: new URL(verifiedTarget.targetUrl).hostname,
@@ -1495,7 +1691,10 @@ export const executePublishedRevisionInternal = internalAction({
           maxRedirects: 3,
           maxBytes: 1_000_000,
           timeoutMs: 15_000,
-          allowedContentTypes: [/^text\/html(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i],
+          allowedContentTypes: [
+            /^text\/html(?:;|$)/i,
+            /^application\/xhtml\+xml(?:;|$)/i,
+          ],
         });
         verifyLivePublicationPage({
           expectedUrl: verifiedTarget.targetUrl,
@@ -1504,19 +1703,27 @@ export const executePublishedRevisionInternal = internalAction({
           title: verifiedTarget.title,
         });
       }
-
       await ctx.runMutation(internal.publishedRevisions.recordAttempted, {
         revisionId,
         leaseOwner,
       });
+      attemptMarkedForLease = true;
       deliveryAttempted = true;
+    };
+    try {
       let receipt: PublishedRevisionReceipt;
+      const rendererVersion = attemptedRevisionRendererVersion(
+        site as SiteRecord,
+        article as ArticleRecord,
+        revision,
+      );
       switch (site.publishMethod ?? "github") {
         case "github":
           receipt = await reviseGitHub({
             site: site as SiteRecord,
             article: article as ArticleRecord,
             revision,
+            beforeExternalMutation,
           });
           break;
         case "wordpress":
@@ -1531,11 +1738,17 @@ export const executePublishedRevisionInternal = internalAction({
             site: site as SiteRecord,
             article: article as ArticleRecord,
             revision,
+            rendererVersion,
+            beforeExternalMutation,
           });
           break;
         default:
           throw new Error("Published revision adapter is unsupported");
       }
+      // An exact idempotency read from a prior attempt is settlement, not a
+      // new mutation. `recordDelivery` accepts it only when the immutable
+      // attempted boundary already exists; never call the mutation-authority
+      // callback after the provider has returned read-only proof.
       await ctx.runMutation(internal.publishedRevisions.recordDelivery, {
         revisionId,
         leaseOwner,
@@ -1551,9 +1764,7 @@ export const executePublishedRevisionInternal = internalAction({
       const detail = error instanceof Error
         ? error.message
         : "Published revision failed without an exact receipt";
-      const deterministicFailure =
-        !deliveryAttempted ||
-        /drift|incomplete|unsupported|unsafe|blocked|not configured|too short|lost its exact target|no longer an exact/i.test(detail);
+      const deterministicFailure = !deliveryAttempted;
       await ctx.runMutation(internal.publishedRevisions.recordFailure, {
         revisionId,
         leaseOwner,
@@ -1673,7 +1884,7 @@ export const recoverPublishedRevisionVerifications = internalAction({
       revisionId: Id<"published_article_revisions">;
       expectedNextArtifactHash: string;
       attempt: number;
-    }> = await ctx.runQuery(
+    }> = await ctx.runMutation(
       internal.publishedRevisions.listDueLiveVerifications,
       { now: Date.now() },
     );
@@ -1723,71 +1934,144 @@ type PublishArgs = {
 async function publishArticleHandler(
   ctx: ActionCtx,
   args: PublishArgs,
+  options?: { readOnlyRecoveryOnly?: boolean },
 ): Promise<PublishResult> {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId: args.siteId });
+    const site = await ctx.runQuery(
+      internal.sites.getPublicationRecoverySite,
+      { siteId: args.siteId },
+    );
     if (!site) throw new Error("Site not found");
-    if (
-      !site.autopilotEnabled ||
-      site.autopilotRolloutMode !== "live"
-    ) {
-      throw new Error(
-        "External publication is blocked unless this exact tenant is in live canary mode",
-      );
-    }
-    const rolloutEpoch = site.autopilotRolloutEpoch ?? 0;
-
     const article = await ctx.runQuery(internal.articles.getInternal, {
       articleId: args.articleId,
     });
     if (!article) throw new Error("Article not found");
 
-    if (article.siteId !== args.siteId) {
+    if (
+      article.siteId !== args.siteId ||
+      !articleMatchesCurrentDomain(site, article)
+    ) {
       throw new Error("Article does not belong to this site");
     }
+    const recoveringUnverifiedPublication = Boolean(
+      article.publicationAttemptedAt &&
+      article.publicationLeaseOwner &&
+      article.publicationLeaseHash &&
+      article.publicationDate &&
+      article.publicationDeliveryHash &&
+      Number.isSafeInteger(article.publicationRolloutEpoch),
+    );
+    const retainedPristinePublication = Boolean(
+      !article.publicationAttemptedAt &&
+      !article.publicationOutcomeUnverifiedAt &&
+      article.publicationLeaseOwner &&
+      article.publicationLeaseHash &&
+      article.publicationDate &&
+      article.publicationDeliveryHash &&
+      Number.isSafeInteger(article.publicationRolloutEpoch),
+    );
+    if (retainedPristinePublication) {
+      const released = await ctx.runMutation(
+        internal.articles.releaseExpiredPristinePublication,
+        {
+          articleId: article._id,
+          expectedContentHash: article.publicationLeaseHash!,
+          expectedLeaseOwner: article.publicationLeaseOwner!,
+        },
+      );
+      throw new Error(
+        released.released
+          ? "An expired pre-provider publication lease was safely released; retry after the current audit is rechecked."
+          : "The publication lease is still active before its provider boundary.",
+      );
+    }
+    const recoveryAuthorization = recoveringUnverifiedPublication
+      ? await ctx.runQuery(
+          internal.articles.getPublicationRecoveryAuthorization,
+          { articleId: article._id },
+        )
+      : { receiptOnlyPlanTransition: false };
+    if (
+      (!site.autopilotEnabled || site.autopilotRolloutMode !== "live") &&
+      !recoveryAuthorization.receiptOnlyPlanTransition
+    ) {
+      throw new Error(
+        "External publication is blocked unless this exact tenant is in live canary mode",
+      );
+    }
+    const rolloutEpoch = recoveryAuthorization.receiptOnlyPlanTransition
+      ? article.publicationRolloutEpoch!
+      : site.autopilotRolloutEpoch ?? 0;
 
-    // Re-evaluate the measured topic at the final delivery boundary. A topic
-    // or tenant profile can change after an article was sealed, and artifacts
-    // approved under an older policy must never slip through on stale state.
-    if (!article.topicId) {
-      await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
-        articleId: article._id,
-        status: "review",
+    // Mutable policy is an authorization gate only before the first provider
+    // mutation. Once an exact sealed envelope may already exist externally,
+    // recovery is receipt reconciliation: current profile, approval, or topic
+    // edits cannot strand the immutable delivery outcome.
+    if (!recoveringUnverifiedPublication) {
+      if (!article.topicId) {
+        await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
+          articleId: article._id,
+          status: "review",
+        });
+        throw new Error(
+          "Publication quality gate blocked this article: autonomous delivery requires a tenant-scoped measured topic.",
+        );
+      }
+      const topic = await ctx.runQuery(internal.topics.getInternal, {
+        topicId: article.topicId,
       });
-      throw new Error(
-        "Publication quality gate blocked this article: autonomous delivery requires a tenant-scoped measured topic.",
-      );
+      if (
+        !topic ||
+        topic.siteId !== args.siteId ||
+        !topicMatchesCurrentDomain(site, topic)
+      ) {
+        await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
+          articleId: article._id,
+          status: "review",
+        });
+        throw new Error(
+          "Publication quality gate blocked this article: its measured topic is missing or belongs to another tenant.",
+        );
+      }
+      const topicFit = evaluateTopicBusinessFit({
+        keyword: topic.primaryKeyword,
+        label: article.title,
+        ...tenantTopicBusinessSignals(site),
+      });
+      if (!topicFit.eligible) {
+        const issue =
+          `Measured topic "${topic.primaryKeyword}" failed the current tenant product-fit gate: ${topicFit.reasons.join("; ")}`;
+        await ctx.runMutation(internal.articles.recordPublicationCheck, {
+          articleId: article._id,
+          status: "blocked",
+          issues: [issue],
+          warnings: [],
+        });
+        await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
+          articleId: article._id,
+          status: "review",
+        });
+        throw new Error(`Publication quality gate blocked this article: ${issue}`);
+      }
     }
-    const topic = await ctx.runQuery(internal.topics.getInternal, {
-      topicId: article.topicId,
-    });
-    if (!topic || topic.siteId !== args.siteId) {
-      await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
-        articleId: article._id,
-        status: "review",
-      });
-      throw new Error(
-        "Publication quality gate blocked this article: its measured topic is missing or belongs to another tenant.",
-      );
-    }
-    const topicFit = evaluateTopicBusinessFit({
-      keyword: topic.primaryKeyword,
-      label: article.title,
-      ...tenantTopicBusinessSignals(site),
-    });
-    if (!topicFit.eligible) {
-      const issue =
-        `Measured topic "${topic.primaryKeyword}" failed the current tenant product-fit gate: ${topicFit.reasons.join("; ")}`;
-      await ctx.runMutation(internal.articles.recordPublicationCheck, {
-        articleId: article._id,
-        status: "blocked",
-        issues: [issue],
-        warnings: [],
-      });
-      await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
-        articleId: article._id,
-        status: "review",
-      });
-      throw new Error(`Publication quality gate blocked this article: ${issue}`);
+    let recoveryMutationAuthorized = true;
+    if (recoveringUnverifiedPublication) {
+      if (!article.topicId) {
+        recoveryMutationAuthorized = false;
+      } else {
+        const currentTopic = await ctx.runQuery(internal.topics.getInternal, {
+          topicId: article.topicId,
+        });
+        recoveryMutationAuthorized = Boolean(
+          currentTopic &&
+          currentTopic.siteId === args.siteId &&
+          topicMatchesCurrentDomain(site, currentTopic) &&
+          evaluateTopicBusinessFit({
+            keyword: currentTopic.primaryKeyword,
+            label: article.title,
+            ...tenantTopicBusinessSignals(site),
+          }).eligible,
+        );
+      }
     }
 
     if (!article.publicationConfigSnapshot || !article.publicationConfigHash) {
@@ -1799,54 +2083,91 @@ async function publishArticleHandler(
     const sealedConfigHash = publicationDeliveryConfigHash(sealedConfig);
     const currentConfig = publicationDeliveryConfig(site);
     const currentConfigHash = publicationDeliveryConfigHash(currentConfig);
+    const recoveryDestinationMatches = recoveringUnverifiedPublication &&
+      publicationDeliveryDestinationHash(currentConfig) ===
+        publicationDeliveryDestinationHash(sealedConfig);
     if (
       sealedConfigHash !== article.publicationConfigHash ||
-      currentConfigHash !== article.publicationConfigHash
+      (currentConfigHash !== article.publicationConfigHash &&
+        !recoveryDestinationMatches)
     ) {
       throw new Error("Publication destination changed after quality audit");
     }
-    assertProductionAdapterVerified(site as SiteRecord);
+    if (recoveringUnverifiedPublication) {
+      assertAttemptedAdapterContract(site as SiteRecord, article as ArticleRecord);
+    } else {
+      assertProductionAdapterVerified(site as SiteRecord);
+    }
     if (site.publishMethod === "manual") {
       throw new Error(
         "Manual delivery cannot be marked published without an external publication receipt.",
       );
     }
     if (article.status !== "review" && article.status !== "ready" && article.status !== "published") {
-      throw new Error(`Article workflow status '${article.status}' is not publishable`);
+      if (!recoveringUnverifiedPublication) {
+        throw new Error(`Article workflow status '${article.status}' is not publishable`);
+      }
+      recoveryMutationAuthorized = false;
     }
-    if (site.approvalRequired && article.status !== "ready" && article.status !== "published") {
+    if (
+      !recoveringUnverifiedPublication &&
+      site.approvalRequired &&
+      article.status !== "ready" &&
+      article.status !== "published"
+    ) {
       throw new Error("Article requires explicit owner approval before publication");
+    }
+    if (
+      recoveringUnverifiedPublication &&
+      site.approvalRequired &&
+      article.status !== "ready" &&
+      article.status !== "published"
+    ) {
+      recoveryMutationAuthorized = false;
     }
 
     // Autonomous quality is tenant-independent. A hostname must never weaken
     // the publication contract for a customer.
     const mode: PublicationQualityMode = "strict";
     const quality = evaluatePublicationQuality(article, mode);
-    await ctx.runMutation(internal.articles.recordPublicationCheck, {
-      articleId: article._id,
-      status: quality.passed ? "passed" : "blocked",
-      issues: quality.issues,
-      warnings: quality.warnings,
-    });
-    if (!quality.passed) {
-      await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
+    if (!recoveringUnverifiedPublication) {
+      await ctx.runMutation(internal.articles.recordPublicationCheck, {
         articleId: article._id,
-        status: "review",
+        status: quality.passed ? "passed" : "blocked",
+        issues: quality.issues,
+        warnings: quality.warnings,
       });
-      throw new Error(
-        `Publication quality gate blocked this article: ${quality.issues.join(" ")}`,
-      );
+    }
+    if (!quality.passed) {
+      if (!recoveringUnverifiedPublication) {
+        await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
+          articleId: article._id,
+          status: "review",
+        });
+        throw new Error(
+          `Publication quality gate blocked this article: ${quality.issues.join(" ")}`,
+        );
+      }
     }
 
+    const auditVersion = article.publicationAuditVersion;
+    if (!Number.isInteger(auditVersion) || !article.auditedContentHash) {
+      throw new Error(
+        "Publication quality gate blocked this article: the exact final artifact has no supported audit seal.",
+      );
+    }
     if (
-      article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
-      !article.auditedContentHash
+      !recoveringUnverifiedPublication &&
+      auditVersion !== PUBLICATION_AUDIT_VERSION
     ) {
       throw new Error(
         "Publication quality gate blocked this article: the exact final artifact has not completed the current audit.",
       );
     }
-    const contentHash = publicationArtifactHash(article);
+    const contentHash = publicationArtifactHashForAuditVersion(
+      article,
+      auditVersion!,
+    );
     if (contentHash !== article.auditedContentHash) {
       throw new Error(
         "Publication quality gate blocked this article: content changed after audit.",
@@ -1866,40 +2187,96 @@ async function publishArticleHandler(
     }
 
     const method = site.publishMethod ?? "github";
-    if (!lease.publicationDate || !lease.publicationDeliveryHash) {
-      await ctx.runMutation(internal.articles.releasePublication, {
-        articleId: article._id,
-        expectedContentHash: contentHash,
-        leaseOwner,
-      });
+    const hadPriorAttempt = lease.deliveryPreviouslyAttempted === true;
+    if (
+      !lease.publicationDate ||
+      !lease.publicationDeliveryHash ||
+      !Number.isSafeInteger(lease.publicationRolloutEpoch)
+    ) {
+      if (!hadPriorAttempt) {
+        await ctx.runMutation(internal.articles.releasePublication, {
+          articleId: article._id,
+          expectedContentHash: contentHash,
+          leaseOwner,
+        });
+      }
       throw new Error("Publication lease did not return a sealed delivery envelope");
     }
+    const deliveryRolloutEpoch = lease.publicationRolloutEpoch!;
     const deliveryKey = publicationDeliveryKey(lease.publicationDeliveryHash);
 
-    const lockedSite = await ctx.runQuery(internal.sites.getFull, {
+    const lockedSite = await ctx.runQuery(internal.sites.getPublicationRecoverySite, {
       siteId: args.siteId,
     });
     if (
       !lockedSite ||
-      lockedSite.autopilotRolloutMode !== "live" ||
-      (lockedSite.autopilotRolloutEpoch ?? 0) !== rolloutEpoch ||
-      publicationDeliveryConfigHash(publicationDeliveryConfig(lockedSite)) !==
-        article.publicationConfigHash
+      !articleMatchesCurrentDomain(lockedSite, article) ||
+      (!recoveryAuthorization.receiptOnlyPlanTransition &&
+        (lockedSite.autopilotRolloutMode !== "live" ||
+          (lockedSite.autopilotRolloutEpoch ?? 0) !== deliveryRolloutEpoch)) ||
+      (publicationDeliveryConfigHash(publicationDeliveryConfig(lockedSite)) !==
+          article.publicationConfigHash &&
+        !(hadPriorAttempt &&
+          publicationDeliveryDestinationHash(
+            publicationDeliveryConfig(lockedSite),
+          ) === publicationDeliveryDestinationHash(sealedConfig)))
     ) {
-      await ctx.runMutation(internal.articles.releasePublication, {
-        articleId: article._id,
-        expectedContentHash: contentHash,
-        leaseOwner,
-      });
+      if (hadPriorAttempt) {
+        await ctx.runMutation(
+          internal.articles.recordPublicationOutcomeUnverified,
+          {
+            articleId: article._id,
+            expectedContentHash: contentHash,
+            leaseOwner,
+            detail:
+              "The prior external publication outcome is still unresolved; a retry lost its rollout or destination boundary before provider access.",
+          },
+        );
+      } else {
+        await ctx.runMutation(internal.articles.releasePublication, {
+          articleId: article._id,
+          expectedContentHash: contentHash,
+          leaseOwner,
+        });
+      }
       throw new Error("Rollout or publication configuration changed before delivery");
     }
-    assertProductionAdapterVerified(lockedSite as SiteRecord);
+    if (hadPriorAttempt) {
+      assertAttemptedAdapterContract(
+        lockedSite as SiteRecord,
+        article as ArticleRecord,
+      );
+    } else {
+      assertProductionAdapterVerified(lockedSite as SiteRecord);
+    }
 
     const deliverySite: SiteRecord = {
       ...(lockedSite as SiteRecord),
       ...sealedConfig,
     };
 
+    let deliveryAttempted = hadPriorAttempt;
+    let attemptMarkedForLease = false;
+    const beforeExternalMutation = async () => {
+      if (attemptMarkedForLease) return;
+      if (options?.readOnlyRecoveryOnly) {
+        throw new Error(
+          "The scheduled publication watchdog is receipt-only and cannot replay an external write.",
+        );
+      }
+      if (hadPriorAttempt && !recoveryMutationAuthorized) {
+        throw new Error(
+          "Current owner policy permits read-only reconciliation only; a new external publication mutation is blocked.",
+        );
+      }
+      await ctx.runMutation(internal.articles.recordPublicationAttempted, {
+        articleId: article._id,
+        expectedContentHash: contentHash,
+        leaseOwner,
+      });
+      attemptMarkedForLease = true;
+      deliveryAttempted = true;
+    };
     try {
       let result: PublishResult;
       switch (method) {
@@ -1910,6 +2287,8 @@ async function publishArticleHandler(
             lease.publicationDate,
             deliveryKey,
             contentHash,
+            auditVersion!,
+            beforeExternalMutation,
           );
           break;
         case "wordpress":
@@ -1918,6 +2297,8 @@ async function publishArticleHandler(
             article as ArticleRecord,
             deliveryKey,
             contentHash,
+            sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION,
+            beforeExternalMutation,
           );
           break;
         case "webhook":
@@ -1927,6 +2308,8 @@ async function publishArticleHandler(
             deliveryKey,
             contentHash,
             lease.publicationDate,
+            sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION,
+            beforeExternalMutation,
           );
           break;
         default:
@@ -1940,17 +2323,34 @@ async function publishArticleHandler(
         publishedContentHash: contentHash,
         expectedDeliveryHash: lease.publicationDeliveryHash,
         expectedConfigHash: article.publicationConfigHash,
-        expectedRolloutEpoch: rolloutEpoch,
+        expectedRolloutEpoch: deliveryRolloutEpoch,
         leaseOwner,
         receipt: result.receipt,
       });
       return result;
     } catch (error) {
-      await ctx.runMutation(internal.articles.releasePublication, {
-        articleId: article._id,
-        expectedContentHash: contentHash,
-        leaseOwner,
-      });
+      if (deliveryAttempted) {
+        const detail = error instanceof Error
+          ? error.message
+          : "Publication delivery outcome is unverified";
+        await ctx.runMutation(
+          internal.articles.recordPublicationOutcomeUnverified,
+          {
+            articleId: article._id,
+            expectedContentHash: contentHash,
+            leaseOwner,
+            detail:
+              `The destination did not return a conclusive receipt. ` +
+              `Pentra retained the exact delivery key and configuration lock for idempotent reconciliation. ${detail}`,
+          },
+        );
+      } else {
+        await ctx.runMutation(internal.articles.releasePublication, {
+          articleId: article._id,
+          expectedContentHash: contentHash,
+          leaseOwner,
+        });
+      }
       throw error;
     }
 }
@@ -1975,7 +2375,12 @@ export const verifyPublicPublicationInternal = internalAction({
       ctx.runQuery(internal.sites.getFull, { siteId: args.siteId }),
       ctx.runQuery(internal.articles.getInternal, { articleId: args.articleId }),
     ]);
-    if (!site || !article || article.siteId !== args.siteId) {
+    if (
+      !site ||
+      !article ||
+      article.siteId !== args.siteId ||
+      !articleMatchesCurrentDomain(site, article)
+    ) {
       return { status: "stale", reason: "tenant_mismatch" };
     }
     if (
@@ -2075,6 +2480,72 @@ export const verifyPublicPublicationInternal = internalAction({
 export const publishArticleInternal = internalAction({
   args: publishArgs,
   handler: publishArticleHandler,
+});
+
+/** Exact-generation watchdog armed by the first publication lease. It is
+ * deliberately separate from the ordinary publisher entry point: pristine
+ * worker death is provider-free cleanup, and a durable prior attempt may only
+ * perform an idempotent destination read. A stale generation is a no-op. */
+export const recoverInitialPublicationLeaseInternal = internalAction({
+  args: {
+    ...publishArgs,
+    expectedContentHash: v.string(),
+    expectedLeaseOwner: v.string(),
+  },
+  handler: async (ctx, args): Promise<{
+    status: "stale" | "active" | "released_pristine" | "settled" | "unverified";
+  }> => {
+    const [site, article] = await Promise.all([
+      ctx.runQuery(internal.sites.getPublicationRecoverySite, {
+        siteId: args.siteId,
+      }),
+      ctx.runQuery(internal.articles.getInternal, {
+        articleId: args.articleId,
+      }),
+    ]);
+    if (
+      !site ||
+      !article ||
+      article.siteId !== args.siteId ||
+      article.publicationLeaseHash !== args.expectedContentHash ||
+      article.publicationLeaseOwner !== args.expectedLeaseOwner ||
+      site.publicationLeaseOwner !== args.expectedLeaseOwner
+    ) {
+      return { status: "stale" };
+    }
+    const leaseExpiry = Math.max(
+      (article.publicationLeaseStartedAt ?? Number.POSITIVE_INFINITY) +
+        PUBLICATION_LEASE_MS,
+      site.publicationLeaseExpiresAt ?? Number.POSITIVE_INFINITY,
+    );
+    if (leaseExpiry > Date.now()) return { status: "active" };
+
+    if (!article.publicationAttemptedAt) {
+      const released = await ctx.runMutation(
+        internal.articles.releaseExpiredPristinePublication,
+        {
+          articleId: article._id,
+          expectedContentHash: args.expectedContentHash,
+          expectedLeaseOwner: args.expectedLeaseOwner,
+        },
+      );
+      return { status: released.released ? "released_pristine" : "stale" };
+    }
+
+    try {
+      await publishArticleHandler(
+        ctx,
+        { siteId: args.siteId, articleId: article._id },
+        { readOnlyRecoveryOnly: true },
+      );
+      return { status: "settled" };
+    } catch {
+      // The handler durably retains an unverified attempted envelope when no
+      // exact receipt exists. Owner-reviewed disposition remains available
+      // after the newly acquired recovery lease expires.
+      return { status: "unverified" };
+    }
+  },
 });
 
 export const publishArticle = action({

@@ -51,6 +51,12 @@ import {
   dataForSeoLocationCode,
 } from "./lib/dataForSeoLocale";
 import { normalizeTopicIntentKeyword } from "./lib/topicLifecycle";
+import {
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  takeCurrentDomainArticles,
+  takeCurrentDomainTopics,
+} from "./lib/siteDomainBinding";
 
 const INVENTORY_READ_LIMIT = 2_000;
 const PLAN_LEASE_MS = 30 * 60 * 1000;
@@ -502,9 +508,11 @@ export const stage = internalMutation({
       domainRank: authority.domainRank,
       referringDomains: authority.referringDomains ?? 0,
     });
-    const existingTopics = await ctx.db.query("topic_clusters")
-      .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-      .take(INVENTORY_READ_LIMIT + 1);
+    const existingTopics = await takeCurrentDomainTopics(
+      ctx,
+      site,
+      INVENTORY_READ_LIMIT + 1,
+    );
     if (existingTopics.length > INVENTORY_READ_LIMIT) {
       throw new Error("Plan checkpoint topic read limit exhausted");
     }
@@ -562,6 +570,8 @@ export const stage = internalMutation({
       });
       const topicId = await ctx.db.insert("topic_clusters", {
         siteId: args.siteId,
+        planningCanonicalDomain: siteCanonicalDomain(site)!,
+        planningDomainRevision: siteCanonicalDomainRevision(site),
         label: candidate.label,
         primaryKeyword: candidate.primaryKeyword,
         secondaryKeywords: candidate.secondaryKeywords,
@@ -863,12 +873,16 @@ export const recordInlineSerp = internalMutation({
       siteHost: current.site.domain,
     });
     const [topics, articles, planCheckpoints] = await Promise.all([
-      ctx.db.query("topic_clusters")
-        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-        .take(INVENTORY_READ_LIMIT + 1),
-      ctx.db.query("articles")
-        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-        .take(INVENTORY_READ_LIMIT + 1),
+      takeCurrentDomainTopics(
+        ctx,
+        current.site,
+        INVENTORY_READ_LIMIT + 1,
+      ),
+      takeCurrentDomainArticles(
+        ctx,
+        current.site,
+        INVENTORY_READ_LIMIT + 1,
+      ),
       ctx.db.query("plan_candidate_checkpoints")
         .withIndex("by_plan_job", (q) => q.eq("planJobId", args.jobId))
         .collect(),
@@ -1045,26 +1059,25 @@ export const completeInline = internalMutation({
   },
   handler: async (ctx, args) => {
     const timestamp = Date.now();
+    const site = await ctx.db.get(args.siteId);
     const [
-      site,
       job,
       checkpoint,
       jobCheckpoints,
       currentTopics,
       currentArticles,
     ] = await Promise.all([
-      ctx.db.get(args.siteId),
       ctx.db.get(args.jobId),
       ctx.db.get(args.checkpointId),
       ctx.db.query("plan_candidate_checkpoints")
         .withIndex("by_plan_job", (q) => q.eq("planJobId", args.jobId))
         .collect(),
-      ctx.db.query("topic_clusters")
-        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-        .take(INVENTORY_READ_LIMIT + 1),
-      ctx.db.query("articles")
-        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-        .take(INVENTORY_READ_LIMIT + 1),
+      site
+        ? takeCurrentDomainTopics(ctx, site, INVENTORY_READ_LIMIT + 1)
+        : Promise.resolve([]),
+      site
+        ? takeCurrentDomainArticles(ctx, site, INVENTORY_READ_LIMIT + 1)
+        : Promise.resolve([]),
     ]);
     const target = job
       ? automaticSingleExecutionCheckpointTargetFromPayload(job.payload)
@@ -1309,19 +1322,19 @@ export const commitInlineSuccess = internalMutation({
   },
   handler: async (ctx, args) => {
     const timestamp = Date.now();
-    const [site, job, checkpoints, currentTopics, currentArticles] =
+    const site = await ctx.db.get(args.siteId);
+    const [job, checkpoints, currentTopics, currentArticles] =
       await Promise.all([
-        ctx.db.get(args.siteId),
         ctx.db.get(args.jobId),
         ctx.db.query("plan_candidate_checkpoints")
           .withIndex("by_plan_job", (q) => q.eq("planJobId", args.jobId))
           .collect(),
-        ctx.db.query("topic_clusters")
-          .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-          .take(INVENTORY_READ_LIMIT + 1),
-        ctx.db.query("articles")
-          .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-          .take(INVENTORY_READ_LIMIT + 1),
+        site
+          ? takeCurrentDomainTopics(ctx, site, INVENTORY_READ_LIMIT + 1)
+          : Promise.resolve([]),
+        site
+          ? takeCurrentDomainArticles(ctx, site, INVENTORY_READ_LIMIT + 1)
+          : Promise.resolve([]),
       ]);
     const checkpoint = checkpoints[0];
     const target = job
@@ -1710,12 +1723,8 @@ export async function activateTerminalPlanCheckpoints(
   if (checkpoints.length !== 1) authorization = false;
   const [currentTopics, currentArticles] = site
     ? await Promise.all([
-        ctx.db.query("topic_clusters")
-          .withIndex("by_site", (q) => q.eq("siteId", site._id))
-          .take(INVENTORY_READ_LIMIT + 1),
-        ctx.db.query("articles")
-          .withIndex("by_site", (q) => q.eq("siteId", site._id))
-          .take(INVENTORY_READ_LIMIT + 1),
+        takeCurrentDomainTopics(ctx, site, INVENTORY_READ_LIMIT + 1),
+        takeCurrentDomainArticles(ctx, site, INVENTORY_READ_LIMIT + 1),
       ])
     : [[], []];
   if (

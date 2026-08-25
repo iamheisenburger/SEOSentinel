@@ -125,6 +125,42 @@ import {
   reserveDurableContactClaim,
 } from "./lib/outreachDurability.ts";
 import { followUpPredecessorDecision } from "./lib/outreachSequence.ts";
+import {
+  normalizeCanonicalDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./lib/siteDomainBinding.ts";
+
+function authorityOpportunityMatchesCurrentDomain(
+  site: Doc<"sites">,
+  opportunity: Doc<"seo_authority_opportunities">,
+): boolean {
+  const explicitlyCurrent =
+    normalizeCanonicalDomain(opportunity.canonicalDomain ?? "") ===
+      siteCanonicalDomain(site) &&
+    opportunity.domainRevision === siteCanonicalDomainRevision(site);
+  const unstampedLegacy =
+    siteUsesLegacyDomainReceipts(site) &&
+    opportunity.canonicalDomain === undefined &&
+    opportunity.domainRevision === undefined;
+  return explicitlyCurrent || unstampedLegacy;
+}
+
+function outreachMessageMatchesCurrentDomain(
+  site: Doc<"sites">,
+  message: Doc<"outreach_messages">,
+): boolean {
+  const explicitlyCurrent =
+    normalizeCanonicalDomain(message.canonicalDomain ?? "") ===
+      siteCanonicalDomain(site) &&
+    message.domainRevision === siteCanonicalDomainRevision(site);
+  const unstampedLegacy =
+    siteUsesLegacyDomainReceipts(site) &&
+    message.canonicalDomain === undefined &&
+    message.domainRevision === undefined;
+  return explicitlyCurrent || unstampedLegacy;
+}
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -2714,19 +2750,39 @@ export const listMessages = query({
   handler: async (ctx, { siteId, status, limit }) => {
     const site = await requireSiteOwner(ctx, siteId);
     const ownerAccountKey = accountDeletionKey(site.userId!);
+    const canonicalDomain = siteCanonicalDomain(site);
     const take = Math.max(1, Math.min(limit ?? 50, 200));
-    if (status) {
+    const currentStatusBatch = (messageStatus: string) => {
+      if (siteUsesLegacyDomainReceipts(site)) {
+        return ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_owner_lineage_status", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("ownerAccountKey", ownerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", messageStatus)
+          )
+          .order("desc")
+          .take(take);
+      }
+      if (!canonicalDomain) return Promise.resolve([]);
       return ctx.db
         .query("outreach_messages")
-        .withIndex("by_site_owner_lineage_status", (q) =>
+        .withIndex("by_site_epoch_owner_status", (q) =>
           q
             .eq("siteId", siteId)
+            .eq("canonicalDomain", canonicalDomain)
+            .eq("domainRevision", siteCanonicalDomainRevision(site))
             .eq("ownerAccountKey", ownerAccountKey)
             .eq("ownerLineageUnresolvedAt", undefined)
-            .eq("status", status),
+            .eq("status", messageStatus)
         )
         .order("desc")
         .take(take);
+    };
+    if (status) {
+      return currentStatusBatch(status);
     }
     const statuses = [
       "draft",
@@ -2742,19 +2798,7 @@ export const listMessages = query({
       "skipped",
     ];
     const batches = await Promise.all(
-      statuses.map((s) =>
-        ctx.db
-          .query("outreach_messages")
-          .withIndex("by_site_owner_lineage_status", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("ownerAccountKey", ownerAccountKey)
-              .eq("ownerLineageUnresolvedAt", undefined)
-              .eq("status", s)
-          )
-          .order("desc")
-          .take(take),
-      ),
+      statuses.map(currentStatusBatch),
     );
     return batches
       .flat()
@@ -2798,8 +2842,14 @@ export const insertDraft = internalMutation({
       throw new Error("Site not found");
     }
     if (!site.userId) throw new Error("Outreach tenant owner is unavailable");
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) throw new Error("Outreach tenant domain is invalid");
     const ownerAccountKey = accountDeletionKey(site.userId);
-    if (!opportunity || opportunity.siteId !== args.siteId) {
+    if (
+      !opportunity ||
+      opportunity.siteId !== args.siteId ||
+      !authorityOpportunityMatchesCurrentDomain(site, opportunity)
+    ) {
       throw new Error("Authority opportunity not found for site");
     }
     if (
@@ -2878,7 +2928,9 @@ export const insertDraft = internalMutation({
 
     // One live message per opportunity: re-running discovery must not queue
     // the same email twice.
-    const liveForOpportunity = sameOpportunity.find((m) => LIVE.includes(m.status));
+    const liveForOpportunity = sameOpportunity.find((m) =>
+      LIVE.includes(m.status) && outreachMessageMatchesCurrentDomain(site, m)
+    );
     if (liveForOpportunity) {
       const refreshesStaleDraft =
         liveForOpportunity.status === "draft" &&
@@ -2893,6 +2945,8 @@ export const insertDraft = internalMutation({
       if (refreshesStaleDraft) {
         await ctx.db.patch(liveForOpportunity._id, {
           ...args,
+          canonicalDomain,
+          domainRevision: siteCanonicalDomainRevision(site),
           ownerAccountKey,
           ownerLineageUnresolvedAt: undefined,
           approvedAt: undefined,
@@ -2927,7 +2981,10 @@ export const insertDraft = internalMutation({
     // behaviour that gets a sender marked as spam. A second opportunity is
     // still recorded, but held blocked behind the one already in flight.
     const liveForThread = sameThread.find(
-      (m) => LIVE.includes(m.status) && m.opportunityId !== args.opportunityId,
+      (m) =>
+        LIVE.includes(m.status) &&
+        outreachMessageMatchesCurrentDomain(site, m) &&
+        m.opportunityId !== args.opportunityId,
     );
     const heldBehindThread = Boolean(liveForThread) && args.status !== "blocked";
 
@@ -2945,6 +3002,8 @@ export const insertDraft = internalMutation({
     const authorizeRecord = automaticallyAuthorized && !heldBehindThread;
     const record = {
       ...args,
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
       ownerAccountKey,
       ownerLineageUnresolvedAt: undefined,
       toEmail: args.toEmail.trim().toLowerCase(),
@@ -2980,7 +3039,9 @@ export const insertDraft = internalMutation({
     // A previously blocked message is refreshed in place. That is what lets a
     // tenant connect an inbox, re-run, and see the same message become
     // sendable instead of accumulating a second blocked row per attempt.
-    const blocked = sameOpportunity.find((m) => m.status === "blocked");
+    const blocked = sameOpportunity.find((m) =>
+      m.status === "blocked" && outreachMessageMatchesCurrentDomain(site, m)
+    );
     if (blocked) {
       await ctx.db.patch(blocked._id, { ...record, updatedAt: now });
       await ctx.db.patch(opportunity._id, {
@@ -3015,6 +3076,7 @@ export const approveMessage = mutation({
     if (
       !message ||
       message.siteId !== siteId ||
+      !outreachMessageMatchesCurrentDomain(site, message) ||
       !outreachMessageOwnerMatches(message, ownerAccountKey)
     ) {
       throw new Error("Message not found for site");
@@ -3089,6 +3151,7 @@ export const discardMessage = mutation({
     if (
       !message ||
       message.siteId !== siteId ||
+      !outreachMessageMatchesCurrentDomain(site, message) ||
       !outreachMessageOwnerMatches(
         message,
         accountDeletionKey(site.userId!),
@@ -3527,6 +3590,7 @@ export const claimApprovedDelivery = internalMutation({
     if (
       !message ||
       message.siteId !== siteId ||
+      !outreachMessageMatchesCurrentDomain(site, message) ||
       !outreachMessageOwnerMatches(
         message,
         inbox.credentialOwnerAccountKey,
@@ -3734,6 +3798,7 @@ export const claimApprovedDelivery = internalMutation({
     if (
       !opportunity ||
       opportunity.siteId !== siteId ||
+      !authorityOpportunityMatchesCurrentDomain(site, opportunity) ||
       !opportunityLifecycleMatches ||
       opportunityEvidence.messageId !== message._id ||
       opportunityEvidence.opportunityId !== opportunity._id ||
@@ -3972,33 +4037,62 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
         !autonomousOutreachReconciliationComplete(inbox) ||
         !(await outreachDurabilityMigrationComplete(ctx, site)))
     ) return null;
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) return null;
     const automaticCandidates = release === "automatic"
       ? await Promise.all(
           Array.from({ length: MAX_SEQUENCE_STEP + 1 }, (_, sequenceStep) =>
-            ctx.db
-              .query("outreach_messages")
-              .withIndex(
-                "by_site_owner_lineage_status_autonomy_consent_sequence_scheduled",
-                (q) => q
-                  .eq("siteId", siteId)
-                  .eq("ownerAccountKey", ownerAccountKey)
-                  .eq("ownerLineageUnresolvedAt", undefined)
-                  .eq("status", "approved")
-                  .eq("approvalKind", "account_autopilot")
-                  .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
-                  .eq(
-                    "approvalConsentPolicyHash",
-                    inbox.autonomyConsentPolicyHash,
-                  )
-                  .eq(
-                    "approvalConsentAcceptedAt",
-                    inbox.autonomyConsentAcceptedAt,
-                  )
-                  .eq("sequenceStep", sequenceStep)
-                  .lte("scheduledAt", now),
-              )
-              .order("asc")
-              .first(),
+            siteUsesLegacyDomainReceipts(site)
+              ? ctx.db
+                .query("outreach_messages")
+                .withIndex(
+                  "by_site_owner_lineage_status_autonomy_consent_sequence_scheduled",
+                  (q) => q
+                    .eq("siteId", siteId)
+                    .eq("ownerAccountKey", ownerAccountKey)
+                    .eq("ownerLineageUnresolvedAt", undefined)
+                    .eq("status", "approved")
+                    .eq("approvalKind", "account_autopilot")
+                    .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+                    .eq(
+                      "approvalConsentPolicyHash",
+                      inbox.autonomyConsentPolicyHash,
+                    )
+                    .eq(
+                      "approvalConsentAcceptedAt",
+                      inbox.autonomyConsentAcceptedAt,
+                    )
+                    .eq("sequenceStep", sequenceStep)
+                    .lte("scheduledAt", now)
+                )
+                .order("asc")
+                .first()
+              : ctx.db
+                .query("outreach_messages")
+                .withIndex(
+                  "by_site_epoch_owner_auto_sequence_scheduled",
+                  (q) => q
+                    .eq("siteId", siteId)
+                    .eq("canonicalDomain", canonicalDomain)
+                    .eq("domainRevision", siteCanonicalDomainRevision(site))
+                    .eq("ownerAccountKey", ownerAccountKey)
+                    .eq("ownerLineageUnresolvedAt", undefined)
+                    .eq("status", "approved")
+                    .eq("approvalKind", "account_autopilot")
+                    .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+                    .eq(
+                      "approvalConsentPolicyHash",
+                      inbox.autonomyConsentPolicyHash,
+                    )
+                    .eq(
+                      "approvalConsentAcceptedAt",
+                      inbox.autonomyConsentAcceptedAt,
+                    )
+                    .eq("sequenceStep", sequenceStep)
+                    .lte("scheduledAt", now)
+                )
+                .order("asc")
+                .first()
           ),
         )
       : [];
@@ -4011,7 +4105,8 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
             (left.scheduledAt ?? 0) - (right.scheduledAt ?? 0) ||
             left.createdAt - right.createdAt
           )[0]
-      : await ctx.db
+      : siteUsesLegacyDomainReceipts(site)
+        ? await ctx.db
           .query("outreach_messages")
           .withIndex("by_site_owner_lineage_status_approval_kind_sequence_scheduled", (q) =>
             q
@@ -4021,7 +4116,23 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
               .eq("status", "approved")
               .eq("approvalKind", "owner_message")
               .eq("sequenceStep", 0)
-              .lte("scheduledAt", now),
+              .lte("scheduledAt", now)
+          )
+          .order("asc")
+          .first()
+        : await ctx.db
+          .query("outreach_messages")
+          .withIndex("by_site_epoch_owner_approval_sequence_scheduled", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("canonicalDomain", canonicalDomain)
+              .eq("domainRevision", siteCanonicalDomainRevision(site))
+              .eq("ownerAccountKey", ownerAccountKey)
+              .eq("ownerLineageUnresolvedAt", undefined)
+              .eq("status", "approved")
+              .eq("approvalKind", "owner_message")
+              .eq("sequenceStep", 0)
+              .lte("scheduledAt", now)
           )
           .order("asc")
           .first();
@@ -4038,6 +4149,8 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
     if (
       !opportunity ||
       opportunity.siteId !== siteId ||
+      !outreachMessageMatchesCurrentDomain(site, message) ||
+      !authorityOpportunityMatchesCurrentDomain(site, opportunity) ||
       !Number.isSafeInteger(message.sequenceStep) ||
       message.sequenceStep < 0 ||
       message.sequenceStep > MAX_SEQUENCE_STEP ||
@@ -4351,9 +4464,14 @@ async function queueNextVerifiedAutonomousFollowUp(
   ) {
     return { queued: false, reason: "authorization_changed" };
   }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) {
+    return { queued: false, reason: "authorization_changed" };
+  }
   if (
     !opportunity ||
     opportunity.siteId !== args.siteId ||
+    !authorityOpportunityMatchesCurrentDomain(site, opportunity) ||
     opportunity.status !== "contacted" ||
     parent.opportunityEvidenceHash !== opportunity.evidenceHash ||
     parent.opportunitySourceUrl !== opportunity.sourceUrl ||
@@ -4416,6 +4534,8 @@ async function queueNextVerifiedAutonomousFollowUp(
 
   await ctx.db.insert("outreach_messages", {
     siteId: args.siteId,
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
     ownerAccountKey,
     inboxId: inbox._id,
     opportunityId: opportunity._id,

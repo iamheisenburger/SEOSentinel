@@ -159,6 +159,7 @@ export type PublicationSiteConfig = {
   repoDefaultBranch?: string;
   wpUrl?: string;
   webhookUrl?: string;
+  rendererVersion?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
   brandFontFamily?: string;
@@ -173,6 +174,20 @@ export type PublicationAdapterSiteConfig = PublicationSiteConfig & {
 export function publicationAdapterConfigHash(
   site: Partial<PublicationAdapterSiteConfig>,
 ): string | undefined {
+  return publicationAdapterConfigHashForVersion(
+    site,
+    PUBLICATION_ADAPTER_VERSION,
+  );
+}
+
+/** Reconstruct an already-attempted adapter seal across a code-version bump.
+ * New deliveries always use PUBLICATION_ADAPTER_VERSION; recovery may use an
+ * older version only while its implementation remains explicitly supported. */
+export function publicationAdapterConfigHashForVersion(
+  site: Partial<PublicationAdapterSiteConfig>,
+  adapterVersion: string,
+): string | undefined {
+  if (!adapterVersion.trim()) return undefined;
   const method = site.publishMethod ?? site.method ?? "github";
   if (method === "wordpress") {
     const wpUrl = normalizedEndpoint(site.wpUrl);
@@ -180,7 +195,7 @@ export function publicationAdapterConfigHash(
     const wpAppPassword = site.wpAppPassword?.trim();
     if (!wpUrl || !wpUsername || !wpAppPassword) return undefined;
     return sha256Hex(JSON.stringify({
-      version: PUBLICATION_ADAPTER_VERSION,
+      version: adapterVersion,
       method,
       wpUrl,
       wpUsername,
@@ -192,13 +207,32 @@ export function publicationAdapterConfigHash(
     const webhookSecret = site.webhookSecret?.trim();
     if (!webhookUrl || !webhookSecret) return undefined;
     return sha256Hex(JSON.stringify({
-      version: PUBLICATION_ADAPTER_VERSION,
+      version: adapterVersion,
       method,
       webhookUrl,
       credentialHash: sha256Hex(webhookSecret),
     }));
   }
   return undefined;
+}
+
+/** Adapter versions with a retained executable request/receipt contract.
+ * A hash label alone is not compatibility; each future version must keep an
+ * explicit dispatcher case until every older attempted delivery is settled. */
+export function assertSupportedPublicationAdapterVersion(
+  adapterVersion: string,
+): void {
+  if (adapterVersion !== "verified-publisher-v1") {
+    throw new Error("Unsupported sealed publication adapter version");
+  }
+}
+
+export function assertSupportedPublicationRendererVersion(
+  rendererVersion: string,
+): void {
+  if (rendererVersion !== "semantic-html-v1") {
+    throw new Error("Unsupported sealed publication renderer version");
+  }
 }
 
 function normalizedEndpoint(value?: string): string | undefined {
@@ -318,7 +352,7 @@ export function publicationDeliveryConfig(
     webhookUrl: normalizedEndpoint(site.webhookUrl),
     rendererVersion:
       method === "wordpress" || method === "webhook"
-        ? PUBLISHER_RENDERER_VERSION
+        ? site.rendererVersion?.trim() || PUBLISHER_RENDERER_VERSION
         : undefined,
     brandPrimaryColor: site.brandPrimaryColor?.trim() || undefined,
     brandAccentColor: site.brandAccentColor?.trim() || undefined,
@@ -398,6 +432,18 @@ export function publicationDeliveryConfigHash(
   config: PublicationDeliveryConfig,
 ): string {
   return sha256Hex(JSON.stringify(config));
+}
+
+/** The external destination identity deliberately excludes the renderer
+ * implementation. An attempted delivery keeps its old renderer bytes and may
+ * read/reconcile that exact artifact after a software upgrade, while changes
+ * to the domain, path, repository, CMS endpoint, or branding remain locked. */
+export function publicationDeliveryDestinationHash(
+  config: PublicationDeliveryConfig,
+): string {
+  const destination = { ...config };
+  delete destination.rendererVersion;
+  return sha256Hex(JSON.stringify(destination));
 }
 
 /**

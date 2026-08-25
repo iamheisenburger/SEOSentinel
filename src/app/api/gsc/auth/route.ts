@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { GSC_GROWTH_SCOPE } from "@/lib/gsc-oauth";
+import { GSC_GROWTH_SCOPE, normalizeGscDomain } from "@/lib/gsc-oauth";
 import { getOwnedSite } from "@/lib/owned-site";
 import { createOAuthState } from "@/lib/oauth-state";
 
@@ -11,7 +11,8 @@ export async function GET(req: NextRequest) {
   }
 
   const siteId = req.nextUrl.searchParams.get("siteId") || "";
-  if (!siteId || !(await getOwnedSite(siteId))) {
+  const site = siteId ? await getOwnedSite(siteId) : null;
+  if (!site) {
     return NextResponse.json({ error: "Site not found" }, { status: 404 });
   }
   const { userId } = await auth();
@@ -21,7 +22,28 @@ export async function GET(req: NextRequest) {
 
   let state: string;
   try {
-    state = createOAuthState({ provider: "gsc", siteId, userId });
+    const expectedCanonicalDomain = normalizeGscDomain(
+      site.canonicalDomain ?? site.domain,
+    );
+    const expectedDomainRevision = Number.isSafeInteger(
+        site.canonicalDomainRevision,
+      ) && (site.canonicalDomainRevision ?? -1) >= 0
+      ? site.canonicalDomainRevision!
+      : 0;
+    const expectedGscConnectionRevision = Number.isSafeInteger(
+        site.gscConnectionRevision,
+      ) && (site.gscConnectionRevision ?? -1) >= 0
+      ? site.gscConnectionRevision!
+      : 0;
+    if (!expectedCanonicalDomain) throw new Error("Invalid site domain");
+    state = createOAuthState({
+      provider: "gsc",
+      siteId,
+      userId,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedGscConnectionRevision,
+    });
   } catch {
     return NextResponse.json(
       { error: "GSC OAuth state signing is not configured" },

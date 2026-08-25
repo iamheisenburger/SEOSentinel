@@ -28,6 +28,7 @@ import {
   TrendingDown,
   RefreshCw,
   BarChart3,
+  AlertTriangle,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
@@ -36,8 +37,11 @@ import rehypeSlug from "rehype-slug";
 import rehypeRaw from "rehype-raw";
 import type { Components } from "react-markdown";
 import type { Id } from "../../../../../convex/_generated/dataModel";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+
+const REVIEWED_AMBIGUITY_CONFIRMATION =
+  "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT";
 
 function simpleMarkdownToHtml(md: string): string {
   let html = md;
@@ -312,6 +316,10 @@ export default function ArticleDetailPage() {
   const router = useRouter();
   const articleId = params.id as Id<"articles">;
   const article = useQuery(api.articles.get, { articleId });
+  const ambiguityReview = useQuery(
+    api.articles.getPublicationAmbiguityReview,
+    { articleId },
+  );
   // Look up the site that owns this article (not just the first site)
   const site = useQuery(
     api.sites.get,
@@ -326,10 +334,25 @@ export default function ArticleDetailPage() {
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);
   const deleteArticle = useMutation(api.articles.deleteArticle);
+  const abandonInitialDelivery = useMutation(
+    api.articles.abandonUnverifiedPublication,
+  );
+  const abandonRevisionDelivery = useMutation(
+    api.publishedRevisions.abandonUnverifiedDelivery,
+  );
   const [linkStatus, setLinkStatus] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [viewMode, setViewMode] = useState<"editor" | "preview">("editor");
   const [schemaOpen, setSchemaOpen] = useState(false);
+  const [ambiguityConfirmation, setAmbiguityConfirmation] = useState("");
+  const [ambiguityBusy, setAmbiguityBusy] = useState(false);
+  const [reviewNow, setReviewNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!ambiguityReview) return;
+    const timer = window.setInterval(() => setReviewNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [ambiguityReview]);
 
   // ── Hooks MUST be called before any conditional returns ──
   const primaryColor = site?.brandPrimaryColor ?? "#0EA5E9";
@@ -428,6 +451,60 @@ export default function ArticleDetailPage() {
       setLinkStatus(err instanceof Error ? err.message : "Publish failed");
     } finally {
       setActionBusy(false);
+    }
+  };
+
+  const handleAbandonInitialDelivery = async () => {
+    if (
+      ambiguityConfirmation !== REVIEWED_AMBIGUITY_CONFIRMATION ||
+      !confirm(
+        "Abandon this unverified delivery without claiming it succeeded? Pentra will retain the audit and will not replay this envelope.",
+      )
+    ) return;
+    setAmbiguityBusy(true);
+    try {
+      await abandonInitialDelivery({
+        articleId,
+        confirmation: ambiguityConfirmation,
+      });
+      setAmbiguityConfirmation("");
+      setLinkStatus(
+        "Unverified delivery abandoned without asserting success. The audit was retained and future publication/configuration work is unlocked.",
+      );
+    } catch (err: unknown) {
+      setLinkStatus(
+        err instanceof Error ? err.message : "Unable to review delivery",
+      );
+    } finally {
+      setAmbiguityBusy(false);
+    }
+  };
+
+  const handleAbandonRevisionDelivery = async (
+    revisionId: Id<"published_article_revisions">,
+  ) => {
+    if (
+      ambiguityConfirmation !== REVIEWED_AMBIGUITY_CONFIRMATION ||
+      !confirm(
+        "Abandon this unverified revision without claiming it succeeded? Pentra will retain the audit and will not replay this envelope.",
+      )
+    ) return;
+    setAmbiguityBusy(true);
+    try {
+      await abandonRevisionDelivery({
+        revisionId,
+        confirmation: ambiguityConfirmation,
+      });
+      setAmbiguityConfirmation("");
+      setLinkStatus(
+        "Unverified revision abandoned without asserting success. The audit was retained and future publication/configuration work is unlocked.",
+      );
+    } catch (err: unknown) {
+      setLinkStatus(
+        err instanceof Error ? err.message : "Unable to review revision",
+      );
+    } finally {
+      setAmbiguityBusy(false);
     }
   };
 
@@ -557,6 +634,137 @@ export default function ArticleDetailPage() {
       {linkStatus && (
         <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
           {linkStatus}
+        </div>
+      )}
+
+      {ambiguityReview && (
+        <div className="rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] p-5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#FBBF24]" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-[14px] font-semibold text-[#FDE68A]">
+                Review an unverified external delivery
+              </h3>
+              <p className="mt-1 text-[12px] leading-relaxed text-[#D1A94A]">
+                Pentra cannot prove whether the provider applied this exact
+                delivery. It will not replay it or count it as a success. If
+                you abandon it, the immutable attempt audit remains stored and
+                future publication, configuration, domain, and deletion work
+                is unlocked. You remain responsible for removing or reconciling
+                any external artifact that may exist.
+              </p>
+
+              <div className="mt-4 space-y-3">
+                {ambiguityReview.initial && (
+                  <div className="rounded-lg border border-[#F59E0B]/20 bg-black/10 p-3 text-[11px] text-[#D6B760]">
+                    <p className="font-semibold text-[#FDE68A]">
+                      Initial publication · {ambiguityReview.initial.method ?? "provider"}
+                    </p>
+                    <p className="mt-1">
+                      Attempted {formatDistanceToNow(new Date(ambiguityReview.initial.attemptedAt), { addSuffix: true })}
+                    </p>
+                    {ambiguityReview.initial.deliveryKey && (
+                      <p className="mt-1 break-all font-mono text-[10px] text-[#A98D46]">
+                        {ambiguityReview.initial.deliveryKey}
+                      </p>
+                    )}
+                    {ambiguityReview.initial.detail && (
+                      <p className="mt-2 text-[#B89A50]">
+                        {ambiguityReview.initial.detail}
+                      </p>
+                    )}
+                    {ambiguityReview.initial.reviewAt ? (
+                      <p className="mt-2">
+                        Owner review {ambiguityReview.initial.reviewAt <= reviewNow
+                          ? "is available now"
+                          : `opens ${formatDistanceToNow(new Date(ambiguityReview.initial.reviewAt), { addSuffix: true })}`}.
+                      </p>
+                    ) : (
+                      <p className="mt-2">An exact recovery lease is still active.</p>
+                    )}
+                  </div>
+                )}
+
+                {ambiguityReview.revision && (
+                  <div className="rounded-lg border border-[#F59E0B]/20 bg-black/10 p-3 text-[11px] text-[#D6B760]">
+                    <p className="font-semibold text-[#FDE68A]">
+                      {ambiguityReview.revision.revisionKind.replaceAll("_", " ")} revision · {ambiguityReview.revision.method}
+                    </p>
+                    <p className="mt-1">
+                      Attempted {formatDistanceToNow(new Date(ambiguityReview.revision.attemptedAt), { addSuffix: true })} · {ambiguityReview.revision.status}
+                    </p>
+                    <p className="mt-1 break-all font-mono text-[10px] text-[#A98D46]">
+                      {ambiguityReview.revision.revisionKey}
+                    </p>
+                    {ambiguityReview.revision.detail && (
+                      <p className="mt-2 text-[#B89A50]">
+                        {ambiguityReview.revision.detail}
+                      </p>
+                    )}
+                    {ambiguityReview.revision.reviewAt ? (
+                      <p className="mt-2">
+                        Owner review {ambiguityReview.revision.reviewAt <= reviewNow
+                          ? "is available now"
+                          : `opens ${formatDistanceToNow(new Date(ambiguityReview.revision.reviewAt), { addSuffix: true })}`}.
+                      </p>
+                    ) : (
+                      <p className="mt-2">An exact recovery lease is still active.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <label className="mt-4 block text-[11px] font-medium text-[#FDE68A]">
+                Type the exact confirmation to abandon without asserting success:
+              </label>
+              <code className="mt-1 block break-all text-[10px] text-[#D6B760]">
+                {REVIEWED_AMBIGUITY_CONFIRMATION}
+              </code>
+              <input
+                value={ambiguityConfirmation}
+                onChange={(event) => setAmbiguityConfirmation(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-[#F59E0B]/20 bg-[#090A0F] px-3 py-2 text-[12px] text-[#EDEEF1] outline-none focus:border-[#F59E0B]/50"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                {ambiguityReview.initial && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={ambiguityBusy}
+                    disabled={
+                      ambiguityConfirmation !== REVIEWED_AMBIGUITY_CONFIRMATION ||
+                      !ambiguityReview.initial.reviewAt ||
+                      ambiguityReview.initial.reviewAt > reviewNow
+                    }
+                    onClick={handleAbandonInitialDelivery}
+                  >
+                    Abandon initial delivery
+                  </Button>
+                )}
+                {ambiguityReview.revision && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={ambiguityBusy}
+                    disabled={
+                      ambiguityConfirmation !== REVIEWED_AMBIGUITY_CONFIRMATION ||
+                      !ambiguityReview.revision.reviewAt ||
+                      ambiguityReview.revision.reviewAt > reviewNow
+                    }
+                    onClick={() =>
+                      handleAbandonRevisionDelivery(
+                        ambiguityReview.revision!.revisionId,
+                      )
+                    }
+                  >
+                    Abandon revision delivery
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

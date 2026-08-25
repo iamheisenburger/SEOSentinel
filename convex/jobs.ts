@@ -88,11 +88,28 @@ import {
   classifyCadenceFailure,
   deriveCadenceRecoveryStrategy,
 } from "./lib/cadenceLiveness";
+import {
+  articleMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  takeCurrentDomainArticleSummaries,
+  takeCurrentDomainTopics,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
+import { ONBOARDING_WORKFLOW } from "./lib/onboardingClaim";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
 const MAX_JOB_ATTEMPTS = 3;
 const AUTOMATIC_PLAN_CONTINUATION_DELAY_MS = 1_000;
+
+function onboardingClaimOwnsLifecycle(job: Doc<"jobs">): boolean {
+  if (job.type !== "onboarding") return false;
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown>
+    : {};
+  return payload.workflow === ONBOARDING_WORKFLOW;
+}
 
 function activeRollout(site: Doc<"sites"> | null): boolean {
   return autonomousRolloutActive(site);
@@ -107,7 +124,13 @@ function rolloutFields(site: Doc<"sites">, manual = false) {
       "Automation is in fail-closed observe mode for this site",
     );
   }
-  return { rolloutEpoch: site.autopilotRolloutEpoch ?? 0 };
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) throw new Error("This site domain is invalid");
+  return {
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+  };
 }
 
 async function currentSitePlanAllowance(
@@ -274,12 +297,16 @@ async function currentAutomaticPlanYieldTarget(
 ) {
   const [topics, summaries, growthGoal, articleQuotaHeadroom] =
     await Promise.all([
-      ctx.db.query("topic_clusters")
-        .withIndex("by_site", (q) => q.eq("siteId", site._id))
-        .take(PLAN_TARGET_INVENTORY_READ_LIMIT + 1),
-      ctx.db.query("article_summaries")
-        .withIndex("by_site", (q) => q.eq("siteId", site._id))
-        .take(PLAN_TARGET_INVENTORY_READ_LIMIT + 1),
+      takeCurrentDomainTopics(
+        ctx,
+        site,
+        PLAN_TARGET_INVENTORY_READ_LIMIT + 1,
+      ),
+      takeCurrentDomainArticleSummaries(
+        ctx,
+        site,
+        PLAN_TARGET_INVENTORY_READ_LIMIT + 1,
+      ),
       ctx.db.query("seo_growth_goals")
         .withIndex("by_site", (q) => q.eq("siteId", site._id))
         .unique(),
@@ -499,10 +526,11 @@ async function raiseJobAlert(
 
 export const listPending = internalQuery({
   handler: async (ctx) => {
-    return await ctx.db
+    const jobs = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
       .collect();
+    return jobs.filter((job) => !onboardingClaimOwnsLifecycle(job));
   },
 });
 
@@ -521,6 +549,7 @@ export const listPendingBySite = internalQuery({
     ]);
     return jobs.filter(
       (job) =>
+        !onboardingClaimOwnsLifecycle(job) &&
         jobAuthorizedForExecution(site, job) &&
         (job.nextAttemptAt === undefined || job.nextAttemptAt <= currentTime),
     );
@@ -657,6 +686,7 @@ export const resetStuckJobs = internalMutation({
           .collect();
     
     for (const job of runningJobs) {
+      if (onboardingClaimOwnsLifecycle(job)) continue;
       const expired = job.leaseExpiresAt !== undefined
         ? job.leaseExpiresAt <= currentTime
         : job.updatedAt <= legacyStaleAt;
@@ -927,6 +957,9 @@ export const create = internalMutation({
       if (!topic || !siteId || topic.siteId !== siteId) {
         throw new Error("Topic does not belong to the job site");
       }
+      if (!site || !topicMatchesCurrentDomain(site, topic)) {
+        throw new Error("Topic belongs to an earlier site domain");
+      }
       if (type === "article" && topicUnavailableForArticleQueue(topic)) {
         throw new Error("Plan checkpoint topic is not article inventory");
       }
@@ -936,6 +969,9 @@ export const create = internalMutation({
       const article = articleId ? await ctx.db.get(articleId) : null;
       if (!article || !siteId || article.siteId !== siteId) {
         throw new Error("Article does not belong to the job site");
+      }
+      if (!site || !articleMatchesCurrentDomain(site, article)) {
+        throw new Error("Article belongs to an earlier site domain");
       }
     }
     return await ctx.db.insert("jobs", {
@@ -977,6 +1013,46 @@ function topicUnavailableForArticleQueue(topic: Doc<"topic_clusters">): boolean 
   return planCheckpointTopicExecutionLocked(topic);
 }
 
+async function jobArtifactsMatchCurrentDomain(
+  ctx: MutationCtx,
+  site: Doc<"sites"> | null,
+  job: Doc<"jobs"> | null,
+): Promise<boolean> {
+  if (!site || !job) return false;
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown>
+    : {};
+  if (job.type === "article" && payload.topicId) {
+    const topicId = ctx.db.normalizeId(
+      "topic_clusters",
+      String(payload.topicId),
+    );
+    const topic = topicId ? await ctx.db.get(topicId) : null;
+    if (
+      !topic ||
+      topic.siteId !== site._id ||
+      !topicMatchesCurrentDomain(site, topic)
+    ) return false;
+  }
+  const rawArticleIds = job.type === "article"
+    ? [payload.articleId, job.articleId]
+    : job.type === "plan"
+    ? [payload.growthParentArticleId]
+    : [];
+  const normalizedArticleIds = rawArticleIds
+    .filter((value): value is string => typeof value === "string");
+  for (const rawArticleId of normalizedArticleIds) {
+    const articleId = ctx.db.normalizeId("articles", String(rawArticleId));
+    const article = articleId ? await ctx.db.get(articleId) : null;
+    if (
+      !article ||
+      article.siteId !== site._id ||
+      !articleMatchesCurrentDomain(site, article)
+    ) return false;
+  }
+  return true;
+}
+
 // The topic transition and job insert share one serializable mutation. Two
 // overlapping cadence ticks therefore cannot enqueue the same topic twice.
 export const queueTopicArticleIfAbsent = internalMutation({
@@ -994,6 +1070,9 @@ export const queueTopicArticleIfAbsent = internalMutation({
     ]);
     if (!site || !topic || topic.siteId !== siteId) {
       throw new Error("Topic does not belong to the site");
+    }
+    if (!topicMatchesCurrentDomain(site, topic)) {
+      return { queued: false, reason: "topic_domain_stale" as const };
     }
     if (topicUnavailableForArticleQueue(topic)) {
       return { queued: false, reason: "topic_checkpoint_locked" as const };
@@ -1088,7 +1167,12 @@ export const queueQualityRetryIfAbsent = internalMutation({
       ctx.db.get(siteId),
     ]);
     if (!site) throw new Error("Site not found");
-    if (!article || article.siteId !== siteId || article.status === "published") {
+    if (
+      !article ||
+      article.siteId !== siteId ||
+      !articleMatchesCurrentDomain(site, article) ||
+      article.status === "published"
+    ) {
       throw new Error("Article is not eligible for quality recovery");
     }
     if (
@@ -1170,6 +1254,7 @@ export const queuePlanIfAbsent = internalMutation({
     growthParentArticleId: v.optional(v.id("articles")),
     growthSeed: v.optional(v.string()),
     growthActionFingerprint: v.optional(v.string()),
+    growthMeasurementKey: v.optional(v.string()),
     oneSetupExecutionId: v.optional(v.id("one_setup_executions")),
     oneSetupClaimNonce: v.optional(v.string()),
     oneSetupConfigurationRevision: v.optional(v.number()),
@@ -1255,10 +1340,12 @@ export const queuePlanIfAbsent = internalMutation({
       if (
         !parent ||
         parent.siteId !== args.siteId ||
+        !articleMatchesCurrentDomain(site, parent) ||
         parent.status !== "published" ||
         !normalizedGrowthSeed ||
         normalizedGrowthSeed.length > 200 ||
-        !args.growthActionFingerprint
+        !args.growthActionFingerprint ||
+        !args.growthMeasurementKey
       ) {
         throw new Error(
           "Growth planning requires a published same-tenant parent, seed, and action fingerprint",
@@ -1274,7 +1361,8 @@ export const queuePlanIfAbsent = internalMutation({
         !action ||
         action.siteId !== args.siteId ||
         action.articleId !== args.growthParentArticleId ||
-        action.status !== "open"
+        action.status !== "open" ||
+        action.measurementKey !== args.growthMeasurementKey
       ) {
         throw new Error("Growth plan does not match an open measured action");
       }
@@ -1284,7 +1372,11 @@ export const queuePlanIfAbsent = internalMutation({
       ) {
         return { queued: false, reason: "autopilot_disabled" as const };
       }
-    } else if (args.growthSeed || args.growthActionFingerprint) {
+    } else if (
+      args.growthSeed ||
+      args.growthActionFingerprint ||
+      args.growthMeasurementKey
+    ) {
       throw new Error("Incomplete growth planning context");
     }
     const active = await activeJobsForSite(ctx, args.siteId);
@@ -1546,6 +1638,7 @@ export const queuePlanIfAbsent = internalMutation({
             growthParentArticleId: args.growthParentArticleId,
             growthSeed: normalizedGrowthSeed!,
             growthActionFingerprint: args.growthActionFingerprint!,
+            growthMeasurementKey: args.growthMeasurementKey!,
           } : {}),
           ...(planYieldTarget ? { planYieldTarget } : {}),
           ...(cadenceRecoveryStrategy ? { cadenceRecoveryStrategy } : {}),
@@ -2098,6 +2191,7 @@ export const queuePublicationIfAbsent = internalMutation({
     if (
       !article ||
       article.siteId !== siteId ||
+      !articleMatchesCurrentDomain(site, article) ||
       article.status !== "ready" ||
       article.publicationGateStatus !== "passed" ||
       article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
@@ -2178,11 +2272,13 @@ export const markRunning = internalMutation({
     const currentTime = now();
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    const topicCurrent = await jobArtifactsMatchCurrentDomain(ctx, site, job);
     if (
       !job ||
       job.siteId !== args.siteId ||
       job.status !== "pending" ||
       !executionAuthorized ||
+      !topicCurrent ||
       !jobAuthorizedForExecution(site, job) ||
       (job.nextAttemptAt !== undefined && job.nextAttemptAt > currentTime)
     ) return null;
@@ -2212,6 +2308,7 @@ export const claimPending = internalMutation({
     const updatedAt = now();
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    const topicCurrent = await jobArtifactsMatchCurrentDomain(ctx, site, job);
     const runningJobs = job
       ? await ctx.db
           .query("jobs")
@@ -2230,6 +2327,7 @@ export const claimPending = internalMutation({
       job.siteId !== siteId ||
       job.status !== "pending" ||
       !executionAuthorized ||
+      !topicCurrent ||
       !jobAuthorizedForExecution(site, job) ||
       otherRunning !== undefined ||
       (job.nextAttemptAt !== undefined && job.nextAttemptAt > updatedAt)
@@ -2263,10 +2361,12 @@ export const heartbeatWorker = internalMutation({
     const job = await ctx.db.get(jobId);
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    const topicCurrent = await jobArtifactsMatchCurrentDomain(ctx, site, job);
     if (
       !job ||
       !ownsJob(job, workerToken) ||
       !executionAuthorized ||
+      !topicCurrent ||
       !jobAuthorizedForExecution(site, job)
     ) return { owned: false };
     const currentTime = now();
@@ -3623,6 +3723,9 @@ export const runQueuedTopic = mutation({
     if (topicUnavailableForArticleQueue(requestedTopic)) {
       throw new Error("This topic is locked by durable plan recovery");
     }
+    if (!topicMatchesCurrentDomain(requestedSite, requestedTopic)) {
+      throw new Error("This topic belongs to an earlier site domain");
+    }
     const allowance = await currentSitePlanAllowance(ctx, requestedSite);
     if (!allowance.ok) throw new Error(allowance.reason);
     const active = await activeJobsForSite(ctx, requestedTopic.siteId);
@@ -3723,6 +3826,9 @@ export const queueArticleNow = mutation({
     }
     if (requestedTopic && topicUnavailableForArticleQueue(requestedTopic)) {
       throw new Error("This topic is locked by durable plan recovery");
+    }
+    if (requestedTopic && !topicMatchesCurrentDomain(site, requestedTopic)) {
+      throw new Error("This topic belongs to an earlier site domain");
     }
 
     const active = await activeJobsForSite(ctx, siteId);

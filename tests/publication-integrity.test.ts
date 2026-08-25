@@ -22,7 +22,13 @@ import {
   acquirePublicationLease,
   nextPublicationRetry,
   ownsPublicationLease,
+  PUBLICATION_LEASE_MS,
+  reviewedAmbiguityDispositionAllowed,
 } from "../convex/lib/publicationLease.ts";
+import {
+  acquirePublishedRevisionLease,
+  PUBLISHED_REVISION_LEASE_MS,
+} from "../convex/lib/publishedRevision.ts";
 import {
   publishedArticlePublicUrl,
   verifyLivePublicationPage,
@@ -90,6 +96,88 @@ test("warm rollout ignores pre-rollout candidates and can fill its bounded buffe
     autopilotCandidateBudget("live"),
     MAX_NEW_CANDIDATES_PER_24H,
   );
+});
+
+test("reviewed ambiguity cannot race a newly reacquired recovery lease", () => {
+  const now = Date.UTC(2026, 7, 25, 14);
+  const oldAttempt = now - 2 * PUBLICATION_LEASE_MS;
+  assert.equal(
+    reviewedAmbiguityDispositionAllowed({
+      attemptedAt: oldAttempt,
+      receiptPresent: false,
+      workflowLeaseOwner: "recovery-2",
+      workflowLeaseStartedAt: now - 1_000,
+      siteLeaseOwner: "recovery-2",
+      siteLeaseExpiresAt: now + PUBLICATION_LEASE_MS,
+      now,
+      leaseMs: PUBLICATION_LEASE_MS,
+    }),
+    false,
+  );
+  assert.equal(
+    reviewedAmbiguityDispositionAllowed({
+      attemptedAt: oldAttempt,
+      receiptPresent: false,
+      workflowLeaseOwner: "recovery-2",
+      workflowLeaseStartedAt: now - PUBLICATION_LEASE_MS - 1,
+      siteLeaseOwner: "recovery-2",
+      siteLeaseExpiresAt: now - 1,
+      now,
+      leaseMs: PUBLICATION_LEASE_MS,
+    }),
+    true,
+  );
+  assert.equal(
+    reviewedAmbiguityDispositionAllowed({
+      attemptedAt: oldAttempt,
+      receiptPresent: false,
+      workflowLeaseOwner: undefined,
+      workflowLeaseStartedAt: undefined,
+      siteLeaseOwner: undefined,
+      siteLeaseExpiresAt: undefined,
+      now,
+      leaseMs: PUBLICATION_LEASE_MS,
+    }),
+    true,
+  );
+  assert.equal(
+    reviewedAmbiguityDispositionAllowed({
+      attemptedAt: oldAttempt,
+      receiptPresent: false,
+      workflowLeaseOwner: "revision-recovery",
+      workflowLeaseStartedAt: now - PUBLISHED_REVISION_LEASE_MS - 1,
+      siteLeaseOwner: "different-generation",
+      siteLeaseExpiresAt: now - 1,
+      now,
+      leaseMs: PUBLISHED_REVISION_LEASE_MS,
+    }),
+    false,
+  );
+});
+
+test("revision recovery reclaims only an expired lease and preserves prior-attempt evidence", () => {
+  const now = Date.UTC(2026, 7, 25, 14);
+  const priorAttemptedAt = now - 2 * PUBLISHED_REVISION_LEASE_MS;
+  const state = {
+    status: "attempted",
+    leaseOwner: "worker-1",
+    leaseStartedAt: now - PUBLISHED_REVISION_LEASE_MS - 1,
+    attempts: 1,
+    attemptedAt: priorAttemptedAt,
+  };
+  const lease = acquirePublishedRevisionLease(state, {
+    leaseOwner: "worker-2",
+    now,
+  });
+  assert.equal(lease.idempotent, false);
+  assert.deepEqual(lease.patch, {
+    status: "leased",
+    leaseOwner: "worker-2",
+    leaseStartedAt: now,
+    attempts: 2,
+  });
+  // The patch is additive: applying it must not erase the immutable boundary.
+  assert.equal(({ ...state, ...lease.patch }).attemptedAt, priorAttemptedAt);
 });
 
 test("only a sealed modern receipt can advance the publication clock", () => {
@@ -225,11 +313,15 @@ test("final delivery revalidates current tenant topic fit", () => {
 
 test("external delivery completes before the internal published transition", () => {
   const publisher = readFileSync("convex/publisher.ts", "utf8");
+  const attempted = publisher.indexOf("internal.articles.recordPublicationAttempted");
   const delivery = publisher.indexOf("result = await publishToGitHub");
   const completion = publisher.indexOf("internal.articles.completePublication");
   const release = publisher.lastIndexOf("internal.articles.releasePublication");
-  assert.ok(delivery >= 0 && completion > delivery);
+  assert.ok(attempted >= 0 && delivery > attempted && completion > delivery);
   assert.ok(release > completion);
+  assert.match(publisher, /if \(deliveryAttempted\)/);
+  assert.match(publisher, /internal\.articles\.recordPublicationOutcomeUnverified/);
+  assert.match(publisher, /retained the exact delivery key and configuration lock/);
   assert.match(publisher, /Not authorized to publish this site/);
 });
 

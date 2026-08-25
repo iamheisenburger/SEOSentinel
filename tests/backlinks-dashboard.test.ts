@@ -29,7 +29,10 @@ test("authority ledger query is owner-scoped and includes terminal evidence stat
   ]) {
     assert.match(listForSite, new RegExp(`"${status}"`));
   }
-  assert.match(listForSite, /q\.eq\("siteId", siteId\)\.eq\("status", status\)/);
+  assert.match(
+    listForSite,
+    /listAuthorityByCurrentDomainStatus\(ctx, site, status, take\)/,
+  );
 });
 
 test("Backlinks workflow keeps approval, send, verification and blocked evidence visible", () => {

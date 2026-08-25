@@ -5,14 +5,19 @@ import {
   query,
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import {
   PUBLICATION_AUDIT_VERSION,
+  assertSupportedPublicationAdapterVersion,
+  assertSupportedPublicationRendererVersion,
+  publicationAdapterConfigHashForVersion,
   publicationArtifactHash,
+  publicationArtifactHashForAuditVersion,
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
+  publicationDeliveryDestinationHash,
   publicationDeliveryEnvelopeHash,
   publicationDeliveryKey,
 } from "./lib/publicationArtifact";
@@ -21,11 +26,18 @@ import {
   acquirePublicationLease,
   ownsPublicationLease,
   PUBLICATION_LEASE_MS,
+  reviewedAmbiguityDispositionAllowed,
 } from "./lib/publicationLease";
 import {
   effectivePublishedAt,
+  evaluateTopicBusinessFit,
   migrationBlocksAutopilot,
+  tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
+import {
+  PUBLICATION_ADAPTER_VERSION,
+  PUBLISHER_RENDERER_VERSION,
+} from "./lib/publicationReceipts";
 import {
   clampMetaDescription,
   evaluatePublicationQuality,
@@ -47,15 +59,28 @@ import {
   growthSupportDeliveryReceiptsMatch,
   SUPPORT_DELIVERY_VERIFIED_STATUS,
 } from "./lib/growthSupportDelivery";
+import {
+  articleMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+  takeCurrentDomainArticles,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
+import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
+const REVIEWED_AMBIGUITY_CONFIRMATION =
+  "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT";
 type ArticleSummaryFields = Omit<Doc<"article_summaries">, "_id" | "_creationTime">;
 
 function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
   return {
     articleId: article._id,
     siteId: article.siteId,
+    canonicalDomain: article.canonicalDomain,
+    domainRevision: article.domainRevision,
     topicId: article.topicId,
     articleType: article.articleType,
     status: article.status,
@@ -92,6 +117,22 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     publicUrlVerifiedAt: article.publicUrlVerifiedAt,
     publicUrlCheckAttempts: article.publicUrlCheckAttempts,
     publicUrlCheckError: article.publicUrlCheckError,
+    gscIndexVerdict: article.gscIndexVerdict,
+    gscCoverageState: article.gscCoverageState,
+    gscPageFetchState: article.gscPageFetchState,
+    gscRobotsTxtState: article.gscRobotsTxtState,
+    gscLastCrawlTime: article.gscLastCrawlTime,
+    gscInspectedAt: article.gscInspectedAt,
+    gscInspectionError: article.gscInspectionError,
+    gscInspectionConnectionRevision:
+      article.gscInspectionConnectionRevision,
+    gscInspectionProperty: article.gscInspectionProperty,
+    publicationAttemptedAt: article.publicationAttemptedAt,
+    publicationOutcomeUnverifiedAt: article.publicationOutcomeUnverifiedAt,
+    publicationAmbiguityDispositionAt:
+      article.publicationAmbiguityDispositionAt,
+    publicationAmbiguityDispositionDetail:
+      article.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: article.qualityRevisionCount,
     entityCoverage: article.entityCoverage,
     topicCompleteness: article.topicCompleteness,
@@ -107,9 +148,13 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
 }
 
 function assertNotPublishing(article: Doc<"articles">) {
-  if (article.publicationLeaseOwner || article.publicationLeaseHash) {
+  if (
+    article.publicationLeaseOwner ||
+    article.publicationLeaseHash ||
+    article.publicationAmbiguityDispositionAt
+  ) {
     throw new Error(
-      "Article publication is in progress; content, workflow, and deletion are locked",
+      "Article publication is in progress or retains a reviewed external ambiguity; content, workflow, and deletion are locked",
     );
   }
 }
@@ -165,6 +210,8 @@ function summaryListItem(summary: ArticleSummaryFields) {
     _id: summary.articleId,
     _creationTime: summary.articleCreatedAt,
     siteId: summary.siteId,
+    canonicalDomain: summary.canonicalDomain,
+    domainRevision: summary.domainRevision,
     topicId: summary.topicId,
     articleType: summary.articleType,
     status: summary.status,
@@ -204,6 +251,12 @@ function summaryListItem(summary: ArticleSummaryFields) {
     publicUrlVerifiedAt: summary.publicUrlVerifiedAt,
     publicUrlCheckAttempts: summary.publicUrlCheckAttempts,
     publicUrlCheckError: summary.publicUrlCheckError,
+    publicationAttemptedAt: summary.publicationAttemptedAt,
+    publicationOutcomeUnverifiedAt: summary.publicationOutcomeUnverifiedAt,
+    publicationAmbiguityDispositionAt:
+      summary.publicationAmbiguityDispositionAt,
+    publicationAmbiguityDispositionDetail:
+      summary.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: summary.qualityRevisionCount,
     entityCoverage: summary.entityCoverage,
     topicCompleteness: summary.topicCompleteness,
@@ -218,10 +271,198 @@ function summaryListItem(summary: ArticleSummaryFields) {
   };
 }
 
+async function listCurrentArticleSummaries(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_created", (q) => q.eq("siteId", site._id))
+      .order("desc")
+      .collect();
+    return legacyEpoch.filter((article) =>
+      articleMatchesCurrentDomain(site, article)
+    );
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return [];
+  return ctx.db
+    .query("article_summaries")
+    .withIndex("by_site_domain_revision_created", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+    )
+    .order("desc")
+    .collect();
+}
+
+async function listCurrentArticles(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("articles")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .order("desc")
+      .collect();
+    return legacyEpoch.filter((article) =>
+      articleMatchesCurrentDomain(site, article)
+    );
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return [];
+  return ctx.db
+    .query("articles")
+    .withIndex("by_site_domain_revision", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+    )
+    .order("desc")
+    .collect();
+}
+
+async function takeCurrentSummariesByStatus(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+  status: string,
+  limit: number,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", site._id).eq("status", status)
+      )
+      .order("desc")
+      .take(limit);
+    return legacyEpoch.filter((article) =>
+      articleMatchesCurrentDomain(site, article)
+    );
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return [];
+  return ctx.db
+    .query("article_summaries")
+    .withIndex("by_site_domain_revision_status", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+        .eq("status", status)
+    )
+    .order("desc")
+    .take(limit);
+}
+
+async function takeCurrentRecentSummaries(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+  since: number,
+  limit: number,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_created", (q) =>
+        q.eq("siteId", site._id).gte("articleCreatedAt", since)
+      )
+      .take(limit);
+    return legacyEpoch.filter((article) =>
+      articleMatchesCurrentDomain(site, article)
+    );
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return [];
+  return ctx.db
+    .query("article_summaries")
+    .withIndex("by_site_domain_revision_created", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+        .gte("articleCreatedAt", since)
+    )
+    .take(limit);
+}
+
+async function latestCurrentModernPublishedSummary(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const candidate = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status_audit_published", (q) =>
+        q
+          .eq("siteId", site._id)
+          .eq("status", "published")
+          .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION)
+      )
+      .order("desc")
+      .first();
+    return candidate && articleMatchesCurrentDomain(site, candidate)
+      ? candidate
+      : null;
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return null;
+  return ctx.db
+    .query("article_summaries")
+    .withIndex("by_site_domain_revision_status_audit_published", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+        .eq("status", "published")
+        .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION)
+    )
+    .order("desc")
+    .first();
+}
+
+async function latestCurrentPublishedByCreationSummary(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const candidate = await ctx.db
+      .query("article_summaries")
+      .withIndex("by_site_status_created", (q) =>
+        q.eq("siteId", site._id).eq("status", "published")
+      )
+      .order("desc")
+      .first();
+    return candidate && articleMatchesCurrentDomain(site, candidate)
+      ? candidate
+      : null;
+  }
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return null;
+  return ctx.db
+    .query("article_summaries")
+    .withIndex("by_site_domain_revision_status_created", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", siteCanonicalDomainRevision(site))
+        .eq("status", "published")
+    )
+    .order("desc")
+    .first();
+}
+
 async function listBySiteHandler(
   ctx: QueryCtx,
   siteId: Doc<"sites">["_id"],
 ) {
+    const site = await ctx.db.get(siteId);
+    if (!site) return [];
     const migrationState = await ctx.db
       .query("maintenance_state")
       .withIndex("by_key", (q) =>
@@ -229,11 +470,7 @@ async function listBySiteHandler(
       )
       .first();
     const summaries = migrationState?.status === "completed"
-      ? await ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_created", (q) => q.eq("siteId", siteId))
-          .order("desc")
-          .collect()
+      ? await listCurrentArticleSummaries(ctx, site)
       : [];
 
     if (summaries.length > 0) {
@@ -241,11 +478,7 @@ async function listBySiteHandler(
     }
 
     // Safe migration fallback until the one-time production backfill runs.
-    const articles = await ctx.db
-      .query("articles")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .order("desc")
-      .collect();
+    const articles = await listCurrentArticles(ctx, site);
     return articles.map((article) => summaryListItem(summaryFields(article)));
 }
 
@@ -299,6 +532,8 @@ export const listVerifiedAuthorityTargetsInternal = internalQuery({
 export const getAutopilotState = internalQuery({
   args: { siteId: v.id("sites"), since: v.number() },
   handler: async (ctx, { siteId, since }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
     const [
       latestModernPublished,
       latestPublishedByCreation,
@@ -309,49 +544,12 @@ export const getAutopilotState = internalQuery({
       migrationState,
     ] =
       await Promise.all([
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status_audit_published", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("status", "published")
-              .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
-          )
-          .order("desc")
-          .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status_created", (q) =>
-            q.eq("siteId", siteId).eq("status", "published"),
-          )
-          .order("desc")
-          .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", siteId).eq("status", "ready"),
-          )
-          .take(10),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", siteId).eq("status", "review"),
-          )
-          .order("desc")
-          .take(25),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_created", (q) =>
-            q.eq("siteId", siteId).gte("articleCreatedAt", since),
-          )
-          .take(10),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", siteId).eq("status", "published"),
-          )
-          .order("desc")
-          .take(50),
+        latestCurrentModernPublishedSummary(ctx, site),
+        latestCurrentPublishedByCreationSummary(ctx, site),
+        takeCurrentSummariesByStatus(ctx, site, "ready", 10),
+        takeCurrentSummariesByStatus(ctx, site, "review", 25),
+        takeCurrentRecentSummaries(ctx, site, since, 10),
+        takeCurrentSummariesByStatus(ctx, site, "published", 50),
         ctx.db
           .query("maintenance_state")
           .withIndex("by_key", (q) =>
@@ -383,10 +581,7 @@ export const getAutopilotState = internalQuery({
     // not enough: a crashed partial backfill may have many unsummarized legacy
     // rows, and cron must fail closed until the resumable migration completes.
     const hasAnyArticle = migrationState?.status !== "completed"
-      ? !!(await ctx.db
-          .query("articles")
-          .withIndex("by_site", (q) => q.eq("siteId", siteId))
-          .first())
+      ? (await takeCurrentDomainArticles(ctx, site, 1)).length > 0
       : false;
     return {
       latestPublished: latestPublished
@@ -412,6 +607,112 @@ export const get = query({
     if (!article) return null;
     await requireArticleOwner(ctx, article);
     return article;
+  },
+});
+
+function ambiguityReviewAt(args: {
+  attemptedAt: number;
+  workflowLeaseOwner?: string;
+  workflowLeaseStartedAt?: number;
+  siteLeaseOwner?: string;
+  siteLeaseExpiresAt?: number;
+  leaseMs: number;
+}): number | undefined {
+  const attemptedReviewAt = args.attemptedAt + args.leaseMs;
+  if (!args.workflowLeaseOwner) {
+    return args.siteLeaseOwner ? undefined : attemptedReviewAt;
+  }
+  if (
+    args.siteLeaseOwner !== args.workflowLeaseOwner ||
+    !args.workflowLeaseStartedAt ||
+    args.siteLeaseExpiresAt === undefined
+  ) return undefined;
+  return Math.max(
+    attemptedReviewAt,
+    args.workflowLeaseStartedAt + args.leaseMs,
+    args.siteLeaseExpiresAt,
+  );
+}
+
+/** Minimal owner-only review projection for external publication outcomes that
+ * Pentra cannot prove. It deliberately exposes no credentials or provider
+ * response bodies. Both the article and every revision candidate are fenced
+ * to the exact current tenant/domain before a terminal control is shown. */
+export const getPublicationAmbiguityReview = query({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) return null;
+    await requireArticleOwner(ctx, article);
+    const site = await ctx.db.get(article.siteId);
+    if (
+      !site ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt ||
+      !articleMatchesCurrentDomain(site, article)
+    ) return null;
+
+    const initial = article.publicationAttemptedAt &&
+        !article.publicationReceipt &&
+        !article.publicationAmbiguityDispositionAt
+      ? {
+          kind: "initial" as const,
+          attemptedAt: article.publicationAttemptedAt,
+          unverifiedAt: article.publicationOutcomeUnverifiedAt,
+          detail: article.publicationOutcomeDetail,
+          method: article.publicationConfigSnapshot?.method,
+          deliveryKey: article.publicationDeliveryHash
+            ? publicationDeliveryKey(article.publicationDeliveryHash)
+            : undefined,
+          reviewAt: ambiguityReviewAt({
+            attemptedAt: article.publicationAttemptedAt,
+            workflowLeaseOwner: article.publicationLeaseOwner,
+            workflowLeaseStartedAt: article.publicationLeaseStartedAt,
+            siteLeaseOwner: site.publicationLeaseOwner,
+            siteLeaseExpiresAt: site.publicationLeaseExpiresAt,
+            leaseMs: PUBLICATION_LEASE_MS,
+          }),
+        }
+      : null;
+
+    const revisionCandidates = await ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_article_created", (q) => q.eq("articleId", articleId))
+      .order("desc")
+      .take(20);
+    const revision = revisionCandidates.find((candidate) =>
+      candidate.siteId === site._id &&
+      Boolean(candidate.attemptedAt) &&
+      !candidate.receipt &&
+      !candidate.ambiguityDispositionAt &&
+      ["leased", "attempted", "unverified"].includes(candidate.status)
+    );
+    const revisionReview = revision?.attemptedAt
+      ? {
+          kind: "revision" as const,
+          revisionId: revision._id,
+          revisionKind: revision.kind,
+          status: revision.status,
+          attemptedAt: revision.attemptedAt,
+          detail: revision.failureDetail,
+          failureCode: revision.failureCode,
+          method: revision.baseReceipt.method,
+          revisionKey: revision.revisionKey,
+          attempts: revision.attempts,
+          reviewAt: ambiguityReviewAt({
+            attemptedAt: revision.attemptedAt,
+            workflowLeaseOwner: revision.leaseOwner,
+            workflowLeaseStartedAt: revision.leaseStartedAt,
+            siteLeaseOwner: site.publicationLeaseOwner,
+            siteLeaseExpiresAt: site.publicationLeaseExpiresAt,
+            leaseMs: PUBLISHED_REVISION_LEASE_MS,
+          }),
+        }
+      : null;
+
+    return initial || revisionReview
+      ? { initial, revision: revisionReview }
+      : null;
   },
 });
 
@@ -459,10 +760,23 @@ export const createDraft = internalMutation({
     productEvidenceStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const site = await ctx.db.get(args.siteId);
-    if (!await siteExecutionAuthorized(ctx, site)) {
+    const [site, topic] = await Promise.all([
+      ctx.db.get(args.siteId),
+      args.topicId ? ctx.db.get(args.topicId) : Promise.resolve(null),
+    ]);
+    if (!site || !await siteExecutionAuthorized(ctx, site)) {
       throw new Error("This site is not active under the current plan");
     }
+    if (
+      args.topicId &&
+      (!topic ||
+        topic.siteId !== args.siteId ||
+        !topicMatchesCurrentDomain(site, topic))
+    ) {
+      throw new Error("Topic belongs to an earlier site domain");
+    }
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) throw new Error("This site domain is invalid");
     // Deduplicate slug — prevent multiple articles with the same URL path
     let slug = args.slug;
     const existing = await ctx.db
@@ -482,6 +796,8 @@ export const createDraft = internalMutation({
 
     const articleId = await ctx.db.insert("articles", {
       siteId: args.siteId,
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
       topicId: args.topicId,
       articleType: args.articleType,
       status: "draft",
@@ -561,22 +877,37 @@ export const createDraftForJob = internalMutation({
     productEvidenceStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const [job, site] = await Promise.all([
+    const [job, site, topic] = await Promise.all([
       ctx.db.get(args.jobId),
       ctx.db.get(args.siteId),
+      args.topicId ? ctx.db.get(args.topicId) : Promise.resolve(null),
     ]);
+    const payload = job?.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    const jobTopicId = payload.topicId === undefined
+      ? undefined
+      : String(payload.topicId);
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     if (
       !job ||
+      !site ||
       job.siteId !== args.siteId ||
       job.status !== "running" ||
       job.workerToken !== args.workerToken ||
       !executionAuthorized ||
-      !jobAuthorizedForExecution(site, job)
+      !jobAuthorizedForExecution(site, job) ||
+      jobTopicId !== (args.topicId ? String(args.topicId) : undefined) ||
+      (args.topicId !== undefined &&
+        (!topic ||
+          topic.siteId !== args.siteId ||
+          !topicMatchesCurrentDomain(site, topic)))
     ) {
       throw new Error("Worker lease lost before generated draft checkpoint");
     }
     if (job.articleId) return job.articleId;
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) throw new Error("This site domain is invalid");
 
     let slug = args.slug;
     let suffix = 2;
@@ -595,6 +926,8 @@ export const createDraftForJob = internalMutation({
     const timestamp = now();
     const articleId = await ctx.db.insert("articles", {
       siteId: args.siteId,
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
       topicId: args.topicId,
       articleType: args.articleType,
       status: "draft",
@@ -643,9 +976,6 @@ export const createDraftForJob = internalMutation({
         settledAt: timestamp,
       });
     }
-    const payload = job.payload && typeof job.payload === "object"
-      ? (job.payload as Record<string, unknown>)
-      : {};
     await ctx.db.patch(job._id, {
       articleId,
       payload: { ...payload, articleId },
@@ -790,6 +1120,206 @@ export const quarantineTargetMismatch = internalMutation({
   },
 });
 
+async function assertNoUnresolvedPublishedRevision(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+): Promise<void> {
+  for (const status of ["leased", "attempted"] as const) {
+    const unresolved = await ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", status)
+      )
+      .first();
+    if (unresolved) {
+      throw new Error("A published revision delivery is already unresolved");
+    }
+  }
+  const ambiguous = await ctx.db
+    .query("published_article_revisions")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", siteId).eq("status", "unverified")
+    )
+    .filter((q) => q.eq(q.field("receipt"), undefined))
+    .first();
+  if (ambiguous) {
+    throw new Error("A published revision delivery has an unverified outcome");
+  }
+}
+
+function sealedPublicationConfig(article: Doc<"articles">) {
+  if (!article.publicationConfigSnapshot || !article.publicationConfigHash) {
+    throw new Error("Publication destination was not sealed by the quality audit");
+  }
+  const config = publicationDeliveryConfig(article.publicationConfigSnapshot);
+  if (publicationDeliveryConfigHash(config) !== article.publicationConfigHash) {
+    throw new Error("Publication destination seal is internally inconsistent");
+  }
+  return config;
+}
+
+function recoveryDestinationStillCurrent(
+  site: Doc<"sites">,
+  article: Doc<"articles">,
+): boolean {
+  try {
+    return publicationDeliveryDestinationHash(publicationDeliveryConfig(site)) ===
+      publicationDeliveryDestinationHash(sealedPublicationConfig(article));
+  } catch {
+    return false;
+  }
+}
+
+function attemptedAdapterContract(
+  site: Doc<"sites">,
+  article: Doc<"articles">,
+): {
+  adapterVersion?: string;
+  adapterConfigHash?: string;
+  rendererVersion?: string;
+} | null {
+  const method = article.publicationConfigSnapshot?.method;
+  if (method !== "wordpress" && method !== "webhook") return {};
+  // Additive compatibility: rows attempted before these explicit fields were
+  // introduced may infer them only from the still-exact live verification and
+  // immutable renderer snapshot. The inferred values are persisted when the
+  // recovery lease is claimed, before any provider access.
+  const adapterVersion = article.publicationAdapterVersionAtAttempt ??
+    site.publicationAdapterVersion;
+  const adapterConfigHash = article.publicationAdapterConfigHashAtAttempt ??
+    site.publicationAdapterConfigHash;
+  const rendererVersion = article.publicationRendererVersionAtAttempt ??
+    article.publicationConfigSnapshot?.rendererVersion;
+  if (!adapterVersion || !adapterConfigHash || !rendererVersion) return null;
+  try {
+    assertSupportedPublicationAdapterVersion(adapterVersion);
+    assertSupportedPublicationRendererVersion(rendererVersion);
+  } catch {
+    return null;
+  }
+  return rendererVersion === article.publicationConfigSnapshot?.rendererVersion &&
+    site.publicationAdapterVersion === adapterVersion &&
+    site.publicationAdapterConfigHash === adapterConfigHash &&
+    publicationAdapterConfigHashForVersion(site, adapterVersion) ===
+      adapterConfigHash
+    ? { adapterVersion, adapterConfigHash, rendererVersion }
+    : null;
+}
+
+/** Final serializable authorization fence immediately before the first
+ * provider mutation. Receipt-only recovery never calls this helper. */
+async function assertInitialPublicationMutationAuthorized(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+  article: Doc<"articles">,
+) {
+  const replayingAttemptedEnvelope = Boolean(article.publicationAttemptedAt);
+  if (
+    !article.topicId ||
+    !["review", "ready", "published"].includes(article.status) ||
+    (site.approvalRequired &&
+      article.status !== "ready" &&
+      article.status !== "published")
+  ) {
+    throw new Error("Current owner policy no longer authorizes publication");
+  }
+  const topic = await ctx.db.get(article.topicId);
+  if (
+    !topic ||
+    topic.siteId !== site._id ||
+    !topicMatchesCurrentDomain(site, topic) ||
+    !evaluateTopicBusinessFit({
+      keyword: topic.primaryKeyword,
+      label: article.title,
+      ...tenantTopicBusinessSignals(site),
+    }).eligible
+  ) {
+    throw new Error("Current tenant topic policy no longer authorizes publication");
+  }
+  const auditVersion = replayingAttemptedEnvelope
+    ? article.publicationAuditVersion
+    : PUBLICATION_AUDIT_VERSION;
+  if (!Number.isInteger(auditVersion)) {
+    throw new Error("Publication attempt lost its sealed audit version");
+  }
+  if (!replayingAttemptedEnvelope) {
+    const quality = evaluatePublicationQuality(article, "strict");
+    if (!quality.passed || article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION) {
+      throw new Error("Current publication audit no longer authorizes a new write");
+    }
+  }
+  if (
+    article.publicationGateStatus !== "passed" ||
+    !article.auditedContentHash ||
+    publicationArtifactHashForAuditVersion(article, auditVersion!) !==
+      article.auditedContentHash
+  ) {
+    throw new Error("Sealed publication artifact no longer authorizes a write");
+  }
+  const currentConfig = publicationDeliveryConfig(site);
+  const sealedConfig = sealedPublicationConfig(article);
+  const exactCurrentConfig = publicationDeliveryConfigHash(currentConfig) ===
+    article.publicationConfigHash;
+  if ((!replayingAttemptedEnvelope && !exactCurrentConfig) ||
+      (replayingAttemptedEnvelope &&
+        publicationDeliveryDestinationHash(currentConfig) !==
+          publicationDeliveryDestinationHash(sealedConfig))) {
+    throw new Error("Current publication destination no longer matches its seal");
+  }
+  if (
+    replayingAttemptedEnvelope &&
+    (sealedConfig.method === "wordpress" || sealedConfig.method === "webhook")
+  ) {
+    if (!attemptedAdapterContract(site, article)) {
+      throw new Error("Attempted publication lost its sealed adapter contract");
+    }
+  } else if (
+    currentConfig.method === "wordpress" || currentConfig.method === "webhook"
+  ) {
+    const adapterHash = publicationAdapterConfigHashForVersion(
+      site,
+      PUBLICATION_ADAPTER_VERSION,
+    );
+    if (
+      currentConfig.rendererVersion !== PUBLISHER_RENDERER_VERSION ||
+      site.publicationAdapterVersion !== PUBLICATION_ADAPTER_VERSION ||
+      !adapterHash ||
+      site.publicationAdapterConfigHash !== adapterHash ||
+      !(site.publicationAdapterVerifiedAt && site.publicationAdapterVerifiedAt > 0)
+    ) {
+      throw new Error("Current publication adapter is not verified for a new write");
+    }
+  }
+  return replayingAttemptedEnvelope ? sealedConfig : currentConfig;
+}
+
+export const getPublicationRecoveryAuthorization = internalQuery({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    const site = article ? await ctx.db.get(article.siteId) : null;
+    if (
+      !article ||
+      !site ||
+      !article.publicationAttemptedAt ||
+      !article.publicationLeaseOwner ||
+      !article.publicationLeaseStartedAt ||
+      !articleMatchesCurrentDomain(site, article) ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt
+    ) {
+      return { receiptOnlyPlanTransition: false };
+    }
+    return {
+      receiptOnlyPlanTransition: await executionLeasePredatesPlanTransition(
+        ctx,
+        site,
+        article.publicationAttemptedAt,
+      ),
+    };
+  },
+});
+
 export const beginPublication = internalMutation({
   args: {
     articleId: v.id("articles"),
@@ -810,30 +1340,71 @@ export const beginPublication = internalMutation({
   ) => {
     const article = await ctx.db.get(articleId);
     if (!article) throw new Error("Article not found");
+    if (article.publicationAmbiguityDispositionAt) {
+      throw new Error(
+        "This article's unresolved external delivery was reviewed and abandoned; create a new immutable publication instead of replaying it",
+      );
+    }
     const site = await ctx.db.get(article.siteId);
+    const deliveryPreviouslyAttempted = Boolean(
+      article.publicationAttemptedAt || article.publicationOutcomeUnverifiedAt,
+    );
+    const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    const receiptOnlyTransition = deliveryPreviouslyAttempted &&
+      await executionLeasePredatesPlanTransition(
+        ctx,
+        site,
+        article.publicationAttemptedAt,
+      );
     if (
       !site ||
-      !(await siteExecutionAuthorized(ctx, site)) ||
-      !site.autopilotEnabled ||
-      site.autopilotRolloutMode !== "live" ||
-      (site.autopilotRolloutEpoch ?? 0) !== expectedRolloutEpoch
+      !articleMatchesCurrentDomain(site, article) ||
+      (!executionAuthorized && !receiptOnlyTransition) ||
+      (!receiptOnlyTransition &&
+        (!site.autopilotEnabled ||
+          site.autopilotRolloutMode !== "live" ||
+          (site.autopilotRolloutEpoch ?? 0) !== expectedRolloutEpoch))
     ) {
       throw new Error("Publication blocked by the current rollout epoch");
     }
+    if (!deliveryPreviouslyAttempted && article.topicId) {
+      const topic = await ctx.db.get(article.topicId);
+      if (
+        !topic ||
+        topic.siteId !== site._id ||
+        !topicMatchesCurrentDomain(site, topic)
+      ) {
+        throw new Error("Publication blocked by an earlier-domain topic");
+      }
+    }
+    // Initial articles and immutable revisions share one external destination.
+    // Neither workflow may start while the other has an unresolved write.
+    await assertNoUnresolvedPublishedRevision(ctx, site._id);
     const currentConfigHash = publicationDeliveryConfigHash(
       publicationDeliveryConfig(site),
     );
+    const recoveryDestinationMatches = deliveryPreviouslyAttempted &&
+      recoveryDestinationStillCurrent(site, article);
+    const recoveryAdapter = deliveryPreviouslyAttempted
+      ? attemptedAdapterContract(site, article)
+      : {};
     if (
-      currentConfigHash !== expectedConfigHash ||
-      article.publicationConfigHash !== expectedConfigHash
+      (currentConfigHash !== expectedConfigHash && !recoveryDestinationMatches) ||
+      article.publicationConfigHash !== expectedConfigHash ||
+      (deliveryPreviouslyAttempted && !recoveryAdapter)
     ) {
       throw new Error("Publication destination changed after quality audit");
     }
-    if (
-      site.publicationLeaseOwner &&
-      (site.publicationLeaseExpiresAt ?? 0) > Date.now()
-    ) {
-      throw new Error("Another publication is already in progress for this site");
+    if (site.publicationLeaseOwner) {
+      const sameRecoverableArticle =
+        article.publicationLeaseOwner === site.publicationLeaseOwner &&
+        article.publicationLeaseHash === expectedContentHash;
+      if (
+        (site.publicationLeaseExpiresAt ?? 0) > Date.now() ||
+        !sameRecoverableArticle
+      ) {
+        throw new Error("Another publication is already in progress for this site");
+      }
     }
     const lease = acquirePublicationLease(article, {
       expectedContentHash,
@@ -847,17 +1418,59 @@ export const beginPublication = internalMutation({
         publicationDeliveryHash: article.publicationDeliveryHash,
       };
     }
-    const publicationDate = article.publicationDate ?? Date.now();
-    const publicationDeliveryHash = publicationDeliveryEnvelopeHash({
-      contentHash: expectedContentHash,
-      configHash: expectedConfigHash,
-      publicationDate,
-      rolloutEpoch: expectedRolloutEpoch,
-    });
+    let publicationDate: number;
+    let publicationDeliveryHash: string;
+    let publicationRolloutEpoch: number;
+    if (deliveryPreviouslyAttempted) {
+      if (
+        !article.publicationDate ||
+        !article.publicationDeliveryHash ||
+        !Number.isSafeInteger(article.publicationRolloutEpoch) ||
+        article.publicationRolloutEpoch !== expectedRolloutEpoch
+      ) {
+        throw new Error(
+          "Unverified publication lost its immutable delivery envelope",
+        );
+      }
+      const expectedPersistedEnvelope = publicationDeliveryEnvelopeHash({
+        contentHash: expectedContentHash,
+        configHash: expectedConfigHash,
+        publicationDate: article.publicationDate,
+        rolloutEpoch: article.publicationRolloutEpoch,
+      });
+      if (expectedPersistedEnvelope !== article.publicationDeliveryHash) {
+        throw new Error(
+          "Unverified publication delivery envelope no longer matches its sealed inputs",
+        );
+      }
+      publicationDate = article.publicationDate;
+      publicationDeliveryHash = article.publicationDeliveryHash;
+      publicationRolloutEpoch = article.publicationRolloutEpoch;
+    } else {
+      publicationDate = Date.now();
+      publicationRolloutEpoch = expectedRolloutEpoch;
+      publicationDeliveryHash = publicationDeliveryEnvelopeHash({
+        contentHash: expectedContentHash,
+        configHash: expectedConfigHash,
+        publicationDate,
+        rolloutEpoch: publicationRolloutEpoch,
+      });
+    }
     await ctx.db.patch(articleId, {
       ...lease.patch,
       publicationDate,
       publicationDeliveryHash,
+      publicationRolloutEpoch,
+      ...(deliveryPreviouslyAttempted && recoveryAdapter
+        ? {
+            publicationAdapterVersionAtAttempt:
+              recoveryAdapter.adapterVersion,
+            publicationAdapterConfigHashAtAttempt:
+              recoveryAdapter.adapterConfigHash,
+            publicationRendererVersionAtAttempt:
+              recoveryAdapter.rendererVersion,
+          }
+        : {}),
       updatedAt: now(),
     });
     await ctx.db.patch(site._id, {
@@ -865,8 +1478,224 @@ export const beginPublication = internalMutation({
       publicationLeaseExpiresAt: Date.now() + 15 * 60 * 1000,
       updatedAt: now(),
     });
+    // Arm recovery in the same transaction as the first immutable delivery
+    // lease. A direct owner-triggered action has no durable job whose worker
+    // reset could revisit a crash after this mutation. The watchdog is bound
+    // to this exact generation: a pristine expired lease is released without
+    // provider access, while a marked attempt gets one read-only receipt
+    // reconciliation and can never replay the external write.
+    if (!deliveryPreviouslyAttempted) {
+      await ctx.scheduler.runAfter(
+        PUBLICATION_LEASE_MS + 1_000,
+        internal.publisher.recoverInitialPublicationLeaseInternal,
+        {
+          siteId: site._id,
+          articleId,
+          expectedContentHash,
+          expectedLeaseOwner: leaseOwner,
+        },
+      );
+    }
     await syncSummary(ctx, articleId);
-    return { alreadyPublished: false, publicationDate, publicationDeliveryHash };
+    return {
+      alreadyPublished: false,
+      publicationDate,
+      publicationDeliveryHash,
+      publicationRolloutEpoch,
+      deliveryPreviouslyAttempted,
+    };
+  },
+});
+
+export const recordPublicationAttempted = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    expectedContentHash: v.string(),
+    leaseOwner: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const article = await ctx.db.get(args.articleId);
+    if (
+      !article ||
+      !ownsPublicationLease(article, {
+        expectedContentHash: args.expectedContentHash,
+        leaseOwner: args.leaseOwner,
+      })
+    ) {
+      throw new Error("Publication attempt lost its immutable article lease");
+    }
+    const site = await ctx.db.get(article.siteId);
+    if (
+      !site ||
+      site.publicationLeaseOwner !== args.leaseOwner ||
+      !articleMatchesCurrentDomain(site, article) ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      site.autopilotRolloutMode !== "live" ||
+      (site.autopilotRolloutEpoch ?? 0) !==
+        article.publicationRolloutEpoch
+    ) {
+      throw new Error("Publication attempt lost its immutable site lease");
+    }
+    if (
+      !article.publicationDate ||
+      !article.publicationDeliveryHash ||
+      !Number.isSafeInteger(article.publicationRolloutEpoch)
+    ) {
+      throw new Error("Publication attempt lost its immutable delivery envelope");
+    }
+    const currentConfig = await assertInitialPublicationMutationAuthorized(
+      ctx,
+      site,
+      article,
+    );
+    const recoveredAdapter = article.publicationAttemptedAt
+      ? attemptedAdapterContract(site, article)
+      : null;
+    const adapterVersion = currentConfig.method === "wordpress" ||
+        currentConfig.method === "webhook"
+      ? recoveredAdapter?.adapterVersion ?? PUBLICATION_ADAPTER_VERSION
+      : undefined;
+    const adapterConfigHash = adapterVersion
+      ? recoveredAdapter?.adapterConfigHash ??
+        publicationAdapterConfigHashForVersion(site, adapterVersion)
+      : undefined;
+    const rendererVersion = currentConfig.method === "wordpress" ||
+        currentConfig.method === "webhook"
+      ? recoveredAdapter?.rendererVersion ?? currentConfig.rendererVersion
+      : undefined;
+    if (
+      article.publicationAttemptedAt &&
+      ((article.publicationAdapterVersionAtAttempt !== undefined &&
+        article.publicationAdapterVersionAtAttempt !== adapterVersion) ||
+        (article.publicationAdapterConfigHashAtAttempt !== undefined &&
+          article.publicationAdapterConfigHashAtAttempt !== adapterConfigHash) ||
+        (article.publicationRendererVersionAtAttempt !== undefined &&
+          article.publicationRendererVersionAtAttempt !== rendererVersion))
+    ) {
+      throw new Error("Publication attempt changed its sealed adapter contract");
+    }
+    const attemptedAt = article.publicationAttemptedAt ?? now();
+    await ctx.db.patch(article._id, {
+      publicationAttemptedAt: attemptedAt,
+      publicationAdapterVersionAtAttempt: adapterVersion,
+      publicationAdapterConfigHashAtAttempt: adapterConfigHash,
+      publicationRendererVersionAtAttempt: rendererVersion,
+      updatedAt: attemptedAt,
+    });
+    await syncSummary(ctx, article._id);
+    return { attemptedAt };
+  },
+});
+
+export const recordPublicationOutcomeUnverified = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    expectedContentHash: v.string(),
+    leaseOwner: v.string(),
+    detail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const article = await ctx.db.get(args.articleId);
+    if (
+      !article ||
+      !ownsPublicationLease(article, {
+        expectedContentHash: args.expectedContentHash,
+        leaseOwner: args.leaseOwner,
+      }) ||
+      !article.publicationAttemptedAt
+    ) {
+      return { recorded: false };
+    }
+    const site = await ctx.db.get(article.siteId);
+    if (site?.publicationLeaseOwner !== args.leaseOwner) {
+      return { recorded: false };
+    }
+    const timestamp = now();
+    await ctx.db.patch(article._id, {
+      publicationOutcomeUnverifiedAt: timestamp,
+      publicationOutcomeDetail: args.detail.slice(0, 500),
+      updatedAt: timestamp,
+    });
+    await syncSummary(ctx, article._id);
+    return { recorded: true };
+  },
+});
+
+/** Owner-reviewed terminal disposition for a provider outcome that cannot be
+ * proven by an exact destination receipt. This never asserts success and
+ * never authorizes a replay. The sealed envelope and attempt metadata remain
+ * immutable audit evidence while the site-level delivery lock is released. */
+export const abandonUnverifiedPublication = mutation({
+  args: {
+    articleId: v.id("articles"),
+    confirmation: v.string(),
+  },
+  handler: async (ctx, { articleId, confirmation }) => {
+    if (confirmation !== REVIEWED_AMBIGUITY_CONFIRMATION) {
+      throw new Error(
+        `Exact confirmation required: ${REVIEWED_AMBIGUITY_CONFIRMATION}`,
+      );
+    }
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    await requireArticleOwner(ctx, article);
+    const site = await ctx.db.get(article.siteId);
+    const identity = await ctx.auth.getUserIdentity();
+    const timestamp = now();
+    if (
+      !site ||
+      !identity ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt ||
+      !articleMatchesCurrentDomain(site, article) ||
+      article.status === "published" ||
+      article.publicationReceipt ||
+      !reviewedAmbiguityDispositionAllowed({
+        attemptedAt: article.publicationAttemptedAt,
+        receiptPresent: Boolean(article.publicationReceipt),
+        dispositionAt: article.publicationAmbiguityDispositionAt,
+        workflowLeaseOwner: article.publicationLeaseOwner,
+        workflowLeaseStartedAt: article.publicationLeaseStartedAt,
+        siteLeaseOwner: site.publicationLeaseOwner,
+        siteLeaseExpiresAt: site.publicationLeaseExpiresAt,
+        now: timestamp,
+        leaseMs: PUBLICATION_LEASE_MS,
+      })
+    ) {
+      throw new Error(
+        "This article does not have an expired, receipt-free publication ambiguity",
+      );
+    }
+    const leaseOwner = article.publicationLeaseOwner;
+    const detail =
+      "The owner reviewed an unresolved provider outcome, abandoned this immutable delivery without asserting success, and accepted responsibility for reconciling any external artifact before future destination changes.";
+    await ctx.db.patch(article._id, {
+      status: "rejected",
+      publicationGateStatus: "blocked",
+      publicationGateIssues: ["owner_reviewed_delivery_ambiguity"],
+      publicationLeaseHash: undefined,
+      publicationLeaseOwner: undefined,
+      publicationLeaseStartedAt: undefined,
+      publicationAmbiguityDispositionAt: timestamp,
+      publicationAmbiguityDispositionBy: identity.subject,
+      publicationAmbiguityDispositionDetail: detail,
+      publicationOutcomeDetail: detail,
+      updatedAt: timestamp,
+    });
+    if (leaseOwner && site.publicationLeaseOwner === leaseOwner) {
+      await ctx.db.patch(site._id, {
+        publicationLeaseOwner: undefined,
+        publicationLeaseExpiresAt: undefined,
+        updatedAt: timestamp,
+      });
+    }
+    await syncSummary(ctx, article._id);
+    return {
+      abandoned: true,
+      disposition: "owner_reviewed_unverified_delivery",
+      attemptedAt: article.publicationAttemptedAt,
+    };
   },
 });
 
@@ -902,13 +1731,18 @@ export const completePublication = internalMutation({
   ) => {
     const article = await ctx.db.get(articleId);
     if (!article) throw new Error("Article not found");
-    const persistedHash = publicationArtifactHash(article);
+    const auditVersion = article.publicationAuditVersion;
+    const attemptedContract = Boolean(article.publicationAttemptedAt);
+    const persistedHash = Number.isInteger(auditVersion)
+      ? publicationArtifactHashForAuditVersion(article, auditVersion!)
+      : undefined;
     if (
       article.auditedContentHash !== publishedContentHash ||
-      article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
+      (!attemptedContract && auditVersion !== PUBLICATION_AUDIT_VERSION) ||
       article.publicationGateStatus !== "passed" ||
       persistedHash !== publishedContentHash ||
       article.publicationDeliveryHash !== expectedDeliveryHash ||
+      article.publicationRolloutEpoch !== expectedRolloutEpoch ||
       !ownsPublicationLease(article, {
         expectedContentHash: publishedContentHash,
         leaseOwner,
@@ -919,12 +1753,16 @@ export const completePublication = internalMutation({
     const site = await ctx.db.get(article.siteId);
     const completedAt = now();
     validatePublicationReceipt(receipt);
-    if (!site) {
+    if (!site || !articleMatchesCurrentDomain(site, article)) {
       throw new Error("Refusing to complete publication after site lease loss");
     }
     const currentConfigHash = publicationDeliveryConfigHash(
       publicationDeliveryConfig(site),
     );
+    const sealedConfig = sealedPublicationConfig(article);
+    const recoveryDestinationMatches = attemptedContract &&
+      recoveryDestinationStillCurrent(site, article) &&
+      Boolean(attemptedAdapterContract(site, article));
     const expectedEnvelope = article.publicationDate
       ? publicationDeliveryEnvelopeHash({
           contentHash: publishedContentHash,
@@ -942,14 +1780,14 @@ export const completePublication = internalMutation({
       await executionLeasePredatesPlanTransition(
         ctx,
         site,
-        article.publicationLeaseStartedAt,
+        article.publicationAttemptedAt,
       );
     if (
       (!normalSettlementAuthorized && !receiptOnlyPlanTransition) ||
-      currentConfigHash !== expectedConfigHash ||
+      (currentConfigHash !== expectedConfigHash && !recoveryDestinationMatches) ||
       article.publicationConfigHash !== expectedConfigHash ||
       expectedEnvelope !== expectedDeliveryHash ||
-      receipt.method !== (site.publishMethod ?? "github") ||
+      receipt.method !== sealedConfig.method ||
       receipt.deliveryKey !== publicationDeliveryKey(expectedDeliveryHash) ||
       receipt.contentHash !== publishedContentHash ||
       receipt.receivedAt < (article.publicationLeaseStartedAt ?? 0) ||
@@ -980,6 +1818,12 @@ export const completePublication = internalMutation({
       publicationLeaseHash: undefined,
       publicationLeaseOwner: undefined,
       publicationLeaseStartedAt: undefined,
+      publicationAttemptedAt: undefined,
+      publicationAdapterVersionAtAttempt: undefined,
+      publicationAdapterConfigHashAtAttempt: undefined,
+      publicationRendererVersionAtAttempt: undefined,
+      publicationOutcomeUnverifiedAt: undefined,
+      publicationOutcomeDetail: undefined,
       updatedAt: completedAt,
     });
     await ctx.db.patch(site._id, {
@@ -1102,7 +1946,12 @@ export const recordPublicPublicationCheck = internalMutation({
       ctx.db.get(siteId),
       ctx.db.get(articleId),
     ]);
-    if (!siteExecutionActive(site) || !article || article.siteId !== siteId) {
+    if (
+      !siteExecutionActive(site) ||
+      !article ||
+      article.siteId !== siteId ||
+      !articleMatchesCurrentDomain(site, article)
+    ) {
       throw new Error("Public publication check tenant mismatch");
     }
     if (
@@ -1155,10 +2004,27 @@ export const releasePublication = internalMutation({
       !article ||
       !ownsPublicationLease(article, { expectedContentHash, leaseOwner })
     ) return;
+    if (
+      article.publicationAttemptedAt ||
+      article.publicationOutcomeUnverifiedAt
+    ) {
+      throw new Error(
+        "Cannot release an initial publication with an unresolved external outcome",
+      );
+    }
     await ctx.db.patch(articleId, {
+      publicationDate: undefined,
+      publicationDeliveryHash: undefined,
+      publicationRolloutEpoch: undefined,
       publicationLeaseHash: undefined,
       publicationLeaseOwner: undefined,
       publicationLeaseStartedAt: undefined,
+      publicationAttemptedAt: undefined,
+      publicationAdapterVersionAtAttempt: undefined,
+      publicationAdapterConfigHashAtAttempt: undefined,
+      publicationRendererVersionAtAttempt: undefined,
+      publicationOutcomeUnverifiedAt: undefined,
+      publicationOutcomeDetail: undefined,
       updatedAt: now(),
     });
     const site = await ctx.db.get(article.siteId);
@@ -1170,6 +2036,63 @@ export const releasePublication = internalMutation({
       });
     }
     await syncSummary(ctx, articleId);
+  },
+});
+
+/** A worker can die after acquiring the database lease but before reaching the
+ * first provider mutation. Once that pristine lease expires, clearing it is
+ * conclusive: the provider boundary marker never committed, and any delayed
+ * worker still carries the old owner token and therefore cannot mark/send. */
+export const releaseExpiredPristinePublication = internalMutation({
+  args: {
+    articleId: v.id("articles"),
+    expectedContentHash: v.string(),
+    expectedLeaseOwner: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const article = await ctx.db.get(args.articleId);
+    if (
+      !article ||
+      !ownsPublicationLease(article, {
+        expectedContentHash: args.expectedContentHash,
+        leaseOwner: args.expectedLeaseOwner,
+      }) ||
+      article.publicationAttemptedAt ||
+      article.publicationOutcomeUnverifiedAt ||
+      !article.publicationLeaseStartedAt ||
+      article.publicationLeaseStartedAt + PUBLICATION_LEASE_MS > now()
+    ) {
+      return { released: false };
+    }
+    const site = await ctx.db.get(article.siteId);
+    if (
+      !site ||
+      site.publicationLeaseOwner !== args.expectedLeaseOwner ||
+      (site.publicationLeaseExpiresAt ?? Number.POSITIVE_INFINITY) > now()
+    ) {
+      return { released: false };
+    }
+    const timestamp = now();
+    await ctx.db.patch(article._id, {
+      publicationDate: undefined,
+      publicationDeliveryHash: undefined,
+      publicationRolloutEpoch: undefined,
+      publicationLeaseHash: undefined,
+      publicationLeaseOwner: undefined,
+      publicationLeaseStartedAt: undefined,
+      publicationAdapterVersionAtAttempt: undefined,
+      publicationAdapterConfigHashAtAttempt: undefined,
+      publicationRendererVersionAtAttempt: undefined,
+      publicationOutcomeDetail: undefined,
+      updatedAt: timestamp,
+    });
+    await ctx.db.patch(site._id, {
+      publicationLeaseOwner: undefined,
+      publicationLeaseExpiresAt: undefined,
+      updatedAt: timestamp,
+    });
+    await syncSummary(ctx, article._id);
+    return { released: true };
   },
 });
 

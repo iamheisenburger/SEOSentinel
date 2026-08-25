@@ -112,6 +112,23 @@ import {
   oneSetupSearchMeasurementReceiptVerified,
 } from "./lib/oneSetupCanonical.ts";
 import { oneSetupPromotionBlockers } from "./lib/oneSetupRuntime.ts";
+import {
+  takeCurrentDomainArticleSummariesByStatus,
+  takeCurrentDomainTopics,
+  contentAnalysisMatchesCurrentDomain,
+  gscConnectionMatchesCurrentDomain,
+  gscPropertyMatchesCanonicalDomain,
+  nextCanonicalDomainRevision,
+  nextGscConnectionRevision,
+  normalizeCanonicalDomain,
+  pageMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteGscConnectionRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./lib/siteDomainBinding.ts";
+import { planCheckpointTopicExecutionLocked } from
+  "./lib/planCandidateCheckpoint.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -155,6 +172,12 @@ const DELIVERY_CONFIG_KEYS = new Set([
   "wpUrl", "wpUsername", "wpAppPassword", "webhookUrl", "webhookSecret",
   "urlStructure", "brandPrimaryColor", "brandAccentColor", "brandFontFamily",
   "autopilotEnabled", "cadencePerWeek",
+  // These fields participate in the final tenant-topic/approval gate. Once a
+  // provider mutation is fenced, owner edits wait for an exact receipt so an
+  // action snapshot cannot race a later authorization revocation.
+  "approvalRequired", "niche", "blogTheme", "siteSummary", "siteType",
+  "targetAudienceSummary", "productUsage", "anchorKeywords", "keyFeatures",
+  "painPoints",
 ]);
 
 function normalizedAuthorityDomain(value: string): string | null {
@@ -171,6 +194,338 @@ type CanonicalDomainRevisionSite = Doc<"sites"> & {
   gscCanonicalDomain?: string;
   gscDomainRevision?: number;
 };
+
+function canonicalDomainTransitionPatch(site: Doc<"sites">) {
+  const timestamp = now();
+  return {
+    canonicalDomainRevision: nextCanonicalDomainRevision(site),
+    contentAnalysisCanonicalDomain: undefined,
+    contentAnalysisDomainRevision: undefined,
+    gscAccessToken: undefined,
+    gscRefreshToken: undefined,
+    gscProperty: undefined,
+    gscCanonicalDomain: undefined,
+    gscDomainRevision: undefined,
+    gscConnectionRevision: nextGscConnectionRevision(site),
+    gscEmail: undefined,
+    gscScopes: undefined,
+    gscConnectedAt: undefined,
+    gscSyncEpoch: undefined,
+    gscPendingSyncEpoch: undefined,
+    gscPendingSyncMode: undefined,
+    gscPendingWindowStart: undefined,
+    gscPendingDataThrough: undefined,
+    gscPendingStartedAt: undefined,
+    gscDateEpochs: undefined,
+    gscDataWindowStart: undefined,
+    gscDataThrough: undefined,
+    gscHistoryDays: undefined,
+    gscCompleteWindows: undefined,
+    gscDataSyncedAt: undefined,
+    gscQueryRows: undefined,
+    gscPageRows: undefined,
+    gscAnalyticsRequests: undefined,
+    gscReceiptStatus: "revoked" as const,
+    gscReceiptRevision: (site.gscReceiptRevision ?? 0) + 1,
+    gscReceiptVerifiedAt: undefined,
+    gscReceiptRevokedAt: timestamp,
+    gscReceiptReasonCode: "site_domain_changed",
+  };
+}
+
+async function scheduleRetiredGscEpochPruning(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+) {
+  const epochs = new Set<string>();
+  for (const receipt of site.gscDateEpochs ?? []) {
+    if (receipt.syncEpoch) epochs.add(receipt.syncEpoch);
+  }
+  if (site.gscSyncEpoch) epochs.add(site.gscSyncEpoch);
+  if (site.gscPendingSyncEpoch) epochs.add(site.gscPendingSyncEpoch);
+  for (const syncEpoch of epochs) {
+    await Promise.all([
+      ctx.scheduler.runAfter(0, internal.searchPerformance.pruneSyncEpoch, {
+        siteId: site._id,
+        syncEpoch,
+        table: "query" as const,
+      }),
+      ctx.scheduler.runAfter(0, internal.searchPerformance.pruneSyncEpoch, {
+        siteId: site._id,
+        syncEpoch,
+        table: "page" as const,
+      }),
+    ]);
+  }
+}
+
+async function invalidateAuxiliaryCadenceJobs(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  reason: string,
+) {
+  const demandStatuses = ["pending", "running", "partial"];
+  const evidenceStatuses = ["pending", "running", "partial"];
+  const microStatuses = [
+    "pending",
+    "running",
+    "awaiting_evidence",
+    "evidence_running",
+    "cadence_scheduling",
+  ];
+  const [demandGroups, evidenceGroups, microGroups, autopilotRunGroups] =
+    await Promise.all([
+    Promise.all(demandStatuses.map((status) =>
+      ctx.db
+        .query("expected_click_demand_jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        )
+        .take(101)
+    )),
+    Promise.all(evidenceStatuses.map((status) =>
+      ctx.db
+        .query("expected_click_evidence_jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        )
+        .take(101)
+    )),
+    Promise.all(microStatuses.map((status) =>
+      ctx.db
+        .query("cadence_micro_seed_jobs")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        )
+        .take(101)
+    )),
+    Promise.all(["scheduled", "running"].map((status) =>
+      ctx.db
+        .query("autopilot_runs")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .filter((q) => q.eq(q.field("status"), status))
+        .take(101)
+    )),
+  ]);
+  if (
+    [...demandGroups, ...evidenceGroups, ...microGroups, ...autopilotRunGroups]
+      .some((rows) => rows.length > 100)
+  ) {
+    throw new Error("Too many auxiliary cadence jobs to invalidate safely");
+  }
+  const timestamp = now();
+  for (const job of [...demandGroups.flat(), ...evidenceGroups.flat()]) {
+    await ctx.db.patch(job._id, {
+      status: "domain_epoch_invalidated",
+      errorCode: reason,
+      workerToken: undefined,
+      leaseExpiresAt: undefined,
+      completedAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  for (const job of microGroups.flat()) {
+    await ctx.db.patch(job._id, {
+      status: "domain_epoch_invalidated",
+      errorCode: reason,
+      workerToken: undefined,
+      leaseExpiresAt: undefined,
+      completedAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  for (const run of autopilotRunGroups.flat()) {
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      outcome: "domain_epoch_invalidated",
+      detail: reason,
+      completedAt: timestamp,
+      heartbeatAt: timestamp,
+    });
+  }
+}
+
+async function invalidateDomainCadenceState(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+) {
+  await invalidateAuxiliaryCadenceJobs(
+    ctx,
+    siteId,
+    "canonical_domain_changed",
+  );
+  const timestamp = now();
+  const [
+    health,
+    growthHealth,
+    activeAlerts,
+    outcomeCredentials,
+    openGrowthActions,
+    monitoringGrowthActions,
+  ] = await Promise.all([
+    ctx.db
+      .query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .unique(),
+    ctx.db
+      .query("seo_growth_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .unique(),
+    ctx.db
+      .query("autopilot_alerts")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "active")
+      )
+      .take(100),
+    ctx.db
+      .query("outcome_ingest_credentials")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .take(10),
+    ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "open")
+      )
+      .take(101),
+    ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "monitoring")
+      )
+      .take(101),
+  ]);
+  if (openGrowthActions.length > 100 || monitoringGrowthActions.length > 100) {
+    throw new Error("Too many growth receipts to change the canonical domain safely");
+  }
+  if (health) {
+    await ctx.db.patch(health._id, {
+      lastPublishedAt: undefined,
+      nextPublicationDueAt: undefined,
+      approvedBufferCount: 0,
+      portfolioStatus: undefined,
+      portfolioDecision: undefined,
+      portfolioSupportsGoal: undefined,
+      portfolioExpectedClicksMonthly: undefined,
+      portfolioGoalMonthly: undefined,
+      portfolioClickDeficit: undefined,
+      portfolioEvidenceMissing: undefined,
+      portfolioEvaluatedAt: undefined,
+      portfolioVersion: undefined,
+      status: "recovering",
+      detail: "Canonical domain changed; prior-domain cadence health was invalidated.",
+      heartbeatAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  if (growthHealth) {
+    await ctx.db.delete(growthHealth._id);
+  }
+  for (const alert of activeAlerts) {
+    await ctx.db.patch(alert._id, {
+      status: "resolved",
+      resolvedAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  for (const credential of outcomeCredentials) {
+    await ctx.db.patch(credential._id, {
+      tokenHash: undefined,
+      status: "revoked",
+      revokedAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  for (const action of [...openGrowthActions, ...monitoringGrowthActions]) {
+    await ctx.db.patch(action._id, {
+      status: "dismissed",
+      automationStatus: "domain_epoch_invalidated",
+      automationDetail:
+        "The canonical domain changed; this prior-domain growth action was retired.",
+      updatedAt: timestamp,
+    });
+  }
+}
+
+async function invalidateGscGrowthState(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  reason: string,
+) {
+  await invalidateAuxiliaryCadenceJobs(
+    ctx,
+    siteId,
+    "gsc_connection_changed",
+  );
+  const [health, open, monitoring] = await Promise.all([
+    ctx.db
+      .query("seo_growth_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .unique(),
+    ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "open")
+      )
+      .take(101),
+    ctx.db
+      .query("seo_growth_actions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "monitoring")
+      )
+      .take(101),
+  ]);
+  if (open.length > 100 || monitoring.length > 100) {
+    throw new Error("Too many active growth receipts to rotate Search Console safely");
+  }
+  if (health) await ctx.db.delete(health._id);
+  const timestamp = now();
+  for (const action of [...open, ...monitoring]) {
+    await ctx.db.patch(action._id, {
+      status: "dismissed",
+      automationStatus: "gsc_connection_invalidated",
+      automationDetail: reason,
+      updatedAt: timestamp,
+    });
+  }
+}
+
+async function currentDomainPage(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+): Promise<Doc<"pages"> | null> {
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  if (!canonicalDomain) return null;
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("pages")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .collect();
+    return legacyEpoch.find((page) => pageMatchesCurrentDomain(site, page)) ??
+      null;
+  }
+  const stamped = await ctx.db
+    .query("pages")
+    .withIndex("by_site_domain_revision", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", domainRevision)
+    )
+    .first();
+  return stamped;
+}
+
+async function currentDomainTopic(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+): Promise<Doc<"topic_clusters"> | null> {
+  const currentTopics = await takeCurrentDomainTopics(ctx, site, 50);
+  return currentTopics.find((topic) =>
+    !planCheckpointTopicExecutionLocked(topic) &&
+    topic.status !== "disqualified"
+  ) ?? null;
+}
 
 async function syncOrganicClickGoal(
   ctx: MutationCtx,
@@ -399,12 +754,24 @@ async function demoteOutreachForDomainChange(
     siteId,
     "change this site's domain",
   );
-  const inFlight = await ctx.db
-    .query("outreach_messages")
-    .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "sending"))
-    .first();
-  if (inFlight) {
-    throw new Error("The site domain cannot change while outreach delivery is in progress");
+  const [inFlight, unresolved] = await Promise.all([
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "sending")
+      )
+      .first(),
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "delivery_unverified")
+      )
+      .first(),
+  ]);
+  if (inFlight || unresolved) {
+    throw new Error(
+      "The site domain cannot change while outreach delivery is in progress or awaiting manual review",
+    );
   }
   const inboxes = await ctx.db
     .query("outreach_inboxes")
@@ -442,9 +809,41 @@ async function demoteOutreachForDomainChange(
   }
 }
 
-function assertConfigUnlocked(site: { publicationLeaseOwner?: string; publicationLeaseExpiresAt?: number }) {
-  if (site.publicationLeaseOwner && (site.publicationLeaseExpiresAt ?? 0) > now()) {
+async function assertConfigUnlocked(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+) {
+  // A lease timestamp is a worker-recovery bound, not proof that an external
+  // write cannot still settle. Configuration and domain epochs therefore stay
+  // frozen until every delivery has either a durable receipt or a
+  // deterministic pre-provider failure.
+  if (site.publicationLeaseOwner) {
     throw new Error("Publishing settings are locked while a publication is in progress");
+  }
+  for (const status of ["leased", "attempted"] as const) {
+    const unresolved = await ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", site._id).eq("status", status)
+      )
+      .first();
+    if (unresolved) {
+      throw new Error(
+        "Publishing settings are locked while a revision delivery is unresolved",
+      );
+    }
+  }
+  const ambiguous = await ctx.db
+    .query("published_article_revisions")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", site._id).eq("status", "unverified")
+    )
+    .filter((q) => q.eq(q.field("receipt"), undefined))
+    .first();
+  if (ambiguous) {
+    throw new Error(
+      "Publishing settings are locked until the ambiguous revision is reconciled",
+    );
   }
 }
 
@@ -617,6 +1016,49 @@ async function cancelAutonomousJobsForEpochTransition(
 
 const PLAN_SITE_RECONCILIATION_PAGE_SIZE = 25;
 
+async function schedulePublicationReceiptRecovery(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+) {
+  const leaseOwner = site.publicationLeaseOwner;
+  if (!leaseOwner) return;
+  const [articles, revisions] = await Promise.all([
+    ctx.db
+      .query("articles")
+      .withIndex("by_site_publication_lease", (q) =>
+        q.eq("siteId", site._id).eq("publicationLeaseOwner", leaseOwner)
+      )
+      .take(2),
+    ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_site_lease_owner", (q) =>
+        q.eq("siteId", site._id).eq("leaseOwner", leaseOwner)
+      )
+      .take(2),
+  ]);
+  if (articles.length + revisions.length !== 1) {
+    // Preserve the lock for operator review; guessing an artifact here could
+    // release or replay the wrong external write.
+    return;
+  }
+  const delay = Math.max(
+    0,
+    (site.publicationLeaseExpiresAt ?? now()) - now() + 1_000,
+  );
+  if (articles[0]) {
+    await ctx.scheduler.runAfter(delay, internal.publisher.publishArticleInternal, {
+      siteId: site._id,
+      articleId: articles[0]._id,
+    });
+  } else if (revisions[0]) {
+    await ctx.scheduler.runAfter(
+      delay,
+      internal.publisher.executePublishedRevisionInternal,
+      { revisionId: revisions[0]._id },
+    );
+  }
+}
+
 async function reconcileCanonicalPlanSitePage(
   ctx: MutationCtx,
   entitlementId: Id<"account_plan_entitlements">,
@@ -657,6 +1099,7 @@ async function reconcileCanonicalPlanSitePage(
     Math.floor(remainingArticleAllowance),
   );
   for (const site of page.page) {
+    await schedulePublicationReceiptRecovery(ctx, site);
     const requestedCadence = site.cadenceRequestedPerWeek ??
       site.cadencePerWeek ??
       defaultCadenceForMonthlyLimit(entitlement.maxArticles);
@@ -677,6 +1120,10 @@ async function reconcileCanonicalPlanSitePage(
     }
     const parkingChanged = shouldPark !== Boolean(site.planParkedAt);
     const cadenceChanged = cadencePerWeek !== (site.cadencePerWeek ?? 0);
+    // Plan reconciliation must complete even when an older external write has
+    // an unresolved receipt. The durable publication lock remains intact and
+    // recovery is receipt-only; this transition changes allocation/rollout,
+    // never the sealed external destination.
     if ((parkingChanged && shouldPark) || cadenceChanged) {
       await gateInboundRelayCanaryExternalLease(
         ctx,
@@ -1042,6 +1489,7 @@ export const saveOneSetupRequest = mutation({
     const domainSnapshot = site.canonicalDomain ??
       normalizedAuthorityDomain(site.domain);
     if (!domainSnapshot) throw new Error("The site domain is invalid");
+    const domainRevisionSnapshot = siteCanonicalDomainRevision(site);
     const ownerAccountKey = accountDeletionKey(site.userId);
     const existing = await ctx.db
       .query("managed_provisioning_requests")
@@ -1052,6 +1500,7 @@ export const saveOneSetupRequest = mutation({
       existing &&
         (existing.ownerAccountKey !== ownerAccountKey ||
           existing.domainSnapshot !== domainSnapshot ||
+          (existing.domainRevisionSnapshot ?? 0) !== domainRevisionSnapshot ||
           existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION),
     );
     const publisher = nextOneSetupCapability(
@@ -1082,6 +1531,7 @@ export const saveOneSetupRequest = mutation({
     const record = {
       ownerAccountKey,
       domainSnapshot,
+      domainRevisionSnapshot,
       contractVersion: ONE_SETUP_CONTRACT_VERSION,
       revision,
       configurationRevision,
@@ -1150,6 +1600,8 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
       site.accountDeletionRequestedAt ||
       request.ownerAccountKey !== accountDeletionKey(site.userId) ||
       request.domainSnapshot !== domainSnapshot ||
+      (request.domainRevisionSnapshot ?? 0) !==
+        siteCanonicalDomainRevision(site) ||
       request.contractVersion !== ONE_SETUP_CONTRACT_VERSION
     ) {
       throw new Error("Provisioning request is no longer active");
@@ -1277,14 +1729,12 @@ export const getOneSetupReadiness = query({
           .query("managed_provisioning_requests")
           .withIndex("by_site", (q) => q.eq("siteId", siteId))
           .unique(),
-        ctx.db
-          .query("pages")
-          .withIndex("by_site", (q) => q.eq("siteId", siteId))
-          .first(),
-        ctx.db
-          .query("topic_clusters")
-          .withIndex("by_site", (q) => q.eq("siteId", siteId))
-          .take(SCHEDULER_TOPIC_INVENTORY_READ_LIMIT + 1),
+        currentDomainPage(ctx, site),
+        takeCurrentDomainTopics(
+          ctx,
+          site,
+          SCHEDULER_TOPIC_INVENTORY_READ_LIMIT + 1,
+        ),
         ctx.db
           .query("seo_growth_goals")
           .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -1308,6 +1758,8 @@ export const getOneSetupReadiness = query({
         ownerAccountKey &&
         request.ownerAccountKey === ownerAccountKey &&
         request.domainSnapshot === domainSnapshot &&
+        (request.domainRevisionSnapshot ?? 0) ===
+          siteCanonicalDomainRevision(site) &&
         request.contractVersion === ONE_SETUP_CONTRACT_VERSION,
     );
     const publisherProgress = requestValid
@@ -1321,7 +1773,9 @@ export const getOneSetupReadiness = query({
       : pendingOneSetupCapability("connect_existing");
 
     const publisherVerified = oneSetupPublisherReceiptVerified(site);
-    const measurementVerified = oneSetupSearchMeasurementReceiptVerified(site);
+    const measurementVerified =
+      oneSetupSearchMeasurementReceiptVerified(site) &&
+      gscConnectionMatchesCurrentDomain(site);
     const outreachMailboxVerified = Boolean(
       ownerAccountKey && oneSetupOutreachMailboxReceiptVerified({
         inboxes,
@@ -1342,7 +1796,9 @@ export const getOneSetupReadiness = query({
         : null;
 
     const websiteState: OneSetupReadinessState =
-      crawledPage && (site.siteSummary || site.niche)
+      crawledPage &&
+        contentAnalysisMatchesCurrentDomain(site) &&
+        (site.siteSummary || site.niche)
         ? "ready"
         : requestValid
           ? "queued"
@@ -1483,9 +1939,28 @@ export const getFull = internalQuery({
   },
 });
 
+/** Narrow recovery projection for a delivery whose durable lease may predate
+ * a plan/domain-conflict transition. Callers still need the atomic
+ * executionLeasePredatesPlanTransition receipt before settling and may never
+ * use this projection to authorize a new provider mutation. */
+export const getPublicationRecoverySite = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !site ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt
+    ) return null;
+    return site;
+  },
+});
+
 export const recordSeoAuthorityEvidenceInternal = internalMutation({
   args: {
     siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
     domain: v.string(),
     domainRank: v.number(),
     referringDomains: v.number(),
@@ -1501,6 +1976,9 @@ export const recordSeoAuthorityEvidenceInternal = internalMutation({
       !measuredDomain ||
       !currentDomain ||
       measuredDomain !== currentDomain ||
+      normalizeCanonicalDomain(args.expectedCanonicalDomain) !==
+        siteCanonicalDomain(site) ||
+      args.expectedDomainRevision !== siteCanonicalDomainRevision(site) ||
       args.source !== DATAFORSEO_AUTHORITY_SOURCE ||
       !Number.isFinite(args.domainRank) ||
       args.domainRank < 0 ||
@@ -1535,7 +2013,7 @@ export const setPublicationAdapterVerificationInternal = internalMutation({
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
     if (!site) throw new Error("Site not found");
-    assertConfigUnlocked(site);
+    await assertConfigUnlocked(ctx, site);
     if (site.publishMethod !== "wordpress" && site.publishMethod !== "webhook") {
       throw new Error("This publication method does not use adapter verification");
     }
@@ -1558,10 +2036,30 @@ export const setPublicationAdapterVerificationInternal = internalMutation({
 });
 
 export const patchInternal = internalMutation({
-  args: { siteId: v.id("sites"), patch: v.any() },
-  handler: async (ctx, { siteId, patch }) => {
+  args: {
+    siteId: v.id("sites"),
+    expectedCanonicalDomain: v.optional(v.string()),
+    expectedDomainRevision: v.optional(v.number()),
+    patch: v.any(),
+  },
+  handler: async (
+    ctx,
+    { siteId, expectedCanonicalDomain, expectedDomainRevision, patch },
+  ) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.deletionStatus) throw new Error("Site not found");
+    if (
+      (expectedCanonicalDomain === undefined) !==
+        (expectedDomainRevision === undefined) ||
+      (expectedCanonicalDomain !== undefined &&
+        (
+          normalizeCanonicalDomain(expectedCanonicalDomain) !==
+            siteCanonicalDomain(site) ||
+          expectedDomainRevision !== siteCanonicalDomainRevision(site)
+        ))
+    ) {
+      throw new Error("Site domain changed before derived data persistence");
+    }
 
     const safePatch = Object.fromEntries(
       Object.entries((patch ?? {}) as Record<string, unknown>).filter(
@@ -1578,18 +2076,23 @@ export const patchInternal = internalMutation({
     const nextDomain = typeof safePatch.domain === "string"
       ? normalizedAuthorityDomain(safePatch.domain)
       : normalizedAuthorityDomain(site.domain);
+    if (Object.prototype.hasOwnProperty.call(safePatch, "domain") && !nextDomain) {
+      throw new Error("Enter a valid website domain");
+    }
     const domainChanged =
       Object.prototype.hasOwnProperty.call(safePatch, "domain") &&
       nextDomain !== normalizedAuthorityDomain(site.domain);
     const invalidatesRollout = deliveryConfigChanged(site, safePatch);
-    if (invalidatesRollout) assertConfigUnlocked(site);
+    if (invalidatesRollout) await assertConfigUnlocked(ctx, site);
     if (invalidatesRollout) {
       await cancelAutonomousJobsForEpochTransition(
         ctx,
         siteId,
         "publishing configuration changed",
+        domainChanged,
       );
     }
+    if (domainChanged) await scheduleRetiredGscEpochPruning(ctx, site);
     await ctx.db.patch(siteId, {
       ...safePatch,
       ...(invalidatesRollout
@@ -1603,6 +2106,8 @@ export const patchInternal = internalMutation({
         : {}),
       ...(domainChanged
         ? {
+            ...canonicalDomainTransitionPatch(site),
+            canonicalDomain: nextDomain!,
             seoAuthorityDomain: undefined,
             seoAuthorityDomainRank: undefined,
             seoAuthorityReferringDomains: undefined,
@@ -1612,6 +2117,7 @@ export const patchInternal = internalMutation({
         : {}),
       updatedAt: now(),
     });
+    if (domainChanged) await invalidateDomainCadenceState(ctx, siteId);
     await syncOrganicClickGoal(
       ctx,
       siteId,
@@ -1894,13 +2400,17 @@ export const upsert = mutation({
       }
       clearStaleGitHubBranch(currentSite!, definedData);
       const invalidatesRollout = deliveryConfigChanged(currentSite!, definedData);
-      if (invalidatesRollout) assertConfigUnlocked(currentSite!);
+      if (invalidatesRollout) await assertConfigUnlocked(ctx, currentSite!);
       if (invalidatesRollout) {
         await cancelAutonomousJobsForEpochTransition(
           ctx,
           args.id,
           "site configuration changed",
+          authorityDomainChanged,
         );
+      }
+      if (authorityDomainChanged) {
+        await scheduleRetiredGscEpochPruning(ctx, currentSite!);
       }
       if (reserveCadence && effectiveCadence !== undefined) {
         await reserveAccountCadence(ctx, cadenceSnapshot, effectiveCadence);
@@ -1920,6 +2430,7 @@ export const upsert = mutation({
           : {}),
         ...(authorityDomainChanged
           ? {
+              ...canonicalDomainTransitionPatch(currentSite!),
               seoAuthorityDomain: undefined,
               seoAuthorityDomainRank: undefined,
               seoAuthorityReferringDomains: undefined,
@@ -1928,6 +2439,9 @@ export const upsert = mutation({
             }
           : {}),
       });
+      if (authorityDomainChanged) {
+        await invalidateDomainCadenceState(ctx, args.id);
+      }
       if (requestedCadence !== undefined) {
         await rebalanceAccountCadencesAfterRequest(ctx, cadenceSnapshot);
       }
@@ -1961,13 +2475,17 @@ export const upsert = mutation({
         await demoteOutreachForDomainChange(ctx, existing._id);
       }
       const invalidatesRollout = deliveryConfigChanged(existing, merged);
-      if (invalidatesRollout) assertConfigUnlocked(existing);
+      if (invalidatesRollout) await assertConfigUnlocked(ctx, existing);
       if (invalidatesRollout) {
         await cancelAutonomousJobsForEpochTransition(
           ctx,
           existing._id,
           "site configuration changed",
+          authorityDomainChanged,
         );
+      }
+      if (authorityDomainChanged) {
+        await scheduleRetiredGscEpochPruning(ctx, existing);
       }
       if (reserveCadence && effectiveCadence !== undefined) {
         await reserveAccountCadence(ctx, cadenceSnapshot, effectiveCadence);
@@ -1987,6 +2505,7 @@ export const upsert = mutation({
           : {}),
         ...(authorityDomainChanged
           ? {
+              ...canonicalDomainTransitionPatch(existing),
               seoAuthorityDomain: undefined,
               seoAuthorityDomainRank: undefined,
               seoAuthorityReferringDomains: undefined,
@@ -1995,6 +2514,9 @@ export const upsert = mutation({
             }
           : {}),
       });
+      if (authorityDomainChanged) {
+        await invalidateDomainCadenceState(ctx, existing._id);
+      }
       if (requestedCadence !== undefined) {
         await rebalanceAccountCadencesAfterRequest(ctx, cadenceSnapshot);
       }
@@ -2020,6 +2542,7 @@ export const upsert = mutation({
       urlStructure: args.urlStructure ?? "/blog/[slug]",
       autopilotRolloutMode: "observe",
       autopilotRolloutEpoch: 0,
+      canonicalDomainRevision: 0,
       createdAt: now(),
     });
     await syncOrganicClickGoal(ctx, siteId, args.organicClickGoalMonthly);
@@ -2136,7 +2659,7 @@ export const updateSite = mutation({
     }
     clearStaleGitHubBranch(site, patch);
     const invalidatesRollout = deliveryConfigChanged(site, patch);
-    if (invalidatesRollout) assertConfigUnlocked(site);
+    if (invalidatesRollout) await assertConfigUnlocked(ctx, site);
     if (invalidatesRollout) {
       await cancelAutonomousJobsForEpochTransition(
         ctx,
@@ -3669,9 +4192,7 @@ export const listGrowthPage = internalQuery({
         (site) => !site.deletionStatus && !site.planParkedAt,
       ).map((site) => ({
         siteId: site._id,
-        gscConnected: Boolean(
-          site.gscProperty && (site.gscRefreshToken || site.gscAccessToken),
-        ),
+        gscConnected: gscConnectionMatchesCurrentDomain(site),
       })),
     };
   },
@@ -3984,6 +4505,125 @@ async function outreachFleetState(
       durabilityMigrationComplete,
   );
   const queriedAt = Date.now();
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  const currentAuthorityOpportunity = async (status: string) => {
+    if (!canonicalDomain) return null;
+    if (siteUsesLegacyDomainReceipts(site)) {
+      const rows = await ctx.db
+        .query("seo_authority_opportunities")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        )
+        .take(100);
+      return rows.find((row) => {
+        const unstampedLegacy =
+          row.canonicalDomain === undefined && row.domainRevision === undefined;
+        const explicitlyCurrent =
+          normalizeCanonicalDomain(row.canonicalDomain ?? "") ===
+            canonicalDomain &&
+          row.domainRevision === siteCanonicalDomainRevision(site);
+        return unstampedLegacy || explicitlyCurrent;
+      }) ?? null;
+    }
+    return ctx.db
+      .query("seo_authority_opportunities")
+      .withIndex("by_site_domain_revision_status", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("canonicalDomain", canonicalDomain)
+          .eq("domainRevision", siteCanonicalDomainRevision(site))
+          .eq("status", status)
+      )
+      .first();
+  };
+  const currentMessageByStatus = async (status: string) => {
+    if (!siteOwnerAccountKey || !canonicalDomain) return null;
+    if (siteUsesLegacyDomainReceipts(site)) {
+      return ctx.db
+        .query("outreach_messages")
+        .withIndex("by_site_owner_lineage_status", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("ownerAccountKey", siteOwnerAccountKey)
+            .eq("ownerLineageUnresolvedAt", undefined)
+            .eq("status", status)
+        )
+        .first();
+    }
+    return ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_epoch_owner_status", (q) =>
+        q
+          .eq("siteId", siteId)
+          .eq("canonicalDomain", canonicalDomain)
+          .eq("domainRevision", domainRevision)
+          .eq("ownerAccountKey", siteOwnerAccountKey)
+          .eq("ownerLineageUnresolvedAt", undefined)
+          .eq("status", status)
+      )
+      .first();
+  };
+  const currentDueAutomaticMessage = async () => {
+    if (
+      !activeAutonomyConsent ||
+      !inbox ||
+      !siteOwnerAccountKey ||
+      !canonicalDomain
+    ) return null;
+    const messages = await Promise.all(
+      Array.from({ length: MAX_SEQUENCE_STEP + 1 }, (_, sequenceStep) =>
+        siteUsesLegacyDomainReceipts(site)
+          ? ctx.db
+            .query("outreach_messages")
+            .withIndex("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", (q) =>
+              q
+                .eq("siteId", siteId)
+                .eq("ownerAccountKey", siteOwnerAccountKey)
+                .eq("ownerLineageUnresolvedAt", undefined)
+                .eq("status", "approved")
+                .eq("approvalKind", "account_autopilot")
+                .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+                .eq(
+                  "approvalConsentPolicyHash",
+                  inbox.autonomyConsentPolicyHash,
+                )
+                .eq(
+                  "approvalConsentAcceptedAt",
+                  inbox.autonomyConsentAcceptedAt,
+                )
+                .eq("sequenceStep", sequenceStep)
+                .lte("scheduledAt", queriedAt)
+            )
+            .first()
+          : ctx.db
+            .query("outreach_messages")
+            .withIndex("by_site_epoch_owner_auto_sequence_scheduled", (q) =>
+              q
+                .eq("siteId", siteId)
+                .eq("canonicalDomain", canonicalDomain)
+                .eq("domainRevision", domainRevision)
+                .eq("ownerAccountKey", siteOwnerAccountKey)
+                .eq("ownerLineageUnresolvedAt", undefined)
+                .eq("status", "approved")
+                .eq("approvalKind", "account_autopilot")
+                .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+                .eq(
+                  "approvalConsentPolicyHash",
+                  inbox.autonomyConsentPolicyHash,
+                )
+                .eq(
+                  "approvalConsentAcceptedAt",
+                  inbox.autonomyConsentAcceptedAt,
+                )
+                .eq("sequenceStep", sequenceStep)
+                .lte("scheduledAt", queriedAt)
+            )
+            .first()
+      ),
+    );
+    return messages.find(Boolean) ?? null;
+  };
   const [
     verifiedOpportunity,
     approvedMessage,
@@ -3994,100 +4634,14 @@ async function outreachFleetState(
     reviewedSentMessage,
     repliedMessage,
   ] = await Promise.all([
-    ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "verified")
-      )
-      .first(),
-    siteOwnerAccountKey
-      ? ctx.db
-          .query("outreach_messages")
-          .withIndex("by_site_owner_lineage_status", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("ownerAccountKey", siteOwnerAccountKey)
-              .eq("ownerLineageUnresolvedAt", undefined)
-              .eq("status", "approved")
-          )
-          .first()
-      : Promise.resolve(null),
-    activeAutonomyConsent && inbox && siteOwnerAccountKey
-      ? Promise.all(
-          Array.from({ length: MAX_SEQUENCE_STEP + 1 }, (_, sequenceStep) =>
-            ctx.db
-              .query("outreach_messages")
-              .withIndex("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", (q) =>
-                q
-                  .eq("siteId", siteId)
-                  .eq("ownerAccountKey", siteOwnerAccountKey)
-                  .eq("ownerLineageUnresolvedAt", undefined)
-                  .eq("status", "approved")
-                  .eq("approvalKind", "account_autopilot")
-                  .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
-                  .eq(
-                    "approvalConsentPolicyHash",
-                    inbox.autonomyConsentPolicyHash,
-                  )
-                  .eq(
-                    "approvalConsentAcceptedAt",
-                    inbox.autonomyConsentAcceptedAt,
-                  )
-                  .eq("sequenceStep", sequenceStep)
-                  .lte("scheduledAt", queriedAt),
-              )
-              .first()
-          ),
-        ).then((messages) => messages.find(Boolean) ?? null)
-      : Promise.resolve(null),
-    ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "contacted")
-      )
-      .first(),
-    ctx.db
-      .query("seo_authority_opportunities")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "acquired")
-      )
-      .first(),
-    siteOwnerAccountKey
-      ? ctx.db
-          .query("outreach_messages")
-          .withIndex("by_site_owner_lineage_status", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("ownerAccountKey", siteOwnerAccountKey)
-              .eq("ownerLineageUnresolvedAt", undefined)
-              .eq("status", "sent")
-          )
-          .first()
-      : Promise.resolve(null),
-    siteOwnerAccountKey
-      ? ctx.db
-          .query("outreach_messages")
-          .withIndex("by_site_owner_lineage_status", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("ownerAccountKey", siteOwnerAccountKey)
-              .eq("ownerLineageUnresolvedAt", undefined)
-              .eq("status", "delivery_reviewed_sent")
-          )
-          .first()
-      : Promise.resolve(null),
-    siteOwnerAccountKey
-      ? ctx.db
-          .query("outreach_messages")
-          .withIndex("by_site_owner_lineage_status", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("ownerAccountKey", siteOwnerAccountKey)
-              .eq("ownerLineageUnresolvedAt", undefined)
-              .eq("status", "replied")
-          )
-          .first()
-      : Promise.resolve(null),
+    currentAuthorityOpportunity("verified"),
+    currentMessageByStatus("approved"),
+    currentDueAutomaticMessage(),
+    currentAuthorityOpportunity("contacted"),
+    currentAuthorityOpportunity("acquired"),
+    currentMessageByStatus("sent"),
+    currentMessageByStatus("delivery_reviewed_sent"),
+    currentMessageByStatus("replied"),
   ]);
   const signedRelayReady = Boolean(
     inbox &&
@@ -4146,7 +4700,8 @@ async function outreachFleetState(
     inboundMonitoringMode,
     hasMessagesToMonitor: [sentMessage, reviewedSentMessage, repliedMessage]
       .some((message) => Boolean(
-        message?.providerMessageId || message?.providerThreadId,
+        message &&
+        (message?.providerMessageId || message?.providerThreadId),
       )),
   };
 }
@@ -4220,7 +4775,7 @@ export const setAutopilotRollout = internalMutation({
     if (!site || site.deletionStatus || site.planParkedAt) {
       throw new Error("Site not found");
     }
-    assertConfigUnlocked(site);
+    await assertConfigUnlocked(ctx, site);
     if (!site.autopilotEnabled && mode !== "observe") {
       throw new Error("Autopilot must be enabled before controlled rollout");
     }
@@ -4238,10 +4793,7 @@ export const setAutopilotRollout = internalMutation({
     }
 
     if (mode === "live") {
-      const hasCrawledPage = Boolean(await ctx.db
-        .query("pages")
-        .withIndex("by_site", (q) => q.eq("siteId", siteId))
-        .first());
+      const hasCrawledPage = Boolean(await currentDomainPage(ctx, site));
       const limits = getLimitsFromFeatures(site.planFeatures ?? []);
       const readiness = liveAutopilotReadiness(
         site,
@@ -4253,12 +4805,12 @@ export const setAutopilotRollout = internalMutation({
           `Live rollout prerequisites are incomplete: ${readiness.blockers.join(", ")}`,
         );
       }
-      const ready = await ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status", (q) =>
-          q.eq("siteId", siteId).eq("status", "ready"),
-        )
-        .take(10);
+      const ready = await takeCurrentDomainArticleSummariesByStatus(
+        ctx,
+        site,
+        "ready",
+        10,
+      );
       const sealed = ready.filter(
         (article) =>
           article.publicationGateStatus === "passed" &&
@@ -4274,6 +4826,7 @@ export const setAutopilotRollout = internalMutation({
 
     const rolloutEpoch = (site.autopilotRolloutEpoch ?? 0) + 1;
     const rolloutStartedAt = Date.now();
+    await assertConfigUnlocked(ctx, site);
     const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
       ctx,
       siteId,
@@ -4310,10 +4863,7 @@ export const enforceLiveReadiness = internalMutation({
     if (site.autopilotRolloutMode !== "live") {
       return { ready: false, changed: false, mode: site.autopilotRolloutMode ?? "observe", blockers: [] as string[] };
     }
-    const hasCrawledPage = Boolean(await ctx.db
-      .query("pages")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .first());
+    const hasCrawledPage = Boolean(await currentDomainPage(ctx, site));
     const limits = getLimitsFromFeatures(site.planFeatures ?? []);
     const setupBlockers = await oneSetupPromotionBlockers(ctx, site, "live");
     const liveReadiness = liveAutopilotReadiness(
@@ -4333,6 +4883,7 @@ export const enforceLiveReadiness = internalMutation({
     const mode = warm.ready && warmSetupBlockers.length === 0
       ? "warm" as const
       : "observe" as const;
+    await assertConfigUnlocked(ctx, site);
     const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
       ctx,
       siteId,
@@ -4662,6 +5213,11 @@ export const resetAll = mutation({
           "Cannot reset data while an article publication lease exists",
         );
       }
+      // This also fences receipt-free `unverified` published revisions after
+      // their worker/site lease was cleared. A reset is all-or-nothing; one
+      // hidden ambiguous provider outcome cannot be discovered only after
+      // other tenants have already entered deletion.
+      await assertConfigUnlocked(ctx, site);
       const outreachDeletion = await gateSiteDeletionForOutreach(ctx, site._id);
       if (!outreachDeletion.ready) {
         return {
@@ -4674,10 +5230,20 @@ export const resetAll = mutation({
       }
     }
     for (const site of sites) {
-      await ctx.scheduler.runAfter(0, internal.sites.requestSiteDeletionInternal, {
-        siteId: site._id,
-        ownerUserId: identity.subject,
-      });
+      // Run every deletion-request fence in this same serializable mutation.
+      // Either every site is marked deletion-pending and credentials are
+      // revoked before commit, or any failure rolls the account reset back;
+      // asynchronous workers only perform the later bounded purge.
+      const result = await requestSiteDeletion(
+        ctx,
+        site._id,
+        identity.subject,
+      );
+      if (!result.scheduled) {
+        throw new Error(
+          `Account reset could not atomically fence site ${String(site._id)}`,
+        );
+      }
     }
     return { scheduled: sites.length };
   },
@@ -4733,7 +5299,7 @@ export const setGithubTokenInternal = internalMutation({
       site.githubToken !== githubToken ||
       site.repoDefaultBranch !== verifiedDefaultBranch;
     if (invalidatesRollout) {
-      assertConfigUnlocked(site);
+      await assertConfigUnlocked(ctx, site);
       await cancelAutonomousJobsForEpochTransition(
         ctx,
         siteId,
@@ -4761,6 +5327,10 @@ export const setGithubTokenInternal = internalMutation({
 export const setGscTokenInternal = internalMutation({
   args: {
     siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    establishConnection: v.optional(v.boolean()),
     gscAccessToken: v.string(),
     gscRefreshToken: v.optional(v.string()),
     gscProperty: v.optional(v.string()),
@@ -4768,12 +5338,37 @@ export const setGscTokenInternal = internalMutation({
     gscScopes: v.optional(v.string()),
     expectedReceiptRevision: v.optional(v.number()),
   },
-  handler: async (ctx, { siteId, gscAccessToken, gscRefreshToken, gscProperty, gscEmail, gscScopes, expectedReceiptRevision }) => {
+  handler: async (
+    ctx,
+    {
+      siteId,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      establishConnection,
+      gscAccessToken,
+      gscRefreshToken,
+      gscProperty,
+      gscEmail,
+      gscScopes,
+      expectedReceiptRevision,
+    },
+  ) => {
     const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
-    if (!gscProperty && !site.gscProperty) {
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (
+      !canonicalDomain ||
+      normalizeCanonicalDomain(expectedCanonicalDomain) !== canonicalDomain ||
+      expectedDomainRevision !== siteCanonicalDomainRevision(site) ||
+      expectedConnectionRevision !== siteGscConnectionRevision(site)
+    ) {
+      throw new Error("Site domain changed during Search Console connection");
+    }
+    const property = gscProperty ?? site.gscProperty;
+    if (!property) {
       throw new Error("A matching Search Console property is required for the initial connection");
     }
     if (
@@ -4782,30 +5377,84 @@ export const setGscTokenInternal = internalMutation({
     ) {
       throw new Error("Search Console connection changed during token refresh");
     }
-    if (!gscProperty && expectedReceiptRevision === undefined) {
+    if (!establishConnection && expectedReceiptRevision === undefined) {
       throw new Error("A token refresh requires the exact connection receipt");
     }
-    if (!gscProperty && site.gscReceiptStatus === "revoked") {
+    if (!establishConnection && site.gscReceiptStatus === "revoked") {
       throw new Error("A revoked Search Console connection cannot be refreshed");
     }
+    if (establishConnection && !gscProperty) {
+      throw new Error("A fresh Search Console connection requires an exact property receipt");
+    }
+    if (!gscPropertyMatchesCanonicalDomain(property, canonicalDomain)) {
+      throw new Error("Search Console property does not match the current site domain");
+    }
+    if (
+      !establishConnection &&
+      (!gscConnectionMatchesCurrentDomain(site) ||
+        property !== site.gscProperty)
+    ) {
+      throw new Error("Search Console refresh belongs to an earlier connection");
+    }
+    const connectionRevision = establishConnection
+      ? nextGscConnectionRevision(site)
+      : expectedConnectionRevision;
+    if (establishConnection) {
+      await assertConfigUnlocked(ctx, site);
+      await scheduleRetiredGscEpochPruning(ctx, site);
+      await invalidateGscGrowthState(
+        ctx,
+        siteId,
+        "Search Console was reconnected; prior measurement actions were retired.",
+      );
+      await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        siteId,
+        "Search Console connection changed",
+      );
+    }
     const timestamp = now();
-    const sealsNewReceipt = Boolean(gscProperty);
     await ctx.db.patch(site._id, {
       gscAccessToken,
-      ...(gscRefreshToken ? { gscRefreshToken } : {}),
-      ...(gscProperty ? { gscProperty } : {}),
-      ...(gscEmail ? { gscEmail } : {}),
-      ...(gscScopes ? { gscScopes } : {}),
-      ...(!site.gscConnectedAt ? { gscConnectedAt: timestamp } : {}),
-      ...(sealsNewReceipt
+      ...(establishConnection
         ? {
+            // A new connection never inherits account-owned fields omitted by
+            // the provider. This prevents a fresh grant from falling back to
+            // an older account's refresh token or identity.
+            gscRefreshToken,
+            gscProperty: property,
+            gscEmail,
+            gscScopes,
+            gscConnectedAt: timestamp,
+            gscSyncEpoch: undefined,
+            gscPendingSyncEpoch: undefined,
+            gscPendingSyncMode: undefined,
+            gscPendingWindowStart: undefined,
+            gscPendingDataThrough: undefined,
+            gscPendingStartedAt: undefined,
+            gscDateEpochs: undefined,
+            gscDataWindowStart: undefined,
+            gscDataThrough: undefined,
+            gscHistoryDays: undefined,
+            gscCompleteWindows: undefined,
+            gscDataSyncedAt: undefined,
+            gscQueryRows: undefined,
+            gscPageRows: undefined,
+            gscAnalyticsRequests: undefined,
             gscReceiptStatus: "verified" as const,
             gscReceiptRevision: (site.gscReceiptRevision ?? 0) + 1,
             gscReceiptVerifiedAt: timestamp,
             gscReceiptRevokedAt: undefined,
             gscReceiptReasonCode: undefined,
+            autopilotRolloutMode: "observe" as const,
+            autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
           }
-        : {}),
+        : {
+            ...(gscRefreshToken ? { gscRefreshToken } : {}),
+          }),
+      gscCanonicalDomain: canonicalDomain,
+      gscDomainRevision: expectedDomainRevision,
+      gscConnectionRevision: connectionRevision,
       updatedAt: timestamp,
     });
   },
@@ -4926,17 +5575,26 @@ export const disconnectGsc = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await requireSiteOwner(ctx, siteId);
-    assertConfigUnlocked(site);
+    await assertConfigUnlocked(ctx, site);
     const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
       ctx,
       siteId,
       "Google Search Console disconnected",
     );
+    await invalidateGscGrowthState(
+      ctx,
+      siteId,
+      "Search Console was disconnected; prior measurement actions were retired.",
+    );
+    await scheduleRetiredGscEpochPruning(ctx, site);
     const timestamp = now();
     await ctx.db.patch(siteId, {
       gscAccessToken: undefined,
       gscRefreshToken: undefined,
       gscProperty: undefined,
+      gscCanonicalDomain: undefined,
+      gscDomainRevision: undefined,
+      gscConnectionRevision: nextGscConnectionRevision(site),
       gscEmail: undefined,
       gscScopes: undefined,
       gscConnectedAt: undefined,

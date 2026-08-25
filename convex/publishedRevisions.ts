@@ -11,8 +11,12 @@ import { internal } from "./_generated/api";
 import {
   publicationArtifactHash,
   publicationArtifactHashForAuditVersion,
+  assertSupportedPublicationAdapterVersion,
+  assertSupportedPublicationRendererVersion,
+  publicationAdapterConfigHashForVersion,
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
+  publicationDeliveryDestinationHash,
   publicationDeliveryKey,
   PUBLICATION_AUDIT_VERSION,
   type PublicationArtifact,
@@ -20,6 +24,7 @@ import {
 import {
   publishedArticlePublicUrl,
   selectVerifiedAuthorityTargets,
+  verifiedAuthorityTarget,
 } from "./lib/publicationLive";
 import {
   acquirePublishedRevisionLease,
@@ -27,6 +32,7 @@ import {
   deterministicSnippetRevision,
   legacyGitHubReceiptAdoptionKey,
   LEGACY_GITHUB_PUBLICATION_AUDIT_VERSION,
+  MAX_PUBLISHED_REVISION_RECONCILIATION_ATTEMPTS,
   MAX_PUBLISHED_REVISIONS_PER_TENANT_24H,
   PUBLISHED_REVISION_PREPARATION_FAILED_DETAIL,
   PUBLISHED_REVISION_LEASE_MS,
@@ -47,12 +53,145 @@ import {
   siteExecutionActive,
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import { reviewedAmbiguityDispositionAllowed } from "./lib/publicationLease";
+import {
+  articleMatchesCurrentDomain,
+  collectCurrentDomainArticles,
+  gscConnectionMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteGscConnectionRevision,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LIVE_VERIFICATION_LEASE_MS = 2 * 60 * 1000;
 const MAX_LIVE_VERIFICATION_RECOVERIES = 20;
 const LEGACY_ADOPTION_LEASE_MS = 10 * 60 * 1000;
 const MAX_LEGACY_ADOPTIONS_PER_TENANT_24H = 1;
+const REVIEWED_AMBIGUITY_CONFIRMATION =
+  "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT";
+
+function sealedRevisionDeliveryConfig(article: Doc<"articles">) {
+  if (!article.publicationConfigSnapshot || !article.publicationConfigHash) {
+    throw new Error("Published revision lost its initial destination seal");
+  }
+  const config = publicationDeliveryConfig(article.publicationConfigSnapshot);
+  if (publicationDeliveryConfigHash(config) !== article.publicationConfigHash) {
+    throw new Error("Published revision destination seal is inconsistent");
+  }
+  return config;
+}
+
+function attemptedRevisionAdapterContract(
+  site: Doc<"sites">,
+  article: Doc<"articles">,
+  revision: Doc<"published_article_revisions">,
+): {
+  adapterVersion?: string;
+  adapterConfigHash?: string;
+  rendererVersion?: string;
+} | null {
+  const sealed = sealedRevisionDeliveryConfig(article);
+  if (sealed.method !== "wordpress" && sealed.method !== "webhook") return {};
+  const adapterVersion = revision.adapterVersionAtAttempt ??
+    site.publicationAdapterVersion;
+  const adapterConfigHash = revision.adapterConfigHashAtAttempt ??
+    site.publicationAdapterConfigHash;
+  const rendererVersion = revision.rendererVersionAtAttempt ??
+    sealed.rendererVersion;
+  if (!adapterVersion || !adapterConfigHash || !rendererVersion) return null;
+  try {
+    assertSupportedPublicationAdapterVersion(adapterVersion);
+    assertSupportedPublicationRendererVersion(rendererVersion);
+  } catch {
+    return null;
+  }
+  return Boolean(
+    rendererVersion === sealed.rendererVersion &&
+    site.publicationAdapterVersion === adapterVersion &&
+    site.publicationAdapterConfigHash === adapterConfigHash &&
+    (site.publicationAdapterVerifiedAt ?? 0) > 0 &&
+    publicationAdapterConfigHashForVersion(site, adapterVersion) ===
+      adapterConfigHash
+  )
+    ? { adapterVersion, adapterConfigHash, rendererVersion }
+    : null;
+}
+
+async function growthRevisionMeasurementCurrent(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+  revision: Doc<"published_article_revisions">,
+): Promise<boolean> {
+  if (!revision.growthActionId) return true;
+  const action = await ctx.db.get(revision.growthActionId);
+  return Boolean(
+    action &&
+    action.siteId === site._id &&
+    action.status === "open" &&
+    action.fingerprint === revision.actionFingerprint &&
+    action.measurementKey === revision.growthMeasurementKey &&
+    gscConnectionMatchesCurrentDomain(site) &&
+    action.measurementCanonicalDomain === siteCanonicalDomain(site) &&
+    action.measurementDomainRevision === siteCanonicalDomainRevision(site) &&
+    action.measurementGscConnectionRevision ===
+      siteGscConnectionRevision(site) &&
+    action.measurementGscProperty === site.gscProperty &&
+    action.measurementGscSyncEpoch === site.gscSyncEpoch &&
+    action.measurementGscDataThrough === site.gscDataThrough
+  );
+}
+
+async function revisionTargetStillCurrent(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+  revision: Doc<"published_article_revisions">,
+): Promise<boolean> {
+  if (revision.kind !== "strengthen_cluster") return true;
+  if (!revision.targetArticleId || !revision.targetUrl) return false;
+  const target = await ctx.db.get(revision.targetArticleId);
+  if (!target || target.siteId !== site._id) return false;
+  const verified = verifiedAuthorityTarget({
+    site,
+    article: target,
+    now: Date.now(),
+  });
+  if (!verified || verified.articleId !== revision.targetArticleId) return false;
+  try {
+    return new URL(verified.targetUrl).pathname === revision.targetUrl;
+  } catch {
+    return false;
+  }
+}
+
+async function assertNoOtherUnresolvedPublication(
+  ctx: MutationCtx,
+  siteId: Id<"sites">,
+  revisionId: Id<"published_article_revisions">,
+) {
+  for (const status of ["leased", "attempted"] as const) {
+    const rows = await ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", status)
+      )
+      .take(2);
+    if (rows.some((row) => row._id !== revisionId)) {
+      throw new Error("Another published revision delivery is unresolved");
+    }
+  }
+  const ambiguous = await ctx.db
+    .query("published_article_revisions")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", siteId).eq("status", "unverified")
+    )
+    .filter((q) => q.eq(q.field("receipt"), undefined))
+    .take(2);
+  if (ambiguous.some((row) => row._id !== revisionId)) {
+    throw new Error("Another published revision delivery is unverified");
+  }
+}
 
 const revisionReceiptValidator = v.object({
   method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
@@ -240,6 +379,23 @@ function rolloutAllowsRevision(site: Doc<"sites">): boolean {
   );
 }
 
+async function currentRevisionArticle(
+  ctx: QueryCtx | MutationCtx,
+  revision: Doc<"published_article_revisions">,
+): Promise<{ site: Doc<"sites">; article: Doc<"articles"> } | null> {
+  const [site, article] = await Promise.all([
+    ctx.db.get(revision.siteId),
+    ctx.db.get(revision.articleId),
+  ]);
+  if (
+    !site ||
+    !article ||
+    article.siteId !== revision.siteId ||
+    !articleMatchesCurrentDomain(site, article)
+  ) return null;
+  return { site, article };
+}
+
 function legacyGitHubAdoptionEligibility(
   site: Doc<"sites">,
   article: Doc<"articles">,
@@ -255,6 +411,7 @@ function legacyGitHubAdoptionEligibility(
   try {
     if (
       !rolloutAllowsRevision(site) ||
+      !articleMatchesCurrentDomain(site, article) ||
       (site.publishMethod ?? "github") !== "github" ||
       article.siteId !== site._id ||
       article.status !== "published" ||
@@ -354,6 +511,7 @@ export const prepareForGrowthAction = internalMutation({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
     fingerprint: v.string(),
+    measurementKey: v.string(),
     actionKind: v.union(
       v.literal("improve_snippet"),
       v.literal("strengthen_cluster"),
@@ -377,11 +535,13 @@ export const prepareForGrowthAction = internalMutation({
       !site ||
       !article ||
       article.siteId !== args.siteId ||
+      !articleMatchesCurrentDomain(site, article) ||
       !action ||
       action.siteId !== args.siteId ||
       action.articleId !== args.articleId ||
       action.actionKind !== args.actionKind ||
-      action.status !== "open"
+      action.status !== "open" ||
+      action.measurementKey !== args.measurementKey
     ) {
       throw new Error("Published revision crossed a tenant, article, or action boundary");
     }
@@ -404,7 +564,12 @@ export const prepareForGrowthAction = internalMutation({
       .withIndex("by_action", (q) => q.eq("growthActionId", action._id))
       .first();
     if (existing) {
-      if (existing.siteId !== args.siteId || existing.articleId !== args.articleId) {
+      if (
+        existing.siteId !== args.siteId ||
+        existing.articleId !== args.articleId ||
+        existing.growthActionId !== action._id ||
+        existing.actionFingerprint !== args.fingerprint
+      ) {
         throw new Error("Existing published revision crossed a tenant boundary");
       }
       if (existing.status === "failed") {
@@ -413,6 +578,29 @@ export const prepareForGrowthAction = internalMutation({
           detail:
             "The action's deterministic revision reached a terminal failed state; Pentra skipped it so later safe candidates can continue.",
         };
+      }
+      // A newer measurement for the same semantic action must not strand a
+      // deterministic revision that has never acquired a delivery lease or
+      // produced any provider receipt. Rebind only this pristine state. Once
+      // execution begins, the immutable measurement remains part of the
+      // ambiguity/no-replay boundary and can never be rewritten.
+      if (
+        existing.status === "prepared" &&
+        existing.attempts === 0 &&
+        existing.leaseOwner === undefined &&
+        existing.leaseStartedAt === undefined &&
+        existing.attemptedAt === undefined &&
+        existing.receipt === undefined &&
+        existing.deliveryVerifiedAt === undefined &&
+        existing.liveVerificationAttempts === 0 &&
+        existing.liveVerificationLeaseOwner === undefined &&
+        existing.liveVerificationLeaseExpiresAt === undefined &&
+        existing.growthMeasurementKey !== args.measurementKey
+      ) {
+        await ctx.db.patch(existing._id, {
+          growthMeasurementKey: args.measurementKey,
+          updatedAt: Date.now(),
+        });
       }
       return {
         status: "existing",
@@ -473,7 +661,11 @@ export const prepareForGrowthAction = internalMutation({
 
     if (args.actionKind === "improve_snippet") {
       const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
-      if (topic && topic.siteId === args.siteId) {
+      if (
+        topic &&
+        topic.siteId === args.siteId &&
+        topicMatchesCurrentDomain(site, topic)
+      ) {
         try {
           next = deterministicSnippetRevision({
             artifact: base.artifact,
@@ -500,10 +692,7 @@ export const prepareForGrowthAction = internalMutation({
         }
       }
     } else {
-      const tenantArticles = await ctx.db
-        .query("articles")
-        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
-        .collect();
+      const tenantArticles = await collectCurrentDomainArticles(ctx, site);
       const verifiedTargets = selectVerifiedAuthorityTargets({
         site,
         articles: tenantArticles.filter((candidate) => candidate._id !== article._id),
@@ -569,6 +758,7 @@ export const prepareForGrowthAction = internalMutation({
       siteId: args.siteId,
       articleId: args.articleId,
       growthActionId: action._id,
+      growthMeasurementKey: args.measurementKey,
       actionFingerprint: args.fingerprint,
       kind: args.actionKind,
       revisionKey,
@@ -717,7 +907,8 @@ export const getLegacyGitHubReceiptAdoptionContext = internalQuery({
     if (
       !siteExecutionActive(site) ||
       !article ||
-      article.siteId !== site._id
+      article.siteId !== site._id ||
+      !articleMatchesCurrentDomain(site, article)
     ) {
       return null;
     }
@@ -899,13 +1090,13 @@ export const getExecutionContext = internalQuery({
   handler: async (ctx, { revisionId }) => {
     const revision = await ctx.db.get(revisionId);
     if (!revision) return null;
-    const [site, article] = await Promise.all([
-      ctx.db.get(revision.siteId),
-      ctx.db.get(revision.articleId),
-    ]);
+    const current = await currentRevisionArticle(ctx, revision);
+    const site = current?.site;
+    const article = current?.article;
     if (
       !site ||
-      !(await siteExecutionAuthorized(ctx, site)) ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt ||
       !article ||
       article.siteId !== revision.siteId
     ) {
@@ -915,7 +1106,7 @@ export const getExecutionContext = internalQuery({
   },
 });
 
-export const listDueLiveVerifications = internalQuery({
+export const listDueLiveVerifications = internalMutation({
   args: { now: v.number() },
   handler: async (ctx, { now }) => {
     const candidates = await ctx.db
@@ -925,7 +1116,7 @@ export const listDueLiveVerifications = internalQuery({
           .eq("status", "verification_pending")
           .lte("liveVerificationNextAt", now),
       )
-      .take(MAX_LIVE_VERIFICATION_RECOVERIES * 2);
+      .take(MAX_LIVE_VERIFICATION_RECOVERIES * 10);
     const due: Array<{
       revisionId: Id<"published_article_revisions">;
       expectedNextArtifactHash: string;
@@ -941,8 +1132,26 @@ export const listDueLiveVerifications = internalQuery({
       ) {
         continue;
       }
-      const site = await ctx.db.get(revision.siteId);
-      if (!siteExecutionActive(site)) continue;
+      const current = await currentRevisionArticle(ctx, revision);
+      if (
+        !current ||
+        !siteExecutionActive(current.site) ||
+        !rolloutAllowsRevision(current.site) ||
+        (current.site.autopilotRolloutEpoch ?? 0) !== revision.rolloutEpoch
+      ) {
+        const retiredAt = Date.now();
+        await ctx.db.patch(revision._id, {
+          status: "unverified",
+          liveVerificationNextAt: undefined,
+          liveVerificationLeaseOwner: undefined,
+          liveVerificationLeaseExpiresAt: undefined,
+          failureCode: "live_verification_epoch_retired",
+          failureDetail:
+            "The exact external receipt remains historical, but this live verification belongs to a retired tenant rollout or domain epoch.",
+          updatedAt: retiredAt,
+        });
+        continue;
+      }
       due.push({
         revisionId: revision._id,
         expectedNextArtifactHash: revision.nextArtifactHash,
@@ -972,7 +1181,8 @@ export const claimLiveVerification = internalMutation({
     ) {
       return { claimed: false };
     }
-    const site = await ctx.db.get(revision.siteId);
+    const current = await currentRevisionArticle(ctx, revision);
+    const site = current?.site;
     if (
       !siteExecutionActive(site) ||
       !rolloutAllowsRevision(site) ||
@@ -997,20 +1207,127 @@ export const claimExecution = internalMutation({
   handler: async (ctx, { revisionId, leaseOwner }) => {
     const revision = await ctx.db.get(revisionId);
     if (!revision) throw new Error("Published revision not found");
-    const [site, article] = await Promise.all([
-      ctx.db.get(revision.siteId),
-      ctx.db.get(revision.articleId),
-    ]);
+    const current = await currentRevisionArticle(ctx, revision);
+    const site = current?.site;
+    const article = current?.article;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    const measurementCurrent = site && revision
+      ? await growthRevisionMeasurementCurrent(ctx, site, revision)
+      : false;
+    const recoveringAttemptedDelivery = Boolean(
+      revision.attemptedAt &&
+      ["leased", "attempted", "unverified"].includes(revision.status),
+    );
+    const receiptOnlyPlanTransition = recoveringAttemptedDelivery &&
+      await executionLeasePredatesPlanTransition(
+        ctx,
+        site,
+        revision.attemptedAt,
+      );
+    let currentConfigHash: string | undefined;
+    let recoveryDestinationMatches = false;
+    let recoveryAdapter: ReturnType<typeof attemptedRevisionAdapterContract> = {};
+    if (site && article) {
+      try {
+        const currentConfig = publicationDeliveryConfig(site);
+        currentConfigHash = publicationDeliveryConfigHash(currentConfig);
+        if (recoveringAttemptedDelivery) {
+          recoveryDestinationMatches =
+            publicationDeliveryDestinationHash(currentConfig) ===
+              publicationDeliveryDestinationHash(
+                sealedRevisionDeliveryConfig(article),
+              );
+          recoveryAdapter = attemptedRevisionAdapterContract(
+            site,
+            article,
+            revision,
+          );
+        }
+      } catch {
+        currentConfigHash = undefined;
+        recoveryDestinationMatches = false;
+        recoveryAdapter = null;
+      }
+    }
+    const rolloutCurrent = Boolean(
+      site &&
+      rolloutAllowsRevision(site) &&
+      (site.autopilotRolloutEpoch ?? 0) === revision.rolloutEpoch,
+    );
+    const expiredWorkerLease = Boolean(
+      ["leased", "attempted"].includes(revision.status) &&
+      revision.leaseStartedAt &&
+      revision.leaseStartedAt + PUBLISHED_REVISION_LEASE_MS <= Date.now(),
+    );
+    const expiredPristineLease = expiredWorkerLease && !revision.attemptedAt;
+    if (
+      expiredPristineLease &&
+      (revision.attempts >=
+          MAX_PUBLISHED_REVISION_RECONCILIATION_ATTEMPTS ||
+        !executionAuthorized ||
+        !measurementCurrent ||
+        !rolloutCurrent ||
+        currentConfigHash !== revision.publicationConfigHash)
+    ) {
+      const retiredAt = Date.now();
+      await ctx.db.patch(revision._id, {
+        status: "failed",
+        leaseOwner: undefined,
+        leaseStartedAt: undefined,
+        failureCode: "pristine_revision_lease_retired",
+        failureDetail:
+          "The worker lease expired before the provider mutation boundary; no external revision was attempted.",
+        updatedAt: retiredAt,
+      });
+      if (site && site.publicationLeaseOwner === revision.leaseOwner) {
+        await ctx.db.patch(site._id, {
+          publicationLeaseOwner: undefined,
+          publicationLeaseExpiresAt: undefined,
+          updatedAt: retiredAt,
+        });
+      }
+      return { idempotent: false, retiredPristine: true, attempts: revision.attempts };
+    }
+    if (
+      expiredWorkerLease &&
+      recoveringAttemptedDelivery &&
+      revision.attempts >=
+        MAX_PUBLISHED_REVISION_RECONCILIATION_ATTEMPTS
+    ) {
+      const exhaustedAt = Date.now();
+      await ctx.db.patch(revision._id, {
+        status: "unverified",
+        leaseOwner: undefined,
+        leaseStartedAt: undefined,
+        failureCode: "revision_reconciliation_exhausted",
+        failureDetail:
+          "Bounded read-only reconciliation could not prove the external outcome; explicit owner review is required and no provider replay is authorized.",
+        updatedAt: exhaustedAt,
+      });
+      if (site && site.publicationLeaseOwner === revision.leaseOwner) {
+        await ctx.db.patch(site._id, {
+          publicationLeaseOwner: undefined,
+          publicationLeaseExpiresAt: undefined,
+          updatedAt: exhaustedAt,
+        });
+      }
+      return {
+        idempotent: false,
+        retiredPristine: false,
+        reconciliationExhausted: true,
+        attempts: revision.attempts,
+      };
+    }
     if (
       !site ||
-      !executionAuthorized ||
+      (!executionAuthorized && !receiptOnlyPlanTransition) ||
       !article ||
+      (!measurementCurrent && !recoveringAttemptedDelivery) ||
       article.siteId !== site._id ||
-      !rolloutAllowsRevision(site) ||
-      (site.autopilotRolloutEpoch ?? 0) !== revision.rolloutEpoch ||
-      publicationDeliveryConfigHash(publicationDeliveryConfig(site)) !==
-        revision.publicationConfigHash ||
+      (!rolloutCurrent && !receiptOnlyPlanTransition) ||
+      (currentConfigHash !== revision.publicationConfigHash &&
+        !(recoveringAttemptedDelivery && recoveryDestinationMatches)) ||
+      (recoveringAttemptedDelivery && !recoveryAdapter) ||
       publishedArticlePublicUrl({
         domain: site.domain,
         urlStructure: site.urlStructure,
@@ -1019,11 +1336,16 @@ export const claimExecution = internalMutation({
     ) {
       throw new Error("Published revision lost its tenant, rollout, or destination boundary");
     }
-    if (
-      site.publicationLeaseOwner &&
-      (site.publicationLeaseExpiresAt ?? 0) > Date.now()
-    ) {
-      throw new Error("Another publication is already in progress for this site");
+    await assertNoOtherUnresolvedPublication(ctx, site._id, revision._id);
+    if (site.publicationLeaseOwner) {
+      const sameRecoverableRevision =
+        revision.leaseOwner === site.publicationLeaseOwner;
+      if (
+        (site.publicationLeaseExpiresAt ?? 0) > Date.now() ||
+        !sameRecoverableRevision
+      ) {
+        throw new Error("Another publication is already in progress for this site");
+      }
     }
     if (
       publicationArtifactHashForAuditVersion(
@@ -1077,6 +1399,13 @@ export const claimExecution = internalMutation({
     if (lease.idempotent) return { idempotent: true };
     await ctx.db.patch(revisionId, {
       ...lease.patch,
+      ...(recoveringAttemptedDelivery && recoveryAdapter
+        ? {
+            adapterVersionAtAttempt: recoveryAdapter.adapterVersion,
+            adapterConfigHashAtAttempt: recoveryAdapter.adapterConfigHash,
+            rendererVersionAtAttempt: recoveryAdapter.rendererVersion,
+          }
+        : {}),
       updatedAt: Date.now(),
     });
     await ctx.db.patch(site._id, {
@@ -1084,7 +1413,17 @@ export const claimExecution = internalMutation({
       publicationLeaseExpiresAt: Date.now() + 15 * 60 * 1000,
       updatedAt: Date.now(),
     });
-    return { idempotent: false, attempts: lease.patch!.attempts };
+    await ctx.scheduler.runAfter(
+      PUBLISHED_REVISION_LEASE_MS + 1_000,
+      internal.publisher.executePublishedRevisionInternal,
+      { revisionId },
+    );
+    return {
+      idempotent: false,
+      retiredPristine: false,
+      attempts: lease.patch!.attempts,
+      receiptOnlyPlanTransition,
+    };
   },
 });
 
@@ -1095,26 +1434,74 @@ export const recordAttempted = internalMutation({
   },
   handler: async (ctx, { revisionId, leaseOwner }) => {
     const revision = await ctx.db.get(revisionId);
-    const site = revision ? await ctx.db.get(revision.siteId) : null;
+    const current = revision
+      ? await currentRevisionArticle(ctx, revision)
+      : null;
+    const site = current?.site;
+    const article = current?.article;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
+    let configAuthorized = false;
+    let adapterContract: ReturnType<typeof attemptedRevisionAdapterContract> = null;
+    if (revision && site && article) {
+      try {
+        const currentConfig = publicationDeliveryConfig(site);
+        const currentConfigHash = publicationDeliveryConfigHash(currentConfig);
+        const recoveringAttempt = Boolean(revision.attemptedAt);
+        const destinationStillExact = recoveringAttempt &&
+          publicationDeliveryDestinationHash(currentConfig) ===
+            publicationDeliveryDestinationHash(
+              sealedRevisionDeliveryConfig(article),
+            );
+        adapterContract = attemptedRevisionAdapterContract(
+          site,
+          article,
+          revision,
+        );
+        configAuthorized =
+          currentConfigHash === revision.publicationConfigHash ||
+          Boolean(destinationStillExact && adapterContract);
+      } catch {
+        configAuthorized = false;
+        adapterContract = null;
+      }
+    }
+    const measurementCurrent = revision && site
+      ? await growthRevisionMeasurementCurrent(ctx, site, revision)
+      : false;
+    const targetCurrent = revision && site
+      ? await revisionTargetStillCurrent(ctx, site, revision)
+      : false;
     if (
       !revision ||
       revision.status !== "leased" ||
       revision.leaseOwner !== leaseOwner ||
       !site ||
+      !article ||
       !executionAuthorized ||
       site.publicationLeaseOwner !== leaseOwner ||
       !rolloutAllowsRevision(site) ||
       (site.autopilotRolloutEpoch ?? 0) !== revision.rolloutEpoch ||
-      publicationDeliveryConfigHash(publicationDeliveryConfig(site)) !==
-        revision.publicationConfigHash
+      !measurementCurrent ||
+      !targetCurrent ||
+      !configAuthorized ||
+      !adapterContract ||
+      publishedArticlePublicUrl({
+        domain: site.domain,
+        urlStructure: site.urlStructure,
+        slug: article.slug,
+      }) !== revision.expectedPublicUrl
     ) {
-      throw new Error("Published revision attempt lost its exact lease");
+      throw new Error(
+        "Published revision attempt lost its exact lease, measurement, target, or destination authorization",
+      );
     }
-    const timestamp = Date.now();
+    const timestamp = revision.attemptedAt ?? Date.now();
     await ctx.db.patch(revisionId, {
       status: "attempted",
       attemptedAt: timestamp,
+      adapterVersionAtAttempt: adapterContract.adapterVersion,
+      adapterConfigHashAtAttempt: adapterContract.adapterConfigHash,
+      rendererVersionAtAttempt: adapterContract.rendererVersion,
       updatedAt: timestamp,
     });
     if (revision.growthActionId) {
@@ -1122,7 +1509,6 @@ export const recordAttempted = internalMutation({
       if (
         action?.siteId === revision.siteId &&
         action.articleId === revision.articleId &&
-        action.status === "open" &&
         action.publishedRevisionId === revision._id
       ) {
         await ctx.db.patch(action._id, {
@@ -1146,12 +1532,23 @@ export const recordDelivery = internalMutation({
   },
   handler: async (ctx, { revisionId, leaseOwner, receipt }) => {
     const revision = await ctx.db.get(revisionId);
-    const site = revision ? await ctx.db.get(revision.siteId) : null;
+    const current = revision
+      ? await currentRevisionArticle(ctx, revision)
+      : null;
+    const site = current?.site;
+    const article = current?.article;
+    const priorAttempt = Boolean(revision?.attemptedAt);
+    const receiptSettlementState = Boolean(
+      revision &&
+      (revision.status === "attempted" ||
+        (revision.status === "leased" && priorAttempt)),
+    );
     if (
       !revision ||
-      revision.status !== "attempted" ||
+      !receiptSettlementState ||
       revision.leaseOwner !== leaseOwner ||
-      !site
+      !site ||
+      !article
     ) {
       throw new Error("Published revision delivery lost its exact lease");
     }
@@ -1163,13 +1560,39 @@ export const recordDelivery = internalMutation({
       await executionLeasePredatesPlanTransition(
         ctx,
         site,
-        revision.leaseStartedAt,
+        revision.attemptedAt,
       );
+    let destinationStillExact = false;
+    let adapterContract: ReturnType<typeof attemptedRevisionAdapterContract> = null;
+    try {
+      const currentConfig = publicationDeliveryConfig(site);
+      destinationStillExact =
+        publicationDeliveryConfigHash(currentConfig) ===
+          revision.publicationConfigHash ||
+        (priorAttempt &&
+          publicationDeliveryDestinationHash(currentConfig) ===
+            publicationDeliveryDestinationHash(
+              sealedRevisionDeliveryConfig(article),
+            ));
+      adapterContract = attemptedRevisionAdapterContract(
+        site,
+        article,
+        revision,
+      );
+    } catch {
+      destinationStillExact = false;
+      adapterContract = null;
+    }
     if (
       (!normalSettlementAuthorized && !receiptOnlyPlanTransition) ||
       site.publicationLeaseOwner !== leaseOwner ||
-      publicationDeliveryConfigHash(publicationDeliveryConfig(site)) !==
-        revision.publicationConfigHash
+      !destinationStillExact ||
+      !adapterContract ||
+      publishedArticlePublicUrl({
+        domain: site.domain,
+        urlStructure: site.urlStructure,
+        slug: article.slug,
+      }) !== revision.expectedPublicUrl
     ) {
       throw new Error("Published revision delivery lost its exact lease");
     }
@@ -1234,8 +1657,12 @@ export const recordFailure = internalMutation({
     if (!revision || revision.leaseOwner !== args.leaseOwner) return { recorded: false };
     const site = await ctx.db.get(revision.siteId);
     const timestamp = Date.now();
+    // Once the durable provider boundary was crossed, no later preflight or
+    // worker classification may erase the ambiguity. Only an exact provider
+    // receipt (or an explicit reviewed disposition) can terminalize it.
+    const status = revision.attemptedAt ? "unverified" : args.status;
     await ctx.db.patch(revision._id, {
-      status: args.status,
+      status,
       failureCode: args.code.slice(0, 100),
       failureDetail: args.detail.slice(0, 500),
       leaseOwner: undefined,
@@ -1258,7 +1685,7 @@ export const recordFailure = internalMutation({
         action.publishedRevisionId === revision._id
       ) {
         await ctx.db.patch(action._id, {
-          automationStatus: args.status === "unverified"
+          automationStatus: status === "unverified"
             ? "revision_unverified"
             : "revision_failed",
           automationDetail: args.detail.slice(0, 500),
@@ -1266,7 +1693,112 @@ export const recordFailure = internalMutation({
         });
       }
     }
+    if (
+      status === "unverified" &&
+      revision.baseReceipt.method === "github" &&
+      revision.attempts < MAX_PUBLISHED_REVISION_RECONCILIATION_ATTEMPTS
+    ) {
+      const delays = [30_000, 2 * 60_000, 10 * 60_000] as const;
+      const delay = delays[Math.max(0, revision.attempts - 1)] ??
+        delays[delays.length - 1];
+      await ctx.scheduler.runAfter(
+        delay,
+        internal.publisher.executePublishedRevisionInternal,
+        { revisionId: revision._id },
+      );
+    }
     return { recorded: true };
+  },
+});
+
+/** Explicit owner disposition for an irreconcilable revision outcome. It is
+ * intentionally an abandonment, never a success receipt or replay permit.
+ * Immutable artifacts, attempt metadata, and the audit reason remain stored;
+ * only the workflow/site locks are terminally released. */
+export const abandonUnverifiedDelivery = mutation({
+  args: {
+    revisionId: v.id("published_article_revisions"),
+    confirmation: v.string(),
+  },
+  handler: async (ctx, { revisionId, confirmation }) => {
+    if (confirmation !== REVIEWED_AMBIGUITY_CONFIRMATION) {
+      throw new Error(
+        `Exact confirmation required: ${REVIEWED_AMBIGUITY_CONFIRMATION}`,
+      );
+    }
+    const revision = await ctx.db.get(revisionId);
+    if (!revision) throw new Error("Published revision not found");
+    const site = await requireOwner(ctx, revision.siteId);
+    const current = await currentRevisionArticle(ctx, revision);
+    const identity = await ctx.auth.getUserIdentity();
+    const timestamp = Date.now();
+    if (
+      !identity ||
+      !current ||
+      current.site._id !== site._id ||
+      site.accountDeletionRequestedAt ||
+      revision.deliveryVerifiedAt ||
+      !["leased", "attempted", "unverified"].includes(revision.status) ||
+      !reviewedAmbiguityDispositionAllowed({
+        attemptedAt: revision.attemptedAt,
+        receiptPresent: Boolean(revision.receipt),
+        dispositionAt: revision.ambiguityDispositionAt,
+        workflowLeaseOwner: revision.leaseOwner,
+        workflowLeaseStartedAt: revision.leaseStartedAt,
+        siteLeaseOwner: site.publicationLeaseOwner,
+        siteLeaseExpiresAt: site.publicationLeaseExpiresAt,
+        now: timestamp,
+        leaseMs: PUBLISHED_REVISION_LEASE_MS,
+      })
+    ) {
+      throw new Error(
+        "This revision does not have an expired, receipt-free delivery ambiguity",
+      );
+    }
+    const detail =
+      "The owner reviewed an unresolved provider outcome, abandoned this immutable revision without asserting success, and accepted responsibility for reconciling any external artifact before future destination changes.";
+    const leaseOwner = revision.leaseOwner;
+    await ctx.db.patch(revision._id, {
+      status: "failed",
+      leaseOwner: undefined,
+      leaseStartedAt: undefined,
+      failureCode: "owner_reviewed_delivery_ambiguity",
+      failureDetail: detail,
+      ambiguityDispositionAt: timestamp,
+      ambiguityDispositionBy: identity.subject,
+      ambiguityDispositionDetail: detail,
+      liveVerificationNextAt: undefined,
+      liveVerificationLeaseOwner: undefined,
+      liveVerificationLeaseExpiresAt: undefined,
+      updatedAt: timestamp,
+    });
+    if (leaseOwner && site.publicationLeaseOwner === leaseOwner) {
+      await ctx.db.patch(site._id, {
+        publicationLeaseOwner: undefined,
+        publicationLeaseExpiresAt: undefined,
+        updatedAt: timestamp,
+      });
+    }
+    if (revision.growthActionId) {
+      const action = await ctx.db.get(revision.growthActionId);
+      if (
+        action?.siteId === revision.siteId &&
+        action.articleId === revision.articleId &&
+        action.publishedRevisionId === revision._id
+      ) {
+        await ctx.db.patch(action._id, {
+          automationStatus: "revision_ambiguity_owner_reviewed",
+          automationDetail: detail,
+          automatedAt: undefined,
+          updatedAt: timestamp,
+        });
+      }
+    }
+    return {
+      abandoned: true,
+      disposition: "owner_reviewed_unverified_delivery",
+      attemptedAt: revision.attemptedAt,
+    };
   },
 });
 
@@ -1295,10 +1827,9 @@ export const recordLiveVerification = internalMutation({
     ) {
       return { recorded: false, reason: "stale_revision" };
     }
-    const [site, article] = await Promise.all([
-      ctx.db.get(revision.siteId),
-      ctx.db.get(revision.articleId),
-    ]);
+    const current = await currentRevisionArticle(ctx, revision);
+    const site = current?.site;
+    const article = current?.article;
     if (!siteExecutionActive(site) || !article || article.siteId !== site._id) {
       return { recorded: false, reason: "tenant_unavailable" };
     }
@@ -1311,10 +1842,14 @@ export const recordLiveVerification = internalMutation({
     } catch {
       destinationStillSealed = false;
     }
+    const measurementStillCurrent = revision.growthActionId
+      ? await growthRevisionMeasurementCurrent(ctx, site, revision)
+      : true;
     const rolloutStillEligible =
       rolloutAllowsRevision(site) &&
       (site.autopilotRolloutEpoch ?? 0) === revision.rolloutEpoch &&
-      destinationStillSealed;
+      destinationStillSealed &&
+      measurementStillCurrent;
     const finalStatus = args.status === "verified" && revision.kind === "rollback"
       ? "rolled_back"
       : args.status;
@@ -1340,7 +1875,6 @@ export const recordLiveVerification = internalMutation({
       if (
         action?.siteId === revision.siteId &&
         action.articleId === revision.articleId &&
-        action.status === "open" &&
         action.publishedRevisionId === revision._id
       ) {
         await ctx.db.patch(action._id, {
@@ -1354,7 +1888,7 @@ export const recordLiveVerification = internalMutation({
           automationDetail: args.status === "verified"
             ? rolloutStillEligible
               ? "The deterministic revision is live at the exact tenant URL and has a verified destination receipt."
-              : "The deterministic revision is verified live, but the tenant rollout or destination changed before completion, so the growth action was not counted as executed."
+              : "The deterministic revision is verified live, but its rollout, destination, or measurement receipt was superseded before completion, so the growth action was not counted as executed."
             : args.detail?.slice(0, 500) ?? "Waiting for exact live revision verification.",
           automatedAt: args.status === "verified" && rolloutStillEligible
             ? timestamp
@@ -1386,6 +1920,14 @@ export const requestRollback = mutation({
       !source.receipt
     ) {
       throw new Error("Only an exact verified tenant revision can be rolled back");
+    }
+    const sourceArticle = await ctx.db.get(source.articleId);
+    if (
+      !sourceArticle ||
+      sourceArticle.siteId !== site._id ||
+      !articleMatchesCurrentDomain(site, sourceArticle)
+    ) {
+      throw new Error("Published revision belongs to an earlier site domain");
     }
     const latest = await latestFinalRevision(ctx, source.articleId);
     if (!latest || latest._id !== source._id) {

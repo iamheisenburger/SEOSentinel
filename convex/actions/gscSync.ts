@@ -20,6 +20,12 @@ import {
 } from "../lib/gscSearchAnalytics";
 import { isSeoGrowthActuationEligible } from "../lib/seoGrowth";
 import { hardGscOAuthFailure } from "../lib/oneSetupCanonical.ts";
+import {
+  gscConnectionMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteGscConnectionRevision,
+} from "../lib/siteDomainBinding";
 
 const GSC_HTTP_TIMEOUT_MS = 20_000;
 
@@ -166,6 +172,47 @@ async function assertGscExecutionAuthorized(
   );
   if (!authorized) {
     throw new Error("Search Console sync is paused for this site");
+  }
+}
+
+function currentGscBinding(site: Doc<"sites">): {
+  canonicalDomain: string;
+  domainRevision: number;
+  connectionRevision: number;
+  property: string;
+} {
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain || !gscConnectionMatchesCurrentDomain(site)) {
+    throw new Error("GSC connection belongs to an earlier site domain");
+  }
+  return {
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    connectionRevision: siteGscConnectionRevision(site),
+    property: site.gscProperty!,
+  };
+}
+
+async function assertCurrentGscConnection(
+  ctx: ActionCtx,
+  expected: Doc<"sites">,
+): Promise<void> {
+  await assertGscExecutionAuthorized(ctx, expected._id);
+  const current = await ctx.runQuery(internal.sites.getFull, {
+    siteId: expected._id,
+  });
+  const expectedBinding = currentGscBinding(expected);
+  if (!current) throw new Error("GSC connection changed during tenant sync");
+  const currentBinding = currentGscBinding(current);
+  if (
+    currentBinding.canonicalDomain !== expectedBinding.canonicalDomain ||
+    currentBinding.domainRevision !== expectedBinding.domainRevision ||
+    currentBinding.connectionRevision !== expectedBinding.connectionRevision ||
+    current.gscProperty !== expected.gscProperty ||
+    (current.gscReceiptRevision ?? 0) !==
+      (expected.gscReceiptRevision ?? 0)
+  ) {
+    throw new Error("GSC connection changed during tenant sync");
   }
 }
 
@@ -318,6 +365,7 @@ async function syncPublishedInspections(
   gscProperty: string,
 ): Promise<{ checked: number; failed: number }> {
   const now = Date.now();
+  const binding = currentGscBinding(site);
   const recent = await ctx.runQuery(
     internal.searchPerformance.listPublishedForInspection,
     {
@@ -344,6 +392,7 @@ async function syncPublishedInspections(
     );
     try {
       await assertGscExecutionAuthorized(ctx, site._id);
+      await assertCurrentGscConnection(ctx, site);
       const result = await fetchUrlInspection(
         accessToken,
         gscProperty,
@@ -353,6 +402,10 @@ async function syncPublishedInspections(
         internal.searchPerformance.recordUrlInspection,
         {
           articleId: article.articleId,
+          expectedCanonicalDomain: binding.canonicalDomain,
+          expectedDomainRevision: binding.domainRevision,
+          expectedConnectionRevision: binding.connectionRevision,
+          expectedProperty: binding.property,
           verdict: result.verdict,
           coverageState: result.coverageState,
           pageFetchState: result.pageFetchState,
@@ -369,6 +422,10 @@ async function syncPublishedInspections(
         internal.searchPerformance.recordUrlInspection,
         {
           articleId: article.articleId,
+          expectedCanonicalDomain: binding.canonicalDomain,
+          expectedDomainRevision: binding.domainRevision,
+          expectedConnectionRevision: binding.connectionRevision,
+          expectedProperty: binding.property,
           inspectedAt: now,
           error: message.slice(0, 500),
         },
@@ -451,6 +508,7 @@ export const syncSite = action({
       throw new Error("Not authorized to sync this site");
     }
     if (!site.gscAccessToken || !site.gscProperty) throw new Error("GSC not connected for this site");
+    currentGscBinding(site);
 
     return syncSiteGSC(ctx, site);
   },
@@ -467,6 +525,7 @@ export const syncSiteInternal = internalAction({
     if (!site.gscAccessToken || !site.gscProperty) {
       throw new Error("GSC not connected for this site");
     }
+    currentGscBinding(site);
     return syncSiteGSC(ctx, site);
   },
 });
@@ -501,6 +560,7 @@ export const syncHistoryBackfillInternal = internalAction({
     if (!site.gscAccessToken || !site.gscProperty) {
       throw new Error("GSC not connected for this site");
     }
+    currentGscBinding(site);
     const accessToken = await refreshedSiteAccessToken(ctx, site);
     const result = await syncAnalyticsWindow(ctx, site, accessToken, {
       mode: "backfill",
@@ -520,8 +580,23 @@ export const syncHistoryBackfillInternal = internalAction({
 // OAuth token, and verifies the exact submitted sitemap before reporting
 // success. The restricted Indexing API is intentionally not used here.
 export const submitSitemapInternal = internalAction({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }): Promise<SitemapSubmissionResult> => {
+  args: {
+    siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
+  },
+  handler: async (
+    ctx,
+    {
+      siteId,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
+      expectedConnectionRevision,
+      expectedProperty,
+    },
+  ): Promise<SitemapSubmissionResult> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     await assertGscExecutionAuthorized(ctx, siteId);
@@ -532,6 +607,15 @@ export const submitSitemapInternal = internalAction({
     }
     if (!site.gscAccessToken || !site.gscProperty) {
       throw new Error("GSC not connected for this site");
+    }
+    const binding = currentGscBinding(site);
+    if (
+      binding.canonicalDomain !== expectedCanonicalDomain ||
+      binding.domainRevision !== expectedDomainRevision ||
+      binding.connectionRevision !== expectedConnectionRevision ||
+      binding.property !== expectedProperty
+    ) {
+      throw new Error("Sitemap repair belongs to an earlier GSC connection");
     }
     if (
       !site.gscScopes
@@ -544,6 +628,7 @@ export const submitSitemapInternal = internalAction({
     }
     let accessToken = site.gscAccessToken;
     if (site.gscRefreshToken) {
+      await assertCurrentGscConnection(ctx, site);
       const refreshed = await refreshAccessToken(site.gscRefreshToken);
       if (!refreshed.ok) {
         if (refreshed.hardAuthFailure) {
@@ -555,6 +640,9 @@ export const submitSitemapInternal = internalAction({
       accessToken = refreshed.accessToken;
       await ctx.runMutation(internal.sites.setGscTokenInternal, {
         siteId,
+        expectedCanonicalDomain: binding.canonicalDomain,
+        expectedDomainRevision: binding.domainRevision,
+        expectedConnectionRevision: binding.connectionRevision,
         gscAccessToken: accessToken,
         expectedReceiptRevision: site.gscReceiptRevision ?? 0,
       });
@@ -564,7 +652,7 @@ export const submitSitemapInternal = internalAction({
         accessToken,
         site.gscProperty,
         sitemapUrlForDomain(site.domain),
-        () => assertGscExecutionAuthorized(ctx, siteId),
+        () => assertCurrentGscConnection(ctx, site),
       );
     } catch (error) {
       if (error instanceof GscAuthorizationError) {
@@ -600,8 +688,9 @@ async function refreshedSiteAccessToken(
   ctx: ActionCtx,
   site: Doc<"sites">,
 ): Promise<string> {
-  await assertGscExecutionAuthorized(ctx, site._id);
+  await assertCurrentGscConnection(ctx, site);
   if (!site.gscAccessToken) throw new Error("GSC not connected for this site");
+  const binding = currentGscBinding(site);
   if (!site.gscRefreshToken) return site.gscAccessToken;
   const refreshed = await refreshAccessToken(site.gscRefreshToken);
   if (!refreshed.ok) {
@@ -613,6 +702,9 @@ async function refreshedSiteAccessToken(
   }
   await ctx.runMutation(internal.sites.setGscTokenInternal, {
     siteId: site._id,
+    expectedCanonicalDomain: binding.canonicalDomain,
+    expectedDomainRevision: binding.domainRevision,
+    expectedConnectionRevision: binding.connectionRevision,
     gscAccessToken: refreshed.accessToken,
     expectedReceiptRevision: site.gscReceiptRevision ?? 0,
   });
@@ -632,12 +724,17 @@ async function syncAnalyticsWindow(
   },
 ): Promise<AnalyticsWindowResult> {
   if (!site.gscProperty) throw new Error("GSC not connected for this site");
+  const binding = currentGscBinding(site);
   const syncEpoch = crypto.randomUUID();
   const started = await ctx.runMutation(
     internal.searchPerformance.beginSyncEpoch,
     {
       siteId: site._id,
       syncEpoch,
+      expectedCanonicalDomain: binding.canonicalDomain,
+      expectedDomainRevision: binding.domainRevision,
+      expectedConnectionRevision: binding.connectionRevision,
+      expectedProperty: binding.property,
       mode: window.mode,
       windowStart: window.windowStart,
       windowEnd: window.windowEnd,
@@ -657,6 +754,7 @@ async function syncAnalyticsWindow(
     analytics = await fetchCompleteDailySearchAnalytics(
       async ({ dataset, date, startRow, rowLimit, timeoutMs }) => {
         await assertGscExecutionAuthorized(ctx, site._id);
+        await assertCurrentGscConnection(ctx, site);
         return fetchSearchAnalyticsPage(
           accessToken,
           site.gscProperty!,
@@ -729,6 +827,10 @@ async function syncAnalyticsWindow(
     const result = await ctx.runMutation(internal.searchPerformance.upsertBatch, {
       siteId: site._id,
       syncEpoch,
+      expectedCanonicalDomain: binding.canonicalDomain,
+      expectedDomainRevision: binding.domainRevision,
+      expectedConnectionRevision: binding.connectionRevision,
+      expectedProperty: binding.property,
       rows: records.slice(index, index + 500),
     });
     saved += result.saved;
@@ -737,6 +839,10 @@ async function syncAnalyticsWindow(
     await ctx.runMutation(internal.searchPerformance.upsertPageBatch, {
       siteId: site._id,
       syncEpoch,
+      expectedCanonicalDomain: binding.canonicalDomain,
+      expectedDomainRevision: binding.domainRevision,
+      expectedConnectionRevision: binding.connectionRevision,
+      expectedProperty: binding.property,
       rows: pageRecords.slice(index, index + 500),
     });
   }
@@ -745,6 +851,10 @@ async function syncAnalyticsWindow(
     {
       siteId: site._id,
       syncEpoch,
+      expectedCanonicalDomain: binding.canonicalDomain,
+      expectedDomainRevision: binding.domainRevision,
+      expectedConnectionRevision: binding.connectionRevision,
+      expectedProperty: binding.property,
       mode: window.mode,
       windowStart: window.windowStart,
       windowEnd: window.windowEnd,
@@ -779,6 +889,7 @@ async function syncSiteGSC(
   if (!site.gscAccessToken || !site.gscProperty) {
     throw new Error("GSC not connected for this site");
   }
+  currentGscBinding(site);
   const accessToken = await refreshedSiteAccessToken(ctx, site);
   const gscProperty = site.gscProperty;
 

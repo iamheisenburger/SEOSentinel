@@ -50,6 +50,11 @@ import {
   isDataForSeoBalancePreflightError,
   type DataForSeoBalancePreflightError,
 } from "../lib/dataForSeoAccountBalance";
+import {
+  articleMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+} from "../lib/siteDomainBinding";
 
 // ── Types ──
 
@@ -579,6 +584,7 @@ async function analyzeBacklinksHandler(
   siteId: Id<"sites">,
   site: Doc<"sites">,
   runtime: AuthorityDiscoveryRuntime,
+  runId: Id<"seo_authority_runs">,
   focusArticleId?: Id<"articles">,
 ): Promise<BacklinkAnalysisResult> {
     const hasDataForSEO = !!getCredentials();
@@ -662,7 +668,7 @@ async function analyzeBacklinksHandler(
     ).origin;
     const verified = [
       ...mentions.map((mention) => ({
-        fingerprint: sha256(`${siteId}:unlinked_mention:${mention.sourceUrl}:${origin}`),
+        fingerprint: sha256(`${siteId}:${siteCanonicalDomainRevision(site)}:unlinked_mention:${mention.sourceUrl}:${origin}`),
         type: "unlinked_mention",
         sourceDomain: mention.sourceDomain,
         sourceUrl: mention.sourceUrl,
@@ -679,7 +685,7 @@ async function analyzeBacklinksHandler(
       })),
       ...brokenLinks.map((opportunity) => ({
         articleId: opportunity.articleId,
-        fingerprint: sha256(`${siteId}:broken_link:${opportunity.sourceUrl}:${opportunity.suggestedReplacement}`),
+        fingerprint: sha256(`${siteId}:${siteCanonicalDomainRevision(site)}:broken_link:${opportunity.sourceUrl}:${opportunity.suggestedReplacement}`),
         type: "broken_link",
         sourceDomain: opportunity.sourceDomain,
         sourceUrl: opportunity.sourceUrl,
@@ -701,6 +707,7 @@ async function analyzeBacklinksHandler(
     if (verified.length > 0) {
       await ctx.runMutation(internal.seoAuthority.upsertVerifiedBatch, {
         siteId,
+        runId,
         opportunities: verified,
       });
     }
@@ -736,6 +743,8 @@ async function runReservedBacklinkAnalysis(
     trigger: AuthorityDiscoveryTrigger;
     ownerUserId?: string;
     focusArticleId?: Id<"articles">;
+    growthActionFingerprint?: string;
+    growthMeasurementKey?: string;
     throwOnDenied: boolean;
   },
 ): Promise<BacklinkAnalysisResult> {
@@ -746,6 +755,8 @@ async function runReservedBacklinkAnalysis(
       articleId: args.focusArticleId,
       trigger: args.trigger,
       ownerUserId: args.ownerUserId,
+      growthActionFingerprint: args.growthActionFingerprint,
+      growthMeasurementKey: args.growthMeasurementKey,
     },
   );
   if (!reservation.allowed) {
@@ -781,11 +792,22 @@ async function runReservedBacklinkAnalysis(
   let result = unavailableBacklinkAnalysis();
   let failure: unknown;
   try {
+    const currentSite = await ctx.runQuery(internal.sites.getFull, {
+      siteId: args.siteId,
+    });
+    if (
+      !currentSite ||
+      siteCanonicalDomain(currentSite) !== reservation.canonicalDomain ||
+      siteCanonicalDomainRevision(currentSite) !== reservation.domainRevision
+    ) {
+      throw new Error("Authority discovery reservation belongs to an earlier site domain");
+    }
     result = await analyzeBacklinksHandler(
       ctx,
       args.siteId,
-      args.site,
+      currentSite,
       runtime,
+      reservation.runId,
       args.focusArticleId,
     );
   } catch (error) {
@@ -865,13 +887,24 @@ export const analyzeBacklinksInternal = internalAction({
   args: {
     siteId: v.id("sites"),
     articleId: v.id("articles"),
+    growthActionFingerprint: v.string(),
+    growthMeasurementKey: v.string(),
   },
-  handler: async (ctx, { siteId, articleId }): Promise<BacklinkAnalysisResult> => {
+  handler: async (
+    ctx,
+    { siteId, articleId, growthActionFingerprint, growthMeasurementKey },
+  ): Promise<BacklinkAnalysisResult> => {
     const [site, article] = await Promise.all([
       ctx.runQuery(internal.sites.getFull, { siteId }),
       ctx.runQuery(internal.articles.getInternal, { articleId }),
     ]);
-    if (!site || !article || article.siteId !== siteId || article.status !== "published") {
+    if (
+      !site ||
+      !article ||
+      article.siteId !== siteId ||
+      !articleMatchesCurrentDomain(site, article) ||
+      article.status !== "published"
+    ) {
       throw new Error("Authority scan crossed a tenant or publication boundary");
     }
     if (
@@ -897,6 +930,8 @@ export const analyzeBacklinksInternal = internalAction({
       site,
       trigger: "growth",
       focusArticleId: articleId,
+      growthActionFingerprint,
+      growthMeasurementKey,
       throwOnDenied: false,
     });
   },

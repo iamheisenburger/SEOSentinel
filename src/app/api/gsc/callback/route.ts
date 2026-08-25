@@ -4,6 +4,7 @@ import {
   findMatchingGscProperty,
   hasGscGrowthScope,
   hasOnlyGscGrowthScopes,
+  normalizeGscDomain,
 } from "@/lib/gsc-oauth";
 import { getOwnedSite } from "@/lib/owned-site";
 import { verifyOAuthState } from "@/lib/oauth-state";
@@ -30,7 +31,12 @@ export async function GET(req: NextRequest) {
   }
 
   const { userId } = await auth();
-  let verifiedState: { siteId: string } | null = null;
+  let verifiedState: {
+    siteId: string;
+    expectedCanonicalDomain?: string;
+    expectedDomainRevision?: number;
+    expectedGscConnectionRevision?: number;
+  } | null = null;
   try {
     verifiedState = userId
       ? verifyOAuthState(state, { provider: "gsc", userId })
@@ -45,11 +51,42 @@ export async function GET(req: NextRequest) {
     });
   }
   const siteId = verifiedState.siteId;
-  if (!(await getOwnedSite(siteId))) {
+  const expectedCanonicalDomain = verifiedState.expectedCanonicalDomain;
+  const expectedDomainRevision = verifiedState.expectedDomainRevision;
+  const expectedGscConnectionRevision =
+    verifiedState.expectedGscConnectionRevision;
+  const site = await getOwnedSite(siteId);
+  if (!site) {
     return new NextResponse(renderPage("Site not found.", false), {
       status: 404,
       headers: { "Content-Type": "text/html" },
     });
+  }
+  const currentCanonicalDomain = normalizeGscDomain(
+    site.canonicalDomain ?? site.domain,
+  );
+  const currentDomainRevision = Number.isSafeInteger(
+      site.canonicalDomainRevision,
+    ) && (site.canonicalDomainRevision ?? -1) >= 0
+    ? site.canonicalDomainRevision!
+    : 0;
+  const currentGscConnectionRevision = Number.isSafeInteger(
+      site.gscConnectionRevision,
+    ) && (site.gscConnectionRevision ?? -1) >= 0
+    ? site.gscConnectionRevision!
+    : 0;
+  if (
+    !expectedCanonicalDomain ||
+    expectedDomainRevision === undefined ||
+    expectedGscConnectionRevision === undefined ||
+    expectedCanonicalDomain !== currentCanonicalDomain ||
+    expectedDomainRevision !== currentDomainRevision ||
+    expectedGscConnectionRevision !== currentGscConnectionRevision
+  ) {
+    return new NextResponse(
+      renderPage("The website domain changed during authorization. Start a new Search Console connection.", false),
+      { status: 409, headers: { "Content-Type": "text/html" } },
+    );
   }
 
   const clientId = process.env.GSC_CLIENT_ID;
@@ -141,25 +178,7 @@ export async function GET(req: NextRequest) {
   // Match the exact GSC property for this Pentra site. Never attach an
   // unrelated first property from a multi-site Google account.
   let gscProperty = "";
-  let siteDomain = "";
-  if (siteId) {
-    try {
-      const site = await callPentraInternal<{ domain: string }>(
-        "/internal/oauth/site",
-        { siteId },
-      );
-      siteDomain = site.domain;
-    } catch {
-      console.error("Failed to load the tenant site for GSC matching");
-    }
-  }
-
-  if (!siteDomain) {
-    return new NextResponse(renderPage("Pentra could not identify the website for this connection.", false), {
-      status: 400,
-      headers: { "Content-Type": "text/html" },
-    });
-  }
+  const siteDomain = expectedCanonicalDomain;
 
   try {
     const sitesRes = await fetch("https://www.googleapis.com/webmasters/v3/sites", {
@@ -200,6 +219,10 @@ export async function GET(req: NextRequest) {
     try {
       await callPentraInternal("/internal/oauth/gsc", {
         siteId,
+        expectedCanonicalDomain,
+        expectedDomainRevision,
+        expectedConnectionRevision: expectedGscConnectionRevision,
+        establishConnection: true,
         gscAccessToken: accessToken,
         gscRefreshToken: refreshToken || undefined,
         gscProperty,

@@ -12,6 +12,7 @@ test("manual owner jobs remain available while autonomous rollout observes", () 
     autopilotEnabled: true,
     autopilotRolloutMode: "observe",
     autopilotRolloutEpoch: 8,
+    domain: "https://example.test",
   };
   assert.equal(
     jobAuthorizedForExecution(observe, {
@@ -38,6 +39,7 @@ test("legacy and prior-epoch autonomous jobs cannot block a warm transition", ()
     autopilotEnabled: true,
     autopilotRolloutMode: "warm",
     autopilotRolloutEpoch: 9,
+    domain: "https://example.test",
   };
   assert.equal(jobAuthorizedForExecution(warm, { payload: {}, rolloutEpoch: undefined }), false);
   assert.equal(jobAuthorizedForExecution(warm, { payload: {}, rolloutEpoch: 8 }), false);

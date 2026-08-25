@@ -42,6 +42,10 @@ import {
 import { nextUtcMonthAt } from "../lib/cadenceLiveness";
 import type { CadenceScheduleResult } from
   "../lib/autopilotRunOutcome.ts";
+import {
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+} from "../lib/siteDomainBinding";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ArticleSummary = {
@@ -389,6 +393,8 @@ export const scheduleCadence = internalAction({
       site.expectedClickSchedulingEnabled === true;
     await ctx.runMutation(internal.autopilot.recordTopicPortfolioAudit, {
       siteId,
+      expectedCanonicalDomain: siteCanonicalDomain(site)!,
+      expectedDomainRevision: siteCanonicalDomainRevision(site),
       status: portfolio.status,
       decision: portfolio.decision,
       supportsGoal: portfolio.supportsGoal,

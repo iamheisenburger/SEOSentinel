@@ -12,7 +12,7 @@ import {
   keywordMatchesBusinessModel,
   keywordMatchesBusinessSignals,
 } from "./lib/autopilotBuffer";
-import { filterRowsForGscReceipts } from "./lib/gscSearchAnalytics";
+import { takeCurrentGscPageRows } from "./lib/currentGscRows";
 import {
   siteExecutionActive,
   siteExecutionAuthorized,
@@ -47,6 +47,18 @@ import {
   PUBLICATION_ADAPTER_VERSION,
   validatePublicationReceipt,
 } from "./lib/publicationReceipts";
+import {
+  articleMatchesCurrentDomain,
+  collectCurrentDomainPublishedSummariesSince,
+  gscConnectionMatchesCurrentDomain,
+  gscInspectionMatchesCurrentConnection,
+  normalizeCanonicalDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteGscConnectionRevision,
+  takeCurrentDomainTopics,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
 
 const ACTIVE_ACTION_STATUSES = ["open", "monitoring"] as const;
 const RETRYABLE_SUPPORT_AUTOMATION = new Set([
@@ -71,6 +83,49 @@ const MEASUREMENT_ONLY_AUTOMATION: GrowthAutomationResult = {
   detail:
     "Pentra recorded this measured opportunity without changing topics or contacting an external service because SEO growth automation is not enabled for this tenant rollout.",
 };
+
+function growthMeasurementMatchesCurrentSite(
+  site: Doc<"sites">,
+  action: Doc<"seo_growth_actions">,
+  measurementKey?: string,
+): boolean {
+  return (
+    (!measurementKey || action.measurementKey === measurementKey) &&
+    gscConnectionMatchesCurrentDomain(site) &&
+    action.measurementCanonicalDomain === siteCanonicalDomain(site) &&
+    action.measurementDomainRevision === siteCanonicalDomainRevision(site) &&
+    action.measurementGscConnectionRevision ===
+      siteGscConnectionRevision(site) &&
+    action.measurementGscProperty === site.gscProperty &&
+    action.measurementGscSyncEpoch === site.gscSyncEpoch &&
+    action.measurementGscDataThrough === site.gscDataThrough
+  );
+}
+
+export const getActionAttemptEligibilityInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    fingerprint: v.string(),
+    measurementKey: v.string(),
+  },
+  handler: async (ctx, { siteId, fingerprint, measurementKey }) => {
+    const [site, action] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_fingerprint", (q) => q.eq("fingerprint", fingerprint))
+        .unique(),
+    ]);
+    return Boolean(
+      site &&
+      action &&
+      action.siteId === siteId &&
+      action.status === "open" &&
+      isSeoGrowthActuationEligible(site) &&
+      growthMeasurementMatchesCurrentSite(site, action, measurementKey),
+    );
+  },
+});
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -134,6 +189,27 @@ async function actionRevisionHistory(
     latestStatus: revisions[0]?.status,
     terminalRevisionStatus: terminal?.status,
   };
+}
+
+async function actionHasUnresolvedRevisionDelivery(
+  ctx: QueryCtx | MutationCtx,
+  action: Doc<"seo_growth_actions">,
+): Promise<boolean> {
+  if (!action.publishedRevisionId) return false;
+  const revision = await ctx.db.get(action.publishedRevisionId);
+  if (
+    !revision ||
+    revision.siteId !== action.siteId ||
+    revision.articleId !== action.articleId ||
+    revision.growthActionId !== action._id
+  ) {
+    return false;
+  }
+  return (
+    revision.status === "leased" ||
+    revision.status === "attempted" ||
+    (revision.status === "unverified" && !revision.receipt)
+  );
 }
 
 async function verifiedSupportDeliveryForAction(
@@ -386,46 +462,48 @@ export const getSiteInputs = internalQuery({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
+    if (!gscConnectionMatchesCurrentDomain(site) || !site.gscProperty) {
+      throw new Error("Search Console connection is not current for this site");
+    }
     const cutoff = site.gscDataThrough
       ? addSearchConsoleDays(site.gscDataThrough, -89)
       : undefined;
     const receipts = site.gscDateEpochs ?? [];
-    const [rowCandidates, articles, goal] = await Promise.all([
+    const [currentRows, articles, goal] = await Promise.all([
       cutoff && receipts.length > 0
-        ? ctx.db
-          .query("search_page_daily")
-          .withIndex("by_site_date", (q) =>
-            q.eq("siteId", siteId).gte("date", cutoff),
-          )
-          .collect()
-        : Promise.resolve([]),
-      ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status_published", (q) =>
-          q
-            .eq("siteId", siteId)
-            .eq("status", "published")
-            .gte("publishedAt", Date.now() - 90 * 24 * 60 * 60 * 1000),
-        )
-        .order("desc")
-        .take(100),
+        ? takeCurrentGscPageRows(ctx, site, 5_000, { startDate: cutoff })
+        : Promise.resolve({ rows: [], exhausted: false }),
+      collectCurrentDomainPublishedSummariesSince(
+        ctx,
+        site,
+        Date.now() - 90 * 24 * 60 * 60 * 1000,
+      ),
       ctx.db
         .query("seo_growth_goals")
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .unique(),
     ]);
-    const rows = filterRowsForGscReceipts(rowCandidates, receipts);
+    if (currentRows.exhausted) {
+      throw new Error("Current Search Console growth receipt read limit exceeded");
+    }
+    const rows = currentRows.rows;
     return {
       site: {
         siteId,
         domain: site.domain,
         urlStructure: site.urlStructure,
+        canonicalDomain: siteCanonicalDomain(site)!,
+        domainRevision: siteCanonicalDomainRevision(site),
+        gscConnectionRevision: siteGscConnectionRevision(site),
+        gscProperty: site.gscProperty!,
+        gscSyncEpoch: site.gscSyncEpoch,
       },
       dataWindowStart: site.gscDataWindowStart,
       dataThrough: site.gscDataThrough,
       dateEpochs: receipts,
       rows,
       articles: articles
+        .slice(0, 100)
         // Legacy rows predate public-page verification. New deliveries are not
         // eligible for GSC growth diagnosis until the exact tenant URL is live.
         .filter(
@@ -433,18 +511,34 @@ export const getSiteInputs = internalQuery({
             article.publicUrlStatus === undefined ||
             article.publicUrlStatus === "verified",
         )
-        .map((article) => ({
-          articleId: article.articleId,
-          topicId: article.topicId,
-          title: article.title,
-          slug: article.slug,
-          publishedAt: article.publishedAt ?? article.articleCreatedAt,
-          gscIndexVerdict: article.gscIndexVerdict,
-          gscCoverageState: article.gscCoverageState,
-          gscPageFetchState: article.gscPageFetchState,
-          gscRobotsTxtState: article.gscRobotsTxtState,
-          gscInspectionError: article.gscInspectionError,
-        })),
+        .map((article) => {
+          const inspectionCurrent = gscInspectionMatchesCurrentConnection(
+            site,
+            article,
+          );
+          return {
+            articleId: article.articleId,
+            topicId: article.topicId,
+            title: article.title,
+            slug: article.slug,
+            publishedAt: article.publishedAt ?? article.articleCreatedAt,
+            gscIndexVerdict: inspectionCurrent
+              ? article.gscIndexVerdict
+              : undefined,
+            gscCoverageState: inspectionCurrent
+              ? article.gscCoverageState
+              : undefined,
+            gscPageFetchState: inspectionCurrent
+              ? article.gscPageFetchState
+              : undefined,
+            gscRobotsTxtState: inspectionCurrent
+              ? article.gscRobotsTxtState
+              : undefined,
+            gscInspectionError: inspectionCurrent
+              ? article.gscInspectionError
+              : undefined,
+          };
+        }),
       monthlyOrganicClicksGoal:
         goal?.monthlyOrganicClicksGoal ?? DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
     };
@@ -542,17 +636,24 @@ async function prioritizeVerifiedSupportingTopic(
     ctx.db.get(articleId),
     ctx.db.get(siteId),
   ]);
-  if (!site || !article || article.siteId !== siteId || !article.topicId) {
+  if (
+    !site ||
+    !article ||
+    article.siteId !== siteId ||
+    !articleMatchesCurrentDomain(site, article) ||
+    !article.topicId
+  ) {
     return { status: "no_safe_candidate", detail: "The article has no source topic." };
   }
   const sourceTopic = await ctx.db.get(article.topicId);
-  if (!sourceTopic || sourceTopic.siteId !== siteId) {
+  if (
+    !sourceTopic ||
+    sourceTopic.siteId !== siteId ||
+    !topicMatchesCurrentDomain(site, sourceTopic)
+  ) {
     return { status: "no_safe_candidate", detail: "The source topic is unavailable." };
   }
-  const topics = await ctx.db
-    .query("topic_clusters")
-    .withIndex("by_site", (q) => q.eq("siteId", siteId))
-    .collect();
+  const topics = await takeCurrentDomainTopics(ctx, site, 2_000);
   const candidates = topics
     .filter((topic) =>
       topic._id !== sourceTopic._id &&
@@ -598,18 +699,28 @@ async function deprioritizeFailedOpportunityCluster(
   siteId: Id<"sites">,
   articleId: Id<"articles">,
 ) {
-  const article = await ctx.db.get(articleId);
-  if (!article || article.siteId !== siteId || !article.topicId) {
+  const [site, article] = await Promise.all([
+    ctx.db.get(siteId),
+    ctx.db.get(articleId),
+  ]);
+  if (
+    !site ||
+    !article ||
+    article.siteId !== siteId ||
+    !articleMatchesCurrentDomain(site, article) ||
+    !article.topicId
+  ) {
     return { status: "no_safe_candidate", detail: "The article has no source topic." };
   }
   const sourceTopic = await ctx.db.get(article.topicId);
-  if (!sourceTopic || sourceTopic.siteId !== siteId) {
+  if (
+    !sourceTopic ||
+    sourceTopic.siteId !== siteId ||
+    !topicMatchesCurrentDomain(site, sourceTopic)
+  ) {
     return { status: "no_safe_candidate", detail: "The source topic is unavailable." };
   }
-  const topics = await ctx.db
-    .query("topic_clusters")
-    .withIndex("by_site", (q) => q.eq("siteId", siteId))
-    .collect();
+  const topics = await takeCurrentDomainTopics(ctx, site, 2_000);
   const candidates = topics.filter((topic) =>
     topic._id !== sourceTopic._id &&
     (
@@ -638,6 +749,12 @@ async function deprioritizeFailedOpportunityCluster(
 export const reconcileSite = internalMutation({
   args: {
     siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedGscConnectionRevision: v.number(),
+    expectedGscProperty: v.string(),
+    expectedGscSyncEpoch: v.optional(v.string()),
+    expectedGscDataThrough: v.optional(v.string()),
     classifications: v.array(classificationValidator),
     health: v.object({
       dataThrough: v.optional(v.string()),
@@ -652,41 +769,86 @@ export const reconcileSite = internalMutation({
       monthlyOrganicClicksGoal: v.number(),
     }),
   },
-  handler: async (ctx, { siteId, classifications, health }) => {
+  handler: async (ctx, {
+    siteId,
+    expectedCanonicalDomain,
+    expectedDomainRevision,
+    expectedGscConnectionRevision,
+    expectedGscProperty,
+    expectedGscSyncEpoch,
+    expectedGscDataThrough,
+    classifications,
+    health,
+  }) => {
     const currentSite = await ctx.db.get(siteId);
     if (!currentSite || !(await siteExecutionAuthorized(ctx, currentSite))) {
       throw new Error("Site not found");
     }
+    if (
+      !gscConnectionMatchesCurrentDomain(currentSite) ||
+      normalizeCanonicalDomain(expectedCanonicalDomain) !==
+        siteCanonicalDomain(currentSite) ||
+      expectedDomainRevision !== siteCanonicalDomainRevision(currentSite) ||
+      expectedGscConnectionRevision !==
+        siteGscConnectionRevision(currentSite) ||
+      expectedGscProperty !== currentSite.gscProperty ||
+      expectedGscSyncEpoch !== currentSite.gscSyncEpoch ||
+      expectedGscDataThrough !== currentSite.gscDataThrough
+    ) {
+      throw new Error("Growth scan belongs to an earlier measurement epoch");
+    }
     const actuationEligible = isSeoGrowthActuationEligible(currentSite);
     const now = Date.now();
+    const measurementKey = [
+      siteCanonicalDomain(currentSite),
+      siteCanonicalDomainRevision(currentSite),
+      siteGscConnectionRevision(currentSite),
+      currentSite.gscProperty,
+      currentSite.gscSyncEpoch ?? "",
+      currentSite.gscDataThrough ?? "",
+      now,
+    ].join(":");
     let openActions = 0;
     const replenishmentRequests: Array<{
       articleId: Id<"articles">;
       fingerprint: string;
+      measurementKey: string;
       growthSeed: string;
       priority: number;
     }> = [];
     const discoveryRepairRequests: Array<{
       fingerprint: string;
+      measurementKey: string;
       priority: number;
     }> = [];
     const authorityRequests: Array<{
       articleId: Id<"articles">;
       fingerprint: string;
+      measurementKey: string;
       priority: number;
     }> = [];
     const revisionRequests: Array<{
       articleId: Id<"articles">;
       fingerprint: string;
+      measurementKey: string;
       actionKind: "improve_snippet" | "strengthen_cluster";
       priority: number;
     }> = [];
     for (const classification of classifications) {
       const article = await ctx.db.get(classification.articleId);
-      if (!article || article.siteId !== siteId || article.status !== "published") {
+      if (
+        !article ||
+        article.siteId !== siteId ||
+        !articleMatchesCurrentDomain(currentSite, article) ||
+        article.status !== "published"
+      ) {
         throw new Error("Growth classification crossed a tenant or publication boundary");
       }
-      const fingerprint = growthActionFingerprint(siteId, classification);
+      const fingerprint = growthActionFingerprint(
+        siteId,
+        classification,
+        `${siteCanonicalDomainRevision(currentSite)}:${siteGscConnectionRevision(currentSite)}`,
+      );
       const desiredStatus = classification.actionKind === "observe"
         ? "monitoring"
         : "open";
@@ -700,7 +862,10 @@ export const reconcileSite = internalMutation({
           )
           .collect();
         for (const prior of active) {
-          if (prior.fingerprint !== fingerprint) {
+          if (
+            prior.fingerprint !== fingerprint &&
+            !(await actionHasUnresolvedRevisionDelivery(ctx, prior))
+          ) {
             await ctx.db.patch(prior._id, {
               status: "resolved",
               resolvedAt: now,
@@ -719,6 +884,13 @@ export const reconcileSite = internalMutation({
         ? Date.parse(`${classification.nextReviewDate}T12:00:00.000Z`)
         : undefined;
       if (existing) {
+        // A newer measurement may inform future work, but it cannot rewrite
+        // the immutable authorization attempt while an external revision CAS
+        // might already have landed. Recovery settles that exact revision and
+        // classifies superseded measurement without counting execution.
+        if (await actionHasUnresolvedRevisionDelivery(ctx, existing)) {
+          continue;
+        }
         let automation: GrowthAutomationResult | undefined;
         let supportDeliveryPatch:
           | {
@@ -776,6 +948,7 @@ export const reconcileSite = internalMutation({
             revisionRequests.push({
               articleId: classification.articleId,
               fingerprint,
+              measurementKey,
               actionKind: classification.actionKind,
               priority: classification.priority,
             });
@@ -794,6 +967,7 @@ export const reconcileSite = internalMutation({
         ) {
           discoveryRepairRequests.push({
             fingerprint,
+            measurementKey,
             priority: classification.priority,
           });
         }
@@ -809,6 +983,7 @@ export const reconcileSite = internalMutation({
           authorityRequests.push({
             articleId: classification.articleId,
             fingerprint,
+            measurementKey,
             priority: classification.priority,
           });
         }
@@ -832,6 +1007,7 @@ export const reconcileSite = internalMutation({
             replenishmentRequests.push({
               articleId: classification.articleId,
               fingerprint,
+              measurementKey,
               growthSeed: automation.growthSeed,
               priority: classification.priority,
             });
@@ -852,6 +1028,14 @@ export const reconcileSite = internalMutation({
           );
         }
         await ctx.db.patch(existing._id, {
+          measurementKey,
+          measurementCanonicalDomain: siteCanonicalDomain(currentSite)!,
+          measurementDomainRevision: siteCanonicalDomainRevision(currentSite),
+          measurementGscConnectionRevision:
+            siteGscConnectionRevision(currentSite),
+          measurementGscProperty: currentSite.gscProperty!,
+          measurementGscSyncEpoch: currentSite.gscSyncEpoch,
+          measurementGscDataThrough: currentSite.gscDataThrough,
           status: desiredStatus,
           priority: classification.priority,
           reason: classification.reason,
@@ -884,6 +1068,7 @@ export const reconcileSite = internalMutation({
           };
           discoveryRepairRequests.push({
             fingerprint,
+            measurementKey,
             priority: classification.priority,
           });
         } else if (classification.actionKind === "build_authority") {
@@ -895,6 +1080,7 @@ export const reconcileSite = internalMutation({
           authorityRequests.push({
             articleId: classification.articleId,
             fingerprint,
+            measurementKey,
             priority: classification.priority,
           });
         } else if (
@@ -909,6 +1095,7 @@ export const reconcileSite = internalMutation({
           revisionRequests.push({
             articleId: classification.articleId,
             fingerprint,
+            measurementKey,
             actionKind: classification.actionKind,
             priority: classification.priority,
           });
@@ -923,6 +1110,7 @@ export const reconcileSite = internalMutation({
           replenishmentRequests.push({
             articleId: classification.articleId,
             fingerprint,
+            measurementKey,
             growthSeed: automation.growthSeed,
             priority: classification.priority,
           });
@@ -931,6 +1119,14 @@ export const reconcileSite = internalMutation({
           siteId,
           articleId: classification.articleId,
           fingerprint,
+          measurementKey,
+          measurementCanonicalDomain: siteCanonicalDomain(currentSite)!,
+          measurementDomainRevision: siteCanonicalDomainRevision(currentSite),
+          measurementGscConnectionRevision:
+            siteGscConnectionRevision(currentSite),
+          measurementGscProperty: currentSite.gscProperty!,
+          measurementGscSyncEpoch: currentSite.gscSyncEpoch,
+          measurementGscDataThrough: currentSite.gscDataThrough,
           stage: classification.stage,
           actionKind: classification.actionKind,
           status: desiredStatus,
@@ -960,7 +1156,10 @@ export const reconcileSite = internalMutation({
         )
         .collect();
       for (const action of stale) {
-        if (!activeArticleIds.has(String(action.articleId))) {
+        if (
+          !activeArticleIds.has(String(action.articleId)) &&
+          !(await actionHasUnresolvedRevisionDelivery(ctx, action))
+        ) {
           await ctx.db.patch(action._id, {
             status: "resolved",
             resolvedAt: now,
@@ -1029,21 +1228,27 @@ export const recordAuthorityDiscovery = internalMutation({
   args: {
     siteId: v.id("sites"),
     fingerprint: v.string(),
+    measurementKey: v.string(),
     status: v.string(),
     detail: v.string(),
     attemptedAt: v.number(),
     verifiedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const action = await ctx.db
-      .query("seo_growth_actions")
-      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", args.fingerprint))
-      .unique();
+    const [site, action] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_fingerprint", (q) => q.eq("fingerprint", args.fingerprint))
+        .unique(),
+    ]);
     if (
+      !site ||
       !action ||
       action.siteId !== args.siteId ||
       action.status !== "open" ||
-      action.actionKind !== "build_authority"
+      action.actionKind !== "build_authority" ||
+      !growthMeasurementMatchesCurrentSite(site, action, args.measurementKey)
     ) {
       throw new Error("Authority discovery does not match an open tenant action");
     }
@@ -1064,6 +1269,7 @@ export const recordDiscoveryRepair = internalMutation({
   args: {
     siteId: v.id("sites"),
     fingerprint: v.string(),
+    measurementKey: v.string(),
     status: v.string(),
     detail: v.string(),
     attemptedAt: v.number(),
@@ -1071,15 +1277,20 @@ export const recordDiscoveryRepair = internalMutation({
     sitemapUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const action = await ctx.db
-      .query("seo_growth_actions")
-      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", args.fingerprint))
-      .unique();
+    const [site, action] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_fingerprint", (q) => q.eq("fingerprint", args.fingerprint))
+        .unique(),
+    ]);
     if (
+      !site ||
       !action ||
       action.siteId !== args.siteId ||
       action.status !== "open" ||
-      action.actionKind !== "repair_discovery"
+      action.actionKind !== "repair_discovery" ||
+      !growthMeasurementMatchesCurrentSite(site, action, args.measurementKey)
     ) {
       throw new Error("Discovery repair does not match an open tenant action");
     }
@@ -1105,15 +1316,28 @@ export const recordAutomationResult = internalMutation({
   args: {
     siteId: v.id("sites"),
     fingerprint: v.string(),
+    measurementKey: v.string(),
     status: v.string(),
     detail: v.string(),
   },
-  handler: async (ctx, { siteId, fingerprint, status, detail }) => {
-    const action = await ctx.db
-      .query("seo_growth_actions")
-      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", fingerprint))
-      .unique();
-    if (!action || action.siteId !== siteId || action.status !== "open") {
+  handler: async (
+    ctx,
+    { siteId, fingerprint, measurementKey, status, detail },
+  ) => {
+    const [site, action] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db
+        .query("seo_growth_actions")
+        .withIndex("by_fingerprint", (q) => q.eq("fingerprint", fingerprint))
+        .unique(),
+    ]);
+    if (
+      !site ||
+      !action ||
+      action.siteId !== siteId ||
+      action.status !== "open" ||
+      !growthMeasurementMatchesCurrentSite(site, action, measurementKey)
+    ) {
       throw new Error("Growth automation result does not match an open tenant action");
     }
     await ctx.db.patch(action._id, {
@@ -1267,6 +1491,7 @@ export const getPublishedRevisionReadinessInternal = internalQuery({
       : undefined;
     const revisionAdapter = revisionAdapterReadiness(site);
     const candidates = actions.filter((action) =>
+      growthMeasurementMatchesCurrentSite(site, action) &&
       (!articleId || action.articleId === articleId) &&
       (action.actionKind === "strengthen_cluster" ||
         action.actionKind === "improve_snippet")
@@ -1382,7 +1607,7 @@ export const getPublishedRevisionReadinessInternal = internalQuery({
 export const getSummary = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
     const [health, goal, open, monitoring] = await Promise.all([
       ctx.db
         .query("seo_growth_health")
@@ -1413,7 +1638,9 @@ export const getSummary = query({
         siteId,
         monthlyOrganicClicksGoal: DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
       },
-      actions: [...open, ...monitoring],
+      actions: [...open, ...monitoring].filter((action) =>
+        growthMeasurementMatchesCurrentSite(site, action)
+      ),
     };
   },
 });
@@ -1503,7 +1730,15 @@ export const getOperatorSnapshot = internalQuery({
       site: { siteId, domain: site.domain },
       goal: goal?.monthlyOrganicClicksGoal ?? DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
       health,
-      actions: [...open, ...monitoring, ...resolved].map((action) => ({
+      actions: [
+        ...open.filter((action) =>
+          growthMeasurementMatchesCurrentSite(site, action)
+        ),
+        ...monitoring.filter((action) =>
+          growthMeasurementMatchesCurrentSite(site, action)
+        ),
+        ...resolved,
+      ].map((action) => ({
         articleId: action.articleId,
         stage: action.stage,
         actionKind: action.actionKind,

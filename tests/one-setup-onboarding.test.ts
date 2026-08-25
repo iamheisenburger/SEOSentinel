@@ -130,6 +130,7 @@ test("the provisioning contract is additive, tenant-fenced, and credential-free"
     "siteId",
     "ownerAccountKey",
     "domainSnapshot",
+    "domainRevisionSnapshot",
     "contractVersion",
     "revision",
     "configurationRevision",
@@ -172,6 +173,7 @@ test("setup intent is owner/domain/version/cadence fenced and adapter progress u
   assert.match(progress, /request\.revision !== args\.expectedRevision/);
   assert.match(progress, /request\.ownerAccountKey !== accountDeletionKey/);
   assert.match(progress, /request\.domainSnapshot !== domainSnapshot/);
+  assert.match(progress, /request\.domainRevisionSnapshot/);
   assert.match(
     progress,
     /Owner-managed connections cannot be advanced by a provider/,
@@ -186,6 +188,10 @@ test("aggregate readiness trusts canonical publishing, GSC, mailbox, and plan re
   const readiness = exportedBlock(sites, "getOneSetupReadiness");
   assert.match(readiness, /oneSetupPublisherReceiptVerified\(site\)/);
   assert.match(readiness, /oneSetupSearchMeasurementReceiptVerified\(site\)/);
+  assert.match(readiness, /gscConnectionMatchesCurrentDomain\(site\)/);
+  assert.match(readiness, /currentDomainPage\(ctx, site\)/);
+  assert.match(readiness, /takeCurrentDomainTopics/);
+  assert.match(readiness, /contentAnalysisMatchesCurrentDomain\(site\)/);
   assert.match(readiness, /oneSetupOutreachMailboxReceiptVerified/);
   assert.match(canonicalSetup, /publicationDestinationBlockers\(site\)/);
   assert.match(canonicalSetup, /site\.gscAccessToken/);

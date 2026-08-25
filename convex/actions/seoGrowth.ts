@@ -13,7 +13,6 @@ import {
 } from "../lib/searchPerformance";
 import {
   classifySeoGrowth,
-  isSeoGrowthActuationEligible,
   type SeoGrowthClassification,
   type SeoWindow,
 } from "../lib/seoGrowth";
@@ -30,6 +29,11 @@ type GrowthInput = {
     siteId: Id<"sites">;
     domain: string;
     urlStructure?: string;
+    canonicalDomain: string;
+    domainRevision: number;
+    gscConnectionRevision: number;
+    gscProperty: string;
+    gscSyncEpoch?: string;
   };
   dataWindowStart?: string;
   dataThrough?: string;
@@ -84,13 +88,14 @@ type GrowthScanResult = {
 async function growthActuationStillEligible(
   ctx: ActionCtx,
   siteId: Id<"sites">,
+  fingerprint: string,
+  measurementKey: string,
 ): Promise<boolean> {
-  const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-  return Boolean(
-    site &&
-    !site.deletionStatus &&
-    isSeoGrowthActuationEligible(site),
-  );
+  return ctx.runQuery(internal.seoGrowth.getActionAttemptEligibilityInternal, {
+    siteId,
+    fingerprint,
+    measurementKey,
+  });
 }
 
 export const scanAllSites = internalAction({
@@ -254,6 +259,12 @@ export const scanSite = internalAction({
       internal.seoGrowth.reconcileSite,
       {
       siteId,
+      expectedCanonicalDomain: input.site.canonicalDomain,
+      expectedDomainRevision: input.site.domainRevision,
+      expectedGscConnectionRevision: input.site.gscConnectionRevision,
+      expectedGscProperty: input.site.gscProperty,
+      expectedGscSyncEpoch: input.site.gscSyncEpoch,
+      expectedGscDataThrough: input.dataThrough,
       classifications: classifications.map((classification) => ({
         ...classification,
         articleId: classification.articleId as Id<"articles">,
@@ -279,7 +290,15 @@ export const scanSite = internalAction({
     const request = [...reconciliation.replenishmentRequests]
       .sort((a, b) => b.priority - a.priority)[0];
     let replenishment: GrowthScanResult["replenishment"];
-    if (request && await growthActuationStillEligible(ctx, siteId)) {
+    if (
+      request &&
+      await growthActuationStillEligible(
+        ctx,
+        siteId,
+        request.fingerprint,
+        request.measurementKey,
+      )
+    ) {
       const queued = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
         siteId,
         reason: "seo_growth_support_replenishment",
@@ -288,6 +307,7 @@ export const scanSite = internalAction({
         growthParentArticleId: request.articleId,
         growthSeed: request.growthSeed,
         growthActionFingerprint: request.fingerprint,
+        growthMeasurementKey: request.measurementKey,
       });
       const status = queued.queued
         ? "queued_growth_plan"
@@ -304,6 +324,7 @@ export const scanSite = internalAction({
       await ctx.runMutation(internal.seoGrowth.recordAutomationResult, {
         siteId,
         fingerprint: request.fingerprint,
+        measurementKey: request.measurementKey,
         status,
         detail,
       });
@@ -322,13 +343,24 @@ export const scanSite = internalAction({
     let discoveryRepair: GrowthScanResult["discoveryRepair"];
     if (
       discoveryRequest &&
-      await growthActuationStillEligible(ctx, siteId)
+      await growthActuationStillEligible(
+        ctx,
+        siteId,
+        discoveryRequest.fingerprint,
+        discoveryRequest.measurementKey,
+      )
     ) {
       const attemptedAt = Date.now();
       try {
         const result = await ctx.runAction(
           internal.actions.gscSync.submitSitemapInternal,
-          { siteId },
+          {
+            siteId,
+            expectedCanonicalDomain: input.site.canonicalDomain,
+            expectedDomainRevision: input.site.domainRevision,
+            expectedConnectionRevision: input.site.gscConnectionRevision,
+            expectedProperty: input.site.gscProperty,
+          },
         );
         const detail = result.isPending
           ? "Search Console accepted and exactly verified the tenant sitemap; Google reports processing is pending."
@@ -336,6 +368,7 @@ export const scanSite = internalAction({
         await ctx.runMutation(internal.seoGrowth.recordDiscoveryRepair, {
           siteId,
           fingerprint: discoveryRequest.fingerprint,
+          measurementKey: discoveryRequest.measurementKey,
           status: "discovery_repair_verified",
           detail,
           attemptedAt,
@@ -349,6 +382,7 @@ export const scanSite = internalAction({
         await ctx.runMutation(internal.seoGrowth.recordDiscoveryRepair, {
           siteId,
           fingerprint: discoveryRequest.fingerprint,
+          measurementKey: discoveryRequest.measurementKey,
           status: "discovery_repair_failed",
           detail,
           attemptedAt,
@@ -365,13 +399,23 @@ export const scanSite = internalAction({
     let authority: GrowthScanResult["authority"];
     if (
       authorityRequest &&
-      await growthActuationStillEligible(ctx, siteId)
+      await growthActuationStillEligible(
+        ctx,
+        siteId,
+        authorityRequest.fingerprint,
+        authorityRequest.measurementKey,
+      )
     ) {
       const attemptedAt = Date.now();
       try {
         const discovery = await ctx.runAction(
           internal.actions.backlinks.analyzeBacklinksInternal,
-          { siteId, articleId: authorityRequest.articleId },
+          {
+            siteId,
+            articleId: authorityRequest.articleId,
+            growthActionFingerprint: authorityRequest.fingerprint,
+            growthMeasurementKey: authorityRequest.measurementKey,
+          },
         );
         const verified = discovery.mentions.length + discovery.brokenLinks.length;
         const applicableDiscoveryStages = [
@@ -391,7 +435,12 @@ export const scanSite = internalAction({
         let blocked = 0;
         if (
           verified > 0 &&
-          await growthActuationStillEligible(ctx, siteId)
+          await growthActuationStillEligible(
+            ctx,
+            siteId,
+            authorityRequest.fingerprint,
+            authorityRequest.measurementKey,
+          )
         ) {
           const drafts = await ctx.runAction(
             internal.actions.outreach.prepareOutreachInternal,
@@ -421,6 +470,7 @@ export const scanSite = internalAction({
         await ctx.runMutation(internal.seoGrowth.recordAuthorityDiscovery, {
           siteId,
           fingerprint: authorityRequest.fingerprint,
+          measurementKey: authorityRequest.measurementKey,
           status,
           detail,
           attemptedAt,
@@ -434,6 +484,7 @@ export const scanSite = internalAction({
         await ctx.runMutation(internal.seoGrowth.recordAuthorityDiscovery, {
           siteId,
           fingerprint: authorityRequest.fingerprint,
+          measurementKey: authorityRequest.measurementKey,
           status,
           detail,
           attemptedAt,
@@ -451,19 +502,28 @@ export const scanSite = internalAction({
         b.priority - a.priority || a.fingerprint.localeCompare(b.fingerprint)
       );
     let revision: GrowthScanResult["revision"];
-    if (
-      revisionRequests.length > 0 &&
-      await growthActuationStillEligible(ctx, siteId)
-    ) {
+    if (revisionRequests.length > 0) {
       const selection = await selectPreparedPublishedRevision({
         requests: revisionRequests,
         prepare: async (request) => {
+          if (!await growthActuationStillEligible(
+            ctx,
+            siteId,
+            request.fingerprint,
+            request.measurementKey,
+          )) {
+            return {
+              status: "bounded_wait" as const,
+              detail: "The measured growth attempt was superseded before revision preparation.",
+            };
+          }
           let prepared = await ctx.runMutation(
             internal.publishedRevisions.prepareForGrowthAction,
             {
               siteId,
               articleId: request.articleId,
               fingerprint: request.fingerprint,
+              measurementKey: request.measurementKey,
               actionKind: request.actionKind,
             },
           );
@@ -479,6 +539,7 @@ export const scanSite = internalAction({
                   siteId,
                   articleId: request.articleId,
                   fingerprint: request.fingerprint,
+                  measurementKey: request.measurementKey,
                   actionKind: request.actionKind,
                 },
               );
@@ -498,6 +559,7 @@ export const scanSite = internalAction({
           await ctx.runMutation(internal.seoGrowth.recordAutomationResult, {
             siteId,
             fingerprint: request.fingerprint,
+            measurementKey: request.measurementKey,
             status,
             detail: outcome.detail,
           });
@@ -506,13 +568,19 @@ export const scanSite = internalAction({
       });
       if (selection.selected) {
         const { request: revisionRequest, prepared } = selection.selected;
-        if (!await growthActuationStillEligible(ctx, siteId)) {
+        if (!await growthActuationStillEligible(
+          ctx,
+          siteId,
+          revisionRequest.fingerprint,
+          revisionRequest.measurementKey,
+        )) {
           const status = "bounded_wait";
           const detail =
             "The tenant rollout changed after revision preparation; no external write was attempted.";
           await ctx.runMutation(internal.seoGrowth.recordAutomationResult, {
             siteId,
             fingerprint: revisionRequest.fingerprint,
+            measurementKey: revisionRequest.measurementKey,
             status,
             detail,
           });
@@ -537,6 +605,7 @@ export const scanSite = internalAction({
               await ctx.runMutation(internal.seoGrowth.recordAutomationResult, {
                 siteId,
                 fingerprint: revisionRequest.fingerprint,
+                measurementKey: revisionRequest.measurementKey,
                 status,
                 detail,
               });

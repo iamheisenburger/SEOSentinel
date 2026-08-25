@@ -38,6 +38,15 @@ import {
   planRetryUsesCurrentReservationDay,
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
+import {
+  articleMatchesCurrentDomain,
+  collectCurrentDomainArticleSummaries,
+  normalizeCanonicalDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
 
 const now = () => Date.now();
 
@@ -62,6 +71,19 @@ async function requireSiteOwner(
   if (!site?.userId || !identity || identity.subject !== site.userId) {
     throw new Error("Not authorized to access this site's topics");
   }
+  return site;
+}
+
+async function assertTopicDeletionUnlocked(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Doc<"sites">["_id"],
+) {
+  const site = await ctx.db.get(siteId);
+  if (site?.publicationLeaseOwner) {
+    throw new Error(
+      "Topics are locked while an external publication outcome is unresolved",
+    );
+  }
 }
 
 async function listBySiteHandler(ctx: QueryCtx, siteId: Doc<"sites">["_id"]) {
@@ -72,11 +94,37 @@ async function listBySiteHandler(ctx: QueryCtx, siteId: Doc<"sites">["_id"]) {
     .collect();
 }
 
+async function listCurrentBySiteHandler(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+) {
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  if (!canonicalDomain) return [];
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await listBySiteHandler(ctx, site._id);
+    return legacyEpoch.filter((topic) =>
+      topicMatchesCurrentDomain(site, topic)
+    );
+  }
+  const stamped = await ctx.db
+    .query("topic_clusters")
+    .withIndex("by_site_domain_revision", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("planningCanonicalDomain", canonicalDomain)
+        .eq("planningDomainRevision", domainRevision)
+    )
+    .order("asc")
+    .collect();
+  return stamped;
+}
+
 export const listBySite = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    await requireSiteOwner(ctx, siteId);
-    const topics = await listBySiteHandler(ctx, siteId);
+    const site = await requireSiteOwner(ctx, siteId);
+    const topics = await listCurrentBySiteHandler(ctx, site);
     return topics.filter((topic) =>
       !planCheckpointTopicExecutionLocked(topic)
     );
@@ -85,7 +133,11 @@ export const listBySite = query({
 
 export const listBySiteInternal = internalQuery({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => listBySiteHandler(ctx, siteId),
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) return [];
+    return listCurrentBySiteHandler(ctx, site);
+  },
 });
 
 /** Compact operator evidence for replenishment and cadence verification. */
@@ -94,15 +146,15 @@ async function inventoryAuditHandler(
   siteId: Doc<"sites">["_id"],
   recentLimit?: number,
 ) {
-    const [site, topics, growthGoal] = await Promise.all([
+    const [site, growthGoal] = await Promise.all([
       ctx.db.get(siteId),
-      listBySiteHandler(ctx, siteId),
       ctx.db
         .query("seo_growth_goals")
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .unique(),
     ]);
     if (!site) throw new Error("Site not found");
+    const topics = await listCurrentBySiteHandler(ctx, site);
     const byStatus: Record<string, number> = {};
     for (const topic of topics) {
       const status = topic.status ?? "planned";
@@ -186,6 +238,7 @@ export const get = query({
     const topic = await ctx.db.get(topicId);
     if (!topic) return null;
     await requireSiteOwner(ctx, topic.siteId);
+    await assertTopicDeletionUnlocked(ctx, topic.siteId);
     if (planCheckpointTopicExecutionLocked(topic)) return null;
     return topic;
   },
@@ -263,6 +316,8 @@ export const getSerpCorpusAudit = internalQuery({
 export const upsertMany = internalMutation({
   args: {
     siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
     planExecution: v.optional(v.object({
       jobId: v.id("jobs"),
       workerToken: v.string(),
@@ -328,6 +383,8 @@ export const upsertMany = internalMutation({
     {
       siteId,
       topics,
+      expectedCanonicalDomain,
+      expectedDomainRevision,
       planExecution,
       growthParentArticleId,
       growthActionFingerprint,
@@ -336,6 +393,14 @@ export const upsertMany = internalMutation({
     const site = await ctx.db.get(siteId);
     if (!site || site.deletionStatus) {
       throw new Error("Site not found");
+    }
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (
+      !canonicalDomain ||
+      normalizeCanonicalDomain(expectedCanonicalDomain) !== canonicalDomain ||
+      expectedDomainRevision !== siteCanonicalDomainRevision(site)
+    ) {
+      throw new Error("Site domain changed before topic persistence");
     }
     let owningPlanJob: Doc<"jobs"> | null = null;
     if (planExecution) {
@@ -386,6 +451,7 @@ export const upsertMany = internalMutation({
       if (
         !parent ||
         parent.siteId !== siteId ||
+        !articleMatchesCurrentDomain(site, parent) ||
         parent.status !== "published" ||
         !growthActionFingerprint
       ) {
@@ -418,20 +484,20 @@ export const upsertMany = internalMutation({
       .query("topic_clusters")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .collect();
+    const domainCurrentExisting = existing.filter((topic) =>
+      topicMatchesCurrentDomain(site, topic)
+    );
     const candidateKeywords = topics.map((topic) =>
       normalizeTopicIntentKeyword(topic.primaryKeyword)
     );
-    const relevantExisting = existing.filter((topic) => {
+    const relevantExisting = domainCurrentExisting.filter((topic) => {
       const keyword = normalizeTopicIntentKeyword(topic.primaryKeyword);
       return candidateKeywords.some((candidate) =>
         candidate.includes(keyword) || keyword.includes(candidate)
       );
     });
     const [articleSummaries, linkedArticleGroups] = await Promise.all([
-      ctx.db
-        .query("article_summaries")
-        .withIndex("by_site", (q) => q.eq("siteId", siteId))
-        .collect(),
+      collectCurrentDomainArticleSummaries(ctx, site),
       Promise.all(relevantExisting.map((topic) =>
         ctx.db
           .query("articles")
@@ -440,7 +506,7 @@ export const upsertMany = internalMutation({
       )),
     ]);
     const summaryCoverageKeywords = coveredIntentTopics(
-      existing.map((topic) => ({
+      domainCurrentExisting.map((topic) => ({
         _id: String(topic._id),
         status: topic.status ?? "planned",
         primaryKeyword: topic.primaryKeyword,
@@ -458,7 +524,7 @@ export const upsertMany = internalMutation({
     // A paid checkpoint row is immutable planning/attempt history. It is not
     // ordinary durable content coverage, but exact or similar upserts must not
     // revive/replace it under a new row and thereby erase the no-replay fence.
-    const checkpointCoverageKeywords = existing
+    const checkpointCoverageKeywords = domainCurrentExisting
       .filter(planCheckpointTopicDeletionLocked)
       .map((topic) => topic.primaryKeyword);
     const reservingTopicIds = new Set<string>();
@@ -472,6 +538,7 @@ export const upsertMany = internalMutation({
       for (const article of articles) {
         if (
           article.siteId === siteId &&
+          articleMatchesCurrentDomain(site, article) &&
           article.topicId &&
           articleReservesTopicIntent(article)
         ) {
@@ -543,7 +610,7 @@ export const upsertMany = internalMutation({
 
       const decision = decideTopicUpsert({
         candidateKeyword: topic.primaryKeyword,
-        existingTopics: existing.map((existingTopic) => ({
+        existingTopics: domainCurrentExisting.map((existingTopic) => ({
           id: String(existingTopic._id),
           primaryKeyword: existingTopic.primaryKeyword,
           updatedAt: existingTopic.updatedAt,
@@ -562,6 +629,8 @@ export const upsertMany = internalMutation({
 
       const persistedFields = {
         siteId,
+        planningCanonicalDomain: canonicalDomain,
+        planningDomainRevision: expectedDomainRevision,
         label: topic.label,
         primaryKeyword: topic.primaryKeyword,
         secondaryKeywords: topic.secondaryKeywords ?? [],
@@ -647,7 +716,7 @@ export const upsertMany = internalMutation({
 
       const timestamp = now();
       if (decision.kind === "revive") {
-        const existingTopic = existing.find((candidate) =>
+        const existingTopic = domainCurrentExisting.find((candidate) =>
           String(candidate._id) === decision.topicId
         );
         if (!existingTopic || existingTopic.siteId !== siteId) {
@@ -780,6 +849,7 @@ export const remove = mutation({
     const topic = await ctx.db.get(topicId);
     if (!topic) return;
     await requireSiteOwner(ctx, topic.siteId);
+    await assertTopicDeletionUnlocked(ctx, topic.siteId);
     if (planCheckpointTopicDeletionLocked(topic)) {
       throw new Error(
         "Plan checkpoint topics are immutable paid-attempt history",
@@ -793,6 +863,7 @@ export const removeInternal = internalMutation({
   args: { topicId: v.id("topic_clusters") },
   handler: async (ctx, { topicId }) => {
     const topic = await ctx.db.get(topicId);
+    if (topic) await assertTopicDeletionUnlocked(ctx, topic.siteId);
     if (topic && planCheckpointTopicDeletionLocked(topic)) {
       throw new Error(
         "Plan checkpoint topics may only be purged by tenant deletion",
@@ -987,6 +1058,7 @@ export const removeUsed = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     await requireSiteOwner(ctx, siteId);
+    await assertTopicDeletionUnlocked(ctx, siteId);
     const all = await ctx.db
       .query("topic_clusters")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -1066,6 +1138,7 @@ export const removeUnused = mutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     await requireSiteOwner(ctx, siteId);
+    await assertTopicDeletionUnlocked(ctx, siteId);
     const all = await ctx.db
       .query("topic_clusters")
       .withIndex("by_site", (q) => q.eq("siteId", siteId))

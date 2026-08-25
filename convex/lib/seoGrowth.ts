@@ -387,11 +387,13 @@ export function classifySeoGrowth(
 export function growthActionFingerprint(
   siteId: string,
   classification: { articleId: string; stage: string; actionKind: string },
+  connectionPartition?: string,
 ): string {
   return [
     siteId,
+    connectionPartition,
     classification.articleId,
     classification.stage,
     classification.actionKind,
-  ].join(":");
+  ].filter((part) => part !== undefined).join(":");
 }

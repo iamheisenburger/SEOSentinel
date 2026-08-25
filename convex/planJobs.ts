@@ -2,6 +2,10 @@ import { mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { reservePlanProviderBudget } from "./lib/planProviderReservation";
+import {
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+} from "./lib/siteDomainBinding";
 
 const now = () => Date.now();
 
@@ -39,6 +43,8 @@ export const queuePlanGeneration = mutation({
     }
 
     const timestamp = now();
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) throw new Error("This site domain is invalid");
     const reservation = await reservePlanProviderBudget(ctx, site, timestamp);
     if (!reservation.ok) {
       throw new Error(
@@ -57,6 +63,8 @@ export const queuePlanGeneration = mutation({
       providerCostReservationDay: reservation.providerCostReservationDay,
       providerSpendReservationId: reservation.providerSpendReservationId,
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
       workerAttempts: 0,
       publicationAttempts: 0,
       createdAt: timestamp,

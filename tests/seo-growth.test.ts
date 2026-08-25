@@ -281,7 +281,7 @@ test("fleet growth reconciliation keeps tenant boundaries and rollout-gates ever
   );
   assert.match(
     controller,
-    /!article \|\| article\.siteId !== siteId \|\| article\.status !== "published"/,
+    /article\.siteId !== siteId \|\|[\s\S]{0,100}!articleMatchesCurrentDomain\(site, article\)/,
   );
   assert.match(controller, /if \(!actuationEligible && desiredStatus === "open"\)/);
   for (const actuator of [
@@ -299,9 +299,14 @@ test("fleet growth reconciliation keeps tenant boundaries and rollout-gates ever
     );
   }
   assert.match(runner, /async function growthActuationStillEligible/);
-  assert.match(runner, /isSeoGrowthActuationEligible\(site\)/);
+  assert.match(
+    runner,
+    /internal\.seoGrowth\.getActionAttemptEligibilityInternal/,
+  );
   assert.ok(
-    (runner.match(/await growthActuationStillEligible\(ctx, siteId\)/g) ?? [])
+    (runner.match(
+      /await growthActuationStillEligible\(\s*ctx,\s*siteId,/g,
+    ) ?? [])
       .length >= 4,
     "every post-reconciliation external actuator must recheck the current rollout",
   );
@@ -370,7 +375,8 @@ test("an uninitialized page rollup cannot be mistaken for zero visibility", () =
     /input\.dateEpochs,[\s\S]{0,100}startDate,[\s\S]{0,100}expectedEndDate/,
   );
   assert.match(inputs, /dateEpochs: receipts/);
-  assert.match(inputs, /filterRowsForGscReceipts\(rowCandidates, receipts\)/);
+  assert.match(inputs, /takeCurrentGscPageRows\(ctx, site, 5_000/);
+  assert.match(inputs, /Current Search Console growth receipt read limit exceeded/);
   assert.match(inputs, /dataWindowStart: site\.gscDataWindowStart/);
   assert.match(inputs, /dataThrough: site\.gscDataThrough/);
 

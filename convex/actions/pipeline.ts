@@ -105,6 +105,11 @@ import {
   type CadenceRecoveryStrategy,
 } from "../lib/cadenceLiveness";
 import {
+  contentAnalysisMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+} from "../lib/siteDomainBinding";
+import {
   STRICT_EVIDENCE_SEARCH_DOMAINS,
   strictEvidenceSources,
 } from "../lib/sourceQuality";
@@ -1419,6 +1424,7 @@ async function inferSiteProfile(
   siteId: Id<"sites">,
   site: {
     domain: string;
+    canonicalDomainRevision?: number;
     tone?: string;
     niche?: string;
     inferToneNiche?: boolean;
@@ -1440,6 +1446,8 @@ async function inferSiteProfile(
   if (inferred.niche || inferred.tone) {
     await ctx.runMutation(internal.sites.patchInternal, {
       siteId,
+      expectedCanonicalDomain: siteCanonicalDomain(site) ?? site.domain,
+      expectedDomainRevision: siteCanonicalDomainRevision(site),
       patch: {
         niche: inferred.niche ?? site.niche,
         tone: inferred.tone ?? site.tone,
@@ -2042,9 +2050,14 @@ async function handleOnboarding(
   siteId: Id<"sites">;
   pages: { slug: string; title: string; summary: string; keywords?: string[] }[];
   siteSummary: string;
+  canonicalDomain: string;
+  domainRevision: number;
 }> {
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  if (!canonicalDomain) throw new Error("Site domain is invalid");
   const { html } = await fetchHtml(site.domain);
 
   const text = await callClaude(
@@ -2072,6 +2085,8 @@ async function handleOnboarding(
   if (pages.length) {
     await ctx.runMutation(internal.pages.bulkUpsert, {
       siteId,
+      expectedCanonicalDomain: canonicalDomain,
+      expectedDomainRevision: domainRevision,
       pages: pages.map((p) => ({
         url: `${site.domain.replace(/\/$/, "")}/${p.slug.replace(/^\//, "")}`,
         slug: p.slug.startsWith("/") ? p.slug : `/${p.slug}`,
@@ -2084,6 +2099,7 @@ async function handleOnboarding(
 
   await inferSiteProfile(ctx, html, siteId, {
     domain: site.domain,
+    canonicalDomainRevision: domainRevision,
     tone: site.tone,
     niche: site.niche,
     inferToneNiche: site.inferToneNiche,
@@ -2093,6 +2109,8 @@ async function handleOnboarding(
     siteId,
     pages,
     siteSummary: data.siteSummary ?? "",
+    canonicalDomain,
+    domainRevision,
   };
 }
 
@@ -2240,6 +2258,16 @@ async function handlePlan(
 
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
+  const planningCanonicalDomain = siteCanonicalDomain(site);
+  const planningDomainRevision = siteCanonicalDomainRevision(site);
+  if (
+    !planningCanonicalDomain ||
+    !contentAnalysisMatchesCurrentDomain(site)
+  ) {
+    throw new Error(
+      "Website analysis belongs to an earlier canonical domain; run a fresh crawl before planning",
+    );
+  }
   if (
     expectedClickMigrationVersion !== undefined &&
     (
@@ -2399,6 +2427,8 @@ async function handlePlan(
     if (domainMetrics) {
       await ctx.runMutation(internal.sites.recordSeoAuthorityEvidenceInternal, {
         siteId,
+        expectedCanonicalDomain: planningCanonicalDomain,
+        expectedDomainRevision: planningDomainRevision,
         domain: domainMetrics.domain,
         domainRank: domainMetrics.domainRank,
         referringDomains: domainMetrics.referringDomains,
@@ -3692,6 +3722,8 @@ async function handlePlan(
       try {
         saved = await ctx.runMutation(internal.topics.upsertMany, {
           siteId,
+          expectedCanonicalDomain: planningCanonicalDomain,
+          expectedDomainRevision: planningDomainRevision,
           planExecution: {
             jobId: jobId!,
             workerToken: workerToken!,
@@ -3789,6 +3821,8 @@ async function handlePlan(
     try {
       saved = await ctx.runMutation(internal.topics.upsertMany, {
         siteId,
+        expectedCanonicalDomain: planningCanonicalDomain,
+        expectedDomainRevision: planningDomainRevision,
         planExecution: {
           jobId: jobId!,
           workerToken: workerToken!,
@@ -3847,6 +3881,8 @@ async function handlePlan(
     const portfolio = inventoryAudit.expectedClickPortfolio;
     await ctx.runMutation(internal.autopilot.recordTopicPortfolioAudit, {
       siteId,
+      expectedCanonicalDomain: planningCanonicalDomain,
+      expectedDomainRevision: planningDomainRevision,
       status: portfolio.status,
       decision: portfolio.decision,
       supportsGoal: portfolio.supportsGoal,
@@ -5543,9 +5579,17 @@ async function handleAnalyzeSite(
   siteId: Id<"sites">,
   html: string,
   pages: { slug: string; title: string; summary: string; keywords?: string[] }[],
+  expectedCanonicalDomain: string,
+  expectedDomainRevision: number,
 ): Promise<SiteAnalysisResult> {
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site) throw new Error("Site not found");
+  if (
+    siteCanonicalDomain(site) !== expectedCanonicalDomain ||
+    siteCanonicalDomainRevision(site) !== expectedDomainRevision
+  ) {
+    throw new Error("Site domain changed before website analysis");
+  }
 
   // Feed homepage HTML + all page summaries to Claude for deep analysis
   const pageContext = pages
@@ -5655,6 +5699,8 @@ async function handleAnalyzeSite(
   // Save analysis to the site record
   await ctx.runMutation(internal.sites.patchInternal, {
     siteId,
+    expectedCanonicalDomain,
+    expectedDomainRevision,
     patch: {
       siteName: analysis.siteName,
       siteType: analysis.siteType,
@@ -5671,6 +5717,8 @@ async function handleAnalyzeSite(
       productUsage: analysis.productUsage,
       competitors: analysis.suggestedCompetitors,
       anchorKeywords: analysis.suggestedAnchorKeywords,
+      contentAnalysisCanonicalDomain: expectedCanonicalDomain,
+      contentAnalysisDomainRevision: expectedDomainRevision,
     },
   });
 
@@ -5731,6 +5779,12 @@ async function performCrawlAndAnalyze(
   // Re-check canonical execution after the first provider phase so a plan
   // transition cannot start the remaining paid analysis work.
   const site = await requireExecutableSite(ctx, siteId);
+  if (
+    siteCanonicalDomain(site) !== crawlResult.canonicalDomain ||
+    siteCanonicalDomainRevision(site) !== crawlResult.domainRevision
+  ) {
+    throw new Error("Site domain changed during website analysis");
+  }
   const { html, url } = await fetchHtml(site.domain);
 
   let brand: BrandDetection = {
@@ -5746,6 +5800,8 @@ async function performCrawlAndAnalyze(
     );
     await ctx.runMutation(internal.sites.patchInternal, {
       siteId,
+      expectedCanonicalDomain: crawlResult.canonicalDomain,
+      expectedDomainRevision: crawlResult.domainRevision,
       patch: {
         brandPrimaryColor: brand.primaryColor ?? undefined,
         brandAccentColor: brand.accentColor ?? undefined,
@@ -5764,6 +5820,8 @@ async function performCrawlAndAnalyze(
     siteId,
     html,
     crawlResult.pages,
+    crawlResult.canonicalDomain,
+    crawlResult.domainRevision,
   );
 
   return {
@@ -5776,6 +5834,56 @@ async function performCrawlAndAnalyze(
       logoUrl: brand.logoUrl,
     },
   };
+}
+
+type ClaimedOnboardingExecution =
+  | {
+    status: "completed";
+    source: "cache" | "provider";
+    result: CrawlAndAnalyzeResult;
+  }
+  | { status: "in_progress" | "cooling_down"; retryAt: number }
+  | { status: "budget_blocked"; reason: string }
+  | { status: "failed" };
+
+/** Every operational onboarding entry point shares the same durable claim,
+ * provider budget, epoch CAS, and complete/fail receipts. A shallow crawl is
+ * never allowed to masquerade as complete analysis. */
+async function executeClaimedCrawlAndAnalyze(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<ClaimedOnboardingExecution> {
+  const workerToken = randomUUID();
+  const claim: OnboardingClaimResult = await ctx.runMutation(
+    internal.onboardingClaims.claim,
+    { siteId, workerToken },
+  );
+  if (claim.status === "cached") {
+    return {
+      status: "completed",
+      source: "cache",
+      result: claim.result as CrawlAndAnalyzeResult,
+    };
+  }
+  if (claim.status !== "claimed") return claim;
+
+  try {
+    const result = await performCrawlAndAnalyze(ctx, siteId);
+    await ctx.runMutation(internal.onboardingClaims.complete, {
+      siteId,
+      jobId: claim.jobId,
+      workerToken,
+      result,
+    });
+    return { status: "completed", source: "provider", result };
+  } catch {
+    await ctx.runMutation(internal.onboardingClaims.fail, {
+      siteId,
+      jobId: claim.jobId,
+      workerToken,
+    });
+    return { status: "failed" };
+  }
 }
 
 function cachedCrawledPages(result: unknown): CrawlAndAnalyzeResult["pages"] | null {
@@ -5798,49 +5906,26 @@ export const crawlAndAnalyze = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<CrawlAndAnalyzeResult> => {
     await requireOwnedSite(ctx, siteId);
-    const workerToken = randomUUID();
-    const claim: OnboardingClaimResult = await ctx.runMutation(
-      internal.onboardingClaims.claim,
-      { siteId, workerToken },
-    );
-    if (claim.status === "cached") {
-      return claim.result as CrawlAndAnalyzeResult;
-    }
-    if (claim.status === "in_progress") {
+    const execution = await executeClaimedCrawlAndAnalyze(ctx, siteId);
+    if (execution.status === "completed") return execution.result;
+    if (execution.status === "in_progress") {
       throw new Error(
         "Website analysis is already running for this site. Please wait for it to finish.",
       );
     }
-    if (claim.status === "cooling_down") {
+    if (execution.status === "cooling_down") {
       throw new Error(
         "The previous website analysis did not complete and is cooling down. Please retry later.",
       );
     }
-    if (claim.status === "budget_blocked") {
+    if (execution.status === "budget_blocked") {
       throw new Error(
         "Website analysis is temporarily unavailable under the current provider budget.",
       );
     }
-
-    try {
-      const result = await performCrawlAndAnalyze(ctx, siteId);
-      await ctx.runMutation(internal.onboardingClaims.complete, {
-        siteId,
-        jobId: claim.jobId,
-        workerToken,
-        result,
-      });
-      return result;
-    } catch {
-      await ctx.runMutation(internal.onboardingClaims.fail, {
-        siteId,
-        jobId: claim.jobId,
-        workerToken,
-      });
-      throw new Error(
-        "Website analysis did not complete. A retry cooldown is now active.",
-      );
-    }
+    throw new Error(
+      "Website analysis did not complete. A retry cooldown is now active.",
+    );
   },
 });
 
@@ -5860,39 +5945,46 @@ export const repairOnboardingInternal = internalAction({
     const existingPages = await ctx.runQuery(internal.pages.listBySiteInternal, {
       siteId,
     });
-    if (existingPages.length > 0) {
+    if (
+      existingPages.length > 0 &&
+      contentAnalysisMatchesCurrentDomain(site)
+    ) {
       return {
         repaired: false,
-        reason: "crawl_already_present",
+        reason: "analysis_already_present",
         pages: existingPages.length,
       };
     }
-    const workerToken = randomUUID();
-    let claim: OnboardingClaimResult;
+    let execution: ClaimedOnboardingExecution;
     try {
-      claim = await ctx.runMutation(internal.onboardingClaims.claim, {
-        siteId,
-        workerToken,
-      });
+      execution = await executeClaimedCrawlAndAnalyze(ctx, siteId);
     } catch {
       return { repaired: false, reason: "site_not_executable", pages: 0 };
     }
-    if (claim.status === "in_progress") {
+    if (execution.status === "in_progress") {
       return { repaired: false, reason: "analysis_in_progress", pages: 0 };
     }
-    if (claim.status === "cooling_down") {
+    if (execution.status === "cooling_down") {
       return { repaired: false, reason: "analysis_cooling_down", pages: 0 };
     }
-    if (claim.status === "budget_blocked") {
+    if (execution.status === "budget_blocked") {
       return { repaired: false, reason: "provider_budget_blocked", pages: 0 };
     }
-    if (claim.status === "cached") {
-      const pages = cachedCrawledPages(claim.result);
+    if (execution.status === "failed") {
+      return { repaired: false, reason: "analysis_failed", pages: 0 };
+    }
+    if (execution.status !== "completed") {
+      return { repaired: false, reason: "analysis_unavailable", pages: 0 };
+    }
+    if (execution.source === "cache") {
+      const pages = cachedCrawledPages(execution.result);
       if (!pages?.length) {
         return { repaired: false, reason: "cached_analysis_invalid", pages: 0 };
       }
       await ctx.runMutation(internal.pages.bulkUpsert, {
         siteId,
+        expectedCanonicalDomain: siteCanonicalDomain(site) ?? site.domain,
+        expectedDomainRevision: siteCanonicalDomainRevision(site),
         pages: pages.map((page) => ({
           url: `${site.domain.replace(/\/$/, "")}/${page.slug.replace(/^\//, "")}`,
           slug: page.slug.startsWith("/") ? page.slug : `/${page.slug}`,
@@ -5907,28 +5999,13 @@ export const repairOnboardingInternal = internalAction({
         pages: pages.length,
       };
     }
-
-    try {
-      const result = await performCrawlAndAnalyze(ctx, siteId);
-      await ctx.runMutation(internal.onboardingClaims.complete, {
-        siteId,
-        jobId: claim.jobId,
-        workerToken,
-        result,
-      });
-      return {
-        repaired: result.pages.length > 0,
-        reason: result.pages.length > 0 ? "crawl_repaired" : "crawl_empty",
-        pages: result.pages.length,
-      };
-    } catch {
-      await ctx.runMutation(internal.onboardingClaims.fail, {
-        siteId,
-        jobId: claim.jobId,
-        workerToken,
-      });
-      return { repaired: false, reason: "analysis_failed", pages: 0 };
-    }
+    return {
+      repaired: execution.result.pages.length > 0,
+      reason: execution.result.pages.length > 0
+        ? "analysis_repaired"
+        : "analysis_empty",
+      pages: execution.result.pages.length,
+    };
   },
 });
 
@@ -7339,8 +7416,37 @@ export const autopilotTick = internalAction({
     // delivery or compete with work already running for this tenant.
     if (!deliveryPriority && cadenceSchedule.mode !== "work_in_progress") {
       const pages = await ctx.runQuery(internal.pages.listBySiteInternal, { siteId });
-      if (!pages.length) {
-        await handleOnboarding(ctx, siteId);
+      if (!pages.length || !contentAnalysisMatchesCurrentDomain(site)) {
+        const onboarding = await executeClaimedCrawlAndAnalyze(ctx, siteId);
+        if (onboarding.status !== "completed") {
+          return finish(
+            { processed: 0 },
+            `onboarding_${onboarding.status}`,
+            "Current-domain website analysis is not complete; planning remains fail-closed.",
+          );
+        }
+        if (!pages.length && onboarding.source === "cache") {
+          const cachedPages = cachedCrawledPages(onboarding.result);
+          if (!cachedPages?.length) {
+            return finish(
+              { processed: 0 },
+              "onboarding_cache_invalid",
+              "The current-domain analysis cache has no restorable crawl receipt.",
+            );
+          }
+          await ctx.runMutation(internal.pages.bulkUpsert, {
+            siteId,
+            expectedCanonicalDomain: siteCanonicalDomain(site) ?? site.domain,
+            expectedDomainRevision: siteCanonicalDomainRevision(site),
+            pages: cachedPages.map((page) => ({
+              url: `${site.domain.replace(/\/$/, "")}/${page.slug.replace(/^\//, "")}`,
+              slug: page.slug.startsWith("/") ? page.slug : `/${page.slug}`,
+              title: page.title,
+              keywords: page.keywords,
+              summary: page.summary,
+            })),
+          });
+        }
       }
     }
 
@@ -7665,8 +7771,16 @@ export const processNextJob = internalAction({
     try {
       if (job.type === "onboarding") {
         await heartbeat();
-        await handleOnboarding(ctx, args.siteId);
-        await complete("ok");
+        const onboarding = await executeClaimedCrawlAndAnalyze(
+          ctx,
+          args.siteId,
+        );
+        if (onboarding.status !== "completed") {
+          throw new Error(
+            `Current-domain website analysis is ${onboarding.status}`,
+          );
+        }
+        await complete(onboarding.result);
         return { processed: true, jobId: job._id };
       }
 

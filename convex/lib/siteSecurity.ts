@@ -1,3 +1,5 @@
+import { gscConnectionMatchesCurrentDomain } from "./siteDomainBinding.ts";
+
 type SiteRecord = Record<string, unknown>;
 
 const SECRET_FIELD_NAMES = [
@@ -37,6 +39,28 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
   const safe = Object.fromEntries(
     Object.entries(site).filter(([key]) => !SECRET_FIELDS.has(key)),
   ) as Omit<T, SecretField>;
+  const gscConnected = gscConnectionMatchesCurrentDomain({
+    domain: typeof site.domain === "string" ? site.domain : undefined,
+    canonicalDomain: typeof site.canonicalDomain === "string"
+      ? site.canonicalDomain
+      : undefined,
+    canonicalDomainRevision:
+      typeof site.canonicalDomainRevision === "number"
+        ? site.canonicalDomainRevision
+        : undefined,
+    gscAccessToken: typeof site.gscAccessToken === "string"
+      ? site.gscAccessToken
+      : undefined,
+    gscProperty: typeof site.gscProperty === "string"
+      ? site.gscProperty
+      : undefined,
+    gscCanonicalDomain: typeof site.gscCanonicalDomain === "string"
+      ? site.gscCanonicalDomain
+      : undefined,
+    gscDomainRevision: typeof site.gscDomainRevision === "number"
+      ? site.gscDomainRevision
+      : undefined,
+  });
 
   return {
     ...safe,
@@ -49,8 +73,8 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
     ),
     webhookConfigured: Boolean(site.webhookUrl),
     webhookSecretConfigured: Boolean(site.webhookSecret),
-    gscConnected: Boolean(site.gscAccessToken && site.gscProperty),
-    gscGrowthEnabled: Boolean(
+    gscConnected,
+    gscGrowthEnabled: gscConnected && Boolean(
       typeof site.gscScopes === "string" &&
       site.gscScopes
         .split(/\s+/)

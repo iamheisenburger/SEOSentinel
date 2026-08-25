@@ -3,6 +3,7 @@ import { internalMutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   decideOnboardingClaim,
+  onboardingJobMatchesDomainBinding,
   onboardingFailureCooldownMs,
   onboardingInputFingerprint,
   ONBOARDING_CACHE_VERSION,
@@ -12,6 +13,13 @@ import {
 } from "./lib/onboardingClaim";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { reserveSharedProviderBudget } from "./lib/providerSpendReservation";
+import {
+  contentAnalysisMatchesCurrentDomain,
+  pageMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./lib/siteDomainBinding";
 
 const now = () => Date.now();
 
@@ -105,6 +113,14 @@ export const claim = internalMutation({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("This site is not active under the current plan");
     }
+    const canonicalDomain = siteCanonicalDomain(site);
+    const domainRevision = siteCanonicalDomainRevision(site);
+    if (!canonicalDomain) throw new Error("This site domain is invalid");
+    const domainBinding = {
+      canonicalDomain,
+      domainRevision,
+      legacyFallbackAllowed: siteUsesLegacyDomainReceipts(site),
+    };
 
     const jobs = await ctx.db
       .query("jobs")
@@ -131,6 +147,14 @@ export const claim = internalMutation({
         );
       }
     }
+    const currentFailureCount = jobs.filter((job) =>
+      job.status === "failed" &&
+      onboardingJobMatchesDomainBinding(
+        job,
+        inputFingerprint,
+        domainBinding,
+      )
+    ).length;
     let expiredCurrentRetryAt: number | undefined;
     for (const job of jobs) {
       const payload = job.payload && typeof job.payload === "object"
@@ -141,11 +165,17 @@ export const claim = internalMutation({
         payload.workflow === ONBOARDING_WORKFLOW &&
         (job.leaseExpiresAt ?? 0) <= currentTime
       ) {
+        const expiredIsCurrent = onboardingJobMatchesDomainBinding(
+          job,
+          inputFingerprint,
+          domainBinding,
+        );
         const fingerprint = typeof payload.inputFingerprint === "string"
           ? payload.inputFingerprint
           : "legacy_unknown";
-        const failureCount =
-          (failureCountByFingerprint.get(fingerprint) ?? 0) + 1;
+        const failureCount = expiredIsCurrent
+          ? currentFailureCount + 1
+          : (failureCountByFingerprint.get(fingerprint) ?? 0) + 1;
         failureCountByFingerprint.set(fingerprint, failureCount);
         const retryAt = currentTime +
           onboardingFailureCooldownMs(failureCount);
@@ -158,7 +188,7 @@ export const claim = internalMutation({
           leaseExpiresAt: undefined,
           updatedAt: currentTime,
         });
-        if (fingerprint === inputFingerprint) {
+        if (expiredIsCurrent) {
           expiredCurrentRetryAt = Math.max(
             expiredCurrentRetryAt ?? 0,
             retryAt,
@@ -176,8 +206,13 @@ export const claim = internalMutation({
       jobs,
       currentTime,
       inputFingerprint,
+      domainBinding,
     );
-    if (decision.status !== "claim") return decision;
+    if (
+      decision.status !== "claim" &&
+      !(decision.status === "cached" &&
+        !contentAnalysisMatchesCurrentDomain(site))
+    ) return decision;
 
     // Older installations predate the receipt ledger. Hydrate one exact
     // success receipt from a complete stored profile instead of paying to
@@ -196,6 +231,8 @@ export const claim = internalMutation({
       !hasVersionedReceipt &&
       pages.length > 0 &&
       pagesMatchSiteDomain(site.domain, pages) &&
+      pages.every((page) => pageMatchesCurrentDomain(site, page)) &&
+      contentAnalysisMatchesCurrentDomain(site) &&
       completeLegacyProfile(site)
     ) {
       const result = legacyResult(site, pages);
@@ -207,6 +244,8 @@ export const claim = internalMutation({
           workflow: ONBOARDING_WORKFLOW,
           cacheVersion: ONBOARDING_CACHE_VERSION,
           inputFingerprint,
+          canonicalDomain,
+          domainRevision,
           source: "legacy_profile",
         },
         result,
@@ -238,6 +277,8 @@ export const claim = internalMutation({
         workflow: ONBOARDING_WORKFLOW,
         cacheVersion: ONBOARDING_CACHE_VERSION,
         inputFingerprint,
+        canonicalDomain,
+        domainRevision,
         source: "owner_onboarding",
       },
       workerToken,
@@ -268,13 +309,33 @@ export const complete = internalMutation({
     result: v.any(),
   },
   handler: async (ctx, { siteId, jobId, workerToken, result }) => {
-    const job = await ctx.db.get(jobId);
+    const [job, site] = await Promise.all([
+      ctx.db.get(jobId),
+      ctx.db.get(siteId),
+    ]);
+    const canonicalDomain = site ? siteCanonicalDomain(site) : null;
+    const domainRevision = site ? siteCanonicalDomainRevision(site) : -1;
+    const inputFingerprint = site
+      ? onboardingInputFingerprint(site.domain)
+      : "";
     if (
       !job ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !canonicalDomain ||
       job.siteId !== siteId ||
       job.type !== "onboarding" ||
       job.status !== "running" ||
-      job.workerToken !== workerToken
+      job.workerToken !== workerToken ||
+      !onboardingJobMatchesDomainBinding(
+        job,
+        inputFingerprint,
+        {
+          canonicalDomain,
+          domainRevision,
+          legacyFallbackAllowed: siteUsesLegacyDomainReceipts(site),
+        },
+      )
     ) {
       throw new Error("Onboarding lease was lost before completion");
     }
@@ -300,13 +361,27 @@ export const fail = internalMutation({
     workerToken: v.string(),
   },
   handler: async (ctx, { siteId, jobId, workerToken }) => {
-    const job = await ctx.db.get(jobId);
+    const [job, site] = await Promise.all([
+      ctx.db.get(jobId),
+      ctx.db.get(siteId),
+    ]);
     if (
       !job ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
       job.siteId !== siteId ||
       job.type !== "onboarding" ||
       job.status !== "running" ||
-      job.workerToken !== workerToken
+      job.workerToken !== workerToken ||
+      !onboardingJobMatchesDomainBinding(
+        job,
+        onboardingInputFingerprint(site.domain),
+        {
+          canonicalDomain: siteCanonicalDomain(site) ?? "",
+          domainRevision: siteCanonicalDomainRevision(site),
+          legacyFallbackAllowed: siteUsesLegacyDomainReceipts(site),
+        },
+      )
     ) {
       return { failed: false };
     }
@@ -315,6 +390,25 @@ export const fail = internalMutation({
       ? (job.payload as Record<string, unknown>)
       : {};
     const inputFingerprint = jobPayload.inputFingerprint;
+    const payloadCanonicalDomain = jobPayload.canonicalDomain;
+    const payloadDomainRevision = jobPayload.domainRevision;
+    const legacySiteDomain = site ? siteCanonicalDomain(site) : null;
+    const failureBinding =
+      typeof payloadCanonicalDomain === "string" &&
+        Number.isSafeInteger(payloadDomainRevision) &&
+        (payloadDomainRevision as number) >= 0
+        ? {
+          canonicalDomain: payloadCanonicalDomain,
+          domainRevision: payloadDomainRevision as number,
+          legacyFallbackAllowed: false,
+        }
+        : site && legacySiteDomain && siteUsesLegacyDomainReceipts(site)
+        ? {
+          canonicalDomain: legacySiteDomain,
+          domainRevision: siteCanonicalDomainRevision(site),
+          legacyFallbackAllowed: true,
+        }
+        : null;
     const priorFailures = (
       await ctx.db
         .query("jobs")
@@ -324,14 +418,15 @@ export const fail = internalMutation({
         .order("desc")
         .take(50)
     ).filter((candidate) => {
-      const payload = candidate.payload && typeof candidate.payload === "object"
-        ? (candidate.payload as Record<string, unknown>)
-        : {};
       return (
         candidate.status === "failed" &&
-        payload.workflow === ONBOARDING_WORKFLOW &&
-        payload.cacheVersion === ONBOARDING_CACHE_VERSION &&
-        payload.inputFingerprint === inputFingerprint
+        typeof inputFingerprint === "string" &&
+        failureBinding !== null &&
+        onboardingJobMatchesDomainBinding(
+          candidate,
+          inputFingerprint,
+          failureBinding,
+        )
       );
     }).length;
     const retryAt = currentTime + onboardingFailureCooldownMs(priorFailures + 1);

@@ -1,14 +1,25 @@
 import { siteExecutionActive } from "./planSiteAllowance.ts";
+import {
+  normalizeCanonicalDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./siteDomainBinding.ts";
 
 export type JobRolloutState = {
   payload?: unknown;
   rolloutEpoch?: number;
+  canonicalDomain?: string;
+  domainRevision?: number;
 };
 
 export type SiteRolloutState = {
   autopilotEnabled?: boolean;
   autopilotRolloutMode?: string;
   autopilotRolloutEpoch?: number;
+  domain?: string;
+  canonicalDomain?: string;
+  canonicalDomainRevision?: number;
   deletionStatus?: string;
   planParkedAt?: number;
 };
@@ -35,6 +46,17 @@ export function jobAuthorizedForExecution(
   job: JobRolloutState,
 ): boolean {
   if (!siteExecutionActive(site)) return false;
+  const currentDomain = siteCanonicalDomain(site);
+  const currentRevision = siteCanonicalDomainRevision(site);
+  const hasJobBinding = job.canonicalDomain !== undefined ||
+    job.domainRevision !== undefined;
+  if (
+    !currentDomain ||
+    (hasJobBinding
+      ? normalizeCanonicalDomain(job.canonicalDomain ?? "") !== currentDomain ||
+        job.domainRevision !== currentRevision
+      : !siteUsesLegacyDomainReceipts(site))
+  ) return false;
   if (isManualJobPayload(job.payload)) return true;
   return (
     autonomousRolloutActive(site) &&

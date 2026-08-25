@@ -33,6 +33,15 @@ import {
   siteExecutionActive,
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance.ts";
+import {
+  articleMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding.ts";
+
+const OUTCOME_SUMMARY_ROLLUP_READ_LIMIT = 5_000;
 
 async function requireSiteOwner(
   ctx: QueryCtx,
@@ -479,6 +488,7 @@ export const ingestReceiptInternal = internalMutation({
       !(await siteExecutionAuthorized(ctx, site)) ||
       !article ||
       article.siteId !== siteId ||
+      !articleMatchesCurrentDomain(site, article) ||
       article.status !== "published" ||
       article.publicUrlStatus !== "verified" ||
       !article.publicationReceipt
@@ -540,12 +550,28 @@ export const ingestReceiptInternal = internalMutation({
       );
     }
 
-    const existingRows = await ctx.db
-      .query("outcome_receipts")
-      .withIndex("by_site_event", (q) =>
-        q.eq("siteId", siteId).eq("eventId", candidate.eventId)
-      )
-      .take(2);
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) {
+      return rejectIngestRequest(ctx, credential, "invalid_site_domain", requestNow);
+    }
+    const domainRevision = siteCanonicalDomainRevision(site);
+    const existingRows = siteUsesLegacyDomainReceipts(site)
+      ? await ctx.db
+        .query("outcome_receipts")
+        .withIndex("by_site_event", (q) =>
+          q.eq("siteId", siteId).eq("eventId", candidate.eventId)
+        )
+        .take(2)
+      : await ctx.db
+        .query("outcome_receipts")
+        .withIndex("by_site_domain_revision_event", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("canonicalDomain", canonicalDomain)
+            .eq("domainRevision", domainRevision)
+            .eq("eventId", candidate.eventId)
+        )
+        .take(2);
     if (existingRows.length > 1) {
       return rejectIngestRequest(
         ctx,
@@ -580,12 +606,23 @@ export const ingestReceiptInternal = internalMutation({
       }
     }
 
-    const sessionRows = await ctx.db
-      .query("outcome_receipts")
-      .withIndex("by_site_session", (q) =>
-        q.eq("siteId", siteId).eq("sessionId", candidate.sessionId)
-      )
-      .take(5);
+    const sessionRows = siteUsesLegacyDomainReceipts(site)
+      ? await ctx.db
+        .query("outcome_receipts")
+        .withIndex("by_site_session", (q) =>
+          q.eq("siteId", siteId).eq("sessionId", candidate.sessionId)
+        )
+        .take(5)
+      : await ctx.db
+        .query("outcome_receipts")
+        .withIndex("by_site_domain_revision_session", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("canonicalDomain", canonicalDomain)
+            .eq("domainRevision", domainRevision)
+            .eq("sessionId", candidate.sessionId)
+        )
+        .take(5);
     const sessionCandidates = sessionRows.map(
       (row): OutcomeReceiptCandidate => ({
         siteId: String(row.siteId),
@@ -646,6 +683,8 @@ export const ingestReceiptInternal = internalMutation({
     const receivedAt = requestNow;
     await ctx.db.insert("outcome_receipts", {
       siteId,
+      canonicalDomain,
+      domainRevision,
       articleId,
       publicationDeliveryKey: candidate.publicationDeliveryKey,
       eventId: candidate.eventId,
@@ -660,16 +699,29 @@ export const ingestReceiptInternal = internalMutation({
     const date = outcomeUtcDay(
       outcomeAttributionOccurredAt(sessionCandidates, candidate),
     );
-    const rollupRows = await ctx.db
-      .query("outcome_daily_rollups")
-      .withIndex("by_site_article_goal_date", (q) =>
-        q
-          .eq("siteId", siteId)
-          .eq("articleId", articleId)
-          .eq("goalKey", candidate.goalKey)
-          .eq("date", date)
-      )
-      .take(2);
+    const rollupRows = siteUsesLegacyDomainReceipts(site)
+      ? await ctx.db
+        .query("outcome_daily_rollups")
+        .withIndex("by_site_article_goal_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("articleId", articleId)
+            .eq("goalKey", candidate.goalKey)
+            .eq("date", date)
+        )
+        .take(2)
+      : await ctx.db
+        .query("outcome_daily_rollups")
+        .withIndex("by_site_domain_revision_article_goal_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("canonicalDomain", canonicalDomain)
+            .eq("domainRevision", domainRevision)
+            .eq("articleId", articleId)
+            .eq("goalKey", candidate.goalKey)
+            .eq("date", date)
+        )
+        .take(2);
     if (rollupRows.length > 1) {
       throw new Error("Outcome daily rollup state is ambiguous");
     }
@@ -686,6 +738,8 @@ export const ingestReceiptInternal = internalMutation({
       candidate.eventType === "paid_conversion" ? 1 : 0;
     if (rollup) {
       await ctx.db.patch(rollup._id, {
+        canonicalDomain,
+        domainRevision,
         landingSessions: rollup.landingSessions + landingIncrement,
         qualifiedActions: rollup.qualifiedActions + actionIncrement,
         organicLandingSessions:
@@ -701,6 +755,8 @@ export const ingestReceiptInternal = internalMutation({
     } else {
       await ctx.db.insert("outcome_daily_rollups", {
         siteId,
+        canonicalDomain,
+        domainRevision,
         articleId,
         date,
         goalKey: candidate.goalKey,
@@ -736,15 +792,54 @@ async function outcomeSummary(
   });
   const startDate = outcomeUtcDay(window.since);
   const endDate = outcomeUtcDay(window.until);
-  const rows = await ctx.db
-    .query("outcome_daily_rollups")
-    .withIndex("by_site_date", (q) =>
-      q.eq("siteId", siteId).gte("date", startDate).lte("date", endDate)
-    )
-    .collect();
+  const site = await ctx.db.get(siteId);
+  if (!site) throw new Error("Site not found");
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  const rows = siteUsesLegacyDomainReceipts(site)
+    ? await ctx.db
+      .query("outcome_daily_rollups")
+      .withIndex("by_site_date", (q) =>
+        q.eq("siteId", siteId).gte("date", startDate).lte("date", endDate)
+      )
+      .take(OUTCOME_SUMMARY_ROLLUP_READ_LIMIT + 1)
+    : canonicalDomain
+      ? await ctx.db
+        .query("outcome_daily_rollups")
+        .withIndex("by_site_domain_revision_date", (q) =>
+          q
+            .eq("siteId", siteId)
+            .eq("canonicalDomain", canonicalDomain)
+            .eq("domainRevision", domainRevision)
+            .gte("date", startDate)
+            .lte("date", endDate)
+        )
+        .take(OUTCOME_SUMMARY_ROLLUP_READ_LIMIT + 1)
+      : [];
+  if (rows.length > OUTCOME_SUMMARY_ROLLUP_READ_LIMIT) {
+    throw new Error(
+      "Current-domain outcome summary exceeds the bounded rollup read limit",
+    );
+  }
+  const articleIdsForRows = [...new Set(rows.map((row) => String(row.articleId)))];
+  const currentArticles = new Map(
+    (await Promise.all(articleIdsForRows.map(async (rawId) => {
+      const articleId = ctx.db.normalizeId("articles", rawId);
+      const article = articleId ? await ctx.db.get(articleId) : null;
+      return article &&
+          article.siteId === siteId &&
+          articleMatchesCurrentDomain(site, article)
+        ? [rawId, article] as const
+        : null;
+    })))
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+  );
+  const currentRows = rows.filter((row) =>
+    currentArticles.has(String(row.articleId))
+  );
   const aggregate = aggregateOutcomeRollups(
     String(siteId),
-    rows.flatMap((row) => [
+    currentRows.flatMap((row) => [
       {
         siteId: String(row.siteId),
         articleId: String(row.articleId),
@@ -790,18 +885,15 @@ async function outcomeSummary(
     ]),
   );
   const articleIds = new Set(aggregate.byArticle.map((row) => row.articleId));
-  const articles = await Promise.all(
-    [...articleIds].map(async (rawId) => {
-      const articleId = ctx.db.normalizeId("articles", rawId);
-      const article = articleId ? await ctx.db.get(articleId) : null;
-      if (!article || article.siteId !== siteId) return null;
+  const articles = [...articleIds].map((rawId) => {
+      const article = currentArticles.get(rawId);
+      if (!article) return null;
       return {
         articleId: rawId,
         title: article.title,
         articleUrl: article.publicUrl,
       };
-    }),
-  );
+    });
   const articleById = new Map(
     articles
       .filter((article): article is NonNullable<typeof article> => Boolean(article))
@@ -874,16 +966,46 @@ export const getCadencePrioritySignalsInternal = internalQuery({
     if (!site) throw new Error("Site not found");
     const cutoff = outcomeUtcDay(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const readLimit = 500;
-    const rows = await ctx.db
-      .query("outcome_daily_rollups")
-      .withIndex("by_site_date", (q) =>
-        q.eq("siteId", siteId).gte("date", cutoff)
-      )
-      .order("desc")
-      .take(readLimit + 1);
+    const canonicalDomain = siteCanonicalDomain(site);
+    const domainRevision = siteCanonicalDomainRevision(site);
+    const rows = siteUsesLegacyDomainReceipts(site)
+      ? await ctx.db
+        .query("outcome_daily_rollups")
+        .withIndex("by_site_date", (q) =>
+          q.eq("siteId", siteId).gte("date", cutoff)
+        )
+        .order("desc")
+        .take(readLimit + 1)
+      : canonicalDomain
+        ? await ctx.db
+          .query("outcome_daily_rollups")
+          .withIndex("by_site_domain_revision_date", (q) =>
+            q
+              .eq("siteId", siteId)
+              .eq("canonicalDomain", canonicalDomain)
+              .eq("domainRevision", domainRevision)
+              .gte("date", cutoff)
+          )
+          .order("desc")
+          .take(readLimit + 1)
+        : [];
     if (rows.length > readLimit) {
       return { truncated: true, signals: [] };
     }
+    const distinctArticleIds = [...new Set(
+      rows.map((row) => String(row.articleId)),
+    )];
+    const currentArticleIds = new Set(
+      (await Promise.all(distinctArticleIds.map(async (rawId) => {
+        const articleId = ctx.db.normalizeId("articles", rawId);
+        const article = articleId ? await ctx.db.get(articleId) : null;
+        return article &&
+            article.siteId === siteId &&
+            articleMatchesCurrentDomain(site, article)
+          ? rawId
+          : null;
+      }))).filter((rawId): rawId is string => rawId !== null),
+    );
     const byArticle = new Map<string, {
       qualifiedActions: number;
       organicLandingSessions: number;
@@ -893,6 +1015,7 @@ export const getCadencePrioritySignalsInternal = internalQuery({
     }>();
     for (const row of rows) {
       const key = String(row.articleId);
+      if (!currentArticleIds.has(key)) continue;
       const aggregate = byArticle.get(key) ?? {
         qualifiedActions: 0,
         organicLandingSessions: 0,
@@ -924,8 +1047,10 @@ export const getCadencePrioritySignalsInternal = internalQuery({
       if (
         !article ||
         article.siteId !== siteId ||
+        !articleMatchesCurrentDomain(site, article) ||
         !topic ||
-        topic.siteId !== siteId
+        topic.siteId !== siteId ||
+        !topicMatchesCurrentDomain(site, topic)
       ) return null;
       return { keyword: topic.primaryKeyword, ...counts };
     }))).filter((signal): signal is NonNullable<typeof signal> =>

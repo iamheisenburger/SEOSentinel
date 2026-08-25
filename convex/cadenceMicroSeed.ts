@@ -96,6 +96,12 @@ import {
   siteExecutionActive,
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import {
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  takeCurrentDomainArticles,
+  takeCurrentDomainTopics,
+} from "./lib/siteDomainBinding";
 
 const ACTIVE_CONTENT_STATUSES = ["pending", "running"] as const;
 const ACTIVE_EVIDENCE_STATUSES = ["pending", "running", "partial"] as const;
@@ -507,12 +513,16 @@ async function inspectReadiness(
 
   const [articles, topics, activeContentGroups, activeEvidence, activeDemand] =
     await Promise.all([
-      ctx.db.query("articles").withIndex("by_site", (q) =>
-        q.eq("siteId", siteId)
-      ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
-      ctx.db.query("topic_clusters").withIndex("by_site", (q) =>
-        q.eq("siteId", siteId)
-      ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      takeCurrentDomainArticles(
+        ctx,
+        site,
+        CADENCE_MICRO_SEED_READ_LIMIT + 1,
+      ),
+      takeCurrentDomainTopics(
+        ctx,
+        site,
+        CADENCE_MICRO_SEED_READ_LIMIT + 1,
+      ),
       Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
         ctx.db.query("jobs").withIndex("by_site_status", (q) =>
           q.eq("siteId", siteId).eq("status", status)
@@ -1408,12 +1418,16 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     ) throw new Error("Cadence micro-seed paid reservation changed");
 
     const [topics, articles] = await Promise.all([
-      ctx.db.query("topic_clusters").withIndex("by_site", (q) =>
-        q.eq("siteId", args.siteId)
-      ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
-      ctx.db.query("articles").withIndex("by_site", (q) =>
-        q.eq("siteId", args.siteId)
-      ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      takeCurrentDomainTopics(
+        ctx,
+        site,
+        CADENCE_MICRO_SEED_READ_LIMIT + 1,
+      ),
+      takeCurrentDomainArticles(
+        ctx,
+        site,
+        CADENCE_MICRO_SEED_READ_LIMIT + 1,
+      ),
     ]);
     if (
       topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
@@ -1514,6 +1528,8 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     });
     const topicId = await ctx.db.insert("topic_clusters", {
       siteId: args.siteId,
+      planningCanonicalDomain: siteCanonicalDomain(site)!,
+      planningDomainRevision: siteCanonicalDomainRevision(site),
       label: selected.keyword,
       primaryKeyword: normalizeCadenceMicroSeedText(selected.keyword),
       secondaryKeywords: [],

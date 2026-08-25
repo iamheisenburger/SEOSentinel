@@ -23,6 +23,12 @@ export type OnboardingClaimDecision =
   | { status: "cooling_down"; retryAt: number }
   | { status: "claim" };
 
+export type OnboardingDomainBinding = {
+  canonicalDomain: string;
+  domainRevision: number;
+  legacyFallbackAllowed: boolean;
+};
+
 export function onboardingFailureCooldownMs(failureCount: number): number {
   if (failureCount <= 1) return ONBOARDING_FAILURE_COOLDOWN_MS;
   if (failureCount === 2) return ONBOARDING_SECOND_FAILURE_COOLDOWN_MS;
@@ -49,14 +55,31 @@ export function onboardingInputFingerprint(domain: string): string {
 function isCurrentWorkflow(
   job: OnboardingClaimCandidate,
   inputFingerprint: string,
+  binding?: OnboardingDomainBinding,
 ): boolean {
   if (!job.payload || typeof job.payload !== "object") return false;
   const payload = job.payload as Record<string, unknown>;
-  return (
+  const workflowMatches = (
     payload.workflow === ONBOARDING_WORKFLOW &&
     payload.cacheVersion === ONBOARDING_CACHE_VERSION &&
     payload.inputFingerprint === inputFingerprint
   );
+  if (!workflowMatches || !binding) return workflowMatches;
+  const receiptDomain = payload.canonicalDomain;
+  const receiptRevision = payload.domainRevision;
+  if (receiptDomain === undefined && receiptRevision === undefined) {
+    return binding.legacyFallbackAllowed;
+  }
+  return receiptDomain === binding.canonicalDomain &&
+    receiptRevision === binding.domainRevision;
+}
+
+export function onboardingJobMatchesDomainBinding(
+  job: OnboardingClaimCandidate,
+  inputFingerprint: string,
+  binding: OnboardingDomainBinding,
+): boolean {
+  return isCurrentWorkflow(job, inputFingerprint, binding);
 }
 
 /**
@@ -68,9 +91,10 @@ export function decideOnboardingClaim(
   jobs: readonly OnboardingClaimCandidate[],
   now: number,
   inputFingerprint: string,
+  binding?: OnboardingDomainBinding,
 ): OnboardingClaimDecision {
   const current = jobs.filter((job) =>
-    isCurrentWorkflow(job, inputFingerprint)
+    isCurrentWorkflow(job, inputFingerprint, binding)
   );
   const completed = current.find(
     (job) => job.status === "done" && job.result !== undefined,

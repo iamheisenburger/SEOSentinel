@@ -158,18 +158,24 @@ test("changing the normalized site domain invalidates old success and failure re
 });
 
 test("core crawl claims before providers and closes the exact receipt", () => {
-  const block = publicAction(
+  const publicBlock = publicAction(
     "crawlAndAnalyze",
     "// Bounded operator/fleet repair",
   );
-  const authAt = block.indexOf("await requireOwnedSite(ctx, siteId)");
+  const authAt = publicBlock.indexOf("await requireOwnedSite(ctx, siteId)");
+  const executeAt = publicBlock.indexOf("executeClaimedCrawlAndAnalyze(ctx, siteId)");
+  assert.ok(authAt >= 0 && executeAt > authAt);
+  const helperStart = pipeline.indexOf("async function executeClaimedCrawlAndAnalyze");
+  const helperEnd = pipeline.indexOf("function cachedCrawledPages", helperStart);
+  const block = pipeline.slice(helperStart, helperEnd);
   const claimAt = block.indexOf("internal.onboardingClaims.claim");
   const providerAt = block.indexOf("performCrawlAndAnalyze(ctx, siteId)");
-  assert.ok(authAt >= 0 && claimAt > authAt && providerAt > claimAt);
+  assert.ok(claimAt >= 0 && providerAt > claimAt);
   assert.match(block, /claim\.status === "cached"/);
-  assert.match(block, /claim\.status === "in_progress"/);
-  assert.match(block, /claim\.status === "cooling_down"/);
-  assert.match(block, /claim\.status === "budget_blocked"/);
+  assert.match(block, /claim\.status !== "claimed"/);
+  assert.match(publicBlock, /execution\.status === "in_progress"/);
+  assert.match(publicBlock, /execution\.status === "cooling_down"/);
+  assert.match(publicBlock, /execution\.status === "budget_blocked"/);
   assert.match(block, /internal\.onboardingClaims\.complete/);
   assert.match(block, /internal\.onboardingClaims\.fail/);
 });
@@ -180,15 +186,11 @@ test("internal onboarding repair uses the same claim, cache, and cooldown", () =
   );
   const end = pipeline.indexOf("async function generatePlanHandler", start);
   const block = pipeline.slice(start, end);
-  const claimAt = block.indexOf("internal.onboardingClaims.claim");
-  const providerAt = block.indexOf("performCrawlAndAnalyze(ctx, siteId)");
-  assert.ok(claimAt >= 0 && providerAt > claimAt);
-  assert.match(block, /claim\.status === "cached"/);
-  assert.match(block, /claim\.status === "in_progress"/);
-  assert.match(block, /claim\.status === "cooling_down"/);
-  assert.match(block, /claim\.status === "budget_blocked"/);
-  assert.match(block, /internal\.onboardingClaims\.complete/);
-  assert.match(block, /internal\.onboardingClaims\.fail/);
+  assert.match(block, /executeClaimedCrawlAndAnalyze\(ctx, siteId\)/);
+  assert.match(block, /execution\.status === "in_progress"/);
+  assert.match(block, /execution\.status === "cooling_down"/);
+  assert.match(block, /execution\.status === "budget_blocked"/);
+  assert.match(block, /execution\.status === "failed"/);
   assert.doesNotMatch(block, /handleOnboarding\(ctx, siteId\)/);
 });
 

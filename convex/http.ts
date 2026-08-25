@@ -516,13 +516,25 @@ http.route({
     if (
       typeof body?.siteId !== "string" ||
       typeof body.gscAccessToken !== "string" ||
-      typeof body.gscProperty !== "string"
+      typeof body.gscProperty !== "string" ||
+      typeof body.expectedCanonicalDomain !== "string" ||
+      typeof body.expectedDomainRevision !== "number" ||
+      !Number.isSafeInteger(body.expectedDomainRevision) ||
+      body.expectedDomainRevision < 0 ||
+      typeof body.expectedConnectionRevision !== "number" ||
+      !Number.isSafeInteger(body.expectedConnectionRevision) ||
+      body.expectedConnectionRevision < 0 ||
+      body.establishConnection !== true
     ) {
       return json({ error: "Invalid Search Console payload" }, 400);
     }
 
     await ctx.runMutation(internal.sites.setGscTokenInternal, {
       siteId: body.siteId as Id<"sites">,
+      expectedCanonicalDomain: body.expectedCanonicalDomain,
+      expectedDomainRevision: body.expectedDomainRevision,
+      expectedConnectionRevision: body.expectedConnectionRevision,
+      establishConnection: true,
       gscAccessToken: body.gscAccessToken,
       gscRefreshToken:
         typeof body.gscRefreshToken === "string"

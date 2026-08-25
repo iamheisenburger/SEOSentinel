@@ -1,6 +1,6 @@
 import { internal } from "./_generated/api";
 import { internalMutation, internalQuery, query } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
@@ -42,6 +42,17 @@ import {
 } from "./lib/planProviderBudget";
 import { classifyAutopilotRunOutcome } from
   "./lib/autopilotRunOutcome.ts";
+import {
+  articleMatchesCurrentDomain,
+  normalizeCanonicalDomain,
+  pageMatchesCurrentDomain,
+  siteCanonicalDomain,
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+  latestCurrentDomainPublishedSummaries,
+  takeCurrentDomainArticleSummariesByStatus,
+  takeCurrentDomainArticles,
+} from "./lib/siteDomainBinding";
 
 const SITE_STAGGER_MS = 5_000;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
@@ -51,6 +62,56 @@ const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
   "operator_recovery_of_public_url_verified:";
 const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
 const TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT = 50;
+
+async function publicationCommitBlocksRolloutTransition(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+): Promise<boolean> {
+  if (site.publicationLeaseOwner) return true;
+  for (const status of ["leased", "attempted"] as const) {
+    const unresolved = await ctx.db
+      .query("published_article_revisions")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", site._id).eq("status", status)
+      )
+      .first();
+    if (unresolved) return true;
+  }
+  const ambiguous = await ctx.db
+    .query("published_article_revisions")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", site._id).eq("status", "unverified")
+    )
+    .filter((q) => q.eq(q.field("receipt"), undefined))
+    .first();
+  return Boolean(ambiguous);
+}
+
+async function hasCurrentDomainPage(
+  ctx: MutationCtx | QueryCtx,
+  site: Doc<"sites">,
+): Promise<boolean> {
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  if (!canonicalDomain) return false;
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("pages")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .collect();
+    return legacyEpoch.some((page) => pageMatchesCurrentDomain(site, page));
+  }
+  const stamped = await ctx.db
+    .query("pages")
+    .withIndex("by_site_domain_revision", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("canonicalDomain", canonicalDomain)
+        .eq("domainRevision", domainRevision)
+    )
+    .first();
+  return Boolean(stamped);
+}
 
 async function upsertHealth(
   ctx: MutationCtx,
@@ -226,10 +287,7 @@ export const dispatchActiveSites = internalMutation({
         }
         continue;
       }
-      const hasCrawledPage = !!(await ctx.db
-        .query("pages")
-        .withIndex("by_site", (q) => q.eq("siteId", site._id))
-        .first());
+      const hasCrawledPage = await hasCurrentDomainPage(ctx, site);
       const baseReadiness = warmAutopilotReadiness(site, hasCrawledPage);
       const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
       const readiness = {
@@ -248,6 +306,16 @@ export const dispatchActiveSites = internalMutation({
           heartbeatAt: now,
           status: "readiness_blocked",
           detail: `Autopilot setup is incomplete: ${blockerDetail}.`,
+        });
+        continue;
+      }
+      if (await publicationCommitBlocksRolloutTransition(ctx, site)) {
+        await setAlert(ctx, {
+          siteId: site._id,
+          kind: "rollout_conflict",
+          message:
+            "Autopilot rollout is frozen until the exact external publication outcome is reconciled.",
+          details: { blocker: "publication_commit_unresolved" },
         });
         continue;
       }
@@ -395,36 +463,31 @@ export const recoverFailedPublicUrlVerifiedFollowup = internalMutation({
       };
     }
 
+    const site = await ctx.db.get(siteId);
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
+    ) {
+      throw new Error("Site is not eligible for autopilot follow-up recovery");
+    }
     const [
-      site,
       health,
-      latestModernPublished,
-      latestPublishedByCreation,
+      [latestModernPublished, latestPublishedByCreation],
       pendingJob,
       runningJob,
     ] = await Promise.all([
-      ctx.db.get(siteId),
       ctx.db
         .query("autopilot_health")
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .first(),
-      ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status_audit_published", (q) =>
-          q
-            .eq("siteId", siteId)
-            .eq("status", "published")
-            .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
-        )
-        .order("desc")
-        .first(),
-      ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status_created", (q) =>
-          q.eq("siteId", siteId).eq("status", "published"),
-        )
-        .order("desc")
-        .first(),
+      latestCurrentDomainPublishedSummaries(
+        ctx,
+        site,
+        PUBLICATION_AUDIT_VERSION,
+      ),
       ctx.db
         .query("jobs")
         .withIndex("by_site_status", (q) =>
@@ -438,15 +501,6 @@ export const recoverFailedPublicUrlVerifiedFollowup = internalMutation({
         )
         .first(),
     ]);
-    if (
-      !site ||
-      !(await siteExecutionAuthorized(ctx, site)) ||
-      !site.autopilotEnabled ||
-      (site.cadencePerWeek ?? 0) <= 0 ||
-      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
-    ) {
-      throw new Error("Site is not eligible for autopilot follow-up recovery");
-    }
     // The failed run must still be the unrecovered health receipt. Any newer
     // run means another worker or operator has already superseded this repair.
     if (!health || health.lastRunId !== failedRunId) {
@@ -656,10 +710,13 @@ export const promoteWarmSiteIfReady = internalMutation({
     if (site.autopilotRolloutMode !== "warm") {
       return { promoted: false, blockers: ["site_not_warm"] };
     }
-    const hasCrawledPage = !!(await ctx.db
-      .query("pages")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .first());
+    if (await publicationCommitBlocksRolloutTransition(ctx, site)) {
+      return {
+        promoted: false,
+        blockers: ["publication_commit_unresolved"],
+      };
+    }
+    const hasCrawledPage = await hasCurrentDomainPage(ctx, site);
     const limits = getLimitsFromFeatures(site.planFeatures ?? []);
     const baseReadiness = liveAutopilotReadiness(
       site,
@@ -671,12 +728,12 @@ export const promoteWarmSiteIfReady = internalMutation({
       ready: baseReadiness.ready && setupBlockers.length === 0,
       blockers: [...baseReadiness.blockers, ...setupBlockers],
     };
-    const ready = await ctx.db
-      .query("article_summaries")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", "ready"),
-      )
-      .take(10);
+    const ready = await takeCurrentDomainArticleSummariesByStatus(
+      ctx,
+      site,
+      "ready",
+      10,
+    );
     const sealedCount = ready.filter(isSealedReady).length;
     const blockers = [...readiness.blockers];
     if (sealedCount < MIN_APPROVED_BUFFER) blockers.push("sealed_buffer_incomplete");
@@ -1222,6 +1279,8 @@ export const markRunStarted = internalMutation({
 export const recordTopicPortfolioAudit = internalMutation({
   args: {
     siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
     status: v.string(),
     decision: v.string(),
     supportsGoal: v.boolean(),
@@ -1234,7 +1293,13 @@ export const recordTopicPortfolioAudit = internalMutation({
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
-    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      siteCanonicalDomain(site) !==
+        normalizeCanonicalDomain(args.expectedCanonicalDomain) ||
+      siteCanonicalDomainRevision(site) !== args.expectedDomainRevision
+    ) {
       throw new Error("Site not found");
     }
     await upsertHealth(ctx, args.siteId, {
@@ -1265,6 +1330,9 @@ export const markRunFinished = internalMutation({
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
     if (!run) return;
+    if (run.status !== "running") {
+      return { updated: false as const, reason: "run_not_active" };
+    }
     if (!topicPlanCooldownTerminalWriteAllowed({
       runClaimNonce: run.claimNonce,
       runContinuationAttempt: run.continuationAttempt,
@@ -1294,12 +1362,12 @@ export const markRunFinished = internalMutation({
       jobId: args.jobId,
       articleId: args.articleId,
     });
-    const currentReady = await ctx.db
-      .query("article_summaries")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", run.siteId).eq("status", "ready"),
-      )
-      .take(10);
+    const currentReady = await takeCurrentDomainArticleSummariesByStatus(
+      ctx,
+      runSite,
+      "ready",
+      10,
+    );
     const approvedBufferCount = currentReady.filter(isSealedReady).length;
     const runClassification = classifyAutopilotRunOutcome({
       outcome: args.outcome,
@@ -1332,7 +1400,11 @@ export const markRunFinished = internalMutation({
         ctx.db.get(args.articleId),
         ctx.db.get(run.siteId),
       ]);
-      if (article?.siteId === run.siteId && site) {
+      if (
+        article?.siteId === run.siteId &&
+        site &&
+        articleMatchesCurrentDomain(site, article)
+      ) {
         lastPublishedAt = effectivePublishedAt({
           createdAt: article.createdAt,
           publishedAt: article.publishedAt,
@@ -1483,6 +1555,9 @@ export const markRunFailed = internalMutation({
   handler: async (ctx, { runId, error, claimNonce, continuationAttempt }) => {
     const run = await ctx.db.get(runId);
     if (!run) return;
+    if (run.status !== "running" && run.status !== "scheduled") {
+      return { updated: false as const, reason: "run_not_active" };
+    }
     if (!topicPlanCooldownTerminalWriteAllowed({
       runClaimNonce: run.claimNonce,
       runContinuationAttempt: run.continuationAttempt,
@@ -1604,10 +1679,11 @@ export const auditSla = internalMutation({
         // One bounded existence read distinguishes a new empty site from any
         // site whose explicit global backfill marker is not complete. A
         // partial set of summaries must never authorize cron to proceed.
-        const legacyArticle = await ctx.db
-          .query("articles")
-          .withIndex("by_site", (q) => q.eq("siteId", site._id))
-          .first();
+        const legacyArticle = (await takeCurrentDomainArticles(
+          ctx,
+          site,
+          1,
+        ))[0];
         if (legacyArticle) {
           migrationPending++;
           await setAlert(ctx, {
@@ -1627,25 +1703,11 @@ export const auditSla = internalMutation({
       await resolveAlert(ctx, site._id, "article_summary_migration_pending");
 
       const [latestModernPublished, latestPublishedByCreation] =
-        await Promise.all([
-          ctx.db
-            .query("article_summaries")
-            .withIndex("by_site_status_audit_published", (q) =>
-              q
-                .eq("siteId", site._id)
-                .eq("status", "published")
-                .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
-            )
-            .order("desc")
-            .first(),
-          ctx.db
-            .query("article_summaries")
-            .withIndex("by_site_status_created", (q) =>
-              q.eq("siteId", site._id).eq("status", "published"),
-            )
-            .order("desc")
-            .first(),
-        ]);
+        await latestCurrentDomainPublishedSummaries(
+          ctx,
+          site,
+          PUBLICATION_AUDIT_VERSION,
+        );
       const latestPublished = [
         latestModernPublished,
         latestPublishedByCreation,
@@ -1666,12 +1728,12 @@ export const auditSla = internalMutation({
               auditedContentHash: a.auditedContentHash,
             }),
         )[0];
-      const readySummaries = await ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status", (q) =>
-          q.eq("siteId", site._id).eq("status", "ready"),
-        )
-        .take(10);
+      const readySummaries = await takeCurrentDomainArticleSummariesByStatus(
+        ctx,
+        site,
+        "ready",
+        10,
+      );
 
       const approvedBufferCount = readySummaries.filter(isSealedReady).length;
       const autonomousDelivery =
@@ -1828,40 +1890,23 @@ export const auditSla = internalMutation({
 export const refreshSiteCadenceHealth = internalMutation({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
-    const [site, health, latestModernPublished, latestPublishedByCreation, ready] =
-      await Promise.all([
-        ctx.db.get(siteId),
-        ctx.db
-          .query("autopilot_health")
-          .withIndex("by_site", (q) => q.eq("siteId", siteId))
-          .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status_audit_published", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("status", "published")
-              .eq("publicationAuditVersion", PUBLICATION_AUDIT_VERSION),
-          )
-          .order("desc")
-          .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status_created", (q) =>
-            q.eq("siteId", siteId).eq("status", "published"),
-          )
-          .order("desc")
-          .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", siteId).eq("status", "ready"),
-          )
-          .take(10),
-      ]);
+    const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       return { siteId, status: "site_parked" };
     }
+    const [health, published, ready] = await Promise.all([
+      ctx.db
+        .query("autopilot_health")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .first(),
+      latestCurrentDomainPublishedSummaries(
+        ctx,
+        site,
+        PUBLICATION_AUDIT_VERSION,
+      ),
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 10),
+    ]);
+    const [latestModernPublished, latestPublishedByCreation] = published;
     if ((site.cadencePerWeek ?? 0) <= 0) {
       const pausedAt = Date.now();
       await upsertHealth(ctx, siteId, {
@@ -2038,19 +2083,8 @@ export const getOperatorSnapshot = internalQuery({
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .order("desc")
         .take(8),
-      ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status", (q) =>
-          q.eq("siteId", siteId).eq("status", "ready"),
-        )
-        .take(10),
-      ctx.db
-        .query("article_summaries")
-        .withIndex("by_site_status", (q) =>
-          q.eq("siteId", siteId).eq("status", "review"),
-        )
-        .order("desc")
-        .take(8),
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 10),
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "review", 8),
       ctx.db
         .query("jobs")
         .withIndex("by_site_status", (q) =>
@@ -2136,23 +2170,14 @@ export const getFleetReadiness = internalQuery({
       .take(50);
     const rows = [];
     for (const site of sites) {
-      const [page, health, ready] = await Promise.all([
-        ctx.db
-          .query("pages")
-          .withIndex("by_site", (q) => q.eq("siteId", site._id))
-          .first(),
+      const [hasCrawledPage, health, ready] = await Promise.all([
+        hasCurrentDomainPage(ctx, site),
         ctx.db
           .query("autopilot_health")
           .withIndex("by_site", (q) => q.eq("siteId", site._id))
           .first(),
-        ctx.db
-          .query("article_summaries")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", site._id).eq("status", "ready"),
-          )
-          .take(10),
+        takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 10),
       ]);
-      const hasCrawledPage = Boolean(page);
       const warm = warmAutopilotReadiness(site, hasCrawledPage);
       const limits = getLimitsFromFeatures(site.planFeatures ?? []);
       const requiredMonthlyArticles = requiredMonthlyArticlesForCadence(

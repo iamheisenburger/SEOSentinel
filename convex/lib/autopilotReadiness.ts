@@ -1,12 +1,20 @@
 import { requiredMonthlyArticlesForCadence } from "../planLimits.ts";
 import { publicationAdapterConfigHash } from "./publicationArtifact.ts";
 import { PUBLICATION_ADAPTER_VERSION } from "./publicationReceipts.ts";
+import {
+  contentAnalysisMatchesCurrentDomain,
+  gscConnectionMatchesCurrentDomain,
+} from "./siteDomainBinding.ts";
 
 export type AutopilotReadinessSite = {
   autopilotEnabled?: boolean;
   approvalRequired?: boolean;
   cadencePerWeek?: number;
   domain?: string;
+  canonicalDomain?: string;
+  canonicalDomainRevision?: number;
+  contentAnalysisCanonicalDomain?: string;
+  contentAnalysisDomainRevision?: number;
   niche?: string;
   siteSummary?: string;
   blogTheme?: string;
@@ -25,6 +33,8 @@ export type AutopilotReadinessSite = {
   publicationAdapterConfigHash?: string;
   gscAccessToken?: string;
   gscProperty?: string;
+  gscCanonicalDomain?: string;
+  gscDomainRevision?: number;
 };
 
 export type AutopilotReadiness = {
@@ -143,7 +153,9 @@ export function warmAutopilotReadiness(
   if (!configured(site.blogTheme) && !configured(site.niche)) {
     blockers.push("content_strategy_missing");
   }
-  if (!hasCrawledPage) blockers.push("site_crawl_missing");
+  if (!hasCrawledPage || !contentAnalysisMatchesCurrentDomain(site)) {
+    blockers.push("site_crawl_missing");
+  }
   const cadence = site.cadencePerWeek ?? 0;
   if (!Number.isFinite(cadence) || cadence <= 0 || cadence > 21) {
     blockers.push("cadence_invalid");
@@ -162,7 +174,7 @@ export function liveAutopilotReadiness(
     ...warmAutopilotReadiness(site, hasCrawledPage).blockers,
   ];
   if (site.approvalRequired) blockers.push("manual_approval_requested");
-  if (!configured(site.gscAccessToken) || !configured(site.gscProperty)) {
+  if (!gscConnectionMatchesCurrentDomain(site)) {
     blockers.push("search_console_not_connected");
   }
   const requiredMonthly = requiredMonthlyArticlesForCadence(

@@ -42,7 +42,7 @@ import {
   dataForSeoLanguageCode,
   dataForSeoLocationCode,
 } from "./lib/dataForSeoLocale";
-import { filterRowsForGscReceipts } from "./lib/gscSearchAnalytics";
+import { takeCurrentGscPageRows } from "./lib/currentGscRows";
 import {
   isSameSearchConsolePage,
   publishedArticlePageUrl,
@@ -71,6 +71,12 @@ import {
   type PlannedRecoveryInventorySnapshot,
   uniqueExactPlannedTargets,
 } from "./lib/plannedTopicEvidenceRecovery";
+import {
+  articleMatchesCurrentDomain,
+  takeCurrentDomainArticles,
+  takeCurrentDomainTopics,
+  topicMatchesCurrentDomain,
+} from "./lib/siteDomainBinding";
 
 const workerApi = internal.actions.expectedClickDemandBackfill;
 const jobOriginValidator = v.union(
@@ -273,6 +279,9 @@ function demandCandidateInventory(args: {
   plannedSiteGateAllowed: boolean;
   plannedAuthorityFresh: boolean;
 }) {
+  const currentTopics = args.topics.filter((topic) =>
+    topicMatchesCurrentDomain(args.site, topic)
+  );
   const byTopic = new Map<string, Doc<"articles">[]>();
   for (const article of args.articles) {
     if (!article.topicId || article.siteId !== args.site._id) continue;
@@ -280,7 +289,7 @@ function demandCandidateInventory(args: {
     byTopic.set(key, [...(byTopic.get(key) ?? []), article]);
   }
   const coveredTopics = coveredIntentTopics(
-    args.topics.map((topic) => ({
+    currentTopics.map((topic) => ({
       _id: String(topic._id),
       status: topic.status ?? "planned",
       primaryKeyword: topic.primaryKeyword,
@@ -311,7 +320,7 @@ function demandCandidateInventory(args: {
   const artifactCandidates: CandidateWithSerp[] = [];
   const rawPlannedCandidates: CandidateWithSerp[] = [];
   let artifactEvidencePending = 0;
-  for (const topic of args.topics) {
+  for (const topic of currentTopics) {
     const linkedArticles = byTopic.get(String(topic._id)) ?? [];
     const article = bestReservingArticle(linkedArticles);
     const artifactHash = article ? artifactFingerprint(article) : null;
@@ -468,17 +477,26 @@ async function plannedTopicClearsCurrentCoverage(
   topic: Doc<"topic_clusters">,
   serpTopUrls = topic.serpTopUrls,
 ): Promise<boolean> {
+  const site = await ctx.db.get(siteId);
   const [topics, articles] = await Promise.all([
-    ctx.db
-      .query("topic_clusters")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .take(EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT),
-    ctx.db
-      .query("articles")
-      .withIndex("by_site", (q) => q.eq("siteId", siteId))
-      .take(EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT),
+    site
+      ? takeCurrentDomainTopics(
+        ctx,
+        site,
+        EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
+      )
+      : Promise.resolve([]),
+    site
+      ? takeCurrentDomainArticles(
+        ctx,
+        site,
+        EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
+      )
+      : Promise.resolve([]),
   ]);
   if (
+    !site ||
+    !topicMatchesCurrentDomain(site, topic) ||
     topics.length >= EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT ||
     articles.length >= EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT
   ) return false;
@@ -788,12 +806,15 @@ export async function expectedClickDemandFleetReadiness(
       };
     }
     const reservationDay = utcDemandBackfillDay(timestamp);
-    const todayJob = await ctx.db
+    const todayRows = await ctx.db
       .query("expected_click_demand_jobs")
       .withIndex("by_site_day", (q) =>
         q.eq("siteId", siteId).eq("reservationDay", reservationDay)
       )
-      .first();
+      .collect();
+    const todayJob = todayRows.find((job) =>
+      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+    );
     if (todayJob) {
       const ambiguous = todayJob.providerCallAttempted === true &&
         todayJob.providerCallCompleted !== true;
@@ -822,14 +843,16 @@ export async function expectedClickDemandFleetReadiness(
           snapshot.plannedGate,
         ] as const
       : await Promise.all([
-          ctx.db
-            .query("topic_clusters")
-            .withIndex("by_site", (q) => q.eq("siteId", siteId))
-            .take(EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT),
-          ctx.db
-            .query("articles")
-            .withIndex("by_site", (q) => q.eq("siteId", siteId))
-            .take(EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT),
+          takeCurrentDomainTopics(
+            ctx,
+            site,
+            EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
+          ),
+          takeCurrentDomainArticles(
+            ctx,
+            site,
+            EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
+          ),
           activeArticleJobTopicIds(ctx, siteId),
           plannedTopicSiteGate(ctx, site, timestamp),
         ]);
@@ -1017,8 +1040,8 @@ export const reserveAndQueue = internalMutation({
     const timestamp = Date.now();
     const reservationDay = utcDemandBackfillDay(timestamp);
     const [
-      todayJobs,
-      todayEvidenceJobs,
+      todayJobRows,
+      todayEvidenceJobRows,
       unresolvedDemand,
       unresolvedEvidence,
     ] = await Promise.all([
@@ -1037,6 +1060,12 @@ export const reserveAndQueue = internalMutation({
       unresolvedFleetDemandJobs(ctx, siteId),
       unresolvedFleetEvidenceJobs(ctx, siteId),
     ]);
+    const todayJobs = todayJobRows.filter((job) =>
+      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+    );
+    const todayEvidenceJobs = todayEvidenceJobRows.filter((job) =>
+      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+    );
     const phaseDecision = planDemandPhaseReservation({
       todayEvidenceJobs: todayEvidenceJobs.length,
       unresolvedDemandJobs: unresolvedDemand.jobs.length,
@@ -1062,32 +1091,30 @@ export const reserveAndQueue = internalMutation({
       };
     }
 
-    const gscCutoff = (site.gscDateEpochs ?? [])
-      .map((receipt) => receipt.date)
-      .sort()[0] ?? "9999-12-31";
-    const [topics, articles, rawPageRows, activeJobs, plannedGate] =
+    const [topics, articles, gscPageRead, activeJobs, plannedGate] =
       await Promise.all([
-      ctx.db
-        .query("topic_clusters")
-        .withIndex("by_site", (q) => q.eq("siteId", siteId))
-        .take(EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT),
-      ctx.db
-        .query("articles")
-        .withIndex("by_site", (q) => q.eq("siteId", siteId))
-        .take(EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT),
-      ctx.db
-        .query("search_page_daily")
-        .withIndex("by_site_date", (q) =>
-          q.eq("siteId", siteId).gte("date", gscCutoff)
-        )
-        .take(EXPECTED_CLICK_DEMAND_GSC_READ_LIMIT),
+      takeCurrentDomainTopics(
+        ctx,
+        site,
+        EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
+      ),
+      takeCurrentDomainArticles(
+        ctx,
+        site,
+        EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
+      ),
+      takeCurrentGscPageRows(
+        ctx,
+        site,
+        EXPECTED_CLICK_DEMAND_GSC_READ_LIMIT,
+      ),
       activeArticleJobTopicIds(ctx, siteId),
       plannedTopicSiteGate(ctx, site, timestamp),
     ]);
     if (
       topics.length >= EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT ||
       articles.length >= EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT ||
-      rawPageRows.length >= EXPECTED_CLICK_DEMAND_GSC_READ_LIMIT ||
+      gscPageRead.exhausted ||
       activeJobs.exhausted
     ) {
       return {
@@ -1095,9 +1122,7 @@ export const reserveAndQueue = internalMutation({
         reason: "evidence_read_limit_exhausted" as const,
       };
     }
-    const pageRows = site.gscDateEpochs?.length
-      ? filterRowsForGscReceipts(rawPageRows, site.gscDateEpochs)
-      : [];
+    const pageRows = gscPageRead.rows;
     const locationCode = dataForSeoLocationCode(site.targetCountry);
     const languageCode = dataForSeoLanguageCode(site.language);
     const inventory = demandCandidateInventory({
@@ -1353,6 +1378,7 @@ async function currentSelectedTopic(
   if (
     !topic ||
     topic.siteId !== site._id ||
+    !topicMatchesCurrentDomain(site, topic) ||
     topic.primaryKeyword !== selected.keyword ||
     topic.label !== selected.label ||
     topic.updatedAt !== selected.topicUpdatedAt
@@ -1385,7 +1411,9 @@ async function currentSelectedTopic(
     const admission = plannedTopicDemandAdmission({
       site,
       topic,
-      hasLinkedArticle: Boolean(linkedArticle),
+      hasLinkedArticle: Boolean(
+        linkedArticle && articleMatchesCurrentDomain(site, linkedArticle),
+      ),
       hasActiveArticleJob: activeJobs.topicIds.has(String(topic._id)),
     });
     if (
@@ -1403,6 +1431,7 @@ async function currentSelectedTopic(
   if (
     !article ||
     article.siteId !== site._id ||
+    !articleMatchesCurrentDomain(site, article) ||
     article.topicId !== selected.topicId ||
     article.status !== selected.articleStatus ||
     artifactFingerprint(article) !== selected.artifactHash ||

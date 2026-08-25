@@ -60,6 +60,32 @@ test("OAuth state is signed and bound to provider, user, site, and expiry", () =
   );
 });
 
+test("GSC state carries an exact canonical-domain revision snapshot", () => {
+  const state = createOAuthState({
+    provider: "gsc",
+    siteId: "site-owner",
+    userId: "user-owner",
+    expectedCanonicalDomain: "example.com",
+    expectedDomainRevision: 3,
+    expectedGscConnectionRevision: 7,
+    now,
+    nonce,
+  });
+  assert.deepEqual(
+    verifyOAuthState(state, {
+      provider: "gsc",
+      userId: "user-owner",
+      now: now + 1_000,
+    }),
+    {
+      siteId: "site-owner",
+      expectedCanonicalDomain: "example.com",
+      expectedDomainRevision: 3,
+      expectedGscConnectionRevision: 7,
+    },
+  );
+});
+
 test("a forged matching cookie/state value cannot authenticate its payload", () => {
   const valid = createOAuthState({
     provider: "github",
