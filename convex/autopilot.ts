@@ -1,4 +1,5 @@
 import { internal } from "./_generated/api";
+import { sanitizeSkipReceiptForOperator } from "./lib/expectedClickSkipReceipt";
 import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -2627,6 +2628,27 @@ export const getOperatorSnapshot = internalQuery({
         operatorArticleReceipt(article, isSealedReady(article))
       ),
       activeJobs: [...pending, ...running].map(operatorActiveJobReceipt),
+      // Why the natural backfill dispatchers last did or did not reserve work.
+      // Demand and evidence are separate diagnoses so one stage can never
+      // erase the other's reason.
+      backfillReservation: {
+        demand: sanitizeSkipReceiptForOperator(
+          await ctx.db
+            .query("expected_click_backfill_skip_receipts")
+            .withIndex("by_site_kind", (q) =>
+              q.eq("siteId", site._id).eq("kind", "demand")
+            )
+            .unique(),
+        ),
+        evidence: sanitizeSkipReceiptForOperator(
+          await ctx.db
+            .query("expected_click_backfill_skip_receipts")
+            .withIndex("by_site_kind", (q) =>
+              q.eq("siteId", site._id).eq("kind", "evidence")
+            )
+            .unique(),
+        ),
+      },
     };
   },
 });

@@ -6,7 +6,9 @@ import {
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
+import { recordExpectedClickReservationOutcome } from "./lib/expectedClickSkipReceiptStore";
+import { sanitizeSkipReceiptForOperator } from "./lib/expectedClickSkipReceipt";
 import {
   EXPECTED_CLICK_EVIDENCE_BACKFILL_LEASE_MS,
   EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
@@ -836,6 +838,16 @@ export const getStatusInternal = internalQuery({
       rolloutMode: site.autopilotRolloutMode ?? "observe",
       activeRollout: activeRollout(site),
       latest: safeJobStatus(await latestJobForSite(ctx, siteId)),
+      // Why the last natural evaluation did or did not reserve work.
+      // Without this a correct idle and a silent stall look identical.
+      reservationReceipt: sanitizeSkipReceiptForOperator(
+        await ctx.db
+          .query("expected_click_backfill_skip_receipts")
+          .withIndex("by_site_kind", (q) =>
+            q.eq("siteId", siteId).eq("kind", "evidence")
+          )
+          .unique(),
+      ),
     };
   },
 });
@@ -1192,10 +1204,45 @@ export const reserveAndQueue = internalMutation({
     origin: jobOriginValidator,
     plannedRecoveryGuard: v.optional(plannedRecoveryGuardValidator),
   },
-  handler: async (
-    ctx,
-    { siteId, policyVersion, origin, plannedRecoveryGuard },
-  ) => {
+  handler: async (ctx, args) => {
+    // Written in this same transaction so an overlapping dispatcher can never
+    // observe a decision the stored evidence contradicts.
+    const evaluatedAt = Date.now();
+    const outcome = await reserveEvidenceOutcome(ctx, args);
+    await recordExpectedClickReservationOutcome(ctx, {
+      siteId: args.siteId,
+      kind: "evidence",
+      policyVersion: args.policyVersion,
+      evaluatedAt,
+      outcome: {
+        queued: outcome.queued,
+        reason: "reason" in outcome ? outcome.reason : undefined,
+        candidateCounts: "candidateCounts" in outcome
+          ? outcome.candidateCounts as Record<string, unknown>
+          : undefined,
+        selectedCandidateCount: "selectedTopics" in outcome
+          ? outcome.selectedTopics
+          : 0,
+      },
+    });
+    return outcome;
+  },
+});
+
+async function reserveEvidenceOutcome(
+  ctx: MutationCtx,
+  {
+    siteId,
+    policyVersion,
+    origin,
+    plannedRecoveryGuard,
+  }: {
+    siteId: Id<"sites">;
+    policyVersion: number;
+    origin: Infer<typeof jobOriginValidator>;
+    plannedRecoveryGuard?: Infer<typeof plannedRecoveryGuardValidator>;
+  },
+) {
     if (policyVersion !== EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION) {
       throw new Error("Unsupported expected-click evidence backfill version");
     }
@@ -1460,8 +1507,7 @@ export const reserveAndQueue = internalMutation({
       providerCostCeilingMicroUsd:
         EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
     };
-  },
-});
+}
 
 function validateWorkerState(
   site: Doc<"sites">,

@@ -1648,6 +1648,42 @@ export default defineSchema({
     .index("by_kind_key", ["kind", "dispatchKey"])
     .index("by_status_updated", ["status", "updatedAt"]),
 
+  // Exactly one current reservation receipt per site and phase. The natural
+  // dispatchers evaluate every tenant hourly and daily, and a refusal used to
+  // return its reason to a caller that discarded it, so a correct idle and a
+  // silent stall were indistinguishable from production evidence. This row is
+  // overwrite-only and finite-enum: it cannot grow with traffic and it never
+  // carries a provider payload, raw error or credential.
+  expected_click_backfill_skip_receipts: defineTable({
+    version: v.number(),
+    siteId: v.id("sites"),
+    kind: v.string(), // demand | evidence
+    decision: v.string(), // skipped | queued
+    reason: v.string(), // allowlisted enum only
+    evaluatedAt: v.number(),
+    nextEligibleAt: v.optional(v.number()),
+    rolloutEpoch: v.number(),
+    canonicalDomain: v.string(),
+    domainRevision: v.optional(v.number()),
+    policyVersion: v.number(),
+    selectedCandidateCount: v.number(),
+    unresolvedJobCount: v.optional(v.number()),
+    candidateCounts: v.optional(v.object({
+      covered: v.optional(v.number()),
+      currentDemand: v.optional(v.number()),
+      alreadyAttempted: v.optional(v.number()),
+      businessFitBlocked: v.optional(v.number()),
+      eligible: v.optional(v.number()),
+      artifactEligible: v.optional(v.number()),
+      plannedUnmaterialized: v.optional(v.number()),
+      plannedGateBlocked: v.optional(v.number()),
+    })),
+    // At most one id, only when a single candidate explains the refusal.
+    blockingTopicId: v.optional(v.id("topic_clusters")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_site_kind", ["siteId", "kind"]),
+
   // Resumable evidence-only measurement for legacy covered topics. Each job
   // owns one immutable shared-provider reservation and at most ten topics.
   // SERP snapshots are committed after each call, so an operator retry never
