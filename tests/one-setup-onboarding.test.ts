@@ -8,6 +8,12 @@ import {
   initialOneSetupProgress,
   oneSetupCapabilityReadiness,
 } from "../convex/lib/oneSetup.ts";
+import {
+  canonicalGscReceiptMutationFenceCurrent,
+  GSC_CANONICAL_RECEIPT_FRESH_MS,
+  hardGscOAuthFailure,
+  oneSetupSearchMeasurementReceiptVerified,
+} from "../convex/lib/oneSetupCanonical.ts";
 
 const sites = readFileSync("convex/sites.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
@@ -23,6 +29,7 @@ const canonicalSetup = readFileSync(
   "convex/lib/oneSetupCanonical.ts",
   "utf8",
 );
+const gscSync = readFileSync("convex/actions/gscSync.ts", "utf8");
 
 function exportedBlock(source: string, name: string): string {
   const start = source.indexOf(`export const ${name}`);
@@ -125,6 +132,7 @@ test("the provisioning contract is additive, tenant-fenced, and credential-free"
     "domainSnapshot",
     "contractVersion",
     "revision",
+    "configurationRevision",
     "automationMode",
     "requestedCadencePerWeek",
     "publisher",
@@ -180,7 +188,10 @@ test("aggregate readiness trusts canonical publishing, GSC, mailbox, and plan re
   assert.match(readiness, /oneSetupSearchMeasurementReceiptVerified\(site\)/);
   assert.match(readiness, /oneSetupOutreachMailboxReceiptVerified/);
   assert.match(canonicalSetup, /publicationDestinationBlockers\(site\)/);
-  assert.match(canonicalSetup, /site\.gscAccessToken && site\.gscProperty/);
+  assert.match(canonicalSetup, /site\.gscAccessToken/);
+  assert.match(canonicalSetup, /site\.gscRefreshToken/);
+  assert.match(canonicalSetup, /site\.gscReceiptStatus === "verified"/);
+  assert.match(canonicalSetup, /canonicalGscBindingCurrent\(site\)/);
   assert.match(canonicalSetup, /inbox\.credentialOwnerAccountKey === args\.ownerAccountKey/);
   assert.match(canonicalSetup, /inbox\.spfVerifiedAt/);
   assert.match(canonicalSetup, /inbox\.dkimVerifiedAt/);
@@ -191,6 +202,107 @@ test("aggregate readiness trusts canonical publishing, GSC, mailbox, and plan re
   assert.match(readiness, /cadenceFitsMonthlyAllowance/);
   assert.match(readiness, /Automation mode authorized/);
   assert.match(readiness, /aggregateOneSetupReadiness/);
+});
+
+test("Search Console readiness is fresh, revocable, and domain-bound", () => {
+  const timestamp = 1_900_000_000_000;
+  const base = {
+    domain: "example.com",
+    canonicalDomain: "example.com",
+    gscAccessToken: "access",
+    gscRefreshToken: "refresh",
+    gscProperty: "sc-domain:example.com",
+    gscReceiptStatus: "verified",
+    gscReceiptRevision: 1,
+    gscReceiptVerifiedAt: timestamp - 1_000,
+  } as unknown as Parameters<
+    typeof oneSetupSearchMeasurementReceiptVerified
+  >[0];
+  assert.equal(
+    oneSetupSearchMeasurementReceiptVerified(base, timestamp),
+    true,
+  );
+  assert.equal(
+    oneSetupSearchMeasurementReceiptVerified({
+      ...base,
+      gscReceiptVerifiedAt:
+        timestamp - GSC_CANONICAL_RECEIPT_FRESH_MS - 1,
+    }, timestamp),
+    false,
+  );
+  assert.equal(
+    oneSetupSearchMeasurementReceiptVerified({
+      ...base,
+      gscReceiptStatus: "revoked",
+      gscReceiptRevokedAt: timestamp,
+    }, timestamp),
+    false,
+  );
+  assert.equal(
+    oneSetupSearchMeasurementReceiptVerified({
+      ...base,
+      gscProperty: "sc-domain:other.example",
+    }, timestamp),
+    false,
+  );
+  assert.equal(
+    oneSetupSearchMeasurementReceiptVerified({
+      ...base,
+      canonicalDomainRevision: 2,
+      gscCanonicalDomain: "example.com",
+      gscDomainRevision: 1,
+    }, timestamp),
+    false,
+  );
+  assert.equal(
+    canonicalGscReceiptMutationFenceCurrent({
+      site: base,
+      expectedCanonicalDomain: "example.com",
+      expectedDomainRevision: 0,
+      expectedGscProperty: "sc-domain:example.com",
+      expectedReceiptRevision: 1,
+    }),
+    true,
+  );
+  assert.equal(
+    canonicalGscReceiptMutationFenceCurrent({
+      site: { ...base, gscReceiptRevision: 2 },
+      expectedCanonicalDomain: "example.com",
+      expectedDomainRevision: 0,
+      expectedGscProperty: "sc-domain:example.com",
+      expectedReceiptRevision: 1,
+    }),
+    false,
+  );
+  assert.equal(
+    hardGscOAuthFailure({ status: 400, errorCode: "invalid_grant" }),
+    true,
+  );
+  assert.equal(
+    hardGscOAuthFailure({ status: 503, errorCode: "invalid_grant" }),
+    false,
+  );
+  assert.equal(
+    hardGscOAuthFailure({ status: 403, errorCode: "" }),
+    true,
+  );
+  assert.ok(
+    [...gscSync.matchAll(/status === 401 \|\| .*status === 403/g)].length >= 4,
+  );
+  assert.match(gscSync, /markGscReceiptRevokedInternal/);
+  assert.match(gscSync, /markGscReceiptVerifiedInternal/);
+  assert.match(gscSync, /expectedReceiptRevision/);
+  assert.match(
+    gscSync,
+    /GSC access-token refresh was temporarily unavailable/,
+  );
+  assert.match(sites, /Search Console connection changed during token refresh/);
+  assert.match(sites, /site\.gscReceiptStatus === "revoked"/);
+  assert.match(
+    sites,
+    /args\.verifiedAt <= \(site\.gscReceiptRevokedAt \?\? 0\)/,
+  );
+  assert.match(sites, /autopilotRolloutMode: "warm"/);
 });
 
 test("one-setup UX defaults to managed Full Autopilot and hides provider controls", () => {

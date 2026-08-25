@@ -34,6 +34,7 @@ type AutomationMode = "assisted" | "full";
 type OneSetupReceipt = {
   requestId: Id<"managed_provisioning_requests">;
   revision: number;
+  configurationRevision: number;
 };
 
 const CAPABILITIES = [
@@ -191,7 +192,7 @@ export function SetupWizard() {
       const result = await resumeOneSetupExecution({
         siteId: createdSiteId,
         requestId: receipt.requestId,
-        requestRevision: receipt.revision,
+        configurationRevision: receipt.configurationRevision,
       });
       if (result.state === "completed") {
         setSetupNeedsRetry(false);

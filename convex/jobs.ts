@@ -1172,7 +1172,7 @@ export const queuePlanIfAbsent = internalMutation({
     growthActionFingerprint: v.optional(v.string()),
     oneSetupExecutionId: v.optional(v.id("one_setup_executions")),
     oneSetupClaimNonce: v.optional(v.string()),
-    oneSetupRequestRevision: v.optional(v.number()),
+    oneSetupConfigurationRevision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
@@ -1180,7 +1180,7 @@ export const queuePlanIfAbsent = internalMutation({
     const setupBindingValues = [
       args.oneSetupExecutionId,
       args.oneSetupClaimNonce,
-      args.oneSetupRequestRevision,
+      args.oneSetupConfigurationRevision,
     ];
     const setupBindingCount = setupBindingValues.filter((value) =>
       value !== undefined
@@ -1192,7 +1192,7 @@ export const queuePlanIfAbsent = internalMutation({
     if (
       args.oneSetupExecutionId &&
       args.oneSetupClaimNonce &&
-      args.oneSetupRequestRevision !== undefined
+      args.oneSetupConfigurationRevision !== undefined
     ) {
       if (
         args.manual !== true ||
@@ -1206,10 +1206,18 @@ export const queuePlanIfAbsent = internalMutation({
       }
       setupExecution = await ctx.db.get(args.oneSetupExecutionId);
       const timestamp = now();
+      const setupRequest = setupExecution
+        ? await ctx.db.get(setupExecution.requestId)
+        : null;
       if (
         !setupExecution ||
+        !setupRequest ||
+        setupRequest.siteId !== args.siteId ||
+        (setupRequest.configurationRevision ?? 0) !==
+          args.oneSetupConfigurationRevision ||
         setupExecution.siteId !== args.siteId ||
-        setupExecution.requestRevision !== args.oneSetupRequestRevision ||
+        setupExecution.configurationRevision !==
+          args.oneSetupConfigurationRevision ||
         setupExecution.claimNonce !== args.oneSetupClaimNonce ||
         (setupExecution.leaseExpiresAt ?? 0) <= timestamp ||
         !["running", "plan_queued"].includes(setupExecution.status)
@@ -1228,8 +1236,8 @@ export const queuePlanIfAbsent = internalMutation({
           boundJob.type !== "plan" ||
           String(boundPayload.oneSetupExecutionId ?? "") !==
             String(setupExecution._id) ||
-          boundPayload.oneSetupRequestRevision !==
-            setupExecution.requestRevision
+          boundPayload.oneSetupConfigurationRevision !==
+            setupExecution.configurationRevision
         ) {
           throw new Error("One-setup execution has an invalid plan binding");
         }
@@ -1551,7 +1559,8 @@ export const queuePlanIfAbsent = internalMutation({
           ...(setupExecution
             ? {
                 oneSetupExecutionId: setupExecution._id,
-                oneSetupRequestRevision: setupExecution.requestRevision,
+                oneSetupConfigurationRevision:
+                  setupExecution.configurationRevision,
               }
             : {}),
         }

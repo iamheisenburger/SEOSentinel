@@ -101,11 +101,32 @@ test("Connect Existing remains an owner action and canonical receipts are the on
 });
 
 test("provider-neutral progress is preserved briefly but a dead adapter cannot look live forever", () => {
-  const timestamp = 1_900_000_000_000;
-  const currentProgress = {
+  const providerReportedAt = 1_900_000_000_000;
+  let currentProgress: NonNullable<
+    Parameters<typeof managedProvisioningDecision>[0]["currentProgress"]
+  > = {
     state: "in_progress" as const,
-    updatedAt: timestamp - 1_000,
+    providerReportedAt,
+    updatedAt: providerReportedAt,
   };
+  for (const elapsed of [
+    MANAGED_PROVISIONING_RECONCILE_MS,
+    MANAGED_PROVISIONING_RECONCILE_MS * 2,
+  ]) {
+    const timestamp = providerReportedAt + elapsed;
+    const decision = managedProvisioningDecision({
+      capability: "publisher",
+      mode: "managed",
+      canonicalReceiptVerified: false,
+      currentProgress,
+      timestamp,
+    });
+    assert.deepEqual(decision, { state: "in_progress" });
+    // This is the passive reconciler's write: wall-clock updatedAt advances,
+    // while the provider-owned source timestamp remains immutable.
+    currentProgress = { ...currentProgress, ...decision, updatedAt: timestamp };
+  }
+  const timestamp = providerReportedAt + MANAGED_PROVISIONING_RECONCILE_MS * 3;
   assert.deepEqual(
     managedProvisioningDecision({
       capability: "publisher",
@@ -114,25 +135,14 @@ test("provider-neutral progress is preserved briefly but a dead adapter cannot l
       currentProgress,
       timestamp,
     }),
-    { state: "in_progress" },
-  );
-  assert.deepEqual(
-    managedProvisioningDecision({
-      capability: "publisher",
-      mode: "managed",
-      canonicalReceiptVerified: false,
-      currentProgress: {
-        ...currentProgress,
-        updatedAt: timestamp - MANAGED_PROVIDER_PROGRESS_STALE_MS - 1,
-      },
-      timestamp,
-    }),
     {
       state: "blocked",
-      blockedReasonCode: "managed_publisher_adapter_unavailable",
+      blockedReasonCode: "managed_publisher_adapter_stalled",
       actionRequiredBy: "operator",
     },
   );
+  assert.ok(timestamp - providerReportedAt > MANAGED_PROVIDER_PROGRESS_STALE_MS);
+  assert.match(dispatcher, /providerReportedAt:[\s\S]*providerReportedAt \?\? args\.current\.updatedAt/);
 });
 
 test("exact wakes, lease watchdog, and a bounded recovery fleet prevent starvation", () => {
@@ -145,8 +155,11 @@ test("exact wakes, lease watchdog, and a bounded recovery fleet prevent starvati
   assert.match(dispatcher, /ctx\.scheduler\.runAt\(/);
   assert.match(dispatcher, /leaseExpiresAt \+ 1_000/);
   assert.match(dispatcher, /by_fulfillment_due/);
+  assert.match(dispatcher, /by_fulfillment_updated/);
   assert.match(dispatcher, /MANAGED_PROVISIONING_FLEET_BATCH = 25/);
-  assert.match(dispatcher, /fulfillmentState"\), undefined/);
+  assert.match(dispatcher, /q\.eq\("fulfillmentState", undefined\)/);
+  assert.doesNotMatch(dispatcher, /field\("fulfillmentState"\)/);
+  assert.match(schema, /by_fulfillment_updated/);
   assert.match(crons, /managed-provisioning-recovery/);
   assert.match(crons, /internal\.managedProvisioning\.dispatchFleet/);
 });
@@ -244,14 +257,15 @@ test("durable lifecycle is additive, credential-free, and visible to the owner",
   assert.match(readinessUi, /Pentra action/);
 });
 
-test("content rollout is publisher-fenced without deadlocking on later authority setup", () => {
+test("warm content is publisher-only while live rollout also requires fresh measurement", () => {
   assert.match(autopilot, /oneSetupPromotionBlockers\(ctx, site\)/);
-  assert.ok(
-    [...autopilot.matchAll(/oneSetupPromotionBlockers\(ctx, site\)/g)].length >= 2,
-  );
+  assert.match(autopilot, /oneSetupPromotionBlockers\(ctx, site, "live"\)/);
   assert.match(sites, /One-setup canonical receipts are incomplete/);
   assert.match(sites, /setupBlockers\.length === 0/);
+  assert.match(sites, /oneSetupPromotionBlockers\(ctx, site, "live"\)/);
+  assert.match(sites, /oneSetupPromotionBlockers\(ctx, site, "warm"\)/);
   const runtime = readFileSync("convex/lib/oneSetupRuntime.ts", "utf8");
   assert.match(runtime, /oneSetupPublisherReceiptVerified\(site\)/);
+  assert.match(runtime, /oneSetupSearchMeasurementReceiptVerified\(site\)/);
   assert.doesNotMatch(runtime, /oneSetupOutreachMailboxReceiptVerified/);
 });

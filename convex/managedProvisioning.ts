@@ -22,7 +22,7 @@ import {
 import { sha256Hex } from "./lib/publicationArtifact.ts";
 
 const MANAGED_PROVISIONING_FLEET_BATCH = 25;
-const MANAGED_PROVISIONING_LEGACY_BATCH_PER_STATE = 5;
+const MANAGED_PROVISIONING_LEGACY_BATCH = 25;
 
 type ManagedProvisioningRequest = Doc<"managed_provisioning_requests">;
 type ManagedProvisioningCapability = ManagedProvisioningRequest["publisher"];
@@ -75,6 +75,9 @@ function capabilityAfterReconciliation(args: {
   return {
     ...args.current,
     ...decision,
+    providerReportedAt: args.current.state === "in_progress"
+      ? args.current.providerReportedAt ?? args.current.updatedAt
+      : args.current.providerReportedAt,
     blockedReasonCode: decision.blockedReasonCode,
     actionRequiredBy: decision.actionRequiredBy,
     updatedAt: args.timestamp,
@@ -410,24 +413,15 @@ export const dispatchFleet = internalMutation({
         q.gte("nextAttemptAt", 0).lte("nextAttemptAt", timestamp)
       )
       .take(MANAGED_PROVISIONING_FLEET_BATCH);
-    const legacyStates = [
-      "owner_action_required",
-      "requested",
-      "in_progress",
-      "ready",
-      "blocked",
-    ] as const;
-    const legacy: ManagedProvisioningRequest[] = [];
-    for (const aggregateState of legacyStates) {
-      const rows = await ctx.db
-        .query("managed_provisioning_requests")
-        .withIndex("by_aggregate_updated", (q) =>
-          q.eq("aggregateState", aggregateState)
-        )
-        .filter((q) => q.eq(q.field("fulfillmentState"), undefined))
-        .take(MANAGED_PROVISIONING_LEGACY_BATCH_PER_STATE);
-      legacy.push(...rows);
-    }
+    // Missing optional index values sort as `undefined`; the equality range
+    // therefore reads at most one fixed legacy page and never post-filters the
+    // entire modern fleet merely to prove that migration is complete.
+    const legacy = await ctx.db
+      .query("managed_provisioning_requests")
+      .withIndex("by_fulfillment_updated", (q) =>
+        q.eq("fulfillmentState", undefined)
+      )
+      .take(MANAGED_PROVISIONING_LEGACY_BATCH);
     const unique = new Map<Id<"managed_provisioning_requests">, ManagedProvisioningRequest>();
     for (const request of [...due, ...legacy]) unique.set(request._id, request);
     for (const request of unique.values()) {
@@ -441,7 +435,7 @@ export const dispatchFleet = internalMutation({
       due: due.length,
       legacy: legacy.length,
       boundedAt: MANAGED_PROVISIONING_FLEET_BATCH +
-        MANAGED_PROVISIONING_LEGACY_BATCH_PER_STATE * legacyStates.length,
+        MANAGED_PROVISIONING_LEGACY_BATCH,
     };
   },
 });

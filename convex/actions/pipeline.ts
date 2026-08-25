@@ -6134,7 +6134,7 @@ type OneSetupResumeResult =
     };
 
 /**
- * Revision-bound setup orchestration. Every retry claims the same durable
+ * Owner-configuration-bound setup orchestration. Every retry claims the same durable
  * execution and, once reserved, the same paid plan job. A missing browser
  * response can therefore resume or inspect work, never purchase a replay.
  */
@@ -6142,7 +6142,7 @@ export const resumeOneSetupExecution = action({
   args: {
     siteId: v.id("sites"),
     requestId: v.id("managed_provisioning_requests"),
-    requestRevision: v.number(),
+    configurationRevision: v.number(),
   },
   handler: async (ctx, args): Promise<OneSetupResumeResult> => {
     await requireOwnedSite(ctx, args.siteId);
@@ -6181,7 +6181,7 @@ export const resumeOneSetupExecution = action({
         state: "in_progress",
         executionId: claim.executionId,
         jobId: claim.planJobId,
-        reason: "exact_revision_claim_active",
+        reason: "exact_configuration_claim_active",
       };
     }
 
@@ -6225,7 +6225,7 @@ export const resumeOneSetupExecution = action({
         manual: true,
         oneSetupExecutionId: claim.executionId,
         oneSetupClaimNonce: claimNonce,
-        oneSetupRequestRevision: args.requestRevision,
+        oneSetupConfigurationRevision: args.configurationRevision,
       });
       const exactPlanReceipt = queued.queued || queued.reason === "setup_receipt";
       planJobId = exactPlanReceipt ? queued.jobId : undefined;

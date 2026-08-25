@@ -117,6 +117,17 @@ export default defineSchema({
     gscEmail: v.optional(v.string()),
     gscScopes: v.optional(v.string()),
     gscConnectedAt: v.optional(v.number()),
+    // A canonical Search Console receipt is separate from merely retaining an
+    // OAuth token. The generation fences late failures from an older grant;
+    // domain/revision binding is supplied by the domain-transition contract.
+    gscReceiptStatus: v.optional(v.union(
+      v.literal("verified"),
+      v.literal("revoked"),
+    )),
+    gscReceiptRevision: v.optional(v.number()),
+    gscReceiptVerifiedAt: v.optional(v.number()),
+    gscReceiptRevokedAt: v.optional(v.number()),
+    gscReceiptReasonCode: v.optional(v.string()),
     // Pointer to the latest recent phase plus a bounded per-date receipt
     // ledger. Staged rows from failed recent/backfill actions are invisible
     // until their exact dates are atomically advanced below.
@@ -168,6 +179,9 @@ export default defineSchema({
     domainSnapshot: v.string(),
     contractVersion: v.number(),
     revision: v.number(),
+    // Owner configuration generation. Unlike revision, this advances only on
+    // an owner save and is never changed by leases or passive reconciliation.
+    configurationRevision: v.optional(v.number()),
     automationMode: v.union(
       v.literal("assisted"),
       v.literal("full"),
@@ -188,6 +202,7 @@ export default defineSchema({
         v.literal("operator"),
       )),
       requestedAt: v.number(),
+      providerReportedAt: v.optional(v.number()),
       updatedAt: v.number(),
     }),
     searchMeasurement: v.object({
@@ -205,6 +220,7 @@ export default defineSchema({
         v.literal("operator"),
       )),
       requestedAt: v.number(),
+      providerReportedAt: v.optional(v.number()),
       updatedAt: v.number(),
     }),
     outreachMailbox: v.object({
@@ -222,6 +238,7 @@ export default defineSchema({
         v.literal("operator"),
       )),
       requestedAt: v.number(),
+      providerReportedAt: v.optional(v.number()),
       updatedAt: v.number(),
     }),
     aggregateState: v.union(
@@ -255,15 +272,16 @@ export default defineSchema({
     .index("by_site", ["siteId"])
     .index("by_aggregate_updated", ["aggregateState", "updatedAt"])
     .index("by_fulfillment_due", ["nextAttemptAt"])
+    .index("by_fulfillment_updated", ["fulfillmentState", "updatedAt"])
     .index("by_operator_action", ["operatorActionRequiredAt"]),
 
   // Exact owner-initiated setup pipeline receipt. Browser retries bind to the
-  // same request revision and plan job; they never mint a second paid plan
+  // same owner configuration generation and plan job; they never mint a second paid plan
   // merely because the first action response was lost.
   one_setup_executions: defineTable({
     siteId: v.id("sites"),
     requestId: v.id("managed_provisioning_requests"),
-    requestRevision: v.number(),
+    configurationRevision: v.number(),
     ownerAccountKey: v.string(),
     domainSnapshot: v.string(),
     automationMode: v.union(
@@ -300,7 +318,7 @@ export default defineSchema({
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
   })
-    .index("by_request_revision", ["requestId", "requestRevision"])
+    .index("by_request_configuration", ["requestId", "configurationRevision"])
     .index("by_site", ["siteId"]),
 
   // Canonical account-level billing receipt. Site reconciliation is paged so

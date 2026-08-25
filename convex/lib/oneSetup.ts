@@ -60,6 +60,7 @@ export function managedProvisioningDecision(args: {
     state: OneSetupProgressState;
     blockedReasonCode?: string;
     actionRequiredBy?: OneSetupActionOwner;
+    providerReportedAt?: number;
     updatedAt: number;
   };
   timestamp?: number;
@@ -83,14 +84,35 @@ export function managedProvisioningDecision(args: {
       actionRequiredBy: args.currentProgress.actionRequiredBy,
     };
   }
-  if (
-    args.currentProgress?.state === "in_progress" &&
-    args.currentProgress.updatedAt > 0 &&
-    args.currentProgress.updatedAt <= (args.timestamp ?? 0) + 5_000 &&
-    (args.timestamp ?? 0) - args.currentProgress.updatedAt <=
-      MANAGED_PROVIDER_PROGRESS_STALE_MS
-  ) {
-    return { state: "in_progress" };
+  if (args.currentProgress?.state === "in_progress") {
+    // Passive reconciliation updates `updatedAt`; it must never renew the
+    // provider's liveness clock. Legacy rows fall back once to their last
+    // pre-migration update and then age normally because that source timestamp
+    // is copied into providerReportedAt by the reconciler.
+    const providerReportedAt = args.currentProgress.providerReportedAt ??
+      args.currentProgress.updatedAt;
+    if (
+      providerReportedAt > 0 &&
+      providerReportedAt <= (args.timestamp ?? 0) + 5_000 &&
+      (args.timestamp ?? 0) - providerReportedAt <=
+        MANAGED_PROVIDER_PROGRESS_STALE_MS
+    ) {
+      return { state: "in_progress" };
+    }
+    if (args.capability === "publisher") {
+      return {
+        state: "blocked",
+        blockedReasonCode: "managed_publisher_adapter_stalled",
+        actionRequiredBy: "operator",
+      };
+    }
+    if (args.capability === "outreach_mailbox") {
+      return {
+        state: "blocked",
+        blockedReasonCode: "managed_outreach_mailbox_adapter_stalled",
+        actionRequiredBy: "operator",
+      };
+    }
   }
   if (args.capability === "search_measurement") {
     return {
@@ -128,8 +150,12 @@ const ONE_SETUP_ACTION_COPY: Record<string, string> = {
     "Authorize Google Search Console. Google requires the website owner to grant OAuth consent.",
   managed_publisher_adapter_unavailable:
     "Pentra operations must provision a supported publishing adapter; no verified destination receipt exists yet.",
+  managed_publisher_adapter_stalled:
+    "Pentra operations must resume the publishing adapter because its last progress receipt expired.",
   managed_outreach_mailbox_adapter_unavailable:
     "Pentra operations must provision and verify a dedicated outreach mailbox; provider, DNS, and sender receipts are still absent.",
+  managed_outreach_mailbox_adapter_stalled:
+    "Pentra operations must resume mailbox provisioning because its last progress receipt expired.",
 };
 
 export function oneSetupActionMessage(

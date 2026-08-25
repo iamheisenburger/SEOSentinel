@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  oneSetupConfigurationRevisionIsCurrent,
   oneSetupExecutionClaimDisposition,
   oneSetupPlanSettlement,
 } from "../convex/lib/oneSetupExecution.ts";
@@ -54,7 +55,33 @@ test("terminal paid-plan receipts are reused and never replayed", () => {
   });
 });
 
-test("the job and revision receipt bind atomically before any retry can reserve", () => {
+test("passive reconciliation cannot invalidate the saved owner configuration", () => {
+  const saved = { requestRevision: 7, configurationRevision: 3 };
+  const afterPassiveReconcile = {
+    requestRevision: 8,
+    configurationRevision: 3,
+  };
+  assert.notEqual(
+    saved.requestRevision,
+    afterPassiveReconcile.requestRevision,
+  );
+  assert.equal(
+    oneSetupConfigurationRevisionIsCurrent({
+      expected: saved.configurationRevision,
+      actual: afterPassiveReconcile.configurationRevision,
+    }),
+    true,
+  );
+  assert.equal(
+    oneSetupConfigurationRevisionIsCurrent({
+      expected: saved.configurationRevision,
+      actual: saved.configurationRevision + 1,
+    }),
+    false,
+  );
+});
+
+test("the job and configuration receipt bind atomically before any retry can reserve", () => {
   const schema = readFileSync("convex/schema.ts", "utf8");
   const jobs = readFileSync("convex/jobs.ts", "utf8");
   const executions = readFileSync("convex/oneSetupExecutions.ts", "utf8");
@@ -62,7 +89,7 @@ test("the job and revision receipt bind atomically before any retry can reserve"
 
   assert.match(
     schema,
-    /one_setup_executions:[\s\S]*\.index\("by_request_revision", \["requestId", "requestRevision"\]\)/,
+    /one_setup_executions:[\s\S]*\.index\("by_request_configuration", \["requestId", "configurationRevision"\]\)/,
   );
   const queueStart = jobs.indexOf("export const queuePlanIfAbsent");
   const queueEnd = jobs.indexOf(
@@ -77,8 +104,18 @@ test("the job and revision receipt bind atomically before any retry can reserve"
   assert.ok(receiptReuseAt >= 0 && receiptReuseAt < reserveAt);
   assert.ok(insertAt >= 0 && bindAt > insertAt);
   assert.match(queue, /oneSetupExecutionId: setupExecution\._id/);
-  assert.match(queue, /oneSetupRequestRevision: setupExecution\.requestRevision/);
+  assert.match(
+    queue,
+    /oneSetupConfigurationRevision:[\s\S]*setupExecution\.configurationRevision/,
+  );
+  assert.match(
+    queue,
+    /setupRequest\.configurationRevision \?\? 0\)[\s\S]*oneSetupConfigurationRevision/,
+  );
   assert.match(executions, /payload\.oneSetupExecutionId/);
+  assert.ok(
+    [...executions.matchAll(/request\.configurationRevision \?\? 0/g)].length >= 2,
+  );
   assert.match(executions, /oneSetupPlanSettlement\(\{/);
 
   const actionStart = pipeline.indexOf(
@@ -96,7 +133,7 @@ test("the job and revision receipt bind atomically before any retry can reserve"
   );
 });
 
-test("browser retry preserves the exact backend revision receipt", () => {
+test("browser retry preserves the exact owner configuration receipt", () => {
   const wizard = readFileSync(
     "src/components/onboarding/setup-wizard.tsx",
     "utf8",
@@ -104,7 +141,10 @@ test("browser retry preserves the exact backend revision receipt", () => {
   assert.match(wizard, /if \(!receipt\) \{[\s\S]*saveOneSetupRequest/);
   assert.match(wizard, /setSetupReceipt\(receipt\)/);
   assert.match(wizard, /requestId: receipt\.requestId/);
-  assert.match(wizard, /requestRevision: receipt\.revision/);
+  assert.match(
+    wizard,
+    /configurationRevision: receipt\.configurationRevision/,
+  );
   assert.match(wizard, /finishSetup\(siteId, setupReceipt\)/);
   assert.doesNotMatch(wizard, /useAction\(api\.actions\.pipeline\.generatePlan\)/);
 });

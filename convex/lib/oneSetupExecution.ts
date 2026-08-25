@@ -10,6 +10,15 @@ export type OneSetupExecutionClaimDisposition =
   | { kind: "in_progress" }
   | { kind: "claimable"; resumePlan: boolean };
 
+export function oneSetupConfigurationRevisionIsCurrent(args: {
+  expected: number;
+  actual: number;
+}): boolean {
+  return Number.isSafeInteger(args.expected) &&
+    args.expected > 0 &&
+    args.expected === args.actual;
+}
+
 /**
  * Pure claim decision used by the durable mutation and interleaving tests.
  * An unexpired claimant owns the exact revision; an expired claimant may be

@@ -666,7 +666,7 @@ export const promoteWarmSiteIfReady = internalMutation({
       hasCrawledPage,
       limits.maxArticles,
     );
-    const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+    const setupBlockers = await oneSetupPromotionBlockers(ctx, site, "live");
     const readiness = {
       ready: baseReadiness.ready && setupBlockers.length === 0,
       blockers: [...baseReadiness.blockers, ...setupBlockers],

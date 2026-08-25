@@ -7,6 +7,7 @@ import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import {
+  oneSetupConfigurationRevisionIsCurrent,
   oneSetupExecutionClaimDisposition,
   oneSetupPlanSettlement,
 } from "./lib/oneSetupExecution.ts";
@@ -58,7 +59,9 @@ function requestMatchesExecution(
   request: Doc<"managed_provisioning_requests">,
   execution: Doc<"one_setup_executions">,
 ): boolean {
-  return execution.ownerAccountKey === request.ownerAccountKey &&
+  return execution.configurationRevision ===
+      (request.configurationRevision ?? 0) &&
+    execution.ownerAccountKey === request.ownerAccountKey &&
     execution.domainSnapshot === request.domainSnapshot &&
     execution.automationMode === request.automationMode &&
     execution.requestedCadencePerWeek === request.requestedCadencePerWeek &&
@@ -71,34 +74,37 @@ export const claim = internalMutation({
   args: {
     siteId: v.id("sites"),
     requestId: v.id("managed_provisioning_requests"),
-    requestRevision: v.number(),
+    configurationRevision: v.number(),
     claimNonce: v.string(),
   },
   handler: async (ctx, args) => {
     if (
-      !Number.isSafeInteger(args.requestRevision) ||
-      args.requestRevision <= 0 ||
+      !Number.isSafeInteger(args.configurationRevision) ||
+      args.configurationRevision <= 0 ||
       !args.claimNonce
     ) throw new Error("Invalid one-setup execution claim");
     const { request } = await activeRequestContext(ctx, args);
     const existing = await ctx.db
       .query("one_setup_executions")
-      .withIndex("by_request_revision", (q) =>
+      .withIndex("by_request_configuration", (q) =>
         q.eq("requestId", args.requestId).eq(
-          "requestRevision",
-          args.requestRevision,
+          "configurationRevision",
+          args.configurationRevision,
         )
       )
       .unique();
     const timestamp = Date.now();
     if (!existing) {
-      if (request.revision !== args.requestRevision) {
-        throw new Error("One-setup request revision changed before execution");
+      if (!oneSetupConfigurationRevisionIsCurrent({
+        expected: args.configurationRevision,
+        actual: request.configurationRevision ?? 0,
+      })) {
+        throw new Error("One-setup owner configuration changed before execution");
       }
       const executionId = await ctx.db.insert("one_setup_executions", {
         siteId: args.siteId,
         requestId: args.requestId,
-        requestRevision: args.requestRevision,
+        configurationRevision: args.configurationRevision,
         ownerAccountKey: request.ownerAccountKey,
         domainSnapshot: request.domainSnapshot,
         automationMode: request.automationMode,
@@ -172,16 +178,22 @@ export const inspectPlan = internalQuery({
   handler: async (ctx, { executionId }) => {
     const execution = await ctx.db.get(executionId);
     if (!execution?.planJobId) return null;
-    const job = await ctx.db.get(execution.planJobId);
+    const [job, request] = await Promise.all([
+      ctx.db.get(execution.planJobId),
+      ctx.db.get(execution.requestId),
+    ]);
     const payload = job?.payload && typeof job.payload === "object"
       ? job.payload as Record<string, unknown>
       : {};
     if (
+      !request ||
+      (request.configurationRevision ?? 0) !==
+        execution.configurationRevision ||
       !job ||
       job.siteId !== execution.siteId ||
       job.type !== "plan" ||
       String(payload.oneSetupExecutionId ?? "") !== String(execution._id) ||
-      payload.oneSetupRequestRevision !== execution.requestRevision
+      payload.oneSetupConfigurationRevision !== execution.configurationRevision
     ) throw new Error("One-setup plan binding changed");
     return { jobId: job._id, status: job.status };
   },
@@ -245,16 +257,22 @@ export const settleFromPlan = internalMutation({
     if (!execution.planJobId) {
       throw new Error("One-setup execution has no bound plan job");
     }
-    const job = await ctx.db.get(execution.planJobId);
+    const [job, request] = await Promise.all([
+      ctx.db.get(execution.planJobId),
+      ctx.db.get(execution.requestId),
+    ]);
     const payload = job?.payload && typeof job.payload === "object"
       ? job.payload as Record<string, unknown>
       : {};
     if (
+      !request ||
+      (request.configurationRevision ?? 0) !==
+        execution.configurationRevision ||
       !job ||
       job.siteId !== execution.siteId ||
       job.type !== "plan" ||
       String(payload.oneSetupExecutionId ?? "") !== String(execution._id) ||
-      payload.oneSetupRequestRevision !== execution.requestRevision
+      payload.oneSetupConfigurationRevision !== execution.configurationRevision
     ) throw new Error("One-setup plan binding changed");
     const timestamp = Date.now();
     const result = job.result && typeof job.result === "object"

@@ -19,35 +19,106 @@ import {
   type GscSearchAnalyticsRow,
 } from "../lib/gscSearchAnalytics";
 import { isSeoGrowthActuationEligible } from "../lib/seoGrowth";
+import { hardGscOAuthFailure } from "../lib/oneSetupCanonical.ts";
 
 const GSC_HTTP_TIMEOUT_MS = 20_000;
 
+type DomainBoundGscSite = Doc<"sites"> & {
+  canonicalDomainRevision?: number;
+};
+
+class GscAuthorizationError extends Error {}
+
+function canonicalSiteDomain(site: Doc<"sites">): string {
+  const value = site.canonicalDomain ?? site.domain;
+  return new URL(
+    /^https?:\/\//i.test(value) ? value : `https://${value}`,
+  ).hostname.toLowerCase().replace(/^www\./, "");
+}
+
+function gscReceiptFence(site: Doc<"sites">) {
+  return {
+    siteId: site._id,
+    expectedCanonicalDomain: canonicalSiteDomain(site),
+    expectedDomainRevision:
+      (site as DomainBoundGscSite).canonicalDomainRevision ?? 0,
+    expectedGscProperty: site.gscProperty!,
+    expectedReceiptRevision: site.gscReceiptRevision ?? 0,
+  };
+}
+
+async function revokeCapturedGscReceipt(
+  ctx: ActionCtx,
+  site: Doc<"sites">,
+  reasonCode: "oauth_invalid_grant" | "provider_unauthorized",
+): Promise<void> {
+  if (!site.gscProperty) return;
+  await ctx.runMutation(internal.sites.markGscReceiptRevokedInternal, {
+    ...gscReceiptFence(site),
+    reasonCode,
+    revokedAt: Date.now(),
+  });
+}
+
 // ── Token Refresh ──
 
-async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresIn: number } | null> {
+type GscTokenRefresh =
+  | { ok: true; accessToken: string; expiresIn: number }
+  | { ok: false; hardAuthFailure: boolean };
+
+async function refreshAccessToken(refreshToken: string): Promise<GscTokenRefresh> {
   const clientId = process.env.GSC_CLIENT_ID;
   const clientSecret = process.env.GSC_CLIENT_SECRET;
-  if (!clientId || !clientSecret || !refreshToken) return null;
+  if (!clientId || !clientSecret || !refreshToken) {
+    return { ok: false, hardAuthFailure: false };
+  }
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-    signal: AbortSignal.timeout(GSC_HTTP_TIMEOUT_MS),
-  });
+  let res: Response;
+  try {
+    res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+      signal: AbortSignal.timeout(GSC_HTTP_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, hardAuthFailure: false };
+  }
 
   if (!res.ok) {
     console.error(`GSC token refresh failed with HTTP ${res.status}`);
-    return null;
+    let code = "";
+    try {
+      const data = await res.json() as { error?: unknown };
+      code = typeof data.error === "string" ? data.error : "";
+    } catch {
+      code = "";
+    }
+    return {
+      ok: false,
+      hardAuthFailure: hardGscOAuthFailure({
+        status: res.status,
+        errorCode: code,
+      }),
+    };
   }
 
-  const data = await res.json();
-  return { accessToken: data.access_token, expiresIn: data.expires_in };
+  const data = await res.json() as {
+    access_token?: unknown;
+    expires_in?: unknown;
+  };
+  return typeof data.access_token === "string"
+    ? {
+        ok: true,
+        accessToken: data.access_token,
+        expiresIn: Number(data.expires_in ?? 0),
+      }
+    : { ok: false, hardAuthFailure: false };
 }
 
 // ── GSC Search Analytics API ──
@@ -121,6 +192,9 @@ async function submitAndVerifySitemap(
     signal: AbortSignal.timeout(GSC_HTTP_TIMEOUT_MS),
   });
   if (!submitted.ok) {
+    if (submitted.status === 401 || submitted.status === 403) {
+      throw new GscAuthorizationError("GSC sitemap authorization was rejected");
+    }
     throw new Error(
       `GSC sitemap submission failed with HTTP ${submitted.status}`,
     );
@@ -131,6 +205,9 @@ async function submitAndVerifySitemap(
     signal: AbortSignal.timeout(GSC_HTTP_TIMEOUT_MS),
   });
   if (!verified.ok) {
+    if (verified.status === 401 || verified.status === 403) {
+      throw new GscAuthorizationError("GSC sitemap authorization was rejected");
+    }
     throw new Error(
       `GSC sitemap verification failed with HTTP ${verified.status}`,
     );
@@ -191,6 +268,9 @@ async function fetchSearchAnalyticsPage(
   );
 
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new GscAuthorizationError("GSC analytics authorization was rejected");
+    }
     throw new Error(`GSC API request failed with HTTP ${res.status}`);
   }
 
@@ -220,6 +300,9 @@ async function fetchUrlInspection(
     },
   );
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new GscAuthorizationError("GSC inspection authorization was rejected");
+    }
     throw new Error(
       `GSC URL Inspection request failed with HTTP ${res.status}`,
     );
@@ -280,6 +363,7 @@ async function syncPublishedInspections(
       );
       checked++;
     } catch (error) {
+      if (error instanceof GscAuthorizationError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(
         internal.searchPerformance.recordUrlInspection,
@@ -461,19 +545,33 @@ export const submitSitemapInternal = internalAction({
     let accessToken = site.gscAccessToken;
     if (site.gscRefreshToken) {
       const refreshed = await refreshAccessToken(site.gscRefreshToken);
-      if (!refreshed) throw new Error("GSC access-token refresh failed");
+      if (!refreshed.ok) {
+        if (refreshed.hardAuthFailure) {
+          await revokeCapturedGscReceipt(ctx, site, "oauth_invalid_grant");
+          throw new GscAuthorizationError("GSC authorization was revoked");
+        }
+        throw new Error("GSC access-token refresh failed");
+      }
       accessToken = refreshed.accessToken;
       await ctx.runMutation(internal.sites.setGscTokenInternal, {
         siteId,
         gscAccessToken: accessToken,
+        expectedReceiptRevision: site.gscReceiptRevision ?? 0,
       });
     }
-    return submitAndVerifySitemap(
-      accessToken,
-      site.gscProperty,
-      sitemapUrlForDomain(site.domain),
-      () => assertGscExecutionAuthorized(ctx, siteId),
-    );
+    try {
+      return await submitAndVerifySitemap(
+        accessToken,
+        site.gscProperty,
+        sitemapUrlForDomain(site.domain),
+        () => assertGscExecutionAuthorized(ctx, siteId),
+      );
+    } catch (error) {
+      if (error instanceof GscAuthorizationError) {
+        await revokeCapturedGscReceipt(ctx, site, "provider_unauthorized");
+      }
+      throw error;
+    }
   },
 });
 
@@ -506,10 +604,17 @@ async function refreshedSiteAccessToken(
   if (!site.gscAccessToken) throw new Error("GSC not connected for this site");
   if (!site.gscRefreshToken) return site.gscAccessToken;
   const refreshed = await refreshAccessToken(site.gscRefreshToken);
-  if (!refreshed) return site.gscAccessToken;
+  if (!refreshed.ok) {
+    if (refreshed.hardAuthFailure) {
+      await revokeCapturedGscReceipt(ctx, site, "oauth_invalid_grant");
+      throw new GscAuthorizationError("GSC authorization was revoked");
+    }
+    throw new Error("GSC access-token refresh was temporarily unavailable");
+  }
   await ctx.runMutation(internal.sites.setGscTokenInternal, {
     siteId: site._id,
     gscAccessToken: refreshed.accessToken,
+    expectedReceiptRevision: site.gscReceiptRevision ?? 0,
   });
   return refreshed.accessToken;
 }
@@ -545,21 +650,31 @@ async function syncAnalyticsWindow(
   console.log(
     `Fetching ${window.mode} GSC data for ${site.domain}: ${window.windowStart} → ${window.windowEnd}`,
   );
-  const analytics = await fetchCompleteDailySearchAnalytics(
-    async ({ dataset, date, startRow, rowLimit, timeoutMs }) => {
-      await assertGscExecutionAuthorized(ctx, site._id);
-      return fetchSearchAnalyticsPage(
-        accessToken,
-        site.gscProperty!,
-        dataset,
-        date,
-        startRow,
-        rowLimit,
-        timeoutMs,
-      );
-    },
-    { startDate: window.windowStart, endDate: window.windowEnd },
-  );
+  let analytics: Awaited<
+    ReturnType<typeof fetchCompleteDailySearchAnalytics>
+  >;
+  try {
+    analytics = await fetchCompleteDailySearchAnalytics(
+      async ({ dataset, date, startRow, rowLimit, timeoutMs }) => {
+        await assertGscExecutionAuthorized(ctx, site._id);
+        return fetchSearchAnalyticsPage(
+          accessToken,
+          site.gscProperty!,
+          dataset,
+          date,
+          startRow,
+          rowLimit,
+          timeoutMs,
+        );
+      },
+      { startDate: window.windowStart, endDate: window.windowEnd },
+    );
+  } catch (error) {
+    if (error instanceof GscAuthorizationError) {
+      await revokeCapturedGscReceipt(ctx, site, "provider_unauthorized");
+    }
+    throw error;
+  }
   const rows = analytics.queryDetailRows;
   const pageRecords = buildGscPageTotalRollups({
     queryDetailRows: rows,
@@ -691,12 +806,30 @@ async function syncSiteGSC(
     }
   }
 
-  const inspections = await syncPublishedInspections(
-    ctx,
-    site,
-    accessToken,
-    gscProperty,
+  let inspections: { checked: number; failed: number };
+  try {
+    inspections = await syncPublishedInspections(
+      ctx,
+      site,
+      accessToken,
+      gscProperty,
+    );
+  } catch (error) {
+    if (error instanceof GscAuthorizationError) {
+      await revokeCapturedGscReceipt(ctx, site, "provider_unauthorized");
+    }
+    throw error;
+  }
+  const receipt = await ctx.runMutation(
+    internal.sites.markGscReceiptVerifiedInternal,
+    {
+      ...gscReceiptFence(site),
+      verifiedAt: Date.now(),
+    },
   );
+  if (!receipt.updated) {
+    throw new Error("GSC receipt binding changed during synchronization");
+  }
 
   return {
     ...recent,

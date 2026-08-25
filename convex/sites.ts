@@ -106,6 +106,7 @@ import {
   type OneSetupReadinessState,
 } from "./lib/oneSetup.ts";
 import {
+  canonicalGscReceiptMutationFenceCurrent,
   oneSetupOutreachMailboxReceiptVerified,
   oneSetupPublisherReceiptVerified,
   oneSetupSearchMeasurementReceiptVerified,
@@ -164,6 +165,12 @@ function normalizedAuthorityDomain(value: string): string | null {
     return null;
   }
 }
+
+type CanonicalDomainRevisionSite = Doc<"sites"> & {
+  canonicalDomainRevision?: number;
+  gscCanonicalDomain?: string;
+  gscDomainRevision?: number;
+};
 
 async function syncOrganicClickGoal(
   ctx: MutationCtx,
@@ -1071,11 +1078,13 @@ export const saveOneSetupRequest = mutation({
       outreachMailbox,
     ]);
     const revision = (existing?.revision ?? 0) + 1;
+    const configurationRevision = (existing?.configurationRevision ?? 0) + 1;
     const record = {
       ownerAccountKey,
       domainSnapshot,
       contractVersion: ONE_SETUP_CONTRACT_VERSION,
       revision,
+      configurationRevision,
       automationMode: args.automationMode,
       requestedCadencePerWeek: args.requestedCadencePerWeek,
       publisher,
@@ -1107,7 +1116,7 @@ export const saveOneSetupRequest = mutation({
       internal.managedProvisioning.dispatchRequest,
       { requestId, expectedRevision: revision },
     );
-    return { requestId, revision };
+    return { requestId, revision, configurationRevision };
   },
 });
 
@@ -1192,6 +1201,7 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
         : args.state === "owner_action_required"
           ? "owner"
           : undefined,
+      providerReportedAt: timestamp,
       updatedAt: timestamp,
     };
     const capabilities = {
@@ -1436,6 +1446,9 @@ export const getOneSetupReadiness = query({
       contractVersion: ONE_SETUP_CONTRACT_VERSION,
       requestExists: requestValid,
       requestRevision: requestValid ? request!.revision : 0,
+      configurationRevision: requestValid
+        ? request!.configurationRevision ?? 0
+        : 0,
       automationMode: (requestValid
         ? request!.automationMode
         : "assisted") as OneSetupAutomationMode,
@@ -4212,7 +4225,11 @@ export const setAutopilotRollout = internalMutation({
       throw new Error("Autopilot must be enabled before controlled rollout");
     }
     if (mode !== "observe") {
-      const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+      const setupBlockers = await oneSetupPromotionBlockers(
+        ctx,
+        site,
+        mode === "live" ? "live" : "warm",
+      );
       if (setupBlockers.length > 0) {
         throw new Error(
           `One-setup canonical receipts are incomplete: ${setupBlockers.join(", ")}`,
@@ -4298,7 +4315,7 @@ export const enforceLiveReadiness = internalMutation({
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .first());
     const limits = getLimitsFromFeatures(site.planFeatures ?? []);
-    const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+    const setupBlockers = await oneSetupPromotionBlockers(ctx, site, "live");
     const liveReadiness = liveAutopilotReadiness(
       site,
       hasCrawledPage,
@@ -4312,7 +4329,8 @@ export const enforceLiveReadiness = internalMutation({
       return { ready: true, changed: false, mode: "live", blockers: [] as string[] };
     }
     const warm = warmAutopilotReadiness(site, hasCrawledPage);
-    const mode = warm.ready && setupBlockers.length === 0
+    const warmSetupBlockers = await oneSetupPromotionBlockers(ctx, site, "warm");
+    const mode = warm.ready && warmSetupBlockers.length === 0
       ? "warm" as const
       : "observe" as const;
     const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
@@ -4748,8 +4766,9 @@ export const setGscTokenInternal = internalMutation({
     gscProperty: v.optional(v.string()),
     gscEmail: v.optional(v.string()),
     gscScopes: v.optional(v.string()),
+    expectedReceiptRevision: v.optional(v.number()),
   },
-  handler: async (ctx, { siteId, gscAccessToken, gscRefreshToken, gscProperty, gscEmail, gscScopes }) => {
+  handler: async (ctx, { siteId, gscAccessToken, gscRefreshToken, gscProperty, gscEmail, gscScopes, expectedReceiptRevision }) => {
     const site = await ctx.db.get(siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
@@ -4757,15 +4776,144 @@ export const setGscTokenInternal = internalMutation({
     if (!gscProperty && !site.gscProperty) {
       throw new Error("A matching Search Console property is required for the initial connection");
     }
+    if (
+      expectedReceiptRevision !== undefined &&
+      (site.gscReceiptRevision ?? 0) !== expectedReceiptRevision
+    ) {
+      throw new Error("Search Console connection changed during token refresh");
+    }
+    if (!gscProperty && expectedReceiptRevision === undefined) {
+      throw new Error("A token refresh requires the exact connection receipt");
+    }
+    const timestamp = now();
+    const sealsNewReceipt = Boolean(gscProperty);
     await ctx.db.patch(site._id, {
       gscAccessToken,
       ...(gscRefreshToken ? { gscRefreshToken } : {}),
       ...(gscProperty ? { gscProperty } : {}),
       ...(gscEmail ? { gscEmail } : {}),
       ...(gscScopes ? { gscScopes } : {}),
-      ...(!site.gscConnectedAt ? { gscConnectedAt: now() } : {}),
-      updatedAt: now(),
+      ...(!site.gscConnectedAt ? { gscConnectedAt: timestamp } : {}),
+      ...(sealsNewReceipt
+        ? {
+            gscReceiptStatus: "verified" as const,
+            gscReceiptRevision: (site.gscReceiptRevision ?? 0) + 1,
+            gscReceiptVerifiedAt: timestamp,
+            gscReceiptRevokedAt: undefined,
+            gscReceiptReasonCode: undefined,
+          }
+        : {}),
+      updatedAt: timestamp,
     });
+  },
+});
+
+const GSC_RECEIPT_REASON_VALIDATOR = v.union(
+  v.literal("oauth_invalid_grant"),
+  v.literal("provider_unauthorized"),
+  v.literal("owner_disconnected"),
+  v.literal("site_domain_changed"),
+);
+
+/**
+ * A successful provider read refreshes the exact domain/grant receipt. The
+ * receipt revision prevents a late response from an older OAuth grant from
+ * blessing a newer connection on the same domain.
+ */
+export const markGscReceiptVerifiedInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedGscProperty: v.string(),
+    expectedReceiptRevision: v.number(),
+    verifiedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    const timestamp = now();
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.gscAccessToken ||
+      !site.gscRefreshToken ||
+      site.gscReceiptStatus === "revoked" ||
+      !Number.isFinite(args.verifiedAt) ||
+      args.verifiedAt <= 0 ||
+      args.verifiedAt > timestamp + 5 * 60 * 1000 ||
+      args.verifiedAt < (site.gscReceiptVerifiedAt ?? 0) ||
+      args.verifiedAt <= (site.gscReceiptRevokedAt ?? 0) ||
+      !canonicalGscReceiptMutationFenceCurrent({
+        site: site as CanonicalDomainRevisionSite,
+        ...args,
+      })
+    ) return { updated: false as const };
+    const receiptRevision = args.expectedReceiptRevision === 0
+      ? 1
+      : args.expectedReceiptRevision;
+    await ctx.db.patch(site._id, {
+      gscReceiptStatus: "verified",
+      gscReceiptRevision: receiptRevision,
+      gscReceiptVerifiedAt: args.verifiedAt,
+      gscReceiptRevokedAt: undefined,
+      gscReceiptReasonCode: undefined,
+      updatedAt: timestamp,
+    });
+    return { updated: true as const, receiptRevision };
+  },
+});
+
+/** Hard provider authorization failures revoke only the exact captured grant. */
+export const markGscReceiptRevokedInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedGscProperty: v.string(),
+    expectedReceiptRevision: v.number(),
+    reasonCode: GSC_RECEIPT_REASON_VALIDATOR,
+    revokedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    const timestamp = now();
+    if (
+      !site ||
+      !Number.isFinite(args.revokedAt) ||
+      args.revokedAt <= 0 ||
+      args.revokedAt > timestamp + 5 * 60 * 1000 ||
+      !canonicalGscReceiptMutationFenceCurrent({
+        site: site as CanonicalDomainRevisionSite,
+        ...args,
+      })
+    ) return { updated: false as const };
+    const wasLive = site.autopilotRolloutMode === "live";
+    if (wasLive) {
+      await cancelAutonomousJobsForEpochTransition(
+        ctx,
+        site._id,
+        "Search Console authorization was revoked",
+      );
+    }
+    const receiptRevision = args.expectedReceiptRevision === 0
+      ? 1
+      : args.expectedReceiptRevision;
+    await ctx.db.patch(site._id, {
+      gscAccessToken: undefined,
+      gscRefreshToken: undefined,
+      gscReceiptStatus: "revoked",
+      gscReceiptRevision: receiptRevision,
+      gscReceiptRevokedAt: args.revokedAt,
+      gscReceiptReasonCode: args.reasonCode,
+      ...(wasLive
+        ? {
+            autopilotRolloutMode: "warm" as const,
+            autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+          }
+        : {}),
+      updatedAt: timestamp,
+    });
+    return { updated: true as const, receiptRevision };
   },
 });
 
@@ -4780,6 +4928,7 @@ export const disconnectGsc = mutation({
       siteId,
       "Google Search Console disconnected",
     );
+    const timestamp = now();
     await ctx.db.patch(siteId, {
       gscAccessToken: undefined,
       gscRefreshToken: undefined,
@@ -4802,9 +4951,13 @@ export const disconnectGsc = mutation({
       gscQueryRows: undefined,
       gscPageRows: undefined,
       gscAnalyticsRequests: undefined,
+      gscReceiptStatus: "revoked",
+      gscReceiptRevision: (site.gscReceiptRevision ?? 0) + 1,
+      gscReceiptRevokedAt: timestamp,
+      gscReceiptReasonCode: "owner_disconnected",
       autopilotRolloutMode: "observe",
       autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
-      updatedAt: now(),
+      updatedAt: timestamp,
     });
     return { disconnected: true, cancelledJobs };
   },
