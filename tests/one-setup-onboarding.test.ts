@@ -328,9 +328,12 @@ test("one-setup UX defaults to managed Full Autopilot and hides provider control
   assert.match(wizard, /Pentra-managed setup/);
   assert.match(
     wizard,
-    /Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts as each required connection is verified/,
+    /Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts after the required production readiness gates verify/,
   );
-  assert.match(wizard, /Authority outreach activates after one sender consent/);
+  assert.match(
+    wizard,
+    /Authority outreach begins only after sender consent, mailbox, compliance, pacing, and runtime gates are all ready/,
+  );
   assert.match(wizard, /Advanced setup options/);
   assert.match(wizard, /Advanced connection controls/);
   assert.match(wizard, /hasSelfManaged/);
@@ -351,6 +354,12 @@ test("one-setup UX defaults to managed Full Autopilot and hides provider control
 
 test("readiness keeps machinery collapsed and separates progress from outcomes", () => {
   assert.match(readinessUi, /Setup complete/);
+  assert.match(readinessUi, /Connections verified/);
+  assert.match(
+    readinessUi,
+    /live cadence begins only after its production readiness gates pass/,
+  );
+  assert.match(readinessUi, /readiness\.publishingRolloutLive !== true/);
   assert.match(readinessUi, /One step needs your approval/);
   assert.match(readinessUi, /View setup details/);
   assert.match(readinessUi, /Setup progress is separate from outcome reporting/);

@@ -39,6 +39,13 @@ const STATUS_COPY = {
   },
 } as const;
 
+const DEPENDENCIES_READY_COPY = {
+  title: "Connections verified",
+  detail:
+    "Your setup dependencies are verified. Pentra is preparing the controlled publishing rollout; live cadence begins only after its production readiness gates pass.",
+  color: "#0EA5E9",
+} as const;
+
 const STAGE_COPY = {
   ready: { label: "Verified", icon: Check, className: "text-[#4ADE80]" },
   queued: { label: "Queued", icon: Clock3, className: "text-[#38BDF8]" },
@@ -71,7 +78,10 @@ export function SetupReadiness({
     );
   }
 
-  const summary = STATUS_COPY[readiness.aggregate.status];
+  const summary = readiness.aggregate.status === "ready" &&
+      readiness.publishingRolloutLive !== true
+    ? DEPENDENCIES_READY_COPY
+    : STATUS_COPY[readiness.aggregate.status];
   const actionStages = readiness.stages.filter(
     (stage) => stage.actionRequiredBy && stage.actionMessage,
   );

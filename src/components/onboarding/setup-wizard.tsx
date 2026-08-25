@@ -482,7 +482,7 @@ export function SetupWizard() {
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
                 {automationMode === "full"
-                  ? "Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts as each required connection is verified. Authority outreach activates after one sender consent."
+                  ? "Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts after the required production readiness gates verify. Authority outreach begins only after sender consent, mailbox, compliance, pacing, and runtime gates are all ready."
                   : "Pentra prepares work for your approval before publishing. Authority outreach remains separately controlled."}
               </p>
             </div>
