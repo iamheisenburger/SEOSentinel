@@ -39,6 +39,7 @@ import {
   tenantTopicBusinessSignals,
   topicReplenishmentBudget,
 } from "../lib/autopilotBuffer";
+import { nextUtcMonthAt } from "../lib/cadenceLiveness";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ArticleSummary = {
@@ -176,6 +177,7 @@ export const scheduleCadence = internalAction({
     mode?: string;
     bufferCount?: number;
     blockers?: string[];
+    eligibleAt?: number;
   }> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
@@ -644,6 +646,23 @@ export const scheduleCadence = internalAction({
           bufferCount: buffer.length,
         },
       });
+      const qualityEligibleAt = recentCandidates.reduce(
+        (earliest: number, article: ArticleSummary) =>
+          Math.min(earliest, article.createdAt + DAY_MS + 1_000),
+        Number.POSITIVE_INFINITY,
+      );
+      if (Number.isSafeInteger(qualityEligibleAt) && qualityEligibleAt > now) {
+        await ctx.runMutation(
+          internal.autopilot.scheduleEligibilityDeadline,
+          {
+            siteId,
+            dueAt: qualityEligibleAt,
+            trigger: "quality_budget_deadline",
+            reason:
+              "Exact daily candidate window reset; rechecking strict buffer recovery.",
+          },
+        );
+      }
       return {
         scheduled: 0,
         mode: "quality_budget_exhausted",
@@ -663,6 +682,19 @@ export const scheduleCadence = internalAction({
           kind: "generation_quota_reached",
           message: `Monthly generation quota reached (${articlesThisMonth}/${limits.maxArticles}).`,
         });
+        const quotaEligibleAt = nextUtcMonthAt(now);
+        if (quotaEligibleAt) {
+          await ctx.runMutation(
+            internal.autopilot.scheduleEligibilityDeadline,
+            {
+              siteId,
+              dueAt: quotaEligibleAt,
+              trigger: "generation_quota_deadline",
+              reason:
+                "Exact UTC monthly generation-quota reset; rechecking ordinary tenant gates.",
+            },
+          );
+        }
         return {
           scheduled: 0,
           mode: "quota_reached",
@@ -899,6 +931,17 @@ export const scheduleCadence = internalAction({
           scheduled: 0,
           mode: "topic_replenishment_exhausted",
           bufferCount: buffer.length,
+        };
+      }
+      if (
+        !replenishment.queued &&
+        replenishment.reason === "cadence_failure_cooldown"
+      ) {
+        return {
+          scheduled: 0,
+          mode: "cadence_failure_cooldown",
+          bufferCount: buffer.length,
+          eligibleAt: replenishment.eligibleAt,
         };
       }
       if (!replenishment.queued) {

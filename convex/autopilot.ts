@@ -767,6 +767,64 @@ export const scheduleCadenceDeadline = internalMutation({
   },
 });
 
+// Quality-window and monthly-quota blockers have deterministic eligibility
+// boundaries too. Persist one exact run receipt so natural ticks cannot fan
+// out duplicate wakeups while the blocker remains unchanged.
+export const scheduleEligibilityDeadline = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    dueAt: v.number(),
+    trigger: v.string(),
+    reason: v.string(),
+  },
+  handler: async (ctx, { siteId, dueAt, trigger, reason }) => {
+    if (![
+      "quality_budget_deadline",
+      "generation_quota_deadline",
+    ].includes(trigger)) {
+      throw new Error("Unsupported cadence eligibility deadline");
+    }
+    const site = await ctx.db.get(siteId);
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe")
+    ) {
+      return { scheduled: false, reason: "autopilot_disabled" };
+    }
+    const timestamp = Date.now();
+    if (!Number.isSafeInteger(dueAt) || dueAt <= timestamp) {
+      return { scheduled: false, reason: "deadline_not_future" };
+    }
+    const existing = await ctx.db
+      .query("autopilot_runs")
+      .withIndex("by_site_scheduled", (q) =>
+        q.eq("siteId", siteId).eq("scheduledAt", dueAt)
+      )
+      .filter((q) => q.eq(q.field("trigger"), trigger))
+      .first();
+    if (existing) {
+      return { scheduled: false, reason: "already_armed", runId: existing._id };
+    }
+    const runId = await ctx.db.insert("autopilot_runs", {
+      siteId,
+      trigger,
+      scheduledAt: dueAt,
+      heartbeatAt: timestamp,
+      status: "scheduled",
+      detail: reason,
+    });
+    await ctx.scheduler.runAt(
+      dueAt,
+      internal.actions.pipeline.autopilotTick,
+      { siteId, runId, trigger },
+    );
+    return { scheduled: true, runId };
+  },
+});
+
 // Claim the exact rolling-window wake before the action re-enters the ordinary
 // scheduler. The scheduler remains the only queue authority: it recomputes
 // current inventory, entitlement, article quota, account/fleet provider

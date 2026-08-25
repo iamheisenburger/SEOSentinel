@@ -596,6 +596,18 @@ export default defineSchema({
     payload: v.optional(v.any()),
     result: v.optional(v.any()),
     error: v.optional(v.string()),
+    // Stable autonomous-cadence failure receipt. The owning job is the
+    // durable/no-replay boundary; eligibleAt is an exact reconsideration
+    // deadline, while terminal blockers deliberately omit a retry promise.
+    cadenceFailure: v.optional(v.object({
+      version: v.literal(1),
+      category: v.string(),
+      code: v.string(),
+      retryable: v.boolean(),
+      terminal: v.boolean(),
+      eligibleAt: v.optional(v.number()),
+      recordedAt: v.number(),
+    })),
     retries: v.optional(v.number()), // number of retry attempts
     nextAttemptAt: v.optional(v.number()),
     workerToken: v.optional(v.string()),
@@ -1244,6 +1256,9 @@ export default defineSchema({
     workerToken: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
     errorCode: v.optional(v.string()),
+    // Transactional receipt for the one scheduler continuation emitted when
+    // evidence becomes durable. This cannot replay provider work.
+    cadenceFollowupScheduledAt: v.optional(v.number()),
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
     createdAt: v.number(),

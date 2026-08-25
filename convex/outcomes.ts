@@ -859,3 +859,78 @@ export const getOutcomeSummaryInternal = internalQuery({
     return outcomeSummary(ctx, siteId, since, until);
   },
 });
+
+// Topic planning needs only a small, recent conversion-priority projection,
+// never the full outcome ledger. An overflow returns no feedback rather than
+// ranking from a silently biased suffix; strict keyword gates continue without
+// this optional tie-breaker.
+export const getCadencePrioritySignalsInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { siteId, limit }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+    const cutoff = outcomeUtcDay(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const readLimit = 500;
+    const rows = await ctx.db
+      .query("outcome_daily_rollups")
+      .withIndex("by_site_date", (q) =>
+        q.eq("siteId", siteId).gte("date", cutoff)
+      )
+      .order("desc")
+      .take(readLimit + 1);
+    if (rows.length > readLimit) {
+      return { truncated: true, signals: [] };
+    }
+    const byArticle = new Map<string, {
+      qualifiedActions: number;
+      organicLandingSessions: number;
+      signups: number;
+      activations: number;
+      paidConversions: number;
+    }>();
+    for (const row of rows) {
+      const key = String(row.articleId);
+      const aggregate = byArticle.get(key) ?? {
+        qualifiedActions: 0,
+        organicLandingSessions: 0,
+        signups: 0,
+        activations: 0,
+        paidConversions: 0,
+      };
+      aggregate.qualifiedActions += row.qualifiedActions;
+      aggregate.organicLandingSessions += row.organicLandingSessions ?? 0;
+      aggregate.signups += row.signups ?? 0;
+      aggregate.activations += row.activations ?? 0;
+      aggregate.paidConversions += row.paidConversions ?? 0;
+      byArticle.set(key, aggregate);
+    }
+    const maximum = Math.max(1, Math.min(limit ?? 50, 50));
+    const ranked = [...byArticle.entries()]
+      .sort((left, right) =>
+        right[1].paidConversions - left[1].paidConversions ||
+        right[1].activations - left[1].activations ||
+        right[1].signups - left[1].signups ||
+        right[1].qualifiedActions - left[1].qualifiedActions ||
+        right[1].organicLandingSessions - left[1].organicLandingSessions
+      )
+      .slice(0, maximum);
+    const signals = (await Promise.all(ranked.map(async ([rawId, counts]) => {
+      const articleId = ctx.db.normalizeId("articles", rawId);
+      const article = articleId ? await ctx.db.get(articleId) : null;
+      const topic = article?.topicId ? await ctx.db.get(article.topicId) : null;
+      if (
+        !article ||
+        article.siteId !== siteId ||
+        !topic ||
+        topic.siteId !== siteId
+      ) return null;
+      return { keyword: topic.primaryKeyword, ...counts };
+    }))).filter((signal): signal is NonNullable<typeof signal> =>
+      Boolean(signal)
+    );
+    return { truncated: false, signals };
+  },
+});

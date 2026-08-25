@@ -89,6 +89,10 @@ import {
   activateTerminalPlanCheckpoints,
   terminallyClosePlanCheckpoints,
 } from "./planCandidateCheckpoints";
+import {
+  classifyCadenceFailure,
+  deriveCadenceRecoveryStrategy,
+} from "./lib/cadenceLiveness";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
@@ -1277,6 +1281,7 @@ export const queuePlanIfAbsent = internalMutation({
       args.reason?.startsWith("topic_") === true &&
       args.growthParentArticleId === undefined;
     let planYieldTarget: AutomaticPlanYieldTarget | undefined;
+    let recentTopicPlans: Doc<"jobs">[] = [];
 
     if (automaticPlan) {
       if (
@@ -1323,6 +1328,7 @@ export const queuePlanIfAbsent = internalMutation({
         )
         .order("desc")
         .take(TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT + 1);
+      recentTopicPlans = recentRows.slice(0, 12);
       const recentWindow = evaluateBoundedRecentPlanWindow({
         rows: recentRows,
         maximumRecent: args.maximumRecent,
@@ -1442,6 +1448,45 @@ export const queuePlanIfAbsent = internalMutation({
       }
     }
 
+    // The paid-window query above intentionally forgets rows after 24 hours;
+    // adaptation must not. Read only the newest twelve durable plan receipts
+    // so a semantic miss can rotate its next eligible discovery plan even
+    // after the exact cooldown boundary has passed.
+    if (automaticTopicPlan) {
+      recentTopicPlans = await ctx.db
+        .query("jobs")
+        .withIndex("by_site_type_created", (q) =>
+          q.eq("siteId", args.siteId).eq("type", "plan")
+        )
+        .order("desc")
+        .take(12);
+    }
+
+    // A provider/budget failure with an exact future eligibility receipt must
+    // not be turned into a tight release/requeue loop by the scheduler. The
+    // mutation that recorded the failure also armed this exact deadline.
+    const latestCadenceFailure = recentTopicPlans.find((job) => {
+      const payload = job.payload && typeof job.payload === "object"
+        ? job.payload as Record<string, unknown>
+        : {};
+      return payload.manual !== true &&
+        typeof payload.reason === "string" &&
+        payload.reason.startsWith("topic_") &&
+        payload.growthParentArticleId === undefined;
+    })?.cadenceFailure;
+    if (
+      automaticTopicPlan &&
+      latestCadenceFailure?.eligibleAt !== undefined &&
+      latestCadenceFailure.eligibleAt > timestamp
+    ) {
+      return {
+        queued: false,
+        reason: "cadence_failure_cooldown" as const,
+        failureCode: latestCadenceFailure.code,
+        eligibleAt: latestCadenceFailure.eligibleAt,
+      };
+    }
+
     // Customer clicks, fleet planning, internal repairs, and authority-driven
     // replenishment all reserve from the same shared provider ledger.
     // "manual" controls rollout authorization only; it is never a spending
@@ -1464,6 +1509,16 @@ export const queuePlanIfAbsent = internalMutation({
         await ctx.db.patch(topicId, { status: "cannibalizing", updatedAt: now() });
       }
     }
+    const cadenceRecoveryStrategy = automaticTopicPlan
+      ? deriveCadenceRecoveryStrategy({
+          recentPlans: recentTopicPlans,
+          targetBufferShortfall:
+            planYieldTarget?.targetBufferShortfall ?? TARGET_APPROVED_BUFFER,
+          requiredVerifiedYield:
+            planYieldTarget?.requiredVerifiedYield ??
+              AUTOMATIC_PLAN_TOPIC_CAPACITY,
+        })
+      : undefined;
     const payload = args.reason || args.manual || args.growthParentArticleId
       ? {
           ...(args.reason ? {
@@ -1477,6 +1532,7 @@ export const queuePlanIfAbsent = internalMutation({
             growthActionFingerprint: args.growthActionFingerprint!,
           } : {}),
           ...(planYieldTarget ? { planYieldTarget } : {}),
+          ...(cadenceRecoveryStrategy ? { cadenceRecoveryStrategy } : {}),
           ...(planYieldTarget &&
               site.expectedClickSchedulingEnabled === true
             ? {
@@ -1810,6 +1866,7 @@ export const recoverExpectedClickPlanMigrationAfterPreflight = internalMutation(
       // processNextJob reports this as execution 2 and cannot schedule a third.
       workerAttempts: 1,
       error: undefined,
+      cadenceFailure: undefined,
       result: undefined,
       stepProgress: undefined,
       nextAttemptAt: undefined,
@@ -1922,11 +1979,19 @@ export const abortPlanForProviderBalance = internalMutation({
       }
     }
 
+    const failureMessage = releaseReason ===
+        "plan_reservation_day_expired_before_execution"
+      ? "The plan reservation expired before its first paid execution."
+      : "Provider account funding preflight blocked paid topic planning.";
+    const cadenceFailure = classifyCadenceFailure({
+      message: releaseReason,
+      now: timestamp,
+      explicitCode: releaseReason,
+    });
     await ctx.db.patch(args.jobId, {
       status: "failed",
-      error: releaseReason === "plan_reservation_day_expired_before_execution"
-        ? "The plan reservation expired before its first paid execution."
-        : "Provider account funding preflight blocked paid topic planning.",
+      error: failureMessage,
+      cadenceFailure,
       providerReservationReleasedAt: released ? timestamp : undefined,
       providerReservationReleaseReason: released ? releaseReason : undefined,
       workerToken: undefined,
@@ -1935,6 +2000,39 @@ export const abortPlanForProviderBalance = internalMutation({
       nextAttemptAt: undefined,
       updatedAt: timestamp,
     });
+    if (cadenceFailure.eligibleAt && cadenceFailure.eligibleAt > timestamp) {
+      const existingWake = await ctx.db
+        .query("autopilot_runs")
+        .withIndex("by_site_scheduled", (q) =>
+          q.eq("siteId", args.siteId).eq(
+            "scheduledAt",
+            cadenceFailure.eligibleAt!,
+          )
+        )
+        .filter((q) =>
+          q.eq(q.field("trigger"), "cadence_failure_deadline")
+        )
+        .first();
+      if (!existingWake) {
+        const runId = await ctx.db.insert("autopilot_runs", {
+          siteId: args.siteId,
+          trigger: "cadence_failure_deadline",
+          scheduledAt: cadenceFailure.eligibleAt,
+          heartbeatAt: timestamp,
+          status: "scheduled",
+          detail: `Exact cadence blocker deadline: ${cadenceFailure.code}.`,
+        });
+        await ctx.scheduler.runAt(
+          cadenceFailure.eligibleAt,
+          internal.actions.pipeline.autopilotTick,
+          {
+            siteId: args.siteId,
+            runId,
+            trigger: "cadence_failure_deadline",
+          },
+        );
+      }
+    }
     // Execution two may arrive here with an active execution-one checkpoint.
     // Its reservation is intentionally retained, so settle that durable paid
     // state through the operational terminal path instead of orphaning rows.
@@ -3146,6 +3244,7 @@ export const markDone = internalMutation({
       // A successful retry must not keep surfacing the previous transient
       // failure as if the completed job were still unhealthy.
       error: undefined,
+      cadenceFailure: undefined,
       workerToken: undefined,
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,
@@ -3172,6 +3271,12 @@ export const markFailed = internalMutation({
     await ctx.db.patch(jobId, {
       status: "failed",
       error,
+      ...(job.type === "plan"
+        ? { cadenceFailure: classifyCadenceFailure({
+            message: error,
+            now: currentTime,
+          }) }
+        : {}),
       reservationId: job.articleId ? job.reservationId : undefined,
       workerToken: undefined,
       heartbeatAt: undefined,
@@ -3219,12 +3324,29 @@ export const markRetryableFailure = internalMutation({
     const nextAttemptAt = willRetry
       ? currentTime + Math.min(15, 2 ** attempts) * 60_000
       : undefined;
+    const cadenceFailure = job.type === "plan"
+      ? {
+          ...classifyCadenceFailure({
+            message: error,
+            now: currentTime,
+            retryAt: nextAttemptAt ?? currentTime + 15 * 60 * 1000,
+            explicitCode: "transient_provider_failure",
+          }),
+          // A checkpoint's single execution may be operationally retryable
+          // in principle while replay remains forbidden in this job. Record
+          // the actual durable decision, not a hypothetical provider retry.
+          retryable: willRetry,
+          terminal: !willRetry,
+          eligibleAt: nextAttemptAt,
+        }
+      : undefined;
     await ctx.db.patch(jobId, {
       status: willRetry ? "pending" : "failed",
       workerAttempts: attempts,
       error: willRetry
         ? `Transient worker failure; retry ${attempts}/${maximumRetries}: ${error}`
         : `Worker failure exhausted after ${attempts} attempts: ${error}`,
+      ...(cadenceFailure ? { cadenceFailure } : {}),
       nextAttemptAt,
       reservationId: job.articleId ? job.reservationId : undefined,
       workerToken: undefined,

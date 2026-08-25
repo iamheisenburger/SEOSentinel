@@ -2304,9 +2304,26 @@ export const persistEvidence = internalMutation({
       workerToken: undefined,
       leaseExpiresAt: undefined,
       errorCode: undefined,
+      cadenceFollowupScheduledAt: timestamp,
       completedAt: timestamp,
       updatedAt: timestamp,
     });
+    // The evidence receipt is now durable and provider work is finished. Wake
+    // the tenant immediately so a newly scheduler-ready topic can fill the
+    // sealed buffer without waiting for the coarse fleet cron. Convex commits
+    // this schedule atomically with the one completed-job receipt, so retries
+    // cannot replay SERPs or emit a second continuation.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.autopilot.dispatchSiteFollowup,
+      {
+        siteId: args.siteId,
+        trigger: "expected_click_evidence_ready",
+        reason: persistedTopics > 0
+          ? `evidence_persisted_${persistedTopics}`
+          : "evidence_completed_without_scheduler_ready_topic",
+      },
+    );
     return { persistedTopics, insufficientTopics, skippedTopics };
   },
 });

@@ -96,6 +96,13 @@ import {
   planSeedBatchManifestHash,
 } from "../lib/planCandidateCheckpoint";
 import {
+  adaptiveDiscoverySeeds,
+  adaptiveOpportunityScore,
+  deriveCadenceRecoveryStrategy,
+  parseCadenceRecoveryStrategy,
+  type CadenceRecoveryStrategy,
+} from "../lib/cadenceLiveness";
+import {
   STRICT_EVIDENCE_SEARCH_DOMAINS,
   strictEvidenceSources,
 } from "../lib/sourceQuality";
@@ -2107,6 +2114,11 @@ type PlanExecutionResult = {
     estimatedCostUsd: number;
     tenantAuthorityCacheHit: boolean;
   };
+  cadenceRecovery: CadenceRecoveryStrategy & {
+    discoverySeedCount: number;
+    demandSignalsReused: number;
+    outcomeSignalsReused: number;
+  };
 };
 
 type PlanCheckpointExecutionAuthorization = {
@@ -2197,6 +2209,7 @@ async function handlePlan(
   maximumTopicsToSave = AUTOMATIC_PLAN_TOPIC_CAPACITY,
   workerExecution = 1,
   requiredVerifiedYield?: number,
+  frozenCadenceRecoveryStrategy?: unknown,
 ): Promise<PlanExecutionResult> {
   const PLAN_STEPS = 6;
   const assertCurrentPlanWorker = async () => {
@@ -2275,6 +2288,14 @@ async function handlePlan(
       requestedTopicLimit,
     ),
   );
+  const cadenceRecoveryStrategy: CadenceRecoveryStrategy =
+    parseCadenceRecoveryStrategy(frozenCadenceRecoveryStrategy) ??
+      deriveCadenceRecoveryStrategy({
+        recentPlans: [],
+        targetBufferShortfall: requiredVerifiedYield ?? 0,
+        requiredVerifiedYield:
+          requiredVerifiedYield ?? AUTOMATIC_PLAN_TOPIC_CAPACITY,
+      });
   let authorityBulkRequests = 0;
   let authorityTargets = 0;
   let authorityEstimatedCostUsd = 0;
@@ -2300,6 +2321,28 @@ async function handlePlan(
       ...tenantBusinessSignals,
     }).eligible,
   );
+  let outcomeFeedbackSignals: Array<{
+    keyword: string;
+    qualifiedActions: number;
+    organicLandingSessions: number;
+    signups: number;
+    activations: number;
+    paidConversions: number;
+  }> = [];
+  try {
+    const outcomePriority = await ctx.runQuery(
+      internal.outcomes.getCadencePrioritySignalsInternal,
+      { siteId, limit: 50 },
+    );
+    outcomeFeedbackSignals = outcomePriority.truncated
+      ? []
+      : outcomePriority.signals;
+  } catch (error) {
+    console.log(
+      "Bounded outcome priority feedback unavailable; strict planning continues:",
+      error,
+    );
+  }
 
   await reportProgress(1, "Analyzing site authority...");
 
@@ -2427,6 +2470,7 @@ async function handlePlan(
   }[] = [];
   let keywordDiscoveryError: unknown = null;
   let checkpointSeedBatches: string[][] = [];
+  let discoverySeedCount = 0;
   try {
     const { discoverKeywords, findKeywordGaps, getKeywordMetrics } = await import("./seoData");
 
@@ -2489,14 +2533,25 @@ async function handlePlan(
       : values.map((_, index) =>
           values[(index + seedCycle) % values.length]
         );
-    const seeds = [
-      ...(growthContext ? [growthContext.seed.trim().toLowerCase()] : []),
-      ...rotateDurableSeeds(durableSearchDemand),
-      ...rotateDurableSeeds(durableProductAnchors),
-      ...rotatingSeeds,
-    ].filter((seed, index, all) => seed && all.indexOf(seed) === index).slice(0, 20);
+    const problemDiscoveryAnchors = tenantDiscoveryAnchors([
+      ...(site.painPoints ?? []),
+      site.productUsage,
+      site.targetAudienceSummary,
+    ], 18);
+    const seeds = adaptiveDiscoverySeeds({
+      strategy: cadenceRecoveryStrategy,
+      gscSeeds: rotateDurableSeeds(durableSearchDemand),
+      profileSeeds: rotateDurableSeeds(durableProductAnchors),
+      problemSeeds: rotateDurableSeeds(problemDiscoveryAnchors),
+      rotatingSeeds,
+      growthSeed: growthContext?.seed,
+      limit: 20,
+    });
+    discoverySeedCount = seeds.length;
     console.log(
-      `Seeds: ${baseSeeds.length} business anchors → ${seeds.length} balanced discovery seeds (cycle ${seedCycle})`,
+      `Seeds: ${baseSeeds.length} business anchors → ${seeds.length} bounded ` +
+        `${cadenceRecoveryStrategy.sourceMode}/${cadenceRecoveryStrategy.intentMode} ` +
+        `discovery seeds (cycle ${seedCycle})`,
     );
     checkpointSeedBatches = topicDiscoverySeedBatches(seeds, 5, 3);
 
@@ -2665,6 +2720,7 @@ async function handlePlan(
     difficultyMeasured: boolean;
     cpc: number;
     opportunity: number;
+    feedbackBonus: number;
   }[] = [];
   const {
     coreBusinessSignals: businessSignals,
@@ -2694,7 +2750,19 @@ async function handlePlan(
         businessModelSignals,
         growthSeed: growthContext?.seed,
       }).eligible)
-      .map(k => ({ ...k, opportunity: scoreKeyword(k) }))
+      .map(k => {
+        const adaptive = adaptiveOpportunityScore({
+          keyword: k.keyword,
+          baseOpportunity: scoreKeyword(k),
+          demandSignals: searchDemandSignals,
+          outcomeSignals: outcomeFeedbackSignals,
+        });
+        return {
+          ...k,
+          opportunity: adaptive.score,
+          feedbackBonus: adaptive.feedbackBonus,
+        };
+      })
       .sort((a, b) => b.opportunity - a.opportunity);
 
     console.log(
@@ -2798,7 +2866,10 @@ async function handlePlan(
       articleType: articleTypeFor(keyword.keyword),
       notes:
         `Measured opportunity: ${keyword.searchVolume}/month, KD ${keyword.difficulty}, ` +
-        `CPC $${keyword.cpc.toFixed(2)}; passed tenant product-fit and authority ceilings.`,
+        `CPC $${keyword.cpc.toFixed(2)}; passed tenant product-fit and authority ceilings` +
+        (keyword.feedbackBonus > 0
+          ? `; bounded production-feedback bonus ${keyword.feedbackBonus}.`
+          : "."),
     }));
     console.log(`Deterministically selected ${plan.length} measured topic(s).`);
   } else if (requireVerifiedKeywordData) {
@@ -3050,7 +3121,13 @@ async function handlePlan(
       }
 
       // Score it
-      const opportunity = scoreKeyword(m);
+      const feedback = adaptiveOpportunityScore({
+        keyword: topic.primaryKeyword,
+        baseOpportunity: scoreKeyword(m),
+        demandSignals: searchDemandSignals,
+        outcomeSignals: outcomeFeedbackSignals,
+      });
+      const opportunity = feedback.score;
       const priority = opportunity >= 70 ? 5 : opportunity >= 55 ? 4 : opportunity >= 40 ? 3 : opportunity >= 20 ? 2 : 1;
 
       enrichedPlan.push({
@@ -3805,6 +3882,12 @@ async function handlePlan(
       targets: authorityTargets,
       estimatedCostUsd: Math.round(authorityEstimatedCostUsd * 1_000_000) / 1_000_000,
       tenantAuthorityCacheHit,
+    },
+    cadenceRecovery: {
+      ...cadenceRecoveryStrategy,
+      discoverySeedCount,
+      demandSignalsReused: searchDemandSignals.length,
+      outcomeSignalsReused: outcomeFeedbackSignals.length,
     },
   };
 }
@@ -5874,6 +5957,7 @@ async function generatePlanHandler(
               requiredVerifiedYield: number;
             };
             planCheckpointModeVersion?: number;
+            cadenceRecoveryStrategy?: unknown;
           })
         : undefined;
       const automaticTopicPlan = payload?.manual !== true &&
@@ -5937,6 +6021,7 @@ async function generatePlanHandler(
           AUTOMATIC_PLAN_TOPIC_CAPACITY,
         workerExecution,
         checkpointYieldTarget?.requiredVerifiedYield,
+        payload?.cadenceRecoveryStrategy,
       );
       let completed: { updated: boolean };
       if (checkpointYieldTarget) {
@@ -7300,6 +7385,7 @@ export const processNextJob = internalAction({
         requiredVerifiedYield: number;
       };
       planCheckpointModeVersion?: number;
+      cadenceRecoveryStrategy?: unknown;
       options?: RichMediaOptions;
     };
     const payload = job.payload as JobPayload | undefined;
@@ -7481,6 +7567,7 @@ export const processNextJob = internalAction({
               AUTOMATIC_PLAN_TOPIC_CAPACITY,
           workerExecution,
           checkpointYieldTarget?.requiredVerifiedYield,
+          payload?.cadenceRecoveryStrategy,
         );
         if (!underfilledContinuation && !checkpointYieldTarget) {
           if (!planResult.planPersistenceCommit) {
