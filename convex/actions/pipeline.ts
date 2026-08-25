@@ -61,6 +61,8 @@ import {
   topicDiscoverySeedWindow,
 } from "../lib/autopilotBuffer";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
+import type { SchedulerRunOutcome } from
+  "../lib/autopilotRunOutcome.ts";
 import { evaluateSerpBusinessIntent } from "../lib/serpAttainability";
 import {
   DATAFORSEO_DEMAND_SOURCE,
@@ -6110,6 +6112,193 @@ export const generatePlan = action({
   },
 });
 
+type OneSetupResumeResult =
+  | {
+      state: "completed";
+      executionId: Id<"one_setup_executions">;
+      jobId?: Id<"jobs">;
+      topicCount: number;
+    }
+  | {
+      state: "in_progress" | "waiting";
+      executionId: Id<"one_setup_executions">;
+      jobId?: Id<"jobs">;
+      reason: string;
+    }
+  | {
+      state: "blocked";
+      executionId: Id<"one_setup_executions">;
+      jobId?: Id<"jobs">;
+      blockerCode: string;
+      topicCount?: number;
+    };
+
+/**
+ * Revision-bound setup orchestration. Every retry claims the same durable
+ * execution and, once reserved, the same paid plan job. A missing browser
+ * response can therefore resume or inspect work, never purchase a replay.
+ */
+export const resumeOneSetupExecution = action({
+  args: {
+    siteId: v.id("sites"),
+    requestId: v.id("managed_provisioning_requests"),
+    requestRevision: v.number(),
+  },
+  handler: async (ctx, args): Promise<OneSetupResumeResult> => {
+    await requireOwnedSite(ctx, args.siteId);
+    const claimNonce = randomUUID();
+    const claim: {
+      claimed: boolean;
+      executionId: Id<"one_setup_executions">;
+      status: "running" | "plan_queued" | "in_progress" | "completed" |
+        "blocked";
+      planJobId?: Id<"jobs">;
+      topicCount?: number;
+      blockerCode?: string;
+    } = await ctx.runMutation(internal.oneSetupExecutions.claim, {
+      ...args,
+      claimNonce,
+    });
+    if (claim.status === "completed") {
+      return {
+        state: "completed",
+        executionId: claim.executionId,
+        jobId: claim.planJobId,
+        topicCount: claim.topicCount ?? 0,
+      };
+    }
+    if (claim.status === "blocked") {
+      return {
+        state: "blocked",
+        executionId: claim.executionId,
+        jobId: claim.planJobId,
+        blockerCode: claim.blockerCode ?? "setup_execution_blocked",
+        topicCount: claim.topicCount,
+      };
+    }
+    if (!claim.claimed) {
+      return {
+        state: "in_progress",
+        executionId: claim.executionId,
+        jobId: claim.planJobId,
+        reason: "exact_revision_claim_active",
+      };
+    }
+
+    let planJobId = claim.planJobId;
+    if (!planJobId) {
+      const crawl = await ctx.runAction(
+        internal.actions.pipeline.repairOnboardingInternal,
+        { siteId: args.siteId },
+      );
+      if (crawl.pages <= 0) {
+        await ctx.runMutation(internal.oneSetupExecutions.releaseForRetry, {
+          executionId: claim.executionId,
+          claimNonce,
+          blockerCode: crawl.reason,
+        });
+        return {
+          state: "waiting",
+          executionId: claim.executionId,
+          reason: crawl.reason,
+        };
+      }
+      const crawlRecorded = await ctx.runMutation(
+        internal.oneSetupExecutions.recordCrawlCompleted,
+        { executionId: claim.executionId, claimNonce },
+      );
+      if (!crawlRecorded.updated) {
+        return {
+          state: "in_progress",
+          executionId: claim.executionId,
+          reason: "setup_execution_claim_changed",
+        };
+      }
+      const queued: {
+        queued: boolean;
+        jobId?: Id<"jobs">;
+        reason?: string;
+        jobStatus?: string;
+      } = await ctx.runMutation(internal.jobs.queuePlanIfAbsent, {
+        siteId: args.siteId,
+        reason: "one_setup_initial_plan",
+        manual: true,
+        oneSetupExecutionId: claim.executionId,
+        oneSetupClaimNonce: claimNonce,
+        oneSetupRequestRevision: args.requestRevision,
+      });
+      const exactPlanReceipt = queued.queued || queued.reason === "setup_receipt";
+      planJobId = exactPlanReceipt ? queued.jobId : undefined;
+      if (!planJobId) {
+        const reason = queued.reason ?? "plan_reservation_unavailable";
+        await ctx.runMutation(internal.oneSetupExecutions.releaseForRetry, {
+          executionId: claim.executionId,
+          claimNonce,
+          blockerCode: reason,
+        });
+        return {
+          state: "waiting",
+          executionId: claim.executionId,
+          reason,
+        };
+      }
+    }
+
+    const plan = await ctx.runQuery(
+      internal.oneSetupExecutions.inspectPlan,
+      { executionId: claim.executionId },
+    );
+    if (!plan || plan.jobId !== planJobId) {
+      throw new Error("One-setup execution lost its exact plan receipt");
+    }
+    if (plan.status === "pending") {
+      try {
+        await generatePlanHandler(ctx, {
+          siteId: args.siteId,
+          jobId: plan.jobId,
+        });
+      } catch {
+        // The plan mutation owns its exact failure receipt. Settle that receipt
+        // below without exposing provider details or creating another job.
+      }
+    }
+    const settled: {
+      state: "completed" | "blocked" | "in_progress" | "claim_lost";
+      topicCount?: number;
+      blockerCode?: string;
+      planJobId?: Id<"jobs">;
+    } = await ctx.runMutation(internal.oneSetupExecutions.settleFromPlan, {
+      executionId: claim.executionId,
+      claimNonce,
+    });
+    if (settled.state === "completed") {
+      return {
+        state: "completed",
+        executionId: claim.executionId,
+        jobId: plan.jobId,
+        topicCount: settled.topicCount ?? 0,
+      };
+    }
+    if (settled.state === "blocked") {
+      return {
+        state: "blocked",
+        executionId: claim.executionId,
+        jobId: plan.jobId,
+        blockerCode: settled.blockerCode ?? "setup_plan_blocked",
+        topicCount: settled.topicCount,
+      };
+    }
+    return {
+      state: "in_progress",
+      executionId: claim.executionId,
+      jobId: plan.jobId,
+      reason: settled.state === "claim_lost"
+        ? "setup_execution_claim_changed"
+        : "exact_plan_job_in_progress",
+    };
+  },
+});
+
 export const generateArticle = action({
   args: {
     siteId: v.id("sites"),
@@ -7254,28 +7443,45 @@ export const autopilotTick = internalAction({
             (blocker: unknown): blocker is string => typeof blocker === "string",
           )
         : [];
-    const detailByMode: Record<string, string> = {
+    const detailByMode = {
+      autopilot_disabled: "Autopilot is disabled for this tenant.",
+      cadence_paused: "The effective tenant cadence is paused.",
+      rollout_observe: "Automation remains in fail-closed observe mode.",
+      readiness_regressed: "Live readiness regressed and execution was stopped.",
       migration_pending: "Publication-integrity migration is incomplete.",
       quality_budget_exhausted: "The bounded quality candidate budget is exhausted.",
       quota_reached: "The monthly generation quota is reached.",
       site_limit_reached: "The tenant exceeds its active site limit.",
       topic_replenishment_exhausted: "Topic recovery is cooling down and will retry automatically.",
+      cadence_failure_cooldown: cadenceSchedule.eligibleAt
+        ? `Cadence recovery is blocked until ${new Date(cadenceSchedule.eligibleAt).toISOString()}.`
+        : "Cadence recovery is blocked by an exact durable eligibility receipt.",
       work_in_progress: "Another leased worker is still processing tenant work.",
       pending_plan: "A pending topic plan is ready for immediate processing.",
+      buffer_delivery: "A sealed article delivery was queued.",
       buffer_delivery_pending: "A sealed delivery job exists but is not currently claimable.",
       public_url_pending: "The latest delivered article is awaiting exact public URL verification.",
       public_url_failed: "The latest delivered article failed exact public URL verification.",
+      automatic_live_promotion: "Verified warm readiness promoted the tenant to live delivery.",
       approval_waiting: "A quality-gated draft is waiting for owner approval.",
       manual_delivery_waiting: "A quality-gated draft is waiting for manual delivery.",
       cadence_not_due: "The next cadence window is not due yet.",
+      quality_revision: "A bounded quality revision was queued.",
+      deterministic_repair: "A deterministic publication repair was queued.",
+      topic_portfolio_goal_replenishment:
+        "A measured topic-portfolio goal replenishment was queued.",
+      topic_portfolio_evidence_replenishment:
+        "A topic evidence replenishment was queued.",
+      topic_replenishment: "A bounded topic replenishment was queued.",
+      buffer_fill: "A strict-quality buffer candidate was queued.",
+      cadence_generation: "A cadence article candidate was queued.",
       buffer_full: "The strict-quality future buffer is full.",
       rollout_buffer_ready:
         rolloutBlockers.length > 0
           ? `The strict-quality buffer is ready, but live publication is blocked: ${describeAutopilotBlockers(rolloutBlockers)}.`
           : "The strict-quality buffer is ready, but live publication prerequisites are incomplete.",
-      autopilot_disabled: "Autopilot is disabled for this tenant.",
       idle: "No eligible work was pending.",
-    };
+    } satisfies Record<SchedulerRunOutcome, string>;
     return finish(
       { processed: 0 },
       mode,

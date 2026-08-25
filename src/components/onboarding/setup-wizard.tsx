@@ -31,6 +31,10 @@ import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 
 type SetupMode = "connect_existing" | "managed";
 type AutomationMode = "assisted" | "full";
+type OneSetupReceipt = {
+  requestId: Id<"managed_provisioning_requests">;
+  revision: number;
+};
 
 const CAPABILITIES = [
   {
@@ -110,6 +114,7 @@ export function SetupWizard() {
   const [cadence, setCadence] = useState(0);
   const automaticCadence = useRef(0);
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
+  const [setupReceipt, setSetupReceipt] = useState<OneSetupReceipt | null>(null);
   const [busy, setBusy] = useState(false);
   const [setupNeedsRetry, setSetupNeedsRetry] = useState(false);
   const [activeOperation, setActiveOperation] = useState<string | null>(null);
@@ -122,8 +127,9 @@ export function SetupWizard() {
   );
   const upsertSite = useMutation(api.sites.upsert);
   const saveOneSetupRequest = useMutation(api.sites.saveOneSetupRequest);
-  const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
-  const generatePlan = useAction(api.actions.pipeline.generatePlan);
+  const resumeOneSetupExecution = useAction(
+    api.actions.pipeline.resumeOneSetupExecution,
+  );
 
   const monthlyAllowance = capacity?.ready
     ? capacity.availableMonthlyArticles
@@ -141,17 +147,24 @@ export function SetupWizard() {
     automaticCadence.current = next;
   }, [monthlyAllowance]);
 
-  async function finishSetup(createdSiteId: Id<"sites">) {
+  async function finishSetup(
+    createdSiteId: Id<"sites">,
+    existingReceipt: OneSetupReceipt | null = setupReceipt,
+  ) {
+    let receipt = existingReceipt;
     try {
-      setActiveOperation("Recording your connection choices…");
-      await saveOneSetupRequest({
-        siteId: createdSiteId,
-        publisherMode,
-        searchMeasurementMode: measurementMode,
-        outreachMailboxMode: outreachMode,
-        automationMode,
-        requestedCadencePerWeek: cadence,
-      });
+      if (!receipt) {
+        setActiveOperation("Recording your connection choices…");
+        receipt = await saveOneSetupRequest({
+          siteId: createdSiteId,
+          publisherMode,
+          searchMeasurementMode: measurementMode,
+          outreachMailboxMode: outreachMode,
+          automationMode,
+          requestedCadencePerWeek: cadence,
+        });
+        setSetupReceipt(receipt);
+      }
 
       const planSync = await fetch("/api/billing/sync-plan", {
         method: "POST",
@@ -174,20 +187,34 @@ export function SetupWizard() {
     }
 
     try {
-      setActiveOperation("Analyzing your website…");
-      await crawlAndAnalyze({ siteId: createdSiteId });
-      setActiveOperation("Preparing the first measured content plan…");
-      await generatePlan({ siteId: createdSiteId });
-      setSetupNeedsRetry(false);
-      setNotice(
-        "The setup request is saved. Managed connections remain pending until their canonical receipts verify.",
-      );
+      setActiveOperation("Resuming the exact setup execution…");
+      const result = await resumeOneSetupExecution({
+        siteId: createdSiteId,
+        requestId: receipt.requestId,
+        requestRevision: receipt.revision,
+      });
+      if (result.state === "completed") {
+        setSetupNeedsRetry(false);
+        setNotice(
+          `The first measured plan produced ${result.topicCount} topics. Managed connections remain pending until their canonical receipts verify.`,
+        );
+      } else if (result.state === "blocked") {
+        setSetupNeedsRetry(true);
+        setError(
+          `The exact setup execution stopped safely (${result.blockerCode}). No paid plan was replayed.`,
+        );
+      } else {
+        setSetupNeedsRetry(true);
+        setNotice(
+          `The saved setup execution is ${result.state.replace("_", " ")} (${result.reason}). Retry resumes the same receipt.`,
+        );
+      }
     } catch (pipelineError) {
       setSetupNeedsRetry(true);
       setNotice(
         pipelineError instanceof Error
-          ? `The setup request is safe, but analysis needs attention: ${pipelineError.message}`
-          : "The setup request is safe, but website analysis needs attention.",
+          ? `The setup request is safe. Retry resumes its exact execution: ${pipelineError.message}`
+          : "The setup request is safe. Retry resumes its exact execution.",
       );
     } finally {
       setActiveOperation(null);
@@ -244,7 +271,7 @@ export function SetupWizard() {
     setError(null);
     setNotice(null);
     try {
-      await finishSetup(siteId);
+      await finishSetup(siteId, setupReceipt);
     } finally {
       setActiveOperation(null);
       setBusy(false);

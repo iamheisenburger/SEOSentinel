@@ -18,7 +18,6 @@ import {
   DATAFORSEO_AUTHORITY_SOURCE,
   DATAFORSEO_DEMAND_SOURCE,
   EXPECTED_CLICK_PORTFOLIO_VERSION,
-  evaluateStoredExpectedClickPortfolio,
 } from "./lib/expectedClickPortfolio";
 import { DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL } from "./lib/seoGrowth";
 import {
@@ -31,6 +30,8 @@ import {
 } from "./lib/planCandidateCheckpoint";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
+import { evaluateSchedulerReadyTopicInventory } from
+  "./lib/schedulerTopicReadiness";
 import {
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
   atomicPlanPersistenceCumulativeCount,
@@ -107,62 +108,21 @@ async function inventoryAuditHandler(
       const status = topic.status ?? "planned";
       byStatus[status] = (byStatus[status] ?? 0) + 1;
     }
-    const portfolioTopics = topics.filter((topic) =>
-      !["cannibalizing", "disqualified", "plan_checkpoint"].includes(
-        topic.status ?? "planned",
-      ) && !topic.planCheckpointTerminalFailureCode
-    );
-    const expectedClickPortfolio = evaluateStoredExpectedClickPortfolio({
-      topics: portfolioTopics.map((topic) => ({
-        topicId: String(topic._id),
-        keyword: topic.primaryKeyword,
-        searchVolume: topic.searchVolume,
-        searchDemandSource: topic.searchDemandSource,
-        searchDemandMeasuredAt: topic.searchDemandMeasuredAt,
-        searchDemandLocationCode: topic.searchDemandLocationCode,
-        searchDemandLanguageCode: topic.searchDemandLanguageCode,
-        serpTopUrls: topic.serpTopUrls,
-        serpObservedAt: topic.serpObservedAt,
-        serpLocationCode: topic.serpLocationCode,
-        serpLanguageCode: topic.serpLanguageCode,
-        serpAuthorityCompetitors: topic.serpAuthorityCompetitors,
-      })),
-      tenantAuthority: {
-        domain: site.seoAuthorityDomain,
-        currentDomain: site.domain,
-        domainRank: site.seoAuthorityDomainRank,
-        referringDomains: site.seoAuthorityReferringDomains,
-        source: site.seoAuthoritySource,
-        measuredAt: site.seoAuthorityMeasuredAt,
-      },
+    const schedulerReadiness = evaluateSchedulerReadyTopicInventory({
+      topics,
+      site,
       monthlyOrganicClickGoal:
         growthGoal?.monthlyOrganicClicksGoal ??
         DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
       currentLocationCode: dataForSeoLocationCode(site.targetCountry),
       currentLanguageCode: dataForSeoLanguageCode(site.language),
     });
-    const expectedClickEligible = new Set(
-      expectedClickPortfolio.topics
-        .filter((topic) => topic.status === "eligible")
-        .map((topic) => topic.topicId),
-    );
-    const schedulerEvidenceReady = topics.filter((topic) =>
-      !["used", "queued", "cannibalizing", "disqualified"].includes(
-        topic.status ?? "planned",
-      ) &&
-      !planCheckpointTopicExecutionLocked(topic) &&
-      Number.isFinite(topic.searchVolume) &&
-      Number.isFinite(topic.keywordDifficulty) &&
-      topic.keywordDifficultyMeasured === true &&
-      Boolean(topic.serpIntent) &&
-      (topic.serpTopUrls?.length ?? 0) >= 5 &&
-      expectedClickEligible.has(String(topic._id))
-    );
     return {
       total: topics.length,
       byStatus,
-      schedulerEvidenceReady: schedulerEvidenceReady.length,
-      expectedClickPortfolio,
+      schedulerEvidenceReady: schedulerReadiness.schedulerReadyTopicIds.length,
+      schedulerReadyTopicIds: schedulerReadiness.schedulerReadyTopicIds,
+      expectedClickPortfolio: schedulerReadiness.portfolio,
       recent: topics
         .slice()
         .sort((left, right) => right._creationTime - left._creationTime)

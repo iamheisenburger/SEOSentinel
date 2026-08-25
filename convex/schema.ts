@@ -257,6 +257,52 @@ export default defineSchema({
     .index("by_fulfillment_due", ["nextAttemptAt"])
     .index("by_operator_action", ["operatorActionRequiredAt"]),
 
+  // Exact owner-initiated setup pipeline receipt. Browser retries bind to the
+  // same request revision and plan job; they never mint a second paid plan
+  // merely because the first action response was lost.
+  one_setup_executions: defineTable({
+    siteId: v.id("sites"),
+    requestId: v.id("managed_provisioning_requests"),
+    requestRevision: v.number(),
+    ownerAccountKey: v.string(),
+    domainSnapshot: v.string(),
+    automationMode: v.union(
+      v.literal("assisted"),
+      v.literal("full"),
+    ),
+    requestedCadencePerWeek: v.number(),
+    publisherMode: v.union(
+      v.literal("connect_existing"),
+      v.literal("managed"),
+    ),
+    searchMeasurementMode: v.union(
+      v.literal("connect_existing"),
+      v.literal("managed"),
+    ),
+    outreachMailboxMode: v.union(
+      v.literal("connect_existing"),
+      v.literal("managed"),
+    ),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("running"),
+      v.literal("plan_queued"),
+      v.literal("completed"),
+      v.literal("blocked"),
+    ),
+    claimNonce: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    planJobId: v.optional(v.id("jobs")),
+    crawlCompletedAt: v.optional(v.number()),
+    topicCount: v.optional(v.number()),
+    blockerCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_request_revision", ["requestId", "requestRevision"])
+    .index("by_site", ["siteId"]),
+
   // Canonical account-level billing receipt. Site reconciliation is paged so
   // even an Enterprise account cannot make one mutation unbounded. While a
   // new receipt is reconciling, paid/write execution fails closed; the prior

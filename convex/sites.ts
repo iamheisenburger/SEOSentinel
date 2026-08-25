@@ -64,7 +64,18 @@ import {
   OUTREACH_DURABILITY_MIGRATION_VERSION,
 } from "./lib/outreachAutonomy.ts";
 import { MAX_SEQUENCE_STEP } from "./lib/outreachPacing.ts";
-import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
+import {
+  DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
+  isSeoGrowthActuationEligible,
+} from "./lib/seoGrowth.ts";
+import {
+  dataForSeoLanguageCode,
+  dataForSeoLocationCode,
+} from "./lib/dataForSeoLocale.ts";
+import {
+  evaluateSchedulerReadyTopicInventory,
+  SCHEDULER_TOPIC_INVENTORY_READ_LIMIT,
+} from "./lib/schedulerTopicReadiness.ts";
 import { terminallyClosePlanCheckpoints } from
   "./planCandidateCheckpoints";
 import { releaseSharedProviderReservation } from
@@ -1243,7 +1254,14 @@ export const getOneSetupReadiness = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await requireSiteOwner(ctx, siteId);
-    const [request, crawledPage, plannedTopic, inboxes, cadenceSnapshot] =
+    const [
+      request,
+      crawledPage,
+      topics,
+      growthGoal,
+      inboxes,
+      cadenceSnapshot,
+    ] =
       await Promise.all([
         ctx.db
           .query("managed_provisioning_requests")
@@ -1256,7 +1274,11 @@ export const getOneSetupReadiness = query({
         ctx.db
           .query("topic_clusters")
           .withIndex("by_site", (q) => q.eq("siteId", siteId))
-          .first(),
+          .take(SCHEDULER_TOPIC_INVENTORY_READ_LIMIT + 1),
+        ctx.db
+          .query("seo_growth_goals")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .unique(),
         ctx.db
           .query("outreach_inboxes")
           .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -1296,6 +1318,18 @@ export const getOneSetupReadiness = query({
         ownerAccountKey,
       }),
     );
+    const schedulerReadiness =
+      topics.length <= SCHEDULER_TOPIC_INVENTORY_READ_LIMIT
+        ? evaluateSchedulerReadyTopicInventory({
+            site,
+            topics,
+            monthlyOrganicClickGoal:
+              growthGoal?.monthlyOrganicClicksGoal ??
+              DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
+            currentLocationCode: dataForSeoLocationCode(site.targetCountry),
+            currentLanguageCode: dataForSeoLanguageCode(site.language),
+          })
+        : null;
 
     const websiteState: OneSetupReadinessState =
       crawledPage && (site.siteSummary || site.niche)
@@ -1303,7 +1337,8 @@ export const getOneSetupReadiness = query({
         : requestValid
           ? "queued"
           : "action_required";
-    const planState: OneSetupReadinessState = plannedTopic
+    const planState: OneSetupReadinessState =
+      (schedulerReadiness?.schedulerReadyTopicIds.length ?? 0) > 0
       ? "ready"
       : requestValid
         ? "queued"
@@ -2137,6 +2172,7 @@ const ACCOUNT_DELETION_RECEIPT_STAGES = [
   "usage_log",
 ] as const;
 const SITE_DELETION_STAGES = [
+  "one_setup_executions",
   "managed_provisioning_requests",
   "outreach_inbound_relay_canaries",
   "outreach_inbound_relay_receipts",
@@ -2575,6 +2611,11 @@ async function deletionRowsForStage(
 ): Promise<Array<{ _id: Id<TableNames> }>> {
   const name = SITE_DELETION_STAGES[stage];
   switch (name) {
+    case "one_setup_executions":
+      return ctx.db
+        .query("one_setup_executions")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(SITE_DELETION_BATCH);
     case "managed_provisioning_requests":
       return ctx.db
         .query("managed_provisioning_requests")

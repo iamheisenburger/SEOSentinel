@@ -40,6 +40,8 @@ import {
   topicReplenishmentBudget,
 } from "../lib/autopilotBuffer";
 import { nextUtcMonthAt } from "../lib/cadenceLiveness";
+import type { CadenceScheduleResult } from
+  "../lib/autopilotRunOutcome.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ArticleSummary = {
@@ -172,13 +174,7 @@ export const scheduleCadence = internalAction({
   handler: async (
     ctx: ActionCtx,
     { siteId },
-  ): Promise<{
-    scheduled: number;
-    mode?: string;
-    bufferCount?: number;
-    blockers?: string[];
-    eligibleAt?: number;
-  }> => {
+  ): Promise<CadenceScheduleResult> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     if (!site.autopilotEnabled) {
@@ -380,11 +376,15 @@ export const scheduleCadence = internalAction({
     // Audit it only after the independent delivery path above has had priority.
     const inventoryAudit: {
       expectedClickPortfolio: ExpectedClickPortfolioEvaluation;
+      schedulerReadyTopicIds: string[];
     } = await ctx.runQuery(internal.topics.getInventoryAuditInternal, {
       siteId,
       recentLimit: 10,
     });
     const portfolio = inventoryAudit.expectedClickPortfolio;
+    const schedulerReadyTopicIds = new Set(
+      inventoryAudit.schedulerReadyTopicIds,
+    );
     const strictExpectedClickScheduling =
       site.expectedClickSchedulingEnabled === true;
     await ctx.runMutation(internal.autopilot.recordTopicPortfolioAudit, {
@@ -789,7 +789,7 @@ export const scheduleCadence = internalAction({
       (topic: Doc<"topic_clusters">) =>
         fitByTopic.get(String(topic._id))?.eligible === true,
     );
-    const available = fitEligible.filter((topic: Doc<"topic_clusters">) => {
+    const evidenceEligible = fitEligible.filter((topic: Doc<"topic_clusters">) => {
       if (!strictExpectedClickScheduling) {
         if (!site.verifiedKeywordDataRequired) return true;
         return (
@@ -818,15 +818,17 @@ export const scheduleCadence = internalAction({
       .replace(/^www\./i, "")
       .split("/")[0];
     const attainableTopics = strictExpectedClickScheduling
-      ? available.filter((topic: Doc<"topic_clusters">) =>
-          evaluateSerpAttainability({
+      ? evidenceEligible.filter((topic: Doc<"topic_clusters">) =>
+          schedulerReadyTopicIds.has(String(topic._id))
+        )
+      : evidenceEligible;
+    const entrenchedSkipped = strictExpectedClickScheduling
+      ? evidenceEligible.filter((topic: Doc<"topic_clusters">) =>
+          !evaluateSerpAttainability({
             serpTopUrls: topic.serpTopUrls,
             siteHost: selectionHost,
           }).attainable
-        )
-      : available;
-    const entrenchedSkipped = strictExpectedClickScheduling
-      ? available.length - attainableTopics.length
+        ).length
       : 0;
     if (entrenchedSkipped > 0) {
       console.log(
@@ -836,11 +838,11 @@ export const scheduleCadence = internalAction({
     // A cadence deadline cannot turn an unwinnable keyword into a useful
     // article. When no observed SERP is attainable, replenish the measured
     // inventory instead of publishing output that is predictably invisible.
-    const selectable = attainableTopics;
+    const available = attainableTopics;
     // Rank only from the live portfolio audit. Persisted estimates are display
     // evidence; the audit recomputes freshness, locale, SERP binding and
     // authority compatibility on every scheduler pass.
-    selectable.sort((a: Doc<"topic_clusters">, b: Doc<"topic_clusters">) => {
+    available.sort((a: Doc<"topic_clusters">, b: Doc<"topic_clusters">) => {
       if (strictExpectedClickScheduling) {
         const delta =
           (expectedClickByTopic.get(String(b._id))?.expectedClicksMonthly ?? 0) -
@@ -849,9 +851,6 @@ export const scheduleCadence = internalAction({
       }
       return (b.priority ?? 1) - (a.priority ?? 1);
     });
-    available.length = 0;
-    available.push(...selectable);
-
     const coveredTopics = coveredIntentTopics(
       topics.map((topic: Doc<"topic_clusters">) => ({
         _id: String(topic._id),

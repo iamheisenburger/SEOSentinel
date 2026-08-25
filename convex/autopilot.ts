@@ -40,6 +40,8 @@ import {
   TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
   TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
 } from "./lib/planProviderBudget";
+import { classifyAutopilotRunOutcome } from
+  "./lib/autopilotRunOutcome.ts";
 
 const SITE_STAGGER_MS = 5_000;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
@@ -1292,32 +1294,6 @@ export const markRunFinished = internalMutation({
       jobId: args.jobId,
       articleId: args.articleId,
     });
-    const blockedOutcomes = new Set([
-      "migration_pending",
-      "quality_budget_exhausted",
-      "quota_reached",
-      "site_limit_reached",
-      "topic_replenishment_exhausted",
-      "job_failed",
-      "publication_failed",
-      "public_url_failed",
-      "quality_quarantined",
-    ]);
-    const waitingOutcomes = new Set([
-      "work_in_progress",
-      "buffer_delivery_pending",
-      "approval_waiting",
-      "manual_delivery_waiting",
-      "retry_scheduled",
-      "plan_continuation_queued",
-      "public_url_pending",
-    ]);
-    let completionStatus = blockedOutcomes.has(args.outcome)
-      ? args.outcome
-      : waitingOutcomes.has(args.outcome)
-        ? "recovering"
-        : "healthy";
-    let completionDetail = args.detail ?? args.outcome;
     const currentReady = await ctx.db
       .query("article_summaries")
       .withIndex("by_site_status", (q) =>
@@ -1325,6 +1301,24 @@ export const markRunFinished = internalMutation({
       )
       .take(10);
     const approvedBufferCount = currentReady.filter(isSealedReady).length;
+    const runClassification = classifyAutopilotRunOutcome({
+      outcome: args.outcome,
+      approvedBufferCount,
+    });
+    let completionStatus = runClassification.status;
+    let completionDetail =
+      args.detail ?? runClassification.detail ?? args.outcome;
+    if (!runClassification.recognized) {
+      await setAlert(ctx, {
+        siteId: run.siteId,
+        runId: args.runId,
+        kind: "run_outcome_unclassified",
+        message:
+          `Autopilot returned an unclassified outcome and was failed closed: ${args.outcome}.`,
+      });
+    } else {
+      await resolveAlert(ctx, run.siteId, "run_outcome_unclassified");
+    }
     let lastPublishedAt: number | undefined;
     let nextPublicationDueAt: number | undefined;
     if (args.outcome === "rollout_buffer_ready") {

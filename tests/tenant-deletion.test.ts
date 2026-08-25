@@ -14,6 +14,7 @@ function exportedBlock(source: string, name: string): string {
 
 test("tenant deletion drains every site-scoped sensitive and growth table", () => {
   for (const table of [
+    "one_setup_executions",
     "managed_provisioning_requests",
     "outreach_inbound_relay_canaries",
     "outreach_inbound_relay_receipts",

@@ -71,20 +71,15 @@ import {
   isSealedReady,
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
-import {
-  evaluateStoredExpectedClickPortfolio,
-} from "./lib/expectedClickPortfolio";
 import { DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL } from "./lib/seoGrowth";
 import {
   dataForSeoLanguageCode,
   dataForSeoLocationCode,
 } from "./lib/dataForSeoLocale";
-import {
-  evaluateSerpAttainability,
-  evaluateSerpBusinessIntent,
-} from "./lib/serpAttainability";
 import { planCheckpointTopicExecutionLocked } from
   "./lib/planCandidateCheckpoint";
+import { evaluateSchedulerReadyTopicInventory } from
+  "./lib/schedulerTopicReadiness";
 import {
   activateTerminalPlanCheckpoints,
   terminallyClosePlanCheckpoints,
@@ -295,75 +290,21 @@ async function currentAutomaticPlanYieldTarget(
     summaries.length > PLAN_TARGET_INVENTORY_READ_LIMIT
   ) return { ready: false as const, reason: "planning_snapshot_read_limit" as const };
   const sealedBufferCount = summaries.filter(isSealedReady).length;
-  const portfolio = evaluateStoredExpectedClickPortfolio({
-    topics: topics
-      .filter((topic) =>
-        !["cannibalizing", "disqualified", "plan_checkpoint"].includes(
-          topic.status ?? "planned",
-        ) && !topic.planCheckpointTerminalFailureCode)
-      .map((topic) => ({
-        topicId: String(topic._id),
-        keyword: topic.primaryKeyword,
-        searchVolume: topic.searchVolume,
-        searchDemandSource: topic.searchDemandSource,
-        searchDemandMeasuredAt: topic.searchDemandMeasuredAt,
-        searchDemandLocationCode: topic.searchDemandLocationCode,
-        searchDemandLanguageCode: topic.searchDemandLanguageCode,
-        serpTopUrls: topic.serpTopUrls,
-        serpObservedAt: topic.serpObservedAt,
-        serpLocationCode: topic.serpLocationCode,
-        serpLanguageCode: topic.serpLanguageCode,
-        serpAuthorityCompetitors: topic.serpAuthorityCompetitors,
-      })),
-    tenantAuthority: {
-      domain: site.seoAuthorityDomain,
-      currentDomain: site.domain,
-      domainRank: site.seoAuthorityDomainRank,
-      referringDomains: site.seoAuthorityReferringDomains,
-      source: site.seoAuthoritySource,
-      measuredAt: site.seoAuthorityMeasuredAt,
-    },
+  const schedulerReadiness = evaluateSchedulerReadyTopicInventory({
+    topics,
+    site,
     monthlyOrganicClickGoal:
       growthGoal?.monthlyOrganicClicksGoal ??
       DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
     currentLocationCode: dataForSeoLocationCode(site.targetCountry),
     currentLanguageCode: dataForSeoLanguageCode(site.language),
   });
-  const expectedClickEligible = new Set(portfolio.topics
-    .filter((topic) => topic.status === "eligible")
-    .map((topic) => topic.topicId));
-  const businessSignals = tenantTopicBusinessSignals(site);
-  const evidenceReady = topics.filter((topic) => {
-    if (["used", "queued", "cannibalizing", "disqualified", "plan_checkpoint"]
-      .includes(topic.status ?? "planned")) return false;
-    if (topic.planCheckpointTerminalFailureCode) return false;
-    const fit = evaluateTopicBusinessFit({
-      keyword: topic.primaryKeyword,
-      label: topic.label,
-      ...businessSignals,
-    });
-    const intent = (topic.serpTopUrls?.length ?? 0) >= 5
-      ? evaluateSerpBusinessIntent({
-          results: topic.serpTopUrls!.map((url) => ({ url })),
-          businessModelSignals: businessSignals.businessModelSignals,
-        })
-      : { aligned: false };
-    return fit.eligible && intent.aligned &&
-      topic.businessFitEligible === true &&
-      topic.businessFitVersion === fit.version &&
-      topic.businessFitScore === fit.score &&
-      JSON.stringify(topic.businessFitReasons ?? []) ===
-        JSON.stringify(fit.reasons) &&
-      Number.isFinite(topic.searchVolume) &&
-      Number.isFinite(topic.keywordDifficulty) &&
-      topic.keywordDifficultyMeasured === true &&
-      Boolean(topic.serpIntent?.trim()) &&
-      expectedClickEligible.has(String(topic._id)) &&
-      evaluateSerpAttainability({
-        serpTopUrls: topic.serpTopUrls,
-        siteHost: site.domain,
-      }).attainable;
-  });
+  const schedulerReadyTopicIds = new Set(
+    schedulerReadiness.schedulerReadyTopicIds,
+  );
+  const evidenceReady = topics.filter((topic) =>
+    schedulerReadyTopicIds.has(String(topic._id))
+  );
   const coverage = coveredIntentTopics(
     topics.map((topic) => ({
       _id: String(topic._id),
@@ -1229,10 +1170,77 @@ export const queuePlanIfAbsent = internalMutation({
     growthParentArticleId: v.optional(v.id("articles")),
     growthSeed: v.optional(v.string()),
     growthActionFingerprint: v.optional(v.string()),
+    oneSetupExecutionId: v.optional(v.id("one_setup_executions")),
+    oneSetupClaimNonce: v.optional(v.string()),
+    oneSetupRequestRevision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
     if (!siteExecutionActive(site)) throw new Error("Site not found");
+    const setupBindingValues = [
+      args.oneSetupExecutionId,
+      args.oneSetupClaimNonce,
+      args.oneSetupRequestRevision,
+    ];
+    const setupBindingCount = setupBindingValues.filter((value) =>
+      value !== undefined
+    ).length;
+    if (setupBindingCount !== 0 && setupBindingCount !== setupBindingValues.length) {
+      throw new Error("Incomplete one-setup plan binding");
+    }
+    let setupExecution: Doc<"one_setup_executions"> | null = null;
+    if (
+      args.oneSetupExecutionId &&
+      args.oneSetupClaimNonce &&
+      args.oneSetupRequestRevision !== undefined
+    ) {
+      if (
+        args.manual !== true ||
+        args.reason !== "one_setup_initial_plan" ||
+        args.growthParentArticleId ||
+        args.growthSeed ||
+        args.growthActionFingerprint ||
+        (args.cannibalizingTopicIds?.length ?? 0) > 0
+      ) {
+        throw new Error("One-setup execution may queue only its initial manual plan");
+      }
+      setupExecution = await ctx.db.get(args.oneSetupExecutionId);
+      const timestamp = now();
+      if (
+        !setupExecution ||
+        setupExecution.siteId !== args.siteId ||
+        setupExecution.requestRevision !== args.oneSetupRequestRevision ||
+        setupExecution.claimNonce !== args.oneSetupClaimNonce ||
+        (setupExecution.leaseExpiresAt ?? 0) <= timestamp ||
+        !["running", "plan_queued"].includes(setupExecution.status)
+      ) {
+        throw new Error("One-setup execution claim is not current");
+      }
+      if (setupExecution.planJobId) {
+        const boundJob = await ctx.db.get(setupExecution.planJobId);
+        const boundPayload = boundJob?.payload &&
+            typeof boundJob.payload === "object"
+          ? boundJob.payload as Record<string, unknown>
+          : {};
+        if (
+          !boundJob ||
+          boundJob.siteId !== args.siteId ||
+          boundJob.type !== "plan" ||
+          String(boundPayload.oneSetupExecutionId ?? "") !==
+            String(setupExecution._id) ||
+          boundPayload.oneSetupRequestRevision !==
+            setupExecution.requestRevision
+        ) {
+          throw new Error("One-setup execution has an invalid plan binding");
+        }
+        return {
+          queued: false,
+          jobId: boundJob._id,
+          reason: "setup_receipt" as const,
+          jobStatus: boundJob.status,
+        };
+      }
+    }
     const normalizedGrowthSeed = args.growthSeed?.trim();
     if (args.growthParentArticleId) {
       const parent = await ctx.db.get(args.growthParentArticleId);
@@ -1540,6 +1548,12 @@ export const queuePlanIfAbsent = internalMutation({
                   PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION,
               }
             : {}),
+          ...(setupExecution
+            ? {
+                oneSetupExecutionId: setupExecution._id,
+                oneSetupRequestRevision: setupExecution.requestRevision,
+              }
+            : {}),
         }
       : undefined;
     const jobId = await ctx.db.insert("jobs", {
@@ -1557,6 +1571,14 @@ export const queuePlanIfAbsent = internalMutation({
       createdAt: timestamp,
       updatedAt: timestamp,
     });
+    if (setupExecution) {
+      await ctx.db.patch(setupExecution._id, {
+        status: "plan_queued",
+        planJobId: jobId,
+        blockerCode: undefined,
+        updatedAt: timestamp,
+      });
+    }
     return { queued: true, jobId, recent: recentCount };
   },
 });
