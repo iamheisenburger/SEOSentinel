@@ -924,6 +924,11 @@ export const reconcileProvisioningResource = internalMutation({
       resource.lifecycleState === "leased" &&
       (resource.leaseExpiresAt ?? 0) > timestamp
     ) {
+      await ctx.scheduler.runAt(
+        resource.leaseExpiresAt! + 1,
+        internal.managedOutreachMailbox.reconcileProvisioningResource,
+        args,
+      );
       return { reconciled: true as const, state: "lease_live" as const };
     }
     const attempt = resource.attempt + 1;

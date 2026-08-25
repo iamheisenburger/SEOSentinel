@@ -389,6 +389,19 @@ export const settlePublisherPreflightActionRequired = internalMutation({
       internal.managedProvisioning.dispatchRequest,
       { requestId: request._id, expectedRevision: revision },
     );
+    // Publisher owner action must not serialize or starve managed mailbox
+    // provisioning. Reconcile the mailbox against the revision committed above;
+    // an older dispatch wake is expected to lose this exact revision race.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.managedOutreachMailbox.reconcileProvisioningResource,
+      {
+        requestId: request._id,
+        expectedRequestRevision: revision,
+        expectedConfigurationRevision: request.configurationRevision ?? 0,
+        expectedGeneration: request.outreachMailboxGeneration ?? 1,
+      },
+    );
     return {
       settled: true as const,
       revision,
@@ -508,6 +521,20 @@ export const dispatchRequest = internalMutation({
       {
         requestId: request._id,
         expectedRevision: request.revision,
+      },
+    );
+    // A publisher action that dies without settling must not starve mailbox
+    // lifecycle work. Wait until the exact top-level lease is expired so this
+    // fallback cannot race a valid publisher settlement; normal settlement and
+    // canonical reconciliation arm their own current-revision mailbox wakes.
+    await ctx.scheduler.runAt(
+      leaseExpiresAt + 1,
+      internal.managedOutreachMailbox.reconcileProvisioningResource,
+      {
+        requestId: request._id,
+        expectedRequestRevision: request.revision,
+        expectedConfigurationRevision: request.configurationRevision ?? 0,
+        expectedGeneration: request.outreachMailboxGeneration ?? 1,
       },
     );
     return {

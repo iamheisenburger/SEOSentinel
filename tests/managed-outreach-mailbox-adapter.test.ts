@@ -717,6 +717,41 @@ test("publisher parking still hands mailbox retirement to its lifecycle reconcil
   );
 });
 
+test("publisher owner action and crashed preflight cannot starve mailbox provisioning", () => {
+  const settlement = dispatcher.slice(
+    dispatcher.indexOf("export const settlePublisherPreflightActionRequired"),
+    dispatcher.indexOf("export const dispatchRequest"),
+  );
+  const dispatch = dispatcher.slice(
+    dispatcher.indexOf("export const dispatchRequest"),
+    dispatcher.indexOf("export const reconcileRequest"),
+  );
+
+  assert.match(
+    settlement,
+    /revision = request\.revision \+ 1[\s\S]*reconcileProvisioningResource[\s\S]*expectedRequestRevision: revision/,
+    "publisher owner-action settlement must wake mailbox work at its newly committed revision",
+  );
+  assert.match(
+    dispatch,
+    /leaseExpiresAt \+ 1[\s\S]*reconcileProvisioningResource[\s\S]*expectedRequestRevision: request\.revision/,
+    "a crashed publisher preflight must arm mailbox recovery only after its exact lease expires",
+  );
+  assert.doesNotMatch(
+    dispatch.slice(
+      dispatch.indexOf('fulfillmentState: "leased"'),
+      dispatch.indexOf("const publisherReady"),
+    ),
+    /reconcileProvisioningResource/,
+    "mailbox work must not race the live publisher lease at the same request revision",
+  );
+  assert.match(
+    ledger,
+    /resource\.lifecycleState === "leased"[\s\S]*resource\.leaseExpiresAt! \+ 1[\s\S]*reconcileProvisioningResource[\s\S]*state: "lease_live"/,
+    "a live resource lease must retain an exact post-expiry recovery wake",
+  );
+});
+
 test("owner OAuth cannot overwrite managed provenance and a managed legacy drain is rejected", () => {
   for (const field of [
     "credentialSource",
