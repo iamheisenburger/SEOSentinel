@@ -462,7 +462,10 @@ test("durable relay ingestion is bodyless, replay-safe, tenant-gated and receivi
   assert.doesNotMatch(schema, /inboundRelayDsnRoutingTargetAddress: v/);
   assert.doesNotMatch(schema, /inboundRelayOutboundMessageId: v/);
   assert.doesNotMatch(schema, /relay(?:Subject|Body)|inbound(?:Message)?Body/i);
-  assert.match(delivery, /relayAliasToken[\s\S]*relayMessageToken/);
+  assert.match(delivery, /relayAliasToken/);
+  assert.match(delivery, /inboundRelayOutboundMessageIdForAttempt/);
+  assert.match(delivery, /deliveryAttemptId: attemptId/);
+  assert.doesNotMatch(delivery, /relayMessageToken/);
   assert.match(delivery, /sendInboundRelayDsnCanary/);
   assert.match(delivery, /OUTREACH_INBOUND_RELAY_CANARY_RECIPIENT/);
   assert.match(backend, /inboundRelayDsnRoutingReady/);

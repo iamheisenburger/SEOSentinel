@@ -126,10 +126,20 @@ test("an expired lease becomes unverified and the same message never returns to 
     backend.indexOf("export const failDeliveryAttempt"),
   );
   assert.doesNotMatch(completion, /ctx\.db\.patch\(messageId, \{\s*status: "approved"/);
+  assert.match(completion, /queueNextVerifiedAutonomousFollowUp/);
+  assert.ok(
+    completion.indexOf("Delivery lease expired before receipt finalization") <
+      completion.indexOf("queueNextVerifiedAutonomousFollowUp"),
+    "an expired provider lease must become terminal before any next step is considered",
+  );
+  const manualReview = backend.slice(
+    backend.indexOf("export const resolveUnverifiedDelivery"),
+    backend.indexOf("export const recordReply"),
+  );
   assert.doesNotMatch(
-    completion,
-    /ctx\.db\.insert\("outreach_messages"/,
-    "the initial-only release must never queue follow-up work after settlement",
+    manualReview,
+    /queueNextVerifiedAutonomousFollowUp/,
+    "a human assertion without the exact provider thread receipt cannot create a follow-up",
   );
 });
 

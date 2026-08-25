@@ -64,6 +64,7 @@ import {
   autonomousOutreachRuntimeEnabled,
   OUTREACH_DURABILITY_MIGRATION_VERSION,
 } from "./lib/outreachAutonomy.ts";
+import { MAX_SEQUENCE_STEP } from "./lib/outreachPacing.ts";
 import { isSeoGrowthActuationEligible } from "./lib/seoGrowth.ts";
 import { terminallyClosePlanCheckpoints } from
   "./planCandidateCheckpoints";
@@ -325,6 +326,34 @@ function clearStaleGitHubBranch(
   }
 }
 
+async function scheduleOutreachSequenceCancellationForInbox(
+  ctx: MutationCtx,
+  inbox: Doc<"outreach_inboxes">,
+  reason: string,
+): Promise<boolean> {
+  if (
+    !inbox.credentialOwnerAccountKey ||
+    !Number.isSafeInteger(inbox.autonomyConsentVersion) ||
+    !inbox.autonomyConsentPolicyHash ||
+    !Number.isFinite(inbox.autonomyConsentAcceptedAt) ||
+    inbox.autonomyConsentAcceptedAt! <= 0
+  ) return false;
+  await ctx.scheduler.runAfter(
+    0,
+    internal.outreach.cancelAutonomousSequenceInternal,
+    {
+      siteId: inbox.siteId,
+      ownerAccountKey: inbox.credentialOwnerAccountKey,
+      consentVersion: inbox.autonomyConsentVersion!,
+      consentPolicyHash: inbox.autonomyConsentPolicyHash,
+      consentAcceptedAt: inbox.autonomyConsentAcceptedAt!,
+      sequenceStep: 0,
+      reason,
+    },
+  );
+  return true;
+}
+
 /**
  * A sender that was secondary to the old site can become the primary domain
  * after a site edit. Demote it atomically with the domain change and invalidate
@@ -368,10 +397,18 @@ async function demoteOutreachForDomainChange(
       inboundRelayDsnRoutingRetentionPolicyHash: undefined,
       inboundRelayDsnRoutingTargetHash: undefined,
       inboundRelayDsnRoutingTargetVersion: undefined,
+      autonomyDisabledAt: timestamp,
+      autonomyReconciliationStatus: "paused",
+      autonomyReconciliationCursor: undefined,
       lastError:
         "The tenant domain changed. Reconnect and verify the secondary-domain sender before reviewing new outreach.",
       updatedAt: timestamp,
     });
+    await scheduleOutreachSequenceCancellationForInbox(
+      ctx,
+      inbox,
+      "The tenant domain changed before this message became due.",
+    );
   }
 }
 
@@ -624,6 +661,26 @@ async function reconcileCanonicalPlanSitePage(
           : "site moved outside the current plan allowance",
         true,
       );
+    }
+    if (parkingChanged && shouldPark) {
+      const outreachInboxes = await ctx.db
+        .query("outreach_inboxes")
+        .withIndex("by_site", (q) => q.eq("siteId", site._id))
+        .take(2);
+      for (const inbox of outreachInboxes) {
+        await ctx.db.patch(inbox._id, {
+          mode: "approval",
+          autonomyDisabledAt: timestamp,
+          autonomyReconciliationStatus: "paused",
+          autonomyReconciliationCursor: undefined,
+          updatedAt: Math.max(inbox.updatedAt, timestamp),
+        });
+        await scheduleOutreachSequenceCancellationForInbox(
+          ctx,
+          inbox,
+          "The tenant was parked outside its plan allowance before this message became due.",
+        );
+      }
     }
     await ctx.db.patch(site._id, {
       planFeatures: entitlement.planFeatures,
@@ -3812,28 +3869,32 @@ async function outreachFleetState(
           .first()
       : Promise.resolve(null),
     activeAutonomyConsent && inbox && siteOwnerAccountKey
-      ? ctx.db
-          .query("outreach_messages")
-          .withIndex("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", (q) =>
-            q
-              .eq("siteId", siteId)
-              .eq("ownerAccountKey", siteOwnerAccountKey)
-              .eq("ownerLineageUnresolvedAt", undefined)
-              .eq("status", "approved")
-              .eq("approvalKind", "account_autopilot")
-              .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
-              .eq(
-                "approvalConsentPolicyHash",
-                inbox.autonomyConsentPolicyHash,
+      ? Promise.all(
+          Array.from({ length: MAX_SEQUENCE_STEP + 1 }, (_, sequenceStep) =>
+            ctx.db
+              .query("outreach_messages")
+              .withIndex("by_site_owner_lineage_status_autonomy_consent_sequence_scheduled", (q) =>
+                q
+                  .eq("siteId", siteId)
+                  .eq("ownerAccountKey", siteOwnerAccountKey)
+                  .eq("ownerLineageUnresolvedAt", undefined)
+                  .eq("status", "approved")
+                  .eq("approvalKind", "account_autopilot")
+                  .eq("approvalConsentVersion", inbox.autonomyConsentVersion)
+                  .eq(
+                    "approvalConsentPolicyHash",
+                    inbox.autonomyConsentPolicyHash,
+                  )
+                  .eq(
+                    "approvalConsentAcceptedAt",
+                    inbox.autonomyConsentAcceptedAt,
+                  )
+                  .eq("sequenceStep", sequenceStep)
+                  .lte("scheduledAt", queriedAt),
               )
-              .eq(
-                "approvalConsentAcceptedAt",
-                inbox.autonomyConsentAcceptedAt,
-              )
-              .eq("sequenceStep", 0)
-              .lte("scheduledAt", queriedAt),
-          )
-          .first()
+              .first()
+          ),
+        ).then((messages) => messages.find(Boolean) ?? null)
       : Promise.resolve(null),
     ctx.db
       .query("seo_authority_opportunities")

@@ -27,6 +27,11 @@ export const DEFAULT_DAILY_SEND_CAP = 30;
 export const OUTREACH_MIN_SEND_INTERVAL_MS = 30 * 60 * 1000;
 /** Never contact the same domain more often than this, across all campaigns. */
 export const DOMAIN_CONTACT_COOLDOWN_DAYS = 90;
+/** Cumulative days after the initial verified send. The second offset is
+ * calculated from the actual first-follow-up receipt, so provider or pacing
+ * delays can only make a sequence slower, never compress it. */
+export const FOLLOW_UP_SCHEDULE_DAYS = [4, 9] as const;
+export const MAX_SEQUENCE_STEP = FOLLOW_UP_SCHEDULE_DAYS.length;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type OutreachInboxState = {
@@ -302,6 +307,32 @@ export function contactEligibility(args: {
     }
   }
   return { eligible: true, reason: "No prior contact or suppression." };
+}
+
+/** Return the next due time for an already-accepted sequence message. A
+ * provider-verified receipt is the only caller allowed to use this schedule. */
+export function nextFollowUpAt(args: {
+  sequenceStep: number;
+  lastSentAt: number;
+  cancelled?: boolean;
+}): number | null {
+  if (args.cancelled) return null;
+  const nextStep = args.sequenceStep + 1;
+  if (
+    !Number.isSafeInteger(args.sequenceStep) ||
+    args.sequenceStep < 0 ||
+    nextStep > MAX_SEQUENCE_STEP ||
+    !Number.isFinite(args.lastSentAt) ||
+    args.lastSentAt <= 0
+  ) return null;
+  const cumulativeDays = FOLLOW_UP_SCHEDULE_DAYS[nextStep - 1];
+  const priorCumulativeDays = args.sequenceStep === 0
+    ? 0
+    : FOLLOW_UP_SCHEDULE_DAYS[args.sequenceStep - 1];
+  const offsetDays = cumulativeDays - priorCumulativeDays;
+  return Number.isFinite(offsetDays) && offsetDays > 0
+    ? args.lastSentAt + offsetDays * DAY_MS
+    : null;
 }
 
 export function normalizeDomain(value: string): string {

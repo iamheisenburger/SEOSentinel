@@ -203,8 +203,9 @@ export function inboundRelayDsnRoutingReady(args: {
 }
 
 /** Derive the current Workspace DSN routing address without persisting its
- * secret local part. The dedicated target secret is a server-only HMAC key; every
- * tenant/inbox/generation fence is included in the canonical input. Routine
+ * secret local part. The server-only derivation key is purpose-separated from
+ * outbound Message-ID derivation; every tenant/inbox/generation fence is
+ * included in the canonical input. Routine
  * sender-profile, plan-epoch and relay-signing changes therefore do not force
  * a Workspace administrator to replace the route. A changed mailbox or an
  * explicit owner rotation advances the persisted non-secret generation.
@@ -293,6 +294,56 @@ export function inboundRelayOutboundMessageId(args: {
   const senderDomain = normalizeInboundRelayDomain(args.senderDomain);
   if (!senderDomain || !ALIAS_TOKEN_PATTERN.test(args.token)) return null;
   return `<pentra.${args.token.toLowerCase()}@${senderDomain}>`;
+}
+
+/** Reconstruct an outbound RFC Message-ID only at the provider boundary.
+ * The database retains its SHA-256 digest and the already-persisted delivery
+ * attempt ID, never this raw identifier. Purpose-separated HMAC input makes a
+ * later follow-up deterministic without turning the identifier into a bearer
+ * capability or reusing the independently random reply alias. */
+export async function inboundRelayOutboundMessageIdForAttempt(args: {
+  siteId: string;
+  inboxId: string;
+  deliveryAttemptId: string;
+  senderDomain: string;
+  secret?: string;
+}): Promise<string | null> {
+  const siteId = String(args.siteId ?? "");
+  const inboxId = String(args.inboxId ?? "");
+  const deliveryAttemptId = String(args.deliveryAttemptId ?? "");
+  const senderDomain = normalizeInboundRelayDomain(args.senderDomain);
+  const secret = args.secret?.trim();
+  if (
+    !siteId || siteId.length > 200 ||
+    !inboxId || inboxId.length > 200 ||
+    !deliveryAttemptId || deliveryAttemptId.length > 200 ||
+    !senderDomain ||
+    !secret || secret.length < 32
+  ) return null;
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const binding = new TextEncoder().encode(JSON.stringify({
+      version: 1,
+      purpose: "outreach_outbound_message_id",
+      siteId,
+      inboxId,
+      deliveryAttemptId,
+      senderDomain,
+    }));
+    const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, binding));
+    const token = Array.from(digest.slice(0, 24), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("");
+    return inboundRelayOutboundMessageId({ token, senderDomain });
+  } catch {
+    return null;
+  }
 }
 
 export function inboundRelayMessageIdHash(value: string | undefined): string {

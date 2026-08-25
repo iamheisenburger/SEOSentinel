@@ -5,11 +5,14 @@ import test from "node:test";
 import {
   DEFAULT_DAILY_SEND_CAP,
   DOMAIN_CONTACT_COOLDOWN_DAYS,
+  FOLLOW_UP_SCHEDULE_DAYS,
+  MAX_SEQUENCE_STEP,
   OUTREACH_PACING_VERSION,
   OUTREACH_MIN_SEND_INTERVAL_MS,
   WARMUP_DAYS,
   WARMUP_INITIAL_DAILY_CAP,
   contactEligibility,
+  nextFollowUpAt,
   normalizeDomain,
   outreachComplianceIssues,
   outreachDeliverySettlementDecision,
@@ -28,6 +31,20 @@ import {
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
 const durabilitySource = readFileSync("convex/lib/outreachDurability.ts", "utf8");
+
+test("the bounded follow-up schedule stretches from verified predecessor receipts", () => {
+  assert.deepEqual(FOLLOW_UP_SCHEDULE_DAYS, [4, 9]);
+  assert.equal(MAX_SEQUENCE_STEP, 2);
+  assert.equal(nextFollowUpAt({ sequenceStep: 0, lastSentAt: NOW }), NOW + 4 * DAY);
+  const delayedFirstFollowUp = NOW + 6 * DAY;
+  assert.equal(
+    nextFollowUpAt({ sequenceStep: 1, lastSentAt: delayedFirstFollowUp }),
+    delayedFirstFollowUp + 5 * DAY,
+  );
+  assert.equal(nextFollowUpAt({ sequenceStep: 2, lastSentAt: NOW }), null);
+  assert.equal(nextFollowUpAt({ sequenceStep: 0, lastSentAt: NOW, cancelled: true }), null);
+  assert.equal(nextFollowUpAt({ sequenceStep: -1, lastSentAt: NOW }), null);
+});
 
 test("a brand new inbox starts at the small warm-up volume", () => {
   assert.equal(
@@ -382,7 +399,7 @@ test("claim -> rejectUnconfirmed -> complete preserves rejected and creates no f
   });
 });
 
-test("an unchanged initial-send lifecycle settles once and creates no future work", () => {
+test("settlement updates only the initial opportunity lifecycle; follow-up creation is separately receipt-gated", () => {
   assert.deepEqual(completeAfterAuthorityInterleaving("outreach_prepared"), {
     opportunityStatus: "contacted",
   });

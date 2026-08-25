@@ -87,6 +87,7 @@ import {
   inboundRelayEmailHash,
   inboundRelayMessageIdHash,
   inboundRelayOutboundMessageId,
+  inboundRelayOutboundMessageIdForAttempt,
 } from "../lib/outreachInboundRelay";
 
 function inboundRelayRuntimeConfig() {
@@ -592,6 +593,7 @@ function rfc822(args: {
   fromEmail: string;
   replyTo?: string;
   messageId?: string;
+  inReplyTo?: string;
   toEmail: string;
   subject: string;
   body: string;
@@ -619,6 +621,8 @@ function rfc822(args: {
   const replyTo = safeEmail(args.replyTo);
   const messageId = String(args.messageId ?? "").trim().toLowerCase();
   if (messageId && !/^<[^<>\s]+@[^<>\s]+>$/.test(messageId)) return null;
+  const inReplyTo = String(args.inReplyTo ?? "").trim().toLowerCase();
+  if (inReplyTo && !/^<[^<>\s]+@[^<>\s]+>$/.test(inReplyTo)) return null;
   const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
   const headers = [
     `From: ${from}`,
@@ -626,6 +630,8 @@ function rfc822(args: {
     `Subject: ${subject}`,
     replyTo ? `Reply-To: ${replyTo}` : "",
     messageId ? `Message-ID: ${messageId}` : "",
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
+    inReplyTo ? `References: ${inReplyTo}` : "",
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
   ].filter(Boolean);
@@ -906,6 +912,8 @@ async function deliver(
     body: string;
     replyTo?: string;
     outboundRfcMessageId?: string;
+    providerThreadId?: string;
+    inReplyToRfcMessageId?: string;
   },
 ): Promise<DeliveryOutcome> {
   if (inbox.provider === "gmail") {
@@ -929,6 +937,7 @@ async function deliver(
         fromEmail: inbox.fromEmail,
         replyTo: message.replyTo ?? inbox.replyToEmail,
         messageId: message.outboundRfcMessageId,
+        inReplyTo: message.inReplyToRfcMessageId,
         toEmail: message.toEmail,
         subject: message.subject,
         body: message.body,
@@ -953,6 +962,9 @@ async function deliver(
           },
           body: JSON.stringify({
             raw,
+            ...(message.providerThreadId
+              ? { threadId: message.providerThreadId }
+              : {}),
           }),
           signal: AbortSignal.timeout(20_000),
         },
@@ -1077,10 +1089,8 @@ async function sendHandler(
     return { ...result, stopped: pacingPreflight.reason };
   }
 
+  const attemptId = randomUUID();
   const relayAliasToken = relayReady
-    ? randomBytes(24).toString("base64url")
-    : undefined;
-  const relayMessageToken = relayReady
     ? randomBytes(24).toString("base64url")
     : undefined;
   const dsnRoutingTarget = relayReady
@@ -1096,10 +1106,13 @@ async function sendHandler(
   const relayAlias = relayAliasToken && relayDomain
     ? inboundRelayAliasAddress(relayAliasToken, relayDomain)
     : null;
-  const outboundRfcMessageId = relayMessageToken
-    ? inboundRelayOutboundMessageId({
-        token: relayMessageToken,
+  const outboundRfcMessageId = relayReady
+    ? await inboundRelayOutboundMessageIdForAttempt({
+        siteId: String(siteId),
+        inboxId: String(inboxSnapshot._id),
+        deliveryAttemptId: attemptId,
         senderDomain: inboxSnapshot.senderDomain ?? "",
+        secret: inboundRelayRuntimeConfig().dsnTargetSecret,
       })
     : null;
   const relayBinding = relayAlias && outboundRfcMessageId && dsnRoutingTarget
@@ -1163,7 +1176,6 @@ async function sendHandler(
     targetReceiptUrl: opportunityEvidenceResult.targetReceiptUrl,
     targetCheckedAt: opportunityEvidenceResult.targetCheckedAt,
   };
-  const attemptId = randomUUID();
   let claim;
   try {
     claim = await ctx.runMutation(internal.outreach.claimApprovedDelivery, {
@@ -1190,6 +1202,8 @@ async function sendHandler(
       body: claim.message.body,
       replyTo: relayBinding?.aliasAddress,
       outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
+      providerThreadId: claim.deliveryThreadId,
+      inReplyToRfcMessageId: claim.deliveryInReplyToRfcMessageId,
     });
   } catch {
     outcome = {

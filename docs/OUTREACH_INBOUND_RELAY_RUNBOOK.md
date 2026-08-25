@@ -7,8 +7,10 @@ mode remains distinct: a prospect message is released only after an owner
 approves and triggers that one message. When the separately audited
 authority-autopilot release is enabled, the tenant owner's exact current,
 versioned tenant-level consent can instead authorize one verified initial
-outreach email for each eligible opportunity. It never authorizes an automated
-follow-up. Tenants never share an outbound
+outreach email and at most two timed follow-ups in the same provider thread for
+each eligible opportunity. Remaining steps are cancelled after a reply,
+exact-recipient STOP, hard bounce, verified link acquisition, tenant parking,
+consent withdrawal or sender-configuration change. Tenants never share an outbound
 identity or sending-domain reputation. New OAuth connections request
 `gmail.send`, `openid`, and `email`; they do not request mailbox-read access.
 The receiving adapter has no outbound-email capability and the webhook cannot
@@ -75,24 +77,28 @@ OUTREACH_INBOUND_RELAY_SECRET_NEXT=<next-at-least-32-random-characters>
 ## Authority-autopilot release (disabled by default)
 
 `OUTREACH_AUTONOMOUS_DELIVERY_ENABLED=true` exposes the owner opt-in and allows
-the internal fleet to release at most one due consent-authorized initial
+the internal fleet to release at most one due consent-authorized sequence
 message per tenant per pass. It does not make an inbox eligible by itself. The current
 tenant owner must accept the exact versioned policy for the current inbox and
-sender-profile configuration, choose a cap of 1–10 messages per UTC day, have
+sender-profile configuration, choose a cap of 1–30 messages per UTC day, have
 an executing growth rollout, and pass the current hard-DSN canary. Each claim
 then rechecks live SPF/DKIM/DMARC, the public opportunity and contact evidence,
 suppression, warm-up, 30-minute spacing, daily cap, plan/lifecycle state and the
-exact consent receipt before Gmail is called. Authority autopilot never
-schedules an automated follow-up. A reply, exact-recipient STOP, structured hard
-bounce, rejected opportunity or verified live backlink settles or retires the
-single-message opportunity as applicable. Manual owner-approved messages remain
-a separate mode and are not released under autonomous consent.
+exact consent receipt before Gmail is called. A verified accepted initial
+receipt schedules step one four days later; a verified accepted step-one
+receipt schedules the final step five days later. Delays are measured from the
+actual predecessor receipt and can only stretch the sequence. Every follow-up
+must use the exact Gmail thread and RFC Message-ID chain from its immediate
+predecessor. A reply, exact-recipient STOP, structured hard bounce, rejected
+opportunity or verified live backlink cancels the remaining sequence. Manual
+owner-approved messages remain a separate mode and are not released under
+autonomous consent.
 
 Disabling authority autopilot immediately blocks new delivery claims. It does
 not erase an external provider attempt that was atomically claimed before the
 disable transition: that exact attempt may settle once as accepted, failed or
 delivery-unverified so Pentra records reality, but disablement cannot create a
-retry, replacement or follow-up.
+retry, replacement or later sequence step.
 
 Keep this flag **false** until all of the following external gates have retained
 evidence:
@@ -109,8 +115,8 @@ evidence:
    is not a substitute for reputation monitoring.
 4. An independent security review and a staged real-provider end-to-end test
    have covered opt-in, disable races, DNS loss, stale evidence, reply, STOP,
-   hard bounce, the no-follow-up boundary, link acquisition, token expiry and
-   ambiguous Gmail outcomes.
+   hard bounce, the two-follow-up boundary and cancellation interleavings,
+   link acquisition, token expiry and ambiguous Gmail outcomes.
 
 There is deliberately no claim that a send, response, backlink, ranking or
 revenue result is guaranteed. The code can guarantee only the authorization,
@@ -215,9 +221,9 @@ The adapter must be explicitly configured to retry `425`; many generic webhook p
 
 ## Durable privacy, replay and isolation
 
-Alias and outbound Message-ID tokens are independent. Pentra stores only their SHA-256 digests, so database state cannot reconstruct the receiving alias. Raw MIME, attachments, subject and body never cross the durable mutation boundary. Accepted receipts contain bounded identifiers/digests and state; ignored mail is not stored. At most one receipt per accepted outcome kind can exist for a prospect message.
+Alias and outbound Message-ID tokens are independent. Pentra stores only their SHA-256 digests, so database state cannot reconstruct either identifier. For a due threaded follow-up, the outbound Message-ID is reconstructed transiently from a purpose-separated server HMAC binding to the exact site, inbox and persisted delivery attempt, proved against the stored digest, and discarded after the provider call. Raw MIME, attachments, subject and body never cross the durable mutation boundary. Accepted receipts contain bounded identifiers/digests and state; ignored mail is not stored. At most one receipt per accepted outcome kind can exist for a prospect message.
 
-Event IDs and inbound Message-IDs are atomically deduplicated. Reuse with different payload evidence is rejected as a collision. Before settlement, Pentra rechecks exact tenant, site, inbox, original configuration, rollout epoch, sender domain, alias domain, delivery boundary, deletion tombstone and plan-transition rules. Parking or disabling authority autopilot blocks new claims but cannot erase the settlement, STOP, reply or bounce for an exact provider attempt claimed before the transition. That attempt may settle once and cannot create a retry or follow-up. Deletion and domain conflict always fail closed.
+Event IDs and inbound Message-IDs are atomically deduplicated. Reuse with different payload evidence is rejected as a collision. Before settlement, Pentra rechecks exact tenant, site, inbox, original configuration, rollout epoch, sender domain, alias domain, delivery boundary, deletion tombstone and plan-transition rules. Parking or disabling authority autopilot blocks new claims but cannot erase the settlement, STOP, reply or bounce for an exact provider attempt claimed before the transition. That attempt may settle once and cannot create a retry or later sequence step after authorization changed. Deletion and domain conflict always fail closed.
 
 Pseudonymous account-wide recipient/domain suppression and contact-cooldown
 records survive ordinary site deletion. This prevents site deletion or

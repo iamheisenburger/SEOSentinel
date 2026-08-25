@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   OUTREACH_AUTONOMY_CONSENT_TEXT,
   OUTREACH_AUTONOMY_CONSENT_VERSION,
+  OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP,
   OUTREACH_AUTONOMY_POLICY_HASH,
   OUTREACH_DURABILITY_MIGRATION_VERSION,
   legacyUnownedPresendMessageMayBeQuarantined,
@@ -21,11 +22,17 @@ const crons = readFileSync("convex/crons.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
 const http = readFileSync("convex/http.ts", "utf8");
 const autonomy = readFileSync("convex/lib/outreachAutonomy.ts", "utf8");
+const sequence = readFileSync("convex/lib/outreachSequence.ts", "utf8");
 
-test("the v2 initial-only consent receipt has an exact audited hash", () => {
-  assert.equal(OUTREACH_AUTONOMY_CONSENT_VERSION, 2);
-  assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /initial commercial business outreach/i);
-  assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /does not permit automated follow-ups/i);
+test("the v3 bounded-sequence consent receipt has an exact audited hash", () => {
+  assert.equal(OUTREACH_AUTONOMY_CONSENT_VERSION, 3);
+  assert.equal(OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP, 30);
+  assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /at most two timed follow-ups/i);
+  assert.match(OUTREACH_AUTONOMY_CONSENT_TEXT, /same message thread/i);
+  assert.match(
+    OUTREACH_AUTONOMY_CONSENT_TEXT,
+    /reply, STOP request, bounce, verified link acquisition, tenant parking, consent withdrawal, or sender configuration change cancels/i,
+  );
   assert.match(
     OUTREACH_AUTONOMY_CONSENT_TEXT,
     /disabling autonomy stops new delivery claims; one attempt already claimed by the provider boundary may settle once/i,
@@ -63,7 +70,7 @@ test("one-time autonomy is inbox-bound, freshly accepted after disable, and kill
   );
 });
 
-test("all creation, approval, selection and claim paths hard-deny follow-ups", () => {
+test("only verified autonomous receipts create and release bounded threaded follow-ups", () => {
   const insert = backend.slice(
     backend.indexOf("export const insertDraft"),
     backend.indexOf("export const approveMessage"),
@@ -84,15 +91,36 @@ test("all creation, approval, selection and claim paths hard-deny follow-ups", (
     backend.indexOf("export const completeDeliveryAttempt"),
     backend.indexOf("export const failDeliveryAttempt"),
   );
+  const cancellation = backend.slice(
+    backend.indexOf("export const cancelAutonomousSequenceInternal"),
+    backend.indexOf("export const enableAutonomousOutreach"),
+  );
 
   assert.match(insert, /args\.sequenceStep !== 0/);
   assert.match(approve, /message\.sequenceStep !== 0/);
-  assert.match(claim, /message\.sequenceStep !== 0/);
-  assert.ok((evidence.match(/\.eq\("sequenceStep", 0\)/g) ?? []).length >= 2);
-  assert.doesNotMatch(completion, /ctx\.db\.insert\("outreach_messages"/);
-  assert.doesNotMatch(completion, /draftFollowUp|nextFollowUpAt|shouldCreateFollowUp/);
-  assert.doesNotMatch(action, /In-Reply-To|References|message\.providerThreadId/);
-  assert.doesNotMatch(schema, /deliveryExpectedThreadId|inReplyToRfcMessageId/);
+  assert.match(claim, /message\.sequenceStep > MAX_SEQUENCE_STEP/);
+  assert.match(claim, /message\.sequenceStep > 0 && release !== "automatic"/);
+  assert.match(claim, /message\.parentMessageId/);
+  assert.match(claim, /followUpPredecessorDecision/);
+  assert.match(sequence, /providerThreadId !== predecessor\.providerThreadId/);
+  assert.match(sequence, /message\.scheduledAt !== expectedDue/);
+  assert.match(evidence, /MAX_SEQUENCE_STEP \+ 1/);
+  assert.match(evidence, /\.eq\("sequenceStep", sequenceStep\)/);
+  assert.match(completion, /queueNextVerifiedAutonomousFollowUp/);
+  assert.match(completion, /safeProviderThreadId !== message\.deliveryExpectedThreadId/);
+  assert.match(completion, /followUpQueued: false/);
+  assert.match(action, /In-Reply-To/);
+  assert.match(action, /References/);
+  assert.match(action, /threadId: message\.providerThreadId/);
+  assert.match(schema, /parentMessageId/);
+  assert.match(schema, /deliveryExpectedThreadId/);
+  assert.match(schema, /inReplyToRfcMessageIdHash/);
+  assert.doesNotMatch(schema, /inReplyToRfcMessageId: v\.optional/);
+  assert.match(claim, /inboundRelayOutboundMessageIdForAttempt/);
+  assert.match(claim, /deliveryInReplyToRfcMessageId/);
+  assert.match(cancellation, /approvalConsentAcceptedAt/);
+  assert.match(cancellation, /status: "skipped"/);
+  assert.match(cancellation, /status: "draft"/);
 });
 
 test("activation is resumable and claims remain closed until migration and reconciliation complete", () => {
@@ -542,10 +570,11 @@ test("every raw outreach message is owner-bound before claim and hidden across o
   );
 });
 
-test("fleet selection is due-only, exact-consent, sequence-zero and preflighted", () => {
+test("fleet selection is due-only, exact-consent, bounded-sequence and preflighted", () => {
   assert.match(sites, /by_site_owner_lineage_status_autonomy_consent_sequence_scheduled/);
   assert.match(sites, /\.eq\("ownerAccountKey", siteOwnerAccountKey\)/);
-  assert.match(sites, /\.eq\("sequenceStep", 0\)/);
+  assert.match(sites, /Array\.from\(\{ length: MAX_SEQUENCE_STEP \+ 1 \}/);
+  assert.match(sites, /\.eq\("sequenceStep", sequenceStep\)/);
   assert.match(sites, /autonomousOutreachReconciliationComplete\(inbox\)/);
   assert.match(fleet, /hasDueAutomaticMessages === true/);
   assert.match(fleet, /internal\.sites\.getOutreachFleetState/);

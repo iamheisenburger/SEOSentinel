@@ -5,17 +5,22 @@ import test from "node:test";
 const terms = readFileSync("src/app/legal/terms/page.tsx", "utf8");
 const privacy = readFileSync("src/app/legal/privacy/page.tsx", "utf8");
 const runbook = readFileSync("docs/OUTREACH_INBOUND_RELAY_RUNBOOK.md", "utf8");
-const publicCopy = `${terms}\n${privacy}\n${runbook}`;
 
-test("public outreach copy describes the bounded initial-only consent contract", () => {
+test("public outreach copy describes the bounded two-follow-up consent contract", () => {
   for (const source of [terms, privacy, runbook]) {
     assert.match(source, /tenant-level consent/i);
     assert.match(source, /one verified initial\s+outreach email/i);
-    assert.match(source, /never authorizes?\s+(?:an\s+)?automated\s+follow-up/i);
+    assert.match(source, /at most two timed follow-ups/i);
+    assert.match(source, /same (?:provider )?thread/i);
+    assert.match(
+      source,
+      /reply[\s\S]*STOP[\s\S]*bounce[\s\S]*link acquisition[\s\S]*tenant parking[\s\S]*consent withdrawal[\s\S]*sender-configuration change/i,
+    );
   }
 
   assert.match(runbook, /Manual\s+mode remains distinct/);
-  assert.doesNotMatch(publicCopy, /schedule at most two Gmail-threaded follow-ups/i);
+  assert.match(runbook, /step one four days later/i);
+  assert.match(runbook, /final step five days later/i);
 });
 
 test("public outreach copy describes disable settlement and bodyless relay boundaries", () => {

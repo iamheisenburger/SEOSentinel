@@ -1654,8 +1654,14 @@ export default defineSchema({
     // draft | blocked | approved | sending | delivery_unverified |
     // delivery_reviewed_sent | sent | failed | replied | bounced | skipped
     status: v.string(),
-    sequenceStep: v.number(), // 0 = initial contact
+    sequenceStep: v.number(), // 0 = initial, 1-2 = consent-authorized follow-ups
     threadKey: v.string(), // stable per site+domain so follow-ups group
+    // Follow-ups bind immutably to the immediately preceding accepted message.
+    // Provider thread identity and RFC references are rechecked at claim and
+    // receipt time; an incomplete predecessor can never yield an unthreaded send.
+    parentMessageId: v.optional(v.id("outreach_messages")),
+    deliveryExpectedThreadId: v.optional(v.string()),
+    inReplyToRfcMessageIdHash: v.optional(v.string()),
     complianceIssues: v.optional(v.array(v.string())),
     blockedReason: v.optional(v.string()),
     pacingReason: v.optional(v.string()),
@@ -1773,6 +1779,11 @@ export default defineSchema({
       "scheduledAt",
     ])
     .index("by_opportunity", ["opportunityId"])
+    .index("by_opportunity_owner_sequence", [
+      "opportunityId",
+      "ownerAccountKey",
+      "sequenceStep",
+    ])
     .index("by_site_created", ["siteId", "createdAt"])
     .index("by_owner", ["ownerAccountKey"])
     .index("by_delivery_owner", ["deliveryOwnerAccountKey"])
@@ -1786,6 +1797,11 @@ export default defineSchema({
     ])
     .index("by_site_email", ["siteId", "toEmail"])
     .index("by_site_provider_thread", ["siteId", "providerThreadId"])
+    .index("by_thread_owner_status", [
+      "threadKey",
+      "ownerAccountKey",
+      "status",
+    ])
     .index("by_relay_alias_hash", ["inboundRelayAliasHash"])
     .index("by_inbox_relay_status_sent", [
       "inboxId",
