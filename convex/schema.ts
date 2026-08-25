@@ -251,6 +251,22 @@ export default defineSchema({
       domainRevision: v.number(),
     })),
     requestedCadencePerWeek: v.number(),
+    // Stable managed-mailbox generation. Passive reconciliation and ordinary
+    // owner retries never advance it; only a hard tenant/domain reset or an
+    // ownership-mode transition can name a new external resource.
+    outreachMailboxGeneration: v.optional(v.number()),
+    // Owner-entered sender/compliance profile and explicit canary authority.
+    // This is operational PII, not a provider credential. No OAuth token,
+    // mailbox password, provider handle, or DNS secret belongs on this row.
+    managedOutreachProfile: v.optional(v.object({
+      fromName: v.string(),
+      physicalMailingAddress: v.string(),
+      attestationVersion: v.number(),
+      senderIdentityAndAddressAttestedAt: v.number(),
+      dedicatedSenderIdentityAttestedAt: v.number(),
+      deliveryEventCanaryAuthorizedAt: v.number(),
+      canaryConsentVersion: v.number(),
+    })),
     publisher: v.object({
       mode: v.union(v.literal("connect_existing"), v.literal("managed")),
       state: v.union(
@@ -338,6 +354,87 @@ export default defineSchema({
     .index("by_fulfillment_due", ["nextAttemptAt"])
     .index("by_fulfillment_updated", ["fulfillmentState", "updatedAt"])
     .index("by_operator_action", ["operatorActionRequiredAt"]),
+
+  // Credential-free ledger for an exact managed mailbox generation. The
+  // external adapter owns any provider resource mapping under operationKey;
+  // provider IDs and credentials are intentionally absent from this table.
+  managed_outreach_mailbox_resources: defineTable({
+    siteId: v.id("sites"),
+    requestId: v.id("managed_provisioning_requests"),
+    ownerAccountKey: v.string(),
+    domainSnapshot: v.string(),
+    domainRevisionSnapshot: v.number(),
+    requestConfigurationRevision: v.number(),
+    requestContractVersion: v.number(),
+    generation: v.number(),
+    operationKey: v.string(),
+    lifecycleState: v.union(
+      v.literal("queued"),
+      v.literal("leased"),
+      v.literal("waiting_adapter"),
+      v.literal("canonicalized"),
+      v.literal("cancelled"),
+    ),
+    releaseState: v.union(
+      v.literal("not_required"),
+      v.literal("active"),
+      v.literal("requested"),
+      v.literal("leased"),
+      v.literal("released"),
+      v.literal("blocked"),
+    ),
+    attempt: v.number(),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
+    adapterVersion: v.optional(v.string()),
+    lastReasonCode: v.optional(v.string()),
+    canonicalInboxId: v.optional(v.id("outreach_inboxes")),
+    // Written before a future adapter crosses an external provisioning
+    // boundary. Ambiguous attempts therefore require release even if the
+    // canonical install receipt never arrives.
+    externalProvisioningAttemptedAt: v.optional(v.number()),
+    // A release cannot race an already-started provider operation. The
+    // adapter's external deadline is copied here before the first call and
+    // release remains blocked until that bounded uncertainty window closes.
+    externalProvisioningSettleAfter: v.optional(v.number()),
+    externalAllocatedAt: v.optional(v.number()),
+    releaseRequestedAt: v.optional(v.number()),
+    releaseReason: v.optional(v.string()),
+    releasedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_site", ["siteId"])
+    .index("by_request", ["requestId"])
+    .index("by_request_generation", ["requestId", "generation"])
+    .index("by_canonical_inbox", ["canonicalInboxId"])
+    .index("by_release_due", ["releaseState", "nextAttemptAt"]),
+
+  // Durable proof that release was requested before site-local rows vanished.
+  // It deliberately has no site foreign key or external provider identifier,
+  // so ordinary tenant deletion can retain it until deprovision is sealed.
+  managed_outreach_mailbox_release_tombstones: defineTable({
+    operationKey: v.string(),
+    ownerAccountKey: v.string(),
+    generation: v.number(),
+    contractVersion: v.number(),
+    state: v.union(
+      v.literal("not_required"),
+      v.literal("release_requested"),
+      v.literal("released"),
+      v.literal("blocked"),
+    ),
+    releaseReason: v.string(),
+    adapterVersion: v.optional(v.string()),
+    lastReasonCode: v.optional(v.string()),
+    requestedAt: v.number(),
+    releasedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_operation", ["operationKey"])
+    .index("by_account", ["ownerAccountKey"])
+    .index("by_state_updated", ["state", "updatedAt"]),
 
   // Exact owner-initiated setup pipeline receipt. Browser retries bind to the
   // same owner configuration generation and plan job; they never mint a second paid plan
@@ -1899,6 +1996,13 @@ export default defineSchema({
     // Non-reversible owner binding. A site ownership change can never inherit
     // the prior owner's Gmail refresh token.
     credentialOwnerAccountKey: v.optional(v.string()),
+    // Non-secret provenance for a canonical identity installed by a managed
+    // transport adapter. Owner OAuth must never silently overwrite this
+    // tuple; release/quarantine clears it before a fresh owner connection.
+    credentialSource: v.optional(v.string()), // owner_oauth | managed_adapter | managed_adapter_retiring
+    managedTransportOperationKey: v.optional(v.string()),
+    managedTransportGeneration: v.optional(v.number()),
+    managedTransportAdapterVersion: v.optional(v.string()),
     senderDomain: v.optional(v.string()),
     dkimSelector: v.optional(v.string()),
     dnsCheckedAt: v.optional(v.number()),
@@ -2142,6 +2246,7 @@ export default defineSchema({
     .index("by_owner", ["ownerAccountKey"])
     .index("by_delivery_owner", ["deliveryOwnerAccountKey"])
     .index("by_inbox", ["inboxId"])
+    .index("by_inbox_status", ["inboxId", "status"])
     .index("by_site_domain", ["siteId", "toDomain"])
     .index("by_site_domain_status_sent", [
       "siteId",
@@ -2214,6 +2319,7 @@ export default defineSchema({
   })
     .index("by_alias_hash", ["aliasHash"])
     .index("by_inbox", ["inboxId"])
+    .index("by_inbox_status", ["inboxId", "deliveryStatus"])
     .index("by_site", ["siteId"]),
 
   // One bodyless, replay-safe receipt per signed receiving-relay event. Raw

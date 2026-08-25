@@ -117,6 +117,7 @@ import { oneSetupExecutionNextEligibleAt } from
   "./lib/oneSetupExecution.ts";
 import {
   canonicalGscReceiptMutationFenceCurrent,
+  oneSetupManagedOutreachMailboxReceiptVerified,
   oneSetupOutreachMailboxReceiptVerified,
   oneSetupPublisherReceiptVerified,
   oneSetupSearchMeasurementReceiptVerified,
@@ -137,6 +138,17 @@ import {
   siteGscConnectionRevision,
   siteUsesLegacyDomainReceipts,
 } from "./lib/siteDomainBinding.ts";
+import {
+  MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION,
+  MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION,
+  managedOutreachMailboxProfileIssues,
+  managedOutreachMailboxReleaseSealed,
+  nextManagedOutreachMailboxGeneration,
+  type ManagedOutreachMailboxProfile,
+} from "./lib/managedOutreachMailbox.ts";
+import {
+  stageManagedOutreachMailboxRelease,
+} from "./managedOutreachMailbox.ts";
 import { planCheckpointTopicExecutionLocked } from
   "./lib/planCandidateCheckpoint.ts";
 import {
@@ -1616,6 +1628,63 @@ function safeOneSetupReasonCode(value: string | undefined): string | undefined {
   return normalized;
 }
 
+function managedOutreachProfileFromOwnerInput(args: {
+  mode: OneSetupMode;
+  fromName?: string;
+  physicalMailingAddress?: string;
+  attestationVersion?: number;
+  canaryConsentVersion?: number;
+  confirmsSenderIdentityAndAddress?: boolean;
+  confirmsDedicatedManagedSenderIdentity?: boolean;
+  authorizesManagedDeliveryEventCanary?: boolean;
+  confirmsAutonomousSendingRequiresSeparateConsent?: boolean;
+  previousProfile?: ManagedOutreachMailboxProfile;
+  timestamp: number;
+}): ManagedOutreachMailboxProfile | undefined {
+  if (args.mode !== "managed") return undefined;
+  const fromName = String(args.fromName ?? "")
+    .replace(/[\r\n<>]/g, " ").replace(/\s+/g, " ").trim();
+  const physicalMailingAddress = String(args.physicalMailingAddress ?? "")
+    .replace(/[\r\n]+/g, ", ").replace(/\s+/g, " ").trim();
+  if (
+    args.attestationVersion !==
+      MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION ||
+    args.canaryConsentVersion !==
+      MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION ||
+    !args.confirmsSenderIdentityAndAddress ||
+    !args.confirmsDedicatedManagedSenderIdentity ||
+    !args.authorizesManagedDeliveryEventCanary ||
+    !args.confirmsAutonomousSendingRequiresSeparateConsent
+  ) {
+    throw new Error(
+      "Confirm the managed sender identity, dedicated sender address, signed delivery-event canary, and separate automatic-sending consent boundary",
+    );
+  }
+  const profileUnchanged = Boolean(
+    args.previousProfile?.fromName === fromName &&
+      args.previousProfile.physicalMailingAddress === physicalMailingAddress &&
+      args.previousProfile.attestationVersion === args.attestationVersion &&
+      args.previousProfile.canaryConsentVersion === args.canaryConsentVersion &&
+      managedOutreachMailboxProfileIssues(args.previousProfile).length === 0,
+  );
+  const profile: ManagedOutreachMailboxProfile = profileUnchanged
+    ? args.previousProfile!
+    : {
+        fromName,
+        physicalMailingAddress,
+        attestationVersion: args.attestationVersion,
+        senderIdentityAndAddressAttestedAt: args.timestamp,
+        dedicatedSenderIdentityAttestedAt: args.timestamp,
+        deliveryEventCanaryAuthorizedAt: args.timestamp,
+        canaryConsentVersion: args.canaryConsentVersion,
+      };
+  const issues = managedOutreachMailboxProfileIssues(profile);
+  if (issues.length > 0) {
+    throw new Error(`Managed outreach profile is invalid: ${issues.join(", ")}`);
+  }
+  return profile;
+}
+
 /**
  * Save owner intent only. This request cannot carry provider credentials and
  * cannot make publishing, Search Console, or an outreach mailbox ready.
@@ -1629,6 +1698,14 @@ export const saveOneSetupRequest = mutation({
     automationMode: ONE_SETUP_AUTOMATION_MODE_VALIDATOR,
     publisherAutopublishConsentAccepted: v.optional(v.boolean()),
     requestedCadencePerWeek: v.number(),
+    managedOutreachFromName: v.optional(v.string()),
+    managedOutreachPhysicalMailingAddress: v.optional(v.string()),
+    managedOutreachAttestationVersion: v.optional(v.number()),
+    managedOutreachCanaryConsentVersion: v.optional(v.number()),
+    confirmsSenderIdentityAndAddress: v.optional(v.boolean()),
+    confirmsDedicatedManagedSenderIdentity: v.optional(v.boolean()),
+    authorizesManagedDeliveryEventCanary: v.optional(v.boolean()),
+    confirmsAutonomousSendingRequiresSeparateConsent: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const site = await requireSiteOwner(ctx, args.siteId);
@@ -1700,6 +1777,39 @@ export const saveOneSetupRequest = mutation({
             legacyUnstampedAllowed: legacyDomainReceiptsAllowed,
           })),
     );
+    const mailboxHardReset = Boolean(
+      reset || existing?.fulfillmentState === "cancelled",
+    );
+    if (
+      existing?.outreachMailbox.mode === "managed" &&
+      (args.outreachMailboxMode !== "managed" || mailboxHardReset)
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        site._id,
+        timestamp,
+        args.outreachMailboxMode === "connect_existing"
+          ? "owner_selected_connect_existing"
+          : "managed_mailbox_request_reset",
+      );
+    }
+    const managedOutreachProfile = managedOutreachProfileFromOwnerInput({
+      mode: args.outreachMailboxMode,
+      fromName: args.managedOutreachFromName,
+      physicalMailingAddress: args.managedOutreachPhysicalMailingAddress,
+      attestationVersion: args.managedOutreachAttestationVersion,
+      canaryConsentVersion: args.managedOutreachCanaryConsentVersion,
+      confirmsSenderIdentityAndAddress:
+        args.confirmsSenderIdentityAndAddress,
+      confirmsDedicatedManagedSenderIdentity:
+        args.confirmsDedicatedManagedSenderIdentity,
+      authorizesManagedDeliveryEventCanary:
+        args.authorizesManagedDeliveryEventCanary,
+      confirmsAutonomousSendingRequiresSeparateConsent:
+        args.confirmsAutonomousSendingRequiresSeparateConsent,
+      previousProfile: reset ? undefined : existing?.managedOutreachProfile,
+      timestamp,
+    });
     const initialPlanContextFingerprint =
       oneSetupInitialPlanContextFingerprint(site);
     let migratedLegacyPlanJob: Doc<"jobs"> | null = null;
@@ -1872,7 +1982,7 @@ export const saveOneSetupRequest = mutation({
       existing?.outreachMailbox,
       args.outreachMailboxMode,
       timestamp,
-      reset,
+      mailboxHardReset,
     );
     const aggregateState = aggregateOneSetupRequestState([
       publisher,
@@ -1881,6 +1991,12 @@ export const saveOneSetupRequest = mutation({
     ]);
     const revision = (existing?.revision ?? 0) + 1;
     const configurationRevision = (existing?.configurationRevision ?? 0) + 1;
+    const outreachMailboxGeneration = nextManagedOutreachMailboxGeneration({
+      previousGeneration: existing?.outreachMailboxGeneration,
+      previousMode: existing?.outreachMailbox.mode,
+      nextMode: args.outreachMailboxMode,
+      hardReset: mailboxHardReset,
+    });
     const record = {
       ownerAccountKey,
       domainSnapshot,
@@ -1914,6 +2030,8 @@ export const saveOneSetupRequest = mutation({
           })
         : undefined,
       requestedCadencePerWeek: args.requestedCadencePerWeek,
+      outreachMailboxGeneration,
+      managedOutreachProfile,
       publisher,
       searchMeasurement,
       outreachMailbox,
@@ -2261,6 +2379,19 @@ export const getOneSetupReadiness = query({
           legacyUnstampedAllowed: siteUsesLegacyDomainReceipts(site),
         }),
     );
+    const managedMailboxResources = requestValid &&
+        request!.outreachMailbox.mode === "managed" &&
+        request!.outreachMailboxGeneration !== undefined
+      ? await ctx.db
+          .query("managed_outreach_mailbox_resources")
+          .withIndex("by_request", (q) => q.eq("requestId", request!._id))
+          .take(2)
+      : [];
+    const managedMailboxResource = managedMailboxResources.length === 1 &&
+        managedMailboxResources[0].generation ===
+          request!.outreachMailboxGeneration
+      ? managedMailboxResources[0]
+      : null;
     const currentExecution = requestValid &&
         (request!.configurationRevision ?? 0) > 0
       ? await ctx.db
@@ -2321,10 +2452,30 @@ export const getOneSetupReadiness = query({
       oneSetupSearchMeasurementReceiptVerified(site) &&
       gscConnectionMatchesCurrentDomain(site);
     const outreachMailboxVerified = Boolean(
-      ownerAccountKey && oneSetupOutreachMailboxReceiptVerified({
-        inboxes,
-        ownerAccountKey,
-      }),
+      ownerAccountKey && (
+        outreachProgress.mode === "managed"
+          ? oneSetupManagedOutreachMailboxReceiptVerified({
+              siteDomain: site.domain,
+              inboxes,
+              resource: managedMailboxResource,
+              requestId: String(request!._id),
+              siteId: String(site._id),
+              ownerAccountKey,
+              expectedDomainRevision: request!.domainRevisionSnapshot ?? -1,
+              expectedConfigurationRevision:
+                request!.configurationRevision ?? 0,
+              expectedGeneration: request!.outreachMailboxGeneration ?? -1,
+              expectedRequestContractVersion: request!.contractVersion,
+              expectedProfile: request?.managedOutreachProfile,
+              now: Date.now(),
+              rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+              runtimeConfig: inboundRelayRuntimeConfig(),
+            })
+          : oneSetupOutreachMailboxReceiptVerified({
+              inboxes,
+              ownerAccountKey,
+            })
+      ),
     );
     const schedulerReadiness =
       topics.length <= SCHEDULER_TOPIC_INVENTORY_READ_LIMIT
@@ -2778,6 +2929,14 @@ export const patchInternal = internalMutation({
       site,
       safePatch,
     );
+    if (domainChanged) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        siteId,
+        now(),
+        "managed_mailbox_domain_invalidated",
+      );
+    }
     const invalidatesRollout = deliveryConfigChanged(site, safePatch);
     if (invalidatesRollout) await assertConfigUnlocked(ctx, site);
     if (invalidatesRollout) {
@@ -3109,6 +3268,12 @@ export const upsert = mutation({
         normalizedAuthorityDomain(currentSite!.domain) !==
         normalizedAuthorityDomain(domain);
       if (authorityDomainChanged) {
+        await stageManagedOutreachMailboxRelease(
+          ctx,
+          args.id,
+          now(),
+          "managed_mailbox_domain_invalidated",
+        );
         await demoteOutreachForDomainChange(ctx, args.id);
       }
       clearStaleGitHubBranch(currentSite!, definedData);
@@ -3204,6 +3369,12 @@ export const upsert = mutation({
         normalizedAuthorityDomain(existing.domain) !==
         normalizedAuthorityDomain(String(merged.domain ?? existing.domain));
       if (authorityDomainChanged) {
+        await stageManagedOutreachMailboxRelease(
+          ctx,
+          existing._id,
+          now(),
+          "managed_mailbox_domain_invalidated",
+        );
         await demoteOutreachForDomainChange(ctx, existing._id);
       }
       const invalidatesRollout = deliveryConfigChanged(existing, merged);
@@ -3466,6 +3637,7 @@ const ACCOUNT_DELETION_RECEIPT_STAGES = [
   "outreach_foreign_owner_contacts",
   "outreach_foreign_owner_suppressions",
   "outreach_foreign_owner_inboxes",
+  "managed_outreach_mailbox_release_tombstones",
   "outreach_durability_migrations",
   "outreach_sender_suppression_tombstones",
   "outreach_tenant_contact_receipts",
@@ -3475,6 +3647,7 @@ const ACCOUNT_DELETION_RECEIPT_STAGES = [
   "usage_log",
 ] as const;
 const SITE_DELETION_STAGES = [
+  "managed_outreach_mailbox_resources",
   "one_setup_executions",
   "managed_provisioning_requests",
   "outreach_inbound_relay_canaries",
@@ -3725,6 +3898,12 @@ async function requestSiteDeletion(
     true,
   );
   const timestamp = now();
+  await stageManagedOutreachMailboxRelease(
+    ctx,
+    siteId,
+    timestamp,
+    "tenant_site_deletion_requested",
+  );
   // Revoke every credential on the site row immediately. Bulk data removal is
   // resumable, but a deletion request must not leave a usable token while it
   // is waiting for the next batch.
@@ -3804,6 +3983,12 @@ async function revokeSiteCredentialsForAccountDeletion(
       true,
     );
   }
+  await stageManagedOutreachMailboxRelease(
+    ctx,
+    site._id,
+    timestamp,
+    "verified_account_deletion_requested",
+  );
   await ctx.db.patch(site._id, {
     accountDeletionRequestedAt:
       site.accountDeletionRequestedAt ?? timestamp,
@@ -3920,6 +4105,11 @@ async function deletionRowsForStage(
 ): Promise<Array<{ _id: Id<TableNames> }>> {
   const name = SITE_DELETION_STAGES[stage];
   switch (name) {
+    case "managed_outreach_mailbox_resources":
+      return ctx.db
+        .query("managed_outreach_mailbox_resources")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(SITE_DELETION_BATCH);
     case "one_setup_executions":
       return ctx.db
         .query("one_setup_executions")
@@ -4068,7 +4258,51 @@ export const continueSiteDeletionInternal = internalMutation({
     }
     const rows = await deletionRowsForStage(ctx, siteId, safeStage);
     for (const row of rows) {
-      if (SITE_DELETION_STAGES[safeStage] === "outreach_messages") {
+      if (
+        SITE_DELETION_STAGES[safeStage] ===
+          "managed_outreach_mailbox_resources"
+      ) {
+        const resource = row as Doc<"managed_outreach_mailbox_resources">;
+        const tombstone = await ctx.db
+          .query("managed_outreach_mailbox_release_tombstones")
+          .withIndex("by_operation", (q) =>
+            q.eq("operationKey", resource.operationKey)
+          )
+          .unique();
+        if (!managedOutreachMailboxReleaseSealed({
+          externalProvisioningAttemptedAt:
+            resource.externalProvisioningAttemptedAt,
+          externalAllocatedAt: resource.externalAllocatedAt,
+          hasCanonicalInbox: Boolean(resource.canonicalInboxId),
+          releaseState: resource.releaseState,
+          tombstoneState: tombstone?.state,
+        })) {
+          await stageManagedOutreachMailboxRelease(
+            ctx,
+            siteId,
+            now(),
+            verifiedAccountDeletion
+              ? "verified_account_deletion_requested"
+              : "tenant_site_deletion_requested",
+          );
+          await ctx.db.patch(siteId, {
+            deletionStage: safeStage,
+            updatedAt: now(),
+          });
+          await ctx.scheduler.runAfter(
+            ACCOUNT_DELETION_RETRY_MS,
+            internal.sites.continueSiteDeletionInternal,
+            { siteId, stage: safeStage },
+          );
+          return {
+            done: false,
+            stage: "managed_mailbox_external_release_pending",
+            deleted: 0,
+            nextStage: safeStage,
+          };
+        }
+        await ctx.db.delete(resource._id);
+      } else if (SITE_DELETION_STAGES[safeStage] === "outreach_messages") {
         const message = row as Doc<"outreach_messages">;
         const acceptedAt = message.sentAt ?? (
           message.status === "delivery_unverified"
@@ -4576,6 +4810,13 @@ async function accountReceiptRowsForStage(
           q.eq("accountKey", accountDeletionKey(userId))
         )
         .take(ACCOUNT_DELETION_RECEIPT_BATCH);
+    case "managed_outreach_mailbox_release_tombstones":
+      return ctx.db
+        .query("managed_outreach_mailbox_release_tombstones")
+        .withIndex("by_account", (q) =>
+          q.eq("ownerAccountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
     case "outreach_sender_suppression_tombstones":
       return ctx.db
         .query("outreach_sender_suppression_tombstones")
@@ -4805,6 +5046,20 @@ export const finalizeAccountDeletionInternal = internalMutation({
           name === "outreach_tenant_contact_receipts"
         ) {
           await ctx.db.delete(row._id);
+        } else if (
+          name === "managed_outreach_mailbox_release_tombstones"
+        ) {
+          const tombstone = row as
+            Doc<"managed_outreach_mailbox_release_tombstones">;
+          if (![
+            "released",
+            "not_required",
+          ].includes(tombstone.state)) {
+            throw new Error(
+              "Managed mailbox release must be sealed before account deletion can remove its tombstone",
+            );
+          }
+          await ctx.db.delete(tombstone._id);
         } else if (name === "outreach_sender_pacing_receipts") {
           // Sender-domain reputation is global and must not be refunded by
           // moving the mailbox to another account. Remove only the deleted

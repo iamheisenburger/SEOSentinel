@@ -563,7 +563,7 @@ http.route({
       internal.outreach.getGmailReconnectReadinessInternal,
       { siteId: body.siteId as Id<"sites"> },
     );
-    return json(result, result.ready ? 200 : 409);
+    return json(result);
   }),
 });
 
@@ -615,6 +615,12 @@ http.route({
       ok: true,
       ready: result.ready,
       inboundReady: result.inboundReady,
+      managedReleasePending: "managedReleasePending" in result
+        ? result.managedReleasePending
+        : undefined,
+      freshOwnerConnectionRequired: "freshOwnerConnectionRequired" in result
+        ? result.freshOwnerConnectionRequired
+        : undefined,
     });
   }),
 });

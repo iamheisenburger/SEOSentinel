@@ -27,6 +27,10 @@ import {
 } from "../../../convex/planLimits";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from
   "../../../convex/lib/publisherProvisioning";
+import {
+  MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION,
+  MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION,
+} from "../../../convex/lib/managedOutreachMailbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
@@ -116,6 +120,19 @@ export function SetupWizard() {
   const [automationMode, setAutomationMode] = useState<AutomationMode>("full");
   const [autopublishConsentAccepted, setAutopublishConsentAccepted] =
     useState(false);
+  const [managedSenderName, setManagedSenderName] = useState("");
+  const [managedPhysicalAddress, setManagedPhysicalAddress] = useState("");
+  const [confirmsSenderIdentityAndAddress, setConfirmsSenderIdentityAndAddress] =
+    useState(false);
+  const [
+    confirmsDedicatedManagedSenderIdentity,
+    setConfirmsDedicatedManagedSenderIdentity,
+  ] =
+    useState(false);
+  const [authorizesManagedDeliveryEventCanary, setAuthorizesManagedDeliveryEventCanary] =
+    useState(false);
+  const [confirmsSeparateAutomaticSendingConsent, setConfirmsSeparateAutomaticSendingConsent] =
+    useState(false);
   const [cadence, setCadence] = useState(0);
   const automaticCadence = useRef(0);
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
@@ -140,6 +157,14 @@ export function SetupWizard() {
     ? capacity.availableMonthlyArticles
     : 0;
   const cadenceOptions = cadenceOptionsForMonthlyLimit(monthlyAllowance);
+  const managedMailboxInputReady = outreachMode !== "managed" || Boolean(
+    managedSenderName.trim().length >= 2 &&
+      managedPhysicalAddress.trim().length >= 15 &&
+      confirmsSenderIdentityAndAddress &&
+      confirmsDedicatedManagedSenderIdentity &&
+      authorizesManagedDeliveryEventCanary &&
+      confirmsSeparateAutomaticSendingConsent,
+  );
 
   useEffect(() => {
     const next = defaultCadenceForMonthlyLimit(monthlyAllowance);
@@ -169,6 +194,22 @@ export function SetupWizard() {
           publisherAutopublishConsentAccepted:
             automationMode === "full" && autopublishConsentAccepted,
           requestedCadencePerWeek: cadence,
+          ...(outreachMode === "managed"
+            ? {
+                managedOutreachFromName: managedSenderName,
+                managedOutreachPhysicalMailingAddress:
+                  managedPhysicalAddress,
+                managedOutreachAttestationVersion:
+                  MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION,
+                managedOutreachCanaryConsentVersion:
+                  MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION,
+                confirmsSenderIdentityAndAddress,
+                confirmsDedicatedManagedSenderIdentity,
+                authorizesManagedDeliveryEventCanary,
+                confirmsAutonomousSendingRequiresSeparateConsent:
+                  confirmsSeparateAutomaticSendingConsent,
+              }
+            : {}),
         });
         setSetupReceipt(receipt);
       }
@@ -243,6 +284,22 @@ export function SetupWizard() {
     }
     if (automationMode === "full" && !autopublishConsentAccepted) {
       setError("Authorize automatic publishing, or choose Assisted review.");
+      return;
+    }
+    if (
+      outreachMode === "managed" &&
+      (
+        managedSenderName.trim().length < 2 ||
+        managedPhysicalAddress.trim().length < 15 ||
+        !confirmsSenderIdentityAndAddress ||
+        !confirmsDedicatedManagedSenderIdentity ||
+        !authorizesManagedDeliveryEventCanary ||
+        !confirmsSeparateAutomaticSendingConsent
+      )
+    ) {
+      setError(
+        "Complete the managed mailbox sender profile and every mailbox attestation.",
+      );
       return;
     }
 
@@ -516,6 +573,79 @@ export function SetupWizard() {
           )}
         </div>
 
+        {outreachMode === "managed" && (
+          <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.025] p-4">
+            <div className="flex items-start gap-3">
+              <Mail className="mt-0.5 h-4 w-4 shrink-0 text-[#38BDF8]" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12px] font-medium text-[#EDEEF1]">
+                  Managed authority sender
+                </p>
+                <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
+                  Enter the truthful identity and physical mailing address that
+                  may appear in compliant outreach. Pentra will request a
+                  dedicated managed sender identity isolated from your primary
+                  mailbox; the active transport must pass its own domain,
+                  authentication, and delivery-event checks.
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <Input
+                    label="Sender name"
+                    placeholder="Person or business name"
+                    value={managedSenderName}
+                    onChange={(event) => setManagedSenderName(event.target.value)}
+                  />
+                  <Input
+                    label="Physical mailing address"
+                    placeholder="Street, city, region, postal code, country"
+                    value={managedPhysicalAddress}
+                    onChange={(event) =>
+                      setManagedPhysicalAddress(event.target.value)
+                    }
+                  />
+                </div>
+                <div className="mt-3 space-y-2">
+                  {[
+                    {
+                      checked: confirmsSenderIdentityAndAddress,
+                      setChecked: setConfirmsSenderIdentityAndAddress,
+                      text: "I confirm the sender identity and physical mailing address are accurate and may be included in outreach.",
+                    },
+                    {
+                      checked: confirmsDedicatedManagedSenderIdentity,
+                      setChecked: setConfirmsDedicatedManagedSenderIdentity,
+                      text: "I authorize Pentra to request a dedicated managed sender identity and its required sender-domain configuration.",
+                    },
+                    {
+                      checked: authorizesManagedDeliveryEventCanary,
+                      setChecked: setAuthorizesManagedDeliveryEventCanary,
+                      text: "I authorize one signed delivery-status canary to verify bounce routing for this mailbox configuration.",
+                    },
+                    {
+                      checked: confirmsSeparateAutomaticSendingConsent,
+                      setChecked: setConfirmsSeparateAutomaticSendingConsent,
+                      text: "I understand this setup does not authorize automatic sending; enabling that later requires a separate versioned consent.",
+                    },
+                  ].map((item) => (
+                    <label
+                      key={item.text}
+                      className="flex cursor-pointer items-start gap-2 text-[10px] leading-relaxed text-[#8B8FA3]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        onChange={(event) => item.setChecked(event.target.checked)}
+                        className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-black/20 accent-[#0EA5E9]"
+                      />
+                      <span>{item.text}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <details className="group mt-3 rounded-xl border border-white/[0.05] bg-white/[0.015]">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[10px] text-[#565A6E] hover:text-[#8B8FA3]">
             <Settings2 className="h-3 w-3" />
@@ -594,7 +724,8 @@ export function SetupWizard() {
             !capacity?.ready ||
             cadence <= 0 ||
             !domain.trim() ||
-            (automationMode === "full" && !autopublishConsentAccepted)
+            (automationMode === "full" && !autopublishConsentAccepted) ||
+            !managedMailboxInputReady
           }
           icon={<Globe className="h-3.5 w-3.5" />}
         >

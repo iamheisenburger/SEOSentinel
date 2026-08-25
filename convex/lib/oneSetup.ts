@@ -169,6 +169,8 @@ const ONE_SETUP_ACTION_COPY: Record<string, string> = {
     "Pentra operations must resume the publishing adapter because its last progress receipt expired.",
   managed_outreach_mailbox_adapter_unavailable:
     "Pentra operations must provision and verify a dedicated outreach mailbox; provider, DNS, and sender receipts are still absent.",
+  managed_outreach_mailbox_adapter_contract_not_implemented:
+    "The managed-mailbox contract is installed, but no external managed-transport adapter (Workspace or Pentra-owned) is implemented for this environment.",
   managed_outreach_mailbox_adapter_stalled:
     "Pentra operations must resume mailbox provisioning because its last progress receipt expired.",
 };

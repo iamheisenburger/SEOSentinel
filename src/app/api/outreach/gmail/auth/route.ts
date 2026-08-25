@@ -22,17 +22,25 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    await callPentraInternal<{ ready: true }>(
+    const preflight = await callPentraInternal<{
+      ready: boolean;
+      reason?: string;
+    }>(
       "/internal/oauth/outreach-gmail/preflight",
       { siteId },
     );
+    if (!preflight.ready) {
+      return NextResponse.json(
+        { error: preflight.reason ?? "The Gmail connection is not ready." },
+        { status: 409 },
+      );
+    }
   } catch {
     return NextResponse.json(
       {
-        error:
-          "This legacy inbox still has sent messages that require bounded reply monitoring. Reconnect is blocked until that compatibility drain completes.",
+        error: "Pentra could not verify Gmail connection readiness.",
       },
-      { status: 409 },
+      { status: 502 },
     );
   }
 

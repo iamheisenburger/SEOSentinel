@@ -131,6 +131,14 @@ import {
   siteCanonicalDomainRevision,
   siteUsesLegacyDomainReceipts,
 } from "./lib/siteDomainBinding.ts";
+import {
+  managedOutreachMailboxLeaseIsCurrent,
+  managedOutreachMailboxProfileIssues,
+  managedOutreachMailboxRequestFenceIssues,
+} from "./lib/managedOutreachMailbox.ts";
+import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
+import { stageManagedOutreachMailboxRelease } from
+  "./managedOutreachMailbox.ts";
 
 function authorityOpportunityMatchesCurrentDomain(
   site: Doc<"sites">,
@@ -702,29 +710,127 @@ export const getInbox = query({
  * Google OAuth callback. Keeping this internal prevents a browser client from
  * injecting SMTP/transactional-provider secrets into the cold-mail path.
  */
+const GMAIL_INBOX_INSTALLATION_ARGS = {
+  siteId: v.id("sites"),
+  fromEmail: v.string(),
+  fromName: v.optional(v.string()),
+  oauthAccessToken: v.string(),
+  oauthRefreshToken: v.optional(v.string()),
+  oauthExpiresAt: v.optional(v.number()),
+  oauthScopes: v.string(),
+  senderDomain: v.string(),
+  dkimSelector: v.string(),
+  dnsCheckedAt: v.number(),
+  spfVerified: v.boolean(),
+  dkimVerified: v.boolean(),
+  dmarcVerified: v.boolean(),
+};
+
+type GmailInboxInstallationArgs = {
+  siteId: Id<"sites">;
+  fromEmail: string;
+  fromName?: string;
+  oauthAccessToken: string;
+  oauthRefreshToken?: string;
+  oauthExpiresAt?: number;
+  oauthScopes: string;
+  senderDomain: string;
+  dkimSelector: string;
+  dnsCheckedAt: number;
+  spfVerified: boolean;
+  dkimVerified: boolean;
+  dmarcVerified: boolean;
+};
+
+type ManagedGmailComplianceProfile = {
+  fromName: string;
+  physicalMailingAddress: string;
+  complianceConfirmedAt: number;
+};
+
+type ManagedTransportBinding = {
+  operationKey: string;
+  generation: number;
+  adapterVersion: string;
+};
+
 export const connectGmailInboxInternal = internalMutation({
-  args: {
-    siteId: v.id("sites"),
-    fromEmail: v.string(),
-    fromName: v.optional(v.string()),
-    oauthAccessToken: v.string(),
-    oauthRefreshToken: v.optional(v.string()),
-    oauthExpiresAt: v.optional(v.number()),
-    oauthScopes: v.string(),
-    senderDomain: v.string(),
-    dkimSelector: v.string(),
-    dnsCheckedAt: v.number(),
-    spfVerified: v.boolean(),
-    dkimVerified: v.boolean(),
-    dmarcVerified: v.boolean(),
-  },
-  handler: async (ctx, args) => {
+  args: GMAIL_INBOX_INSTALLATION_ARGS,
+  handler: (ctx, args) => installCanonicalGmailInbox(ctx, args),
+});
+
+/** The owner OAuth callback and a future managed adapter converge on this one
+ * canonical Gmail writer. Managed callers must first cross their request and
+ * resource lease fence below; credentials never touch the managed ledger. */
+async function installCanonicalGmailInbox(
+  ctx: MutationCtx,
+  args: GmailInboxInstallationArgs,
+  managedProfile?: ManagedGmailComplianceProfile,
+  managedBinding?: ManagedTransportBinding,
+) {
     const site = await ctx.db.get(args.siteId);
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       throw new Error("Site not found");
     }
     const credentialOwnerAccountKey = accountDeletionKey(site.userId!);
+    const ownerSetupRequest = !managedBinding
+      ? await ctx.db
+          .query("managed_provisioning_requests")
+          .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
+          .unique()
+      : null;
+    if (ownerSetupRequest?.outreachMailbox.mode === "managed") {
+      throw new Error(
+        "Select Connect existing in One Setup before connecting an owner mailbox",
+      );
+    }
     const existing = await inboxForSite(ctx, args.siteId);
+    if (
+      existing &&
+      !managedBinding &&
+      (
+        existing.credentialSource === "managed_adapter" ||
+        existing.credentialSource === "managed_adapter_retiring" ||
+        existing.managedTransportOperationKey !== undefined ||
+        existing.managedTransportGeneration !== undefined ||
+        existing.managedTransportAdapterVersion !== undefined
+      )
+    ) {
+      if (ownerSetupRequest?.outreachMailbox.mode !== "connect_existing") {
+        throw new Error(
+          "Select Connect existing in One Setup before replacing a managed mailbox",
+        );
+      }
+      const managedResources = await ctx.db
+        .query("managed_outreach_mailbox_resources")
+        .withIndex("by_canonical_inbox", (q) =>
+          q.eq("canonicalInboxId", existing._id)
+        )
+        .take(2);
+      if (managedResources.length === 0) {
+        throw new Error(
+          "Managed mailbox provenance cannot be released automatically; operator review is required",
+        );
+      }
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        args.siteId,
+        Date.now(),
+        "owner_selected_connect_existing",
+      );
+      const retired = await ctx.db.get(existing._id);
+      return {
+        inboxId: existing._id,
+        reconnected: false,
+        ready: false,
+        inboundReady: false,
+        managedReleasePending: Boolean(
+          retired?.credentialSource === "managed_adapter_retiring" ||
+            retired?.managedTransportOperationKey !== undefined,
+        ),
+        freshOwnerConnectionRequired: true as const,
+      };
+    }
     const existingOwnerMatches = Boolean(
       existing?.credentialOwnerAccountKey === credentialOwnerAccountKey,
     );
@@ -810,6 +916,16 @@ export const connectGmailInboxInternal = internalMutation({
           "Reconnect the exact legacy mailbox before its bounded reply and STOP drain can continue",
         );
       }
+      if (managedBinding) {
+        return {
+          inboxId: existing!._id,
+          reconnected: false,
+          ready: false,
+          inboundReady: true,
+          legacyDrainAdopted: true as const,
+          managedInstallRejected: true as const,
+        };
+      }
       // A fresh strict OAuth callback proves control of the same mailbox, but
       // it must not overwrite the only credential that can still observe
       // pre-relay replies, STOPs and bounces. Bind that legacy read lane to the
@@ -817,6 +933,10 @@ export const connectGmailInboxInternal = internalMutation({
       // delivery impossible until the bounded 90-day drain is empty. The
       // owner can repeat the send-only OAuth connection after the drain.
       await ctx.db.patch(existing!._id, {
+        credentialSource: "owner_oauth",
+        managedTransportOperationKey: undefined,
+        managedTransportGeneration: undefined,
+        managedTransportAdapterVersion: undefined,
         credentialOwnerAccountKey,
         fromName: undefined,
         replyToEmail: undefined,
@@ -929,15 +1049,21 @@ export const connectGmailInboxInternal = internalMutation({
       throw new Error("Google did not provide durable offline mailbox access");
     }
     const dnsReady = args.spfVerified && args.dkimVerified && args.dmarcVerified;
-    const reconnectProfile = resolveGmailReconnectProfile({
-      requestedFromName: args.fromName,
-      existingFromName: existingOwnerMatches ? existing?.fromName : undefined,
+    const existingComplianceProfile = {
       physicalMailingAddress: existingOwnerMatches
         ? existing?.physicalMailingAddress
         : undefined,
       complianceConfirmedAt: existingOwnerMatches
         ? existing?.complianceConfirmedAt
         : undefined,
+    };
+    const reconnectProfile = resolveGmailReconnectProfile({
+      requestedFromName: managedProfile?.fromName ?? args.fromName,
+      existingFromName: existingOwnerMatches ? existing?.fromName : undefined,
+      physicalMailingAddress: managedProfile?.physicalMailingAddress ??
+        existingComplianceProfile.physicalMailingAddress,
+      complianceConfirmedAt: managedProfile?.complianceConfirmedAt ??
+        existingComplianceProfile.complianceConfirmedAt,
     });
     const complianceReady = reconnectProfile.complianceReady;
     const ready = dnsReady && complianceReady;
@@ -975,12 +1101,10 @@ export const connectGmailInboxInternal = internalMutation({
       fromEmail,
       fromName: reconnectProfile.fromName,
       replyToEmail: existingOwnerMatches ? existing?.replyToEmail : undefined,
-      physicalMailingAddress: existingOwnerMatches
-        ? existing?.physicalMailingAddress
-        : undefined,
-      complianceConfirmedAt: existingOwnerMatches
-        ? existing?.complianceConfirmedAt
-        : undefined,
+      physicalMailingAddress: managedProfile?.physicalMailingAddress ??
+        existingComplianceProfile.physicalMailingAddress,
+      complianceConfirmedAt: managedProfile?.complianceConfirmedAt ??
+        existingComplianceProfile.complianceConfirmedAt,
       oauthAccessToken: args.oauthAccessToken,
       oauthRefreshToken: args.oauthRefreshToken ??
         (reconnectsCurrentMailbox ? existing?.oauthRefreshToken : undefined),
@@ -989,6 +1113,12 @@ export const connectGmailInboxInternal = internalMutation({
       smtpPassword: undefined,
       apiKey: undefined,
       credentialOwnerAccountKey,
+      credentialSource: managedBinding
+        ? "managed_adapter"
+        : "owner_oauth",
+      managedTransportOperationKey: managedBinding?.operationKey,
+      managedTransportGeneration: managedBinding?.generation,
+      managedTransportAdapterVersion: managedBinding?.adapterVersion,
       senderDomain: emailDomain,
       dkimSelector: args.dkimSelector,
       dnsCheckedAt: args.dnsCheckedAt,
@@ -1062,6 +1192,185 @@ export const connectGmailInboxInternal = internalMutation({
       createdAt: now,
     });
     return { inboxId, reconnected: false, ready, inboundReady };
+}
+
+/**
+ * Action-only managed installer. The credential-bearing receipt exists only
+ * in these mutation arguments and is written directly to the canonical inbox;
+ * it is never copied to the managed request, resource ledger, or projections.
+ */
+export const installManagedGmailInboxInternal = internalMutation({
+  args: {
+    ...GMAIL_INBOX_INSTALLATION_ARGS,
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRequestRevision: v.number(),
+    expectedConfigurationRevision: v.number(),
+    expectedGeneration: v.number(),
+    leaseToken: v.string(),
+    adapterVersion: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const [resource, request] = await Promise.all([
+      ctx.db.get(args.resourceId),
+      ctx.db.get(args.requestId),
+    ]);
+    const timestamp = Date.now();
+    if (
+      !resource ||
+      !request ||
+      resource.requestId !== request._id ||
+      resource.siteId !== request.siteId ||
+      resource.ownerAccountKey !== request.ownerAccountKey ||
+      resource.domainSnapshot !== request.domainSnapshot ||
+      resource.domainRevisionSnapshot !== request.domainRevisionSnapshot ||
+      resource.requestContractVersion !== request.contractVersion ||
+      args.siteId !== request.siteId ||
+      request.revision !== args.expectedRequestRevision ||
+      resource.requestConfigurationRevision !==
+        args.expectedConfigurationRevision ||
+      resource.generation !== args.expectedGeneration ||
+      resource.lifecycleState !== "leased" ||
+      resource.releaseState !== "active" ||
+      !resource.externalProvisioningAttemptedAt ||
+      !resource.externalProvisioningSettleAfter ||
+      resource.adapterVersion !== args.adapterVersion ||
+      !managedOutreachMailboxLeaseIsCurrent({
+        expectedLeaseToken: args.leaseToken,
+        actualLeaseToken: resource.leaseToken,
+        leaseExpiresAt: resource.leaseExpiresAt,
+        timestamp,
+      })
+    ) throw new Error("Managed mailbox install lease or request changed");
+    const site = await ctx.db.get(request.siteId);
+    const fenceIssues = managedOutreachMailboxRequestFenceIssues({
+      siteActive: Boolean(
+        site?.userId &&
+          !site.deletionStatus &&
+          !site.accountDeletionRequestedAt,
+      ),
+      requestMode: request.outreachMailbox.mode,
+      requestOwnerAccountKey: request.ownerAccountKey,
+      currentOwnerAccountKey: site?.userId
+        ? accountDeletionKey(site.userId)
+        : undefined,
+      requestDomainSnapshot: request.domainSnapshot,
+      currentDomainSnapshot: site ? siteCanonicalDomain(site) : null,
+      requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+      currentDomainRevision: site ? siteCanonicalDomainRevision(site) : -1,
+      expectedConfigurationRevision: args.expectedConfigurationRevision,
+      actualConfigurationRevision: request.configurationRevision,
+      expectedGeneration: args.expectedGeneration,
+      actualGeneration: request.outreachMailboxGeneration,
+      expectedContractVersion: ONE_SETUP_CONTRACT_VERSION,
+      actualContractVersion: request.contractVersion,
+    });
+    const profile = request.managedOutreachProfile;
+    if (
+      fenceIssues.length > 0 ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !profile ||
+      managedOutreachMailboxProfileIssues(profile).length > 0 ||
+      (args.fromName !== undefined && args.fromName.trim() !== profile.fromName) ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(args.adapterVersion)
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        request.siteId,
+        timestamp,
+        "managed_mailbox_install_lifecycle_invalidated",
+      );
+      await ctx.db.patch(request._id, {
+        fulfillmentState: "cancelled",
+        nextAttemptAt: undefined,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        completedAt: undefined,
+        updatedAt: timestamp,
+      });
+      return {
+        installed: false as const,
+        reason: "lifecycle_fence" as const,
+      };
+    }
+
+    const installation = await installCanonicalGmailInbox(
+      ctx,
+      {
+        siteId: args.siteId,
+        fromEmail: args.fromEmail,
+        fromName: profile.fromName,
+        oauthAccessToken: args.oauthAccessToken,
+        oauthRefreshToken: args.oauthRefreshToken,
+        oauthExpiresAt: args.oauthExpiresAt,
+        oauthScopes: args.oauthScopes,
+        senderDomain: args.senderDomain,
+        dkimSelector: args.dkimSelector,
+        dnsCheckedAt: args.dnsCheckedAt,
+        spfVerified: args.spfVerified,
+        dkimVerified: args.dkimVerified,
+        dmarcVerified: args.dmarcVerified,
+      },
+      {
+        fromName: profile.fromName,
+        physicalMailingAddress: profile.physicalMailingAddress,
+        complianceConfirmedAt: profile.senderIdentityAndAddressAttestedAt,
+      },
+      {
+        operationKey: resource.operationKey,
+        generation: resource.generation,
+        adapterVersion: args.adapterVersion,
+      },
+    );
+    if ("managedInstallRejected" in installation) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        request.siteId,
+        timestamp,
+        "managed_mailbox_legacy_drain_not_installable",
+      );
+      await ctx.db.patch(request._id, {
+        fulfillmentState: "cancelled",
+        nextAttemptAt: undefined,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        completedAt: undefined,
+        updatedAt: timestamp,
+      });
+      return {
+        ...installation,
+        installed: false as const,
+        generation: resource.generation,
+        operationallyReady: false as const,
+        nextRequiredReceipt: "legacy_drain_settlement" as const,
+      };
+    }
+    await ctx.db.patch(resource._id, {
+      lifecycleState: "canonicalized",
+      releaseState: "active",
+      canonicalInboxId: installation.inboxId,
+      externalAllocatedAt: resource.externalAllocatedAt ?? timestamp,
+      adapterVersion: args.adapterVersion,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      externalProvisioningSettleAfter: undefined,
+      nextAttemptAt: undefined,
+      lastReasonCode: undefined,
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.managedProvisioning.dispatchRequest,
+      { requestId: request._id, expectedRevision: request.revision },
+    );
+    return {
+      ...installation,
+      installed: true as const,
+      generation: resource.generation,
+      operationallyReady: false as const,
+      nextRequiredReceipt: "signed_dsn_canary" as const,
+    };
   },
 });
 
@@ -2453,7 +2762,34 @@ export const getGmailReconnectReadinessInternal = internalQuery({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       return { ready: false, reason: "Tenant is unavailable." };
     }
-    const inbox = await inboxForSite(ctx, siteId);
+    const [inbox, setupRequest] = await Promise.all([
+      inboxForSite(ctx, siteId),
+      ctx.db
+        .query("managed_provisioning_requests")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .unique(),
+    ]);
+    if (setupRequest?.outreachMailbox.mode === "managed") {
+      return {
+        ready: false,
+        reason:
+          "Select Connect existing in One Setup before starting owner Gmail authorization.",
+      };
+    }
+    if (
+      inbox &&
+      (
+        inbox.credentialSource === "managed_adapter" ||
+        inbox.credentialSource === "managed_adapter_retiring" ||
+        inbox.managedTransportOperationKey !== undefined
+      )
+    ) {
+      return {
+        ready: false,
+        reason:
+          "The managed sender is still retiring. Start a fresh owner Gmail connection after its release completes.",
+      };
+    }
     const ownerKey = accountDeletionKey(site.userId!);
     if (
       inbox?.credentialOwnerAccountKey &&

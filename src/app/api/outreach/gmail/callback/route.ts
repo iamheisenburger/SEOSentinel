@@ -40,6 +40,28 @@ async function handleOutreachGmailCallback(req: NextRequest) {
   const site = await getOwnedSite(siteId);
   if (!site) return page("Site not found.", false, 404);
 
+  try {
+    const preflight = await callPentraInternal<{
+      ready: boolean;
+      reason?: string;
+    }>("/internal/oauth/outreach-gmail/preflight", { siteId });
+    if (!preflight.ready) {
+      const response = page(
+        preflight.reason ?? "The Gmail connection is no longer ready.",
+        false,
+        409,
+      );
+      response.cookies.delete("outreach_gmail_oauth_state");
+      return response;
+    }
+  } catch {
+    return page(
+      "Pentra could not recheck Gmail connection readiness.",
+      false,
+      502,
+    );
+  }
+
   const clientId = process.env.OUTREACH_GOOGLE_CLIENT_ID;
   const clientSecret = process.env.OUTREACH_GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
@@ -117,6 +139,8 @@ async function handleOutreachGmailCallback(req: NextRequest) {
     const result = await callPentraInternal<{
       ready: boolean;
       inboundReady: boolean;
+      managedReleasePending?: boolean;
+      freshOwnerConnectionRequired?: boolean;
     }>(
       "/internal/oauth/outreach-gmail",
       {
@@ -137,6 +161,17 @@ async function handleOutreachGmailCallback(req: NextRequest) {
         dmarcVerified: dns.dmarc,
       },
     );
+    if (result.freshOwnerConnectionRequired) {
+      const response = page(
+        result.managedReleasePending
+          ? "The managed sender is safely retiring. No Google credential was saved. Retry Connect Gmail after its release completes."
+          : "The managed sender was retired and no Google credential was saved. Start Connect Gmail again to create a fresh owner connection.",
+        false,
+        409,
+      );
+      response.cookies.delete("outreach_gmail_oauth_state");
+      return response;
+    }
     const message = result.ready && result.inboundReady
       ? "Gmail connected. The inbox is ready in approval mode with signed inbound handling."
       : result.ready

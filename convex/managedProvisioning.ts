@@ -5,6 +5,7 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import {
+  oneSetupManagedOutreachMailboxReceiptVerified,
   oneSetupOutreachMailboxReceiptVerified,
   oneSetupPublisherReceiptVerified,
   oneSetupSearchMeasurementReceiptVerified,
@@ -28,9 +29,27 @@ import { sha256Hex } from "./lib/publicationArtifact.ts";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import { publisherAutopublishConsentCurrent } from
   "./lib/publisherProvisioning.ts";
+import { stageManagedOutreachMailboxRelease } from
+  "./managedOutreachMailbox.ts";
 
 const MANAGED_PROVISIONING_FLEET_BATCH = 25;
 const MANAGED_PROVISIONING_LEGACY_BATCH = 25;
+
+function inboundRelayRuntimeConfig() {
+  return {
+    domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+    secrets: [
+      process.env.OUTREACH_INBOUND_RELAY_SECRET,
+      process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+    ],
+    dsnTargetSecret:
+      process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
+    adapterVersion: process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+    retentionPolicyHash:
+      process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+    retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+  };
+}
 
 type ManagedProvisioningRequest = Doc<"managed_provisioning_requests">;
 type ManagedProvisioningCapability = ManagedProvisioningRequest["publisher"];
@@ -140,6 +159,12 @@ async function cancelStaleRequest(
   request: ManagedProvisioningRequest,
   timestamp: number,
 ) {
+  await stageManagedOutreachMailboxRelease(
+    ctx,
+    request.siteId,
+    timestamp,
+    "managed_mailbox_request_identity_invalidated",
+  );
   const alert = await ctx.db
     .query("autopilot_alerts")
     .withIndex("by_site_kind_status", (q) =>
@@ -388,6 +413,9 @@ export const dispatchRequest = internalMutation({
     if (!request || request.revision !== args.expectedRevision) {
       return { claimed: false as const, reason: "stale_revision" as const };
     }
+    if (request.fulfillmentState === "cancelled") {
+      return { claimed: false as const, reason: "cancelled" as const };
+    }
     const timestamp = Date.now();
     const site = await ctx.db.get(request.siteId);
     if (!requestIdentityIsCurrent({ request, site })) {
@@ -396,6 +424,19 @@ export const dispatchRequest = internalMutation({
     }
     if (!site) throw new Error("Active provisioning site disappeared");
     if (!(await siteExecutionAuthorized(ctx, site))) {
+      // Parking publisher execution must not strand a managed mailbox. The
+      // mailbox reconciler owns retirement, quarantine, and durable release;
+      // under this same execution fence it will retire rather than allocate.
+      await ctx.scheduler.runAfter(
+        0,
+        internal.managedOutreachMailbox.reconcileProvisioningResource,
+        {
+          requestId: request._id,
+          expectedRequestRevision: request.revision,
+          expectedConfigurationRevision: request.configurationRevision ?? 0,
+          expectedGeneration: request.outreachMailboxGeneration ?? 1,
+        },
+      );
       const nextAttemptAt = managedProvisioningRetryAt(timestamp);
       await ctx.db.patch(request._id, {
         fulfillmentState: "retry_wait",
@@ -516,6 +557,18 @@ export const reconcileRequest = internalMutation({
       .query("outreach_inboxes")
       .withIndex("by_site", (q) => q.eq("siteId", site._id))
       .take(2);
+    const managedMailboxResources = request.outreachMailbox.mode === "managed" &&
+        request.outreachMailboxGeneration !== undefined
+      ? await ctx.db
+          .query("managed_outreach_mailbox_resources")
+          .withIndex("by_request", (q) => q.eq("requestId", request._id))
+          .take(2)
+      : [];
+    const managedMailboxResource = managedMailboxResources.length === 1 &&
+        managedMailboxResources[0].generation ===
+          request.outreachMailboxGeneration
+      ? managedMailboxResources[0]
+      : null;
     const publisher = capabilityAfterReconciliation({
       capability: "publisher",
       current: request.publisher,
@@ -532,10 +585,28 @@ export const reconcileRequest = internalMutation({
     const outreachMailbox = capabilityAfterReconciliation({
       capability: "outreach_mailbox",
       current: request.outreachMailbox,
-      canonicalReceiptVerified: oneSetupOutreachMailboxReceiptVerified({
-        inboxes,
-        ownerAccountKey: request.ownerAccountKey,
-      }),
+      canonicalReceiptVerified: request.outreachMailbox.mode === "managed"
+        ? oneSetupManagedOutreachMailboxReceiptVerified({
+            siteDomain: site.domain,
+            inboxes,
+            resource: managedMailboxResource,
+            requestId: String(request._id),
+            siteId: String(site._id),
+            ownerAccountKey: request.ownerAccountKey,
+            expectedDomainRevision: request.domainRevisionSnapshot ?? -1,
+            expectedConfigurationRevision:
+              request.configurationRevision ?? 0,
+            expectedGeneration: request.outreachMailboxGeneration ?? -1,
+            expectedRequestContractVersion: request.contractVersion,
+            expectedProfile: request.managedOutreachProfile,
+            now: timestamp,
+            rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+            runtimeConfig: inboundRelayRuntimeConfig(),
+          })
+        : oneSetupOutreachMailboxReceiptVerified({
+            inboxes,
+            ownerAccountKey: request.ownerAccountKey,
+          }),
       timestamp,
     });
     const aggregateState = aggregateOneSetupRequestState([
@@ -594,6 +665,16 @@ export const reconcileRequest = internalMutation({
       nextAttemptAt,
       internal.managedProvisioning.dispatchRequest,
       { requestId: request._id, expectedRevision: revision },
+    );
+    await ctx.scheduler.runAfter(
+      0,
+      internal.managedOutreachMailbox.reconcileProvisioningResource,
+      {
+        requestId: request._id,
+        expectedRequestRevision: revision,
+        expectedConfigurationRevision: request.configurationRevision ?? 0,
+        expectedGeneration: request.outreachMailboxGeneration ?? 1,
+      },
     );
     return {
       reconciled: true as const,

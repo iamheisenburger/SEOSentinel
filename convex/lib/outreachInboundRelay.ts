@@ -118,14 +118,18 @@ export function normalizeInboundRelayDomain(value: string | undefined): string |
   return domain;
 }
 
-export function inboundRelayConfigured(args: {
+export type InboundRelayRuntimeConfig = {
   domain?: string;
   secrets?: Array<string | undefined>;
   dsnTargetSecret?: string;
   adapterVersion?: string;
   retentionPolicyHash?: string;
   retentionAudited?: string | boolean;
-}): boolean {
+};
+
+export function inboundRelayConfigured(
+  args: InboundRelayRuntimeConfig,
+): boolean {
   return Boolean(
     normalizeInboundRelayDomain(args.domain) &&
     args.secrets?.some((secret) => (secret?.trim().length ?? 0) >= 32) &&

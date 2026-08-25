@@ -1,6 +1,11 @@
 import type { Doc } from "../_generated/dataModel";
 import { publicationDestinationBlockers } from "./autopilotReadiness.ts";
 import { autonomousGmailCredentialIssues } from "./outreachDelivery.ts";
+import {
+  managedOutreachMailboxOperationallyReady,
+  type ManagedOutreachMailboxProfile,
+} from "./managedOutreachMailbox.ts";
+import type { InboundRelayRuntimeConfig } from "./outreachInboundRelay.ts";
 import { normalizedOneSetupDomain } from "./oneSetup.ts";
 import { publisherDestinationReceiptVerified } from
   "./publisherProvisioning.ts";
@@ -127,6 +132,30 @@ export function oneSetupOutreachMailboxReceiptVerified(args: {
         hasRefreshToken: Boolean(inbox.oauthRefreshToken),
       }).length === 0,
   );
+}
+
+/** Managed fulfillment is held to the real delivery posture, including the
+ * current signed DSN route. The legacy/connect-existing projection remains
+ * intentionally separate so this additive contract does not rewrite an
+ * owner's existing onboarding semantics. Live DNS is still resolved again at
+ * send claim time; these durable receipts never replace that claim-time gate. */
+export function oneSetupManagedOutreachMailboxReceiptVerified(args: {
+  siteDomain: string;
+  inboxes: readonly Doc<"outreach_inboxes">[];
+  resource: Doc<"managed_outreach_mailbox_resources"> | null;
+  requestId: string;
+  siteId: string;
+  ownerAccountKey: string;
+  expectedDomainRevision: number;
+  expectedConfigurationRevision: number;
+  expectedGeneration: number;
+  expectedRequestContractVersion: number;
+  expectedProfile: Partial<ManagedOutreachMailboxProfile> | null | undefined;
+  now: number;
+  rolloutEpoch: number;
+  runtimeConfig: InboundRelayRuntimeConfig;
+}): boolean {
+  return managedOutreachMailboxOperationallyReady(args);
 }
 
 export function oneSetupCanonicalReceiptBlockers(args: {
