@@ -220,7 +220,13 @@ export type TopicPlanSettlementDecision =
   | { decision: "already_settled" }
   | { decision: "terminal_done" }
   | { decision: "terminal_failed" }
-  | { decision: "ambiguous"; reason: "lease_expired" | "monitor_exhausted" }
+  | {
+      decision: "ambiguous";
+      reason:
+        | "lease_expired"
+        | "monitor_exhausted"
+        | "terminal_finalizer_exhausted";
+    }
   | { decision: "wait"; settlementAttempt: number };
 
 /**
@@ -247,8 +253,24 @@ export function topicPlanSettlementDecision(args: {
     args.currentSettlementAttempt !== args.expectedSettlementAttempt ||
     !Number.isSafeInteger(args.now)
   ) return { decision: "fence_changed" };
-  if (args.jobStatus === "done") return { decision: "terminal_done" };
-  if (args.jobStatus === "failed") return { decision: "terminal_failed" };
+  if (["done", "failed"].includes(args.jobStatus ?? "")) {
+    // A terminal receipt first observed on the final active-monitor attempt
+    // still gets one exact finalizer dispatch. Its pre-armed confirmation is
+    // generation MAX + 1; if that finalizer persistently rejects or rolls
+    // back, fail closed instead of scheduling an unbounded confirmation loop.
+    if (
+      args.expectedSettlementAttempt >
+        TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS
+    ) {
+      return {
+        decision: "ambiguous",
+        reason: "terminal_finalizer_exhausted",
+      };
+    }
+    return args.jobStatus === "done"
+      ? { decision: "terminal_done" }
+      : { decision: "terminal_failed" };
+  }
   if (
     args.jobStatus === "running" &&
     Number.isSafeInteger(args.leaseExpiresAt) &&

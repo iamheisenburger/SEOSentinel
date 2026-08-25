@@ -59,6 +59,23 @@ test("done, ambiguous, exhausted, and stale settlement receipts fail closed", ()
   }), { decision: "ambiguous", reason: "monitor_exhausted" });
   assert.deepEqual(topicPlanSettlementDecision({
     receiptState: "claimed",
+    currentSettlementAttempt: TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS,
+    expectedSettlementAttempt: TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS,
+    jobStatus: "failed",
+    now: 10_000,
+  }), { decision: "terminal_failed" });
+  assert.deepEqual(topicPlanSettlementDecision({
+    receiptState: "claimed",
+    currentSettlementAttempt: TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS + 1,
+    expectedSettlementAttempt: TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS + 1,
+    jobStatus: "failed",
+    now: 10_000,
+  }), {
+    decision: "ambiguous",
+    reason: "terminal_finalizer_exhausted",
+  });
+  assert.deepEqual(topicPlanSettlementDecision({
+    receiptState: "claimed",
     currentSettlementAttempt: 6,
     expectedSettlementAttempt: 5,
     jobStatus: "failed",
@@ -121,6 +138,16 @@ test("binding atomically owns worker dispatch and terminal observation", () => {
   assert.match(finish, /args\.jobId !== run\.jobId/);
   assert.match(finish, /!\["done", "failed"\]\.includes\(boundJob\.status\)/);
   assert.match(finish, /bound_job_settlement_owned/);
+  const parked = finish.slice(
+    finish.indexOf("if (!runSite ||"),
+    finish.indexOf("await ctx.db.patch(args.runId, {", finish.indexOf("if (!runSite ||")) +
+      1_200,
+  );
+  assert.match(parked, /status: "failed"/);
+  assert.match(parked, /status: "run_failed"/);
+  assert.match(parked, /await upsertHealth/);
+  assert.match(parked, /await setAlert/);
+  assert.match(parked, /lastNaturalCompletedAt/);
 });
 
 test("action death before binding is recoverable without replaying a live bound job", () => {

@@ -1745,12 +1745,28 @@ export const markRunFinished = internalMutation({
     const runSite = await ctx.db.get(run.siteId);
     const now = Date.now();
     if (!runSite || !(await siteExecutionAuthorized(ctx, runSite))) {
+      const detail = "The site is not active under the current plan.";
       await ctx.db.patch(args.runId, {
         status: "failed",
         completedAt: now,
         heartbeatAt: now,
         outcome: "site_parked",
-        detail: "The site is not active under the current plan.",
+        detail,
+      });
+      await upsertHealth(ctx, run.siteId, {
+        lastRunId: args.runId,
+        heartbeatAt: now,
+        status: "run_failed",
+        detail,
+        ...(run.trigger === "natural" ? { lastNaturalCompletedAt: now } : {}),
+      });
+      await setAlert(ctx, {
+        siteId: run.siteId,
+        runId: args.runId,
+        kind: run.trigger === "natural"
+          ? "natural_run_failed"
+          : `${run.trigger}_run_failed`,
+        message: `${run.trigger} autopilot run failed: ${detail}`,
       });
       return { updated: true as const, reason: "site_parked" };
     }
