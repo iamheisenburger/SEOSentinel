@@ -28,6 +28,26 @@ const operatorProjection = readFileSync(
 );
 const schema = readFileSync("convex/schema.ts", "utf8");
 
+function assertNoForbiddenStrings(
+  value: unknown,
+  forbidden: readonly string[],
+): void {
+  if (typeof value === "string") {
+    for (const secret of forbidden) {
+      assert.equal(
+        value.includes(secret),
+        false,
+        `projected forbidden string: ${secret}`,
+      );
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const nested of Object.values(value)) {
+    assertNoForbiddenStrings(nested, forbidden);
+  }
+}
+
 test("operator plan receipts are bounded before projection", () => {
   assert.equal(OPERATOR_PLAN_RECEIPT_LIMIT, 8);
   assert.equal(OPERATOR_PLAN_CHECKPOINT_READ_LIMIT, 2);
@@ -99,7 +119,7 @@ test("the entire snapshot projection excludes credentials, free-form content, id
     cadenceFailure: {
       version: 1,
       category: "terminal_invariant",
-      code: "verified_zero_yield",
+      code: "terminal_planner_invariant",
       retryable: false,
       terminal: true,
       eligibleAt: undefined,
@@ -119,11 +139,12 @@ test("the entire snapshot projection excludes credentials, free-form content, id
     policyVersion: PLAN_CANDIDATE_CHECKPOINT_VERSION,
     rolloutEpoch: 7,
     requiredVerifiedYield: 2,
+    candidateCapacity: 2,
     providerCostCeilingMicroUsd:
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
     providerCostReservedMicroUsd:
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    reservationDay: "2026-08-25",
+    reservationDay: "1970-01-01",
     status: "terminal_blocked",
     activationScheduledAt: 11,
     completedAt: 12,
@@ -145,7 +166,8 @@ test("the entire snapshot projection excludes credentials, free-form content, id
     purpose: "topic_plan",
     trigger: "topic_plan",
     reservedMicroUsd: AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    reservationDay: "2026-08-25",
+    reservationDay: "1970-01-01",
+    reservationMonth: "1970-01",
     createdAt: 10,
     releasedAt: 40,
     releaseReason: "provider_balance_insufficient",
@@ -202,14 +224,14 @@ test("the entire snapshot projection excludes credentials, free-form content, id
       status: "failed",
       createdAt: 10,
       updatedAt: 20,
-      workerAttempts: 1,
+      workerAttempts: 0,
       rolloutEpoch: 7,
       providerSpendReservationId: "reservation-1",
       providerCostCeilingMicroUsd:
         AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
       providerCostReservedMicroUsd:
         AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-      providerCostReservationDay: "2026-08-25",
+      providerCostReservationDay: "1970-01-01",
       providerReservationReleasedAt: 40,
       providerReservationReleaseReason: "provider_balance_insufficient",
       payload: {
@@ -242,7 +264,7 @@ test("the entire snapshot projection excludes credentials, free-form content, id
   for (const secret of secretValues) assert.doesNotMatch(serialized, new RegExp(secret));
   assert.deepEqual(job.cadenceFailure, {
     category: "terminal_invariant",
-    code: "verified_zero_yield",
+    code: "terminal_planner_invariant",
     eligibleAt: undefined,
     terminal: true,
   });
@@ -256,7 +278,7 @@ test("the entire snapshot projection excludes credentials, free-form content, id
   assert.equal(terminal.checkpointState, "single");
   assert.equal(
     terminal.providerReservationState,
-    "released_before_paid_work",
+    "invalid",
   );
   const forbiddenKeys = new Set([
     "payload",
@@ -292,13 +314,13 @@ test("corrupt tenant bindings and multiple checkpoints expose no counts or ledge
     status: "failed",
     createdAt: 10,
     updatedAt: 20,
-    workerAttempts: 1,
+    workerAttempts: 0,
     providerSpendReservationId: "reservation-1",
     providerCostCeilingMicroUsd:
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
     providerCostReservedMicroUsd:
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    providerCostReservationDay: "2026-08-25",
+    providerCostReservationDay: "1970-01-01",
   } as never;
   const checkpoint = {
     _id: "checkpoint-1",
@@ -319,7 +341,8 @@ test("corrupt tenant bindings and multiple checkpoints expose no counts or ledge
     purpose: "topic_plan",
     trigger: "topic_plan",
     reservedMicroUsd: AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    reservationDay: "2026-08-25",
+    reservationDay: "1970-01-01",
+    reservationMonth: "1970-01",
     createdAt: 10,
   } as never;
   const corrupt = operatorTerminalPlanReceipt({
@@ -363,6 +386,7 @@ test("terminal checkpoint states expose only bounded yield counts", () => {
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
     reservationDay: "2026-08-25",
     requiredVerifiedYield: 2,
+    candidateCapacity: 2,
     candidateTopicIds: ["topic-1", "topic-2"],
     candidateFingerprints: ["fingerprint-1", "fingerprint-2"],
     createdAt: 10,
@@ -435,11 +459,25 @@ test("checkpoint result counts require bounded duplicate-free candidate subsets"
     status: "done",
     createdAt: 10,
     updatedAt: 20,
-    workerAttempts: 1,
+    workerAttempts: 0,
     rolloutEpoch: 4,
+    providerSpendReservationId: "reservation-1",
+    providerCostCeilingMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservationDay: "1970-01-01",
     result: {
       count: 1,
       planPersistenceCommit: { version: 1, cumulativeTopicCount: 1 },
+      planCheckpointCommit: {
+        version: 1,
+        completionNonce: "completion-1",
+        checkpointId: "checkpoint-1",
+        workerExecution: 1,
+        acceptedTopicIds: ["topic-1"],
+        committedAt: 20,
+      },
     },
     payload: {
       reason: "topic_buffer_replenishment",
@@ -461,13 +499,22 @@ test("checkpoint result counts require bounded duplicate-free candidate subsets"
     workerExecution: 1,
     policyVersion: PLAN_CANDIDATE_CHECKPOINT_VERSION,
     rolloutEpoch: 4,
+    providerSpendReservationId: "reservation-1",
+    providerCostCeilingMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    reservationDay: "1970-01-01",
     requiredVerifiedYield: 2,
+    candidateCapacity: 2,
     status: "inline_completed",
+    inlineSuccessCommitNonce: "completion-1",
     candidateTopicIds: candidateIds,
     candidateFingerprints: ["fingerprint-1", "fingerprint-2"],
     inlineCompletedTopicIds: ["topic-1"],
     activatedTopicIds: [],
     terminallyExcludedTopicIds: ["topic-2"],
+    completedAt: 20,
     createdAt: 10,
     updatedAt: 20,
   };
@@ -495,8 +542,14 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
     _id: "job-1",
     createdAt: 10,
     updatedAt: 20,
-    workerAttempts: 1,
+    workerAttempts: 0,
     rolloutEpoch: 4,
+    providerSpendReservationId: "reservation-1",
+    providerCostCeilingMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservationDay: "1970-01-01",
     payload: {
       reason: "topic_buffer_replenishment",
       planCheckpointModeVersion: 1,
@@ -518,32 +571,85 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
     policyVersion: PLAN_CANDIDATE_CHECKPOINT_VERSION,
     rolloutEpoch: 4,
     requiredVerifiedYield: 2,
+    candidateCapacity: 2,
+    providerSpendReservationId: "reservation-1",
+    providerCostCeilingMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    reservationDay: "1970-01-01",
     candidateTopicIds: ["topic-1", "topic-2"],
     candidateFingerprints: ["fingerprint-1", "fingerprint-2"],
     createdAt: 10,
     updatedAt: 20,
   };
+  const inlineJobResult = {
+    count: 1,
+    planCheckpointCommit: {
+      version: 1,
+      completionNonce: "completion-1",
+      checkpointId: "checkpoint-1",
+      workerExecution: 1,
+      acceptedTopicIds: ["topic-1"],
+      committedAt: 20,
+    },
+  };
+  const inlineCheckpoint = {
+    status: "inline_completed",
+    inlineSuccessCommitNonce: "completion-1",
+    inlineCompletedTopicIds: ["topic-1"],
+    activatedTopicIds: [],
+    terminallyExcludedTopicIds: ["topic-2"],
+    completedAt: 20,
+  };
   const cases = [
     {
       jobStatus: "done",
-      jobResult: { count: 1 },
+      workerAttempts: 0,
+      jobResult: inlineJobResult,
+      checkpoint: inlineCheckpoint,
+    },
+    {
+      jobStatus: "failed",
+      workerAttempts: 1,
       checkpoint: {
-        status: "inline_completed",
-        inlineCompletedTopicIds: ["topic-1"],
-        completedAt: 20,
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activatedAt: 20,
       },
     },
     {
       jobStatus: "failed",
-      checkpoint: { status: "activated", activatedAt: 20 },
+      workerAttempts: 0,
+      checkpoint: {
+        status: "empty",
+        candidateTopicIds: [],
+        candidateFingerprints: [],
+        completedAt: 10,
+        updatedAt: 10,
+      },
     },
     {
       jobStatus: "failed",
-      checkpoint: { status: "empty", completedAt: 20 },
+      workerAttempts: 1,
+      checkpoint: {
+        status: "empty",
+        candidateTopicIds: [],
+        candidateFingerprints: [],
+        completedAt: 10,
+        updatedAt: 10,
+      },
     },
     {
       jobStatus: "failed",
-      checkpoint: { status: "terminal_blocked", activatedAt: 20 },
+      workerAttempts: 1,
+      checkpoint: {
+        status: "terminal_blocked",
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1", "topic-2"],
+        activatedAt: 20,
+      },
     },
   ] as const;
   for (const row of cases) {
@@ -553,6 +659,7 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
       job: {
         ...baseJob,
         status: row.jobStatus,
+        workerAttempts: row.workerAttempts,
         result: "jobResult" in row ? row.jobResult : undefined,
       } as never,
       domainBinding: "current",
@@ -583,6 +690,216 @@ test("terminal checkpoint acceptance binds status, terminal time, and persisted 
     });
     assert.equal(receipt.checkpointState, "multiple_or_invalid");
   }
+
+  const project = (
+    jobPatch: Record<string, unknown>,
+    checkpointPatch: Record<string, unknown>,
+  ) => operatorTerminalPlanReceipt({
+    siteId: "site-1" as never,
+    siteUserId: "owner-1",
+    job: { ...baseJob, ...jobPatch } as never,
+    domainBinding: "current",
+    expectedReservationTrigger: "topic_plan",
+    checkpoints: [{ ...baseCheckpoint, ...checkpointPatch } as never],
+    reservation: null,
+  });
+  for (const contradiction of [
+    {
+      job: { status: "failed", workerAttempts: 2 },
+      checkpoint: {
+        status: "empty",
+        candidateTopicIds: [],
+        candidateFingerprints: [],
+        completedAt: 10,
+        updatedAt: 10,
+      },
+      label: "empty checkpoint after more than one terminal attempt",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: { status: "empty", completedAt: 10, updatedAt: 10 },
+      label: "empty checkpoint with candidates",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: { status: "activated", activatedAt: 20 },
+      label: "activated checkpoint without a result partition",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-1"],
+        activatedAt: 20,
+      },
+      label: "activated checkpoint with an overlapping partition",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "terminal_blocked",
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-1"],
+        activatedAt: 20,
+      },
+      label: "activation-blocked checkpoint with an incomplete partition",
+    },
+    {
+      job: { status: "done", workerAttempts: 0, result: inlineJobResult },
+      checkpoint: {
+        status: "inline_completed",
+        inlineSuccessCommitNonce: "completion-1",
+        inlineCompletedTopicIds: ["topic-1"],
+        completedAt: 20,
+      },
+      label: "inline checkpoint without an excluded partition",
+    },
+    {
+      job: { status: "done", workerAttempts: 1, result: inlineJobResult },
+      checkpoint: inlineCheckpoint,
+      label: "inline checkpoint after a consumed worker attempt",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        completedAt: 20,
+        activatedAt: 20,
+      },
+      label: "activated checkpoint with two terminal timestamps",
+    },
+    {
+      job: { status: "failed", workerAttempts: 1 },
+      checkpoint: {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activatedAt: 20,
+        candidateFingerprints: ["fingerprint-1", "fingerprint-1"],
+      },
+      label: "duplicate candidate fingerprints",
+    },
+    {
+      job: { status: "failed", workerAttempts: 0 },
+      checkpoint: {
+        status: "terminal_blocked",
+        completedAt: -100,
+        updatedAt: -100,
+        terminallyExcludedTopicIds: ["topic-1"],
+      },
+      label: "terminal time before checkpoint creation",
+    },
+  ]) {
+    assert.equal(
+      project(contradiction.job, contradiction.checkpoint).checkpointState,
+      "multiple_or_invalid",
+      contradiction.label,
+    );
+  }
+  for (const candidateCapacity of [undefined, 0, 3, 2.5]) {
+    assert.equal(
+      project(
+        { status: "failed", workerAttempts: 1 },
+        {
+          status: "activated",
+          activatedTopicIds: ["topic-1"],
+          terminallyExcludedTopicIds: ["topic-2"],
+          activatedAt: 20,
+          candidateCapacity,
+        },
+      ).checkpointState,
+      "multiple_or_invalid",
+    );
+  }
+  const tenIds = Array.from({ length: 10 }, (_, index) => `topic-${index}`);
+  assert.equal(
+    project(
+      {
+        status: "done",
+        workerAttempts: 0,
+        result: {
+          count: 10,
+          planCheckpointCommit: {
+            version: 1,
+            completionNonce: "completion-10",
+            checkpointId: "checkpoint-1",
+            workerExecution: 1,
+            acceptedTopicIds: tenIds,
+            committedAt: 20,
+          },
+        },
+      },
+      {
+        status: "inline_completed",
+        inlineSuccessCommitNonce: "completion-10",
+        completedAt: 20,
+        candidateCapacity: 2,
+        candidateTopicIds: tenIds,
+        candidateFingerprints: tenIds.map((id) => `fingerprint-${id}`),
+        inlineCompletedTopicIds: tenIds,
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: [],
+      },
+    ).checkpointState,
+    "multiple_or_invalid",
+  );
+  assert.equal(
+    project(
+      { status: "failed", workerAttempts: 1, result: { count: 1 } },
+      {
+        status: "activated",
+        activatedTopicIds: ["topic-1"],
+        terminallyExcludedTopicIds: ["topic-2"],
+        activatedAt: 20,
+      },
+    ).checkpointState,
+    "multiple_or_invalid",
+  );
+  assert.equal(
+    project(
+      { status: "done", workerAttempts: 0, result: { count: 1 } },
+      {
+        status: "inline_completed",
+        inlineSuccessCommitNonce: "completion-1",
+        inlineCompletedTopicIds: ["topic-1"],
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-2"],
+        completedAt: 20,
+      },
+    ).checkpointState,
+    "multiple_or_invalid",
+  );
+  assert.equal(
+    project(
+      {
+        status: "done",
+        workerAttempts: 0,
+        result: {
+          count: 1,
+          planCheckpointCommit: {
+            version: 1,
+            completionNonce: "wrong-completion",
+            checkpointId: "checkpoint-1",
+            workerExecution: 1,
+            acceptedTopicIds: ["topic-1"],
+            committedAt: 20,
+          },
+        },
+      },
+      {
+        status: "inline_completed",
+        inlineSuccessCommitNonce: "completion-1",
+        inlineCompletedTopicIds: ["topic-1"],
+        activatedTopicIds: [],
+        terminallyExcludedTopicIds: ["topic-2"],
+        completedAt: 20,
+      },
+    ).checkpointState,
+    "multiple_or_invalid",
+  );
 });
 
 test("persisted plan counts and reservation release state are strictly derived", () => {
@@ -613,14 +930,14 @@ test("persisted plan counts and reservation release state are strictly derived",
     _id: "job-1",
     status: "failed",
     createdAt: 10,
-    updatedAt: 20,
-    workerAttempts: 1,
+    updatedAt: 30,
+    workerAttempts: 0,
     providerSpendReservationId: "reservation-1",
     providerCostCeilingMicroUsd:
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
     providerCostReservedMicroUsd:
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    providerCostReservationDay: "2026-08-25",
+    providerCostReservationDay: "1970-01-01",
   };
   const reservation = {
     _id: "reservation-1",
@@ -629,7 +946,8 @@ test("persisted plan counts and reservation release state are strictly derived",
     purpose: "topic_plan",
     trigger: "topic_plan",
     reservedMicroUsd: AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    reservationDay: "2026-08-25",
+    reservationDay: "1970-01-01",
+    reservationMonth: "1970-01",
     createdAt: 10,
   };
   const project = (
@@ -655,6 +973,17 @@ test("persisted plan counts and reservation release state are strictly derived",
     ),
     "released_before_paid_work",
   );
+  assert.equal(
+    project(
+      {
+        updatedAt: 20,
+        providerReservationReleasedAt: 30,
+        providerReservationReleaseReason: "provider_balance_insufficient",
+      },
+      { releasedAt: 30, releaseReason: "provider_balance_insufficient" },
+    ),
+    "invalid",
+  );
   assert.equal(project(
     { providerReservationReleasedAt: 30 },
     { releasedAt: 30 },
@@ -667,6 +996,206 @@ test("persisted plan counts and reservation release state are strictly derived",
     project({}, { _id: "reservation-foreign" }),
     "invalid",
   );
+  assert.equal(project({}, { reservationDay: "1970-01-02" }), "invalid");
+  assert.equal(project({}, { reservationMonth: "1970-02" }), "invalid");
+});
+
+test("released-before-paid-work rejects attempts, success, and validated checkpoints", () => {
+  const releaseJobFields = {
+    providerReservationReleasedAt: 30,
+    providerReservationReleaseReason: "provider_balance_insufficient",
+  };
+  const reservation = {
+    _id: "reservation-1",
+    siteId: "site-1",
+    userId: "owner-1",
+    purpose: "topic_plan",
+    trigger: "topic_plan",
+    reservedMicroUsd: AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    reservationDay: "1970-01-01",
+    reservationMonth: "1970-01",
+    createdAt: 10,
+    releasedAt: 30,
+    releaseReason: "provider_balance_insufficient",
+  } as never;
+  const job = {
+    _id: "job-1",
+    status: "failed",
+    createdAt: 10,
+    updatedAt: 30,
+    workerAttempts: 0,
+    rolloutEpoch: 4,
+    providerSpendReservationId: "reservation-1",
+    providerCostCeilingMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservationDay: "1970-01-01",
+    payload: {
+      reason: "topic_buffer_replenishment",
+      planCheckpointModeVersion: 1,
+      planYieldTarget: {
+        version: 1,
+        targetBufferShortfall: 2,
+        verifiedHorizonShortfall: 2,
+        articleQuotaHeadroom: 2,
+        requiredVerifiedYield: 2,
+      },
+    },
+    ...releaseJobFields,
+  };
+  const project = (
+    jobPatch: Record<string, unknown>,
+    checkpoints: readonly Record<string, unknown>[] = [],
+  ) => operatorTerminalPlanReceipt({
+    siteId: "site-1" as never,
+    siteUserId: "owner-1",
+    job: { ...job, ...jobPatch } as never,
+    domainBinding: "current",
+    expectedReservationTrigger: "topic_plan",
+    checkpoints: checkpoints as never,
+    reservation,
+  }).providerReservationState;
+
+  assert.equal(project({ workerAttempts: 1 }), "invalid");
+  assert.equal(project({ workerAttempts: undefined }), "invalid");
+  assert.equal(project({ status: "done" }), "invalid");
+  assert.equal(project({ result: { count: 0 } }), "invalid");
+  assert.equal(
+    project({ result: { planPersistenceCommit: { version: 1 } } }),
+    "invalid",
+  );
+
+  const checkpoint = {
+    _id: "checkpoint-1",
+    siteId: "site-1",
+    userId: "owner-1",
+    planJobId: "job-1",
+    workerExecution: 1,
+    policyVersion: PLAN_CANDIDATE_CHECKPOINT_VERSION,
+    rolloutEpoch: 4,
+    providerSpendReservationId: "reservation-1",
+    providerCostCeilingMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    reservationDay: "2026-08-25",
+    requiredVerifiedYield: 2,
+    candidateCapacity: 1,
+    status: "terminal_blocked",
+    completedAt: 29,
+    candidateTopicIds: ["topic-1"],
+    candidateFingerprints: ["fingerprint-1"],
+    inlineCompletedTopicIds: [],
+    activatedTopicIds: [],
+    terminallyExcludedTopicIds: ["topic-1"],
+    createdAt: 10,
+    updatedAt: 29,
+  };
+  assert.equal(project({}, [checkpoint]), "invalid");
+  assert.equal(project({}, [{ ...checkpoint, status: "active" }]), "invalid");
+});
+
+test("credential-shaped values are never echoed by string projections", () => {
+  const secrets = [
+    "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+    "sk_test_0123456789abcdefghijklmnopqrstuvwxyz",
+    "whsec_0123456789abcdefghijklmnopqrstuvwxyz",
+  ];
+  for (const secret of secrets) {
+    const cadenceCategory = operatorPlanJobReceipt({
+      _id: "job-category",
+      status: "failed",
+      createdAt: 1,
+      updatedAt: 2,
+      cadenceFailure: {
+        version: 1,
+        category: secret,
+        code: "terminal_planner_invariant",
+        retryable: false,
+        terminal: true,
+        recordedAt: 2,
+      },
+    } as never, "current");
+    const cadenceCode = operatorPlanJobReceipt({
+      _id: "job-code",
+      status: "failed",
+      createdAt: 1,
+      updatedAt: 2,
+      cadenceFailure: {
+        version: 1,
+        category: "terminal_invariant",
+        code: secret,
+        retryable: false,
+        terminal: true,
+        recordedAt: 2,
+      },
+    } as never, "current");
+    const checkpoint = operatorPlanCheckpointReceipt({
+      status: secret,
+      workerExecution: 1,
+      requiredVerifiedYield: 1,
+      candidateCapacity: 1,
+      candidateTopicIds: [],
+      candidateFingerprints: [],
+      createdAt: 1,
+      updatedAt: 2,
+    } as never);
+    const run = operatorContinuationRunReceipt({
+      _id: "run-1",
+      trigger: secret,
+      status: secret,
+      outcome: secret,
+      scheduledAt: 1,
+      heartbeatAt: 2,
+    } as never);
+    const health = operatorHealthReceipt({
+      status: secret,
+      portfolioStatus: secret,
+      portfolioDecision: secret,
+      heartbeatAt: 1,
+      updatedAt: 2,
+    } as never);
+    const article = operatorArticleReceipt({
+      articleId: "article-1",
+      status: secret,
+      mediaQualityStatus: secret,
+      publicationGateStatus: secret,
+      articleCreatedAt: 1,
+      articleUpdatedAt: 2,
+    } as never, false);
+    const activeJob = operatorActiveJobReceipt({
+      _id: "active-job",
+      type: secret,
+      status: secret,
+      createdAt: 1,
+      updatedAt: 2,
+    } as never);
+    const projections = {
+      cadenceCategory,
+      cadenceCode,
+      checkpoint,
+      run,
+      health,
+      article,
+      activeJob,
+    };
+    assertNoForbiddenStrings(projections, secrets);
+    assert.equal(cadenceCategory.cadenceFailureState, "invalid");
+    assert.equal(cadenceCode.cadenceFailureState, "invalid");
+    assert.equal(checkpoint.status, "unclassified");
+    assert.equal(run.trigger, "followup");
+    assert.equal(run.status, "unclassified");
+    assert.equal(run.outcome, "unclassified");
+    assert.equal(health?.status, "unclassified");
+    assert.equal(health?.portfolioStatus, "unclassified");
+    assert.equal(health?.portfolioDecision, "unclassified");
+    assert.equal(article.status, "unclassified");
+    assert.equal(article.mediaQualityStatus, "unclassified");
+    assert.equal(article.publicationGateStatus, "unclassified");
+    assert.equal(activeJob.type, "unclassified");
+    assert.equal(activeJob.status, "unclassified");
+  }
 });
 
 test("run triggers are classified without exposing raw trigger strings", () => {

@@ -44,11 +44,162 @@ const TERMINAL_CHECKPOINT_STATUSES = new Set([
   "terminal_blocked",
 ]);
 
-function safeOperatorCode(value: string | undefined): string | undefined {
+const RUN_STATUSES = new Set([
+  "scheduled",
+  "running",
+  "completed",
+  "failed",
+]);
+
+const RUN_OUTCOMES = new Set([
+  "autopilot_disabled",
+  "cadence_paused",
+  "rollout_observe",
+  "readiness_regressed",
+  "migration_pending",
+  "public_url_failed",
+  "rollout_buffer_ready",
+  "quality_budget_exhausted",
+  "quota_reached",
+  "site_limit_reached",
+  "topic_replenishment_exhausted",
+  "cadence_failure_cooldown",
+  "public_url_pending",
+  "automatic_live_promotion",
+  "buffer_delivery",
+  "buffer_delivery_pending",
+  "pending_plan",
+  "work_in_progress",
+  "approval_waiting",
+  "manual_delivery_waiting",
+  "cadence_not_due",
+  "quality_revision",
+  "deterministic_repair",
+  "topic_portfolio_goal_replenishment",
+  "topic_portfolio_evidence_replenishment",
+  "topic_replenishment",
+  "buffer_fill",
+  "cadence_generation",
+  "idle",
+  "buffer_full",
+  "claim_lost",
+  "retry_scheduled",
+  "plan_continuation_queued",
+  "buffer_ready",
+  "quality_recovered",
+  "job_processed",
+  "publication_succeeded",
+  "quality_quarantined",
+  "publication_failed",
+  "job_failed",
+  "site_parked",
+  "failed",
+  "domain_epoch_invalidated",
+  "cadence_held",
+  "onboarding_in_progress",
+  "onboarding_cooling_down",
+  "onboarding_budget_blocked",
+  "onboarding_failed",
+  "onboarding_cache_invalid",
+  "wake_receipt_incompatible",
+  "autopilot_or_entitlement_ineligible",
+  "rollout_epoch_changed",
+  "plan_cooldown_fence_changed",
+  "plan_history_overflow",
+  "newer_topic_plan_exists",
+  "continuation_before_claim",
+  "active_job",
+]);
+
+const HEALTH_STATUSES = new Set([
+  "recovering",
+  "cadence_paused",
+  "readiness_blocked",
+  "run_failed",
+  "rollout_observe",
+  "migration_pending",
+  "autopilot_disabled",
+  "readiness_regressed",
+  "public_url_failed",
+  "quota_reached",
+  "site_limit_reached",
+  "topic_replenishment_exhausted",
+  "cadence_failure_cooldown",
+  "quality_quarantined",
+  "publication_failed",
+  "job_failed",
+  "site_parked",
+  "run_outcome_unclassified",
+  "healthy",
+  "buffer_empty",
+  "buffer_low",
+  "public_url_pending",
+  "scheduler_stale",
+  "missed",
+  "quality_budget_exhausted",
+  "job_lease_exhausted",
+  "rollout_conflict",
+  "rollout_buffer_ready",
+  "topic_portfolio_below_goal",
+  "topic_portfolio_evidence_missing",
+]);
+
+const PORTFOLIO_STATUSES = new Set([
+  "supports_goal",
+  "below_goal",
+  "insufficient_evidence",
+  "goal_unconfigured",
+]);
+
+const ARTICLE_STATUSES = new Set([
+  "draft",
+  "review",
+  "ready",
+  "rejected",
+  "published",
+]);
+const MEDIA_QUALITY_STATUSES = new Set(["passed", "failed"]);
+const PUBLICATION_GATE_STATUSES = new Set(["passed", "blocked"]);
+const JOB_TYPES = new Set([
+  "onboarding",
+  "plan",
+  "article",
+  "links",
+  "scheduler",
+]);
+const JOB_STATUSES = new Set(["pending", "running", "done", "failed"]);
+
+const CADENCE_FAILURE_CODES = new Map<string, ReadonlySet<string>>([
+  ["semantic_zero_yield", new Set(["strict_zero_yield"])],
+  [
+    "transient_provider",
+    new Set([
+      "provider_preflight_unavailable",
+      "provider_balance_preflight_unavailable",
+      "transient_provider_failure",
+      "one_setup_planning_context_superseded_before_execution",
+    ]),
+  ],
+  ["provider_funding", new Set(["provider_balance_insufficient"])],
+  [
+    "budget_window",
+    new Set([
+      "provider_reservation_day_expired",
+      "plan_reservation_day_expired_before_execution",
+    ]),
+  ],
+  ["monthly_quota", new Set(["monthly_generation_quota"])],
+  ["readiness", new Set(["tenant_readiness_blocked"])],
+  ["entitlement", new Set(["tenant_entitlement_blocked"])],
+  ["terminal_invariant", new Set(["terminal_planner_invariant"])],
+]);
+
+function safeOperatorCode(
+  value: string | undefined,
+  allowed: ReadonlySet<string>,
+): string | undefined {
   if (value === undefined) return undefined;
-  return /^[a-z0-9][a-z0-9_:-]{0,99}$/i.test(value)
-    ? value
-    : "unclassified";
+  return allowed.has(value) ? value : "unclassified";
 }
 
 export function latestTerminalPlanJobs<
@@ -73,9 +224,12 @@ export function operatorPlanJobReceipt(
   }
   const category = job.cadenceFailure?.category;
   const code = job.cadenceFailure?.code;
+  const allowedFailureCodes = category
+    ? CADENCE_FAILURE_CODES.get(category)
+    : undefined;
   const safeFailure = job.cadenceFailure &&
       category && CADENCE_FAILURE_CATEGORIES.has(category) &&
-      code && /^[a-z0-9][a-z0-9_:-]{0,99}$/i.test(code)
+      code && allowedFailureCodes?.has(code)
     ? {
         category,
         code,
@@ -141,12 +295,13 @@ export function operatorPlanCheckpointReceipt(
   checkpoint: Doc<"plan_candidate_checkpoints">,
 ) {
   return {
-    status: checkpoint.status,
+    status: safeOperatorCode(checkpoint.status, TERMINAL_CHECKPOINT_STATUSES),
     completedAt: checkpoint.completedAt,
     activatedAt: checkpoint.activatedAt,
     updatedAt: checkpoint.updatedAt,
     workerExecution: checkpoint.workerExecution,
     requiredVerifiedYield: checkpoint.requiredVerifiedYield,
+    candidateCapacity: checkpoint.candidateCapacity,
     candidateCount: checkpoint.candidateTopicIds.length,
     inlineCompletedCount: checkpoint.inlineCompletedTopicIds?.length ?? 0,
     activatedCount: checkpoint.activatedTopicIds?.length ?? 0,
@@ -188,6 +343,30 @@ export function operatorCheckpointIdsAreBoundedUniqueSubset<T>(
   return true;
 }
 
+function operatorCheckpointIdsExactlyPartition<T>(
+  candidateIds: readonly T[],
+  acceptedIds: readonly T[] | undefined,
+  excludedIds: readonly T[] | undefined,
+): boolean {
+  if (acceptedIds === undefined || excludedIds === undefined) return false;
+  const partition = [...acceptedIds, ...excludedIds];
+  if (partition.length !== candidateIds.length) return false;
+  const partitionSet = new Set(partition);
+  return partitionSet.size === candidateIds.length &&
+    candidateIds.every((id) => partitionSet.has(id));
+}
+
+function utcProviderReservationPeriod(timestamp: number): {
+  day: string;
+  month: string;
+} | null {
+  if (!Number.isFinite(timestamp)) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const iso = date.toISOString();
+  return { day: iso.slice(0, 10), month: iso.slice(0, 7) };
+}
+
 export function operatorTerminalPlanReceipt(args: {
   siteId: Doc<"sites">["_id"];
   siteUserId?: string;
@@ -204,24 +383,122 @@ export function operatorTerminalPlanReceipt(args: {
     args.job.payload,
   );
   const persistedTopicCount = operatorPersistedTopicCountReceipt(args.job);
-  const checkpointTerminalStateMatchesJob = Boolean(
+  const result = args.job.result && typeof args.job.result === "object" &&
+      !Array.isArray(args.job.result)
+    ? args.job.result as Record<string, unknown>
+    : null;
+  const rawCheckpointCommit = result?.planCheckpointCommit;
+  const checkpointCommit = rawCheckpointCommit &&
+      typeof rawCheckpointCommit === "object" &&
+      !Array.isArray(rawCheckpointCommit)
+    ? rawCheckpointCommit as Record<string, unknown>
+    : null;
+  const checkpointAcceptedKeys = checkpoint?.inlineCompletedTopicIds?.map(String) ??
+    [];
+  const committedKeys = Array.isArray(checkpointCommit?.acceptedTopicIds)
+    ? checkpointCommit.acceptedTopicIds.map(String)
+    : [];
+  const exactInlineSuccessCommit = Boolean(
+    checkpoint && checkpointCommit &&
+      typeof checkpoint.inlineSuccessCommitNonce === "string" &&
+      checkpoint.inlineSuccessCommitNonce.length > 0 &&
+      checkpointCommit.version === 1 &&
+      checkpointCommit.completionNonce === checkpoint.inlineSuccessCommitNonce &&
+      String(checkpointCommit.checkpointId) === String(checkpoint._id) &&
+      checkpointCommit.workerExecution === checkpoint.workerExecution &&
+      checkpointCommit.committedAt === checkpoint.completedAt &&
+      JSON.stringify(committedKeys) === JSON.stringify(checkpointAcceptedKeys),
+  );
+  const checkpointTimelineValid = Boolean(
     checkpoint &&
+      Number.isFinite(args.job.createdAt) &&
+      Number.isFinite(args.job.updatedAt) &&
+      Number.isFinite(checkpoint.createdAt) &&
+      Number.isFinite(checkpoint.updatedAt) &&
+      args.job.createdAt <= checkpoint.createdAt &&
+      checkpoint.createdAt <= checkpoint.updatedAt &&
+      checkpoint.updatedAt <= args.job.updatedAt,
+  );
+  const completedAtMatchesCheckpoint = Boolean(
+    checkpoint && Number.isFinite(checkpoint.completedAt) &&
+      checkpoint.completedAt === checkpoint.updatedAt,
+  );
+  const activatedAtMatchesCheckpoint = Boolean(
+    checkpoint && Number.isFinite(checkpoint.activatedAt) &&
+      checkpoint.activatedAt === checkpoint.updatedAt,
+  );
+  const candidateCount = checkpoint?.candidateTopicIds.length ?? 0;
+  const inlineCompletedCount = checkpoint?.inlineCompletedTopicIds?.length ?? 0;
+  const activatedCount = checkpoint?.activatedTopicIds?.length ?? 0;
+  const excludedCount = checkpoint?.terminallyExcludedTopicIds?.length ?? 0;
+  const inlinePartitionMatches = Boolean(
+    checkpoint && operatorCheckpointIdsExactlyPartition(
+      checkpoint.candidateTopicIds,
+      checkpoint.inlineCompletedTopicIds,
+      checkpoint.terminallyExcludedTopicIds,
+    ),
+  );
+  const activatedPartitionMatches = Boolean(
+    checkpoint && operatorCheckpointIdsExactlyPartition(
+      checkpoint.candidateTopicIds,
+      checkpoint.activatedTopicIds,
+      checkpoint.terminallyExcludedTopicIds,
+    ),
+  );
+  const providerReservationPeriod = utcProviderReservationPeriod(
+    args.job.createdAt,
+  );
+  const checkpointTerminalStateMatchesJob = Boolean(
+    checkpoint && checkpointTimelineValid &&
       (
         args.job.status === "done"
           ? checkpoint.status === "inline_completed" &&
-            Number.isFinite(checkpoint.completedAt) &&
+            args.job.workerAttempts === 0 &&
+            completedAtMatchesCheckpoint &&
+            checkpoint.activatedAt === undefined &&
+            candidateCount > 0 &&
+            inlineCompletedCount > 0 &&
+            activatedCount === 0 &&
+            inlinePartitionMatches &&
+            exactInlineSuccessCommit &&
             persistedTopicCount.persistedTopicCountState === "recorded" &&
             persistedTopicCount.persistedTopicCount ===
-              (checkpoint.inlineCompletedTopicIds?.length ?? 0)
-          : checkpoint.status === "activated"
-            ? Number.isFinite(checkpoint.activatedAt)
+              inlineCompletedCount
+          : args.job.result !== undefined
+            ? false
             : checkpoint.status === "empty"
-              ? Number.isFinite(checkpoint.completedAt)
-              : checkpoint.status === "terminal_blocked" &&
-                (
-                  Number.isFinite(checkpoint.completedAt) ||
-                  Number.isFinite(checkpoint.activatedAt)
-                )
+              ? (args.job.workerAttempts === 0 ||
+                  args.job.workerAttempts === 1) &&
+                completedAtMatchesCheckpoint &&
+                checkpoint.completedAt === checkpoint.createdAt &&
+                checkpoint.activatedAt === undefined &&
+                candidateCount === 0 &&
+                inlineCompletedCount === 0 &&
+                activatedCount === 0 &&
+                excludedCount === 0
+              : checkpoint.status === "activated"
+                ? args.job.workerAttempts === 1 &&
+                  activatedAtMatchesCheckpoint &&
+                  checkpoint.completedAt === undefined &&
+                  candidateCount > 0 &&
+                  activatedPartitionMatches
+                : checkpoint.status === "terminal_blocked" &&
+                  candidateCount > 0 &&
+                  activatedCount === 0 &&
+                  checkpoint.terminallyExcludedTopicIds !== undefined &&
+                  (
+                    (
+                      completedAtMatchesCheckpoint &&
+                      checkpoint.activatedAt === undefined &&
+                      args.job.workerAttempts === 0
+                    ) ||
+                    (
+                      activatedAtMatchesCheckpoint &&
+                      checkpoint.completedAt === undefined &&
+                      args.job.workerAttempts === 1 &&
+                      activatedPartitionMatches
+                    )
+                  )
       )
   );
   const exactCheckpoint = Boolean(
@@ -241,7 +518,10 @@ export function operatorTerminalPlanReceipt(args: {
       checkpoint.providerCostReservedMicroUsd ===
         args.job.providerCostReservedMicroUsd &&
       checkpoint.reservationDay === args.job.providerCostReservationDay &&
+      checkpoint.reservationDay === providerReservationPeriod?.day &&
       checkpoint.candidateTopicIds.length ===
+        checkpoint.candidateFingerprints.length &&
+      new Set(checkpoint.candidateFingerprints).size ===
         checkpoint.candidateFingerprints.length &&
       checkpoint.candidateTopicIds.length <=
         PLAN_CANDIDATE_CHECKPOINT_LIMIT &&
@@ -260,6 +540,11 @@ export function operatorTerminalPlanReceipt(args: {
       Number.isInteger(checkpoint.requiredVerifiedYield) &&
       checkpoint.requiredVerifiedYield ===
         checkpointTarget.requiredVerifiedYield &&
+      Number.isInteger(checkpoint.candidateCapacity) &&
+      checkpoint.candidateCapacity >= 1 &&
+      checkpoint.candidateCapacity <= checkpoint.requiredVerifiedYield &&
+      checkpoint.candidateCapacity <= checkpointTarget.requiredVerifiedYield &&
+      checkpoint.candidateTopicIds.length <= checkpoint.candidateCapacity &&
       operatorCheckpointStatusAllowed(checkpoint.status) &&
       checkpointTerminalStateMatchesJob
   );
@@ -267,8 +552,11 @@ export function operatorTerminalPlanReceipt(args: {
     args.reservation?.releaseReason === undefined &&
     args.job.providerReservationReleasedAt === undefined &&
     args.job.providerReservationReleaseReason === undefined;
-  const reservationReleased = Boolean(
+  const reservationReleasedBeforePaidWork = Boolean(
     Number.isFinite(args.reservation?.releasedAt) &&
+      Number.isFinite(args.reservation?.createdAt) &&
+      Number.isFinite(args.job.createdAt) &&
+      Number.isFinite(args.job.updatedAt) &&
       (args.reservation?.releasedAt ?? -Infinity) >=
         (args.reservation?.createdAt ?? Infinity) &&
       args.reservation?.releasedAt ===
@@ -276,12 +564,23 @@ export function operatorTerminalPlanReceipt(args: {
       typeof args.reservation?.releaseReason === "string" &&
       args.reservation.releaseReason ===
         args.job.providerReservationReleaseReason &&
-      PLAN_RELEASE_REASONS.has(args.reservation.releaseReason),
+      PLAN_RELEASE_REASONS.has(args.reservation.releaseReason) &&
+      (args.reservation.releasedAt ?? Infinity) <= args.job.updatedAt &&
+      args.job.status === "failed" &&
+      args.job.workerAttempts === 0 &&
+      args.checkpoints.length === 0 &&
+      args.job.result === undefined,
   );
-  const releasePairMatches = reservationUnreleased || reservationReleased;
+  const releasePairMatches = reservationUnreleased ||
+    reservationReleasedBeforePaidWork;
   const exactReservation = Boolean(
     args.reservation &&
       args.siteUserId &&
+      providerReservationPeriod &&
+      Number.isFinite(args.job.createdAt) &&
+      Number.isFinite(args.job.updatedAt) &&
+      args.job.createdAt <= args.job.updatedAt &&
+      Number.isFinite(args.reservation.createdAt) &&
       args.reservation._id === args.job.providerSpendReservationId &&
       args.reservation.siteId === args.siteId &&
       args.reservation.userId === args.siteUserId &&
@@ -290,6 +589,8 @@ export function operatorTerminalPlanReceipt(args: {
       args.reservation.createdAt === args.job.createdAt &&
       args.reservation.reservationDay ===
         args.job.providerCostReservationDay &&
+      args.reservation.reservationDay === providerReservationPeriod.day &&
+      args.reservation.reservationMonth === providerReservationPeriod.month &&
       args.reservation.reservedMicroUsd ===
         args.job.providerCostReservedMicroUsd &&
       args.reservation.reservedMicroUsd ===
@@ -351,8 +652,8 @@ export function operatorContinuationRunReceipt(
     recoveryOfRunId: run.recoveryOfRunId,
     jobId: run.jobId,
     trigger,
-    status: safeOperatorCode(run.status),
-    outcome: safeOperatorCode(run.outcome),
+    status: safeOperatorCode(run.status, RUN_STATUSES),
+    outcome: safeOperatorCode(run.outcome, RUN_OUTCOMES),
     scheduledAt: run.scheduledAt,
     startedAt: run.startedAt,
     heartbeatAt: run.heartbeatAt,
@@ -367,7 +668,7 @@ export function operatorHealthReceipt(
 ) {
   if (!health) return null;
   return {
-    status: safeOperatorCode(health.status),
+    status: safeOperatorCode(health.status, HEALTH_STATUSES),
     lastRunId: health.lastRunId,
     heartbeatAt: health.heartbeatAt,
     lastNaturalScheduledAt: health.lastNaturalScheduledAt,
@@ -378,7 +679,10 @@ export function operatorHealthReceipt(
     approvedBufferCount: health.approvedBufferCount,
     bufferMinimum: health.bufferMinimum,
     bufferTarget: health.bufferTarget,
-    portfolioStatus: safeOperatorCode(health.portfolioStatus),
+    portfolioStatus: safeOperatorCode(
+      health.portfolioStatus,
+      PORTFOLIO_STATUSES,
+    ),
     portfolioDecision: ["accept", "reject", "flag"].includes(
         health.portfolioDecision ?? "",
       )
@@ -403,11 +707,17 @@ export function operatorArticleReceipt(
 ) {
   return {
     articleId: article.articleId,
-    status: safeOperatorCode(article.status),
+    status: safeOperatorCode(article.status, ARTICLE_STATUSES),
     editorialQualityScore: article.editorialQualityScore,
     factCheckScore: article.factCheckScore,
-    mediaQualityStatus: safeOperatorCode(article.mediaQualityStatus),
-    publicationGateStatus: safeOperatorCode(article.publicationGateStatus),
+    mediaQualityStatus: safeOperatorCode(
+      article.mediaQualityStatus,
+      MEDIA_QUALITY_STATUSES,
+    ),
+    publicationGateStatus: safeOperatorCode(
+      article.publicationGateStatus,
+      PUBLICATION_GATE_STATUSES,
+    ),
     publicationAuditVersion: article.publicationAuditVersion,
     sealed,
     qualityRevisionCount: article.qualityRevisionCount,
@@ -419,8 +729,8 @@ export function operatorArticleReceipt(
 export function operatorActiveJobReceipt(job: Doc<"jobs">) {
   return {
     jobId: job._id,
-    type: safeOperatorCode(job.type),
-    status: safeOperatorCode(job.status),
+    type: safeOperatorCode(job.type, JOB_TYPES),
+    status: safeOperatorCode(job.status, JOB_STATUSES),
     retries: job.retries,
     workerAttempts: job.workerAttempts,
     publicationAttempts: job.publicationAttempts,
