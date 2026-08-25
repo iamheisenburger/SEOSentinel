@@ -368,6 +368,9 @@ export default defineSchema({
     requestContractVersion: v.number(),
     generation: v.number(),
     operationKey: v.string(),
+    // Explicit application transport. Missing remains the pre-SES managed
+    // Gmail framework; only the canonical managed_ses installer may stamp it.
+    transportKind: v.optional(v.literal("managed_ses")),
     lifecycleState: v.union(
       v.literal("queued"),
       v.literal("leased"),
@@ -388,6 +391,10 @@ export default defineSchema({
     leaseExpiresAt: v.optional(v.number()),
     nextAttemptAt: v.optional(v.number()),
     adapterVersion: v.optional(v.string()),
+    // Signed adapter proof only. Provider tenant names, ARNs, configuration
+    // set ids and AWS credentials are never accepted by this schema.
+    resourceReceipt: v.optional(v.string()),
+    externalVerifiedAt: v.optional(v.number()),
     lastReasonCode: v.optional(v.string()),
     canonicalInboxId: v.optional(v.id("outreach_inboxes")),
     // Written before a future adapter crosses an external provisioning
@@ -2003,6 +2010,21 @@ export default defineSchema({
     managedTransportOperationKey: v.optional(v.string()),
     managedTransportGeneration: v.optional(v.number()),
     managedTransportAdapterVersion: v.optional(v.string()),
+    managedTransportKind: v.optional(v.literal("managed_ses")),
+    managedTransportResourceReceipt: v.optional(v.string()),
+    managedTransportResourceVerifiedAt: v.optional(v.number()),
+    managedTransportEventCanaryVerifiedAt: v.optional(v.number()),
+    managedTransportEventCanaryReceipt: v.optional(v.string()),
+    managedTransportEventCanaryOperationKey: v.optional(v.string()),
+    managedTransportEventProviderMessageIdDigest: v.optional(v.string()),
+    managedTransportInboundCanaryVerifiedAt: v.optional(v.number()),
+    managedTransportInboundCanaryReceipt: v.optional(v.string()),
+    managedTransportInboundCanaryOperationKey: v.optional(v.string()),
+    managedTransportInboundCanaryInboxBinding: v.optional(v.string()),
+    managedTransportInboundCanaryRelayConfigurationHash:
+      v.optional(v.string()),
+    managedTransportInboundCanaryAdapterVersion: v.optional(v.string()),
+    managedTransportInboundCanaryRetentionPolicyHash: v.optional(v.string()),
     senderDomain: v.optional(v.string()),
     dkimSelector: v.optional(v.string()),
     dnsCheckedAt: v.optional(v.number()),
@@ -2116,6 +2138,11 @@ export default defineSchema({
     deliveryClaimedAt: v.optional(v.number()),
     deliveryLeaseExpiresAt: v.optional(v.number()),
     deliveryLeaseExpiredAt: v.optional(v.number()),
+    // Versioned claim/boundary split. Legacy in-flight Gmail rows have no
+    // version and therefore remain ambiguous; only v1 claims can prove that
+    // an action died before the final provider-boundary mutation.
+    deliveryBoundaryVersion: v.optional(v.number()),
+    deliveryExternalAttemptedAt: v.optional(v.number()),
     deliveryReviewedAt: v.optional(v.number()),
     deliveryReviewResolution: v.optional(v.string()),
     scheduledAt: v.optional(v.number()),
@@ -2125,6 +2152,32 @@ export default defineSchema({
     failureReason: v.optional(v.string()),
     providerMessageId: v.optional(v.string()),
     providerThreadId: v.optional(v.string()),
+    // managed_ses never stores SES MessageId or provider resource ids. The
+    // exact application operation/binding and a one-way provider digest are
+    // sufficient for event correlation, no replay and reply verification.
+    deliveryTransport: v.optional(v.literal("managed_ses")),
+    managedSesOperationKey: v.optional(v.string()),
+    managedSesResourceOperationKey: v.optional(v.string()),
+    managedSesGeneration: v.optional(v.number()),
+    managedSesAdapterVersion: v.optional(v.string()),
+    managedSesExternalAttemptedAt: v.optional(v.number()),
+    managedSesProviderMessageIdDigest: v.optional(v.string()),
+    managedSesThreadReceipt: v.optional(v.string()),
+    managedSesParentOperationKey: v.optional(v.string()),
+    managedSesParentThreadReceipt: v.optional(v.string()),
+    managedSesDispositionState: v.optional(v.string()),
+    managedSesDispositionAuthorizedAt: v.optional(v.number()),
+    managedSesDispositionAuthorizationReceipt: v.optional(v.string()),
+    managedSesDispositionLeaseToken: v.optional(v.string()),
+    managedSesDispositionLeaseExpiresAt: v.optional(v.number()),
+    managedSesDispositionExternalAttemptedAt: v.optional(v.number()),
+    managedSesDispositionSettledAt: v.optional(v.number()),
+    managedSesUnsubscribeTokenHash: v.optional(v.string()),
+    // Exact privacy-safe dedupe for a late signed event accepted after site
+    // deletion fencing. No site-scoped event row is recreated.
+    managedSesLateEventReceipt: v.optional(v.string()),
+    managedSesLateEventBindingHash: v.optional(v.string()),
+    managedSesLateEventRecordedAt: v.optional(v.number()),
     // Pentra stores the classification and a deterministic evidence digest,
     // never the inbound email body itself.
     inboundCheckedAt: v.optional(v.number()),
@@ -2281,7 +2334,193 @@ export default defineSchema({
       "status",
       "sentAt",
     ])
+    .index("by_managed_ses_operation", ["managedSesOperationKey"])
+    .index("by_managed_resource_status_disposition", [
+      "managedSesResourceOperationKey",
+      "status",
+      "managedSesDispositionSettledAt",
+    ])
+    .index("by_managed_resource_disposition_due", [
+      "managedSesResourceOperationKey",
+      "status",
+      "managedSesDispositionSettledAt",
+      "managedSesExternalAttemptedAt",
+    ])
+    .index("by_managed_ses_unsubscribe", ["managedSesUnsubscribeTokenHash"])
     .index("by_thread", ["threadKey"]),
+
+  // One non-prospect event canary per managed resource/configuration. The
+  // recipient and message content never enter Convex; only their hashes and
+  // the signed adapter/event receipts survive.
+  managed_ses_event_canaries: defineTable({
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    operationKey: v.string(),
+    resourceOperationKey: v.string(),
+    generation: v.number(),
+    adapterVersion: v.string(),
+    inboxConfigurationVersion: v.number(),
+    recipientHash: v.string(),
+    status: v.union(
+      v.literal("claimed"),
+      v.literal("accepted"),
+      v.literal("unverified"),
+      v.literal("failed"),
+      v.literal("delivered"),
+    ),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    sendLeaseExpiresAt: v.optional(v.number()),
+    externalAttemptedAt: v.optional(v.number()),
+    providerMessageIdDigest: v.optional(v.string()),
+    rfcMessageIdDigest: v.optional(v.string()),
+    threadReceipt: v.optional(v.string()),
+    eventReceipt: v.optional(v.string()),
+    eventType: v.optional(v.string()),
+    verifiedAt: v.optional(v.number()),
+    // The same controlled non-prospect canary must also traverse the signed
+    // receiving relay. Only hashes and exact configuration/generation fences
+    // survive; the alias, sender, subject, and body never enter Convex.
+    inboundRelayAliasHash: v.optional(v.string()),
+    inboundRelayAliasDomain: v.optional(v.string()),
+    inboundRelayConfigurationHash: v.optional(v.string()),
+    inboundRelayAdapterVersion: v.optional(v.string()),
+    inboundRelayRetentionPolicyHash: v.optional(v.string()),
+    inboundRelayRolloutEpoch: v.optional(v.number()),
+    inboundRelayDsnRoutingTargetHash: v.optional(v.string()),
+    inboundRelayDsnRoutingTargetVersion: v.optional(v.number()),
+    inboundRelayDsnRoutingTargetGeneration: v.optional(v.number()),
+    inboundCanaryInboxBinding: v.optional(v.string()),
+    inboundCanaryEventKey: v.optional(v.string()),
+    inboundCanaryPayloadHash: v.optional(v.string()),
+    inboundCanaryEvidenceHash: v.optional(v.string()),
+    inboundCanaryMessageIdHash: v.optional(v.string()),
+    inboundCanaryFromHash: v.optional(v.string()),
+    inboundCanarySettledAt: v.optional(v.number()),
+    inboundCanaryActivationState: v.optional(v.string()),
+    inboundCanaryActivationLeaseToken: v.optional(v.string()),
+    inboundCanaryActivationLeaseExpiresAt: v.optional(v.number()),
+    inboundCanaryActivationExternalAttemptedAt: v.optional(v.number()),
+    inboundCanaryReceipt: v.optional(v.string()),
+    inboundCanaryVerifiedAt: v.optional(v.number()),
+    dispositionState: v.optional(v.string()),
+    dispositionAuthorizedAt: v.optional(v.number()),
+    dispositionAuthorizationReceipt: v.optional(v.string()),
+    dispositionLeaseToken: v.optional(v.string()),
+    dispositionLeaseExpiresAt: v.optional(v.number()),
+    dispositionExternalAttemptedAt: v.optional(v.number()),
+    dispositionSettledAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_operation", ["operationKey"])
+    .index("by_resource_status_disposition", [
+      "resourceOperationKey",
+      "status",
+      "dispositionSettledAt",
+    ])
+    .index("by_resource_disposition_due", [
+      "resourceOperationKey",
+      "status",
+      "dispositionSettledAt",
+      "externalAttemptedAt",
+    ])
+    .index("by_inbound_alias_hash", ["inboundRelayAliasHash"])
+    .index("by_inbound_event_key", ["inboundCanaryEventKey"])
+    .index("by_inbox", ["inboxId"])
+    .index("by_inbox_configuration_adapter_issued_at", [
+      "inboxId",
+      "inboxConfigurationVersion",
+      "adapterVersion",
+      "issuedAt",
+    ])
+    .index("by_inbox_status", ["inboxId", "status"])
+    .index("by_site", ["siteId"]),
+
+  // Privacy-reduced, signed SES event ledger. Exactly one of messageId or
+  // canaryId is present; no address, subject, body, SES id or AWS resource id
+  // is accepted.
+  managed_ses_delivery_events: defineTable({
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.optional(v.id("outreach_messages")),
+    canaryId: v.optional(v.id("managed_ses_event_canaries")),
+    operationKey: v.string(),
+    resourceOperationKey: v.string(),
+    generation: v.number(),
+    adapterVersion: v.string(),
+    sequenceStep: v.number(),
+    purpose: v.string(),
+    eventType: v.string(),
+    occurredAt: v.number(),
+    providerMessageIdDigest: v.string(),
+    rfcMessageIdDigest: v.string(),
+    threadReceipt: v.string(),
+    eventReceipt: v.string(),
+    recordedAt: v.number(),
+  })
+    .index("by_event_receipt", ["eventReceipt"])
+    .index("by_operation_event", ["operationKey", "eventReceipt"])
+    .index("by_operation_occurred", ["operationKey", "occurredAt"])
+    .index("by_site", ["siteId"])
+    .index("by_inbox", ["inboxId"])
+    .index("by_message", ["messageId"])
+    .index("by_canary", ["canaryId"]),
+
+  // Privacy-safe bridge for signed event retries after account/site deletion
+  // removes the message and inbox. It retains only immutable transport
+  // bindings and digests; never tenant ids, owner ids, addresses, content, or
+  // provider identifiers.
+  managed_ses_send_tombstones: defineTable({
+    operationKey: v.string(),
+    resourceOperationKey: v.string(),
+    generation: v.number(),
+    adapterVersion: v.string(),
+    sequenceStep: v.number(),
+    purpose: v.union(
+      v.literal("outreach"),
+      v.literal("inbound_relay_canary"),
+    ),
+    providerMessageIdDigest: v.optional(v.string()),
+    rfcMessageIdDigest: v.optional(v.string()),
+    threadReceipt: v.optional(v.string()),
+    releaseState: v.literal("released"),
+    terminalEventType: v.optional(v.string()),
+    terminalEventOccurredAt: v.optional(v.number()),
+    terminalEventReceipt: v.optional(v.string()),
+    terminalEventBindingHash: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_operation", ["operationKey"])
+    .index("by_resource", ["resourceOperationKey"])
+    .index("by_expires", ["expiresAt"]),
+
+  // Attempt-count pacing for Pentra's shared platform sender. A global domain
+  // row and a tenant/mailbox row are reserved atomically before every external
+  // call; the existing Gmail domain-ownership ledger remains unchanged.
+  managed_ses_pacing_receipts: defineTable({
+    scopeKey: v.string(),
+    scope: v.union(
+      v.literal("global_domain"),
+      v.literal("tenant_account"),
+      v.literal("tenant_mailbox"),
+    ),
+    senderDomainKey: v.string(),
+    accountKey: v.optional(v.string()),
+    mailboxKey: v.optional(v.string()),
+    resourceOperationKeyDigest: v.optional(v.string()),
+    attemptedToday: v.number(),
+    attemptedTodayDay: v.string(),
+    lastAttemptAt: v.number(),
+    retainUntil: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_scope_key", ["scopeKey"])
+    .index("by_account", ["accountKey"])
+    .index("by_retain_until", ["retainUntil"]),
 
   // A challenge is prepared without sending mail. It can seal an inbox only
   // when the receiving-only adapter later submits an exact signed, structured

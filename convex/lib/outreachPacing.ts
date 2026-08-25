@@ -1,5 +1,9 @@
 import { getDomain } from "tldts";
 import { outreachOrganisationDomain } from "./outreachContacts.ts";
+import {
+  MANAGED_SES_PLATFORM_SENDER_DOMAIN,
+  MANAGED_SES_TRANSPORT,
+} from "./managedSes.ts";
 
 /**
  * Authority outreach pacing, warm-up and compliance.
@@ -155,10 +159,10 @@ export function outreachSendDecision(args: {
     targetCap: inbox.dailySendCap,
   });
 
-  if (inbox.provider !== "gmail") {
+  if (!["gmail", MANAGED_SES_TRANSPORT].includes(inbox.provider ?? "")) {
     return {
       allowed: false,
-      reason: "Cold outreach requires a verified secondary-domain Gmail inbox.",
+      reason: "Cold outreach requires a verified Gmail or Pentra-managed sender.",
       effectiveDailyCap,
       version,
     };
@@ -234,14 +238,26 @@ export function outreachSenderReadinessIssues(args: {
   fromEmail: string;
 }): string[] {
   const issues: string[] = [];
-  if (args.provider !== "gmail") {
-    issues.push("Cold outreach supports secondary-domain Gmail only; transactional providers are not permitted.");
+  if (!["gmail", MANAGED_SES_TRANSPORT].includes(args.provider)) {
+    issues.push("Cold outreach supports secondary-domain Gmail or Pentra's managed sender only.");
   }
   const senderDomain = normalizeDomain(args.fromEmail.split("@")[1] ?? "");
   const primaryDomain = normalizeDomain(args.siteDomain);
   if (!senderDomain) {
     issues.push("A valid sender domain is required.");
   } else {
+    if (
+      args.provider === MANAGED_SES_TRANSPORT &&
+      senderDomain !== MANAGED_SES_PLATFORM_SENDER_DOMAIN
+    ) {
+      issues.push("The managed sender must use Pentra's reviewed platform outreach domain.");
+    }
+    if (
+      args.provider === "gmail" &&
+      senderDomain === MANAGED_SES_PLATFORM_SENDER_DOMAIN
+    ) {
+      issues.push("Pentra's platform outreach domain cannot be connected through owner Gmail.");
+    }
     if (CONSUMER_MAIL_DOMAINS.has(senderDomain)) {
       issues.push("Use a business mailbox on a dedicated secondary domain, not a consumer mailbox.");
     }

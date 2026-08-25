@@ -23,6 +23,8 @@ export type OutreachFleetSiteState = {
   inboxStatus?: string;
   inboxMode?: string;
   inboxVerified: boolean;
+  inboxOwnerCurrent?: boolean;
+  outboundTransportReady?: boolean;
   autonomyConsentActive?: boolean;
   autonomyDurabilityMigrationPending?: boolean;
   autonomyReconciliationPending?: boolean;
@@ -54,6 +56,10 @@ export function planOutreachFleetSite(
   state: OutreachFleetSiteState,
   phase: OutreachFleetPhase,
 ): OutreachFleetPlan {
+  // These are explicit server-side receipts, not provider-name inference.
+  // Missing projections fail closed for every transport.
+  const inboxOwnerCurrent = state.inboxOwnerCurrent === true;
+  const outboundTransportReady = state.outboundTransportReady === true;
   if (!state.inboxConfigurationValid) {
     return {
       prepare: false,
@@ -74,6 +80,7 @@ export function planOutreachFleetSite(
         (state.hasVerifiedOpportunities ||
           state.autonomyReconciliationPending === true) &&
         state.hasInbox &&
+        inboxOwnerCurrent &&
         CONNECTED_INBOX_STATUSES.has(state.inboxStatus ?? ""),
       deliver: false,
       // Link receipts remain truthful even if the tenant later disconnects
@@ -124,9 +131,10 @@ export function planOutreachFleetSite(
         state.autopilotRolloutMode ?? "observe",
       ) &&
       state.hasInbox &&
-      state.inboxProvider === "gmail" &&
+      outboundTransportReady &&
       ["warming", "active"].includes(state.inboxStatus ?? "") &&
       state.inboxVerified &&
+      inboxOwnerCurrent &&
       state.inboxMode === "live" &&
       state.autonomyConsentActive === true &&
       state.inboundMonitoringReady === true &&

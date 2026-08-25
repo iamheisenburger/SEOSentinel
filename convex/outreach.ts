@@ -62,12 +62,28 @@ import {
   OUTREACH_LIVE_OPPORTUNITY_EVIDENCE_MAX_AGE_MS,
   approvalMatchesInbox,
   autonomousGmailCredentialIssues,
+  autonomousOutreachTransportIssues,
+  deliveryExternalBoundaryDecision,
+  deliveryLeaseRecoveryDecision,
   deliveryLeaseState,
+  deliveryOpportunityBoundaryCurrent,
   liveDnsEvidenceIssues,
   opportunityEvidenceIsFresh,
   sanitizeDeliveryFailure,
   senderClaimIssues,
 } from "./lib/outreachDelivery.ts";
+import {
+  MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
+  MANAGED_SES_EVENT_CANARY_TTL_MS,
+  MANAGED_SES_PLATFORM_RELAY_DOMAIN,
+  MANAGED_SES_PLATFORM_SENDER_DOMAIN,
+  MANAGED_SES_TRANSPORT,
+  managedSesIdentityTupleMatchesEstablished,
+  managedSesInboxReceiptCurrent,
+  managedSesPacingBoundaryTransition,
+} from "./lib/managedSes.ts";
+import { reserveManagedSesPacingAttempt } from
+  "./lib/managedSesPacing.ts";
 import {
   canonicalPublicationUrl,
   verifiedAuthorityTarget,
@@ -124,7 +140,10 @@ import {
   releaseDurableContactClaimForAccount,
   reserveDurableContactClaim,
 } from "./lib/outreachDurability.ts";
-import { followUpPredecessorDecision } from "./lib/outreachSequence.ts";
+import {
+  followUpPredecessorDecision,
+  managedSesFollowUpPredecessorDecision,
+} from "./lib/outreachSequence.ts";
 import {
   normalizeCanonicalDomain,
   siteCanonicalDomain,
@@ -135,10 +154,12 @@ import {
   managedOutreachMailboxLeaseIsCurrent,
   managedOutreachMailboxProfileIssues,
   managedOutreachMailboxRequestFenceIssues,
+  managedSesRotationCandidateEligible,
 } from "./lib/managedOutreachMailbox.ts";
 import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
 import { stageManagedOutreachMailboxRelease } from
   "./managedOutreachMailbox.ts";
+import { sha256Hex } from "./lib/publicationArtifact.ts";
 
 function authorityOpportunityMatchesCurrentDomain(
   site: Doc<"sites">,
@@ -282,6 +303,7 @@ async function outboundIdentityUsedByAnotherTenant(
   siteId: Id<"sites">,
   fromEmail: string,
   senderDomain: string,
+  provider = "gmail",
 ): Promise<boolean> {
   const normalizedEmail = fromEmail.trim().toLowerCase();
   const normalizedDomain = normalizeDomain(senderDomain);
@@ -299,6 +321,13 @@ async function outboundIdentityUsedByAnotherTenant(
       )
       .take(scanLimit),
   ]);
+  if (provider === MANAGED_SES_TRANSPORT) {
+    if (normalizedDomain !== MANAGED_SES_PLATFORM_SENDER_DOMAIN) return true;
+    if (sameMailbox.length === scanLimit) return true;
+    return sameMailbox.some((row) =>
+      row.siteId !== siteId && row.status !== "disconnected"
+    );
+  }
   // A saturated identity range is abnormal. Do not scan without a bound or
   // guess that a conflicting active tenant is absent; require reviewed cleanup.
   if (sameMailbox.length === scanLimit || sameDomain.length === scanLimit) {
@@ -894,6 +923,7 @@ async function installCanonicalGmailInbox(
         args.siteId,
         fromEmail,
         emailDomain,
+        "gmail",
       )
     ) {
       throw new Error(
@@ -1225,6 +1255,10 @@ export const installManagedGmailInboxInternal = internalMutation({
       resource.domainSnapshot !== request.domainSnapshot ||
       resource.domainRevisionSnapshot !== request.domainRevisionSnapshot ||
       resource.requestContractVersion !== request.contractVersion ||
+      resource.ownerAccountKey !== request.ownerAccountKey ||
+      resource.domainSnapshot !== request.domainSnapshot ||
+      resource.domainRevisionSnapshot !== request.domainRevisionSnapshot ||
+      resource.requestContractVersion !== request.contractVersion ||
       args.siteId !== request.siteId ||
       request.revision !== args.expectedRequestRevision ||
       resource.requestConfigurationRevision !==
@@ -1374,6 +1408,1488 @@ export const installManagedGmailInboxInternal = internalMutation({
   },
 });
 
+/** Install only the non-secret canonical identity returned by the signed
+ * managed-SES adapter. Provider tenant names, ARNs and credentials are not
+ * mutation arguments and cannot enter the application database. */
+export const installManagedSesInboxInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRequestRevision: v.number(),
+    expectedConfigurationRevision: v.number(),
+    expectedGeneration: v.number(),
+    leaseToken: v.string(),
+    adapterVersion: v.string(),
+    fromEmail: v.string(),
+    resourceReceipt: v.string(),
+    providerVerifiedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const [resource, request] = await Promise.all([
+      ctx.db.get(args.resourceId),
+      ctx.db.get(args.requestId),
+    ]);
+    const timestamp = Date.now();
+    if (
+      !resource ||
+      !request ||
+      resource.requestId !== request._id ||
+      resource.siteId !== request.siteId ||
+      resource.ownerAccountKey !== request.ownerAccountKey ||
+      resource.domainSnapshot !== request.domainSnapshot ||
+      resource.domainRevisionSnapshot !== request.domainRevisionSnapshot ||
+      resource.requestContractVersion !== request.contractVersion ||
+      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      args.siteId !== request.siteId ||
+      request.revision !== args.expectedRequestRevision ||
+      resource.requestConfigurationRevision !==
+        args.expectedConfigurationRevision ||
+      resource.generation !== args.expectedGeneration ||
+      resource.lifecycleState !== "leased" ||
+      resource.releaseState !== "active" ||
+      resource.adapterVersion !== args.adapterVersion ||
+      !resource.externalProvisioningAttemptedAt ||
+      !managedOutreachMailboxLeaseIsCurrent({
+        expectedLeaseToken: args.leaseToken,
+        actualLeaseToken: resource.leaseToken,
+        leaseExpiresAt: resource.leaseExpiresAt,
+        timestamp,
+      }) ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(args.adapterVersion) ||
+      !/^[a-f0-9]{64}$/.test(args.resourceReceipt) ||
+      !Number.isFinite(args.providerVerifiedAt) ||
+      args.providerVerifiedAt <= 0 ||
+      args.providerVerifiedAt > timestamp + 5 * 60 * 1000
+    ) throw new Error("Managed SES install lease or receipt changed");
+    const site = await ctx.db.get(request.siteId);
+    const fenceIssues = managedOutreachMailboxRequestFenceIssues({
+      siteActive: Boolean(
+        site?.userId &&
+          !site.deletionStatus &&
+          !site.accountDeletionRequestedAt,
+      ),
+      requestMode: request.outreachMailbox.mode,
+      requestOwnerAccountKey: request.ownerAccountKey,
+      currentOwnerAccountKey: site?.userId
+        ? accountDeletionKey(site.userId)
+        : undefined,
+      requestDomainSnapshot: request.domainSnapshot,
+      currentDomainSnapshot: site ? siteCanonicalDomain(site) : null,
+      requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+      currentDomainRevision: site ? siteCanonicalDomainRevision(site) : -1,
+      expectedConfigurationRevision: args.expectedConfigurationRevision,
+      actualConfigurationRevision: request.configurationRevision,
+      expectedGeneration: args.expectedGeneration,
+      actualGeneration: request.outreachMailboxGeneration,
+      expectedContractVersion: ONE_SETUP_CONTRACT_VERSION,
+      actualContractVersion: request.contractVersion,
+    });
+    const profile = request.managedOutreachProfile;
+    const fromEmail = args.fromEmail.trim().toLowerCase();
+    const senderDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
+    if (
+      fenceIssues.length > 0 ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !profile ||
+      managedOutreachMailboxProfileIssues(profile).length > 0 ||
+      !/^[^@\s<>\r\n]+@[^@\s<>\r\n]+\.[a-z]{2,63}$/i.test(fromEmail) ||
+      senderDomain !== MANAGED_SES_PLATFORM_SENDER_DOMAIN
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        request.siteId,
+        timestamp,
+        "managed_ses_install_lifecycle_invalidated",
+      );
+      return { installed: false as const, reason: "lifecycle_fence" as const };
+    }
+    const [existingRows, sameAddress] = await Promise.all([
+      ctx.db
+        .query("outreach_inboxes")
+        .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
+        .take(2),
+      ctx.db
+        .query("outreach_inboxes")
+        .withIndex("by_from_email", (q) => q.eq("fromEmail", fromEmail))
+        .take(2),
+    ]);
+    const existing = existingRows.length === 1 ? existingRows[0] : null;
+    const exactExisting = Boolean(
+      existing &&
+      existing.provider === MANAGED_SES_TRANSPORT &&
+      existing.credentialSource === "managed_adapter" &&
+      existing.managedTransportKind === MANAGED_SES_TRANSPORT &&
+      existing.managedTransportOperationKey === resource.operationKey &&
+      existing.managedTransportGeneration === resource.generation &&
+      existing.managedTransportAdapterVersion === args.adapterVersion,
+    );
+    let rotationReusable = false;
+    let rotationReusableResourceId:
+      | Id<"managed_outreach_mailbox_resources">
+      | undefined;
+    if (
+      existing &&
+      !exactExisting &&
+      existing.provider === MANAGED_SES_TRANSPORT &&
+      existing.status === "disconnected" &&
+      existing.mode === "approval" &&
+      existing.credentialSource === undefined &&
+      existing.managedTransportKind === undefined &&
+      existing.managedTransportOperationKey === undefined &&
+      existing.managedTransportGeneration === undefined &&
+      existing.managedTransportAdapterVersion === undefined &&
+      !existing.oauthAccessToken &&
+      !existing.oauthRefreshToken &&
+      !existing.smtpPassword &&
+      !existing.apiKey
+    ) {
+      const [oldResources, pendingMessages, pendingCanaries] =
+        await Promise.all([
+          ctx.db
+            .query("managed_outreach_mailbox_resources")
+            .withIndex("by_canonical_inbox", (q) =>
+              q.eq("canonicalInboxId", existing._id)
+            )
+            .take(3),
+          ctx.db
+            .query("outreach_messages")
+            .withIndex("by_inbox", (q) => q.eq("inboxId", existing._id))
+            .filter((q) =>
+              q.or(
+                q.eq(q.field("status"), "draft"),
+                q.eq(q.field("status"), "approved"),
+                q.eq(q.field("status"), "sending"),
+                q.eq(q.field("status"), "delivery_unverified"),
+              )
+            )
+            .first(),
+          ctx.db
+            .query("managed_ses_event_canaries")
+            .withIndex("by_inbox", (q) => q.eq("inboxId", existing._id))
+            .filter((q) =>
+              q.or(
+                q.eq(q.field("status"), "claimed"),
+                q.eq(q.field("status"), "accepted"),
+                q.eq(q.field("status"), "unverified"),
+              )
+            )
+            .first(),
+        ]);
+      const oldResource = oldResources.length === 1 ? oldResources[0] : null;
+      const oldTombstone = oldResource
+        ? await ctx.db
+            .query("managed_outreach_mailbox_release_tombstones")
+            .withIndex("by_operation", (q) =>
+              q.eq("operationKey", oldResource.operationKey)
+            )
+            .unique()
+        : null;
+      rotationReusable = Boolean(oldResource &&
+        managedSesRotationCandidateEligible({
+          differentGeneration: oldResource._id !== resource._id &&
+            oldResource.generation !== resource.generation,
+          resourceRequestMatches: oldResource.requestId === request._id,
+          siteMatches:
+            oldResource.siteId === args.siteId &&
+            existing.siteId === args.siteId,
+          ownerMatches:
+            oldResource.ownerAccountKey === request.ownerAccountKey &&
+            existing.credentialOwnerAccountKey === request.ownerAccountKey,
+          domainMatches: oldResource.domainSnapshot === request.domainSnapshot,
+          domainRevisionMatches:
+            oldResource.domainRevisionSnapshot ===
+              request.domainRevisionSnapshot,
+          contractMatches:
+            oldResource.requestContractVersion === request.contractVersion,
+          resourceReleased:
+            oldResource.lifecycleState === "cancelled" &&
+            oldResource.releaseState === "released" &&
+            Boolean(oldResource.releasedAt),
+          tombstoneMatches:
+            oldTombstone?.state === "released" &&
+            oldTombstone.operationKey === oldResource.operationKey &&
+            oldTombstone.ownerAccountKey === oldResource.ownerAccountKey &&
+            oldTombstone.generation === oldResource.generation,
+          inboxIdentityMatches:
+            oldResource.canonicalInboxId === existing._id &&
+            existing.provider === MANAGED_SES_TRANSPORT,
+          inboxProvenanceCleared:
+            existing.status === "disconnected" &&
+            existing.mode === "approval" &&
+            existing.credentialSource === undefined &&
+            existing.managedTransportKind === undefined &&
+            existing.managedTransportOperationKey === undefined &&
+            existing.managedTransportGeneration === undefined &&
+            existing.managedTransportAdapterVersion === undefined &&
+            !existing.oauthAccessToken &&
+            !existing.oauthRefreshToken &&
+            !existing.smtpPassword &&
+            !existing.apiKey,
+          noPendingWork: !pendingMessages && !pendingCanaries,
+        }));
+      if (rotationReusable) rotationReusableResourceId = oldResource!._id;
+    }
+    if (
+      existingRows.length > 1 ||
+      (existing && !exactExisting && !rotationReusable) ||
+      sameAddress.some((row) => row.siteId !== args.siteId)
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        request.siteId,
+        timestamp,
+        "managed_ses_canonical_identity_conflict",
+      );
+      return {
+        installed: false as const,
+        reason: "canonical_identity_conflict" as const,
+      };
+    }
+    const configurationVersion = exactExisting
+      ? existing!.configurationVersion ?? 1
+      : (existing?.configurationVersion ?? 0) + 1;
+    const preserveExactProofs = Boolean(
+      exactExisting &&
+      existing!.managedTransportResourceReceipt === args.resourceReceipt,
+    );
+    const record = {
+      provider: MANAGED_SES_TRANSPORT,
+      fromEmail,
+      fromName: profile.fromName,
+      physicalMailingAddress: profile.physicalMailingAddress,
+      complianceConfirmedAt: profile.senderIdentityAndAddressAttestedAt,
+      status: "warming",
+      mode: "approval",
+      dailySendCap: Math.min(DEFAULT_DAILY_SEND_CAP, 30),
+      warmupStartedAt: exactExisting
+        ? existing?.warmupStartedAt ?? timestamp
+        : timestamp,
+      credentialOwnerAccountKey: request.ownerAccountKey,
+      credentialSource: "managed_adapter",
+      managedTransportKind: MANAGED_SES_TRANSPORT,
+      managedTransportOperationKey: resource.operationKey,
+      managedTransportGeneration: resource.generation,
+      managedTransportAdapterVersion: args.adapterVersion,
+      managedTransportResourceReceipt: args.resourceReceipt,
+      managedTransportResourceVerifiedAt: args.providerVerifiedAt,
+      managedTransportEventCanaryVerifiedAt: preserveExactProofs
+        ? existing!.managedTransportEventCanaryVerifiedAt
+        : undefined,
+      managedTransportEventCanaryReceipt: preserveExactProofs
+        ? existing!.managedTransportEventCanaryReceipt
+        : undefined,
+      managedTransportEventCanaryOperationKey: preserveExactProofs
+        ? existing!.managedTransportEventCanaryOperationKey
+        : undefined,
+      managedTransportEventProviderMessageIdDigest: preserveExactProofs
+        ? existing!.managedTransportEventProviderMessageIdDigest
+        : undefined,
+      managedTransportInboundCanaryVerifiedAt: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryVerifiedAt
+        : undefined,
+      managedTransportInboundCanaryReceipt: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryReceipt
+        : undefined,
+      managedTransportInboundCanaryOperationKey: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryOperationKey
+        : undefined,
+      managedTransportInboundCanaryInboxBinding: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryInboxBinding
+        : undefined,
+      managedTransportInboundCanaryRelayConfigurationHash: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryRelayConfigurationHash
+        : undefined,
+      managedTransportInboundCanaryAdapterVersion: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryAdapterVersion
+        : undefined,
+      managedTransportInboundCanaryRetentionPolicyHash: preserveExactProofs
+        ? existing!.managedTransportInboundCanaryRetentionPolicyHash
+        : undefined,
+      senderDomain,
+      verifiedAt: args.providerVerifiedAt,
+      configurationVersion,
+      oauthAccessToken: undefined,
+      oauthRefreshToken: undefined,
+      oauthExpiresAt: undefined,
+      oauthScopes: undefined,
+      smtpPassword: undefined,
+      apiKey: undefined,
+      lastError:
+        "Managed sender provisioned; waiting for the signed delivery-event canary.",
+      updatedAt: timestamp,
+    };
+    let inboxId: Id<"outreach_inboxes">;
+    if (exactExisting || rotationReusable) {
+      inboxId = existing!._id;
+      await ctx.db.patch(inboxId, record);
+    } else {
+      inboxId = await ctx.db.insert("outreach_inboxes", {
+        ...record,
+        siteId: args.siteId,
+        createdAt: timestamp,
+      });
+    }
+    await ctx.db.patch(resource._id, {
+      lifecycleState: "canonicalized",
+      releaseState: "active",
+      canonicalInboxId: inboxId,
+      externalAllocatedAt: resource.externalAllocatedAt ?? timestamp,
+      resourceReceipt: args.resourceReceipt,
+      externalVerifiedAt: args.providerVerifiedAt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      externalProvisioningSettleAfter: undefined,
+      nextAttemptAt: undefined,
+      lastReasonCode: undefined,
+      updatedAt: timestamp,
+    });
+    if (rotationReusableResourceId) {
+      // The old released row exists only as an OCC-protected handoff bridge.
+      // Delete it in the same transaction that binds the successor so the
+      // canonical inbox index is never left ambiguous after installation.
+      await ctx.db.delete(rotationReusableResourceId);
+    }
+    const installedInbox = await ctx.db.get(inboxId);
+    const operationallyReady = Boolean(
+      installedInbox && managedSesInboxReceiptCurrent({
+        inbox: installedInbox,
+        now: timestamp,
+        expectedAdapterVersion: args.adapterVersion,
+      }),
+    );
+    if (operationallyReady) {
+      await ctx.db.patch(inboxId, { lastError: undefined, updatedAt: timestamp });
+    } else {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.actions.managedOutreachMailbox.sendManagedSesEventCanary,
+        { resourceId: resource._id, inboxId },
+      );
+    }
+    return {
+      installed: true as const,
+      inboxId,
+      operationallyReady,
+      nextRequiredReceipt: operationallyReady
+        ? undefined
+        : "signed_managed_ses_event_canary" as const,
+    };
+  },
+});
+
+const managedSesEventTypeValidator = v.union(
+  v.literal("sent"),
+  v.literal("delivered"),
+  v.literal("bounced"),
+  v.literal("complaint"),
+  v.literal("delayed"),
+  v.literal("rejected"),
+  v.literal("rendering_failed"),
+);
+
+export const MANAGED_SES_SEND_TOMBSTONE_RETENTION_MS =
+  90 * 24 * 60 * 60 * 1000;
+
+/** Materialize the exact provider-attempt bridge before deletion removes its
+ * message/inbox. This deliberately excludes tenant, owner, recipient and
+ * content fields. A sealed resource release is the only authorization. */
+export async function materializeManagedSesSendTombstoneForDeletion(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+): Promise<boolean> {
+  if (
+    message.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+    !message.managedSesExternalAttemptedAt
+  ) return true;
+  if (
+    !message.managedSesOperationKey ||
+    !message.managedSesResourceOperationKey ||
+    !Number.isSafeInteger(message.managedSesGeneration) ||
+    !message.managedSesAdapterVersion ||
+    !Number.isSafeInteger(message.sequenceStep) ||
+    message.sequenceStep < 0 ||
+    message.sequenceStep > MAX_SEQUENCE_STEP
+  ) return false;
+  const releaseTombstone = await ctx.db
+    .query("managed_outreach_mailbox_release_tombstones")
+    .withIndex("by_operation", (q) =>
+      q.eq("operationKey", message.managedSesResourceOperationKey!)
+    )
+    .unique();
+  if (
+    !releaseTombstone ||
+    releaseTombstone.state !== "released" ||
+    releaseTombstone.generation !== message.managedSesGeneration ||
+    releaseTombstone.adapterVersion !== message.managedSesAdapterVersion ||
+    releaseTombstone.ownerAccountKey !== message.deliveryOwnerAccountKey
+  ) return false;
+  const existing = await ctx.db
+    .query("managed_ses_send_tombstones")
+    .withIndex("by_operation", (q) =>
+      q.eq("operationKey", message.managedSesOperationKey!)
+    )
+    .unique();
+  if (
+    existing &&
+    (existing.resourceOperationKey !==
+        message.managedSesResourceOperationKey ||
+      existing.generation !== message.managedSesGeneration ||
+      existing.adapterVersion !== message.managedSesAdapterVersion ||
+      existing.sequenceStep !== message.sequenceStep ||
+      existing.purpose !== "outreach" ||
+      (existing.providerMessageIdDigest !== undefined &&
+        message.managedSesProviderMessageIdDigest !== undefined &&
+        existing.providerMessageIdDigest !==
+          message.managedSesProviderMessageIdDigest) ||
+      (existing.rfcMessageIdDigest !== undefined &&
+        message.inboundRelayOutboundMessageIdHash !== undefined &&
+        existing.rfcMessageIdDigest !==
+          message.inboundRelayOutboundMessageIdHash) ||
+      (existing.threadReceipt !== undefined &&
+        message.managedSesThreadReceipt !== undefined &&
+        existing.threadReceipt !== message.managedSesThreadReceipt))
+  ) throw new Error("Managed SES send tombstone crossed a binding");
+  const timestamp = Date.now();
+  const record = {
+    operationKey: message.managedSesOperationKey,
+    resourceOperationKey: message.managedSesResourceOperationKey,
+    generation: message.managedSesGeneration,
+    adapterVersion: message.managedSesAdapterVersion,
+    sequenceStep: message.sequenceStep,
+    purpose: "outreach" as const,
+    providerMessageIdDigest:
+      message.managedSesProviderMessageIdDigest ??
+      existing?.providerMessageIdDigest,
+    rfcMessageIdDigest:
+      message.inboundRelayOutboundMessageIdHash ??
+      existing?.rfcMessageIdDigest,
+    threadReceipt:
+      message.managedSesThreadReceipt ?? existing?.threadReceipt,
+    releaseState: "released" as const,
+    terminalEventType: existing?.terminalEventType,
+    terminalEventOccurredAt: existing?.terminalEventOccurredAt,
+    terminalEventReceipt: existing?.terminalEventReceipt,
+    terminalEventBindingHash: existing?.terminalEventBindingHash,
+    expiresAt: Math.max(
+      existing?.expiresAt ?? 0,
+      timestamp + MANAGED_SES_SEND_TOMBSTONE_RETENTION_MS,
+    ),
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+  };
+  if (existing) await ctx.db.patch(existing._id, record);
+  else await ctx.db.insert("managed_ses_send_tombstones", record);
+  return true;
+}
+
+export async function materializeManagedSesCanaryTombstoneForDeletion(
+  ctx: MutationCtx,
+  canary: Doc<"managed_ses_event_canaries">,
+): Promise<boolean> {
+  if (!canary.externalAttemptedAt) return true;
+  const releaseTombstone = await ctx.db
+    .query("managed_outreach_mailbox_release_tombstones")
+    .withIndex("by_operation", (q) =>
+      q.eq("operationKey", canary.resourceOperationKey)
+    )
+    .unique();
+  if (
+    !releaseTombstone ||
+    releaseTombstone.state !== "released" ||
+    releaseTombstone.generation !== canary.generation ||
+    releaseTombstone.adapterVersion !== canary.adapterVersion
+  ) return false;
+  const existing = await ctx.db
+    .query("managed_ses_send_tombstones")
+    .withIndex("by_operation", (q) => q.eq("operationKey", canary.operationKey))
+    .unique();
+  if (
+    existing &&
+    (existing.resourceOperationKey !== canary.resourceOperationKey ||
+      existing.generation !== canary.generation ||
+      existing.adapterVersion !== canary.adapterVersion ||
+      existing.sequenceStep !== 0 ||
+      existing.purpose !== "inbound_relay_canary" ||
+      (existing.providerMessageIdDigest !== undefined &&
+        canary.providerMessageIdDigest !== undefined &&
+        existing.providerMessageIdDigest !== canary.providerMessageIdDigest) ||
+      (existing.rfcMessageIdDigest !== undefined &&
+        canary.rfcMessageIdDigest !== undefined &&
+        existing.rfcMessageIdDigest !== canary.rfcMessageIdDigest) ||
+      (existing.threadReceipt !== undefined &&
+        canary.threadReceipt !== undefined &&
+        existing.threadReceipt !== canary.threadReceipt))
+  ) throw new Error("Managed SES canary tombstone crossed a binding");
+  const timestamp = Date.now();
+  const record = {
+    operationKey: canary.operationKey,
+    resourceOperationKey: canary.resourceOperationKey,
+    generation: canary.generation,
+    adapterVersion: canary.adapterVersion,
+    sequenceStep: 0,
+    purpose: "inbound_relay_canary" as const,
+    providerMessageIdDigest:
+      canary.providerMessageIdDigest ?? existing?.providerMessageIdDigest,
+    rfcMessageIdDigest:
+      canary.rfcMessageIdDigest ?? existing?.rfcMessageIdDigest,
+    threadReceipt: canary.threadReceipt ?? existing?.threadReceipt,
+    releaseState: "released" as const,
+    terminalEventType: existing?.terminalEventType,
+    terminalEventOccurredAt: existing?.terminalEventOccurredAt,
+    terminalEventReceipt: existing?.terminalEventReceipt,
+    terminalEventBindingHash: existing?.terminalEventBindingHash,
+    expiresAt: Math.max(
+      existing?.expiresAt ?? 0,
+      timestamp + MANAGED_SES_SEND_TOMBSTONE_RETENTION_MS,
+    ),
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+  };
+  if (existing) await ctx.db.patch(existing._id, record);
+  else await ctx.db.insert("managed_ses_send_tombstones", record);
+  return true;
+}
+
+async function quarantineManagedSesEventCanaryIdentityMismatch(
+  ctx: MutationCtx,
+  canary: Doc<"managed_ses_event_canaries">,
+  timestamp: number,
+) {
+  await ctx.db.patch(canary._id, {
+    status: "failed",
+    dispositionState: "quarantined_integrity",
+    dispositionLeaseToken: undefined,
+    dispositionLeaseExpiresAt: undefined,
+    dispositionSettledAt: timestamp,
+    inboundCanaryActivationState: "failed",
+    inboundCanaryActivationLeaseToken: undefined,
+    inboundCanaryActivationLeaseExpiresAt: undefined,
+    inboundCanaryReceipt: undefined,
+    inboundCanaryVerifiedAt: undefined,
+    updatedAt: timestamp,
+  });
+  const inbox = await ctx.db.get(canary.inboxId);
+  if (!inbox) return;
+  const ownsOutboundProof =
+    inbox.managedTransportEventCanaryOperationKey === canary.operationKey;
+  const ownsInboundProof =
+    inbox.managedTransportInboundCanaryOperationKey === canary.operationKey;
+  if (!ownsOutboundProof && !ownsInboundProof) return;
+  await ctx.db.patch(inbox._id, {
+    ...(ownsOutboundProof
+      ? {
+          managedTransportEventCanaryVerifiedAt: undefined,
+          managedTransportEventCanaryReceipt: undefined,
+          managedTransportEventCanaryOperationKey: undefined,
+          managedTransportEventProviderMessageIdDigest: undefined,
+        }
+      : {}),
+    ...(ownsInboundProof
+      ? {
+          managedTransportInboundCanaryVerifiedAt: undefined,
+          managedTransportInboundCanaryReceipt: undefined,
+          managedTransportInboundCanaryOperationKey: undefined,
+          managedTransportInboundCanaryInboxBinding: undefined,
+          managedTransportInboundCanaryRelayConfigurationHash: undefined,
+          managedTransportInboundCanaryAdapterVersion: undefined,
+          managedTransportInboundCanaryRetentionPolicyHash: undefined,
+        }
+      : {}),
+    lastError:
+      "The managed sender returned a signed provider/RFC/thread identity mismatch. This canary is quarantined and cannot authorize outreach.",
+    updatedAt: timestamp,
+  });
+}
+
+/** Settle one privacy-reduced, signed SES event. The operation index must
+ * resolve to exactly one canary or delivery attempt, and every stored binding
+ * must still match the canonical managed resource. */
+export const recordManagedSesDeliveryEvent = internalMutation({
+  args: {
+    adapterVersion: v.string(),
+    operationKey: v.string(),
+    resourceOperationKey: v.string(),
+    generation: v.number(),
+    sequenceStep: v.number(),
+    purpose: v.union(
+      v.literal("outreach"),
+      v.literal("rfc_message_id_canary"),
+      v.literal("inbound_relay_canary"),
+    ),
+    eventType: managedSesEventTypeValidator,
+    occurredAt: v.number(),
+    providerMessageIdDigest: v.string(),
+    rfcMessageIdDigest: v.string(),
+    threadReceipt: v.string(),
+    eventReceipt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const timestamp = Date.now();
+    if (
+      args.adapterVersion !== process.env.MANAGED_SES_ADAPTER_VERSION ||
+      !/^[A-Za-z0-9_-]{32,96}$/.test(args.operationKey) ||
+      !/^[A-Za-z0-9_-]{32,96}$/.test(args.resourceOperationKey) ||
+      !Number.isSafeInteger(args.generation) ||
+      args.generation < 1 ||
+      !Number.isSafeInteger(args.sequenceStep) ||
+      args.sequenceStep < 0 ||
+      args.sequenceStep > MAX_SEQUENCE_STEP ||
+      !/^[a-f0-9]{64}$/.test(args.providerMessageIdDigest) ||
+      !/^[a-f0-9]{64}$/.test(args.rfcMessageIdDigest) ||
+      !/^[A-Za-z0-9_-]{32,96}$/.test(args.threadReceipt) ||
+      !/^[a-f0-9]{64}$/.test(args.eventReceipt) ||
+      !Number.isFinite(args.occurredAt) ||
+      args.occurredAt <= 0 ||
+      args.occurredAt > timestamp + 5 * 60 * 1000
+    ) throw new Error("Managed SES event receipt is invalid");
+    const prior = await ctx.db
+      .query("managed_ses_delivery_events")
+      .withIndex("by_event_receipt", (q) =>
+        q.eq("eventReceipt", args.eventReceipt)
+      )
+      .unique();
+    if (prior) {
+      if (
+        prior.operationKey !== args.operationKey ||
+        prior.resourceOperationKey !== args.resourceOperationKey ||
+        prior.generation !== args.generation ||
+        prior.sequenceStep !== args.sequenceStep ||
+        prior.purpose !== args.purpose ||
+        prior.eventType !== args.eventType ||
+        prior.occurredAt !== args.occurredAt ||
+        prior.providerMessageIdDigest !== args.providerMessageIdDigest ||
+        prior.rfcMessageIdDigest !== args.rfcMessageIdDigest ||
+        prior.threadReceipt !== args.threadReceipt ||
+        prior.adapterVersion !== args.adapterVersion
+      ) throw new Error("Managed SES event receipt was rebound");
+      return { recorded: false as const, replay: true as const };
+    }
+    const [canary, message] = await Promise.all([
+      ctx.db
+        .query("managed_ses_event_canaries")
+        .withIndex("by_operation", (q) =>
+          q.eq("operationKey", args.operationKey)
+        )
+        .unique(),
+      ctx.db
+        .query("outreach_messages")
+        .withIndex("by_managed_ses_operation", (q) =>
+          q.eq("managedSesOperationKey", args.operationKey)
+        )
+        .unique(),
+    ]);
+    if (canary && message) {
+      throw new Error("Managed SES event operation is missing or ambiguous");
+    }
+    if (!canary && !message) {
+      const sendTombstone = await ctx.db
+        .query("managed_ses_send_tombstones")
+        .withIndex("by_operation", (q) =>
+          q.eq("operationKey", args.operationKey)
+        )
+        .unique();
+      if (
+        !sendTombstone ||
+        sendTombstone.expiresAt <= timestamp ||
+        sendTombstone.releaseState !== "released" ||
+        sendTombstone.resourceOperationKey !== args.resourceOperationKey ||
+        sendTombstone.generation !== args.generation ||
+        sendTombstone.adapterVersion !== args.adapterVersion ||
+        sendTombstone.sequenceStep !== args.sequenceStep ||
+        sendTombstone.purpose !== args.purpose ||
+        (sendTombstone.providerMessageIdDigest !== undefined &&
+          sendTombstone.providerMessageIdDigest !==
+            args.providerMessageIdDigest) ||
+        (sendTombstone.rfcMessageIdDigest !== undefined &&
+          sendTombstone.rfcMessageIdDigest !== args.rfcMessageIdDigest) ||
+        (sendTombstone.threadReceipt !== undefined &&
+          sendTombstone.threadReceipt !== args.threadReceipt)
+      ) {
+        throw new Error("Managed SES event operation is missing or ambiguous");
+      }
+      const tombstoneEventBindingHash = sha256Hex(JSON.stringify({
+        version: 1,
+        operationKey: args.operationKey,
+        resourceOperationKey: args.resourceOperationKey,
+        generation: args.generation,
+        adapterVersion: args.adapterVersion,
+        sequenceStep: args.sequenceStep,
+        purpose: args.purpose,
+        eventType: args.eventType,
+        occurredAt: args.occurredAt,
+        providerMessageIdDigest: args.providerMessageIdDigest,
+        rfcMessageIdDigest: args.rfcMessageIdDigest,
+        threadReceipt: args.threadReceipt,
+        eventReceipt: args.eventReceipt,
+      }));
+      if (sendTombstone.terminalEventReceipt === args.eventReceipt) {
+        if (
+          sendTombstone.terminalEventBindingHash !==
+            tombstoneEventBindingHash
+        ) throw new Error("Managed SES tombstone event was rebound");
+        return { recorded: false as const, replay: true as const };
+      }
+      await ctx.db.patch(sendTombstone._id, {
+        providerMessageIdDigest: args.providerMessageIdDigest,
+        rfcMessageIdDigest: args.rfcMessageIdDigest,
+        threadReceipt: args.threadReceipt,
+        terminalEventType: args.eventType,
+        terminalEventOccurredAt: args.occurredAt,
+        terminalEventReceipt: args.eventReceipt,
+        terminalEventBindingHash: tombstoneEventBindingHash,
+        updatedAt: timestamp,
+      });
+      // deletion_fenced_tombstone_only: the exact adapter/resource release is
+      // sealed and all site/message rows are already gone. A late signed retry
+      // is acknowledged without recreating any site-scoped data.
+      return {
+        recorded: true as const,
+        tombstoneOnly: true as const,
+        reason: "deletion_fenced_tombstone_only" as const,
+      };
+    }
+    if (canary) {
+      const [
+        inbox,
+        resource,
+        request,
+        canarySite,
+        canaryReleaseTombstone,
+      ] = await Promise.all([
+        ctx.db.get(canary.inboxId),
+        ctx.db.get(canary.resourceId),
+        ctx.db.get(canary.resourceId).then((row) =>
+          row ? ctx.db.get(row.requestId) : null
+        ),
+        ctx.db.get(canary.siteId),
+        ctx.db
+          .query("managed_outreach_mailbox_release_tombstones")
+          .withIndex("by_operation", (q) =>
+            q.eq("operationKey", canary.resourceOperationKey)
+          )
+          .unique(),
+      ]);
+      const liveCanaryBinding = Boolean(
+        inbox &&
+        resource &&
+        canary.resourceOperationKey === resource.operationKey &&
+        canary.generation === resource.generation &&
+        canary.inboxConfigurationVersion ===
+          (inbox.configurationVersion ?? 0) &&
+        resource.canonicalInboxId === inbox._id &&
+        resource.releaseState === "active" &&
+        inbox.credentialSource === "managed_adapter" &&
+        inbox.managedTransportKind === MANAGED_SES_TRANSPORT &&
+        inbox.managedTransportOperationKey === resource.operationKey &&
+        inbox.managedTransportGeneration === resource.generation &&
+        inbox.managedTransportAdapterVersion === args.adapterVersion,
+      );
+      const releasedCanaryBinding = Boolean(
+        canaryReleaseTombstone &&
+        ["release_requested", "blocked", "released"].includes(
+          canaryReleaseTombstone.state,
+        ) &&
+        canaryReleaseTombstone.generation === canary.generation &&
+        canaryReleaseTombstone.adapterVersion === canary.adapterVersion,
+      );
+      if (
+        canary.adapterVersion !== args.adapterVersion ||
+        args.resourceOperationKey !== canary.resourceOperationKey ||
+        args.generation !== canary.generation ||
+        args.sequenceStep !== 0 ||
+        args.purpose !== "inbound_relay_canary" ||
+        (!liveCanaryBinding && !releasedCanaryBinding) ||
+        !canary.externalAttemptedAt ||
+        args.occurredAt < canary.externalAttemptedAt - 5 * 60 * 1000 ||
+        canary.expiresAt < args.occurredAt
+      ) throw new Error("Managed SES canary event crossed a binding");
+      if (!managedSesIdentityTupleMatchesEstablished({
+        establishedProviderMessageIdDigest:
+          canary.providerMessageIdDigest,
+        establishedRfcMessageIdDigest: canary.rfcMessageIdDigest,
+        establishedThreadReceipt: canary.threadReceipt,
+        providerMessageIdDigest: args.providerMessageIdDigest,
+        rfcMessageIdDigest: args.rfcMessageIdDigest,
+        threadReceipt: args.threadReceipt,
+      })) {
+        await quarantineManagedSesEventCanaryIdentityMismatch(
+          ctx,
+          canary,
+          timestamp,
+        );
+        return {
+          recorded: false as const,
+          terminal: true as const,
+          identityMismatch: true as const,
+        };
+      }
+      if (canary.eventReceipt === args.eventReceipt) {
+        if (
+          canary.eventType !== args.eventType ||
+          canary.providerMessageIdDigest !== args.providerMessageIdDigest ||
+          canary.rfcMessageIdDigest !== args.rfcMessageIdDigest ||
+          canary.threadReceipt !== args.threadReceipt
+        ) throw new Error("Managed SES canary event receipt was rebound");
+        return { recorded: false as const, replay: true as const };
+      }
+      if (
+        !liveCanaryBinding ||
+        !canarySite ||
+        canarySite.deletionStatus ||
+        canarySite.accountDeletionRequestedAt
+      ) {
+        await ctx.db.patch(canary._id, {
+          status: "failed",
+          eventReceipt: args.eventReceipt,
+          eventType: args.eventType,
+          providerMessageIdDigest: args.providerMessageIdDigest,
+          rfcMessageIdDigest: args.rfcMessageIdDigest,
+          threadReceipt: args.threadReceipt,
+          inboundCanaryActivationState: "failed",
+          inboundCanaryActivationLeaseToken: undefined,
+          inboundCanaryActivationLeaseExpiresAt: undefined,
+          dispositionState: "event_confirmed",
+          dispositionLeaseToken: undefined,
+          dispositionLeaseExpiresAt: undefined,
+          dispositionSettledAt: timestamp,
+          updatedAt: timestamp,
+        });
+        if (canaryReleaseTombstone?.state === "released") {
+          await materializeManagedSesCanaryTombstoneForDeletion(ctx, {
+            ...canary,
+            status: "failed",
+            eventReceipt: args.eventReceipt,
+            eventType: args.eventType,
+            providerMessageIdDigest: args.providerMessageIdDigest,
+            rfcMessageIdDigest: args.rfcMessageIdDigest,
+            threadReceipt: args.threadReceipt,
+          });
+          const transportTombstone = await ctx.db
+            .query("managed_ses_send_tombstones")
+            .withIndex("by_operation", (q) =>
+              q.eq("operationKey", canary.operationKey)
+            )
+            .unique();
+          if (transportTombstone) {
+            const bindingHash = sha256Hex(JSON.stringify({
+              version: 1,
+              operationKey: args.operationKey,
+              resourceOperationKey: args.resourceOperationKey,
+              generation: args.generation,
+              adapterVersion: args.adapterVersion,
+              sequenceStep: args.sequenceStep,
+              purpose: args.purpose,
+              eventType: args.eventType,
+              occurredAt: args.occurredAt,
+              providerMessageIdDigest: args.providerMessageIdDigest,
+              rfcMessageIdDigest: args.rfcMessageIdDigest,
+              threadReceipt: args.threadReceipt,
+              eventReceipt: args.eventReceipt,
+            }));
+            await ctx.db.patch(transportTombstone._id, {
+              terminalEventType: args.eventType,
+              terminalEventOccurredAt: args.occurredAt,
+              terminalEventReceipt: args.eventReceipt,
+              terminalEventBindingHash: bindingHash,
+              updatedAt: timestamp,
+            });
+          }
+        }
+        // deletion_fenced_tombstone_only: do not recreate a site-scoped
+        // managed_ses_delivery_events row while account/site deletion drains.
+        return {
+          recorded: true as const,
+          canary: true as const,
+          tombstoneOnly: true as const,
+          reason: "deletion_fenced_tombstone_only" as const,
+        };
+      }
+      if (!inbox || !resource) {
+        throw new Error("Managed SES live canary binding disappeared");
+      }
+      const adverseCanaryEvent = [
+        "bounced",
+        "complaint",
+        "rejected",
+        "rendering_failed",
+      ].includes(args.eventType);
+      const canaryAlreadyTerminal = canary.status === "failed";
+      if (adverseCanaryEvent) {
+        await ctx.db.patch(canary._id, {
+          status: "failed",
+          providerMessageIdDigest: args.providerMessageIdDigest,
+          rfcMessageIdDigest: args.rfcMessageIdDigest,
+          threadReceipt: args.threadReceipt,
+          eventReceipt: args.eventReceipt,
+          eventType: args.eventType,
+          verifiedAt: undefined,
+          inboundCanaryActivationState: "failed",
+          inboundCanaryActivationLeaseToken: undefined,
+          inboundCanaryActivationLeaseExpiresAt: undefined,
+          inboundCanaryReceipt: undefined,
+          inboundCanaryVerifiedAt: undefined,
+          dispositionState: "event_confirmed",
+          dispositionLeaseToken: undefined,
+          dispositionLeaseExpiresAt: undefined,
+          dispositionSettledAt: timestamp,
+          updatedAt: timestamp,
+        });
+        const ownsOutboundProof =
+          inbox.managedTransportEventCanaryOperationKey ===
+            canary.operationKey;
+        const ownsInboundProof =
+          inbox.managedTransportInboundCanaryOperationKey ===
+            canary.operationKey;
+        if (ownsOutboundProof || ownsInboundProof) {
+          await ctx.db.patch(inbox._id, {
+            ...(ownsOutboundProof
+              ? {
+                  managedTransportEventCanaryVerifiedAt: undefined,
+                  managedTransportEventCanaryReceipt: undefined,
+                  managedTransportEventCanaryOperationKey: undefined,
+                  managedTransportEventProviderMessageIdDigest: undefined,
+                }
+              : {}),
+            ...(ownsInboundProof
+              ? {
+                  managedTransportInboundCanaryVerifiedAt: undefined,
+                  managedTransportInboundCanaryReceipt: undefined,
+                  managedTransportInboundCanaryOperationKey: undefined,
+                  managedTransportInboundCanaryInboxBinding: undefined,
+                  managedTransportInboundCanaryRelayConfigurationHash:
+                    undefined,
+                  managedTransportInboundCanaryAdapterVersion: undefined,
+                  managedTransportInboundCanaryRetentionPolicyHash:
+                    undefined,
+                }
+              : {}),
+            lastError:
+              "The current managed sender canary received a terminal adverse event; outreach is quarantined until a new exact canary succeeds.",
+            updatedAt: timestamp,
+          });
+        }
+        if (request) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.managedProvisioning.dispatchRequest,
+            { requestId: request._id, expectedRevision: request.revision },
+          );
+        }
+      } else if (args.eventType === "delivered" && !canaryAlreadyTerminal) {
+        await ctx.db.patch(canary._id, {
+          status: "delivered",
+          providerMessageIdDigest: args.providerMessageIdDigest,
+          rfcMessageIdDigest: args.rfcMessageIdDigest,
+          threadReceipt: args.threadReceipt,
+          eventReceipt: args.eventReceipt,
+          eventType: args.eventType,
+          verifiedAt: args.occurredAt,
+          updatedAt: timestamp,
+        });
+        await ctx.db.patch(inbox._id, {
+          managedTransportEventCanaryVerifiedAt: args.occurredAt,
+          managedTransportEventCanaryReceipt: args.eventReceipt,
+          managedTransportEventCanaryOperationKey: args.operationKey,
+          managedTransportEventProviderMessageIdDigest:
+            args.providerMessageIdDigest,
+          lastError: undefined,
+          updatedAt: timestamp,
+        });
+        if (request) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.managedProvisioning.dispatchRequest,
+            { requestId: request._id, expectedRevision: request.revision },
+          );
+        }
+        if (canary.inboundCanarySettledAt) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.actions.managedOutreachMailbox
+              .activateManagedSesInboundCanary,
+            { canaryId: canary._id },
+          );
+        }
+      }
+      await ctx.db.insert("managed_ses_delivery_events", {
+        siteId: canary.siteId,
+        inboxId: canary.inboxId,
+        canaryId: canary._id,
+        operationKey: args.operationKey,
+        resourceOperationKey: args.resourceOperationKey,
+        generation: args.generation,
+        adapterVersion: args.adapterVersion,
+        sequenceStep: args.sequenceStep,
+        purpose: args.purpose,
+        eventType: args.eventType,
+        occurredAt: args.occurredAt,
+        providerMessageIdDigest: args.providerMessageIdDigest,
+        rfcMessageIdDigest: args.rfcMessageIdDigest,
+        threadReceipt: args.threadReceipt,
+        eventReceipt: args.eventReceipt,
+        recordedAt: timestamp,
+      });
+      return { recorded: true as const, canary: true as const };
+    }
+
+    const [inbox, eventSite, releaseTombstone] = await Promise.all([
+      message!.inboxId ? ctx.db.get(message!.inboxId) : null,
+      ctx.db.get(message!.siteId),
+      ctx.db
+        .query("managed_outreach_mailbox_release_tombstones")
+        .withIndex("by_operation", (q) =>
+          q.eq("operationKey", args.resourceOperationKey)
+        )
+        .unique(),
+    ]);
+    const liveInboxBinding = Boolean(
+      inbox &&
+      inbox.provider === MANAGED_SES_TRANSPORT &&
+      message!.managedSesResourceOperationKey ===
+        inbox.managedTransportOperationKey &&
+      message!.managedSesGeneration === inbox.managedTransportGeneration &&
+      inbox.managedTransportAdapterVersion === args.adapterVersion,
+    );
+    const releaseTombstoneBinding = Boolean(
+      releaseTombstone &&
+      ["release_requested", "blocked", "released"].includes(
+        releaseTombstone.state,
+      ) &&
+      releaseTombstone.ownerAccountKey ===
+        message!.deliveryOwnerAccountKey &&
+      releaseTombstone.generation === args.generation &&
+      releaseTombstone.adapterVersion === args.adapterVersion,
+    );
+    if (
+      message!.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+      args.resourceOperationKey !==
+        message!.managedSesResourceOperationKey ||
+      args.generation !== message!.managedSesGeneration ||
+      args.sequenceStep !== message!.sequenceStep ||
+      args.purpose !== "outreach" ||
+      message!.managedSesAdapterVersion !== args.adapterVersion ||
+      (!liveInboxBinding && !releaseTombstoneBinding) ||
+      !message!.managedSesExternalAttemptedAt ||
+      args.occurredAt <
+        message!.managedSesExternalAttemptedAt - 5 * 60 * 1000 ||
+      ![
+        "sending",
+        "delivery_unverified",
+        "sent",
+        "failed",
+        "replied",
+        "bounced",
+      ].includes(message!.status)
+    ) throw new Error("Managed SES delivery event crossed a binding");
+    if (!managedSesIdentityTupleMatchesEstablished({
+      establishedProviderMessageIdDigest:
+        message!.managedSesProviderMessageIdDigest,
+      establishedRfcMessageIdDigest:
+        message!.inboundRelayOutboundMessageIdHash,
+      establishedThreadReceipt: message!.managedSesThreadReceipt,
+      providerMessageIdDigest: args.providerMessageIdDigest,
+      rfcMessageIdDigest: args.rfcMessageIdDigest,
+      threadReceipt: args.threadReceipt,
+    })) {
+      await quarantineManagedSesMessageIdentityMismatch(
+        ctx,
+        message!,
+        timestamp,
+      );
+      return {
+        recorded: false as const,
+        terminal: true as const,
+        identityMismatch: true as const,
+      };
+    }
+    const lateEventBindingHash = sha256Hex(JSON.stringify({
+      version: 1,
+      operationKey: args.operationKey,
+      resourceOperationKey: args.resourceOperationKey,
+      generation: args.generation,
+      adapterVersion: args.adapterVersion,
+      sequenceStep: args.sequenceStep,
+      purpose: args.purpose,
+      eventType: args.eventType,
+      occurredAt: args.occurredAt,
+      providerMessageIdDigest: args.providerMessageIdDigest,
+      rfcMessageIdDigest: args.rfcMessageIdDigest,
+      threadReceipt: args.threadReceipt,
+      eventReceipt: args.eventReceipt,
+    }));
+    if (message!.managedSesLateEventReceipt === args.eventReceipt) {
+      if (message!.managedSesLateEventBindingHash !== lateEventBindingHash) {
+        throw new Error("Managed SES late event receipt was rebound");
+      }
+      return { recorded: false as const, replay: true as const };
+    }
+    const latestEvent = await ctx.db
+      .query("managed_ses_delivery_events")
+      .withIndex("by_operation_occurred", (q) =>
+        q.eq("operationKey", args.operationKey)
+      )
+      .order("desc")
+      .first();
+    const staleEvent = Boolean(
+      latestEvent && args.occurredAt < latestEvent.occurredAt,
+    );
+    const settlementAccountKey = immutableDeliveryOwnerAccountKey(
+      message!,
+      inbox,
+    );
+    const ownsCurrentSite = Boolean(
+      settlementAccountKey &&
+      eventSite?.userId &&
+      !eventSite.deletionStatus &&
+      !eventSite.accountDeletionRequestedAt &&
+      inbox &&
+      settlementAccountKey === accountDeletionKey(eventSite.userId) &&
+      inbox.credentialOwnerAccountKey === settlementAccountKey,
+    );
+    const deletionFencedTombstoneOnly = Boolean(
+      !eventSite ||
+      eventSite.deletionStatus ||
+      eventSite.accountDeletionRequestedAt ||
+      !inbox,
+    );
+
+    const acceptedEvent = ["sent", "delivered", "bounced", "complaint"]
+      .includes(args.eventType);
+    let acceptedSettlement:
+      | { accountKey?: string; ownsCurrentSite: boolean }
+      | undefined;
+    if (acceptedEvent && !message!.sentAt) {
+      if (deletionFencedTombstoneOnly) {
+        if (settlementAccountKey) {
+          await recordDurableContactReceiptForAccount(
+            ctx,
+            settlementAccountKey,
+            message!.toDomain,
+            args.occurredAt,
+            message!.deliveryAttemptId,
+          );
+        }
+        acceptedSettlement = { ownsCurrentSite: false };
+      } else {
+        acceptedSettlement = await settleAcceptedDeliveryCounter(
+          ctx,
+          message!,
+          message!.siteId,
+          args.occurredAt,
+        );
+      }
+    }
+    if (["bounced", "complaint"].includes(args.eventType)) {
+      const reason = args.eventType === "complaint" ? "complaint" : "bounce";
+      if (settlementAccountKey) {
+        await materializeOutreachSuppressionTombstoneForAccount(
+          ctx,
+          settlementAccountKey,
+          "email",
+          message!.toEmail,
+          reason,
+          args.occurredAt,
+        );
+        if (args.eventType === "complaint") {
+          await materializeOutreachSuppressionTombstoneForAccount(
+            ctx,
+            settlementAccountKey,
+            "domain",
+            message!.toDomain,
+            reason,
+            args.occurredAt,
+          );
+        }
+      }
+      if (ownsCurrentSite) {
+        await addSuppression(
+          ctx,
+          message!.siteId,
+          "email",
+          message!.toEmail,
+          reason,
+        );
+        if (args.eventType === "complaint") {
+          await addSuppression(
+            ctx,
+            message!.siteId,
+            "domain",
+            message!.toDomain,
+            reason,
+          );
+        }
+        await cancelQueuedThread(
+          ctx,
+          message!.siteId,
+          message!.threadKey,
+          message!._id,
+          "bounce",
+        );
+      }
+      await ctx.db.patch(message!._id, {
+        status: "bounced",
+        sentAt: message!.sentAt ?? args.occurredAt,
+        bouncedAt: args.occurredAt,
+        managedSesProviderMessageIdDigest: args.providerMessageIdDigest,
+        managedSesThreadReceipt: args.threadReceipt,
+        inboundRelayOutboundMessageIdHash: args.rfcMessageIdDigest,
+        failureReason: args.eventType === "complaint"
+          ? "The managed sender received a signed complaint event."
+          : "The managed sender received a signed bounce event.",
+        managedSesDispositionState: "event_confirmed",
+        managedSesDispositionLeaseToken: undefined,
+        managedSesDispositionLeaseExpiresAt: undefined,
+        managedSesDispositionSettledAt: timestamp,
+        updatedAt: timestamp,
+      });
+    } else if (
+      ["sent", "delivered"].includes(args.eventType) &&
+      !staleEvent
+    ) {
+      await ctx.db.patch(message!._id, {
+        status: ["replied", "bounced"].includes(message!.status)
+          ? message!.status
+          : "sent",
+        sentAt: message!.sentAt ?? args.occurredAt,
+        managedSesProviderMessageIdDigest: args.providerMessageIdDigest,
+        managedSesThreadReceipt: args.threadReceipt,
+        inboundRelayOutboundMessageIdHash: args.rfcMessageIdDigest,
+        failureReason: undefined,
+        managedSesDispositionState: "event_confirmed",
+        managedSesDispositionLeaseToken: undefined,
+        managedSesDispositionLeaseExpiresAt: undefined,
+        managedSesDispositionSettledAt: timestamp,
+        updatedAt: timestamp,
+      });
+    } else if (
+      ["rejected", "rendering_failed"].includes(args.eventType) &&
+      !staleEvent &&
+      !message!.sentAt &&
+      ["sending", "delivery_unverified", "failed"].includes(message!.status)
+    ) {
+      await ctx.db.patch(message!._id, {
+        status: "failed",
+        managedSesProviderMessageIdDigest: args.providerMessageIdDigest,
+        managedSesThreadReceipt: args.threadReceipt,
+        inboundRelayOutboundMessageIdHash: args.rfcMessageIdDigest,
+        failureReason: "The managed sender reported a terminal delivery failure.",
+        managedSesDispositionState: "event_confirmed",
+        managedSesDispositionLeaseToken: undefined,
+        managedSesDispositionLeaseExpiresAt: undefined,
+        managedSesDispositionSettledAt: timestamp,
+        updatedAt: timestamp,
+      });
+      if (
+        message!.deliveryOwnerAccountKey &&
+        message!.deliveryAttemptId
+      ) {
+        await releaseDurableContactClaimForAccount(
+          ctx,
+          message!.deliveryOwnerAccountKey,
+          message!.toDomain,
+          message!.deliveryAttemptId,
+          timestamp,
+        );
+      }
+    }
+    if (acceptedSettlement?.ownsCurrentSite) {
+      const [opportunity, contact] = await Promise.all([
+        ctx.db.get(message!.opportunityId),
+        ctx.db
+          .query("outreach_contacts")
+          .withIndex("by_site_email", (q) =>
+            q.eq("siteId", message!.siteId).eq("email", message!.toEmail)
+          )
+          .unique(),
+      ]);
+      const lifecycle = outreachDeliverySettlementDecision({
+        sequenceStep: message!.sequenceStep,
+        messageSiteId: String(message!.siteId),
+        opportunitySiteId: opportunity
+          ? String(opportunity.siteId)
+          : undefined,
+        messageEvidenceHash: message!.opportunityEvidenceHash,
+        opportunityEvidenceHash: opportunity?.evidenceHash,
+        messageSourceUrl: message!.opportunitySourceUrl,
+        opportunitySourceUrl: opportunity?.sourceUrl,
+        messageTargetUrl: message!.opportunityTargetUrl,
+        opportunityTargetUrl: opportunity?.targetUrl,
+        opportunityStatus:
+          opportunity?.siteId === message!.siteId
+            ? opportunity.status
+            : undefined,
+      });
+      if (
+        opportunity &&
+        opportunity.siteId === message!.siteId &&
+        lifecycle.shouldMarkContacted
+      ) {
+        await ctx.db.patch(opportunity._id, {
+          status: "contacted",
+          contactedAt: args.occurredAt,
+          updatedAt: timestamp,
+        });
+      }
+      if (contact) {
+        await ctx.db.patch(contact._id, {
+          lastContactedAt: args.occurredAt,
+          updatedAt: timestamp,
+        });
+      }
+    }
+    let followUpQueued = false;
+    if (
+      acceptedSettlement?.ownsCurrentSite &&
+      ["sent", "delivered"].includes(args.eventType)
+    ) {
+      const next = await queueNextVerifiedAutonomousFollowUp(ctx, {
+        siteId: message!.siteId,
+        parentMessageId: message!._id,
+        transport: MANAGED_SES_TRANSPORT,
+        providerThreadId: undefined,
+        outboundRfcMessageId: undefined,
+        managedSesOperationKey: message!.managedSesOperationKey,
+        managedSesThreadReceipt: args.threadReceipt,
+        rfcMessageIdDigest: args.rfcMessageIdDigest,
+        sentAt: message!.sentAt ?? args.occurredAt,
+      });
+      followUpQueued = next.queued;
+    }
+    if (deletionFencedTombstoneOnly) {
+      await ctx.db.patch(message!._id, {
+        managedSesLateEventReceipt: args.eventReceipt,
+        managedSesLateEventBindingHash: lateEventBindingHash,
+        managedSesLateEventRecordedAt: timestamp,
+        updatedAt: timestamp,
+      });
+      // deletion_fenced_tombstone_only: never insert a new
+      // managed_ses_delivery_events row after the deletion sweep.
+      return {
+        recorded: true as const,
+        canary: false as const,
+        tombstoneOnly: true as const,
+        reason: "deletion_fenced_tombstone_only" as const,
+        followUpQueued: false as const,
+      };
+    }
+    await ctx.db.insert("managed_ses_delivery_events", {
+      siteId: message!.siteId,
+      inboxId: inbox!._id,
+      messageId: message!._id,
+      operationKey: args.operationKey,
+      resourceOperationKey: args.resourceOperationKey,
+      generation: args.generation,
+      adapterVersion: args.adapterVersion,
+      sequenceStep: args.sequenceStep,
+      purpose: args.purpose,
+      eventType: args.eventType,
+      occurredAt: args.occurredAt,
+      providerMessageIdDigest: args.providerMessageIdDigest,
+      rfcMessageIdDigest: args.rfcMessageIdDigest,
+      threadReceipt: args.threadReceipt,
+      eventReceipt: args.eventReceipt,
+      recordedAt: timestamp,
+    });
+    return {
+      recorded: true as const,
+      canary: false as const,
+      followUpQueued,
+    };
+  },
+});
+
+export const recordManagedSesUnsubscribe = internalMutation({
+  args: { tokenHash: v.string() },
+  handler: async (ctx, { tokenHash }) => {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) {
+      return { recorded: false as const };
+    }
+    const message = await ctx.db
+      .query("outreach_messages")
+      .withIndex("by_managed_ses_unsubscribe", (q) =>
+        q.eq("managedSesUnsubscribeTokenHash", tokenHash)
+      )
+      .unique();
+    if (
+      !message ||
+      message.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+      !message.deliveryOwnerAccountKey ||
+      !message.managedSesExternalAttemptedAt
+    ) return { recorded: false as const };
+    if (message.inboundReceiptKind === "unsubscribe") {
+      return { recorded: false as const, replay: true as const };
+    }
+    const timestamp = Date.now();
+    if (!message.sentAt) {
+      await settleAcceptedDeliveryCounter(
+        ctx,
+        message,
+        message.siteId,
+        message.deliveryClaimedAt ?? timestamp,
+      );
+    }
+    const site = await ctx.db.get(message.siteId);
+    const ownsCurrentSite = Boolean(
+      site?.userId &&
+      accountDeletionKey(site.userId) === message.deliveryOwnerAccountKey,
+    );
+    await Promise.all([
+      materializeOutreachSuppressionTombstoneForAccount(
+        ctx,
+        message.deliveryOwnerAccountKey,
+        "email",
+        message.toEmail,
+        "unsubscribe",
+        timestamp,
+      ),
+      materializeOutreachSuppressionTombstoneForAccount(
+        ctx,
+        message.deliveryOwnerAccountKey,
+        "domain",
+        message.toDomain,
+        "unsubscribe",
+        timestamp,
+      ),
+    ]);
+    if (ownsCurrentSite) {
+      await addSuppression(
+        ctx,
+        message.siteId,
+        "email",
+        message.toEmail,
+        "unsubscribe",
+      );
+      await addSuppression(
+        ctx,
+        message.siteId,
+        "domain",
+        message.toDomain,
+        "unsubscribe",
+      );
+      await cancelQueuedThread(
+        ctx,
+        message.siteId,
+        message.threadKey,
+        message._id,
+        "unsubscribe",
+      );
+    }
+    await ctx.db.patch(message._id, {
+      status: message.status === "bounced" ? "bounced" : "replied",
+      sentAt: message.sentAt ?? message.deliveryClaimedAt ?? timestamp,
+      repliedAt: message.repliedAt ?? timestamp,
+      inboundCheckedAt: timestamp,
+      inboundReceiptKind: "unsubscribe",
+      inboundReceiptHash: tokenHash,
+      inboundReceiptAt: timestamp,
+      updatedAt: timestamp,
+    });
+    return { recorded: true as const };
+  },
+});
+
 export const setInboxComplianceProfile = mutation({
   args: {
     siteId: v.id("sites"),
@@ -1385,6 +2901,11 @@ export const setInboxComplianceProfile = mutation({
     await assertNoActiveDelivery(ctx, siteId);
     const inbox = await inboxForSite(ctx, siteId);
     if (!inbox) throw new Error("Connect the secondary-domain Gmail inbox first");
+    if (inbox.provider === MANAGED_SES_TRANSPORT) {
+      throw new Error(
+        "Update a managed sender through One Setup so its generation is released and reverified",
+      );
+    }
     if (
       !site.userId ||
       inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
@@ -1736,6 +3257,7 @@ export const enableAutonomousOutreach = mutation({
         args.siteId,
         inbox.fromEmail,
         inbox.senderDomain ?? "",
+        inbox.provider,
       )
     ) {
       throw new Error(
@@ -1756,21 +3278,28 @@ export const enableAutonomousOutreach = mutation({
       senderDomain: inbox.senderDomain,
     });
     if (senderIssues.length > 0) throw new Error(senderIssues[0]);
-    const autonomousCredentialIssues = autonomousGmailCredentialIssues({
-      oauthScopes: inbox.oauthScopes,
-      hasRefreshToken: Boolean(inbox.oauthRefreshToken),
+    const autonomousCredentialIssues = autonomousOutreachTransportIssues({
+      inbox,
+      now: Date.now(),
+      managedSesAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
     });
     if (autonomousCredentialIssues.length > 0) {
       throw new Error(autonomousCredentialIssues[0]);
     }
     if (
       !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
-      !inboundRelayDsnRoutingReady({
-        inbox,
-        now: Date.now(),
-        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-        runtimeConfig: inboundRelayRuntimeConfig(),
-      })
+      (inbox.provider === MANAGED_SES_TRANSPORT
+        ? !managedSesInboxReceiptCurrent({
+            inbox,
+            now: Date.now(),
+            expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+          })
+        : !inboundRelayDsnRoutingReady({
+            inbox,
+            now: Date.now(),
+            rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+            runtimeConfig: inboundRelayRuntimeConfig(),
+          }))
     ) {
       throw new Error(
         "The signed reply/bounce/STOP relay must pass its current routing canary first",
@@ -2595,6 +4124,11 @@ export const disconnectInbox = mutation({
     await assertNoActiveDelivery(ctx, siteId);
     const inbox = await inboxForSite(ctx, siteId);
     if (!inbox) return { disconnected: false };
+    if (inbox.provider === MANAGED_SES_TRANSPORT) {
+      throw new Error(
+        "Retire a managed sender through One Setup so its external resource is quarantined and released",
+      );
+    }
     if (
       !site.userId ||
       inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId)
@@ -2715,11 +4249,13 @@ export const getInboxInternal = internalQuery({
       return null;
     }
     const timestamp = Date.now();
-    const durablePacing = await readDurablePacingReceipt(
-      ctx,
-      site,
-      inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
-    );
+    const durablePacing = inbox.provider === MANAGED_SES_TRANSPORT
+      ? null
+      : await readDurablePacingReceipt(
+          ctx,
+          site,
+          inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+        );
     const activeDurablePacing =
       durablePacing && durablePacing.retainUntil > timestamp
         ? durablePacing
@@ -3537,6 +5073,15 @@ const inboundRelayBindingValidator = v.object({
   dsnRoutingTargetGeneration: v.number(),
 });
 
+const managedSesClaimReceiptValidator = v.object({
+  resourceOperationKey: v.string(),
+  generation: v.number(),
+  adapterVersion: v.string(),
+  resourceReceipt: v.string(),
+  providerVerifiedAt: v.number(),
+  unsubscribeTokenHash: v.string(),
+});
+
 const deliveryReleaseValidator = v.union(
   v.literal("approved"),
   v.literal("automatic"),
@@ -3557,6 +5102,7 @@ export const claimApprovedDelivery = internalMutation({
     dnsEvidence: dnsEvidenceValidator,
     opportunityEvidence: liveOpportunityEvidenceValidator,
     inboundRelay: v.optional(inboundRelayBindingValidator),
+    managedSesReceipt: v.optional(managedSesClaimReceiptValidator),
   },
   handler: async (
     ctx,
@@ -3567,6 +5113,7 @@ export const claimApprovedDelivery = internalMutation({
       dnsEvidence,
       opportunityEvidence,
       inboundRelay,
+      managedSesReceipt,
     },
   ) => {
     const now = Date.now();
@@ -3594,9 +5141,44 @@ export const claimApprovedDelivery = internalMutation({
       )
       .first();
     if (unresolved) {
+      if (
+        unresolved.deliveryTransport === MANAGED_SES_TRANSPORT &&
+        unresolved.managedSesExternalAttemptedAt &&
+        unresolved.inboxId
+      ) {
+        const resourceRows = await ctx.db
+          .query("managed_outreach_mailbox_resources")
+          .withIndex("by_canonical_inbox", (q) =>
+            q.eq("canonicalInboxId", unresolved.inboxId)
+          )
+          .take(20);
+        const resource = resourceRows.find((row) =>
+          row.operationKey === unresolved.managedSesResourceOperationKey &&
+          row.generation === unresolved.managedSesGeneration &&
+          row.adapterVersion === unresolved.managedSesAdapterVersion
+        );
+        if (
+          resource &&
+          resource.operationKey ===
+            unresolved.managedSesResourceOperationKey &&
+          resource.generation === unresolved.managedSesGeneration &&
+          resource.adapterVersion === unresolved.managedSesAdapterVersion
+        ) {
+          await ctx.scheduler.runAt(
+            Math.max(
+              now,
+              unresolved.managedSesExternalAttemptedAt +
+                MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
+            ),
+            internal.managedOutreachMailbox
+              .claimManagedSesAmbiguityReconciliation,
+            { resourceId: resource._id },
+          );
+        }
+      }
       return {
         claimed: false as const,
-        reason: "A previous Gmail delivery has an unverified outcome and requires manual review.",
+        reason: "A previous delivery has an unverified outcome and requires exact provider settlement.",
       };
     }
 
@@ -3621,16 +5203,75 @@ export const claimApprovedDelivery = internalMutation({
           }) === "expired_unverified",
       );
       if (expired) {
+        const recoveryDecision = deliveryLeaseRecoveryDecision({
+          exactClaimCurrent: expired.deliveryBoundaryVersion === 1,
+          leaseExpired: true,
+          externalAttempted: Boolean(
+            expired.deliveryExternalAttemptedAt ||
+            expired.managedSesExternalAttemptedAt
+          ),
+        });
+        if (recoveryDecision === "restore_approved") {
+          const restored = await deferClaimedDeliveryBeforeProvider(
+            ctx,
+            expired,
+            now,
+            now + 1_000,
+            "The delivery lease expired before the provider boundary; the exact approved message was restored for a fresh authorization check.",
+            false,
+          );
+          return {
+            claimed: false as const,
+            reason:
+              "A pre-provider delivery claim expired safely and was restored for retry.",
+            deferredUntil: restored.nextEligibleAt,
+          };
+        }
         await ctx.db.patch(expired._id, {
           status: "delivery_unverified",
           deliveryLeaseExpiredAt: now,
           failureReason:
-            "The delivery lease expired without a verified Gmail receipt. Manual review is required; this message will not be retried automatically.",
+            "The delivery lease expired after a provider boundary without a verified receipt. This operation will not be replayed.",
           updatedAt: now,
         });
+        if (
+          expired.deliveryTransport === MANAGED_SES_TRANSPORT &&
+          expired.managedSesExternalAttemptedAt &&
+          expired.inboxId
+        ) {
+          const resourceRows = await ctx.db
+            .query("managed_outreach_mailbox_resources")
+            .withIndex("by_canonical_inbox", (q) =>
+              q.eq("canonicalInboxId", expired.inboxId)
+            )
+            .take(20);
+          const resource = resourceRows.find((row) =>
+            row.operationKey === expired.managedSesResourceOperationKey &&
+            row.generation === expired.managedSesGeneration &&
+            row.adapterVersion === expired.managedSesAdapterVersion
+          );
+          if (
+            resource &&
+            resource.operationKey === expired.managedSesResourceOperationKey &&
+            resource.generation === expired.managedSesGeneration &&
+            resource.adapterVersion === expired.managedSesAdapterVersion
+          ) {
+            await ctx.scheduler.runAt(
+              Math.max(
+                now,
+                expired.managedSesExternalAttemptedAt +
+                  MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
+              ),
+              internal.managedOutreachMailbox
+                .claimManagedSesAmbiguityReconciliation,
+              { resourceId: resource._id },
+            );
+          }
+        }
         return {
           claimed: false as const,
-          reason: "A delivery lease expired without a verified receipt; manual review is required.",
+          reason:
+            "A delivery lease expired without a verified receipt; exact provider settlement is required.",
         };
       }
       return {
@@ -3704,17 +5345,90 @@ export const claimApprovedDelivery = internalMutation({
         reason: "The Gmail credential does not belong to the current tenant owner.",
       };
     }
+    const managedSes = inbox.provider === MANAGED_SES_TRANSPORT;
+    const managedResourceRows = managedSes
+      ? await ctx.db
+        .query("managed_outreach_mailbox_resources")
+        .withIndex("by_canonical_inbox", (q) =>
+          q.eq("canonicalInboxId", inbox._id)
+        )
+        .take(20)
+      : [];
+    const managedResource = managedSes
+      ? managedResourceRows.find((row) =>
+          row.operationKey === inbox.managedTransportOperationKey &&
+          row.generation === inbox.managedTransportGeneration &&
+          row.adapterVersion === inbox.managedTransportAdapterVersion
+        )
+      : undefined;
+    if (
+      managedSes &&
+      (!managedSesReceipt ||
+        !managedResource ||
+        managedResource.transportKind !== MANAGED_SES_TRANSPORT ||
+        managedResource.lifecycleState !== "canonicalized" ||
+        managedResource.releaseState !== "active" ||
+        managedResource.canonicalInboxId !== inbox._id ||
+        managedResource.resourceReceipt !==
+          inbox.managedTransportResourceReceipt ||
+        inbox.managedTransportKind !== MANAGED_SES_TRANSPORT ||
+        inbox.credentialSource !== "managed_adapter" ||
+        managedSesReceipt.resourceOperationKey !==
+          inbox.managedTransportOperationKey ||
+        managedSesReceipt.generation !== inbox.managedTransportGeneration ||
+        managedSesReceipt.adapterVersion !==
+          inbox.managedTransportAdapterVersion ||
+        managedSesReceipt.resourceReceipt !==
+          inbox.managedTransportResourceReceipt ||
+        !/^[a-f0-9]{64}$/.test(managedSesReceipt.resourceReceipt) ||
+        !/^[a-f0-9]{64}$/.test(
+          managedSesReceipt.unsubscribeTokenHash,
+        ) ||
+        !Number.isFinite(managedSesReceipt.providerVerifiedAt) ||
+        managedSesReceipt.providerVerifiedAt <= 0 ||
+        managedSesReceipt.providerVerifiedAt > now + 5 * 60 * 1000 ||
+        !managedSesInboxReceiptCurrent({
+          inbox,
+          now,
+          expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+        }))
+    ) {
+      return {
+        claimed: false as const,
+        reason:
+          "The managed sender lacks a current exact signed status or event-canary receipt.",
+      };
+    }
+    if (managedSes && managedSesReceipt && managedResource) {
+      // The same exact signed status receipt advances both projections in one
+      // transaction; One Setup never churns because only the inbox moved.
+      await Promise.all([
+        ctx.db.patch(inbox._id, {
+          managedTransportResourceVerifiedAt:
+            managedSesReceipt.providerVerifiedAt,
+          updatedAt: now,
+        }),
+        ctx.db.patch(managedResource._id, {
+          externalVerifiedAt: managedSesReceipt.providerVerifiedAt,
+          updatedAt: now,
+        }),
+      ]);
+    }
+    if (!managedSes && managedSesReceipt) {
+      return { claimed: false as const, reason: "Transport receipt mismatch." };
+    }
     if (
       release === "automatic" &&
-      autonomousGmailCredentialIssues({
-        oauthScopes: inbox.oauthScopes,
-        hasRefreshToken: Boolean(inbox.oauthRefreshToken),
+      autonomousOutreachTransportIssues({
+        inbox,
+        now,
+        managedSesAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
       }).length > 0
     ) {
       return {
         claimed: false as const,
         reason:
-          "Autonomous outreach requires a durable exact send-only Gmail authorization.",
+          "Autonomous outreach requires a current verified outbound transport.",
       };
     }
     if (
@@ -3723,6 +5437,7 @@ export const claimApprovedDelivery = internalMutation({
         siteId,
         inbox.fromEmail,
         inbox.senderDomain ?? "",
+        inbox.provider,
       )
     ) {
       await ctx.db.patch(inbox._id, {
@@ -3810,24 +5525,30 @@ export const claimApprovedDelivery = internalMutation({
           expectedDsnRoutingTarget.hash ||
         inboundRelay.dsnRoutingTargetVersion !==
           expectedDsnRoutingTarget.version ||
-        inboundRelay.dsnRoutingTargetHash !==
-          inbox.inboundRelayDsnRoutingTargetHash ||
+        (!managedSes && inboundRelay.dsnRoutingTargetHash !==
+          inbox.inboundRelayDsnRoutingTargetHash) ||
         inboundRelay.dsnRoutingTargetVersion !==
           OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION ||
-        inboundRelay.dsnRoutingTargetVersion !==
-          inbox.inboundRelayDsnRoutingTargetVersion ||
+        (!managedSes && inboundRelay.dsnRoutingTargetVersion !==
+          inbox.inboundRelayDsnRoutingTargetVersion) ||
         inboundRelay.dsnRoutingTargetGeneration !==
           (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
         !outboundMessageId ||
         !outboundMessageId.endsWith(
           `@${normalizeDomain(inbox.senderDomain ?? "")}>`,
         ) ||
-        !inboundRelayDsnRoutingReady({
-          inbox,
-          now,
-          rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-          runtimeConfig: inboundRelayRuntimeConfig(),
-        })
+        (managedSes
+          ? !managedSesInboxReceiptCurrent({
+              inbox,
+              now,
+              expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+            })
+          : !inboundRelayDsnRoutingReady({
+              inbox,
+              now,
+              rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+              runtimeConfig: inboundRelayRuntimeConfig(),
+            }))
       ) {
         return {
           claimed: false as const,
@@ -3842,16 +5563,19 @@ export const claimApprovedDelivery = internalMutation({
     // this mutation and merge it monotonically before the authoritative pacing
     // decision. The indexed read also serializes against a concurrent receipt
     // update, so the action preflight can never be the only cap boundary.
-    const durablePacing = await readDurablePacingReceipt(
-      ctx,
-      site,
-      inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
-    );
+    const durablePacing = managedSes
+      ? null
+      : await readDurablePacingReceipt(
+          ctx,
+          site,
+          inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+        );
     const activeDurablePacing =
       durablePacing && durablePacing.retainUntil > now
         ? durablePacing
         : null;
     if (
+      !managedSes &&
       activeDurablePacing &&
       activeDurablePacing.accountKey !== accountDeletionKey(site.userId!)
     ) {
@@ -3885,7 +5609,7 @@ export const claimApprovedDelivery = internalMutation({
       hasCredential: Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken),
       senderDomain: inbox.senderDomain,
     });
-    const dnsIssues = liveDnsEvidenceIssues({
+    const dnsIssues = managedSes ? [] : liveDnsEvidenceIssues({
       checkedAt: dnsEvidence.checkedAt,
       now,
       senderDomain: dnsEvidence.senderDomain,
@@ -3898,10 +5622,17 @@ export const claimApprovedDelivery = internalMutation({
     });
     if (senderIssues.length > 0 || dnsIssues.length > 0) {
       await ctx.db.patch(inbox._id, {
+        ...(managedSes
+          ? {
+              managedTransportResourceVerifiedAt:
+                managedSesReceipt?.providerVerifiedAt,
+            }
+          : {
         dnsCheckedAt: dnsEvidence.checkedAt,
         spfVerifiedAt: dnsEvidence.spf ? dnsEvidence.checkedAt : undefined,
         dkimVerifiedAt: dnsEvidence.dkim ? dnsEvidence.checkedAt : undefined,
         dmarcVerifiedAt: dnsEvidence.dmarc ? dnsEvidence.checkedAt : undefined,
+            }),
         ...(dnsIssues.length > 0
           ? { status: "connected", mode: "approval", verifiedAt: undefined }
           : {}),
@@ -4038,46 +5769,68 @@ export const claimApprovedDelivery = internalMutation({
       ]);
       const predecessor = candidate;
       const threadStopped = Boolean(replied || bounced);
-      const predecessorDecision = followUpPredecessorDecision({
-        message,
-        predecessor,
-        ownerAccountKey: inbox.credentialOwnerAccountKey!,
-        threadStopped,
-      });
-      const transientInReplyTo = predecessorDecision.allowed &&
-          predecessor?.deliveryAttemptId
-        ? await inboundRelayOutboundMessageIdForAttempt({
-            siteId: String(siteId),
-            inboxId: String(inbox._id),
-            deliveryAttemptId: predecessor.deliveryAttemptId,
-            senderDomain: inbox.senderDomain ?? "",
-            secret: inboundRelayRuntimeConfig().dsnTargetSecret,
-          })
-        : null;
-      const exactTransientReference = Boolean(
-        transientInReplyTo &&
-        predecessor?.inboundRelayOutboundMessageIdHash &&
-        inboundRelayMessageIdHash(transientInReplyTo) ===
-          predecessor.inboundRelayOutboundMessageIdHash &&
-        message.inReplyToRfcMessageIdHash ===
-          predecessor.inboundRelayOutboundMessageIdHash,
-      );
-      if (!predecessorDecision.allowed || !exactTransientReference) {
-        await ctx.db.patch(message._id, {
-          status: "skipped",
-          blockedReason: !predecessorDecision.allowed &&
-              predecessorDecision.reason === "thread_stopped"
-            ? "The recipient replied, opted out, or bounced before this follow-up became due."
-            : "The exact accepted predecessor, Gmail thread, or message identity is unavailable; Pentra will not send an unthreaded follow-up.",
-          updatedAt: now,
+      if (managedSes) {
+        const predecessorDecision = managedSesFollowUpPredecessorDecision({
+          message,
+          predecessor,
+          ownerAccountKey: inbox.credentialOwnerAccountKey!,
+          threadStopped,
         });
-        return {
-          claimed: false as const,
-          reason: "The follow-up sequence is no longer eligible.",
-        };
+        if (!predecessorDecision.allowed) {
+          await ctx.db.patch(message._id, {
+            status: "skipped",
+            blockedReason: predecessorDecision.reason === "thread_stopped"
+              ? "The recipient replied, opted out, or bounced before this follow-up became due."
+              : "The exact signed managed-sender predecessor or thread receipt is unavailable; Pentra will not send an unthreaded follow-up.",
+            updatedAt: now,
+          });
+          return {
+            claimed: false as const,
+            reason: "The follow-up sequence is no longer eligible.",
+          };
+        }
+      } else {
+        const predecessorDecision = followUpPredecessorDecision({
+          message,
+          predecessor,
+          ownerAccountKey: inbox.credentialOwnerAccountKey!,
+          threadStopped,
+        });
+        const transientInReplyTo = predecessorDecision.allowed &&
+            predecessor?.deliveryAttemptId
+          ? await inboundRelayOutboundMessageIdForAttempt({
+              siteId: String(siteId),
+              inboxId: String(inbox._id),
+              deliveryAttemptId: predecessor.deliveryAttemptId,
+              senderDomain: inbox.senderDomain ?? "",
+              secret: inboundRelayRuntimeConfig().dsnTargetSecret,
+            })
+          : null;
+        const exactTransientReference = Boolean(
+          transientInReplyTo &&
+          predecessor?.inboundRelayOutboundMessageIdHash &&
+          inboundRelayMessageIdHash(transientInReplyTo) ===
+            predecessor.inboundRelayOutboundMessageIdHash &&
+          message.inReplyToRfcMessageIdHash ===
+            predecessor.inboundRelayOutboundMessageIdHash,
+        );
+        if (!predecessorDecision.allowed || !exactTransientReference) {
+          await ctx.db.patch(message._id, {
+            status: "skipped",
+            blockedReason: !predecessorDecision.allowed &&
+                predecessorDecision.reason === "thread_stopped"
+              ? "The recipient replied, opted out, or bounced before this follow-up became due."
+              : "The exact accepted predecessor, Gmail thread, or message identity is unavailable; Pentra will not send an unthreaded follow-up.",
+            updatedAt: now,
+          });
+          return {
+            claimed: false as const,
+            reason: "The follow-up sequence is no longer eligible.",
+          };
+        }
+        deliveryThreadId = predecessorDecision.providerThreadId;
+        deliveryInReplyToRfcMessageId = transientInReplyTo!;
       }
-      deliveryThreadId = predecessorDecision.providerThreadId;
-      deliveryInReplyToRfcMessageId = transientInReplyTo!;
     }
 
     const opportunity = await ctx.db.get(message.opportunityId);
@@ -4292,12 +6045,20 @@ export const claimApprovedDelivery = internalMutation({
       }
     }
 
+    const deliveryLeaseExpiresAt = now + OUTREACH_DELIVERY_LEASE_MS;
     await ctx.db.patch(inbox._id, {
       ...effectivePacing,
-      dnsCheckedAt: dnsEvidence.checkedAt,
-      spfVerifiedAt: dnsEvidence.checkedAt,
-      dkimVerifiedAt: dnsEvidence.checkedAt,
-      dmarcVerifiedAt: dnsEvidence.checkedAt,
+      ...(managedSes
+        ? {
+            managedTransportResourceVerifiedAt:
+              managedSesReceipt!.providerVerifiedAt,
+          }
+        : {
+            dnsCheckedAt: dnsEvidence.checkedAt,
+            spfVerifiedAt: dnsEvidence.checkedAt,
+            dkimVerifiedAt: dnsEvidence.checkedAt,
+            dmarcVerifiedAt: dnsEvidence.checkedAt,
+          }),
       lastError: undefined,
       updatedAt: now,
     });
@@ -4306,18 +6067,36 @@ export const claimApprovedDelivery = internalMutation({
       deliveryOwnerAccountKey: inbox.credentialOwnerAccountKey,
       deliveryAttemptId: attemptId,
       deliveryClaimedAt: now,
-      deliveryLeaseExpiresAt: now + OUTREACH_DELIVERY_LEASE_MS,
+      deliveryLeaseExpiresAt,
       deliveryLeaseExpiredAt: undefined,
+      deliveryBoundaryVersion: 1,
+      deliveryExternalAttemptedAt: undefined,
       failureReason: undefined,
+      ...(managedSes
+        ? {
+            deliveryTransport: MANAGED_SES_TRANSPORT,
+            managedSesOperationKey: attemptId,
+            managedSesResourceOperationKey:
+              managedSesReceipt!.resourceOperationKey,
+            managedSesGeneration: managedSesReceipt!.generation,
+            managedSesAdapterVersion: managedSesReceipt!.adapterVersion,
+            managedSesUnsubscribeTokenHash:
+              managedSesReceipt!.unsubscribeTokenHash,
+          }
+        : {}),
       ...(inboundRelay
         ? {
             inboundRelayAliasHash: inboundRelay.aliasHash,
             inboundRelayAliasDomain: normalizeInboundRelayDomain(
               inboundRelay.aliasDomain,
             )!,
-            inboundRelayOutboundMessageIdHash: inboundRelayMessageIdHash(
-              inboundRelay.outboundRfcMessageId,
-            ),
+            // Gmail receives this locally generated RFC Message-ID. Managed
+            // SES does not: its actual RFC digest is accepted only from the
+            // exact signed send/status/event receipt after provider identity
+            // exists.
+            inboundRelayOutboundMessageIdHash: managedSes
+              ? undefined
+              : inboundRelayMessageIdHash(inboundRelay.outboundRfcMessageId),
             inboundRelayRolloutEpoch: site.autopilotRolloutEpoch ?? 0,
             inboundRelayInboxConfigurationVersion:
               inbox.configurationVersion ?? 0,
@@ -4334,6 +6113,14 @@ export const claimApprovedDelivery = internalMutation({
         : {}),
       updatedAt: now,
     });
+    // Claim-owned wake closes action death before either provider-boundary
+    // mutation. The exact attempt is safely restored when no marker exists,
+    // or quarantined no-replay when a boundary marker won.
+    await ctx.scheduler.runAt(
+      deliveryLeaseExpiresAt + 1_000,
+      internal.outreach.recoverApprovedDeliveryBoundaryLease,
+      { siteId, messageId: message._id, attemptId },
+    );
     return {
       claimed: true as const,
       attemptId,
@@ -4341,8 +6128,710 @@ export const claimApprovedDelivery = internalMutation({
       message,
       deliveryThreadId,
       deliveryInReplyToRfcMessageId,
-      leaseExpiresAt: now + OUTREACH_DELIVERY_LEASE_MS,
+      leaseExpiresAt: deliveryLeaseExpiresAt,
     };
+  },
+});
+
+type DeliveryBoundaryTransport = "gmail" | typeof MANAGED_SES_TRANSPORT;
+
+type DeliveryBoundaryArgs = {
+  siteId: Id<"sites">;
+  messageId: Id<"outreach_messages">;
+  attemptId: string;
+  release: "approved" | "automatic";
+  expectedParentMessageId?: Id<"outreach_messages">;
+  expectedProviderThreadId?: string;
+  expectedInReplyToRfcMessageIdHash?: string;
+  expectedManagedParentOperationKey?: string;
+  expectedManagedParentThreadReceipt?: string;
+};
+
+async function terminalizeClaimedDeliveryBeforeProvider(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+  attemptId: string,
+  timestamp: number,
+  reason: string,
+) {
+  if (
+    message.status === "sending" &&
+    message.deliveryAttemptId === attemptId &&
+    message.deliveryBoundaryVersion === 1 &&
+    !message.deliveryExternalAttemptedAt &&
+    !message.managedSesExternalAttemptedAt
+  ) {
+    await ctx.db.patch(message._id, {
+      status: "skipped",
+      deliveryLeaseExpiredAt: timestamp,
+      deliveryLeaseExpiresAt: undefined,
+      managedSesUnsubscribeTokenHash: undefined,
+      blockedReason: reason.slice(0, 500),
+      failureReason: reason.slice(0, 500),
+      updatedAt: timestamp,
+    });
+  }
+  if (message.deliveryOwnerAccountKey) {
+    await releaseDurableContactClaimForAccount(
+      ctx,
+      message.deliveryOwnerAccountKey,
+      message.toDomain,
+      attemptId,
+      timestamp,
+    );
+  }
+  return {
+    authorized: false as const,
+    marked: false as const,
+    externalAttempted: false as const,
+    terminalized: true as const,
+    reason: "delivery_authorization_changed" as const,
+  };
+}
+
+async function deferClaimedDeliveryBeforeProvider(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+  timestamp: number,
+  nextEligibleAt: number,
+  reason: string,
+  pacingDeferred = true,
+) {
+  const deferredUntil = Math.max(timestamp + 1_000, nextEligibleAt);
+  await ctx.db.patch(message._id, {
+    status: "approved",
+    scheduledAt: deferredUntil,
+    deliveryOwnerAccountKey: undefined,
+    deliveryAttemptId: undefined,
+    deliveryClaimedAt: undefined,
+    deliveryLeaseExpiresAt: undefined,
+    deliveryLeaseExpiredAt: undefined,
+    deliveryBoundaryVersion: undefined,
+    deliveryExternalAttemptedAt: undefined,
+    deliveryTransport: undefined,
+    managedSesOperationKey: undefined,
+    managedSesResourceOperationKey: undefined,
+    managedSesGeneration: undefined,
+    managedSesAdapterVersion: undefined,
+    managedSesExternalAttemptedAt: undefined,
+    managedSesProviderMessageIdDigest: undefined,
+    managedSesThreadReceipt: undefined,
+    managedSesDispositionState: undefined,
+    managedSesDispositionAuthorizedAt: undefined,
+    managedSesDispositionAuthorizationReceipt: undefined,
+    managedSesDispositionLeaseToken: undefined,
+    managedSesDispositionLeaseExpiresAt: undefined,
+    managedSesDispositionExternalAttemptedAt: undefined,
+    managedSesDispositionSettledAt: undefined,
+    managedSesUnsubscribeTokenHash: undefined,
+    inboundRelayAliasHash: undefined,
+    inboundRelayAliasDomain: undefined,
+    inboundRelayOutboundMessageIdHash: undefined,
+    inboundRelayRolloutEpoch: undefined,
+    inboundRelayInboxConfigurationVersion: undefined,
+    inboundRelaySenderDomain: undefined,
+    inboundRelayDsnRoutingTargetHash: undefined,
+    inboundRelayDsnRoutingTargetVersion: undefined,
+    inboundRelayDsnRoutingTargetGeneration: undefined,
+    failureReason: undefined,
+    blockedReason: undefined,
+    pacingReason: pacingDeferred ? reason.slice(0, 500) : undefined,
+    updatedAt: timestamp,
+  });
+  if (message.deliveryOwnerAccountKey && message.deliveryAttemptId) {
+    await releaseDurableContactClaimForAccount(
+      ctx,
+      message.deliveryOwnerAccountKey,
+      message.toDomain,
+      message.deliveryAttemptId,
+      timestamp,
+    );
+  }
+  await ctx.scheduler.runAt(
+    deferredUntil,
+    internal.actions.outreachFleet.runSite,
+    { siteId: message.siteId, phase: "delivery" },
+  );
+  return {
+    marked: false as const,
+    externalAttempted: false as const,
+    deferred: true as const,
+    nextEligibleAt: deferredUntil,
+    reason,
+  };
+}
+
+/** Shared last-mutation authorization fence for both Gmail and managed SES.
+ * Every reply, STOP, unsubscribe, suppression, consent, owner, configuration,
+ * parent, thread and lease write conflicts with these reads before a provider
+ * message call can begin. */
+async function authorizeClaimedDeliveryAtExternalBoundary(
+  ctx: MutationCtx,
+  args: DeliveryBoundaryArgs,
+  expectedTransport: DeliveryBoundaryTransport,
+) {
+  const timestamp = Date.now();
+  const message = await ctx.db.get(args.messageId);
+  if (!message || message.siteId !== args.siteId) {
+    return {
+      authorized: false as const,
+      marked: false as const,
+      externalAttempted: false as const,
+    };
+  }
+  if (
+    message.deliveryExternalAttemptedAt ||
+    message.managedSesExternalAttemptedAt
+  ) {
+    return {
+      authorized: false as const,
+      marked: false as const,
+      externalAttempted: true as const,
+    };
+  }
+  const [site, inbox, opportunity] = await Promise.all([
+    ctx.db.get(args.siteId),
+    message.inboxId ? ctx.db.get(message.inboxId) : null,
+    ctx.db.get(message.opportunityId),
+  ]);
+  const ownerAccountKey = site?.userId
+    ? accountDeletionKey(site.userId)
+    : undefined;
+  const managedSes = expectedTransport === MANAGED_SES_TRANSPORT;
+  const releaseAuthorized = Boolean(
+    site?.userId &&
+      inbox &&
+      (args.release === "automatic"
+        ? autonomousOutreachRuntimeEnabled(
+            process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
+          ) &&
+          isSeoGrowthActuationEligible(site) &&
+          autonomousOutreachConsentActive(inbox, site.userId) &&
+          autonomousOutreachReconciliationComplete(inbox) &&
+          autonomousMessageAuthorizationMatches({
+            inbox,
+            ownerId: site.userId,
+            approvalKind: message.approvalKind,
+            approvalConsentVersion: message.approvalConsentVersion,
+            approvalConsentPolicyHash: message.approvalConsentPolicyHash,
+            approvalConsentAcceptedAt: message.approvalConsentAcceptedAt,
+          })
+        : ["approval", "live"].includes(inbox.mode) &&
+          message.approvalKind !== "account_autopilot"),
+  );
+  const coreAuthorized = Boolean(
+    site?.userId &&
+      !site.deletionStatus &&
+      !site.accountDeletionRequestedAt &&
+      inbox &&
+      ownerAccountKey &&
+      message.status === "sending" &&
+      message.deliveryAttemptId === args.attemptId &&
+      message.deliveryBoundaryVersion === 1 &&
+      (message.deliveryLeaseExpiresAt ?? 0) > timestamp &&
+      message.deliveryOwnerAccountKey === ownerAccountKey &&
+      outreachMessageMatchesCurrentDomain(site, message) &&
+      outreachMessageOwnerMatches(message, ownerAccountKey) &&
+      message.inboxId === inbox._id &&
+      inbox.siteId === site._id &&
+      inbox.credentialOwnerAccountKey === ownerAccountKey &&
+      !["disconnected", "suspended"].includes(inbox.status) &&
+      approvalMatchesInbox({
+        messageInboxId: message.inboxId,
+        approvedInboxId: message.approvedInboxId,
+        approvedInboxConfigurationVersion:
+          message.approvedInboxConfigurationVersion,
+        inboxId: inbox._id,
+        inboxConfigurationVersion: inbox.configurationVersion,
+      }) &&
+      (!message.inboundRelayAliasHash ||
+        (message.inboundRelayInboxConfigurationVersion ===
+          (inbox.configurationVersion ?? 0) &&
+          message.inboundRelayRolloutEpoch ===
+            (site.autopilotRolloutEpoch ?? 0) &&
+          message.inboundRelaySenderDomain ===
+            normalizeDomain(inbox.senderDomain ?? "") &&
+          message.inboundRelayDsnRoutingTargetHash ===
+            inbox.inboundRelayDsnRoutingTargetHash &&
+          message.inboundRelayDsnRoutingTargetVersion ===
+            inbox.inboundRelayDsnRoutingTargetVersion &&
+          message.inboundRelayDsnRoutingTargetGeneration ===
+            inbox.inboundRelayDsnRoutingTargetGeneration)) &&
+      (managedSes
+        ? message.deliveryTransport === MANAGED_SES_TRANSPORT &&
+          inbox.provider === MANAGED_SES_TRANSPORT &&
+          inbox.credentialSource === "managed_adapter"
+        : message.deliveryTransport !== MANAGED_SES_TRANSPORT &&
+          inbox.provider === "gmail" &&
+          Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken)) &&
+      message.parentMessageId === args.expectedParentMessageId &&
+      message.deliveryExpectedThreadId === args.expectedProviderThreadId &&
+      message.inReplyToRfcMessageIdHash ===
+        args.expectedInReplyToRfcMessageIdHash &&
+      message.managedSesParentOperationKey ===
+        args.expectedManagedParentOperationKey &&
+      message.managedSesParentThreadReceipt ===
+        args.expectedManagedParentThreadReceipt,
+  );
+  const executionAuthorized = site
+    ? await siteExecutionAuthorized(ctx, site)
+    : false;
+  const opportunityCurrent = Boolean(
+    site &&
+      opportunity &&
+      deliveryOpportunityBoundaryCurrent({
+        messageSiteId: String(message.siteId),
+        opportunitySiteId: String(opportunity.siteId),
+        sequenceStep: message.sequenceStep,
+        opportunityStatus: opportunity.status,
+        messageEvidenceHash: message.opportunityEvidenceHash,
+        opportunityEvidenceHash: opportunity.evidenceHash,
+        messageSourceUrl: message.opportunitySourceUrl,
+        opportunitySourceUrl: opportunity.sourceUrl,
+        messageTargetUrl: message.opportunityTargetUrl,
+        opportunityTargetUrl: opportunity.targetUrl,
+        currentDomainBinding:
+          authorityOpportunityMatchesCurrentDomain(site, opportunity),
+        initialEvidenceFresh: opportunityEvidenceIsFresh({
+          verifiedAt: opportunity.verifiedAt,
+          now: timestamp,
+        }),
+      })
+  );
+  // Managed SES proves its separate signed resource/inbound canary below.
+  // A relay-bound Gmail message must re-prove the finite DSN canary here;
+  // an intentional legacy readonly delivery has no relay binding to recheck.
+  const inboundRelayCurrent = managedSes ||
+    !message.inboundRelayAliasHash ||
+    inboundRelayDsnRoutingReady({
+      inbox,
+      now: timestamp,
+      rolloutEpoch: site?.autopilotRolloutEpoch ?? 0,
+      runtimeConfig: inboundRelayRuntimeConfig(),
+    });
+  if (
+    !site ||
+    !inbox ||
+    !ownerAccountKey ||
+    !coreAuthorized ||
+    !executionAuthorized
+  ) {
+    return terminalizeClaimedDeliveryBeforeProvider(
+      ctx,
+      message,
+      args.attemptId,
+      timestamp,
+      "Delivery authorization, ownership, consent, or sender configuration changed before the provider boundary.",
+    );
+  }
+
+  const [
+    localDomainSuppressed,
+    localEmailSuppressed,
+    persistentDomainSuppressed,
+    persistentEmailSuppressed,
+    replied,
+    bounced,
+    predecessor,
+  ] = await Promise.all([
+    siteSuppressionExists(ctx, args.siteId, "domain", message.toDomain),
+    siteSuppressionExists(ctx, args.siteId, "email", message.toEmail),
+    persistentSuppressionExists(ctx, site, "domain", message.toDomain),
+    persistentSuppressionExists(ctx, site, "email", message.toEmail),
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_thread_owner_status", (q) =>
+        q
+          .eq("threadKey", message.threadKey)
+          .eq("ownerAccountKey", ownerAccountKey)
+          .eq("status", "replied"))
+      .first(),
+    ctx.db
+      .query("outreach_messages")
+      .withIndex("by_thread_owner_status", (q) =>
+        q
+          .eq("threadKey", message.threadKey)
+          .eq("ownerAccountKey", ownerAccountKey)
+          .eq("status", "bounced"))
+      .first(),
+    message.parentMessageId ? ctx.db.get(message.parentMessageId) : null,
+  ]);
+  const threadStopped = Boolean(replied || bounced);
+  const parentAuthorized = message.sequenceStep === 0 || (
+    managedSes
+      ? managedSesFollowUpPredecessorDecision({
+          message,
+          predecessor,
+          ownerAccountKey,
+          threadStopped,
+        }).allowed
+      : followUpPredecessorDecision({
+          message,
+          predecessor,
+          ownerAccountKey,
+          threadStopped,
+      }).allowed
+  );
+  const boundaryDecision = deliveryExternalBoundaryDecision({
+    alreadyExternalAttempted: false,
+    exactClaimCurrent: coreAuthorized,
+    siteExecutionAuthorized: executionAuthorized,
+    ownerAndConfigurationCurrent: coreAuthorized,
+    consentCurrent: releaseAuthorized,
+    recipientUnsuppressed: !(
+      localDomainSuppressed ||
+      localEmailSuppressed ||
+      persistentDomainSuppressed ||
+      persistentEmailSuppressed
+    ),
+    threadCurrent: !threadStopped,
+    predecessorCurrent: parentAuthorized,
+    opportunityEvidenceCurrent: opportunityCurrent,
+    inboundRelayCurrent,
+  });
+  if (!boundaryDecision.providerCallAllowed) {
+    return terminalizeClaimedDeliveryBeforeProvider(
+      ctx,
+      message,
+      args.attemptId,
+      timestamp,
+      "The recipient replied, opted out, bounced, became suppressed, or the verified opportunity changed before the provider boundary.",
+    );
+  }
+  return {
+    authorized: true as const,
+    message,
+    site,
+    inbox,
+    timestamp,
+  };
+}
+
+/** The claim reserves app state; this second CAS is the exact provider
+ * boundary. A pre-boundary action death is safely retryable as a fresh draft,
+ * while any post-boundary ambiguity is status/event/disposition-only. */
+export const markManagedSesDeliveryExternalBoundary = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+    release: deliveryReleaseValidator,
+    expectedParentMessageId: v.optional(v.id("outreach_messages")),
+    expectedProviderThreadId: v.optional(v.string()),
+    expectedInReplyToRfcMessageIdHash: v.optional(v.string()),
+    expectedManagedParentOperationKey: v.optional(v.string()),
+    expectedManagedParentThreadReceipt: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authorization = await authorizeClaimedDeliveryAtExternalBoundary(
+      ctx,
+      args,
+      MANAGED_SES_TRANSPORT,
+    );
+    if (!authorization.authorized) return authorization;
+    const { message, site, inbox, timestamp } = authorization;
+    const resourceRows = inbox
+      ? await ctx.db
+        .query("managed_outreach_mailbox_resources")
+        .withIndex("by_canonical_inbox", (q) =>
+          q.eq("canonicalInboxId", inbox._id)
+        )
+        .take(20)
+      : [];
+    const resource = resourceRows.find((row) =>
+      row.operationKey === message.managedSesResourceOperationKey &&
+      row.generation === message.managedSesGeneration &&
+      row.adapterVersion === message.managedSesAdapterVersion
+    ) ?? null;
+    const request = resource ? await ctx.db.get(resource.requestId) : null;
+    const requestFence = site && request && resource
+      ? managedOutreachMailboxRequestFenceIssues({
+          siteActive: Boolean(
+            site.userId &&
+              !site.deletionStatus &&
+              !site.accountDeletionRequestedAt,
+          ),
+          requestMode: request.outreachMailbox.mode,
+          requestOwnerAccountKey: request.ownerAccountKey,
+          currentOwnerAccountKey: site.userId
+            ? accountDeletionKey(site.userId)
+            : undefined,
+          requestDomainSnapshot: request.domainSnapshot,
+          currentDomainSnapshot: siteCanonicalDomain(site),
+          requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+          currentDomainRevision: siteCanonicalDomainRevision(site),
+          expectedConfigurationRevision:
+            resource.requestConfigurationRevision,
+          actualConfigurationRevision: request.configurationRevision,
+          expectedGeneration: resource.generation,
+          actualGeneration: request.outreachMailboxGeneration,
+          expectedContractVersion: ONE_SETUP_CONTRACT_VERSION,
+          actualContractVersion: request.contractVersion,
+        })
+      : ["managed_resource_or_request_missing"];
+    if (
+      !resource ||
+      !request ||
+      requestFence.length > 0 ||
+      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" ||
+      resource.releaseState !== "active" ||
+      resource.canonicalInboxId !== inbox._id ||
+      resource.siteId !== site._id ||
+      resource.requestId !== request._id ||
+      resource.ownerAccountKey !== request.ownerAccountKey ||
+      resource.domainSnapshot !== request.domainSnapshot ||
+      resource.domainRevisionSnapshot !== request.domainRevisionSnapshot ||
+      resource.requestContractVersion !== request.contractVersion ||
+      inbox.managedTransportKind !== MANAGED_SES_TRANSPORT ||
+      message.managedSesOperationKey !== args.attemptId ||
+      message.managedSesResourceOperationKey !==
+        inbox.managedTransportOperationKey ||
+      message.managedSesResourceOperationKey !== resource.operationKey ||
+      message.managedSesGeneration !== inbox.managedTransportGeneration ||
+      message.managedSesGeneration !== resource.generation ||
+      message.managedSesAdapterVersion !==
+        inbox.managedTransportAdapterVersion ||
+      message.managedSesAdapterVersion !== resource.adapterVersion ||
+      resource.resourceReceipt !== inbox.managedTransportResourceReceipt ||
+      request.outreachMailbox.mode !== "managed" ||
+      request.outreachMailboxGeneration !== resource.generation ||
+      !request.managedOutreachProfile ||
+      managedOutreachMailboxProfileIssues(request.managedOutreachProfile)
+        .length > 0 ||
+      !message.managedSesUnsubscribeTokenHash ||
+      !message.inboundRelayAliasHash ||
+      !managedSesInboxReceiptCurrent({
+        inbox,
+        now: timestamp,
+        expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+      })
+    ) {
+      return terminalizeClaimedDeliveryBeforeProvider(
+        ctx,
+        message,
+        args.attemptId,
+        timestamp,
+        "The managed sender resource or signed readiness binding changed before the provider boundary.",
+      );
+    }
+    const pacing = await reserveManagedSesPacingAttempt(ctx, {
+      inbox,
+      accountKey: inbox.credentialOwnerAccountKey!,
+      now: timestamp,
+    });
+    const pacingTransition = managedSesPacingBoundaryTransition({
+      kind: "delivery",
+      reserved: pacing.reserved,
+      nextEligibleAt: pacing.nextEligibleAt,
+    });
+    if (pacingTransition !== "cross_external_boundary") {
+      if (
+        pacingTransition === "defer_delivery" &&
+        pacing.nextEligibleAt
+      ) {
+        return deferClaimedDeliveryBeforeProvider(
+          ctx,
+          message,
+          timestamp,
+          pacing.nextEligibleAt,
+          pacing.reason ?? "Managed sender pacing deferred this attempt.",
+        );
+      }
+      return terminalizeClaimedDeliveryBeforeProvider(
+        ctx,
+        message,
+        args.attemptId,
+        timestamp,
+        "The managed sender pacing identity became invalid before the provider boundary.",
+      );
+    }
+    await ctx.db.patch(message._id, {
+      deliveryExternalAttemptedAt: timestamp,
+      managedSesExternalAttemptedAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAt(
+      message.deliveryLeaseExpiresAt! + 1_000,
+      internal.outreach.recoverManagedSesDeliveryBoundaryLease,
+      {
+        siteId: message.siteId,
+        messageId: message._id,
+        attemptId: args.attemptId,
+        resourceId: resource._id,
+      },
+    );
+    return { marked: true as const, externalAttempted: true as const };
+  },
+});
+
+export const markGmailDeliveryExternalBoundary = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+    release: deliveryReleaseValidator,
+    expectedParentMessageId: v.optional(v.id("outreach_messages")),
+    expectedProviderThreadId: v.optional(v.string()),
+    expectedInReplyToRfcMessageIdHash: v.optional(v.string()),
+    expectedManagedParentOperationKey: v.optional(v.string()),
+    expectedManagedParentThreadReceipt: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authorization = await authorizeClaimedDeliveryAtExternalBoundary(
+      ctx,
+      args,
+      "gmail",
+    );
+    if (!authorization.authorized) return authorization;
+    await ctx.db.patch(authorization.message._id, {
+      deliveryExternalAttemptedAt: authorization.timestamp,
+      updatedAt: authorization.timestamp,
+    });
+    await ctx.scheduler.runAt(
+      authorization.message.deliveryLeaseExpiresAt! + 1_000,
+      internal.outreach.recoverApprovedDeliveryBoundaryLease,
+      {
+        siteId: authorization.message.siteId,
+        messageId: authorization.message._id,
+        attemptId: args.attemptId,
+      },
+    );
+    return { marked: true as const, externalAttempted: true as const };
+  },
+});
+
+/** Claim-owned recovery shared by Gmail and managed SES. An exact v1 claim
+ * with no boundary marker is safe to restore; a marker makes the operation
+ * immutable and therefore delivery_unverified/no-replay. */
+export const recoverApprovedDeliveryBoundaryLease = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    const timestamp = Date.now();
+    if (
+      !message ||
+      message.siteId !== args.siteId ||
+      message.status !== "sending" ||
+      message.deliveryAttemptId !== args.attemptId ||
+      message.deliveryBoundaryVersion !== 1 ||
+      (message.deliveryLeaseExpiresAt ?? 0) > timestamp
+    ) return { recovered: false as const };
+    const recoveryDecision = deliveryLeaseRecoveryDecision({
+      exactClaimCurrent: true,
+      leaseExpired: true,
+      externalAttempted: Boolean(
+        message.deliveryExternalAttemptedAt ||
+        message.managedSesExternalAttemptedAt
+      ),
+    });
+    if (recoveryDecision === "restore_approved") {
+      const restored = await deferClaimedDeliveryBeforeProvider(
+        ctx,
+        message,
+        timestamp,
+        timestamp + 1_000,
+        "The delivery action ended before the provider boundary; the exact approved message was restored for a fresh authorization check.",
+        false,
+      );
+      return {
+        recovered: true as const,
+        externalAttempted: false as const,
+        deferredUntil: restored.nextEligibleAt,
+      };
+    }
+    await ctx.db.patch(message._id, {
+      status: "delivery_unverified",
+      deliveryLeaseExpiresAt: undefined,
+      deliveryLeaseExpiredAt: timestamp,
+      failureReason:
+        "The provider boundary was crossed but no exact receipt was stored before the lease expired. This operation will not be replayed.",
+      updatedAt: timestamp,
+    });
+    if (
+      message.deliveryTransport === MANAGED_SES_TRANSPORT &&
+      message.managedSesExternalAttemptedAt &&
+      message.inboxId
+    ) {
+      const resources = await ctx.db
+        .query("managed_outreach_mailbox_resources")
+        .withIndex("by_canonical_inbox", (q) =>
+          q.eq("canonicalInboxId", message.inboxId!))
+        .take(20);
+      const resource = resources.find((row) =>
+        row.operationKey === message.managedSesResourceOperationKey &&
+        row.generation === message.managedSesGeneration &&
+        row.adapterVersion === message.managedSesAdapterVersion
+      );
+      if (resource) {
+        await ctx.scheduler.runAt(
+          Math.max(
+            timestamp,
+            message.managedSesExternalAttemptedAt +
+              MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
+          ),
+          internal.managedOutreachMailbox
+            .claimManagedSesAmbiguityReconciliation,
+          { resourceId: resource._id },
+        );
+      }
+    }
+    return { recovered: true as const, externalAttempted: true as const };
+  },
+});
+
+/** Exact action-death watchdog armed in the provider-boundary transaction. */
+export const recoverManagedSesDeliveryBoundaryLease = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+  },
+  handler: async (ctx, args) => {
+    const [message, resource] = await Promise.all([
+      ctx.db.get(args.messageId),
+      ctx.db.get(args.resourceId),
+    ]);
+    const timestamp = Date.now();
+    if (
+      !message ||
+      message.siteId !== args.siteId ||
+      message.status !== "sending" ||
+      message.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+      message.deliveryAttemptId !== args.attemptId ||
+      message.managedSesOperationKey !== args.attemptId ||
+      !message.managedSesExternalAttemptedAt ||
+      (message.deliveryLeaseExpiresAt ?? 0) > timestamp ||
+      !message.inboxId ||
+      !resource ||
+      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      resource.operationKey !== message.managedSesResourceOperationKey ||
+      resource.generation !== message.managedSesGeneration ||
+      resource.adapterVersion !== message.managedSesAdapterVersion ||
+      resource.canonicalInboxId !== message.inboxId
+    ) return { recovered: false as const };
+    await ctx.db.patch(message._id, {
+      status: "delivery_unverified",
+      deliveryLeaseExpiredAt: timestamp,
+      failureReason:
+        "The managed sender crossed its provider boundary but the action died before an exact signed receipt was stored. This operation will not be replayed.",
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAt(
+      Math.max(
+        timestamp,
+        message.managedSesExternalAttemptedAt +
+          MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
+      ),
+      internal.managedOutreachMailbox.claimManagedSesAmbiguityReconciliation,
+      { resourceId: args.resourceId },
+    );
+    return { recovered: true as const };
   },
 });
 
@@ -4652,21 +7141,25 @@ async function settleAcceptedDeliveryCounter(
       updatedAt: Math.max(inbox.updatedAt ?? 0, deliveredAt),
     });
   }
-  await Promise.all([
-    recordDurableContactReceiptForAccount(
-      ctx,
-      settlementAccountKey,
-      message.toDomain,
-      deliveredAt,
-      message.deliveryAttemptId,
-    ),
-    recordDurablePacingReceiptForAccount(
+  await recordDurableContactReceiptForAccount(
+    ctx,
+    settlementAccountKey,
+    message.toDomain,
+    deliveredAt,
+    message.deliveryAttemptId,
+  );
+  // A managed SES sender shares Pentra's platform domain. Its conservative
+  // global-domain and tenant/mailbox attempt receipts are reserved atomically
+  // at claim time, so it must never enter the legacy one-domain-per-account
+  // reputation table used by owner-connected Gmail senders.
+  if (inbox.provider !== MANAGED_SES_TRANSPORT) {
+    await recordDurablePacingReceiptForAccount(
       ctx,
       settlementAccountKey,
       inbox,
       deliveredAt,
-    ),
-  ]);
+    );
+  }
   return { accountKey: settlementAccountKey, ownsCurrentSite };
 }
 
@@ -4678,8 +7171,12 @@ async function queueNextVerifiedAutonomousFollowUp(
   args: {
     siteId: Id<"sites">;
     parentMessageId: Id<"outreach_messages">;
+    transport: "gmail" | typeof MANAGED_SES_TRANSPORT;
     providerThreadId: string | undefined;
     outboundRfcMessageId: string | undefined;
+    managedSesOperationKey?: string;
+    managedSesThreadReceipt?: string;
+    rfcMessageIdDigest?: string;
     sentAt: number;
   },
 ): Promise<{ queued: boolean; reason?: string }> {
@@ -4687,6 +7184,29 @@ async function queueNextVerifiedAutonomousFollowUp(
   const ownerAccountKey = parent?.ownerAccountKey;
   const normalizedOutboundMessageId = normalizeRfcMessageId(
     args.outboundRfcMessageId,
+  );
+  const gmailParentIdentityMatches = Boolean(
+    args.transport === "gmail" &&
+      args.providerThreadId &&
+      /^[a-zA-Z0-9_-]{1,200}$/.test(args.providerThreadId) &&
+      parent?.providerThreadId === args.providerThreadId &&
+      normalizedOutboundMessageId &&
+      parent?.inboundRelayOutboundMessageIdHash &&
+      inboundRelayMessageIdHash(normalizedOutboundMessageId) ===
+        parent.inboundRelayOutboundMessageIdHash,
+  );
+  const managedParentIdentityMatches = Boolean(
+    args.transport === MANAGED_SES_TRANSPORT &&
+      parent?.deliveryTransport === MANAGED_SES_TRANSPORT &&
+      args.managedSesOperationKey &&
+      /^[A-Za-z0-9_-]{32,96}$/.test(args.managedSesOperationKey) &&
+      parent.managedSesOperationKey === args.managedSesOperationKey &&
+      args.managedSesThreadReceipt &&
+      /^[A-Za-z0-9_-]{32,96}$/.test(args.managedSesThreadReceipt) &&
+      parent.managedSesThreadReceipt === args.managedSesThreadReceipt &&
+      args.rfcMessageIdDigest &&
+      /^[a-f0-9]{64}$/.test(args.rfcMessageIdDigest) &&
+      parent.inboundRelayOutboundMessageIdHash === args.rfcMessageIdDigest,
   );
   if (
     !parent ||
@@ -4699,13 +7219,7 @@ async function queueNextVerifiedAutonomousFollowUp(
     !Number.isSafeInteger(parent.sequenceStep) ||
     parent.sequenceStep < 0 ||
     parent.sequenceStep >= MAX_SEQUENCE_STEP ||
-    !args.providerThreadId ||
-    !/^[a-zA-Z0-9_-]{1,200}$/.test(args.providerThreadId) ||
-    parent.providerThreadId !== args.providerThreadId ||
-    !normalizedOutboundMessageId ||
-    !parent.inboundRelayOutboundMessageIdHash ||
-    inboundRelayMessageIdHash(normalizedOutboundMessageId) !==
-      parent.inboundRelayOutboundMessageIdHash
+    (!gmailParentIdentityMatches && !managedParentIdentityMatches)
   ) {
     return { queued: false, reason: "verified_parent_unavailable" };
   }
@@ -4760,6 +7274,40 @@ async function queueNextVerifiedAutonomousFollowUp(
   ]);
   if (existingNext) return { queued: false, reason: "already_queued" };
   if (replied || bounced) return { queued: false, reason: "thread_stopped" };
+  const relayRuntime = inboundRelayRuntimeConfig();
+  const managedRoutingTarget =
+    args.transport === MANAGED_SES_TRANSPORT && inbox
+      ? await inboundRelayDsnRoutingTarget({
+          siteId: String(args.siteId),
+          inboxId: String(inbox._id),
+          generation: inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+          relayDomain: relayRuntime.domain,
+          secret: relayRuntime.dsnTargetSecret,
+        })
+      : null;
+  const managedRelayReady = Boolean(
+    args.transport === MANAGED_SES_TRANSPORT &&
+      inbox?.provider === MANAGED_SES_TRANSPORT &&
+      managedSesInboxReceiptCurrent({
+        inbox,
+        now: args.sentAt,
+        expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+      }) &&
+      inboundRelayConfigured(relayRuntime) &&
+      managedRoutingTarget &&
+      parent.inboundRelayAliasHash &&
+      /^[a-f0-9]{64}$/.test(parent.inboundRelayAliasHash) &&
+      parent.inboundRelayAliasDomain ===
+        normalizeInboundRelayDomain(relayRuntime.domain) &&
+      parent.inboundRelayDsnRoutingTargetHash === managedRoutingTarget.hash &&
+      parent.inboundRelayDsnRoutingTargetVersion ===
+        managedRoutingTarget.version &&
+      parent.inboundRelayDsnRoutingTargetGeneration ===
+        (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) &&
+      parent.inboundRelayInboxConfigurationVersion ===
+        (inbox.configurationVersion ?? 0) &&
+      parent.inboundRelayRolloutEpoch === (site?.autopilotRolloutEpoch ?? 0),
+  );
   if (
     !site ||
     !(await siteExecutionAuthorized(ctx, site)) ||
@@ -4791,12 +7339,14 @@ async function queueNextVerifiedAutonomousFollowUp(
       inboxId: inbox._id,
       inboxConfigurationVersion: inbox.configurationVersion,
     }) ||
-    !inboundRelayDsnRoutingReady({
-      inbox,
-      now: args.sentAt,
-      rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-      runtimeConfig: inboundRelayRuntimeConfig(),
-    })
+    (args.transport === MANAGED_SES_TRANSPORT
+      ? !managedRelayReady
+      : !inboundRelayDsnRoutingReady({
+          inbox,
+          now: args.sentAt,
+          rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+          runtimeConfig: relayRuntime,
+        }))
   ) {
     return { queued: false, reason: "authorization_changed" };
   }
@@ -4883,7 +7433,13 @@ async function queueNextVerifiedAutonomousFollowUp(
     sequenceStep: nextStep,
     threadKey: parent.threadKey,
     parentMessageId: parent._id,
-    deliveryExpectedThreadId: args.providerThreadId,
+    ...(args.transport === MANAGED_SES_TRANSPORT
+      ? {
+          deliveryTransport: MANAGED_SES_TRANSPORT,
+          managedSesParentOperationKey: args.managedSesOperationKey!,
+          managedSesParentThreadReceipt: args.managedSesThreadReceipt!,
+        }
+      : { deliveryExpectedThreadId: args.providerThreadId }),
     inReplyToRfcMessageIdHash:
       parent.inboundRelayOutboundMessageIdHash,
     inboxConfigurationVersion: inbox.configurationVersion ?? 0,
@@ -4903,6 +7459,325 @@ async function queueNextVerifiedAutonomousFollowUp(
   });
   return { queued: true };
 }
+
+/** Shared exact settlement used by a synchronous send, a signed delivery
+ * event, or the finite +72h status/disposition reconciler. It accepts only
+ * adapter-derived digests/receipts and keeps owner/contact/follow-up effects
+ * in the same transaction as the terminal message state. */
+export async function quarantineManagedSesMessageIdentityMismatch(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+  timestamp: number,
+) {
+  await ctx.db.patch(message._id, {
+    status: ["replied", "bounced"].includes(message.status)
+      ? message.status
+      : "failed",
+    failureReason:
+      "The managed sender returned a signed provider/RFC/thread identity mismatch. The operation is quarantined and will not be replayed.",
+    managedSesDispositionState: "quarantined_integrity",
+    managedSesDispositionLeaseToken: undefined,
+    managedSesDispositionLeaseExpiresAt: undefined,
+    managedSesDispositionSettledAt: timestamp,
+    updatedAt: timestamp,
+  });
+}
+
+export async function settleManagedSesAcceptedMessage(
+  ctx: MutationCtx,
+  args: {
+    message: Doc<"outreach_messages">;
+    providerMessageIdDigest: string;
+    rfcMessageIdDigest: string;
+    threadReceipt: string;
+    acceptedAt: number;
+  },
+): Promise<{
+  settled: boolean;
+  followUpQueued: boolean;
+  identityMismatch?: boolean;
+}> {
+  const { message } = args;
+  if (
+    message.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+    !message.managedSesOperationKey ||
+    !message.managedSesExternalAttemptedAt ||
+    !/^[a-f0-9]{64}$/.test(args.providerMessageIdDigest) ||
+    !/^[a-f0-9]{64}$/.test(args.rfcMessageIdDigest) ||
+    !/^[A-Za-z0-9_-]{32,96}$/.test(args.threadReceipt)
+  ) return { settled: false, followUpQueued: false };
+  if (!managedSesIdentityTupleMatchesEstablished({
+    establishedProviderMessageIdDigest:
+      message.managedSesProviderMessageIdDigest,
+    establishedRfcMessageIdDigest:
+      message.inboundRelayOutboundMessageIdHash,
+    establishedThreadReceipt: message.managedSesThreadReceipt,
+    providerMessageIdDigest: args.providerMessageIdDigest,
+    rfcMessageIdDigest: args.rfcMessageIdDigest,
+    threadReceipt: args.threadReceipt,
+  })) {
+    await quarantineManagedSesMessageIdentityMismatch(ctx, message, Date.now());
+    return {
+      settled: false,
+      followUpQueued: false,
+      identityMismatch: true,
+    };
+  }
+  if (message.sentAt) {
+    const exact =
+      message.managedSesProviderMessageIdDigest ===
+        args.providerMessageIdDigest &&
+      message.inboundRelayOutboundMessageIdHash ===
+        args.rfcMessageIdDigest &&
+      message.managedSesThreadReceipt === args.threadReceipt;
+    return { settled: exact, followUpQueued: false };
+  }
+  const acceptedAt = Math.max(
+    message.managedSesExternalAttemptedAt,
+    args.acceptedAt,
+  );
+  const settlement = await settleAcceptedDeliveryCounter(
+    ctx,
+    message,
+    message.siteId,
+    acceptedAt,
+  );
+  await ctx.db.patch(message._id, {
+    status: "sent",
+    sentAt: acceptedAt,
+    managedSesProviderMessageIdDigest: args.providerMessageIdDigest,
+    inboundRelayOutboundMessageIdHash: args.rfcMessageIdDigest,
+    managedSesThreadReceipt: args.threadReceipt,
+    failureReason: undefined,
+    updatedAt: Date.now(),
+  });
+  if (settlement.ownsCurrentSite) {
+    const [opportunity, contact] = await Promise.all([
+      ctx.db.get(message.opportunityId),
+      ctx.db
+        .query("outreach_contacts")
+        .withIndex("by_site_email", (q) =>
+          q.eq("siteId", message.siteId).eq("email", message.toEmail)
+        )
+        .unique(),
+    ]);
+    const lifecycle = outreachDeliverySettlementDecision({
+      sequenceStep: message.sequenceStep,
+      messageSiteId: String(message.siteId),
+      opportunitySiteId: opportunity ? String(opportunity.siteId) : undefined,
+      messageEvidenceHash: message.opportunityEvidenceHash,
+      opportunityEvidenceHash: opportunity?.evidenceHash,
+      messageSourceUrl: message.opportunitySourceUrl,
+      opportunitySourceUrl: opportunity?.sourceUrl,
+      messageTargetUrl: message.opportunityTargetUrl,
+      opportunityTargetUrl: opportunity?.targetUrl,
+      opportunityStatus: opportunity?.siteId === message.siteId
+        ? opportunity.status
+        : undefined,
+    });
+    if (
+      opportunity?.siteId === message.siteId &&
+      lifecycle.shouldMarkContacted
+    ) {
+      await ctx.db.patch(opportunity._id, {
+        status: "contacted",
+        contactedAt: acceptedAt,
+        updatedAt: Date.now(),
+      });
+    }
+    if (contact) {
+      await ctx.db.patch(contact._id, {
+        lastContactedAt: acceptedAt,
+        updatedAt: Date.now(),
+      });
+    }
+  }
+  const next = settlement.ownsCurrentSite
+    ? await queueNextVerifiedAutonomousFollowUp(ctx, {
+        siteId: message.siteId,
+        parentMessageId: message._id,
+        transport: MANAGED_SES_TRANSPORT,
+        providerThreadId: undefined,
+        outboundRfcMessageId: undefined,
+        managedSesOperationKey: message.managedSesOperationKey,
+        managedSesThreadReceipt: args.threadReceipt,
+        rfcMessageIdDigest: args.rfcMessageIdDigest,
+        sentAt: acceptedAt,
+      })
+    : { queued: false };
+  return { settled: true, followUpQueued: next.queued };
+}
+
+/** Finalize a synchronously accepted managed SES operation without ever
+ * storing the provider message identifier. The adapter exposes only its
+ * digest, and a signed event is allowed to win the settlement race. */
+export const completeManagedSesDeliveryAttempt = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+    providerMessageIdDigest: v.string(),
+    rfcMessageIdDigest: v.string(),
+    threadReceipt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (!message || message.siteId !== args.siteId) {
+      throw new Error("Message not found for site");
+    }
+    const now = Date.now();
+    if (
+      !/^[a-f0-9]{64}$/.test(args.providerMessageIdDigest) ||
+      !/^[a-f0-9]{64}$/.test(args.rfcMessageIdDigest) ||
+      !/^[A-Za-z0-9_-]{32,96}$/.test(args.threadReceipt) ||
+      message.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+      message.managedSesOperationKey !== args.attemptId ||
+      message.deliveryAttemptId !== args.attemptId ||
+      !message.managedSesExternalAttemptedAt
+    ) {
+      throw new Error("Managed SES delivery receipt crossed an operation binding");
+    }
+    if (!managedSesIdentityTupleMatchesEstablished({
+      establishedProviderMessageIdDigest:
+        message.managedSesProviderMessageIdDigest,
+      establishedRfcMessageIdDigest:
+        message.inboundRelayOutboundMessageIdHash,
+      establishedThreadReceipt: message.managedSesThreadReceipt,
+      providerMessageIdDigest: args.providerMessageIdDigest,
+      rfcMessageIdDigest: args.rfcMessageIdDigest,
+      threadReceipt: args.threadReceipt,
+    })) {
+      await quarantineManagedSesMessageIdentityMismatch(ctx, message, now);
+      return {
+        recorded: false as const,
+        terminal: true as const,
+        identityMismatch: true as const,
+        reason: "Signed managed-sender identity mismatch was quarantined.",
+      };
+    }
+    if (
+      message.managedSesProviderMessageIdDigest ===
+        args.providerMessageIdDigest &&
+      message.inboundRelayOutboundMessageIdHash ===
+        args.rfcMessageIdDigest &&
+      message.managedSesThreadReceipt === args.threadReceipt &&
+      ["sent", "replied"].includes(message.status)
+    ) {
+      return { recorded: true as const, eventWon: true as const };
+    }
+    if (
+      message.managedSesProviderMessageIdDigest ===
+        args.providerMessageIdDigest &&
+      message.inboundRelayOutboundMessageIdHash ===
+        args.rfcMessageIdDigest &&
+      message.managedSesThreadReceipt === args.threadReceipt &&
+      ["bounced", "failed"].includes(message.status)
+    ) {
+      return {
+        recorded: false as const,
+        terminal: true as const,
+        reason: "A signed terminal delivery event won settlement.",
+      };
+    }
+    if (message.status !== "sending") {
+      return {
+        recorded: false as const,
+        reason: "Delivery attempt no longer owns this message.",
+      };
+    }
+    if ((message.deliveryLeaseExpiresAt ?? 0) <= now) {
+      await ctx.db.patch(message._id, {
+        status: "delivery_unverified",
+        deliveryLeaseExpiredAt: now,
+        failureReason:
+          "The signed managed-sender receipt arrived after the delivery lease expired. This operation will not be replayed.",
+        updatedAt: now,
+      });
+      return {
+        recorded: false as const,
+        reason: "Delivery lease expired before receipt finalization.",
+      };
+    }
+    const settlement = await settleAcceptedDeliveryCounter(
+      ctx,
+      message,
+      args.siteId,
+      now,
+    );
+    if (!settlement.ownsCurrentSite) {
+      await ctx.db.patch(message._id, {
+        status: "delivery_unverified",
+        sentAt: now,
+        managedSesProviderMessageIdDigest: args.providerMessageIdDigest,
+        managedSesThreadReceipt: args.threadReceipt,
+        inboundRelayOutboundMessageIdHash: args.rfcMessageIdDigest,
+        deliveryLeaseExpiredAt: now,
+        failureReason:
+          "The managed sender accepted this attempt after the tenant owner changed. Durable cooldown was preserved and the operation will not be replayed.",
+        updatedAt: now,
+      });
+      return { recorded: true as const, ownerChanged: true as const };
+    }
+    await ctx.db.patch(message._id, {
+      status: "sent",
+      sentAt: now,
+      managedSesProviderMessageIdDigest: args.providerMessageIdDigest,
+      managedSesThreadReceipt: args.threadReceipt,
+      inboundRelayOutboundMessageIdHash: args.rfcMessageIdDigest,
+      failureReason: undefined,
+      updatedAt: now,
+    });
+    const opportunity = await ctx.db.get(message.opportunityId);
+    const lifecycle = outreachDeliverySettlementDecision({
+      sequenceStep: message.sequenceStep,
+      messageSiteId: String(message.siteId),
+      opportunitySiteId: opportunity ? String(opportunity.siteId) : undefined,
+      messageEvidenceHash: message.opportunityEvidenceHash,
+      opportunityEvidenceHash: opportunity?.evidenceHash,
+      messageSourceUrl: message.opportunitySourceUrl,
+      opportunitySourceUrl: opportunity?.sourceUrl,
+      messageTargetUrl: message.opportunityTargetUrl,
+      opportunityTargetUrl: opportunity?.targetUrl,
+      opportunityStatus:
+        opportunity?.siteId === args.siteId ? opportunity.status : undefined,
+    });
+    if (
+      opportunity &&
+      opportunity.siteId === args.siteId &&
+      lifecycle.shouldMarkContacted
+    ) {
+      await ctx.db.patch(opportunity._id, {
+        status: "contacted",
+        contactedAt: now,
+        updatedAt: now,
+      });
+    }
+    const contact = await ctx.db
+      .query("outreach_contacts")
+      .withIndex("by_site_email", (q) =>
+        q.eq("siteId", args.siteId).eq("email", message.toEmail)
+      )
+      .unique();
+    if (contact) {
+      await ctx.db.patch(contact._id, {
+        lastContactedAt: now,
+        updatedAt: now,
+      });
+    }
+    const next = await queueNextVerifiedAutonomousFollowUp(ctx, {
+      siteId: args.siteId,
+      parentMessageId: message._id,
+      transport: MANAGED_SES_TRANSPORT,
+      providerThreadId: undefined,
+      outboundRfcMessageId: undefined,
+      managedSesOperationKey: message.managedSesOperationKey,
+      managedSesThreadReceipt: args.threadReceipt,
+      rfcMessageIdDigest: args.rfcMessageIdDigest,
+      sentAt: now,
+    });
+    return { recorded: true as const, followUpQueued: next.queued };
+  },
+});
 
 export const completeDeliveryAttempt = internalMutation({
   args: {
@@ -5075,6 +7950,7 @@ export const completeDeliveryAttempt = internalMutation({
     const next = await queueNextVerifiedAutonomousFollowUp(ctx, {
       siteId,
       parentMessageId: messageId,
+      transport: "gmail",
       providerThreadId: safeProviderThreadId,
       outboundRfcMessageId: safeOutboundRfcMessageId,
       sentAt: now,
@@ -5092,8 +7968,20 @@ export const failDeliveryAttempt = internalMutation({
     reason: v.string(),
     bounced: v.optional(v.boolean()),
     unverified: v.optional(v.boolean()),
+    preserveContactClaim: v.optional(v.boolean()),
   },
-  handler: async (ctx, { siteId, messageId, attemptId, reason, bounced, unverified }) => {
+  handler: async (
+    ctx,
+    {
+      siteId,
+      messageId,
+      attemptId,
+      reason,
+      bounced,
+      unverified,
+      preserveContactClaim,
+    },
+  ) => {
     const message = await ctx.db.get(messageId);
     if (!message || message.siteId !== siteId) throw new Error("Message not found for site");
     const now = Date.now();
@@ -5107,6 +7995,38 @@ export const failDeliveryAttempt = internalMutation({
       deliveryLeaseExpiredAt: unverified ? now : undefined,
       updatedAt: now,
     });
+    if (
+      unverified &&
+      message.deliveryTransport === MANAGED_SES_TRANSPORT &&
+      message.managedSesExternalAttemptedAt &&
+      message.managedSesResourceOperationKey
+    ) {
+      const resourceRows = message.inboxId
+        ? await ctx.db
+          .query("managed_outreach_mailbox_resources")
+          .withIndex("by_canonical_inbox", (q) =>
+            q.eq("canonicalInboxId", message.inboxId)
+          )
+          .take(20)
+        : [];
+      const resource = resourceRows.find((row) =>
+        row.operationKey === message.managedSesResourceOperationKey &&
+        row.generation === message.managedSesGeneration &&
+        row.adapterVersion === message.managedSesAdapterVersion
+      );
+      if (resource) {
+        await ctx.scheduler.runAt(
+          Math.max(
+            now,
+            message.managedSesExternalAttemptedAt +
+              MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
+          ),
+          internal.managedOutreachMailbox
+            .claimManagedSesAmbiguityReconciliation,
+          { resourceId: resource._id },
+        );
+      }
+    }
     const [site, inbox] = await Promise.all([
       ctx.db.get(siteId),
       message.inboxId ? ctx.db.get(message.inboxId) : null,
@@ -5135,7 +8055,7 @@ export const failDeliveryAttempt = internalMutation({
           message.deliveryClaimedAt ?? now,
           attemptId,
         );
-      } else if (!unverified) {
+      } else if (!unverified && !preserveContactClaim) {
         await releaseDurableContactClaimForAccount(
           ctx,
           settlementAccountKey,
@@ -5208,6 +8128,11 @@ export const resolveUnverifiedDelivery = mutation({
     }
     if (message.status !== "delivery_unverified") {
       throw new Error("Only an unverified delivery outcome can be reviewed");
+    }
+    if (message.deliveryTransport === MANAGED_SES_TRANSPORT) {
+      throw new Error(
+        "Managed delivery ambiguity is settled only by signed status, event, or no-replay disposition receipts",
+      );
     }
     const now = Date.now();
     if (resolution === "confirmed_not_sent") {
@@ -5784,6 +8709,258 @@ const inboundRelayIgnoredReasons = new Set([
   "timestamp_mismatch",
 ]);
 
+/** Resolve the deterministic digest of the controlled managed-SES canary
+ * Reply-To alias. The raw alias and controlled mailbox address never leave
+ * the HTTP action; this returns only bodyless hashes and immutable fences. */
+export const getManagedSesInboundCanaryCandidate = internalQuery({
+  args: {
+    aliasHash: v.string(),
+    aliasDomain: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const runtime = inboundRelayRuntimeConfig();
+    const relayDomain = normalizeInboundRelayDomain(runtime.domain);
+    const relayConfigurationHash = inboundRelayConfigurationHash(runtime);
+    if (
+      !inboundRelayConfigured(runtime) ||
+      relayDomain !== MANAGED_SES_PLATFORM_RELAY_DOMAIN ||
+      normalizeInboundRelayDomain(args.aliasDomain) !== relayDomain ||
+      !relayConfigurationHash ||
+      !/^[a-f0-9]{64}$/.test(args.aliasHash)
+    ) return null;
+    const rows = await ctx.db
+      .query("managed_ses_event_canaries")
+      .withIndex("by_inbound_alias_hash", (q) =>
+        q.eq("inboundRelayAliasHash", args.aliasHash)
+      )
+      .take(2);
+    if (rows.length !== 1) return null;
+    const canary = rows[0];
+    const [site, inbox, resource] = await Promise.all([
+      ctx.db.get(canary.siteId),
+      ctx.db.get(canary.inboxId),
+      ctx.db.get(canary.resourceId),
+    ]);
+    const routingTarget = inbox
+      ? await inboundRelayDsnRoutingTarget({
+          siteId: String(canary.siteId),
+          inboxId: String(inbox._id),
+          generation: inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+          relayDomain: runtime.domain,
+          secret: runtime.dsnTargetSecret,
+        })
+      : null;
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !inbox ||
+      !resource ||
+      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" ||
+      resource.releaseState !== "active" ||
+      resource.canonicalInboxId !== inbox._id ||
+      resource.operationKey !== canary.resourceOperationKey ||
+      resource.generation !== canary.generation ||
+      resource.adapterVersion !== canary.adapterVersion ||
+      inbox.provider !== MANAGED_SES_TRANSPORT ||
+      inbox.credentialSource !== "managed_adapter" ||
+      inbox.managedTransportOperationKey !== resource.operationKey ||
+      inbox.managedTransportGeneration !== resource.generation ||
+      inbox.managedTransportAdapterVersion !== resource.adapterVersion ||
+      canary.inboxConfigurationVersion !==
+        (inbox.configurationVersion ?? 0) ||
+      canary.inboundRelayAliasDomain !== relayDomain ||
+      canary.inboundRelayConfigurationHash !== relayConfigurationHash ||
+      canary.inboundRelayAdapterVersion !== runtime.adapterVersion ||
+      canary.inboundRelayRetentionPolicyHash !==
+        runtime.retentionPolicyHash ||
+      canary.inboundRelayRolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+      !routingTarget ||
+      canary.inboundRelayDsnRoutingTargetHash !== routingTarget.hash ||
+      canary.inboundRelayDsnRoutingTargetVersion !== routingTarget.version ||
+      canary.inboundRelayDsnRoutingTargetGeneration !==
+        (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
+      !/^[a-f0-9]{64}$/.test(canary.inboundCanaryInboxBinding ?? "") ||
+      !/^[a-f0-9]{64}$/.test(canary.recipientHash) ||
+      !/^[a-f0-9]{64}$/.test(canary.rfcMessageIdDigest ?? "") ||
+      !canary.externalAttemptedAt ||
+      !["accepted", "delivered"].includes(canary.status) ||
+      canary.expiresAt < Date.now()
+    ) return null;
+    return {
+      canaryId: canary._id,
+      siteId: canary.siteId,
+      inboxId: canary.inboxId,
+      resourceId: canary.resourceId,
+      operationKey: canary.operationKey,
+      resourceOperationKey: canary.resourceOperationKey,
+      generation: canary.generation,
+      adapterVersion: canary.adapterVersion,
+      inboxConfigurationVersion: canary.inboxConfigurationVersion,
+      inboxBinding: canary.inboundCanaryInboxBinding!,
+      recipientHash: canary.recipientHash,
+      outboundRfcMessageIdHash: canary.rfcMessageIdDigest!,
+      aliasHash: canary.inboundRelayAliasHash!,
+      aliasDomain: relayDomain,
+      issuedAt: canary.issuedAt,
+      expiresAt: canary.expiresAt,
+      relayConfigurationHash,
+      relayAdapterVersion: runtime.adapterVersion!,
+      retentionPolicyHash: runtime.retentionPolicyHash!,
+      rolloutEpoch: canary.inboundRelayRolloutEpoch!,
+      dsnRoutingTargetHash: canary.inboundRelayDsnRoutingTargetHash!,
+      dsnRoutingTargetVersion: canary.inboundRelayDsnRoutingTargetVersion!,
+      dsnRoutingTargetGeneration:
+        canary.inboundRelayDsnRoutingTargetGeneration!,
+    };
+  },
+});
+
+export const recordManagedSesInboundCanaryReceipt = internalMutation({
+  args: {
+    canaryId: v.id("managed_ses_event_canaries"),
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    operationKey: v.string(),
+    resourceOperationKey: v.string(),
+    generation: v.number(),
+    adapterVersion: v.string(),
+    inboxConfigurationVersion: v.number(),
+    inboxBinding: v.string(),
+    aliasHash: v.string(),
+    aliasDomain: v.string(),
+    eventKey: v.string(),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    inboundMessageIdHash: v.string(),
+    outboundRfcMessageIdHash: v.string(),
+    fromHash: v.string(),
+    receivedAt: v.number(),
+    relayConfigurationHash: v.string(),
+    relayAdapterVersion: v.string(),
+    retentionPolicyHash: v.string(),
+    rolloutEpoch: v.number(),
+    dsnRoutingTargetHash: v.string(),
+    dsnRoutingTargetVersion: v.number(),
+    dsnRoutingTargetGeneration: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const timestamp = Date.now();
+    const prior = await ctx.db
+      .query("managed_ses_event_canaries")
+      .withIndex("by_inbound_event_key", (q) =>
+        q.eq("inboundCanaryEventKey", args.eventKey)
+      )
+      .unique();
+    if (prior) {
+      if (
+        prior._id !== args.canaryId ||
+        prior.inboundCanaryPayloadHash !== args.payloadHash ||
+        prior.inboundCanaryEvidenceHash !== args.evidenceHash
+      ) throw new Error("Managed inbound canary event was rebound");
+      return { recorded: false as const, replay: true as const };
+    }
+    const [canary, site, inbox, resource] = await Promise.all([
+      ctx.db.get(args.canaryId),
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+      ctx.db.get(args.resourceId),
+    ]);
+    const runtime = inboundRelayRuntimeConfig();
+    const relayDomain = normalizeInboundRelayDomain(runtime.domain);
+    const relayConfigurationHash = inboundRelayConfigurationHash(runtime);
+    const routingTarget = inbox
+      ? await inboundRelayDsnRoutingTarget({
+          siteId: String(args.siteId),
+          inboxId: String(args.inboxId),
+          generation: inbox.inboundRelayDsnRoutingTargetGeneration ?? 1,
+          relayDomain: runtime.domain,
+          secret: runtime.dsnTargetSecret,
+        })
+      : null;
+    if (
+      !canary ||
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !inbox ||
+      !resource ||
+      canary.siteId !== args.siteId ||
+      canary.inboxId !== args.inboxId ||
+      canary.resourceId !== args.resourceId ||
+      canary.operationKey !== args.operationKey ||
+      canary.resourceOperationKey !== args.resourceOperationKey ||
+      canary.generation !== args.generation ||
+      canary.adapterVersion !== args.adapterVersion ||
+      canary.inboxConfigurationVersion !== args.inboxConfigurationVersion ||
+      canary.inboundCanaryInboxBinding !== args.inboxBinding ||
+      canary.inboundRelayAliasHash !== args.aliasHash ||
+      canary.inboundRelayAliasDomain !== relayDomain ||
+      args.aliasDomain !== relayDomain ||
+      canary.recipientHash !== args.fromHash ||
+      canary.rfcMessageIdDigest !== args.outboundRfcMessageIdHash ||
+      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" ||
+      resource.releaseState !== "active" ||
+      resource.canonicalInboxId !== inbox._id ||
+      resource.operationKey !== args.resourceOperationKey ||
+      resource.generation !== args.generation ||
+      resource.adapterVersion !== args.adapterVersion ||
+      inbox.provider !== MANAGED_SES_TRANSPORT ||
+      inbox.credentialSource !== "managed_adapter" ||
+      inbox.managedTransportOperationKey !== resource.operationKey ||
+      inbox.managedTransportGeneration !== resource.generation ||
+      inbox.managedTransportAdapterVersion !== resource.adapterVersion ||
+      (inbox.configurationVersion ?? 0) !== args.inboxConfigurationVersion ||
+      !relayConfigurationHash ||
+      args.relayConfigurationHash !== relayConfigurationHash ||
+      canary.inboundRelayConfigurationHash !== relayConfigurationHash ||
+      args.relayAdapterVersion !== runtime.adapterVersion ||
+      canary.inboundRelayAdapterVersion !== runtime.adapterVersion ||
+      args.retentionPolicyHash !== runtime.retentionPolicyHash ||
+      canary.inboundRelayRetentionPolicyHash !== runtime.retentionPolicyHash ||
+      args.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+      canary.inboundRelayRolloutEpoch !== args.rolloutEpoch ||
+      !routingTarget ||
+      args.dsnRoutingTargetHash !== routingTarget.hash ||
+      args.dsnRoutingTargetVersion !== routingTarget.version ||
+      args.dsnRoutingTargetGeneration !==
+        (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
+      canary.inboundRelayDsnRoutingTargetHash !== routingTarget.hash ||
+      canary.inboundRelayDsnRoutingTargetVersion !== routingTarget.version ||
+      canary.inboundRelayDsnRoutingTargetGeneration !==
+        (inbox.inboundRelayDsnRoutingTargetGeneration ?? 1) ||
+      !/^[a-f0-9]{64}$/.test(args.eventKey) ||
+      !/^[a-f0-9]{64}$/.test(args.payloadHash) ||
+      !/^[a-f0-9]{64}$/.test(args.evidenceHash) ||
+      !/^[a-f0-9]{64}$/.test(args.inboundMessageIdHash) ||
+      !/^[a-f0-9]{64}$/.test(args.outboundRfcMessageIdHash) ||
+      !/^[a-f0-9]{64}$/.test(args.fromHash) ||
+      !/^[a-f0-9]{64}$/.test(args.inboxBinding) ||
+      !Number.isSafeInteger(args.receivedAt) ||
+      args.receivedAt < canary.issuedAt - 60_000 ||
+      args.receivedAt > canary.expiresAt ||
+      args.receivedAt > timestamp + 5 * 60 * 1000
+    ) throw new Error("Managed inbound canary crossed a binding");
+    await ctx.db.patch(canary._id, {
+      inboundCanaryEventKey: args.eventKey,
+      inboundCanaryPayloadHash: args.payloadHash,
+      inboundCanaryEvidenceHash: args.evidenceHash,
+      inboundCanaryMessageIdHash: args.inboundMessageIdHash,
+      inboundCanaryFromHash: args.fromHash,
+      inboundCanarySettledAt: args.receivedAt,
+      inboundCanaryActivationState: "pending",
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.managedOutreachMailbox.activateManagedSesInboundCanary,
+      { canaryId: canary._id },
+    );
+    return { recorded: true as const };
+  },
+});
+
 /** Resolve an unguessable per-message alias to one bodyless candidate. This
  * query is internal-only and returns no draft body or mailbox credential. */
 export const getInboundRelayCandidate = internalQuery({
@@ -5825,6 +9002,17 @@ export const getInboundRelayCandidate = internalQuery({
     const settlementOwnerDeleting = settlementAccountKey
       ? await accountDeletionRequestedForKey(ctx, settlementAccountKey)
       : true;
+    const managedSesIdentityPending =
+      message.deliveryTransport === MANAGED_SES_TRANSPORT &&
+      (!/^[a-f0-9]{64}$/.test(
+        message.inboundRelayOutboundMessageIdHash ?? "",
+      ) ||
+        !/^[a-f0-9]{64}$/.test(
+          message.managedSesProviderMessageIdDigest ?? "",
+        ) ||
+        !/^[A-Za-z0-9_-]{32,96}$/.test(
+          message.managedSesThreadReceipt ?? "",
+        ));
     if (
       !site ||
       !(await relaySettlementAuthorized(ctx, site, settlementBoundaryAt)) ||
@@ -5838,9 +9026,10 @@ export const getInboundRelayCandidate = internalQuery({
       !message.inboundRelaySenderDomain ||
       message.inboundRelaySenderDomain !==
         normalizeDomain(message.inboundRelaySenderDomain) ||
-      !/^[a-f0-9]{64}$/.test(
-        message.inboundRelayOutboundMessageIdHash ?? "",
-      ) ||
+      (!managedSesIdentityPending &&
+        !/^[a-f0-9]{64}$/.test(
+          message.inboundRelayOutboundMessageIdHash ?? "",
+        )) ||
       !/^[a-f0-9]{64}$/.test(
         message.inboundRelayDsnRoutingTargetHash ?? "",
       ) ||
@@ -5861,6 +9050,30 @@ export const getInboundRelayCandidate = internalQuery({
       )
     ) {
       return null;
+    }
+    if (managedSesIdentityPending) {
+      return {
+        state: "pending" as const,
+        siteId: message.siteId,
+        inboxId: inbox._id,
+        messageId: message._id,
+        toEmail: message.toEmail,
+        toDomain: message.toDomain,
+        sentAt: chronologyAt!,
+        outboundRfcMessageIdHash: "",
+        dsnRoutingTargetHash: message.inboundRelayDsnRoutingTargetHash!,
+        dsnRoutingTargetVersion:
+          message.inboundRelayDsnRoutingTargetVersion!,
+        dsnRoutingTargetGeneration:
+          message.inboundRelayDsnRoutingTargetGeneration!,
+        aliasHash,
+        aliasDomain: configuredDomain,
+        rolloutEpoch: message.inboundRelayRolloutEpoch,
+        inboxConfigurationVersion:
+          message.inboundRelayInboxConfigurationVersion,
+        senderDomain: message.inboundRelaySenderDomain,
+        deliveryOwnerAccountKey: settlementAccountKey,
+      };
     }
     if (
       message.status === "sending" &&
@@ -7170,7 +10383,20 @@ export const pruneExpiredSenderPacingReceiptsInternal = internalMutation({
     const timestamp = Date.now();
     const cutoff = timestamp -
       DOMAIN_CONTACT_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
-    const [pacingRows, contactCandidates] = await Promise.all([
+    const [
+      pacingRows,
+      managedPacingRows,
+      managedSendTombstones,
+      contactCandidates,
+    ] = await Promise.all([
+      ctx.db
+        .query("managed_ses_pacing_receipts")
+        .withIndex("by_retain_until", (q) => q.lt("retainUntil", timestamp))
+        .take(100),
+      ctx.db
+        .query("managed_ses_send_tombstones")
+        .withIndex("by_expires", (q) => q.lt("expiresAt", timestamp))
+        .take(100),
       ctx.db
         .query("outreach_sender_pacing_receipts")
         .withIndex("by_retain_until", (q) => q.lt("retainUntil", timestamp))
@@ -7181,6 +10407,8 @@ export const pruneExpiredSenderPacingReceiptsInternal = internalMutation({
         .take(100),
     ]);
     for (const row of pacingRows) await ctx.db.delete(row._id);
+    for (const row of managedPacingRows) await ctx.db.delete(row._id);
+    for (const row of managedSendTombstones) await ctx.db.delete(row._id);
     let contactsDeleted = 0;
     for (const row of contactCandidates) {
       if (
@@ -7191,7 +10419,12 @@ export const pruneExpiredSenderPacingReceiptsInternal = internalMutation({
         contactsDeleted++;
       }
     }
-    if (pacingRows.length === 100 || contactCandidates.length === 100) {
+    if (
+      pacingRows.length === 100 ||
+      managedPacingRows.length === 100 ||
+      managedSendTombstones.length === 100 ||
+      contactCandidates.length === 100
+    ) {
       await ctx.scheduler.runAfter(
         0,
         internal.outreach.pruneExpiredSenderPacingReceiptsInternal,
@@ -7200,9 +10433,14 @@ export const pruneExpiredSenderPacingReceiptsInternal = internalMutation({
     }
     return {
       pacingDeleted: pacingRows.length,
+      managedPacingDeleted: managedPacingRows.length,
+      managedSendTombstonesDeleted: managedSendTombstones.length,
       contactsDeleted,
       scheduledNext:
-        pacingRows.length === 100 || contactCandidates.length === 100,
+        pacingRows.length === 100 ||
+        managedPacingRows.length === 100 ||
+        managedSendTombstones.length === 100 ||
+        contactCandidates.length === 100,
     };
   },
 });

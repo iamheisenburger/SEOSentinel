@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   OUTREACH_INBOUND_RELAY_MAX_BODY_BYTES,
   OUTREACH_INBOUND_RELAY_CANARY_COOLDOWN_MS,
+  OUTREACH_INBOUND_RELAY_CANARY_VALID_MS,
   OUTREACH_INBOUND_RELAY_DSN_TARGET_VERSION,
   classifyInboundRelay,
   classifyInboundRelayDsnCanary,
@@ -171,6 +172,22 @@ test("a legacy inbox becomes ready only after the canary seal persists generatio
     }),
     true,
   );
+  const sealedInbox = {
+    ...legacyInbox,
+    inboundRelayDsnRoutingTargetGeneration: 1,
+  };
+  assert.equal(inboundRelayDsnRoutingReady({
+    inbox: sealedInbox,
+    now: NOW + OUTREACH_INBOUND_RELAY_CANARY_VALID_MS + 1,
+    rolloutEpoch: 3,
+    runtimeConfig: RUNTIME_CONFIG,
+  }), false, "the Gmail provider boundary cannot outlive the finite canary");
+  assert.equal(inboundRelayDsnRoutingReady({
+    inbox: sealedInbox,
+    now: NOW,
+    rolloutEpoch: 3,
+    runtimeConfig: { ...RUNTIME_CONFIG, retentionPolicyHash: "8".repeat(64) },
+  }), false, "relay policy drift invalidates the last-CAS proof");
 
   const backend = readFileSync("convex/outreach.ts", "utf8");
   const successfulSeal = backend.slice(

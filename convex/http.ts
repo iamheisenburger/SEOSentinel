@@ -22,6 +22,7 @@ import {
   inboundRelayAliasHash,
   inboundRelayCanaryEvidenceReceipt,
   inboundRelayConfigured,
+  inboundRelayEmailHash,
   inboundRelayEventKey,
   inboundRelayEvidenceReceipt,
   inboundRelayMessageIdHash,
@@ -29,6 +30,17 @@ import {
   parseInboundRelayPayload,
   verifyInboundRelaySignature,
 } from "./lib/outreachInboundRelay";
+import {
+  emailAddressFromHeader,
+  requestsOutreachOptOut,
+} from "./lib/outreachInbound";
+import {
+  managedSesAdapterConfiguration,
+  managedSesDeterministicJson,
+  managedSesSignedResponse,
+  parseManagedSesEventPayload,
+  verifyManagedSesWebhookSignature,
+} from "./lib/managedSes";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -242,6 +254,113 @@ http.route({
       { aliasHash, aliasDomain: recipientDomain },
     );
     if (!candidate) {
+      const managedCanary = await ctx.runQuery(
+        internal.outreach.getManagedSesInboundCanaryCandidate,
+        { aliasHash, aliasDomain: recipientDomain },
+      );
+      if (managedCanary) {
+        const fromEmail = emailAddressFromHeader(payload.from);
+        const authenticatedFrom = emailAddressFromHeader(
+          payload.authentication.alignedFrom,
+        );
+        const autoSubmitted = String(payload.autoSubmitted ?? "")
+          .trim().toLowerCase();
+        const hasReplyProof = [payload.inReplyTo, ...payload.references]
+          .map((value) => inboundRelayMessageIdHash(value))
+          .includes(managedCanary.outboundRfcMessageIdHash);
+        const isExactControlledStop = Boolean(
+          !payload.dsn &&
+          fromEmail &&
+          authenticatedFrom === fromEmail &&
+          inboundRelayEmailHash(fromEmail) === managedCanary.recipientHash &&
+          (!autoSubmitted || autoSubmitted === "no") &&
+          hasReplyProof &&
+          requestsOutreachOptOut(payload.text) &&
+          payload.receivedAt >= managedCanary.issuedAt - 60_000 &&
+          payload.receivedAt <= managedCanary.expiresAt &&
+          payload.receivedAt <= Date.now() + 5 * 60 * 1000,
+        );
+        // Unknown or malformed canary traffic receives the same bodyless
+        // acknowledgement as an unknown alias. It cannot create evidence.
+        if (!isExactControlledStop) return json({ ok: true }, 202);
+        const eventKey = inboundRelayEventKey(payload.eventId);
+        const payloadHash = sha256Hex(body.text);
+        const inboundMessageIdHash = inboundRelayMessageIdHash(
+          payload.messageId,
+        );
+        const fromHash = inboundRelayEmailHash(fromEmail);
+        const evidenceHash = sha256Hex(JSON.stringify({
+          version: 1,
+          purpose: "managed_ses_inbound_reply_stop_canary",
+          eventKey,
+          canaryId: String(managedCanary.canaryId),
+          siteId: String(managedCanary.siteId),
+          inboxId: String(managedCanary.inboxId),
+          resourceId: String(managedCanary.resourceId),
+          operationKey: managedCanary.operationKey,
+          resourceOperationKey: managedCanary.resourceOperationKey,
+          generation: managedCanary.generation,
+          adapterVersion: managedCanary.adapterVersion,
+          inboxBinding: managedCanary.inboxBinding,
+          aliasHash,
+          inboundMessageIdHash,
+          outboundRfcMessageIdHash:
+            managedCanary.outboundRfcMessageIdHash,
+          fromHash,
+          classifications: ["reply", "stop"],
+          receivedAt: payload.receivedAt,
+          relayConfigurationHash:
+            managedCanary.relayConfigurationHash,
+          relayAdapterVersion: managedCanary.relayAdapterVersion,
+          retentionPolicyHash: managedCanary.retentionPolicyHash,
+          rolloutEpoch: managedCanary.rolloutEpoch,
+          dsnRoutingTargetHash: managedCanary.dsnRoutingTargetHash,
+          dsnRoutingTargetVersion: managedCanary.dsnRoutingTargetVersion,
+          dsnRoutingTargetGeneration:
+            managedCanary.dsnRoutingTargetGeneration,
+        }));
+        const result = await ctx.runMutation(
+          internal.outreach.recordManagedSesInboundCanaryReceipt,
+          {
+            canaryId: managedCanary.canaryId,
+            siteId: managedCanary.siteId,
+            inboxId: managedCanary.inboxId,
+            resourceId: managedCanary.resourceId,
+            operationKey: managedCanary.operationKey,
+            resourceOperationKey: managedCanary.resourceOperationKey,
+            generation: managedCanary.generation,
+            adapterVersion: managedCanary.adapterVersion,
+            inboxConfigurationVersion:
+              managedCanary.inboxConfigurationVersion,
+            inboxBinding: managedCanary.inboxBinding,
+            aliasHash,
+            aliasDomain: managedCanary.aliasDomain,
+            eventKey,
+            payloadHash,
+            evidenceHash,
+            inboundMessageIdHash,
+            outboundRfcMessageIdHash:
+              managedCanary.outboundRfcMessageIdHash,
+            fromHash,
+            receivedAt: payload.receivedAt,
+            relayConfigurationHash:
+              managedCanary.relayConfigurationHash,
+            relayAdapterVersion: managedCanary.relayAdapterVersion,
+            retentionPolicyHash: managedCanary.retentionPolicyHash,
+            rolloutEpoch: managedCanary.rolloutEpoch,
+            dsnRoutingTargetHash: managedCanary.dsnRoutingTargetHash,
+            dsnRoutingTargetVersion: managedCanary.dsnRoutingTargetVersion,
+            dsnRoutingTargetGeneration:
+              managedCanary.dsnRoutingTargetGeneration,
+          },
+        );
+        return json({
+          ok: true,
+          accepted: true,
+          managedCanary: true,
+          replay: "replay" in result && result.replay === true,
+        });
+      }
       const canary = await ctx.runQuery(
         internal.outreach.getInboundRelayDsnCanaryCandidate,
         { aliasHash, aliasDomain: recipientDomain },
@@ -388,6 +507,138 @@ http.route({
       ok: true,
       accepted: classification.kind !== "ignored",
       replay: "replay" in result && result.replay === true,
+    });
+  }),
+});
+
+const managedSesUnsubscribeHandler = httpAction(async (ctx, request) => {
+  const pathname = new URL(request.url).pathname;
+  const match = pathname.match(/^\/unsubscribe\/([A-Za-z0-9_-]{43})$/);
+  if (request.method === "POST" && match) {
+    try {
+      await ctx.runMutation(internal.outreach.recordManagedSesUnsubscribe, {
+        tokenHash: sha256Hex(match[1]),
+      });
+    } catch {
+      // Unknown and replayed tokens are normal mutation results. A thrown
+      // error means durable storage was not acknowledged, so the proxy must
+      // invite a retry without revealing whether the token exists.
+      return new Response(null, {
+        status: 503,
+        headers: {
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+          "Retry-After": "30",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+  }
+  const headers = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+  };
+  if (request.method === "POST") {
+    return new Response(null, { status: 200, headers });
+  }
+  return new Response(
+    "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><title>Email preferences</title><p>Confirm that you no longer want these emails.</p><form method=post><button type=submit>Unsubscribe</button></form>",
+    {
+      status: 200,
+      headers: { ...headers, "Content-Type": "text/html; charset=utf-8" },
+    },
+  );
+});
+
+http.route({
+  pathPrefix: "/unsubscribe/",
+  method: "GET",
+  handler: managedSesUnsubscribeHandler,
+});
+
+http.route({
+  pathPrefix: "/unsubscribe/",
+  method: "POST",
+  handler: managedSesUnsubscribeHandler,
+});
+
+http.route({
+  path: "/webhooks/outreach-managed-ses",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const config = managedSesAdapterConfiguration({
+      endpoint: process.env.MANAGED_SES_ADAPTER_URL,
+      adapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+      signingSecret: process.env.MANAGED_SES_ADAPTER_HMAC_SECRET,
+      nextVerificationSecret:
+        process.env.MANAGED_SES_ADAPTER_HMAC_SECRET_NEXT,
+    });
+    if (!config) {
+      return json({ error: "Managed sender event adapter is unavailable" }, 503);
+    }
+    const body = await readBoundedRawJson(request, 4 * 1024);
+    if (!body) return json({ error: "Invalid managed sender event" }, 400);
+    const nonce = request.headers.get("x-pentra-nonce");
+    const valid = await verifyManagedSesWebhookSignature({
+      rawBody: body.bytes,
+      path: "/webhooks/outreach-managed-ses",
+      timestampHeader: request.headers.get("x-pentra-timestamp"),
+      nonceHeader: nonce,
+      signatureHeader: request.headers.get("x-pentra-signature"),
+      secrets: config.verificationSecrets,
+      now: Date.now(),
+    });
+    if (!valid || !nonce) {
+      return json({ error: "Invalid managed sender event signature" }, 401);
+    }
+    const payload = parseManagedSesEventPayload(body.text);
+    if (!payload || payload.adapterVersion !== config.adapterVersion) {
+      return json({ error: "Invalid managed sender event" }, 400);
+    }
+    let result;
+    try {
+      result = await ctx.runMutation(
+        internal.outreach.recordManagedSesDeliveryEvent,
+        {
+          adapterVersion: payload.adapterVersion,
+          operationKey: payload.operationKey,
+          resourceOperationKey: payload.resourceOperationKey,
+          generation: payload.generation,
+          sequenceStep: payload.sequenceStep,
+          purpose: payload.purpose,
+          eventType: payload.eventType,
+          occurredAt: Date.parse(payload.occurredAt),
+          providerMessageIdDigest: payload.providerMessageIdDigest,
+          rfcMessageIdDigest: payload.rfcMessageIdDigest,
+          threadReceipt: payload.threadReceipt,
+          eventReceipt: payload.eventReceipt,
+        },
+      );
+    } catch {
+      return json({ error: "Managed sender event could not be settled" }, 503);
+    }
+    const responseText = managedSesDeterministicJson({
+      version: 1,
+      ok: true,
+      eventReceipt: payload.eventReceipt,
+    });
+    const responseBody = new TextEncoder().encode(responseText);
+    const signed = await managedSesSignedResponse({
+      body: responseBody,
+      nonce,
+      secret: config.signingSecret,
+    });
+    return new Response(responseBody, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Pentra-Response-Timestamp": signed.timestamp,
+        "X-Pentra-Response-Signature": signed.signature,
+        "X-Pentra-Adapter-Version": config.adapterVersion,
+        "X-Pentra-Event-Replay": result.recorded ? "false" : "true",
+      },
     });
   }),
 });

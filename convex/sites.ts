@@ -40,7 +40,7 @@ import {
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
 import {
-  autonomousGmailCredentialIssues,
+  autonomousOutreachTransportIssues,
   outreachDeletionGate,
 } from "./lib/outreachDelivery";
 import {
@@ -54,6 +54,7 @@ import {
   accountDeletionTombstoneUserId,
 } from "./lib/accountDeletion.ts";
 import {
+  inboundRelayConfigurationHash,
   inboundRelayConfigured,
   inboundRelayDsnRoutingReady,
 } from "./lib/outreachInboundRelay.ts";
@@ -88,6 +89,7 @@ import {
   recordDurableContactReceiptForAccount,
   recordDurablePacingReceiptForAccount,
   recordUnlinkedDurablePacingReceipt,
+  releaseDurableContactClaimForAccount,
 } from "./lib/outreachDurability.ts";
 import {
   materializeOutreachSuppressionTombstoneForAccount,
@@ -148,7 +150,16 @@ import {
 } from "./lib/managedOutreachMailbox.ts";
 import {
   stageManagedOutreachMailboxRelease,
+  stageManagedOutreachMailboxReleaseForInbox,
 } from "./managedOutreachMailbox.ts";
+import {
+  materializeManagedSesCanaryTombstoneForDeletion,
+  materializeManagedSesSendTombstoneForDeletion,
+} from "./outreach.ts";
+import {
+  MANAGED_SES_TRANSPORT,
+  managedSesInboxReceiptCurrent,
+} from "./lib/managedSes.ts";
 import { planCheckpointTopicExecutionLocked } from
   "./lib/planCandidateCheckpoint.ts";
 import {
@@ -3633,15 +3644,18 @@ const ACCOUNT_DELETION_SITE_PAGE_SIZE = 5;
 const ACCOUNT_DELETION_RECEIPT_BATCH = 100;
 const ACCOUNT_DELETION_RETRY_MS = 60 * 1000;
 const ACCOUNT_DELETION_RECEIPT_STAGES = [
+  // Managed foreign inboxes must release first so their post-boundary
+  // messages can materialize exact provider-only tombstones before scrubbing.
+  "outreach_foreign_owner_inboxes",
   "outreach_foreign_owner_messages",
   "outreach_foreign_owner_contacts",
   "outreach_foreign_owner_suppressions",
-  "outreach_foreign_owner_inboxes",
   "managed_outreach_mailbox_release_tombstones",
   "outreach_durability_migrations",
   "outreach_sender_suppression_tombstones",
   "outreach_tenant_contact_receipts",
   "outreach_sender_pacing_receipts",
+  "managed_ses_pacing_receipts",
   "article_generation_attempts",
   "provider_spend_reservations",
   "usage_log",
@@ -3650,9 +3664,16 @@ const SITE_DELETION_STAGES = [
   "managed_outreach_mailbox_resources",
   "one_setup_executions",
   "managed_provisioning_requests",
+  "managed_ses_delivery_events",
+  "managed_ses_event_canaries",
   "outreach_inbound_relay_canaries",
   "outreach_inbound_relay_receipts",
   "outreach_messages",
+  // A signed event may settle while its exact message/canary row is being
+  // drained. Sweep the event index again after both parent tables are gone;
+  // the final all-stage rescan then supplies the OCC boundary against a
+  // concurrent last insert.
+  "managed_ses_delivery_events_terminal",
   "outreach_contacts",
   "outreach_suppressions",
   "outreach_inboxes",
@@ -3713,9 +3734,95 @@ async function gateInboundRelayCanaryExternalLease(
   }
 }
 
+async function managedSesDeliveryHasExactReleaseFence(
+  ctx: MutationCtx,
+  message: Doc<"outreach_messages">,
+  inbox: Doc<"outreach_inboxes"> | null,
+  allowAtomicReleaseStaging: boolean,
+): Promise<boolean> {
+  if (
+    message.deliveryTransport !== MANAGED_SES_TRANSPORT ||
+    !message.inboxId ||
+    !inbox ||
+    inbox._id !== message.inboxId ||
+    inbox.siteId !== message.siteId ||
+    inbox.provider !== MANAGED_SES_TRANSPORT ||
+    !message.deliveryOwnerAccountKey ||
+    message.deliveryOwnerAccountKey !== inbox.credentialOwnerAccountKey
+  ) return false;
+  const resources = await ctx.db
+    .query("managed_outreach_mailbox_resources")
+    .withIndex("by_canonical_inbox", (q) =>
+      q.eq("canonicalInboxId", inbox._id)
+    )
+    .take(2);
+  if (resources.length !== 1) return false;
+  const resource = resources[0];
+  if (
+    resource.siteId !== message.siteId ||
+    resource.ownerAccountKey !== message.deliveryOwnerAccountKey ||
+    resource.transportKind !== MANAGED_SES_TRANSPORT ||
+    resource.operationKey !== message.managedSesResourceOperationKey ||
+    resource.generation !== message.managedSesGeneration ||
+    resource.adapterVersion !== message.managedSesAdapterVersion
+  ) return false;
+
+  if (
+    allowAtomicReleaseStaging &&
+    resource.lifecycleState === "canonicalized" &&
+    resource.releaseState === "active" &&
+    inbox.credentialSource === "managed_adapter" &&
+    inbox.managedTransportKind === MANAGED_SES_TRANSPORT &&
+    inbox.managedTransportOperationKey === resource.operationKey &&
+    inbox.managedTransportGeneration === resource.generation &&
+    inbox.managedTransportAdapterVersion === resource.adapterVersion &&
+    inbox.managedTransportResourceReceipt === resource.resourceReceipt
+  ) return true;
+
+  const tombstone = await ctx.db
+    .query("managed_outreach_mailbox_release_tombstones")
+    .withIndex("by_operation", (q) =>
+      q.eq("operationKey", resource.operationKey)
+    )
+    .unique();
+  if (
+    !resource.releaseRequestedAt ||
+    resource.lifecycleState !== "cancelled" ||
+    !["requested", "leased", "blocked", "released"].includes(
+      resource.releaseState,
+    ) ||
+    !tombstone ||
+    tombstone.ownerAccountKey !== resource.ownerAccountKey ||
+    tombstone.generation !== resource.generation ||
+    tombstone.adapterVersion !== resource.adapterVersion ||
+    !["release_requested", "blocked", "released"].includes(tombstone.state)
+  ) return false;
+
+  if (
+    managedOutreachMailboxReleaseSealed({
+      externalProvisioningAttemptedAt:
+        resource.externalProvisioningAttemptedAt,
+      externalAllocatedAt: resource.externalAllocatedAt,
+      hasCanonicalInbox: Boolean(resource.canonicalInboxId),
+      releaseState: resource.releaseState,
+      tombstoneState: tombstone.state,
+    })
+  ) return true;
+  return Boolean(
+    inbox.credentialSource === "managed_adapter_retiring" &&
+      inbox.managedTransportKind === MANAGED_SES_TRANSPORT &&
+      inbox.managedTransportOperationKey === resource.operationKey &&
+      inbox.managedTransportGeneration === resource.generation &&
+      inbox.managedTransportAdapterVersion === resource.adapterVersion &&
+      inbox.status === "disconnected" &&
+      inbox.mode === "approval",
+  );
+}
+
 async function gateSiteDeletionForOutreach(
   ctx: MutationCtx,
   siteId: Id<"sites">,
+  options: { allowAtomicManagedReleaseStaging?: boolean } = {},
 ): Promise<
   | { ready: true }
   | {
@@ -3728,30 +3835,99 @@ async function gateSiteDeletionForOutreach(
 > {
   const timestamp = now();
   await gateInboundRelayCanaryExternalLease(ctx, siteId, "delete this site");
-  const [sending, unresolved] = await Promise.all([
+  const [sendingRows, unresolvedRows, inboxes] = await Promise.all([
     ctx.db
       .query("outreach_messages")
       .withIndex("by_site_status", (q) =>
         q.eq("siteId", siteId).eq("status", "sending")
       )
-      .take(10),
+      .take(101),
     ctx.db
       .query("outreach_messages")
       .withIndex("by_site_status", (q) =>
         q.eq("siteId", siteId).eq("status", "delivery_unverified")
       )
-      .take(1),
+      .take(101),
+    ctx.db
+      .query("outreach_inboxes")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .take(2),
   ]);
+  if (sendingRows.length > 100 || unresolvedRows.length > 100) {
+    return {
+      ready: false,
+      reason: "outreach_delivery_unverified",
+      convertedExpired: 0,
+    };
+  }
+  const inboxById = new Map(
+    inboxes.map((inbox) => [String(inbox._id), inbox]),
+  );
+  const releaseFenceCoverage = new Map<string, Promise<boolean>>();
+  const releaseOwns = (message: Doc<"outreach_messages">) => {
+    const key = JSON.stringify([
+      message.inboxId,
+      message.deliveryOwnerAccountKey,
+      message.managedSesResourceOperationKey,
+      message.managedSesGeneration,
+      message.managedSesAdapterVersion,
+    ]);
+    const existing = releaseFenceCoverage.get(key);
+    if (existing) return existing;
+    const result = managedSesDeliveryHasExactReleaseFence(
+      ctx,
+      message,
+      message.inboxId
+        ? inboxById.get(String(message.inboxId)) ?? null
+        : null,
+      options.allowAtomicManagedReleaseStaging === true,
+    );
+    releaseFenceCoverage.set(key, result);
+    return result;
+  };
+  const sendingCoverage = await Promise.all(sendingRows.map(releaseOwns));
+  const unresolvedCoverage = await Promise.all(unresolvedRows.map(releaseOwns));
+  const sending = sendingRows.filter((_, index) => !sendingCoverage[index]);
+  const unresolved = unresolvedRows.filter(
+    (_, index) => !unresolvedCoverage[index],
+  );
   const decision = outreachDeletionGate({
     sending: sending.map((message) => ({
       messageId: message._id,
       status: message.status,
       attemptId: message.deliveryAttemptId,
       leaseExpiresAt: message.deliveryLeaseExpiresAt,
+      boundaryVersion: message.deliveryBoundaryVersion,
+      externalAttemptedAt: message.deliveryExternalAttemptedAt,
+      managedSesExternalAttemptedAt: message.managedSesExternalAttemptedAt,
     })),
     unresolvedDeliveryCount: unresolved.length,
     now: timestamp,
   });
+  for (const messageId of decision.safePreboundaryMessageIds) {
+    const message = sending.find((row) => row._id === messageId);
+    if (!message) continue;
+    await ctx.db.patch(message._id, {
+      status: "skipped",
+      deliveryLeaseExpiresAt: undefined,
+      deliveryLeaseExpiredAt: timestamp,
+      managedSesUnsubscribeTokenHash: undefined,
+      blockedReason:
+        "Tenant deletion drained an expired exact claim that never crossed the provider boundary.",
+      failureReason:
+        "Tenant deletion drained an expired exact claim that never crossed the provider boundary.",
+      updatedAt: timestamp,
+    });
+    if (message.deliveryOwnerAccountKey && message.deliveryAttemptId) {
+      await releaseDurableContactClaimForAccount(
+        ctx,
+        message.deliveryOwnerAccountKey,
+        message.toDomain,
+        message.deliveryAttemptId,
+        timestamp,
+      );
+    }
+  }
   if (decision.state === "in_flight") {
     // Throwing leaves the whole mutation untouched. The serializable read of
     // the sending index also conflicts with a concurrent approved -> sending
@@ -3783,10 +3959,6 @@ async function gateSiteDeletionForOutreach(
       convertedExpired: 0,
     };
   }
-  const inboxes = await ctx.db
-    .query("outreach_inboxes")
-    .withIndex("by_site", (q) => q.eq("siteId", siteId))
-    .take(2);
   const exactInboxOwner = inboxes.length === 1
     ? inboxes[0].credentialOwnerAccountKey
     : undefined;
@@ -3880,6 +4052,17 @@ async function requestSiteDeletion(
   }
   if (site.deletionStatus) return { scheduled: true, alreadyRequested: true };
 
+  // Managed SES ambiguity is settled by the exact resource release pipeline,
+  // not by a Gmail-style owner review. Quarantine and stage that immutable
+  // disposition/release fence before evaluating whether any remaining
+  // (legacy/Gmail) provider boundary still requires owner action.
+  const timestamp = now();
+  await stageManagedOutreachMailboxRelease(
+    ctx,
+    siteId,
+    timestamp,
+    "tenant_site_deletion_requested",
+  );
   const outreachDeletion = await gateSiteDeletionForOutreach(ctx, siteId);
   if (!outreachDeletion.ready) {
     return {
@@ -3896,13 +4079,6 @@ async function requestSiteDeletion(
     siteId,
     "tenant deletion requested",
     true,
-  );
-  const timestamp = now();
-  await stageManagedOutreachMailboxRelease(
-    ctx,
-    siteId,
-    timestamp,
-    "tenant_site_deletion_requested",
   );
   // Revoke every credential on the site row immediately. Bulk data removal is
   // resumable, but a deletion request must not leave a usable token while it
@@ -3970,11 +4146,11 @@ async function revokeSiteCredentialsForAccountDeletion(
   site: Doc<"sites">,
   timestamp: number,
 ) {
-  await gateInboundRelayCanaryExternalLease(
-    ctx,
-    site._id,
-    "delete this account",
-  );
+  // A verified account-erasure receipt must erect its credential fence even
+  // when a previously claimed relay canary is still inside its bounded lease.
+  // The later account-site finalizer waits through that exact lease and the
+  // global quiescence window; throwing here would roll back the deletion
+  // receipt and leave credentials live indefinitely.
   if (!site.accountDeletionRequestedAt) {
     await cancelAutonomousJobsForEpochTransition(
       ctx,
@@ -4118,6 +4294,17 @@ async function deletionRowsForStage(
     case "managed_provisioning_requests":
       return ctx.db
         .query("managed_provisioning_requests")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(SITE_DELETION_BATCH);
+    case "managed_ses_delivery_events":
+    case "managed_ses_delivery_events_terminal":
+      return ctx.db
+        .query("managed_ses_delivery_events")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(SITE_DELETION_BATCH);
+    case "managed_ses_event_canaries":
+      return ctx.db
+        .query("managed_ses_event_canaries")
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .take(SITE_DELETION_BATCH);
     case "outreach_inbound_relay_canaries":
@@ -4302,8 +4489,53 @@ export const continueSiteDeletionInternal = internalMutation({
           };
         }
         await ctx.db.delete(resource._id);
+      } else if (
+        SITE_DELETION_STAGES[safeStage] === "managed_ses_event_canaries"
+      ) {
+        const canary = row as Doc<"managed_ses_event_canaries">;
+        if (!(await materializeManagedSesCanaryTombstoneForDeletion(
+          ctx,
+          canary,
+        ))) {
+          await ctx.db.patch(siteId, {
+            deletionStage: safeStage,
+            updatedAt: now(),
+          });
+          await ctx.scheduler.runAfter(
+            ACCOUNT_DELETION_RETRY_MS,
+            internal.sites.continueSiteDeletionInternal,
+            { siteId, stage: safeStage },
+          );
+          return {
+            done: false,
+            stage: "managed_ses_canary_tombstone_pending",
+            deleted: 0,
+            nextStage: safeStage,
+          };
+        }
+        await ctx.db.delete(canary._id);
       } else if (SITE_DELETION_STAGES[safeStage] === "outreach_messages") {
         const message = row as Doc<"outreach_messages">;
+        if (!(await materializeManagedSesSendTombstoneForDeletion(
+          ctx,
+          message,
+        ))) {
+          await ctx.db.patch(siteId, {
+            deletionStage: safeStage,
+            updatedAt: now(),
+          });
+          await ctx.scheduler.runAfter(
+            ACCOUNT_DELETION_RETRY_MS,
+            internal.sites.continueSiteDeletionInternal,
+            { siteId, stage: safeStage },
+          );
+          return {
+            done: false,
+            stage: "managed_ses_send_tombstone_pending",
+            deleted: 0,
+            nextStage: safeStage,
+          };
+        }
         const acceptedAt = message.sentAt ?? (
           message.status === "delivery_unverified"
             ? message.deliveryClaimedAt
@@ -4640,7 +4872,7 @@ export const finalizeAccountSiteDeletionInternal = internalMutation({
     const quiescentAt =
       (site.accountDeletionRequestedAt ?? timestamp) +
       SITE_DELETION_QUIESCENCE_MS;
-    const [sending, canaries] = await Promise.all([
+    const [sending, canaries, managedSesCanaries] = await Promise.all([
       ctx.db
         .query("outreach_messages")
         .withIndex("by_site_status", (q) =>
@@ -4651,11 +4883,21 @@ export const finalizeAccountSiteDeletionInternal = internalMutation({
         .query("outreach_inbound_relay_canaries")
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .take(2),
+      ctx.db
+        .query("managed_ses_event_canaries")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(100),
     ]);
     const latestExternalLease = Math.max(
       site.publicationLeaseExpiresAt ?? 0,
       ...sending.map((message) => message.deliveryLeaseExpiresAt ?? 0),
       ...canaries.map((canary) => canary.deliveryLeaseExpiresAt ?? 0),
+      ...managedSesCanaries.map((canary) =>
+        Math.max(
+          canary.sendLeaseExpiresAt ?? 0,
+          canary.dispositionLeaseExpiresAt ?? 0,
+        )
+      ),
     );
     const safeAfter = Math.max(quiescentAt, latestExternalLease + 1_000);
     if (safeAfter > timestamp) {
@@ -4838,6 +5080,13 @@ async function accountReceiptRowsForStage(
           q.eq("accountKey", accountDeletionKey(userId))
         )
         .take(ACCOUNT_DELETION_RECEIPT_BATCH);
+    case "managed_ses_pacing_receipts":
+      return ctx.db
+        .query("managed_ses_pacing_receipts")
+        .withIndex("by_account", (q) =>
+          q.eq("accountKey", accountDeletionKey(userId))
+        )
+        .take(ACCOUNT_DELETION_RECEIPT_BATCH);
     case "article_generation_attempts":
       return ctx.db
         .query("article_generation_attempts")
@@ -4869,6 +5118,9 @@ async function scrubForeignAccountOutreachMessage(
   ) {
     return "lease_wait";
   }
+  if (!(await materializeManagedSesSendTombstoneForDeletion(ctx, message))) {
+    return "lease_wait";
+  }
   const relayReceipts = await ctx.db
     .query("outreach_inbound_relay_receipts")
     .withIndex("by_site_message", (q) =>
@@ -4891,6 +5143,90 @@ async function scrubForeignAccountOutreachMessage(
   }
   await ctx.db.delete(message._id);
   return "deleted";
+}
+
+type ForeignManagedInboxReleaseState =
+  | { state: "not_managed" }
+  | { state: "pending" }
+  | {
+      state: "sealed";
+      resource: Doc<"managed_outreach_mailbox_resources">;
+    };
+
+async function stageForeignOwnerManagedInboxRelease(
+  ctx: MutationCtx,
+  inbox: Doc<"outreach_inboxes">,
+  deletingOwnerAccountKey: string,
+  timestamp: number,
+): Promise<ForeignManagedInboxReleaseState> {
+  const managed = Boolean(
+    inbox.provider === MANAGED_SES_TRANSPORT ||
+      inbox.managedTransportKind === MANAGED_SES_TRANSPORT ||
+      ["managed_adapter", "managed_adapter_retiring"].includes(
+        inbox.credentialSource ?? "",
+      ),
+  );
+  if (!managed) return { state: "not_managed" };
+  if (inbox.credentialOwnerAccountKey !== deletingOwnerAccountKey) {
+    throw new Error(
+      "Foreign managed inbox no longer belongs to the deleting account",
+    );
+  }
+
+  await stageManagedOutreachMailboxReleaseForInbox(
+    ctx,
+    inbox._id,
+    timestamp,
+    "verified_account_deletion_foreign_owner",
+  );
+  const resources = await ctx.db
+    .query("managed_outreach_mailbox_resources")
+    .withIndex("by_canonical_inbox", (q) =>
+      q.eq("canonicalInboxId", inbox._id)
+    )
+    .take(2);
+  if (resources.length !== 1) {
+    throw new Error(
+      "Foreign managed inbox must resolve to one exact external resource",
+    );
+  }
+  const resource = resources[0];
+  if (
+    resource.siteId !== inbox.siteId ||
+    resource.canonicalInboxId !== inbox._id ||
+    resource.ownerAccountKey !== deletingOwnerAccountKey ||
+    resource.transportKind !== MANAGED_SES_TRANSPORT ||
+    (inbox.credentialSource !== undefined &&
+      (inbox.managedTransportKind !== MANAGED_SES_TRANSPORT ||
+        inbox.managedTransportOperationKey !== resource.operationKey ||
+        inbox.managedTransportGeneration !== resource.generation ||
+        inbox.managedTransportAdapterVersion !== resource.adapterVersion))
+  ) {
+    throw new Error(
+      "Foreign managed inbox external-resource provenance is not exact",
+    );
+  }
+  const tombstone = await ctx.db
+    .query("managed_outreach_mailbox_release_tombstones")
+    .withIndex("by_operation", (q) =>
+      q.eq("operationKey", resource.operationKey)
+    )
+    .unique();
+  if (
+    !tombstone ||
+    !managedOutreachMailboxReleaseSealed({
+      externalProvisioningAttemptedAt:
+        resource.externalProvisioningAttemptedAt,
+      externalAllocatedAt: resource.externalAllocatedAt,
+      hasCanonicalInbox: true,
+      releaseState: resource.releaseState,
+      tombstoneState: tombstone.state,
+    }) ||
+    tombstone.ownerAccountKey !== deletingOwnerAccountKey ||
+    tombstone.generation !== resource.generation ||
+    tombstone.adapterVersion !== resource.adapterVersion
+  ) return { state: "pending" };
+  return { state: "sealed", resource };
 }
 
 export const finalizeAccountDeletionInternal = internalMutation({
@@ -4964,6 +5300,46 @@ export const finalizeAccountDeletionInternal = internalMutation({
           externalLeaseWait ||= result === "lease_wait";
         } else if (name === "outreach_foreign_owner_inboxes") {
           const inbox = row as Doc<"outreach_inboxes">;
+          const managedRelease = await stageForeignOwnerManagedInboxRelease(
+            ctx,
+            inbox,
+            receipt.accountKey,
+            now(),
+          );
+          if (managedRelease.state === "pending") {
+            externalLeaseWait = true;
+            continue;
+          }
+          if (managedRelease.state === "sealed") {
+            // Drain only the exact historical inbox. Site-wide reads here
+            // could erase the current owner's managed resource after a site
+            // transfer, so every query is keyed by the foreign inbox id.
+            const deliveryEvents = await ctx.db
+              .query("managed_ses_delivery_events")
+              .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
+              .take(20);
+            for (const event of deliveryEvents) {
+              await ctx.db.delete(event._id);
+            }
+            if (deliveryEvents.length > 0) continue;
+            const managedCanaries = await ctx.db
+              .query("managed_ses_event_canaries")
+              .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
+              .take(20);
+            for (const canary of managedCanaries) {
+              if (
+                await materializeManagedSesCanaryTombstoneForDeletion(
+                  ctx,
+                  canary,
+                )
+              ) {
+                await ctx.db.delete(canary._id);
+              } else {
+                externalLeaseWait = true;
+              }
+            }
+            if (managedCanaries.length > 0) continue;
+          }
           const inboxMessages = await ctx.db
             .query("outreach_messages")
             .withIndex("by_inbox", (q) => q.eq("inboxId", inbox._id))
@@ -5034,6 +5410,9 @@ export const finalizeAccountDeletionInternal = internalMutation({
                 unresolvedContacts.length === 0 &&
                 unresolvedSuppressions.length === 0
               ) {
+                if (managedRelease.state === "sealed") {
+                  await ctx.db.delete(managedRelease.resource._id);
+                }
                 await ctx.db.delete(inbox._id);
               }
             }
@@ -5067,6 +5446,18 @@ export const finalizeAccountDeletionInternal = internalMutation({
           await ctx.db.patch(
             row._id as Id<"outreach_sender_pacing_receipts">,
             { accountKey: undefined, tenantDomainKey: undefined },
+          );
+        } else if (name === "managed_ses_pacing_receipts") {
+          // Preserve conservative shared-domain reputation without retaining
+          // a deleted tenant, mailbox, or managed-resource linkage.
+          await ctx.db.patch(
+            row._id as Id<"managed_ses_pacing_receipts">,
+            {
+              accountKey: undefined,
+              mailboxKey: undefined,
+              resourceOperationKeyDigest: undefined,
+              updatedAt: now(),
+            },
           );
         } else if (name === "article_generation_attempts") {
           const attempt = row as Doc<"article_generation_attempts">;
@@ -5486,6 +5877,7 @@ async function outreachFleetState(
   site: Doc<"sites">,
 ) {
   const siteId = site._id;
+  const queriedAt = Date.now();
   const siteOwnerAccountKey = site.userId
     ? accountDeletionKey(site.userId)
     : undefined;
@@ -5494,6 +5886,71 @@ async function outreachFleetState(
     .withIndex("by_site", (q) => q.eq("siteId", siteId))
     .take(2);
   const inbox = inboxes.length === 1 ? inboxes[0] : undefined;
+  const inboxOwnerCurrent = Boolean(
+    inbox &&
+      siteOwnerAccountKey &&
+      inbox.credentialOwnerAccountKey === siteOwnerAccountKey,
+  );
+  const managedSesResources = inbox?.provider === MANAGED_SES_TRANSPORT
+    ? await ctx.db
+        .query("managed_outreach_mailbox_resources")
+        .withIndex("by_canonical_inbox", (q) =>
+          q.eq("canonicalInboxId", inbox._id)
+        )
+        .take(2)
+    : [];
+  const managedSesResource = managedSesResources.length === 1
+    ? managedSesResources[0]
+    : undefined;
+  const relayRuntimeConfig = inboundRelayRuntimeConfig();
+  const relayConfigurationHash = inboundRelayConfigurationHash(
+    relayRuntimeConfig,
+  );
+  const managedSesTransportReady = Boolean(
+    inbox &&
+      inboxOwnerCurrent &&
+      managedSesResource &&
+      managedSesResource.siteId === siteId &&
+      managedSesResource.ownerAccountKey === siteOwnerAccountKey &&
+      managedSesResource.transportKind === MANAGED_SES_TRANSPORT &&
+      managedSesResource.lifecycleState === "canonicalized" &&
+      managedSesResource.releaseState === "active" &&
+      managedSesResource.canonicalInboxId === inbox._id &&
+      managedSesResource.operationKey ===
+        inbox.managedTransportOperationKey &&
+      managedSesResource.generation === inbox.managedTransportGeneration &&
+      managedSesResource.adapterVersion ===
+        inbox.managedTransportAdapterVersion &&
+      managedSesResource.resourceReceipt ===
+        inbox.managedTransportResourceReceipt &&
+      managedSesResource.externalVerifiedAt ===
+        inbox.managedTransportResourceVerifiedAt &&
+      managedSesInboxReceiptCurrent({
+        inbox,
+        now: queriedAt,
+        expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+      }),
+  );
+  const managedSesInboundRelayReady = Boolean(
+    managedSesTransportReady &&
+      relayConfigurationHash &&
+      inbox?.managedTransportInboundCanaryRelayConfigurationHash ===
+        relayConfigurationHash &&
+      inbox.managedTransportInboundCanaryRetentionPolicyHash ===
+        relayRuntimeConfig.retentionPolicyHash,
+  );
+  const outboundTransportReady = Boolean(
+    inbox &&
+      inboxOwnerCurrent &&
+      (inbox.provider === MANAGED_SES_TRANSPORT
+        ? managedSesTransportReady
+        : autonomousOutreachTransportIssues({
+            inbox,
+            now: queriedAt,
+            managedSesAdapterVersion:
+              process.env.MANAGED_SES_ADAPTER_VERSION,
+          }).length === 0),
+  );
   const durabilityMigration = site.userId
     ? await ctx.db
         .query("outreach_durability_migrations")
@@ -5518,10 +5975,7 @@ async function outreachFleetState(
       ) &&
       autonomousOutreachConsentActive(inbox, site.userId) &&
       isSeoGrowthActuationEligible(site) &&
-      autonomousGmailCredentialIssues({
-        oauthScopes: inbox?.oauthScopes,
-        hasRefreshToken: Boolean(inbox?.oauthRefreshToken),
-      }).length === 0,
+      outboundTransportReady,
   );
   const durabilityMigrationComplete = Boolean(
     durabilityMigration?.version === OUTREACH_DURABILITY_MIGRATION_VERSION &&
@@ -5532,7 +5986,6 @@ async function outreachFleetState(
       autonomousOutreachReconciliationComplete(inbox) &&
       durabilityMigrationComplete,
   );
-  const queriedAt = Date.now();
   const canonicalDomain = siteCanonicalDomain(site);
   const domainRevision = siteCanonicalDomainRevision(site);
   const currentAuthorityOpportunity = async (status: string) => {
@@ -5673,18 +6126,21 @@ async function outreachFleetState(
   ]);
   const signedRelayReady = Boolean(
     inbox &&
-    inbox.provider === "gmail" &&
+    inboxOwnerCurrent &&
     !["disconnected", "suspended"].includes(inbox.status) &&
-    inboundRelayConfigured(inboundRelayRuntimeConfig()) &&
-    inboundRelayDsnRoutingReady({
-      inbox,
-      now: Date.now(),
-      rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-      runtimeConfig: inboundRelayRuntimeConfig(),
-    }),
+    inboundRelayConfigured(relayRuntimeConfig) &&
+    (inbox.provider === MANAGED_SES_TRANSPORT
+      ? managedSesInboundRelayReady
+      : inbox.provider === "gmail" && inboundRelayDsnRoutingReady({
+          inbox,
+          now: queriedAt,
+          rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+          runtimeConfig: relayRuntimeConfig,
+        })),
   );
   const legacyGmailReadReady = Boolean(
     inbox &&
+    inboxOwnerCurrent &&
     inbox.provider === "gmail" &&
     inbox.oauthScopes?.split(/\s+/).includes(
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -5712,6 +6168,8 @@ async function outreachFleetState(
     inboxStatus: inbox?.status,
     inboxMode: inbox?.mode,
     inboxVerified: Boolean(inbox?.verifiedAt),
+    inboxOwnerCurrent,
+    outboundTransportReady,
     autonomyConsentActive: activeAutonomyConsent,
     autonomyDurabilityMigrationPending: Boolean(
       durabilityMigrationBootstrapEligible && !durabilityMigrationComplete,
@@ -5729,7 +6187,10 @@ async function outreachFleetState(
     hasMessagesToMonitor: [sentMessage, reviewedSentMessage, repliedMessage]
       .some((message) => Boolean(
         message &&
-        (message?.providerMessageId || message?.providerThreadId),
+        (inbox?.provider === MANAGED_SES_TRANSPORT
+          ? message.inboundRelayAliasHash &&
+            message.inboundRelayOutboundMessageIdHash
+          : message.providerMessageId || message.providerThreadId),
       )),
   };
 }
@@ -6246,7 +6707,11 @@ export const resetAll = mutation({
       // hidden ambiguous provider outcome cannot be discovered only after
       // other tenants have already entered deletion.
       await assertConfigUnlocked(ctx, site);
-      const outreachDeletion = await gateSiteDeletionForOutreach(ctx, site._id);
+      const outreachDeletion = await gateSiteDeletionForOutreach(
+        ctx,
+        site._id,
+        { allowAtomicManagedReleaseStaging: true },
+      );
       if (!outreachDeletion.ready) {
         return {
           scheduled: 0,

@@ -302,7 +302,7 @@ test("messages are spaced even after explicit approval", () => {
   assert.match(decision.reason, /spacing/);
 });
 
-test("outreach sender must use a secondary-domain Gmail business mailbox", () => {
+test("outreach sender must use secondary-domain Gmail or the exact managed platform sender", () => {
   assert.ok(outreachSenderReadinessIssues({
     siteDomain: "leadpilot.chat",
     provider: "gmail",
@@ -312,7 +312,7 @@ test("outreach sender must use a secondary-domain Gmail business mailbox", () =>
     siteDomain: "leadpilot.chat",
     provider: "resend",
     fromEmail: "outreach@getleadpilot.com",
-  }).some((issue) => /transactional/.test(issue)));
+  }).some((issue) => /Gmail or Pentra's managed sender/.test(issue)));
   assert.ok(outreachSenderReadinessIssues({
     siteDomain: "https://app.example.co.uk",
     provider: "gmail",
@@ -323,6 +323,16 @@ test("outreach sender must use a secondary-domain Gmail business mailbox", () =>
     provider: "gmail",
     fromEmail: "outreach@mailer.another.co.uk",
   }), []);
+  assert.deepEqual(outreachSenderReadinessIssues({
+    siteDomain: "leadpilot.chat",
+    provider: "managed_ses",
+    fromEmail: "tenant@mail.pentra.dev",
+  }), []);
+  assert.ok(outreachSenderReadinessIssues({
+    siteDomain: "leadpilot.chat",
+    provider: "managed_ses",
+    fromEmail: "tenant@unreviewed.example",
+  }).some((issue) => /reviewed platform outreach domain/.test(issue)));
 });
 
 test("suppression and prior contact block a domain", () => {

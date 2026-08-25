@@ -20,6 +20,8 @@ function state(
     inboxStatus: "active",
     inboxMode: "approval",
     inboxVerified: true,
+    inboxOwnerCurrent: true,
+    outboundTransportReady: true,
     autonomyConsentActive: false,
     hasVerifiedOpportunities: false,
     hasApprovedMessages: false,
@@ -49,7 +51,9 @@ test("only a due message under current tenant consent can enable fleet delivery"
   assert.equal(planOutreachFleetSite(state(ready), "delivery").deliver, true);
   for (const unsafe of [
     { ...ready, inboxVerified: false },
-    { ...ready, inboxProvider: "resend" },
+    { ...ready, inboxOwnerCurrent: undefined },
+    { ...ready, outboundTransportReady: undefined },
+    { ...ready, inboxProvider: "resend", outboundTransportReady: false },
     { ...ready, inboxStatus: "suspended" },
     { ...ready, inboundMonitoringReady: false },
     { ...ready, inboundMonitoringMode: "legacy_gmail" as const },

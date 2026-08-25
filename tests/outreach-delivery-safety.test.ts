@@ -147,13 +147,23 @@ test("every post-send settlement preserves newer terminal authority evidence", (
   const backend = readFileSync("convex/outreach.ts", "utf8");
   assert.equal(
     backend.match(/outreachDeliverySettlementDecision\(\{/g)?.length,
-    3,
-    "provider receipt, owner-reviewed receipt, and signed-relay proof must share the terminal-state fence",
+    6,
+    "Gmail receipt, owner review, signed relay, and exact managed_ses receipt/event/status paths must share the terminal-state fence",
   );
   assert.equal(
     backend.match(/settlementLifecycle\.shouldMarkContacted/g)?.length,
     3,
   );
+  const managedSettlement = backend.slice(
+    backend.indexOf("export async function settleManagedSesAcceptedMessage"),
+    backend.indexOf("export const completeManagedSesDeliveryAttempt"),
+  );
+  assert.match(managedSettlement, /message\.deliveryTransport !== MANAGED_SES_TRANSPORT/);
+  assert.match(managedSettlement, /providerMessageIdDigest/);
+  assert.match(managedSettlement, /rfcMessageIdDigest/);
+  assert.match(managedSettlement, /threadReceipt/);
+  assert.match(managedSettlement, /settled: false, followUpQueued: false/);
+  assert.match(managedSettlement, /outreachDeliverySettlementDecision\(\{/);
 });
 
 test("tenant deletion is serialized behind live delivery and expired claims require review", () => {
@@ -176,7 +186,11 @@ test("tenant deletion is serialized behind live delivery and expired claims requ
       unresolvedDeliveryCount: 0,
       now: NOW,
     }),
-    { state: "in_flight", expiredMessageIds: [] },
+    {
+      state: "in_flight",
+      expiredMessageIds: [],
+      safePreboundaryMessageIds: [],
+    },
     "a live claim must make the entire deletion attempt a no-op",
   );
   assert.deepEqual(
@@ -190,7 +204,11 @@ test("tenant deletion is serialized behind live delivery and expired claims requ
       unresolvedDeliveryCount: 0,
       now: NOW,
     }),
-    { state: "expired_unverified", expiredMessageIds: ["expired"] },
+    {
+      state: "expired_unverified",
+      expiredMessageIds: ["expired"],
+      safePreboundaryMessageIds: [],
+    },
   );
   assert.deepEqual(
     outreachDeletionGate({
@@ -198,7 +216,11 @@ test("tenant deletion is serialized behind live delivery and expired claims requ
       unresolvedDeliveryCount: 1,
       now: NOW,
     }),
-    { state: "manual_review", expiredMessageIds: [] },
+    {
+      state: "manual_review",
+      expiredMessageIds: [],
+      safePreboundaryMessageIds: [],
+    },
   );
   assert.deepEqual(
     outreachDeletionGate({
@@ -206,8 +228,58 @@ test("tenant deletion is serialized behind live delivery and expired claims requ
       unresolvedDeliveryCount: 0,
       now: NOW,
     }),
-    { state: "ready", expiredMessageIds: [] },
+    { state: "ready", expiredMessageIds: [], safePreboundaryMessageIds: [] },
   );
+});
+
+test("tenant deletion drains only exact expired pre-provider claims", () => {
+  assert.deepEqual(outreachDeletionGate({
+    sending: [{
+      messageId: "v1-preboundary",
+      status: "sending",
+      attemptId: "attempt-v1",
+      leaseExpiresAt: NOW - 1,
+      boundaryVersion: 1,
+    }],
+    unresolvedDeliveryCount: 0,
+    now: NOW,
+  }), {
+    state: "ready",
+    expiredMessageIds: [],
+    safePreboundaryMessageIds: ["v1-preboundary"],
+  });
+  for (const sending of [
+    {
+      messageId: "legacy",
+      status: "sending",
+      attemptId: "attempt-legacy",
+      leaseExpiresAt: NOW - 1,
+    },
+    {
+      messageId: "v1-postboundary",
+      status: "sending",
+      attemptId: "attempt-v1-post",
+      leaseExpiresAt: NOW - 1,
+      boundaryVersion: 1,
+      externalAttemptedAt: NOW - 2,
+    },
+  ]) {
+    assert.deepEqual(outreachDeletionGate({
+      sending: [sending],
+      unresolvedDeliveryCount: 0,
+      now: NOW,
+    }), {
+      state: "expired_unverified",
+      expiredMessageIds: [sending.messageId],
+      safePreboundaryMessageIds: [],
+    });
+  }
+  const sitesSource = readFileSync(
+    new URL("../convex/sites.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(sitesSource, /decision\.safePreboundaryMessageIds/);
+  assert.match(sitesSource, /releaseDurableContactClaimForAccount/);
 });
 
 test("approval is bound to the exact inbox connection and sender profile version", () => {

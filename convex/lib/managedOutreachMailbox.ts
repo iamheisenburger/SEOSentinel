@@ -1,9 +1,15 @@
 import type { Doc } from "../_generated/dataModel";
 import { autonomousGmailCredentialIssues } from "./outreachDelivery.ts";
 import {
+  inboundRelayConfigured,
   inboundRelayDsnRoutingReady,
   type InboundRelayRuntimeConfig,
 } from "./outreachInboundRelay.ts";
+import {
+  MANAGED_SES_PLATFORM_SENDER_DOMAIN,
+  MANAGED_SES_TRANSPORT,
+  managedSesInboxReceiptCurrent,
+} from "./managedSes.ts";
 import {
   normalizeDomain,
   outreachSenderReadinessIssues,
@@ -20,6 +26,43 @@ export const MANAGED_OUTREACH_MAILBOX_ADAPTER_UNAVAILABLE =
   "managed_outreach_mailbox_adapter_unavailable";
 export const MANAGED_OUTREACH_MAILBOX_ADAPTER_NOT_IMPLEMENTED =
   "managed_outreach_mailbox_adapter_contract_not_implemented";
+export const MANAGED_OUTREACH_MAILBOX_ADAPTER_RETRY =
+  "managed_outreach_mailbox_adapter_retry";
+export const MANAGED_OUTREACH_MAILBOX_PROVIDER_BLOCKED =
+  "managed_outreach_mailbox_provider_blocked";
+
+export function managedSesSuccessorHandoffDecision<ResourceId extends string>(
+  args: {
+    successorAlreadyInstalled: boolean;
+    eligibleResourceIds: ResourceId[];
+  },
+):
+  | { state: "none" }
+  | { state: "retain_one"; resourceId: ResourceId }
+  | { state: "ambiguous" } {
+  if (args.successorAlreadyInstalled || args.eligibleResourceIds.length === 0) {
+    return { state: "none" };
+  }
+  if (args.eligibleResourceIds.length !== 1) return { state: "ambiguous" };
+  return { state: "retain_one", resourceId: args.eligibleResourceIds[0] };
+}
+
+export function managedSesRotationCandidateEligible(args: {
+  differentGeneration: boolean;
+  resourceRequestMatches: boolean;
+  siteMatches: boolean;
+  ownerMatches: boolean;
+  domainMatches: boolean;
+  domainRevisionMatches: boolean;
+  contractMatches: boolean;
+  resourceReleased: boolean;
+  tombstoneMatches: boolean;
+  inboxIdentityMatches: boolean;
+  inboxProvenanceCleared: boolean;
+  noPendingWork: boolean;
+}): boolean {
+  return Object.values(args).every(Boolean);
+}
 
 export type ManagedOutreachMailboxProfile = {
   fromName: string;
@@ -255,6 +298,50 @@ export function managedOutreachMailboxOperationalIssues(args: {
     return ["owner_sender_attestation_missing"];
   }
   const expectedProfile = args.expectedProfile as ManagedOutreachMailboxProfile;
+  if (inbox.provider === MANAGED_SES_TRANSPORT) {
+    const issues: string[] = [];
+    const senderDomain = normalizeDomain(inbox.senderDomain ?? "");
+    const fromDomain = normalizeDomain(inbox.fromEmail.split("@")[1] ?? "");
+    if (
+      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      inbox.managedTransportKind !== MANAGED_SES_TRANSPORT ||
+      resource.resourceReceipt !== inbox.managedTransportResourceReceipt ||
+      resource.externalVerifiedAt !==
+        inbox.managedTransportResourceVerifiedAt ||
+      !managedSesInboxReceiptCurrent({
+        inbox,
+        now: args.now,
+        expectedAdapterVersion: resource.adapterVersion,
+      })
+    ) issues.push("managed_ses_signed_receipt_missing_or_stale");
+    if (
+      !senderDomain ||
+      senderDomain !== fromDomain ||
+      senderDomain !== MANAGED_SES_PLATFORM_SENDER_DOMAIN
+    ) issues.push("managed_ses_sender_binding_invalid");
+    if (inbox.credentialOwnerAccountKey !== args.ownerAccountKey) {
+      issues.push("credential_owner_mismatch");
+    }
+    if (inbox.fromName?.trim() !== expectedProfile.fromName) {
+      issues.push("sender_identity_mismatch");
+    }
+    if (
+      inbox.physicalMailingAddress?.trim() !==
+        expectedProfile.physicalMailingAddress
+    ) issues.push("physical_mailing_address_mismatch");
+    if (
+      !inbox.complianceConfirmedAt ||
+      inbox.complianceConfirmedAt <
+        expectedProfile.senderIdentityAndAddressAttestedAt
+    ) issues.push("compliance_receipt_missing_or_stale");
+    if (!inbox.verifiedAt || !["warming", "active"].includes(inbox.status)) {
+      issues.push("mailbox_not_operational");
+    }
+    if (!inboundRelayConfigured(args.runtimeConfig)) {
+      issues.push("signed_reply_stop_relay_unavailable");
+    }
+    return [...new Set(issues)];
+  }
   const issues = outreachSenderReadinessIssues({
     siteDomain: args.siteDomain,
     provider: inbox.provider,
@@ -330,6 +417,7 @@ export function managedOutreachMailboxReleaseSealed(args: {
 
 export type ManagedOutreachMailboxProvisionOperation = {
   contractVersion: number;
+  transport: "managed_ses";
   operationKey: string;
   generation: number;
   configurationRevision: number;
@@ -362,6 +450,7 @@ export type ManagedOutreachMailboxProvisionOperation = {
 
 export type ManagedOutreachMailboxReleaseOperation = {
   contractVersion: number;
+  transport: "managed_ses";
   operationKey: string;
   generation: number;
   provisioningAdapterVersion?: string;

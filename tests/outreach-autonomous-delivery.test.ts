@@ -23,6 +23,7 @@ const schema = readFileSync("convex/schema.ts", "utf8");
 const http = readFileSync("convex/http.ts", "utf8");
 const autonomy = readFileSync("convex/lib/outreachAutonomy.ts", "utf8");
 const sequence = readFileSync("convex/lib/outreachSequence.ts", "utf8");
+const delivery = readFileSync("convex/lib/outreachDelivery.ts", "utf8");
 
 test("the v3 bounded-sequence consent receipt has an exact audited hash", () => {
   assert.equal(OUTREACH_AUTONOMY_CONSENT_VERSION, 3);
@@ -192,7 +193,25 @@ test("automatic delivery uses exact current consent, strict send-only credential
     backend.indexOf("export const getApprovedDeliveryEvidenceInternal"),
   );
   assert.match(claim, /autonomousMessageAuthorizationMatches/);
-  assert.match(claim, /autonomousGmailCredentialIssues/);
+  assert.match(claim, /autonomousOutreachTransportIssues/);
+  const transportIssues = delivery.slice(
+    delivery.indexOf("export function autonomousOutreachTransportIssues"),
+    delivery.indexOf("export type DeliveryLeaseState"),
+  );
+  assert.match(transportIssues, /managedSesInboxReceiptCurrent/);
+  assert.match(transportIssues, /return autonomousGmailCredentialIssues/);
+  assert.match(claim, /managedSes\s*&&\s*\(\s*!managedSesReceipt/);
+  assert.match(
+    claim,
+    /The managed sender lacks a current exact signed status or event-canary receipt/,
+    "managed_ses must fail closed when its exact signed claim proof is missing",
+  );
+  assert.match(
+    claim,
+    /if \(managedSes && managedSesReceipt && managedResource\)/,
+    "a fully bound managed_ses receipt may advance the canonical projections",
+  );
+  assert.match(claim, /if \(!managedSes && managedSesReceipt\)/);
   assert.match(claim, /credentialOwnerAccountKey/);
   assert.match(claim, /isSeoGrowthActuationEligible\(site\)/);
   assert.match(claim, /readDurablePacingReceipt/);

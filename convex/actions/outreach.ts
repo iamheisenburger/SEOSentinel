@@ -49,6 +49,7 @@ import {
 import {
   OUTREACH_OPPORTUNITY_EVIDENCE_MAX_AGE_MS as OUTREACH_OPPORTUNITY_MAX_AGE_MS,
   autonomousGmailCredentialIssues,
+  autonomousOutreachTransportIssues,
   gmailHttpFailureDisposition,
 } from "../lib/outreachDelivery";
 import { autonomousOutreachRuntimeEnabled } from "../lib/outreachAutonomy";
@@ -89,6 +90,16 @@ import {
   inboundRelayOutboundMessageId,
   inboundRelayOutboundMessageIdForAttempt,
 } from "../lib/outreachInboundRelay";
+import {
+  MANAGED_SES_PLATFORM_RELAY_DOMAIN,
+  MANAGED_SES_PLATFORM_SENDER_DOMAIN,
+  MANAGED_SES_TRANSPORT,
+  callManagedSesAdapter,
+  managedSesAdapterConfiguration,
+  managedSesInboxReceiptCurrent,
+  parseManagedSesResourceReceipt,
+  parseManagedSesSendReceipt,
+} from "../lib/managedSes";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -104,6 +115,20 @@ function inboundRelayRuntimeConfig() {
       process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
     retentionAudited: process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
   };
+}
+
+function managedSesRuntimeConfig() {
+  return managedSesAdapterConfiguration({
+    endpoint: process.env.MANAGED_SES_ADAPTER_URL,
+    adapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
+    signingSecret: process.env.MANAGED_SES_ADAPTER_HMAC_SECRET,
+    nextVerificationSecret:
+      process.env.MANAGED_SES_ADAPTER_HMAC_SECRET_NEXT,
+  });
+}
+
+function managedSesNonce(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 async function requireOwnedSite(ctx: ActionCtx, siteId: Id<"sites">) {
@@ -694,6 +719,8 @@ type DeliveryOutcome = {
   ok: boolean;
   providerMessageId?: string;
   providerThreadId?: string;
+  rfcMessageIdDigest?: string;
+  managedSesThreadReceipt?: string;
   error?: string;
   /** A hard rejection: the address is dead and must be suppressed. */
   bounced?: boolean;
@@ -701,6 +728,15 @@ type DeliveryOutcome = {
   suspend?: boolean;
   /** No provider receipt proves whether Gmail accepted the message. */
   unverified?: boolean;
+  /** The exact claim was safely terminalized before any provider call. */
+  preBoundaryTerminalized?: boolean;
+  /** Reputation pacing preserved the approved row for an exact later wake. */
+  preBoundaryDeferred?: boolean;
+  deferredUntil?: number;
+  /** A signed semantic terminal event won; it already settled state. */
+  terminalEventSettled?: boolean;
+  /** Terminal integrity quarantine remains no-replay without blocking fleet. */
+  preserveContactClaim?: boolean;
 };
 
 type LiveDnsEvidence = {
@@ -896,16 +932,40 @@ async function liveOpportunityEvidence(
   }
 }
 
+type DeliveryInbox = {
+  provider: string;
+  fromEmail: string;
+  fromName?: string;
+  replyToEmail?: string;
+  oauthRefreshToken?: string;
+  oauthAccessToken?: string;
+  apiKey?: string;
+};
+
+async function prepareGmailAccessToken(
+  inbox: DeliveryInbox,
+): Promise<
+  | { ok: true; accessToken: string }
+  | { ok: false; suspend: boolean }
+> {
+  const refreshed = inbox.oauthRefreshToken
+    ? await refreshGoogleAccessToken(inbox.oauthRefreshToken)
+    : null;
+  const accessToken = refreshed?.ok
+    ? refreshed.accessToken
+    : inbox.oauthRefreshToken
+      ? undefined
+      : inbox.oauthAccessToken;
+  return accessToken
+    ? { ok: true, accessToken }
+    : {
+        ok: false,
+        suspend: Boolean(refreshed?.ok === false && refreshed.hardAuthFailure),
+      };
+}
+
 async function deliver(
-  inbox: {
-    provider: string;
-    fromEmail: string;
-    fromName?: string;
-    replyToEmail?: string;
-    oauthRefreshToken?: string;
-    oauthAccessToken?: string;
-    apiKey?: string;
-  },
+  inbox: DeliveryInbox,
   message: {
     toEmail: string;
     subject: string;
@@ -915,23 +975,20 @@ async function deliver(
     providerThreadId?: string;
     inReplyToRfcMessageId?: string;
   },
+  preparedGmailAccessToken?: string,
 ): Promise<DeliveryOutcome> {
   if (inbox.provider === "gmail") {
-    const refreshed = inbox.oauthRefreshToken
-      ? await refreshGoogleAccessToken(inbox.oauthRefreshToken)
-      : null;
-    const accessToken = refreshed?.ok
-      ? refreshed.accessToken
-      : inbox.oauthRefreshToken
-        ? undefined
-        : inbox.oauthAccessToken;
-    if (!accessToken) {
+    const prepared = preparedGmailAccessToken
+      ? { ok: true as const, accessToken: preparedGmailAccessToken }
+      : await prepareGmailAccessToken(inbox);
+    if (!prepared.ok) {
       return {
         ok: false,
         error: "Gmail access token unavailable",
-        suspend: refreshed?.ok === false && refreshed.hardAuthFailure,
+        suspend: prepared.suspend,
       };
     }
+    const accessToken = prepared.accessToken;
     const messageBody = rfc822({
         fromName: inbox.fromName,
         fromEmail: inbox.fromEmail,
@@ -1043,14 +1100,34 @@ async function sendHandler(
     };
   }
 
+  const managedSes = inboxSnapshot.provider === MANAGED_SES_TRANSPORT;
+  const managedSesConfig = managedSes ? managedSesRuntimeConfig() : null;
+  if (
+    managedSes &&
+    (!managedSesConfig ||
+      inboxSnapshot.managedTransportAdapterVersion !==
+        managedSesConfig.adapterVersion)
+  ) {
+    return {
+      ...result,
+      stopped:
+        "The signed managed sender adapter is unavailable or its version no longer matches this inbox. Nothing was sent.",
+    };
+  }
   const relayDomain = process.env.OUTREACH_INBOUND_RELAY_DOMAIN;
   const relayConfigured = inboundRelayConfigured(inboundRelayRuntimeConfig());
-  const relayReady = relayConfigured && inboundRelayDsnRoutingReady({
-    inbox: inboxSnapshot,
-    now: Date.now(),
-    rolloutEpoch: inboxSnapshot.siteRolloutEpoch ?? 0,
-    runtimeConfig: inboundRelayRuntimeConfig(),
-  });
+  const relayReady = managedSes
+    ? relayConfigured && managedSesInboxReceiptCurrent({
+        inbox: inboxSnapshot,
+        now: Date.now(),
+        expectedAdapterVersion: managedSesConfig!.adapterVersion,
+      })
+    : relayConfigured && inboundRelayDsnRoutingReady({
+        inbox: inboxSnapshot,
+        now: Date.now(),
+        rolloutEpoch: inboxSnapshot.siteRolloutEpoch ?? 0,
+        runtimeConfig: inboundRelayRuntimeConfig(),
+      });
   const legacyGmailReadReady = Boolean(
     inboxSnapshot.provider === "gmail" &&
     inboxSnapshot.oauthScopes?.split(/\s+/).includes(
@@ -1068,16 +1145,17 @@ async function sendHandler(
   }
   if (
     release === "automatic" &&
-    (!inboxSnapshot.automaticDeliveryAuthorized ||
-      autonomousGmailCredentialIssues({
-        oauthScopes: inboxSnapshot.oauthScopes,
-        hasRefreshToken: Boolean(inboxSnapshot.oauthRefreshToken),
+      (!inboxSnapshot.automaticDeliveryAuthorized ||
+      autonomousOutreachTransportIssues({
+        inbox: inboxSnapshot,
+        now: Date.now(),
+        managedSesAdapterVersion: managedSesConfig?.adapterVersion,
       }).length > 0)
   ) {
     return {
       ...result,
       stopped:
-        "The current tenant consent, rollout, or exact send-only Gmail authorization does not permit automatic delivery.",
+        "The current tenant consent, rollout, or exact outbound transport authorization does not permit automatic delivery.",
     };
   }
   const pacingPreflight = outreachSendDecision({
@@ -1138,7 +1216,16 @@ async function sendHandler(
   // mutation rejects evidence older than one minute and reloads every tenant,
   // sender, message, opportunity, suppression and pacing record itself.
   const [dnsEvidence, opportunityEvidenceResult] = await Promise.all([
-    liveDnsEvidence(inboxSnapshot),
+    managedSes
+      ? Promise.resolve({
+          senderDomain: MANAGED_SES_PLATFORM_SENDER_DOMAIN,
+          dkimSelector: inboxSnapshot.dkimSelector ?? "managed-ses",
+          checkedAt: Date.now(),
+          spf: true,
+          dkim: true,
+          dmarc: true,
+        })
+      : liveDnsEvidence(inboxSnapshot),
     liveOpportunityEvidence(ctx, siteId, release),
   ]);
   if (!opportunityEvidenceResult) {
@@ -1176,6 +1263,80 @@ async function sendHandler(
     targetReceiptUrl: opportunityEvidenceResult.targetReceiptUrl,
     targetCheckedAt: opportunityEvidenceResult.targetCheckedAt,
   };
+  let managedSesClaimReceipt:
+    | {
+        resourceOperationKey: string;
+        generation: number;
+        adapterVersion: string;
+        resourceReceipt: string;
+        providerVerifiedAt: number;
+        unsubscribeTokenHash: string;
+      }
+    | undefined;
+  let managedSesUnsubscribeUrl: string | undefined;
+  if (managedSes) {
+    const resourceOperationKey =
+      inboxSnapshot.managedTransportOperationKey ?? "";
+    const generation = inboxSnapshot.managedTransportGeneration;
+    if (
+      !managedSesConfig ||
+      !resourceOperationKey ||
+      !Number.isSafeInteger(generation)
+    ) {
+      return {
+        ...result,
+        stopped: "The managed sender binding is invalid. Nothing was sent.",
+      };
+    }
+    const status = await callManagedSesAdapter({
+      config: managedSesConfig,
+      route: "status",
+      nonce: managedSesNonce(),
+      payload: {
+        kind: "resource",
+        operationKey: resourceOperationKey,
+        adapterVersion: managedSesConfig.adapterVersion,
+      },
+      timeoutMs: 30_000,
+    });
+    const receipt = status.authenticated && status.ok
+      ? parseManagedSesResourceReceipt(status.receipt)
+      : null;
+    const providerVerifiedAt =
+      receipt?.state === "ready" ? receipt.verifiedAt! * 1_000 : 0;
+    if (
+      !receipt ||
+      receipt.state !== "ready" ||
+      receipt.operationKey !== resourceOperationKey ||
+      receipt.generation !== generation ||
+      receipt.adapterVersion !== managedSesConfig.adapterVersion ||
+      receipt.fromEmail !== inboxSnapshot.fromEmail ||
+      receipt.resourceReceipt !==
+        inboxSnapshot.managedTransportResourceReceipt ||
+      providerVerifiedAt <= 0 ||
+      providerVerifiedAt > Date.now() + 5 * 60 * 1000 ||
+      Date.now() - providerVerifiedAt > 5 * 60 * 1000
+    ) {
+      return {
+        ...result,
+        stopped:
+          "The managed sender did not return a current exact signed readiness receipt. Nothing was sent.",
+      };
+    }
+    const unsubscribeToken = randomBytes(32).toString("base64url");
+    managedSesUnsubscribeUrl =
+      `https://pentra.dev/unsubscribe/${unsubscribeToken}`;
+    managedSesClaimReceipt = {
+      resourceOperationKey,
+      generation: generation!,
+      adapterVersion: managedSesConfig.adapterVersion,
+      resourceReceipt: receipt.resourceReceipt!,
+      providerVerifiedAt,
+      unsubscribeTokenHash: createHash("sha256")
+        .update(unsubscribeToken)
+        .digest("hex"),
+    };
+  }
   let claim;
   try {
     claim = await ctx.runMutation(internal.outreach.claimApprovedDelivery, {
@@ -1185,6 +1346,7 @@ async function sendHandler(
       dnsEvidence,
       opportunityEvidence,
       inboundRelay: relayBinding,
+      managedSesReceipt: managedSesClaimReceipt,
     });
   } catch {
     return {
@@ -1194,47 +1356,287 @@ async function sendHandler(
   }
   if (!claim.claimed) return { ...result, stopped: claim.reason };
 
+  const managedSesParent = managedSes && claim.message.sequenceStep > 0 &&
+      claim.message.managedSesParentOperationKey &&
+      claim.message.managedSesParentThreadReceipt
+    ? {
+        operationId: claim.message.managedSesParentOperationKey,
+        threadReceipt: claim.message.managedSesParentThreadReceipt,
+      }
+    : undefined;
+  const deliveryBoundaryBinding = {
+    siteId,
+    messageId: claim.message._id,
+    attemptId,
+    release,
+    expectedParentMessageId: claim.message.parentMessageId,
+    expectedProviderThreadId: claim.message.deliveryExpectedThreadId,
+    expectedInReplyToRfcMessageIdHash:
+      claim.message.inReplyToRfcMessageIdHash,
+    expectedManagedParentOperationKey:
+      claim.message.managedSesParentOperationKey,
+    expectedManagedParentThreadReceipt:
+      claim.message.managedSesParentThreadReceipt,
+  };
   let outcome: DeliveryOutcome;
   try {
-    outcome = await deliver(claim.inbox, {
-      toEmail: claim.message.toEmail,
-      subject: claim.message.subject,
-      body: claim.message.body,
-      replyTo: relayBinding?.aliasAddress,
-      outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
-      providerThreadId: claim.deliveryThreadId,
-      inReplyToRfcMessageId: claim.deliveryInReplyToRfcMessageId,
-    });
+    if (managedSes) {
+      if (
+        !managedSesConfig ||
+        !managedSesClaimReceipt ||
+        !managedSesUnsubscribeUrl ||
+        !relayBinding?.aliasAddress ||
+        (claim.message.sequenceStep > 0 && !managedSesParent)
+      ) {
+        outcome = {
+          ok: false,
+          error: "Managed sender binding unavailable",
+          unverified: true,
+        };
+      } else {
+        const boundary = await ctx.runMutation(
+          internal.outreach.markManagedSesDeliveryExternalBoundary,
+          deliveryBoundaryBinding,
+        );
+        if (!boundary.marked) {
+          outcome = {
+            ok: false,
+            error: "deferred" in boundary && boundary.deferred
+              ? "Managed sender pacing deferred delivery"
+              : boundary.externalAttempted
+                ? "Managed sender boundary was already crossed"
+                : "Managed sender authorization changed before delivery",
+            unverified: boundary.externalAttempted,
+            preBoundaryTerminalized:
+              "terminalized" in boundary && boundary.terminalized,
+            preBoundaryDeferred:
+              "deferred" in boundary && boundary.deferred,
+            deferredUntil:
+              "nextEligibleAt" in boundary
+                ? boundary.nextEligibleAt
+                : undefined,
+          };
+        } else {
+          const response = await callManagedSesAdapter({
+            config: managedSesConfig,
+            route: "send",
+            nonce: managedSesNonce(),
+            payload: {
+              purpose: "outreach",
+              operationKey: attemptId,
+              resourceOperationKey:
+                managedSesClaimReceipt.resourceOperationKey,
+              generation: managedSesClaimReceipt.generation,
+              adapterVersion: managedSesClaimReceipt.adapterVersion,
+              sequenceStep: claim.message.sequenceStep,
+              ...(managedSesParent ? { parent: managedSesParent } : {}),
+              toEmail: claim.message.toEmail,
+              displayName: claim.inbox.fromName,
+              subject: claim.message.subject,
+              text: claim.message.body,
+              replyTo: relayBinding.aliasAddress,
+              unsubscribeUrl: managedSesUnsubscribeUrl,
+            },
+            timeoutMs: 30_000,
+          });
+          const receipt = response.authenticated && response.ok
+            ? parseManagedSesSendReceipt(response.receipt)
+            : null;
+          if (
+            receipt &&
+            receipt.state !== "missing" &&
+            receipt.operationKey === attemptId &&
+            receipt.resourceOperationKey ===
+              managedSesClaimReceipt.resourceOperationKey &&
+            receipt.generation === managedSesClaimReceipt.generation &&
+            receipt.adapterVersion === managedSesClaimReceipt.adapterVersion &&
+            receipt.sequenceStep === claim.message.sequenceStep &&
+            receipt.purpose === "outreach" &&
+            receipt.updatedAt <= Math.floor(Date.now() / 1_000) + 5 * 60 &&
+            receipt.terminalDeliveryEvent &&
+            receipt.providerMessageIdDigest &&
+            receipt.rfcMessageIdDigest &&
+            receipt.threadReceipt
+          ) {
+            await ctx.runMutation(
+              internal.outreach.recordManagedSesDeliveryEvent,
+              {
+                adapterVersion: receipt.adapterVersion,
+                operationKey: receipt.operationKey,
+                resourceOperationKey: receipt.resourceOperationKey,
+                generation: receipt.generation,
+                sequenceStep: receipt.sequenceStep,
+                purpose: receipt.purpose,
+                eventType: receipt.terminalDeliveryEvent.eventType,
+                occurredAt: Date.parse(
+                  receipt.terminalDeliveryEvent.occurredAt,
+                ),
+                providerMessageIdDigest: receipt.providerMessageIdDigest,
+                rfcMessageIdDigest: receipt.rfcMessageIdDigest,
+                threadReceipt: receipt.threadReceipt,
+                eventReceipt: receipt.terminalDeliveryEvent.eventReceipt,
+              },
+            );
+            outcome = {
+              ok: false,
+              error: "The managed sender returned a signed terminal delivery event",
+              terminalEventSettled: true,
+            };
+          } else if (
+            receipt &&
+            receipt.state !== "missing" &&
+            receipt.operationKey === attemptId &&
+            receipt.resourceOperationKey ===
+              managedSesClaimReceipt.resourceOperationKey &&
+            receipt.generation === managedSesClaimReceipt.generation &&
+            receipt.adapterVersion === managedSesClaimReceipt.adapterVersion &&
+            receipt.sequenceStep === claim.message.sequenceStep &&
+            receipt.purpose === "outreach" &&
+            receipt.updatedAt <= Math.floor(Date.now() / 1_000) + 5 * 60 &&
+            receipt.state === "submitted" &&
+            !receipt.terminalDeliveryEvent &&
+            receipt.providerMessageIdDigest
+          ) {
+            outcome = {
+              ok: true,
+              providerMessageId: receipt.providerMessageIdDigest,
+              rfcMessageIdDigest: receipt.rfcMessageIdDigest,
+              managedSesThreadReceipt: receipt.threadReceipt,
+            };
+          } else if (
+            ["terminal_rejected", "quarantined_integrity"].includes(
+              receipt?.state ?? "",
+            ) &&
+            receipt?.state !== "missing" &&
+            receipt?.operationKey === attemptId &&
+            receipt.resourceOperationKey ===
+              managedSesClaimReceipt.resourceOperationKey &&
+            receipt.generation === managedSesClaimReceipt.generation &&
+            receipt.adapterVersion === managedSesClaimReceipt.adapterVersion &&
+            receipt.sequenceStep === claim.message.sequenceStep &&
+            receipt.purpose === "outreach"
+          ) {
+            outcome = {
+              ok: false,
+              error: receipt?.state === "quarantined_integrity"
+                ? "Managed sender quarantined a no-replay integrity mismatch"
+                : "Managed sender rejected the delivery",
+              preserveContactClaim:
+                receipt?.state === "quarantined_integrity",
+            };
+          } else {
+            // The application claim and provider transport both enforce an
+            // immutable operation key. Any missing or mismatched response is an
+            // ambiguous external attempt and must never be replayed.
+            outcome = {
+              ok: false,
+              error: "Managed sender receipt is unverified",
+              unverified: true,
+            };
+          }
+        }
+      }
+    } else {
+      // OAuth refresh may make a credential-only provider call, but the final
+      // serializable authorization fence remains immediately before the Gmail
+      // message boundary. A concurrent reply/STOP/unsubscribe therefore wins.
+      const prepared = await prepareGmailAccessToken(claim.inbox);
+      if (!prepared.ok) {
+        outcome = {
+          ok: false,
+          error: "Gmail access token unavailable",
+          suspend: prepared.suspend,
+        };
+      } else {
+        const boundary = await ctx.runMutation(
+          internal.outreach.markGmailDeliveryExternalBoundary,
+          deliveryBoundaryBinding,
+        );
+        if (!boundary.marked) {
+          outcome = {
+            ok: false,
+            error: boundary.externalAttempted
+              ? "Gmail delivery boundary was already crossed"
+              : "Gmail delivery authorization changed before delivery",
+            unverified: boundary.externalAttempted,
+            preBoundaryTerminalized:
+              "terminalized" in boundary && boundary.terminalized,
+          };
+        } else {
+          outcome = await deliver(claim.inbox, {
+            toEmail: claim.message.toEmail,
+            subject: claim.message.subject,
+            body: claim.message.body,
+            replyTo: relayBinding?.aliasAddress,
+            outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
+            providerThreadId: claim.deliveryThreadId,
+            inReplyToRfcMessageId: claim.deliveryInReplyToRfcMessageId,
+          }, prepared.accessToken);
+        }
+      }
+    }
   } catch {
     outcome = {
       ok: false,
-      error: "Gmail delivery timeout",
+      error: managedSes
+        ? "Managed sender delivery outcome is ambiguous"
+        : "Gmail delivery timeout",
       unverified: true,
+    };
+  }
+  if (outcome.terminalEventSettled) {
+    return {
+      sent: 0,
+      failed: 1,
+      stopped:
+        "A signed terminal managed-sender event settled this attempt; it was not counted as sent and no follow-up was queued.",
     };
   }
   if (outcome.ok) {
     try {
-      const completed = await ctx.runMutation(
-        internal.outreach.completeDeliveryAttempt,
-        {
-          siteId,
-          messageId: claim.message._id,
-          attemptId,
-          providerMessageId: outcome.providerMessageId,
-          providerThreadId: outcome.providerThreadId,
-          outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
-        },
-      );
+      const completed = managedSes
+        ? await ctx.runMutation(
+            internal.outreach.completeManagedSesDeliveryAttempt,
+            {
+              siteId,
+              messageId: claim.message._id,
+              attemptId,
+              providerMessageIdDigest: outcome.providerMessageId!,
+              rfcMessageIdDigest: outcome.rfcMessageIdDigest!,
+              threadReceipt: outcome.managedSesThreadReceipt!,
+            },
+          )
+        : await ctx.runMutation(
+            internal.outreach.completeDeliveryAttempt,
+            {
+              siteId,
+              messageId: claim.message._id,
+              attemptId,
+              providerMessageId: outcome.providerMessageId,
+              providerThreadId: outcome.providerThreadId,
+              outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
+            },
+          );
       if (completed.recorded) return { sent: 1, failed: 0 };
+      if (managedSes && "terminal" in completed && completed.terminal) {
+        return {
+          sent: 0,
+          failed: 1,
+          stopped:
+            "A signed terminal managed-sender event settled this attempt before the synchronous receipt.",
+        };
+      }
     } catch {
-      // Gmail accepted the message but Pentra could not seal the receipt. This
+      // The provider accepted the message but Pentra could not seal the receipt. This
       // is ambiguous and must never become a retryable approved draft.
       try {
         await ctx.runMutation(internal.outreach.failDeliveryAttempt, {
           siteId,
           messageId: claim.message._id,
           attemptId,
-          reason: "Gmail receipt finalization failed",
+          reason: managedSes
+            ? "Managed sender receipt finalization failed"
+            : "Gmail receipt finalization failed",
           unverified: true,
         });
       } catch {
@@ -1245,10 +1647,29 @@ async function sendHandler(
     return {
       sent: 0,
       failed: 1,
-      stopped: "Gmail accepted the request but the receipt is unverified; manual review is required.",
+      stopped: managedSes
+        ? "The managed sender accepted the request but Pentra could not seal its signed receipt; the attempt will not be replayed."
+        : "Gmail accepted the request but the receipt is unverified; manual review is required.",
     };
   }
 
+  if (outcome.preBoundaryTerminalized) {
+    return {
+      sent: 0,
+      failed: 0,
+      stopped:
+        "Delivery authorization changed before the provider boundary; no provider attempt was made.",
+    };
+  }
+  if (outcome.preBoundaryDeferred) {
+    return {
+      sent: 0,
+      failed: 0,
+      stopped: outcome.deferredUntil
+        ? "Managed sender reputation pacing deferred this approved message to its exact next eligible window; no provider attempt was made."
+        : "Managed sender reputation pacing deferred this approved message; no provider attempt was made.",
+    };
+  }
   result.failed = 1;
   let failed;
   try {
@@ -1259,6 +1680,7 @@ async function sendHandler(
       reason: outcome.error ?? "Unknown delivery failure",
       bounced: outcome.bounced,
       unverified: outcome.unverified,
+      preserveContactClaim: outcome.preserveContactClaim,
     });
   } catch {
     return {
@@ -1290,7 +1712,9 @@ async function sendHandler(
   if (outcome.unverified) {
     return {
       ...result,
-      stopped: "Gmail did not return a verified receipt; manual review is required.",
+      stopped: managedSes
+        ? "The managed sender did not return a verified receipt; this operation is quarantined and will not be replayed."
+        : "Gmail did not return a verified receipt; manual review is required.",
     };
   }
   return result;

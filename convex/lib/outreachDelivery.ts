@@ -1,4 +1,8 @@
 import { normalizeDomain, outreachSenderReadinessIssues } from "./outreachPacing.ts";
+import {
+  MANAGED_SES_TRANSPORT,
+  managedSesInboxReceiptCurrent,
+} from "./managedSes.ts";
 
 /** Long enough for one bounded Gmail request, short enough to surface uncertainty. */
 export const OUTREACH_DELIVERY_LEASE_MS = 2 * 60 * 1000;
@@ -42,6 +46,29 @@ export function autonomousGmailCredentialIssues(args: {
   return issues;
 }
 
+export function autonomousOutreachTransportIssues(args: {
+  inbox: Record<string, unknown> | null | undefined;
+  now: number;
+  managedSesAdapterVersion?: string;
+}): string[] {
+  if (args.inbox?.provider === MANAGED_SES_TRANSPORT) {
+    return managedSesInboxReceiptCurrent({
+      inbox: args.inbox,
+      now: args.now,
+      expectedAdapterVersion: args.managedSesAdapterVersion,
+    })
+      ? []
+      : ["Pentra's managed sender needs current signed resource and delivery-event receipts."];
+  }
+  return autonomousGmailCredentialIssues({
+    oauthScopes:
+      typeof args.inbox?.oauthScopes === "string"
+        ? args.inbox.oauthScopes
+        : undefined,
+    hasRefreshToken: Boolean(args.inbox?.oauthRefreshToken),
+  });
+}
+
 export type DeliveryLeaseState =
   | "available"
   | "in_flight"
@@ -56,7 +83,95 @@ export type OutreachDeletionGateState =
 export type OutreachDeletionGateDecision<MessageId extends string = string> = {
   state: OutreachDeletionGateState;
   expiredMessageIds: MessageId[];
+  safePreboundaryMessageIds: MessageId[];
 };
+
+export type DeliveryExternalBoundaryDecision =
+  | { state: "authorized"; providerCallAllowed: true }
+  | {
+      state: "already_external" | "deny_preboundary";
+      providerCallAllowed: false;
+    };
+
+/** Exact opportunity/evidence binding re-read at the provider boundary. */
+export function deliveryOpportunityBoundaryCurrent(args: {
+  messageSiteId: string;
+  opportunitySiteId?: string;
+  sequenceStep: number;
+  opportunityStatus?: string;
+  messageEvidenceHash?: string;
+  opportunityEvidenceHash?: string;
+  messageSourceUrl?: string;
+  opportunitySourceUrl?: string;
+  messageTargetUrl?: string;
+  opportunityTargetUrl?: string;
+  currentDomainBinding: boolean;
+  initialEvidenceFresh: boolean;
+}): boolean {
+  const expectedStatus = args.sequenceStep === 0
+    ? "outreach_prepared"
+    : "contacted";
+  return Boolean(
+    args.opportunitySiteId === args.messageSiteId &&
+      args.sequenceStep >= 0 &&
+      args.sequenceStep <= 2 &&
+      args.opportunityStatus === expectedStatus &&
+      args.messageEvidenceHash &&
+      args.messageEvidenceHash === args.opportunityEvidenceHash &&
+      args.messageSourceUrl === args.opportunitySourceUrl &&
+      args.messageTargetUrl === args.opportunityTargetUrl &&
+      args.currentDomainBinding &&
+      (args.sequenceStep > 0 || args.initialEvidenceFresh)
+  );
+}
+
+/** Pure model for the shared Gmail/managed-SES last-CAS. Production supplies
+ * values read in the same mutation that writes the external-attempt marker. */
+export function deliveryExternalBoundaryDecision(args: {
+  alreadyExternalAttempted: boolean;
+  exactClaimCurrent: boolean;
+  siteExecutionAuthorized: boolean;
+  ownerAndConfigurationCurrent: boolean;
+  consentCurrent: boolean;
+  recipientUnsuppressed: boolean;
+  threadCurrent: boolean;
+  predecessorCurrent: boolean;
+  opportunityEvidenceCurrent: boolean;
+  inboundRelayCurrent: boolean;
+}): DeliveryExternalBoundaryDecision {
+  if (args.alreadyExternalAttempted) {
+    return { state: "already_external", providerCallAllowed: false };
+  }
+  if (
+    args.exactClaimCurrent &&
+    args.siteExecutionAuthorized &&
+    args.ownerAndConfigurationCurrent &&
+    args.consentCurrent &&
+    args.recipientUnsuppressed &&
+    args.threadCurrent &&
+    args.predecessorCurrent &&
+    args.opportunityEvidenceCurrent &&
+    args.inboundRelayCurrent
+  ) return { state: "authorized", providerCallAllowed: true };
+  return { state: "deny_preboundary", providerCallAllowed: false };
+}
+
+export type DeliveryLeaseRecoveryDecision =
+  | "noop"
+  | "restore_approved"
+  | "delivery_unverified_no_replay";
+
+/** Pure lease-expiry transition shared by Gmail and managed SES. */
+export function deliveryLeaseRecoveryDecision(args: {
+  exactClaimCurrent: boolean;
+  leaseExpired: boolean;
+  externalAttempted: boolean;
+}): DeliveryLeaseRecoveryDecision {
+  if (!args.exactClaimCurrent || !args.leaseExpired) return "noop";
+  return args.externalAttempted
+    ? "delivery_unverified_no_replay"
+    : "restore_approved";
+}
 
 export function deliveryLeaseState(args: {
   status: string;
@@ -80,9 +195,9 @@ export function deliveryLeaseState(args: {
  *
  * A live claim wins over every other state: the deletion transaction must do
  * nothing so the action can seal its provider receipt. Once all live claims
- * are gone, expired claims are surfaced as delivery_unverified and deletion
- * remains deferred until the owner records what happened in Gmail. This
- * deliberately has no branch that restores an expired message to approved.
+ * are gone, only an exact v1 claim with no provider-boundary marker is safe to
+ * drain. Legacy or post-boundary expiry is surfaced as delivery_unverified and
+ * deletion remains deferred until its immutable outcome is settled.
  */
 export function outreachDeletionGate<MessageId extends string>(args: {
   sending: Array<{
@@ -90,6 +205,9 @@ export function outreachDeletionGate<MessageId extends string>(args: {
     status: string;
     attemptId?: string;
     leaseExpiresAt?: number;
+    boundaryVersion?: number;
+    externalAttemptedAt?: number;
+    managedSesExternalAttemptedAt?: number;
   }>;
   unresolvedDeliveryCount: number;
   now: number;
@@ -104,18 +222,46 @@ export function outreachDeletionGate<MessageId extends string>(args: {
     }),
   }));
   if (states.some((message) => message.state === "in_flight")) {
-    return { state: "in_flight", expiredMessageIds: [] };
+    return {
+      state: "in_flight",
+      expiredMessageIds: [],
+      safePreboundaryMessageIds: [],
+    };
   }
+  const safePreboundaryMessageIds = args.sending
+    .filter((message) =>
+      deliveryLeaseState({
+        status: message.status,
+        attemptId: message.attemptId,
+        leaseExpiresAt: message.leaseExpiresAt,
+        now: args.now,
+      }) === "expired_unverified" &&
+      message.boundaryVersion === 1 &&
+      !message.externalAttemptedAt &&
+      !message.managedSesExternalAttemptedAt
+    )
+    .map((message) => message.messageId);
   const expiredMessageIds = states
-    .filter((message) => message.state === "expired_unverified")
+    .filter((message) =>
+      message.state === "expired_unverified" &&
+      !safePreboundaryMessageIds.includes(message.messageId)
+    )
     .map((message) => message.messageId);
   if (expiredMessageIds.length > 0) {
-    return { state: "expired_unverified", expiredMessageIds };
+    return {
+      state: "expired_unverified",
+      expiredMessageIds,
+      safePreboundaryMessageIds,
+    };
   }
   if (args.unresolvedDeliveryCount > 0) {
-    return { state: "manual_review", expiredMessageIds: [] };
+    return {
+      state: "manual_review",
+      expiredMessageIds: [],
+      safePreboundaryMessageIds,
+    };
   }
-  return { state: "ready", expiredMessageIds: [] };
+  return { state: "ready", expiredMessageIds: [], safePreboundaryMessageIds };
 }
 
 export function approvalMatchesInbox(args: {
@@ -215,10 +361,11 @@ export function senderClaimIssues(args: {
     issues.push("The current sender compliance profile has not been confirmed.");
   }
   if (
-    !args.oauthScopes
+    args.provider !== MANAGED_SES_TRANSPORT &&
+    (!args.oauthScopes
       ?.split(/\s+/)
       .includes("https://www.googleapis.com/auth/gmail.send") ||
-    !args.hasCredential
+      !args.hasCredential)
   ) {
     issues.push("The current Gmail authorization cannot send mail.");
   }

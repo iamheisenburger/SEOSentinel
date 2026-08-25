@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { deliveryLeaseRecoveryDecision } from
+  "../convex/lib/outreachDelivery.ts";
 
 const sites = fs.readFileSync(new URL("../convex/sites.ts", import.meta.url), "utf8");
 const schema = fs.readFileSync(new URL("../convex/schema.ts", import.meta.url), "utf8");
@@ -159,7 +161,22 @@ test("deletion cannot race a claimed Gmail send or erase an ambiguous outcome", 
     outreach.indexOf("export const getApprovedDeliveryEvidenceInternal"),
   );
   assert.match(claim, /siteExecutionAuthorized\(ctx, site\)/);
-  assert.doesNotMatch(claim, /status: "approved"/);
+  assert.match(claim, /deliveryLeaseRecoveryDecision/);
+  assert.equal(deliveryLeaseRecoveryDecision({
+    exactClaimCurrent: false,
+    leaseExpired: true,
+    externalAttempted: false,
+  }), "noop", "legacy/unversioned claims can never be restored");
+  assert.equal(deliveryLeaseRecoveryDecision({
+    exactClaimCurrent: true,
+    leaseExpired: true,
+    externalAttempted: true,
+  }), "delivery_unverified_no_replay");
+  assert.equal(deliveryLeaseRecoveryDecision({
+    exactClaimCurrent: true,
+    leaseExpired: true,
+    externalAttempted: false,
+  }), "restore_approved", "only an exact v1 pre-provider claim is retryable");
 });
 
 test("OAuth completions cannot restore credentials after deletion starts", () => {

@@ -325,7 +325,7 @@ test("managed readiness requires canonical Gmail identity, compliance, refresh s
     "claim-time live DNS remains in the delivery implementation");
 });
 
-test("the Node boundary is an honest, network-free stub until a real adapter exists", () => {
+test("the Node boundary uses the signed managed-SES adapter behind the durable external boundary", () => {
   assert.equal(managedOutreachMailboxAdapterConfiguration({}), null);
   assert.equal(managedOutreachMailboxAdapterConfiguration({
     endpoint: "http://adapter.invalid",
@@ -348,17 +348,24 @@ test("the Node boundary is an honest, network-free stub until a real adapter exi
     "managed_outreach_mailbox_adapter_contract_not_implemented",
   );
   assert.match(action, /MANAGED_OUTREACH_MAILBOX_ADAPTER_UNAVAILABLE/);
-  assert.match(action, /MANAGED_OUTREACH_MAILBOX_ADAPTER_NOT_IMPLEMENTED/);
+  assert.doesNotMatch(action, /MANAGED_OUTREACH_MAILBOX_ADAPTER_NOT_IMPLEMENTED/);
   assert.match(
     action,
     /runMutation\(\s*internal\.managedOutreachMailbox\.getProvisioningOperation/,
+  );
+  assert.match(action, /managedSesAdapterConfiguration/);
+  assert.match(action, /callManagedSesAdapter/);
+  assert.match(action, /parseManagedSesResourceReceipt/);
+  assert.ok(
+    action.indexOf("markProvisioningExternalBoundaryInternal") <
+      action.indexOf('route: "provision"'),
   );
   assert.doesNotMatch(
     action,
     /\bfetch\s*\(|from ["']googleapis|admin\.directory\s*\(/i,
   );
-  assert.doesNotMatch(action, /recordReleaseCompletedInternal/);
-  assert.doesNotMatch(action, /internal\.managedOutreachMailbox\.markProvisioningExternalBoundaryInternal/);
+  assert.match(action, /recordReleaseCompletedInternal/);
+  assert.match(action, /internal\.managedOutreachMailbox\.markProvisioningExternalBoundaryInternal/);
   assert.match(ledger, /markProvisioningExternalBoundaryInternal/);
 });
 
@@ -574,13 +581,27 @@ test("release defers provider deprovision across provision, send, and canary amb
     ledger,
     /externalProvisioningSettleAfter:[\s\S]*resource\.leaseExpiresAt![\s\S]*EXTERNAL_PROVISIONING_LATE_RESULT_GRACE_MS/,
   );
-  assert.match(action, /cannot start or commit after[\s\S]*externalDeadlineAt/);
+  const provision = action.slice(
+    action.indexOf("export const provision"),
+    action.indexOf("export const sendManagedSesEventCanary"),
+  );
+  assert.ok(
+    provision.indexOf("markProvisioningExternalBoundaryInternal") <
+      provision.indexOf('route: "provision"'),
+  );
   assert.match(ledger, /reconcileProvisioningStatusByOperationKey: true/);
   assert.match(ledger, /releaseWinsLateProvision: true/);
-  assert.match(
-    action,
-    /durable operation-key[\s\S]*serializes release ahead of every late provisioning result/,
+  const release = action.slice(action.indexOf("export const release"));
+  assert.ok(
+    release.indexOf("getReleaseOperation") < release.indexOf('route: "release"'),
   );
+  assert.ok(
+    release.indexOf('route: "release"') <
+      release.indexOf("recordReleaseCompletedInternal"),
+  );
+  assert.match(release, /receipt\.operationKey === claim\.operation\.operationKey/);
+  assert.match(release, /receipt\.generation === claim\.operation\.generation/);
+  assert.match(release, /receipt\.adapterVersion === config\.adapterVersion/);
 });
 
 test("lost DSN canaries become terminal after their exact deadline so site deletion cannot deadlock", () => {
