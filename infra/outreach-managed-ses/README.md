@@ -22,7 +22,8 @@ SES production-access receipt all pass on the exact released version.
 - a conservative adapter-side daily warm-up counter based on distinct days
   with settled sends—not mailbox age—and a 30-minute minimum send spacing, in
   addition to Pentra's application pacing;
-- every send's durable external-attempt marker and provider receipt;
+- every send's durable external-attempt marker, exact sequence/parent binding,
+  provider digest, RFC Message-ID digest and opaque thread receipt;
 - an opaque HMAC message binding that prevents one operation key from adopting
   a receipt for different mail without persisting a raw content hash;
 - bounce, complaint, delivery, delay, reject and send events correlated only by
@@ -45,13 +46,21 @@ tenant-level bounce/complaint suppression.
 
 ## Signed adapter protocol
 
-All five API routes are `POST` and accept deterministic JSON with `version: 1`:
+All six API routes are `POST` and accept deterministic JSON with `version: 1`:
 
 - `/v1/provision` — `{operationKey, generation, adapterVersion}`
 - `/v1/status` — `{kind: "resource"|"send", operationKey, adapterVersion}`
 - `/v1/send` — `{operationKey, resourceOperationKey, generation,
-  adapterVersion, toEmail, displayName, subject, text, replyTo,
-  unsubscribeUrl}`
+  adapterVersion, sequenceStep, purpose, toEmail, displayName, subject, text,
+  replyTo, unsubscribeUrl, parent?}`. `parent` is forbidden at step zero and is
+  exactly `{operationId, threadReceipt}` at every later step. `purpose` is
+  `outreach`, per-resource `inbound_relay_canary`, or the one
+  deployment-global bootstrap `rfc_message_id_canary`.
+- `/v1/inbound-canary` — `{operationKey, resourceOperationKey, generation,
+  adapterVersion, inboxBinding, classifications:["reply","stop"],
+  relayConfigurationHash, retentionPolicyHash, verifiedAt, relayReceipt}`;
+  accepted only for the matching controlled canary send and independently
+  signed inbound-relay receipt
 - `/v1/disposition` — `{operationKey, resourceOperationKey, generation,
   adapterVersion, decision: "quarantine_no_replay", authorizedAt,
   authorizationReceipt}`; this is accepted only after 72 hours and requires
@@ -80,14 +89,30 @@ signature bound to the request nonce. The Secrets Manager document is:
 }
 ```
 
-The independently permissioned `DispositionSecretArn` contains a separate
-random string (or `{"key":"..."}` document) with at least 32 characters.
+The independently permissioned `DispositionSecretArn` and
+`InboundCanarySecretArn` each contain separate random strings (or
+`{"key":"..."}` documents) with at least 32 characters.
 Rotate `current`/`next` using a dual-acceptance window. `resourceKey` and the
-disposition secret are distinct from each other and from both request keys.
+disposition and inbound-canary secrets are all distinct from each other and
+from both request keys.
 `resourceKey` is immutable for the lifetime of existing resources; replacing it
 requires an explicit generation migration and release of all old resources.
 The disposition signature is bound to the exact send/resource/generation,
 fixed `quarantine_no_replay` decision and a five-minute authorization time.
+
+A send/status receipt always returns `state`, `operationKey`,
+`resourceOperationKey`, `generation`, `adapterVersion`, `sequenceStep`,
+`purpose`, and `updatedAt`. Once provider identity is established it also
+returns `providerMessageIdDigest`, `rfcMessageIdDigest`, and `threadReceipt`.
+`quarantined_integrity` is terminal and returns `noReplay:true` plus
+`code:"provider_receipt_mismatch"`; its established identity remains visible
+for reconciliation, but it can never authorize a child.
+When a bounce, complaint, rejection, or rendering failure is durably known,
+send/status also returns
+`terminalDeliveryEvent:{eventType,occurredAt,eventReceipt}`. This is the same
+canonical receipt used by the signed event webhook, so a delayed webhook cannot
+make generic `event_confirmed` look like successful delivery. A partial or
+unknown terminal event object is never adoptable.
 
 ## Send no-replay boundary
 
@@ -122,14 +147,68 @@ display name, subject, body, reply alias or unsubscribe URL. The raw message
 includes `Reply-To`, `List-Unsubscribe`, and `List-Unsubscribe-Post`; SES assigns
 its own `Message-ID`, as documented in [SES header behavior](https://docs.aws.amazon.com/ses/latest/dg/header-fields.html).
 
+## Exact reply threading and inbound activation
+
+Every root send requires `sequenceStep: 0` and no parent. Every follow-up must
+name the exact preceding operation and its opaque thread receipt. Before the
+child crosses the SES boundary, the adapter verifies the entire chain is on the
+same resource, generation, adapter version and keyed recipient binding, with
+strictly consecutive steps. It decrypts only the minimum ancestor RFC
+Message-IDs and emits one `In-Reply-To` plus one root-to-parent `References`
+header. CR/LF, multiple-header/list syntax, duplicates and oversized unfolded
+headers are rejected. The existing durable marker still permits exactly one
+`SendEmail` call per child operation.
+
+Bounce, complaint, rejection, and rendering-failure events set a monotonic
+terminal disposition on the exact send row. Parent validation rejects that
+disposition, and the child-marker transaction rechecks the direct parent so an
+out-of-order terminal event cannot race a child across the SES boundary. A
+lost-response recovery seals provider identity and an adverse disposition in
+the same DynamoDB transaction; there is no parent-eligible intermediate state.
+A later delivery event never clears the terminal disposition.
+
+The SES API/event identifier and the RFC header form have separate SHA-256
+digests. The canonical RFC identifier is never stored plaintext: a retained,
+rotating CMK encrypts it with exact operation/resource/generation/adapter/
+recipient context. Only the adapter may decrypt; the event recovery Lambda may
+encrypt but cannot decrypt. Public send/status receipts and signed events bind
+`operationKey`, `resourceOperationKey`, generation, adapter version,
+`sequenceStep`, purpose, both digests and the opaque thread receipt. Any
+response/event disagreement quarantines the send without replay.
+
+Normal outreach is fail-closed behind two distinct activations. First, exactly
+one deployment-global `rfc_message_id_canary` send is allowed for the configured
+opaque operation and SHA-256-bound controlled recipient. Only its exact SES
+`delivered` event with a present, matching `commonHeaders.messageId` creates the
+durable RFC marker. That marker is HMAC-bound to adapter version, configured
+operation, recipient hash, suffix, provider digest, RFC digest, thread receipt,
+and event key. It is verified from DynamoDB on every gated path; no environment
+receipt or arbitrary 64-hex value can activate it. The global event settles
+inside the adapter and is never sent to Pentra's per-tenant webhook.
+
+After that global marker exists, every resource runs its own
+`inbound_relay_canary` with an arbitrary fresh operation, the controlled
+recipient, and a unique Reply-To alias. Its signed event uses the normal tenant
+webhook. After Pentra's inbound webhook settles bodyless controlled `reply` and
+`stop` classifications, it calls `/v1/inbound-canary` with a separate
+purpose-key HMAC bound to adapter version, resource/generation/operation/keyed inbox, current
+relay-configuration hash, retention-policy hash and time. The adapter stores
+and returns only those opaque bindings plus its own activation receipt. A
+resource must have a receipt no older than 30 days, and application readiness
+must compare both hashes to the current inbound runtime configuration.
+
 ## Privacy-reduced event path
 
 SES publishes only this configuration set to EventBridge. An EventBridge input
-transformer removes source, destination, headers, subject and provider detail
-before SQS. The queue receives only event type/id/time, SES message ID and the
-opaque Pentra attempt tag. The Lambda converts the provider message ID to a
-digest, deduplicates the semantic event, and posts a signed bounded receipt to
-Pentra. A generic HTTP 2xx is insufficient: Pentra must return the exact
+transformer removes source, destination, subject and provider detail before
+SQS. One mutually exclusive rule extracts only `commonHeaders.messageId`; a
+second valid-JSON route handles its absence. Absence retries until the explicit
+canary invariant is active, after which the configured exact suffix may derive
+the canonical form. A present but mismatched common header quarantines the
+send. The queue otherwise receives only event type/id/time, the two message-ID
+forms and the opaque Pentra attempt tag. The Lambda converts both identifiers
+to digests, deduplicates the semantic event, and posts a signed bounded receipt
+to Pentra only for `outreach` and `inbound_relay_canary`. A generic HTTP 2xx is insufficient: Pentra must return the exact
 `{version:1, ok:true, eventReceipt}` body with a valid response signature bound
 to the event nonce before SQS may delete the event.
 
@@ -167,8 +246,9 @@ These are one-time Pentra platform operations, not customer setup:
 1. Use a dedicated reviewed AWS account and `us-east-1`; inventory every SES
    identity, configuration set, tenant, quota and existing workload before
    acknowledging the deployment parameter.
-2. Create the HMAC secret out of band. Never put its content in parameters,
-   source, logs, shell history or CloudFormation outputs.
+2. Create the request HMAC, disposition and inbound-canary secrets out of band
+   with distinct key material. Never put their content in parameters, source,
+   logs, shell history or CloudFormation outputs.
 3. Deploy first with no application `managed_ses` activation. Add the three
    emitted Easy-DKIM CNAME records to the Pentra-controlled sender domain.
 4. Confirm the alarm-topic email subscription, then verify SES identity/DKIM,
@@ -180,9 +260,16 @@ These are one-time Pentra platform operations, not customer setup:
    publishers and this stack does not introduce a separate CMK lifecycle.
 5. Deploy and verify the separate receiving-only reply relay. Its Lambda roles
    must continue to have no `ses:Send*` authority.
-6. Run one non-prospect event canary through the exact application/provider
-   generation. Only then permit the application reconciler to install the
-   canonical `managed_ses` transport receipt.
+6. Configure the exact global opaque RFC-canary operation, hash of the
+   controlled recipient, and canary-observed suffix (empty or
+   `@email.amazonses.com`). Run that one `rfc_message_id_canary`. Its exact
+   delivered common-header event must create the verified DynamoDB marker;
+   there is no environment receipt and no Pentra tenant webhook row for it.
+7. For every managed resource, run a fresh `inbound_relay_canary`. Drive
+   bodyless controlled reply and STOP settlements through its unique alias,
+   then submit `/v1/inbound-canary` with current relay and retention hashes.
+   Only after both the global marker and current per-resource activation exist
+   may the application reconciler install normal `managed_ses` outreach.
 
 The template creates the platform identity but cannot make DKIM valid without
 the DNS records. It also cannot grant SES production access or resurrect the
@@ -213,7 +300,7 @@ must add all of the following before release:
   domain;
 - pacing keys bound to transport/account/tenant/mailbox rather than global
   sender-domain ownership;
-- signed provision/status/send/disposition/release request and response
+- signed provision/status/send/inbound-canary/disposition/release request and response
   verification, including the purpose-separated disposition authority;
 - external-attempt/no-replay settlement and event dedupe;
 - delivery/bounce/complaint suppression plus signed human-reply relay;

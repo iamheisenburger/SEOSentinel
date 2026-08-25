@@ -22,6 +22,16 @@ Rules:
             - !Ref HmacSecretArn
             - !Ref DispositionSecretArn
         AssertDescription: Request/event signing and reviewed no-replay disposition must use different Secrets Manager resources.
+      - Assert: !Not
+          - !Equals
+            - !Ref HmacSecretArn
+            - !Ref InboundCanarySecretArn
+        AssertDescription: Request signing and inbound-relay canary attestation must use different secrets.
+      - Assert: !Not
+          - !Equals
+            - !Ref DispositionSecretArn
+            - !Ref InboundCanarySecretArn
+        AssertDescription: No-replay disposition and inbound-relay canary attestation must use different secrets.
 
 Parameters:
   ResourcePrefix:
@@ -50,6 +60,10 @@ Parameters:
     Type: String
     AllowedPattern: ^arn:[a-z0-9-]+:secretsmanager:us-east-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$
     NoEcho: true
+  InboundCanarySecretArn:
+    Type: String
+    AllowedPattern: ^arn:[a-z0-9-]+:secretsmanager:us-east-1:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$
+    NoEcho: true
   AlertEmail:
     Type: String
     AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
@@ -57,6 +71,19 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
+  RfcMessageIdSuffix:
+    Type: String
+    Default: ""
+    AllowedValues: ["", "@email.amazonses.com"]
+    Description: Exact canary-observed suffix applied to the SES API MessageId.
+  RfcMessageIdCanaryRecipientSha256:
+    Type: String
+    AllowedPattern: ^[a-f0-9]{64}$
+    NoEcho: true
+  RfcMessageIdCanaryOperationKey:
+    Type: String
+    AllowedPattern: ^[A-Za-z0-9_-]{32,96}$
+    NoEcho: true
 
 Globals:
   Function:
@@ -83,8 +110,41 @@ Globals:
         CONFIGURATION_SET_ARN: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ManagedConfigurationSet}
         EVENT_DESTINATION_NAME: !Sub ${ResourcePrefix}-eventbridge
         EVENT_BUS_ARN: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+        THREAD_MESSAGE_KEY_ARN: !GetAtt ThreadMessageKey.Arn
+        RFC_MESSAGE_ID_SUFFIX: !Ref RfcMessageIdSuffix
+        RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256: !Ref RfcMessageIdCanaryRecipientSha256
+        RFC_MESSAGE_ID_CANARY_OPERATION_KEY: !Ref RfcMessageIdCanaryOperationKey
 
 Resources:
+  ThreadMessageKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Encrypts only exact managed-SES RFC Message-IDs used for reply threading
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableAccountIAMPolicies
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+      Tags:
+        - Key: PentraComponent
+          Value: managed-ses
+        - Key: PentraPurpose
+          Value: encrypted-thread-message-id
+
+  ThreadMessageKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${ResourcePrefix}-thread-message-id
+      TargetKeyId: !Ref ThreadMessageKey
+
   ManagedEmailIdentity:
     Type: AWS::SES::EmailIdentity
     DeletionPolicy: Retain
@@ -215,6 +275,30 @@ Resources:
                 Resource:
                   - !Ref HmacSecretArn
                   - !Ref DispositionSecretArn
+                  - !Ref InboundCanarySecretArn
+              - Sid: EncryptAndDecryptExactThreadMessageIds
+                Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                Resource: !GetAtt ThreadMessageKey.Arn
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose: managed-ses-rfc-message-id
+                    kms:EncryptionContext:adapterVersion: managed-ses-v1
+                  "ForAllValues:StringEquals":
+                    kms:EncryptionContextKeys:
+                      - purpose
+                      - adapterVersion
+                      - operationKey
+                      - resourceOperationKey
+                      - generation
+                      - recipientBinding
+                  "Null":
+                    kms:EncryptionContext:operationKey: "false"
+                    kms:EncryptionContext:resourceOperationKey: "false"
+                    kms:EncryptionContext:generation: "false"
+                    kms:EncryptionContext:recipientBinding: "false"
               - Sid: CreateTaggedPentraTenant
                 Effect: Allow
                 Action:
@@ -269,6 +353,7 @@ Resources:
       Environment:
         Variables:
           DISPOSITION_SECRET_ARN: !Ref DispositionSecretArn
+          INBOUND_CANARY_SECRET_ARN: !Ref InboundCanarySecretArn
       Events:
         Provision:
           Type: Api
@@ -293,6 +378,12 @@ Resources:
           Properties:
             RestApiId: !Ref AdapterApi
             Path: /v1/disposition
+            Method: post
+        InboundCanary:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdapterApi
+            Path: /v1/inbound-canary
             Method: post
         Release:
           Type: Api
@@ -343,6 +434,9 @@ Resources:
           - Email Rendering Failed
         detail:
           mail:
+            commonHeaders:
+              messageId:
+                - exists: true
             tags:
               ses:configuration-set:
                 - !Ref ManagedConfigurationSet
@@ -350,6 +444,47 @@ Resources:
                 - managed-ses-v1
       Targets:
         - Id: SanitizedEventQueue
+          Arn: !GetAtt EventQueue.Arn
+          InputTransformer:
+            InputPathsMap:
+              eventType: $.detail-type
+              eventId: $.id
+              eventTime: $.time
+              messageId: $.detail.mail.messageId
+              rfcMessageId: $.detail.mail.commonHeaders.messageId
+              attempt: $.detail.mail.tags.pentraAttempt
+            InputTemplate: >-
+              {"eventType":<eventType>,"eventId":<eventId>,"eventTime":<eventTime>,"messageId":<messageId>,"rfcMessageId":<rfcMessageId>,"attempt":<attempt>}
+
+  EventRuleMissingRfcMessageId:
+    Type: AWS::Events::Rule
+    DependsOn: ManagedEventDestination
+    Properties:
+      Name: !Sub ${ResourcePrefix}-sanitized-events-missing-rfc-id
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ses
+        detail-type:
+          - Email Sent
+          - Email Delivered
+          - Email Bounced
+          - Email Complaint Received
+          - Email Delivery Delayed
+          - Email Rejected
+          - Email Rendering Failed
+        detail:
+          mail:
+            commonHeaders:
+              messageId:
+                - exists: false
+            tags:
+              ses:configuration-set:
+                - !Ref ManagedConfigurationSet
+              pentraAdapter:
+                - managed-ses-v1
+      Targets:
+        - Id: SanitizedEventQueueMissingRfcId
           Arn: !GetAtt EventQueue.Arn
           InputTransformer:
             InputPathsMap:
@@ -377,7 +512,9 @@ Resources:
             Resource: !GetAtt EventQueue.Arn
             Condition:
               ArnEquals:
-                aws:SourceArn: !GetAtt EventRule.Arn
+                aws:SourceArn:
+                  - !GetAtt EventRule.Arn
+                  - !GetAtt EventRuleMissingRfcMessageId.Arn
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
 
@@ -420,6 +557,27 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref HmacSecretArn
+              - Sid: EncryptRecoveredThreadMessageIdsOnly
+                Effect: Allow
+                Action: kms:Encrypt
+                Resource: !GetAtt ThreadMessageKey.Arn
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose: managed-ses-rfc-message-id
+                    kms:EncryptionContext:adapterVersion: managed-ses-v1
+                  "ForAllValues:StringEquals":
+                    kms:EncryptionContextKeys:
+                      - purpose
+                      - adapterVersion
+                      - operationKey
+                      - resourceOperationKey
+                      - generation
+                      - recipientBinding
+                  "Null":
+                    kms:EncryptionContext:operationKey: "false"
+                    kms:EncryptionContext:resourceOperationKey: "false"
+                    kms:EncryptionContext:generation: "false"
+                    kms:EncryptionContext:recipientBinding: "false"
               - Effect: Allow
                 Action:
                   - sqs:ReceiveMessage
@@ -603,6 +761,25 @@ Resources:
       Dimensions:
         - Name: RuleName
           Value: !Ref EventRule
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  EventRuleMissingRfcFailedInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ResourcePrefix}-event-rule-missing-rfc-failed-invocations
+      AlarmDescription: SES events without common RFC Message-ID failed sanitized queue delivery.
+      Namespace: AWS/Events
+      MetricName: FailedInvocations
+      Dimensions:
+        - Name: RuleName
+          Value: !Ref EventRuleMissingRfcMessageId
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1

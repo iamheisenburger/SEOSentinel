@@ -14,6 +14,7 @@ from common import (  # noqa: E402
     build_raw_message,
     derive_send_message_binding,
     derive_resource_names,
+    inbound_canary_signature,
     normalize_event_envelope,
     parse_disposition_key,
     parse_secret_document,
@@ -27,6 +28,23 @@ from common import (  # noqa: E402
 
 
 class CommonContractTests(unittest.TestCase):
+    def test_inbound_relay_hmac_golden_vector(self) -> None:
+        self.assertEqual(
+            inbound_canary_signature(
+                "inbound-canary-secret-00000000000000000000000000000000",
+                adapter_version="managed-ses-v1",
+                resource_operation_key="r" * 40,
+                generation=7,
+                canary_operation_key="c" * 40,
+                inbox_binding="a" * 64,
+                relay_configuration_hash="b" * 64,
+                retention_policy_hash="d" * 64,
+                verified_at=1_787_702_400,
+            ),
+            "c08174d55c74ec0b83d1b0dd32294240"
+            "2e19e3a714917a46a946653d40751781",
+        )
+
     def test_request_signature_accepts_rotation_and_rejects_expiry(self) -> None:
         body = b'{"version":1}'
         nonce = "n" * 32
@@ -157,6 +175,7 @@ class CommonContractTests(unittest.TestCase):
             "eventId": "12345678-1234-1234-1234-123456789abc",
             "eventTime": "2026-08-25T19:00:00Z",
             "messageId": "provider-message-1",
+            "rfcMessageId": "<provider-message-1>",
             "attempt": ["a" * 40],
             "destination": ["must-not-survive@example.com"],
         }
@@ -175,6 +194,7 @@ class CommonContractTests(unittest.TestCase):
                     "eventId": "12345678-1234-1234-1234-123456789abc",
                     "eventTime": "2026-08-25T19:00:00Z",
                     "messageId": "provider-message-1",
+                    "rfcMessageId": "<provider-message-1>",
                     "attempt": ["a" * 40, "b" * 40],
                 }
             )
@@ -185,6 +205,7 @@ class CommonContractTests(unittest.TestCase):
             "eventId": "12345678-1234-1234-1234-123456789abc",
             "eventTime": "2026-08-25T19:00:00Z",
             "messageId": "provider-message-1",
+            "rfcMessageId": "<provider-message-1>",
             "attempt": ["a" * 40],
         }
         redelivery = {

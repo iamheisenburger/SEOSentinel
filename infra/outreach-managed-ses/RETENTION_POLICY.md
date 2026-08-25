@@ -7,14 +7,23 @@ The adapter DynamoDB table may contain only:
 - opaque application operation keys and their SHA-256 digests;
 - HMAC-derived SES tenant names and Pentra-owned sender addresses;
 - generation, adapter version, lifecycle state and timestamps;
-- send attempt state and an SES message-ID digest;
+- send attempt state, sequence/parent operation, keyed recipient binding,
+  provider/RFC Message-ID digests, opaque thread receipt, and the minimum RFC
+  Message-ID ciphertext encrypted by the dedicated rotating CMK;
+- finite monotonic terminal delivery disposition, event-key digest, and
+  canonical event receipt;
+- the deployment-global RFC canary marker bound to configured operation,
+  controlled-recipient hash, suffix, both message-ID digests, thread receipt,
+  event key and HMAC receipt;
+- per-resource inbound reply/STOP activation containing only a keyed inbox
+  binding, relay-configuration hash, retention-policy hash, time and receipts;
 - aggregate warm-up/day counters;
 - at most fourteen immutable warm-up day guards per resource;
 - event ID/message ID digests and finite event types;
 - immutable sender collision guards.
 
 It must never contain a customer/user/site identifier, customer domain,
-prospect address, sender display name, subject, body, reply alias, unsubscribe
+prospect address, plaintext RFC Message-ID, sender display name, subject, body, reply alias, unsubscribe
 URL, provider response body, AWS access key, HMAC secret or arbitrary error.
 
 API Gateway data tracing is disabled. Lambda code catches exceptions and emits
@@ -25,7 +34,8 @@ fields before SQS.
 ## Durations
 
 - request nonces: 10-minute DynamoDB TTL;
-- resource, send, event, disposition and release receipts: retained without
+- resource, send, event, disposition, global RFC canary, inbound activation,
+  and release receipts: retained without
   DynamoDB TTL because they are the immutable resource/no-replay ledger;
 - release-before-provision tombstones: retained without TTL so delayed create
   requests cannot resurrect deleted resources;

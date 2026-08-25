@@ -23,10 +23,19 @@ from common import (
     MAX_REQUEST_BYTES,
     MIN_SEND_SPACING_SECONDS,
     NONCE_TTL_SECONDS,
+    TERMINAL_DELIVERY_EVENT_TYPES,
     AdapterInputError,
     AdapterRetryableError,
     build_raw_message,
+    canonical_provider_message_id,
+    canonical_rfc_message_id,
+    derive_recipient_binding,
+    derive_rfc_message_id,
     derive_send_message_binding,
+    derive_inbox_binding,
+    derive_inbound_activation_receipt,
+    derive_rfc_canary_receipt,
+    derive_thread_receipt,
     derive_resource_names,
     deterministic_json,
     metric,
@@ -38,12 +47,14 @@ from common import (
     require_https_url,
     require_opaque_key,
     require_reply_alias,
+    require_sequence_step,
     response_signature,
     safe_code,
     sha256_hex,
     seconds_until_next_utc_day,
     utc_day,
     verify_disposition_authorization,
+    verify_inbound_canary_receipt,
     verify_request_signature,
     warmup_daily_cap,
 )
@@ -51,6 +62,7 @@ from common import (
 TABLE_NAME = os.environ.get("STATE_TABLE_NAME", "")
 SECRET_ARN = os.environ.get("HMAC_SECRET_ARN", "")
 DISPOSITION_SECRET_ARN = os.environ.get("DISPOSITION_SECRET_ARN", "")
+INBOUND_CANARY_SECRET_ARN = os.environ.get("INBOUND_CANARY_SECRET_ARN", "")
 ADAPTER_VERSION = os.environ.get("ADAPTER_VERSION", "")
 SENDER_DOMAIN = os.environ.get("SENDER_DOMAIN", "").lower()
 RELAY_DOMAIN = os.environ.get("RELAY_DOMAIN", "").lower()
@@ -60,13 +72,141 @@ CONFIGURATION_SET_NAME = os.environ.get("CONFIGURATION_SET_NAME", "")
 CONFIGURATION_SET_ARN = os.environ.get("CONFIGURATION_SET_ARN", "")
 EVENT_DESTINATION_NAME = os.environ.get("EVENT_DESTINATION_NAME", "")
 EVENT_BUS_ARN = os.environ.get("EVENT_BUS_ARN", "")
+THREAD_MESSAGE_KEY_ARN = os.environ.get("THREAD_MESSAGE_KEY_ARN", "")
+RFC_MESSAGE_ID_SUFFIX = os.environ.get("RFC_MESSAGE_ID_SUFFIX", "")
+RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256 = os.environ.get(
+    "RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256", ""
+)
+RFC_MESSAGE_ID_CANARY_OPERATION_KEY = os.environ.get(
+    "RFC_MESSAGE_ID_CANARY_OPERATION_KEY", ""
+)
 PROVISION_LEASE_SECONDS = 90
 PROVISION_AMBIGUITY_SECONDS = 15 * 60
 RELEASE_STABILITY_SECONDS = 2 * 60
 AMBIGUOUS_DISPOSITION_MIN_AGE_SECONDS = 72 * 60 * 60
 MAX_WARMUP_SETTLED_DAYS = 14
+INBOUND_CANARY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 _CLIENTS: dict[str, Any] = {}
+
+
+def _rfc_canary_marker_key() -> str:
+    """Return the exact deployment-scoped RFC invariant marker key."""
+    return "rfc-canary#" + sha256_hex(
+        "|".join(
+            [
+                "v1",
+                ADAPTER_VERSION,
+                RFC_MESSAGE_ID_CANARY_OPERATION_KEY,
+                RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256,
+                RFC_MESSAGE_ID_SUFFIX,
+            ]
+        )
+    )
+
+
+def _rfc_message_id_canary_is_verified(secrets: dict[str, str]) -> bool:
+    """Verify the durable event-established marker, never an env attestation."""
+    if (
+        not isinstance(RFC_MESSAGE_ID_CANARY_OPERATION_KEY, str)
+        or not re.fullmatch(
+            r"[A-Za-z0-9_-]{32,96}", RFC_MESSAGE_ID_CANARY_OPERATION_KEY
+        )
+        or not isinstance(RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256, str)
+        or not re.fullmatch(
+            r"[a-f0-9]{64}", RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+        )
+        or RFC_MESSAGE_ID_SUFFIX not in {"", "@email.amazonses.com"}
+    ):
+        return False
+    try:
+        row = _get(_rfc_canary_marker_key())
+    except Exception as exc:
+        raise AdapterRetryableError("rfc_canary_marker_unavailable") from exc
+    if not row:
+        return False
+    provider_digest = row.get("providerMessageIdDigest")
+    rfc_digest = row.get("rfcMessageIdDigest")
+    thread_receipt = row.get("threadReceipt")
+    event_key_digest = row.get("eventKeyDigest")
+    receipt = row.get("canaryReceipt")
+    if (
+        row.get("kind") != "rfc_message_id_canary"
+        or row.get("state") != "verified"
+        or row.get("adapterVersion") != ADAPTER_VERSION
+        or row.get("operationKey") != RFC_MESSAGE_ID_CANARY_OPERATION_KEY
+        or row.get("recipientSha256")
+        != RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+        or row.get("rfcMessageIdSuffix") != RFC_MESSAGE_ID_SUFFIX
+        or not isinstance(receipt, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", receipt)
+    ):
+        return False
+    try:
+        expected = derive_rfc_canary_receipt(
+            secrets.get("resourceKey", ""),
+            adapter_version=ADAPTER_VERSION,
+            operation_key=RFC_MESSAGE_ID_CANARY_OPERATION_KEY,
+            recipient_sha256=RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256,
+            rfc_message_id_suffix=RFC_MESSAGE_ID_SUFFIX,
+            provider_message_id_digest=provider_digest,
+            rfc_message_id_digest=rfc_digest,
+            thread_receipt=thread_receipt,
+            event_key_digest=event_key_digest,
+        )
+    except AdapterInputError:
+        return False
+    return random_secrets.compare_digest(receipt, expected)
+
+
+def _require_send_purpose(
+    payload: dict[str, Any],
+    *,
+    operation_key: str,
+    to_email: str,
+    sequence_step: int,
+    rfc_canary_verified: bool,
+) -> str:
+    purpose = payload.get("purpose")
+    if purpose == "outreach":
+        if not rfc_canary_verified:
+            raise AdapterRetryableError("rfc_message_id_canary_required")
+        return purpose
+    if purpose == "inbound_relay_canary":
+        if not rfc_canary_verified:
+            raise AdapterRetryableError("rfc_message_id_canary_required")
+        if (
+            sequence_step != 0
+            or payload.get("parent") is not None
+            or not isinstance(RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256, str)
+            or not re.fullmatch(
+                r"[a-f0-9]{64}", RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+            )
+            or not random_secrets.compare_digest(
+                sha256_hex(to_email), RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+            )
+        ):
+            raise AdapterInputError("canary_send_binding_invalid")
+        return purpose
+    if purpose != "rfc_message_id_canary":
+        raise AdapterInputError("invalid_send_purpose")
+    if (
+        sequence_step != 0
+        or payload.get("parent") is not None
+        or not isinstance(RFC_MESSAGE_ID_CANARY_OPERATION_KEY, str)
+        or not isinstance(RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256, str)
+        or not re.fullmatch(
+            r"[a-f0-9]{64}", RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+        )
+        or not random_secrets.compare_digest(
+            operation_key, RFC_MESSAGE_ID_CANARY_OPERATION_KEY
+        )
+        or not random_secrets.compare_digest(
+            sha256_hex(to_email), RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+        )
+    ):
+        raise AdapterInputError("canary_send_binding_invalid")
+    return purpose
 
 
 def _client(name: str) -> Any:
@@ -173,6 +313,13 @@ def _load_disposition_key() -> str:
     return parse_disposition_key(response.get("SecretString"))
 
 
+def _load_inbound_canary_key() -> str:
+    response = _client("secretsmanager").get_secret_value(
+        SecretId=INBOUND_CANARY_SECRET_ARN
+    )
+    return parse_disposition_key(response.get("SecretString"))
+
+
 def _public_resource(row: dict[str, Any] | None) -> dict[str, Any]:
     if not row:
         return {"state": "missing"}
@@ -188,6 +335,11 @@ def _public_resource(row: dict[str, Any] | None) -> dict[str, Any]:
         state = "blocked"
     result: dict[str, Any] = {
         "state": state,
+        "operationKey": (
+            row.get("pk", "").removeprefix("resource#")
+            if isinstance(row.get("pk"), str)
+            else None
+        ),
         "generation": row.get("generation"),
         "adapterVersion": row.get("adapterVersion"),
         "updatedAt": row.get("updatedAt"),
@@ -199,8 +351,33 @@ def _public_resource(row: dict[str, Any] | None) -> dict[str, Any]:
                 "verifiedAt": row.get("verifiedAt"),
                 "resourceReceipt": row.get("resourceReceipt"),
                 "eventCanaryRequired": True,
+                "inboundCanaryRequired": True,
             }
         )
+        if all(
+            isinstance(row.get(field), expected)
+            for field, expected in (
+                ("inboundCanaryOperationKey", str),
+                ("inboundCanaryInboxBinding", str),
+                ("inboundCanaryRelayConfigurationHash", str),
+                ("inboundCanaryRetentionPolicyHash", str),
+                ("inboundCanaryVerifiedAt", int),
+                ("inboundCanaryReceipt", str),
+            )
+        ):
+            result["inboundCanary"] = {
+                "operationKey": row["inboundCanaryOperationKey"],
+                "inboxBinding": row["inboundCanaryInboxBinding"],
+                "classifications": ["reply", "stop"],
+                "relayConfigurationHash": row[
+                    "inboundCanaryRelayConfigurationHash"
+                ],
+                "retentionPolicyHash": row[
+                    "inboundCanaryRetentionPolicyHash"
+                ],
+                "verifiedAt": row["inboundCanaryVerifiedAt"],
+                "inboundCanaryReceipt": row["inboundCanaryReceipt"],
+            }
     if state == "blocked":
         result["code"] = safe_code(row.get("code"), "resource_blocked")
     if state == "releasing" and isinstance(row.get("releaseVerifyAfter"), int):
@@ -218,23 +395,68 @@ def _public_send(row: dict[str, Any] | None) -> dict[str, Any]:
         "event_confirmed",
         "event_confirmed_after_disposition",
         "quarantined_no_replay",
+        "quarantined_integrity",
         "terminal_rejected",
     }:
         state = "external_attempted"
     result: dict[str, Any] = {
         "state": state,
+        "operationKey": (
+            row.get("pk", "").removeprefix("send#")
+            if isinstance(row.get("pk"), str)
+            else None
+        ),
+        "resourceOperationKey": row.get("resourceOperationKey"),
         "generation": row.get("generation"),
         "adapterVersion": row.get("adapterVersion"),
+        "sequenceStep": row.get("sequenceStep"),
+        "purpose": row.get("purpose"),
         "updatedAt": row.get("updatedAt"),
     }
     if row.get("providerMessageIdDigest"):
         result["providerMessageIdDigest"] = row["providerMessageIdDigest"]
+    if row.get("rfcMessageIdDigest"):
+        result["rfcMessageIdDigest"] = row["rfcMessageIdDigest"]
+    if (
+        isinstance(row.get("providerMessageIdDigest"), str)
+        and isinstance(row.get("rfcMessageIdDigest"), str)
+        and isinstance(row.get("threadReceipt"), str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{32,96}", row["threadReceipt"])
+    ):
+        result["threadReceipt"] = row["threadReceipt"]
     if state == "terminal_rejected":
         result["code"] = safe_code(row.get("code"), "provider_rejected")
-    if state in {"external_attempted", "quarantined_no_replay"}:
+    if state in {
+        "external_attempted",
+        "quarantined_no_replay",
+        "quarantined_integrity",
+    }:
         result["noReplay"] = True
     if state == "quarantined_no_replay":
         result["code"] = "owner_reviewed_no_replay_disposition"
+    if state == "quarantined_integrity":
+        result["code"] = "provider_receipt_mismatch"
+    terminal_event_type = row.get("terminalDeliveryEvent")
+    terminal_event_at = row.get("terminalDeliveryEventAt")
+    terminal_event_receipt = row.get("terminalDeliveryEventReceipt")
+    if (
+        terminal_event_type in TERMINAL_DELIVERY_EVENT_TYPES
+        and isinstance(terminal_event_at, str)
+        and re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z",
+            terminal_event_at,
+        )
+        and isinstance(terminal_event_receipt, str)
+        and re.fullmatch(r"[a-f0-9]{64}", terminal_event_receipt)
+        and isinstance(result.get("providerMessageIdDigest"), str)
+        and isinstance(result.get("rfcMessageIdDigest"), str)
+        and isinstance(result.get("threadReceipt"), str)
+    ):
+        result["terminalDeliveryEvent"] = {
+            "eventType": terminal_event_type,
+            "occurredAt": terminal_event_at,
+            "eventReceipt": terminal_event_receipt,
+        }
     return result
 
 
@@ -256,6 +478,106 @@ def _pacing_key(resource_operation_key: str, day: str) -> str:
 
 def _warmup_day_key(resource_operation_key: str, day: str) -> str:
     return f"warmup-day#{sha256_hex(resource_operation_key)}#{day}"
+
+
+def _thread_encryption_context(
+    *,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    recipient_binding: str,
+) -> dict[str, str]:
+    return {
+        "purpose": "managed-ses-rfc-message-id",
+        "adapterVersion": ADAPTER_VERSION,
+        "operationKey": operation_key,
+        "resourceOperationKey": resource_operation_key,
+        "generation": str(generation),
+        "recipientBinding": recipient_binding,
+    }
+
+
+def _encrypt_rfc_message_id(
+    canonical_message_id: str,
+    *,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    recipient_binding: str,
+) -> str:
+    canonical = canonical_rfc_message_id(canonical_message_id)
+    if not THREAD_MESSAGE_KEY_ARN:
+        raise AdapterRetryableError("thread_key_unavailable")
+    try:
+        response = _client("kms").encrypt(
+            KeyId=THREAD_MESSAGE_KEY_ARN,
+            Plaintext=canonical.encode("ascii"),
+            EncryptionContext=_thread_encryption_context(
+                operation_key=operation_key,
+                resource_operation_key=resource_operation_key,
+                generation=generation,
+                recipient_binding=recipient_binding,
+            ),
+        )
+        ciphertext = response.get("CiphertextBlob")
+    except AdapterRetryableError:
+        raise
+    except Exception as exc:
+        raise AdapterRetryableError("thread_identity_encrypt_retry") from exc
+    if not isinstance(ciphertext, bytes) or not 1 <= len(ciphertext) <= 4096:
+        raise AdapterRetryableError("thread_identity_encrypt_retry")
+    return base64.b64encode(ciphertext).decode("ascii")
+
+
+def _decrypt_rfc_message_id(
+    ciphertext_value: Any,
+    *,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    recipient_binding: str,
+    expected_digest: str,
+) -> str:
+    if (
+        not isinstance(ciphertext_value, str)
+        or not 1 <= len(ciphertext_value) <= 8192
+        or not isinstance(expected_digest, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", expected_digest)
+        or not THREAD_MESSAGE_KEY_ARN
+    ):
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    try:
+        ciphertext = base64.b64decode(ciphertext_value, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise AdapterInputError("parent_thread_receipt_invalid") from exc
+    if not 1 <= len(ciphertext) <= 4096:
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    try:
+        response = _client("kms").decrypt(
+            KeyId=THREAD_MESSAGE_KEY_ARN,
+            CiphertextBlob=ciphertext,
+            EncryptionContext=_thread_encryption_context(
+                operation_key=operation_key,
+                resource_operation_key=resource_operation_key,
+                generation=generation,
+                recipient_binding=recipient_binding,
+            ),
+        )
+        plaintext = response.get("Plaintext")
+    except Exception as exc:
+        raise AdapterInputError("parent_thread_receipt_invalid") from exc
+    if not isinstance(plaintext, bytes):
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    try:
+        decoded = plaintext.decode("ascii")
+        canonical = canonical_rfc_message_id(decoded)
+    except (UnicodeError, AdapterInputError) as exc:
+        raise AdapterInputError("parent_thread_receipt_invalid") from exc
+    if decoded != canonical or not random_secrets.compare_digest(
+        sha256_hex(canonical), expected_digest
+    ):
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    return canonical
 
 
 def _pacing_wait(
@@ -750,6 +1072,30 @@ def _provision(payload: dict[str, Any], secrets: dict[str, str], now: int) -> di
     )
 
 
+def _validated_terminal_delivery(
+    value: dict[str, str] | None,
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {"eventType", "occurredAt", "eventKeyDigest", "eventReceipt"}
+        or value.get("eventType") not in TERMINAL_DELIVERY_EVENT_TYPES
+        or not isinstance(value.get("occurredAt"), str)
+        or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z",
+            value["occurredAt"],
+        )
+        or not isinstance(value.get("eventKeyDigest"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", value["eventKeyDigest"])
+        or not isinstance(value.get("eventReceipt"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", value["eventReceipt"])
+    ):
+        raise AdapterInputError("send_receipt_invalid")
+    return value
+
+
 def _mark_send_terminal(
     operation_key: str,
     resource_operation_key: str,
@@ -758,18 +1104,37 @@ def _mark_send_terminal(
     now: int,
     *,
     provider_message_id_digest: str | None = None,
+    rfc_message_id_digest: str | None = None,
+    rfc_message_id_ciphertext: str | None = None,
+    thread_receipt: str | None = None,
     code: str | None = None,
     expected_message_binding: str | None = None,
+    terminal_delivery: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    terminal = _validated_terminal_delivery(terminal_delivery)
     if state in {"submitted", "event_confirmed"}:
         if (
             not isinstance(provider_message_id_digest, str)
             or not re.fullmatch(r"[a-f0-9]{64}", provider_message_id_digest)
+            or not isinstance(rfc_message_id_digest, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", rfc_message_id_digest)
+            or not isinstance(rfc_message_id_ciphertext, str)
+            or not 1 <= len(rfc_message_id_ciphertext) <= 8192
+            or not isinstance(thread_receipt, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{32,96}", thread_receipt)
             or code is not None
+            or (terminal is not None and state != "event_confirmed")
         ):
             raise AdapterInputError("send_receipt_invalid")
     elif state == "terminal_rejected":
-        if provider_message_id_digest is not None or code != "provider_rejected":
+        if (
+            provider_message_id_digest is not None
+            or rfc_message_id_digest is not None
+            or rfc_message_id_ciphertext is not None
+            or thread_receipt is not None
+            or code != "provider_rejected"
+            or terminal is not None
+        ):
             raise AdapterInputError("send_receipt_invalid")
     else:
         raise AdapterInputError("send_receipt_invalid")
@@ -784,6 +1149,9 @@ def _mark_send_terminal(
         or current_send.get("adapterVersion") != ADAPTER_VERSION
         or not isinstance(message_binding, str)
         or not re.fullmatch(r"[a-f0-9]{64}", message_binding)
+        or not isinstance(current_send.get("recipientBinding"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", current_send["recipientBinding"])
+        or not isinstance(current_send.get("sequenceStep"), int)
         or (
             expected_message_binding is not None
             and not random_secrets.compare_digest(
@@ -804,11 +1172,38 @@ def _mark_send_terminal(
     }
     set_parts = ["#sendState=:state", "updatedAt=:now"]
     if provider_message_id_digest:
-        set_parts.append("providerMessageIdDigest=:messageDigest")
+        set_parts.extend(
+            [
+                "providerMessageIdDigest=:messageDigest",
+                "rfcMessageIdDigest=:rfcMessageDigest",
+                "rfcMessageIdCiphertext=:messageCiphertext",
+                "threadReceipt=:threadReceipt",
+            ]
+        )
         send_values[":messageDigest"] = {"S": provider_message_id_digest}
+        send_values[":rfcMessageDigest"] = {"S": str(rfc_message_id_digest)}
+        send_values[":messageCiphertext"] = {"S": str(rfc_message_id_ciphertext)}
+        send_values[":threadReceipt"] = {"S": str(thread_receipt)}
     if code:
         set_parts.append("code=:code")
         send_values[":code"] = {"S": safe_code(code, "provider_rejected")}
+    if terminal is not None:
+        set_parts.extend(
+            [
+                "terminalDeliveryEvent=:terminalEvent",
+                "terminalDeliveryEventAt=:terminalEventAt",
+                "terminalDeliveryEventKeyDigest=:terminalEventKey",
+                "terminalDeliveryEventReceipt=:terminalEventReceipt",
+            ]
+        )
+        send_values.update(
+            {
+                ":terminalEvent": {"S": terminal["eventType"]},
+                ":terminalEventAt": {"S": terminal["occurredAt"]},
+                ":terminalEventKey": {"S": terminal["eventKeyDigest"]},
+                ":terminalEventReceipt": {"S": terminal["eventReceipt"]},
+            }
+        )
 
     def transact(*, warmup_mode: str | None) -> None:
         resource_values: dict[str, Any] = {
@@ -933,8 +1328,13 @@ def _mark_send_terminal(
                 generation=generation,
                 state=state,
                 provider_message_id_digest=provider_message_id_digest,
+                rfc_message_id_digest=rfc_message_id_digest,
+                rfc_message_id_ciphertext=rfc_message_id_ciphertext,
+                thread_receipt=thread_receipt,
                 code=code,
                 message_binding=message_binding,
+                now=now,
+                terminal_delivery=terminal,
             )
         if advances_warmup:
             try:
@@ -948,8 +1348,13 @@ def _mark_send_terminal(
                         generation=generation,
                         state=state,
                         provider_message_id_digest=provider_message_id_digest,
+                        rfc_message_id_digest=rfc_message_id_digest,
+                        rfc_message_id_ciphertext=rfc_message_id_ciphertext,
+                        thread_receipt=thread_receipt,
                         code=code,
                         message_binding=message_binding,
+                        now=now,
+                        terminal_delivery=terminal,
                     )
                 try:
                     transact(warmup_mode="capped")
@@ -962,8 +1367,13 @@ def _mark_send_terminal(
                             generation=generation,
                             state=state,
                             provider_message_id_digest=provider_message_id_digest,
+                            rfc_message_id_digest=rfc_message_id_digest,
+                            rfc_message_id_ciphertext=rfc_message_id_ciphertext,
+                            thread_receipt=thread_receipt,
                             code=code,
                             message_binding=message_binding,
+                            now=now,
+                            terminal_delivery=terminal,
                         )
                     raise AdapterRetryableError(
                         "send_settlement_unavailable"
@@ -981,8 +1391,13 @@ def _mark_send_terminal(
         generation=generation,
         state=state,
         provider_message_id_digest=provider_message_id_digest,
+        rfc_message_id_digest=rfc_message_id_digest,
+        rfc_message_id_ciphertext=rfc_message_id_ciphertext,
+        thread_receipt=thread_receipt,
         code=code,
         message_binding=message_binding,
+        now=now,
+        terminal_delivery=terminal,
     )
 
 
@@ -993,8 +1408,13 @@ def _require_matching_terminal_send(
     generation: int,
     state: str,
     provider_message_id_digest: str | None,
+    rfc_message_id_digest: str | None,
+    rfc_message_id_ciphertext: str | None,
+    thread_receipt: str | None,
     code: str | None,
     message_binding: str,
+    now: int,
+    terminal_delivery: dict[str, str] | None,
 ) -> dict[str, Any]:
     exact_binding = (
         row.get("kind") == "send"
@@ -1006,22 +1426,51 @@ def _require_matching_terminal_send(
     if not exact_binding:
         raise AdapterInputError("provider_receipt_mismatch")
     if state in {"submitted", "event_confirmed"}:
+        terminal_matches = terminal_delivery is None or (
+            row.get("terminalDeliveryEvent")
+            == terminal_delivery["eventType"]
+            and row.get("terminalDeliveryEventAt")
+            == terminal_delivery["occurredAt"]
+            and row.get("terminalDeliveryEventKeyDigest")
+            == terminal_delivery["eventKeyDigest"]
+            and row.get("terminalDeliveryEventReceipt")
+            == terminal_delivery["eventReceipt"]
+        )
         valid = (
             row.get("state") in {"submitted", "event_confirmed"}
             and isinstance(provider_message_id_digest, str)
             and row.get("providerMessageIdDigest")
             == provider_message_id_digest
+            and row.get("rfcMessageIdDigest") == rfc_message_id_digest
+            and row.get("rfcMessageIdCiphertext")
+            == rfc_message_id_ciphertext
+            and row.get("threadReceipt") == thread_receipt
             and row.get("code") is None
+            and terminal_matches
         )
     elif state == "terminal_rejected":
         valid = (
             row.get("state") == "terminal_rejected"
             and row.get("providerMessageIdDigest") is None
+            and row.get("rfcMessageIdDigest") is None
+            and row.get("rfcMessageIdCiphertext") is None
+            and row.get("threadReceipt") is None
             and row.get("code") == safe_code(code, "provider_rejected")
         )
     else:
         valid = False
     if not valid:
+        if (
+            state in {"submitted", "event_confirmed"}
+            and isinstance(provider_message_id_digest, str)
+            and isinstance(row.get("providerMessageIdDigest"), str)
+            and row.get("providerMessageIdDigest")
+            != provider_message_id_digest
+        ):
+            _quarantine_send_integrity(
+                str(row.get("pk", "")).removeprefix("send#"),
+                now,
+            )
         raise AdapterInputError("provider_receipt_mismatch")
     return row
 
@@ -1029,26 +1478,58 @@ def _require_matching_terminal_send(
 def _mark_disposed_send_event_confirmed(
     operation_key: str,
     provider_message_id_digest: str,
+    rfc_message_id_digest: str,
+    rfc_message_id_ciphertext: str,
+    thread_receipt: str,
     now: int,
+    *,
+    terminal_delivery: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    terminal = _validated_terminal_delivery(terminal_delivery)
+    set_parts = [
+        "#state=:confirmed",
+        "providerMessageIdDigest=:digest",
+        "rfcMessageIdDigest=:rfcDigest",
+        "rfcMessageIdCiphertext=:ciphertext",
+        "threadReceipt=:threadReceipt",
+        "updatedAt=:now",
+    ]
+    values = {
+        ":confirmed": {"S": "event_confirmed_after_disposition"},
+        ":quarantined": {"S": "quarantined_no_replay"},
+        ":digest": {"S": provider_message_id_digest},
+        ":rfcDigest": {"S": rfc_message_id_digest},
+        ":ciphertext": {"S": rfc_message_id_ciphertext},
+        ":threadReceipt": {"S": thread_receipt},
+        ":now": {"N": str(now)},
+    }
+    if terminal is not None:
+        set_parts.extend(
+            [
+                "terminalDeliveryEvent=:terminalEvent",
+                "terminalDeliveryEventAt=:terminalEventAt",
+                "terminalDeliveryEventKeyDigest=:terminalEventKey",
+                "terminalDeliveryEventReceipt=:terminalEventReceipt",
+            ]
+        )
+        values.update(
+            {
+                ":terminalEvent": {"S": terminal["eventType"]},
+                ":terminalEventAt": {"S": terminal["occurredAt"]},
+                ":terminalEventKey": {"S": terminal["eventKeyDigest"]},
+                ":terminalEventReceipt": {"S": terminal["eventReceipt"]},
+            }
+        )
     try:
         _client("dynamodb").update_item(
             TableName=TABLE_NAME,
             Key={"pk": {"S": _send_key(operation_key)}},
-            UpdateExpression=(
-                "SET #state=:confirmed, providerMessageIdDigest=:digest, "
-                "updatedAt=:now"
-            ),
+            UpdateExpression="SET " + ", ".join(set_parts),
             ConditionExpression=(
                 "#state=:quarantined AND attribute_not_exists(providerMessageIdDigest)"
             ),
             ExpressionAttributeNames={"#state": "state"},
-            ExpressionAttributeValues={
-                ":confirmed": {"S": "event_confirmed_after_disposition"},
-                ":quarantined": {"S": "quarantined_no_replay"},
-                ":digest": {"S": provider_message_id_digest},
-                ":now": {"N": str(now)},
-            },
+            ExpressionAttributeValues=values,
         )
     except Exception as exc:
         current = _get(_send_key(operation_key))
@@ -1057,6 +1538,23 @@ def _mark_disposed_send_event_confirmed(
             and current.get("state") == "event_confirmed_after_disposition"
             and current.get("providerMessageIdDigest")
             == provider_message_id_digest
+            and current.get("rfcMessageIdDigest") == rfc_message_id_digest
+            and current.get("rfcMessageIdCiphertext")
+            == rfc_message_id_ciphertext
+            and current.get("threadReceipt") == thread_receipt
+            and (
+                terminal is None
+                or (
+                    current.get("terminalDeliveryEvent")
+                    == terminal["eventType"]
+                    and current.get("terminalDeliveryEventAt")
+                    == terminal["occurredAt"]
+                    and current.get("terminalDeliveryEventKeyDigest")
+                    == terminal["eventKeyDigest"]
+                    and current.get("terminalDeliveryEventReceipt")
+                    == terminal["eventReceipt"]
+                )
+            )
         ):
             return current
         raise AdapterRetryableError("send_settlement_unavailable") from exc
@@ -1064,6 +1562,62 @@ def _mark_disposed_send_event_confirmed(
     if not row:
         raise AdapterRetryableError("send_settlement_unavailable")
     return row
+
+
+def _quarantine_send_integrity(
+    operation_key: str,
+    now: int,
+) -> dict[str, Any]:
+    row = _get(_send_key(operation_key))
+    if not row:
+        raise AdapterRetryableError("send_settlement_unavailable")
+    if row.get("state") == "quarantined_integrity":
+        return row
+    actual_digest = row.get("providerMessageIdDigest")
+    if (
+        not isinstance(actual_digest, str)
+        or row.get("state")
+        not in {
+            "submitted",
+            "event_confirmed",
+            "event_confirmed_after_disposition",
+        }
+    ):
+        raise AdapterInputError("provider_receipt_mismatch")
+    try:
+        _client("dynamodb").update_item(
+            TableName=TABLE_NAME,
+            Key={"pk": {"S": _send_key(operation_key)}},
+            UpdateExpression=(
+                "SET #state=:quarantined, code=:code, updatedAt=:now"
+            ),
+            ConditionExpression=(
+                "providerMessageIdDigest=:actual AND "
+                "(#state=:submitted OR #state=:confirmed "
+                "OR #state=:disposedConfirmed)"
+            ),
+            ExpressionAttributeNames={"#state": "state"},
+            ExpressionAttributeValues={
+                ":quarantined": {"S": "quarantined_integrity"},
+                ":code": {"S": "provider_receipt_mismatch"},
+                ":now": {"N": str(now)},
+                ":actual": {"S": actual_digest},
+                ":submitted": {"S": "submitted"},
+                ":confirmed": {"S": "event_confirmed"},
+                ":disposedConfirmed": {
+                    "S": "event_confirmed_after_disposition"
+                },
+            },
+        )
+    except Exception as exc:
+        current = _get(_send_key(operation_key))
+        if current and current.get("state") == "quarantined_integrity":
+            return current
+        raise AdapterRetryableError("send_settlement_unavailable") from exc
+    quarantined = _get(_send_key(operation_key))
+    if not quarantined:
+        raise AdapterRetryableError("send_settlement_unavailable")
+    return quarantined
 
 
 def _disposition(
@@ -1088,6 +1642,7 @@ def _disposition(
     if row.get("state") in {
         "quarantined_no_replay",
         "event_confirmed_after_disposition",
+        "quarantined_integrity",
     }:
         return _public_send(row)
     if row.get("state") != "external_attempted":
@@ -1187,17 +1742,347 @@ def _disposition(
     return _public_send(row)
 
 
+def _activate_inbound_canary(
+    payload: dict[str, Any],
+    inbound_canary_key: str,
+    secrets: dict[str, str],
+    now: int,
+) -> dict[str, Any]:
+    require_adapter_version(payload.get("adapterVersion"), ADAPTER_VERSION)
+    (
+        resource_operation_key,
+        generation,
+        canary_operation_key,
+        inbox_binding,
+        relay_configuration_hash,
+        retention_policy_hash,
+        verified_at,
+        relay_receipt,
+    ) = verify_inbound_canary_receipt(
+        payload,
+        inbound_canary_key,
+        adapter_version=ADAPTER_VERSION,
+        now=now,
+    )
+    send = _get(_send_key(canary_operation_key))
+    if (
+        not send
+        or send.get("kind") != "send"
+        or send.get("purpose") != "inbound_relay_canary"
+        or send.get("resourceOperationKey") != resource_operation_key
+        or send.get("generation") != generation
+        or send.get("adapterVersion") != ADAPTER_VERSION
+        or send.get("sequenceStep") != 0
+        or send.get("parentOperationKey") is not None
+        or isinstance(send.get("terminalDeliveryEvent"), str)
+        or send.get("inboxBinding") != inbox_binding
+        or send.get("state")
+        not in {
+            "submitted",
+            "event_confirmed",
+            "event_confirmed_after_disposition",
+        }
+        or not isinstance(send.get("providerMessageIdDigest"), str)
+        or not isinstance(send.get("rfcMessageIdDigest"), str)
+        or not isinstance(send.get("threadReceipt"), str)
+    ):
+        raise AdapterInputError("inbound_canary_send_invalid")
+    inbound_canary_receipt = derive_inbound_activation_receipt(
+        secrets.get("resourceKey", ""),
+        adapter_version=ADAPTER_VERSION,
+        resource_operation_key=resource_operation_key,
+        generation=generation,
+        operation_key=canary_operation_key,
+        inbox_binding=inbox_binding,
+        relay_configuration_hash=relay_configuration_hash,
+        retention_policy_hash=retention_policy_hash,
+        verified_at=verified_at,
+        relay_receipt=relay_receipt,
+    )
+    try:
+        _client("dynamodb").update_item(
+            TableName=TABLE_NAME,
+            Key={"pk": {"S": _resource_key(resource_operation_key)}},
+            UpdateExpression=(
+                "SET inboundCanaryOperationKey=:operation, "
+                "inboundCanaryInboxBinding=:inbox, "
+                "inboundCanaryRelayConfigurationHash=:relayConfiguration, "
+                "inboundCanaryRetentionPolicyHash=:retentionPolicy, "
+                "inboundCanaryRelayReceipt=:relayReceipt, "
+                "inboundCanaryVerifiedAt=:verifiedAt, "
+                "inboundCanaryReceipt=:receipt, updatedAt=:now"
+            ),
+            ConditionExpression=(
+                "generation=:generation AND adapterVersion=:version "
+                "AND #state=:ready"
+            ),
+            ExpressionAttributeNames={"#state": "state"},
+            ExpressionAttributeValues={
+                ":operation": {"S": canary_operation_key},
+                ":inbox": {"S": inbox_binding},
+                ":relayConfiguration": {"S": relay_configuration_hash},
+                ":retentionPolicy": {"S": retention_policy_hash},
+                ":relayReceipt": {"S": relay_receipt},
+                ":verifiedAt": {"N": str(verified_at)},
+                ":receipt": {"S": inbound_canary_receipt},
+                ":now": {"N": str(now)},
+                ":generation": {"N": str(generation)},
+                ":version": {"S": ADAPTER_VERSION},
+                ":ready": {"S": "ready"},
+            },
+        )
+    except Exception as exc:
+        current = _get(_resource_key(resource_operation_key))
+        if (
+            current
+            and current.get("generation") == generation
+            and current.get("adapterVersion") == ADAPTER_VERSION
+            and current.get("inboundCanaryOperationKey")
+            == canary_operation_key
+            and current.get("inboundCanaryInboxBinding") == inbox_binding
+            and current.get("inboundCanaryRelayConfigurationHash")
+            == relay_configuration_hash
+            and current.get("inboundCanaryRetentionPolicyHash")
+            == retention_policy_hash
+            and current.get("inboundCanaryRelayReceipt") == relay_receipt
+            and current.get("inboundCanaryVerifiedAt") == verified_at
+            and current.get("inboundCanaryReceipt")
+            == inbound_canary_receipt
+        ):
+            return _public_resource(current)
+        raise AdapterRetryableError("inbound_canary_settlement_retry") from exc
+    resource = _get(_resource_key(resource_operation_key))
+    if not resource:
+        raise AdapterRetryableError("inbound_canary_settlement_retry")
+    return _public_resource(resource)
+
+
+def _derive_row_thread_receipt(
+    row: dict[str, Any], secrets: dict[str, str]
+) -> str:
+    return derive_thread_receipt(
+        secrets.get("resourceKey", ""),
+        operation_key=row.get("operationKey", ""),
+        resource_operation_key=row.get("resourceOperationKey", ""),
+        generation=row.get("generation"),
+        adapter_version=row.get("adapterVersion", ""),
+        recipient_binding=row.get("recipientBinding", ""),
+        sequence_step=row.get("sequenceStep"),
+        provider_message_id_digest=row.get("providerMessageIdDigest", ""),
+        rfc_message_id_digest=row.get("rfcMessageIdDigest", ""),
+    )
+
+
+def _provider_thread_identity(
+    provider_message_id: str,
+    *,
+    rfc_message_id: str | None = None,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    recipient_binding: str,
+    sequence_step: int,
+    secrets: dict[str, str],
+) -> tuple[str, str, str, str]:
+    canonical_provider = canonical_provider_message_id(provider_message_id)
+    expected_rfc = derive_rfc_message_id(
+        canonical_provider, RFC_MESSAGE_ID_SUFFIX
+    )
+    canonical_rfc = canonical_rfc_message_id(
+        rfc_message_id if rfc_message_id is not None else expected_rfc
+    )
+    if canonical_rfc != expected_rfc:
+        raise AdapterInputError("provider_receipt_mismatch")
+    provider_digest = sha256_hex(canonical_provider)
+    rfc_digest = sha256_hex(canonical_rfc)
+    ciphertext = _encrypt_rfc_message_id(
+        canonical_rfc,
+        operation_key=operation_key,
+        resource_operation_key=resource_operation_key,
+        generation=generation,
+        recipient_binding=recipient_binding,
+    )
+    receipt = derive_thread_receipt(
+        secrets.get("resourceKey", ""),
+        operation_key=operation_key,
+        resource_operation_key=resource_operation_key,
+        generation=generation,
+        adapter_version=ADAPTER_VERSION,
+        recipient_binding=recipient_binding,
+        sequence_step=sequence_step,
+        provider_message_id_digest=provider_digest,
+        rfc_message_id_digest=rfc_digest,
+    )
+    return provider_digest, rfc_digest, ciphertext, receipt
+
+
+def _parent_thread_references(
+    payload: dict[str, Any],
+    secrets: dict[str, str],
+    *,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    recipient_binding: str,
+    sequence_step: int,
+) -> tuple[str | None, tuple[str, ...], dict[str, Any] | None]:
+    parent = payload.get("parent")
+    if sequence_step == 0:
+        if parent is not None:
+            raise AdapterInputError("parent_not_allowed")
+        return None, (), None
+    if not isinstance(parent, dict) or set(parent) != {
+        "operationId",
+        "threadReceipt",
+    }:
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    parent_operation_key = require_opaque_key(
+        parent.get("operationId"), "parent_operation_id"
+    )
+    supplied_receipt = require_opaque_key(
+        parent.get("threadReceipt"), "parent_thread_receipt"
+    )
+    if parent_operation_key == operation_key:
+        raise AdapterInputError("parent_thread_receipt_invalid")
+
+    reverse_references: list[str] = []
+    direct_parent_guard: dict[str, Any] | None = None
+    current_operation = parent_operation_key
+    expected_step = sequence_step - 1
+    seen: set[str] = set()
+    while True:
+        if current_operation in seen:
+            raise AdapterInputError("parent_thread_receipt_invalid")
+        seen.add(current_operation)
+        row = _get(_send_key(current_operation))
+        if (
+            not row
+            or row.get("kind") != "send"
+            or row.get("resourceOperationKey") != resource_operation_key
+            or row.get("generation") != generation
+            or row.get("adapterVersion") != ADAPTER_VERSION
+            or row.get("recipientBinding") != recipient_binding
+            or row.get("sequenceStep") != expected_step
+            or row.get("purpose") != "outreach"
+            or isinstance(row.get("terminalDeliveryEvent"), str)
+            or row.get("state")
+            not in {
+                "submitted",
+                "event_confirmed",
+                "event_confirmed_after_disposition",
+            }
+        ):
+            raise AdapterInputError("parent_thread_receipt_invalid")
+        # Legacy or malformed rows cannot become parents. The operation key is
+        # reconstructed from the lookup key because it is intentionally not
+        # duplicated in the durable item.
+        exact_row = {**row, "operationKey": current_operation}
+        try:
+            expected_receipt = _derive_row_thread_receipt(exact_row, secrets)
+        except AdapterInputError as exc:
+            raise AdapterInputError("parent_thread_receipt_invalid") from exc
+        stored_receipt = row.get("threadReceipt")
+        if (
+            not isinstance(stored_receipt, str)
+            or not random_secrets.compare_digest(stored_receipt, expected_receipt)
+            or (
+                expected_step == sequence_step - 1
+                and not random_secrets.compare_digest(
+                    supplied_receipt, expected_receipt
+                )
+            )
+        ):
+            raise AdapterInputError("parent_thread_receipt_invalid")
+        if expected_step == sequence_step - 1:
+            direct_parent_guard = {
+                "operationKey": current_operation,
+                "resourceOperationKey": resource_operation_key,
+                "generation": generation,
+                "adapterVersion": ADAPTER_VERSION,
+                "recipientBinding": recipient_binding,
+                "sequenceStep": expected_step,
+                "threadReceipt": expected_receipt,
+                "providerMessageIdDigest": row.get(
+                    "providerMessageIdDigest"
+                ),
+                "rfcMessageIdDigest": row.get("rfcMessageIdDigest"),
+            }
+        reverse_references.append(
+            _decrypt_rfc_message_id(
+                row.get("rfcMessageIdCiphertext"),
+                operation_key=current_operation,
+                resource_operation_key=resource_operation_key,
+                generation=generation,
+                recipient_binding=recipient_binding,
+                expected_digest=row.get("rfcMessageIdDigest"),
+            )
+        )
+        next_parent = row.get("parentOperationKey")
+        if expected_step == 0:
+            if next_parent is not None:
+                raise AdapterInputError("parent_thread_receipt_invalid")
+            break
+        if not isinstance(next_parent, str):
+            raise AdapterInputError("parent_thread_receipt_invalid")
+        current_operation = require_opaque_key(
+            next_parent, "parent_operation_id"
+        )
+        expected_step -= 1
+
+    references = tuple(reversed(reverse_references))
+    if direct_parent_guard is None:
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    return parent_operation_key, references, direct_parent_guard
+
+
 def _begin_send(
     operation_key: str,
     resource_operation_key: str,
     generation: int,
     message_binding: str,
     now: int,
+    *,
+    recipient_binding: str,
+    sequence_step: int,
+    parent_operation_key: str | None,
+    parent_guard: dict[str, Any] | None = None,
+    purpose: str = "outreach",
+    inbox_binding: str | None = None,
+    canary_recipient_sha256: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     if not isinstance(message_binding, str) or not re.fullmatch(
         r"[a-f0-9]{64}", message_binding
     ):
         raise AdapterInputError("send_receipt_invalid")
+    if not isinstance(recipient_binding, str) or not re.fullmatch(
+        r"[a-f0-9]{64}", recipient_binding
+    ):
+        raise AdapterInputError("send_receipt_invalid")
+    step = require_sequence_step(sequence_step)
+    if parent_operation_key is not None:
+        require_opaque_key(parent_operation_key, "parent_operation_id")
+    if (step == 0) != (parent_operation_key is None):
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    if (step == 0) != (parent_guard is None):
+        raise AdapterInputError("parent_thread_receipt_invalid")
+    if purpose not in {"outreach", "rfc_message_id_canary"}:
+        if purpose != "inbound_relay_canary":
+            raise AdapterInputError("invalid_send_purpose")
+    if purpose == "inbound_relay_canary":
+        if not isinstance(inbox_binding, str) or not re.fullmatch(
+            r"[a-f0-9]{64}", inbox_binding
+        ):
+            raise AdapterInputError("canary_send_binding_invalid")
+    elif inbox_binding is not None:
+        raise AdapterInputError("canary_send_binding_invalid")
+    if purpose == "rfc_message_id_canary":
+        if (
+            not isinstance(canary_recipient_sha256, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", canary_recipient_sha256)
+        ):
+            raise AdapterInputError("canary_send_binding_invalid")
+    elif canary_recipient_sha256 is not None:
+        raise AdapterInputError("canary_send_binding_invalid")
     existing = _get(_send_key(operation_key))
     if existing:
         if (
@@ -1205,6 +2090,13 @@ def _begin_send(
             or existing.get("generation") != generation
             or existing.get("adapterVersion") != ADAPTER_VERSION
             or existing.get("messageBinding") != message_binding
+            or existing.get("recipientBinding") != recipient_binding
+            or existing.get("sequenceStep") != step
+            or existing.get("parentOperationKey") != parent_operation_key
+            or existing.get("purpose") != purpose
+            or existing.get("inboxBinding") != inbox_binding
+            or existing.get("canaryRecipientSha256")
+            != canary_recipient_sha256
         ):
             raise AdapterInputError("operation_binding_conflict")
         return existing, False
@@ -1231,68 +2123,137 @@ def _begin_send(
         "generation": {"N": str(generation)},
         "adapterVersion": {"S": ADAPTER_VERSION},
         "messageBinding": {"S": message_binding},
+        "recipientBinding": {"S": recipient_binding},
+        "sequenceStep": {"N": str(step)},
+        "purpose": {"S": purpose},
         "createdAt": {"N": str(now)},
         "updatedAt": {"N": str(now)},
     }
+    if parent_operation_key is not None:
+        item["parentOperationKey"] = {"S": parent_operation_key}
+    if inbox_binding is not None:
+        item["inboxBinding"] = {"S": inbox_binding}
+    if canary_recipient_sha256 is not None:
+        item["canaryRecipientSha256"] = {"S": canary_recipient_sha256}
+    parent_check: dict[str, Any] | None = None
+    if parent_guard is not None:
+        guard_digests = (
+            parent_guard.get("providerMessageIdDigest"),
+            parent_guard.get("rfcMessageIdDigest"),
+            parent_guard.get("threadReceipt"),
+            parent_guard.get("recipientBinding"),
+        )
+        if any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value)
+            for value in guard_digests
+        ):
+            raise AdapterInputError("parent_thread_receipt_invalid")
+        parent_check = {
+            "ConditionCheck": {
+                "TableName": TABLE_NAME,
+                "Key": {
+                    "pk": {"S": _send_key(parent_guard["operationKey"])}
+                },
+                "ConditionExpression": (
+                    "kind=:sendKind AND resourceOperationKey=:resource "
+                    "AND generation=:generation AND adapterVersion=:version "
+                    "AND recipientBinding=:recipient AND sequenceStep=:parentStep "
+                    "AND purpose=:outreach AND threadReceipt=:threadReceipt "
+                    "AND providerMessageIdDigest=:providerDigest "
+                    "AND rfcMessageIdDigest=:rfcDigest "
+                    "AND attribute_not_exists(terminalDeliveryEvent) "
+                    "AND (#parentState=:submitted OR #parentState=:confirmed "
+                    "OR #parentState=:disposedConfirmed)"
+                ),
+                "ExpressionAttributeNames": {"#parentState": "state"},
+                "ExpressionAttributeValues": {
+                    ":sendKind": {"S": "send"},
+                    ":resource": {"S": resource_operation_key},
+                    ":generation": {"N": str(generation)},
+                    ":version": {"S": ADAPTER_VERSION},
+                    ":recipient": {"S": recipient_binding},
+                    ":parentStep": {"N": str(step - 1)},
+                    ":outreach": {"S": "outreach"},
+                    ":threadReceipt": {
+                        "S": str(parent_guard["threadReceipt"])
+                    },
+                    ":providerDigest": {
+                        "S": str(parent_guard["providerMessageIdDigest"])
+                    },
+                    ":rfcDigest": {
+                        "S": str(parent_guard["rfcMessageIdDigest"])
+                    },
+                    ":submitted": {"S": "submitted"},
+                    ":confirmed": {"S": "event_confirmed"},
+                    ":disposedConfirmed": {
+                        "S": "event_confirmed_after_disposition"
+                    },
+                },
+            }
+        }
     try:
+        writes = [
+            {
+                "Put": {
+                    "TableName": TABLE_NAME,
+                    "Item": item,
+                    "ConditionExpression": "attribute_not_exists(pk)",
+                }
+            },
+            {
+                "Update": {
+                    "TableName": TABLE_NAME,
+                    "Key": {"pk": {"S": _resource_key(resource_operation_key)}},
+                    "UpdateExpression": (
+                        "SET updatedAt=:now, lastSendAttemptAt=:now "
+                        "ADD unsettledSendCount :one"
+                    ),
+                    "ConditionExpression": (
+                        "generation=:generation AND adapterVersion=:version "
+                        "AND #state=:ready AND "
+                        "(attribute_not_exists(lastSendAttemptAt) "
+                        "OR lastSendAttemptAt <= :spacingCutoff)"
+                    ),
+                    "ExpressionAttributeNames": {"#state": "state"},
+                    "ExpressionAttributeValues": {
+                        ":one": {"N": "1"},
+                        ":now": {"N": str(now)},
+                        ":spacingCutoff": {
+                            "N": str(now - MIN_SEND_SPACING_SECONDS)
+                        },
+                        ":generation": {"N": str(generation)},
+                        ":version": {"S": ADAPTER_VERSION},
+                        ":ready": {"S": "ready"},
+                    },
+                }
+            },
+            {
+                "Update": {
+                    "TableName": TABLE_NAME,
+                    "Key": {
+                        "pk": {"S": _pacing_key(resource_operation_key, day)}
+                    },
+                    "UpdateExpression": (
+                        "SET expiresAt=:expires, updatedAt=:now ADD #count :one"
+                    ),
+                    "ConditionExpression": (
+                        "attribute_not_exists(#count) OR #count < :cap"
+                    ),
+                    "ExpressionAttributeNames": {"#count": "count"},
+                    "ExpressionAttributeValues": {
+                        ":one": {"N": "1"},
+                        ":cap": {"N": str(daily_cap)},
+                        ":now": {"N": str(now)},
+                        ":expires": {"N": str(now + 8 * 86_400)},
+                    },
+                }
+            },
+        ]
+        if parent_check is not None:
+            writes.append(parent_check)
         _client("dynamodb").transact_write_items(
-            TransactItems=[
-                {
-                    "Put": {
-                        "TableName": TABLE_NAME,
-                        "Item": item,
-                        "ConditionExpression": "attribute_not_exists(pk)",
-                    }
-                },
-                {
-                    "Update": {
-                        "TableName": TABLE_NAME,
-                        "Key": {"pk": {"S": _resource_key(resource_operation_key)}},
-                        "UpdateExpression": (
-                            "SET updatedAt=:now, lastSendAttemptAt=:now "
-                            "ADD unsettledSendCount :one"
-                        ),
-                        "ConditionExpression": (
-                            "generation=:generation AND adapterVersion=:version "
-                            "AND #state=:ready AND "
-                            "(attribute_not_exists(lastSendAttemptAt) "
-                            "OR lastSendAttemptAt <= :spacingCutoff)"
-                        ),
-                        "ExpressionAttributeNames": {"#state": "state"},
-                        "ExpressionAttributeValues": {
-                            ":one": {"N": "1"},
-                            ":now": {"N": str(now)},
-                            ":spacingCutoff": {
-                                "N": str(now - MIN_SEND_SPACING_SECONDS)
-                            },
-                            ":generation": {"N": str(generation)},
-                            ":version": {"S": ADAPTER_VERSION},
-                            ":ready": {"S": "ready"},
-                        },
-                    }
-                },
-                {
-                    "Update": {
-                        "TableName": TABLE_NAME,
-                        "Key": {
-                            "pk": {"S": _pacing_key(resource_operation_key, day)}
-                        },
-                        "UpdateExpression": (
-                            "SET expiresAt=:expires, updatedAt=:now ADD #count :one"
-                        ),
-                        "ConditionExpression": (
-                            "attribute_not_exists(#count) OR #count < :cap"
-                        ),
-                        "ExpressionAttributeNames": {"#count": "count"},
-                        "ExpressionAttributeValues": {
-                            ":one": {"N": "1"},
-                            ":cap": {"N": str(daily_cap)},
-                            ":now": {"N": str(now)},
-                            ":expires": {"N": str(now + 8 * 86_400)},
-                        },
-                    }
-                },
-            ]
+            TransactItems=writes
         )
     except Exception as exc:
         existing = _get(_send_key(operation_key))
@@ -1302,6 +2263,13 @@ def _begin_send(
                 or existing.get("generation") != generation
                 or existing.get("adapterVersion") != ADAPTER_VERSION
                 or existing.get("messageBinding") != message_binding
+                or existing.get("recipientBinding") != recipient_binding
+                or existing.get("sequenceStep") != step
+                or existing.get("parentOperationKey") != parent_operation_key
+                or existing.get("purpose") != purpose
+                or existing.get("inboxBinding") != inbox_binding
+                or existing.get("canaryRecipientSha256")
+                != canary_recipient_sha256
             ):
                 raise AdapterInputError("operation_binding_conflict") from exc
             return existing, False
@@ -1313,6 +2281,14 @@ def _begin_send(
         wait = _pacing_wait(resource, resource_operation_key, now)
         if wait > 0:
             raise AdapterRetryableError("sender_pacing_wait", wait) from exc
+        if parent_operation_key is not None:
+            parent_now = _get(_send_key(parent_operation_key))
+            if not parent_now or isinstance(
+                parent_now.get("terminalDeliveryEvent"), str
+            ):
+                raise AdapterInputError(
+                    "parent_thread_receipt_invalid"
+                ) from exc
         raise AdapterRetryableError("send_marker_unavailable") from exc
     row = _get(_send_key(operation_key))
     if not row:
@@ -1329,6 +2305,7 @@ def _send(
         payload.get("resourceOperationKey"), "resource_operation_key"
     )
     generation = require_generation(payload.get("generation"))
+    sequence_step = require_sequence_step(payload.get("sequenceStep"))
     resource = _get(_resource_key(resource_operation_key))
     if not resource or not _resource_binding_is_valid(
         resource, resource_operation_key, generation
@@ -1349,7 +2326,44 @@ def _send(
     to_email = normalize_address(payload.get("toEmail"))
     if not to_email:
         raise AdapterInputError("invalid_recipient")
+    purpose = _require_send_purpose(
+        payload,
+        operation_key=operation_key,
+        to_email=to_email,
+        sequence_step=sequence_step,
+        rfc_canary_verified=_rfc_message_id_canary_is_verified(secrets),
+    )
+    if purpose == "outreach" and not _resource_inbound_canary_is_current(
+        resource, resource_operation_key, generation, now, secrets
+    ):
+        raise AdapterRetryableError("inbound_relay_canary_required")
+    recipient_binding = derive_recipient_binding(
+        secrets.get("resourceKey", ""),
+        resource_operation_key,
+        generation,
+        to_email,
+    )
+    parent_operation_key, references, parent_guard = _parent_thread_references(
+        payload,
+        secrets,
+        operation_key=operation_key,
+        resource_operation_key=resource_operation_key,
+        generation=generation,
+        recipient_binding=recipient_binding,
+        sequence_step=sequence_step,
+    )
     reply_to = require_reply_alias(payload.get("replyTo"), RELAY_DOMAIN)
+    inbox_binding = (
+        derive_inbox_binding(
+            secrets.get("resourceKey", ""),
+            operation_key=operation_key,
+            resource_operation_key=resource_operation_key,
+            generation=generation,
+            reply_alias=reply_to,
+        )
+        if purpose == "inbound_relay_canary"
+        else None
+    )
     unsubscribe_url = require_https_url(payload.get("unsubscribeUrl"), "unsubscribe_url")
     unsubscribe = urlsplit(unsubscribe_url)
     if (
@@ -1365,6 +2379,8 @@ def _send(
         text=payload.get("text"),
         reply_to=reply_to,
         unsubscribe_url=unsubscribe_url,
+        in_reply_to=references[-1] if references else None,
+        references=references,
     )
     message_binding = derive_send_message_binding(
         secrets.get("resourceKey", ""),
@@ -1380,6 +2396,17 @@ def _send(
         generation,
         message_binding,
         now,
+        recipient_binding=recipient_binding,
+        sequence_step=sequence_step,
+        parent_operation_key=parent_operation_key,
+        parent_guard=parent_guard,
+        purpose=purpose,
+        inbox_binding=inbox_binding,
+        canary_recipient_sha256=(
+            RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+            if purpose == "rfc_message_id_canary"
+            else None
+        ),
     )
     if row.get("state") != "external_attempted":
         return _public_send(row)
@@ -1404,8 +2431,23 @@ def _send(
             TenantName=tenant_name,
         )
         message_id = response.get("MessageId")
-        if not isinstance(message_id, str) or not 1 <= len(message_id) <= 256:
-            raise AdapterRetryableError("provider_receipt_incomplete")
+        try:
+            (
+                message_id_digest,
+                rfc_message_id_digest,
+                rfc_message_id_ciphertext,
+                thread_receipt,
+            ) = _provider_thread_identity(
+                message_id,
+                operation_key=operation_key,
+                resource_operation_key=resource_operation_key,
+                generation=generation,
+                recipient_binding=recipient_binding,
+                sequence_step=sequence_step,
+                secrets=secrets,
+            )
+        except AdapterInputError as exc:
+            raise AdapterRetryableError("provider_receipt_incomplete") from exc
     except AdapterRetryableError:
         raise
     except Exception as exc:
@@ -1442,7 +2484,10 @@ def _send(
             generation,
             "submitted",
             now,
-            provider_message_id_digest=sha256_hex(message_id),
+            provider_message_id_digest=message_id_digest,
+            rfc_message_id_digest=rfc_message_id_digest,
+            rfc_message_id_ciphertext=rfc_message_id_ciphertext,
+            thread_receipt=thread_receipt,
             expected_message_binding=message_binding,
         )
     )
@@ -1477,6 +2522,68 @@ def _tenant_is_absent(ses: Any, tenant_name: str) -> bool:
         if _provider_is_not_found(exc):
             return True
         raise
+
+
+def _resource_inbound_canary_is_current(
+    row: dict[str, Any],
+    resource_operation_key: str,
+    generation: int,
+    now: int,
+    secrets: dict[str, str],
+) -> bool:
+    verified_at = row.get("inboundCanaryVerifiedAt")
+    structurally_valid = bool(
+        row.get("pk") == _resource_key(resource_operation_key)
+        and row.get("generation") == generation
+        and row.get("adapterVersion") == ADAPTER_VERSION
+        and isinstance(row.get("inboundCanaryOperationKey"), str)
+        and re.fullmatch(
+            r"[A-Za-z0-9_-]{32,96}", row["inboundCanaryOperationKey"]
+        )
+        and isinstance(row.get("inboundCanaryInboxBinding"), str)
+        and re.fullmatch(
+            r"[a-f0-9]{64}", row["inboundCanaryInboxBinding"]
+        )
+        and isinstance(row.get("inboundCanaryReceipt"), str)
+        and re.fullmatch(r"[a-f0-9]{64}", row["inboundCanaryReceipt"])
+        and isinstance(row.get("inboundCanaryRelayReceipt"), str)
+        and re.fullmatch(
+            r"[a-f0-9]{64}", row["inboundCanaryRelayReceipt"]
+        )
+        and isinstance(row.get("inboundCanaryRelayConfigurationHash"), str)
+        and re.fullmatch(
+            r"[a-f0-9]{64}", row["inboundCanaryRelayConfigurationHash"]
+        )
+        and isinstance(row.get("inboundCanaryRetentionPolicyHash"), str)
+        and re.fullmatch(
+            r"[a-f0-9]{64}", row["inboundCanaryRetentionPolicyHash"]
+        )
+        and isinstance(verified_at, int)
+        and verified_at <= now + 5 * 60
+        and verified_at >= now - INBOUND_CANARY_MAX_AGE_SECONDS
+    )
+    if not structurally_valid:
+        return False
+    try:
+        expected = derive_inbound_activation_receipt(
+            secrets.get("resourceKey", ""),
+            adapter_version=ADAPTER_VERSION,
+            resource_operation_key=resource_operation_key,
+            generation=generation,
+            operation_key=row["inboundCanaryOperationKey"],
+            inbox_binding=row["inboundCanaryInboxBinding"],
+            relay_configuration_hash=row[
+                "inboundCanaryRelayConfigurationHash"
+            ],
+            retention_policy_hash=row["inboundCanaryRetentionPolicyHash"],
+            verified_at=verified_at,
+            relay_receipt=row["inboundCanaryRelayReceipt"],
+        )
+    except AdapterInputError:
+        return False
+    return random_secrets.compare_digest(
+        row["inboundCanaryReceipt"], expected
+    )
 
 
 def _mark_release_verifying(
@@ -1858,6 +2965,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "/v1/provision": lambda: _provision(payload, secrets, now),
             "/v1/status": lambda: _status(payload, now),
             "/v1/send": lambda: _send(payload, secrets, now),
+            "/v1/inbound-canary": lambda: _activate_inbound_canary(
+                payload, _load_inbound_canary_key(), secrets, now
+            ),
             "/v1/disposition": lambda: _disposition(
                 payload, _load_disposition_key(), now
             ),

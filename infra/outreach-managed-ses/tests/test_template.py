@@ -39,6 +39,36 @@ class TemplateSafetyTests(unittest.TestCase):
         self.assertIn("PurposeKeysMustBeDistinct:", self.template)
         self.assertIn("- !Ref HmacSecretArn", self.template)
         self.assertIn("- !Ref DispositionSecretArn", self.template)
+        self.assertIn("- !Ref InboundCanarySecretArn", self.template)
+        self.assertIn("Path: /v1/inbound-canary", self.template)
+
+    def test_thread_identity_uses_context_bound_rotating_kms_key(self) -> None:
+        self.assertIn("ThreadMessageKey:", self.template)
+        self.assertIn("EnableKeyRotation: true", self.template)
+        self.assertIn("PendingWindowInDays: 30", self.template)
+        self.assertIn("kms:EncryptionContext:purpose: managed-ses-rfc-message-id", self.template)
+        for required in (
+            "operationKey",
+            "resourceOperationKey",
+            "generation",
+            "recipientBinding",
+        ):
+            self.assertIn(f"kms:EncryptionContext:{required}", self.template)
+        self.assertEqual(self.template.count("- kms:Decrypt"), 1)
+        event_role = self.template.split("  EventFunctionRole:", 1)[1].split(
+            "\n  EventFunction:", 1
+        )[0]
+        self.assertIn("Action: kms:Encrypt", event_role)
+        self.assertNotIn("kms:Decrypt", event_role)
+
+    def test_rfc_event_schema_has_exact_and_missing_header_routes(self) -> None:
+        self.assertIn("EventRuleMissingRfcMessageId:", self.template)
+        self.assertIn("- exists: true", self.template)
+        self.assertIn("- exists: false", self.template)
+        self.assertIn("rfcMessageId: $.detail.mail.commonHeaders.messageId", self.template)
+        self.assertNotIn("RfcMessageIdCanaryReceipt:", self.template)
+        self.assertNotIn("RFC_MESSAGE_ID_CANARY_RECEIPT", self.template)
+        self.assertIn("rfc-canary#", self.adapter)
 
     def test_provider_events_are_reduced_before_queue(self) -> None:
         transformer = self.template.split("          InputTransformer:", 1)[1].split(

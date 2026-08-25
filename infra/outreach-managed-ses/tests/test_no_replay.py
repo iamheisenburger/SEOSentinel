@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import pathlib
@@ -17,6 +18,9 @@ from common import (  # noqa: E402
     AdapterRetryableError,
     deterministic_json,
     disposition_signature,
+    derive_inbound_activation_receipt,
+    derive_recipient_binding,
+    derive_rfc_canary_receipt,
     response_signature,
 )
 
@@ -55,7 +59,9 @@ class FakeDynamoDb:
     def __init__(self) -> None:
         self.items = {}
         self.fail_next_transact = False
+        self.fail_next_put = False
         self.before_next_transact = None
+        self.after_next_transact = None
 
     def get_item(self, **kwargs):
         key = kwargs["Key"]["pk"]["S"]
@@ -63,6 +69,9 @@ class FakeDynamoDb:
         return {"Item": encode(item)} if item is not None else {}
 
     def put_item(self, **kwargs):
+        if self.fail_next_put:
+            self.fail_next_put = False
+            raise FakeAwsError("InternalServerError")
         item = decode(kwargs["Item"])
         if kwargs.get("ConditionExpression") and item["pk"] in self.items:
             raise FakeAwsError("ConditionalCheckFailedException")
@@ -137,6 +146,50 @@ class FakeDynamoDb:
                 raise FakeAwsError("ConditionalCheckFailedException")
             item["state"] = values[":confirmed"]
             item["providerMessageIdDigest"] = values[":digest"]
+            item["rfcMessageIdDigest"] = values[":rfcDigest"]
+            item["rfcMessageIdCiphertext"] = values[":ciphertext"]
+            item["threadReceipt"] = values[":threadReceipt"]
+            if ":terminalEvent" in values:
+                item["terminalDeliveryEvent"] = values[":terminalEvent"]
+                item["terminalDeliveryEventAt"] = values[":terminalEventAt"]
+                item["terminalDeliveryEventKeyDigest"] = values[
+                    ":terminalEventKey"
+                ]
+                item["terminalDeliveryEventReceipt"] = values[
+                    ":terminalEventReceipt"
+                ]
+            item["updatedAt"] = values[":now"]
+        elif "#state=:quarantined" in expression:
+            item["state"] = values[":quarantined"]
+            item["code"] = values[":code"]
+            item["updatedAt"] = values[":now"]
+        elif "inboundCanaryOperationKey=:operation" in expression:
+            if item.get("state") != "ready":
+                raise FakeAwsError("ConditionalCheckFailedException")
+            item["inboundCanaryOperationKey"] = values[":operation"]
+            item["inboundCanaryInboxBinding"] = values[":inbox"]
+            item["inboundCanaryRelayConfigurationHash"] = values[
+                ":relayConfiguration"
+            ]
+            item["inboundCanaryRetentionPolicyHash"] = values[
+                ":retentionPolicy"
+            ]
+            item["inboundCanaryRelayReceipt"] = values[":relayReceipt"]
+            item["inboundCanaryVerifiedAt"] = values[":verifiedAt"]
+            item["inboundCanaryReceipt"] = values[":receipt"]
+            item["updatedAt"] = values[":now"]
+        elif "terminalDeliveryEvent=:eventType" in expression:
+            if (
+                isinstance(item.get("terminalDeliveryEvent"), str)
+                or item.get("providerMessageIdDigest")
+                != values[":providerDigest"]
+                or item.get("rfcMessageIdDigest") != values[":rfcDigest"]
+            ):
+                raise FakeAwsError("ConditionalCheckFailedException")
+            item["terminalDeliveryEvent"] = values[":eventType"]
+            item["terminalDeliveryEventAt"] = values[":eventTime"]
+            item["terminalDeliveryEventKeyDigest"] = values[":eventKey"]
+            item["terminalDeliveryEventReceipt"] = values[":eventReceipt"]
             item["updatedAt"] = values[":now"]
         elif "#state=:state" in expression:
             item["state"] = values[":state"]
@@ -179,12 +232,45 @@ class FakeDynamoDb:
             generation = int(values[":generation"]["N"])
             if not resource or resource.get("state") != "ready" or resource.get("generation") != generation:
                 raise FakeAwsError("TransactionCanceledException")
+            if len(writes) == 4 and "ConditionCheck" in writes[3]:
+                check = writes[3]["ConditionCheck"]
+                parent = self.items.get(check["Key"]["pk"]["S"])
+                expected = check["ExpressionAttributeValues"]
+                if (
+                    not parent
+                    or parent.get("kind") != expected[":sendKind"]["S"]
+                    or parent.get("resourceOperationKey")
+                    != expected[":resource"]["S"]
+                    or parent.get("generation")
+                    != int(expected[":generation"]["N"])
+                    or parent.get("adapterVersion")
+                    != expected[":version"]["S"]
+                    or parent.get("recipientBinding")
+                    != expected[":recipient"]["S"]
+                    or parent.get("sequenceStep")
+                    != int(expected[":parentStep"]["N"])
+                    or parent.get("purpose") != expected[":outreach"]["S"]
+                    or parent.get("threadReceipt")
+                    != expected[":threadReceipt"]["S"]
+                    or parent.get("providerMessageIdDigest")
+                    != expected[":providerDigest"]["S"]
+                    or parent.get("rfcMessageIdDigest")
+                    != expected[":rfcDigest"]["S"]
+                    or isinstance(parent.get("terminalDeliveryEvent"), str)
+                    or parent.get("state")
+                    not in {
+                        expected[":submitted"]["S"],
+                        expected[":confirmed"]["S"],
+                        expected[":disposedConfirmed"]["S"],
+                    }
+                ):
+                    raise FakeAwsError("TransactionCanceledException")
             self.items[send["pk"]] = send
             resource["unsettledSendCount"] += 1
             attempt_at = int(values[":now"]["N"])
             resource["updatedAt"] = attempt_at
             resource["lastSendAttemptAt"] = attempt_at
-            if len(writes) == 3:
+            if len(writes) >= 3 and "Update" in writes[2]:
                 pacing_update = writes[2]["Update"]
                 pacing_key = pacing_update["Key"]["pk"]["S"]
                 pacing = self.items.setdefault(
@@ -243,6 +329,18 @@ class FakeDynamoDb:
         send["updatedAt"] = int(values[":now"]["N"])
         if ":messageDigest" in values:
             send["providerMessageIdDigest"] = values[":messageDigest"]["S"]
+            send["rfcMessageIdDigest"] = values[":rfcMessageDigest"]["S"]
+            send["rfcMessageIdCiphertext"] = values[":messageCiphertext"]["S"]
+            send["threadReceipt"] = values[":threadReceipt"]["S"]
+        if ":terminalEvent" in values:
+            send["terminalDeliveryEvent"] = values[":terminalEvent"]["S"]
+            send["terminalDeliveryEventAt"] = values[":terminalEventAt"]["S"]
+            send["terminalDeliveryEventKeyDigest"] = values[
+                ":terminalEventKey"
+            ]["S"]
+            send["terminalDeliveryEventReceipt"] = values[
+                ":terminalEventReceipt"
+            ]["S"]
         if ":code" in values:
             send["code"] = values[":code"]["S"]
         if ":authorizedAt" in values:
@@ -259,6 +357,10 @@ class FakeDynamoDb:
         resource["updatedAt"] = int(
             writes[1]["Update"]["ExpressionAttributeValues"][":now"]["N"]
         )
+        if self.after_next_transact is not None:
+            callback = self.after_next_transact
+            self.after_next_transact = None
+            callback()
         return {}
 
 
@@ -266,6 +368,7 @@ class FakeSes:
     def __init__(self, failure: Exception | None = None) -> None:
         self.failure = failure
         self.send_count = 0
+        self.send_calls = []
         self.tenants = {}
         self.create_count = 0
         self.production_access_enabled = True
@@ -273,11 +376,12 @@ class FakeSes:
         self.missing_identity = False
         self.event_bus_arn = None
 
-    def send_email(self, **_kwargs):
+    def send_email(self, **kwargs):
         self.send_count += 1
+        self.send_calls.append(kwargs)
         if self.failure:
             raise self.failure
-        return {"MessageId": "provider-message-0001"}
+        return {"MessageId": f"provider-message-{self.send_count:04d}"}
 
     def get_account(self):
         return {
@@ -381,6 +485,31 @@ class FakeSes:
         }
 
 
+class FakeKms:
+    def __init__(self) -> None:
+        self.values = {}
+        self.encrypt_calls = []
+        self.decrypt_calls = []
+
+    def encrypt(self, **kwargs):
+        plaintext = bytes(kwargs["Plaintext"])
+        context = dict(kwargs["EncryptionContext"])
+        blob = b"cipher:" + hashlib.sha256(
+            plaintext + json.dumps(context, sort_keys=True).encode()
+        ).digest()
+        self.values[(blob, tuple(sorted(context.items())))] = plaintext
+        self.encrypt_calls.append(kwargs)
+        return {"CiphertextBlob": blob, "KeyId": kwargs["KeyId"]}
+
+    def decrypt(self, **kwargs):
+        context = dict(kwargs["EncryptionContext"])
+        key = (bytes(kwargs["CiphertextBlob"]), tuple(sorted(context.items())))
+        self.decrypt_calls.append(kwargs)
+        if key not in self.values:
+            raise FakeAwsError("InvalidCiphertextException")
+        return {"Plaintext": self.values[key], "KeyId": kwargs["KeyId"]}
+
+
 class FakeWebhookResponse:
     def __init__(self, status, body, headers):
         self.status = status
@@ -411,12 +540,14 @@ class NoReplayTests(unittest.TestCase):
     def setUp(self) -> None:
         self.ddb = FakeDynamoDb()
         self.ses = FakeSes()
+        self.kms = FakeKms()
         adapter._CLIENTS.clear()
         adapter._CLIENTS.update(
             {
                 "dynamodb": self.ddb,
                 "sesv2": self.ses,
                 "sesv2_send_no_retry": self.ses,
+                "kms": self.kms,
             }
         )
         adapter.TABLE_NAME = "state"
@@ -431,8 +562,23 @@ class NoReplayTests(unittest.TestCase):
         adapter.EVENT_BUS_ARN = (
             "arn:aws:events:us-east-1:123456789012:event-bus/default"
         )
+        adapter.THREAD_MESSAGE_KEY_ARN = (
+            "arn:aws:kms:us-east-1:123456789012:key/thread-test"
+        )
+        adapter.RFC_MESSAGE_ID_SUFFIX = ""
+        adapter.RFC_MESSAGE_ID_CANARY_OPERATION_KEY = "c" * 40
+        adapter.RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256 = adapter.sha256_hex(
+            "canary@pentra.dev"
+        )
         events.ADAPTER_VERSION = adapter.ADAPTER_VERSION
         events.TABLE_NAME = adapter.TABLE_NAME
+        events.RFC_MESSAGE_ID_SUFFIX = adapter.RFC_MESSAGE_ID_SUFFIX
+        events.RFC_MESSAGE_ID_CANARY_OPERATION_KEY = (
+            adapter.RFC_MESSAGE_ID_CANARY_OPERATION_KEY
+        )
+        events.RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256 = (
+            adapter.RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+        )
 
         self.resource_operation = "r" * 40
         self.send_operation = "s" * 40
@@ -441,7 +587,47 @@ class NoReplayTests(unittest.TestCase):
             "signWith": "current",
             "resourceKey": "k" * 40,
         }
+        marker_values = {
+            "providerMessageIdDigest": "1" * 64,
+            "rfcMessageIdDigest": "2" * 64,
+            "threadReceipt": "3" * 64,
+            "eventKeyDigest": "4" * 64,
+        }
+        self.ddb.items[adapter._rfc_canary_marker_key()] = {
+            "pk": adapter._rfc_canary_marker_key(),
+            "kind": "rfc_message_id_canary",
+            "state": "verified",
+            "adapterVersion": adapter.ADAPTER_VERSION,
+            "operationKey": adapter.RFC_MESSAGE_ID_CANARY_OPERATION_KEY,
+            "recipientSha256": (
+                adapter.RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+            ),
+            "rfcMessageIdSuffix": adapter.RFC_MESSAGE_ID_SUFFIX,
+            **marker_values,
+            "verifiedAt": 1,
+            "canaryReceipt": derive_rfc_canary_receipt(
+                self.secrets["resourceKey"],
+                adapter_version=adapter.ADAPTER_VERSION,
+                operation_key=adapter.RFC_MESSAGE_ID_CANARY_OPERATION_KEY,
+                recipient_sha256=(
+                    adapter.RFC_MESSAGE_ID_CANARY_RECIPIENT_SHA256
+                ),
+                rfc_message_id_suffix=adapter.RFC_MESSAGE_ID_SUFFIX,
+                provider_message_id_digest=marker_values[
+                    "providerMessageIdDigest"
+                ],
+                rfc_message_id_digest=marker_values["rfcMessageIdDigest"],
+                thread_receipt=marker_values["threadReceipt"],
+                event_key_digest=marker_values["eventKeyDigest"],
+            ),
+        }
         self.message_binding = "b" * 64
+        self.recipient_binding = derive_recipient_binding(
+            self.secrets["resourceKey"],
+            self.resource_operation,
+            2,
+            "prospect@example.com",
+        )
         self.tenant_name = "pentra-" + "1" * 40
         self.ddb.items[adapter._resource_key(self.resource_operation)] = {
             "pk": adapter._resource_key(self.resource_operation),
@@ -460,6 +646,24 @@ class NoReplayTests(unittest.TestCase):
             "unsettledSendCount": 0,
             "verifiedAt": 1,
             "resourceReceipt": "a" * 64,
+            "inboundCanaryOperationKey": "i" * 40,
+            "inboundCanaryInboxBinding": "d" * 64,
+            "inboundCanaryRelayConfigurationHash": "b" * 64,
+            "inboundCanaryRetentionPolicyHash": "c" * 64,
+            "inboundCanaryRelayReceipt": "f" * 64,
+            "inboundCanaryVerifiedAt": 1,
+            "inboundCanaryReceipt": derive_inbound_activation_receipt(
+                self.secrets["resourceKey"],
+                adapter_version=adapter.ADAPTER_VERSION,
+                resource_operation_key=self.resource_operation,
+                generation=2,
+                operation_key="i" * 40,
+                inbox_binding="d" * 64,
+                relay_configuration_hash="b" * 64,
+                retention_policy_hash="c" * 64,
+                verified_at=1,
+                relay_receipt="f" * 64,
+            ),
             "createdAt": 1,
             "updatedAt": 1,
         }
@@ -480,6 +684,8 @@ class NoReplayTests(unittest.TestCase):
             "operationKey": self.send_operation,
             "resourceOperationKey": self.resource_operation,
             "generation": 2,
+            "sequenceStep": 0,
+            "purpose": "outreach",
             "toEmail": "prospect@example.com",
             "displayName": "Pentra customer",
             "subject": "Useful research",
@@ -579,10 +785,16 @@ class NoReplayTests(unittest.TestCase):
             2,
             self.message_binding,
             100,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         send = self.ddb.items[adapter._send_key(self.send_operation)]
         send["state"] = "submitted"
         send["providerMessageIdDigest"] = "a" * 64
+        send["rfcMessageIdDigest"] = "d" * 64
+        send["rfcMessageIdCiphertext"] = "Y2lwaGVy"
+        send["threadReceipt"] = "t" * 64
         self.ddb.items[adapter._resource_key(self.resource_operation)][
             "unsettledSendCount"
         ] = 0
@@ -596,16 +808,11 @@ class NoReplayTests(unittest.TestCase):
                 "event_confirmed",
                 101,
                 provider_message_id_digest="b" * 64,
+                rfc_message_id_digest="e" * 64,
+                rfc_message_id_ciphertext="Y2lwaGVyMg==",
+                thread_receipt="u" * 64,
             )
-        matched = adapter._mark_send_terminal(
-            self.send_operation,
-            self.resource_operation,
-            2,
-            "event_confirmed",
-            102,
-            provider_message_id_digest="a" * 64,
-        )
-        self.assertEqual(matched["state"], "submitted")
+        self.assertEqual(send["state"], "quarantined_integrity")
 
     def test_warmup_day_ledger_stops_at_maximum_tier(self) -> None:
         resource = self.ddb.items[adapter._resource_key(self.resource_operation)]
@@ -616,6 +823,9 @@ class NoReplayTests(unittest.TestCase):
             2,
             self.message_binding,
             15 * 86_400,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         adapter._mark_send_terminal(
             self.send_operation,
@@ -624,6 +834,9 @@ class NoReplayTests(unittest.TestCase):
             "submitted",
             15 * 86_400 + 1,
             provider_message_id_digest="a" * 64,
+            rfc_message_id_digest="d" * 64,
+            rfc_message_id_ciphertext="Y2lwaGVy",
+            thread_receipt="t" * 64,
         )
         self.assertEqual(
             resource["warmupSettledDayCount"], adapter.MAX_WARMUP_SETTLED_DAYS
@@ -687,10 +900,24 @@ class NoReplayTests(unittest.TestCase):
         second_operation = "v" * 40
         third_operation = "w" * 40
         adapter._begin_send(
-            first_operation, self.resource_operation, 2, "1" * 64, day_one
+            first_operation,
+            self.resource_operation,
+            2,
+            "1" * 64,
+            day_one,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         adapter._begin_send(
-            second_operation, self.resource_operation, 2, "2" * 64, day_two
+            second_operation,
+            self.resource_operation,
+            2,
+            "2" * 64,
+            day_two,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         adapter._mark_send_terminal(
             second_operation,
@@ -699,6 +926,9 @@ class NoReplayTests(unittest.TestCase):
             "submitted",
             day_two + 1,
             provider_message_id_digest="b" * 64,
+            rfc_message_id_digest="e" * 64,
+            rfc_message_id_ciphertext="Y2lwaGVyMg==",
+            thread_receipt="u" * 64,
         )
         adapter._mark_send_terminal(
             first_operation,
@@ -707,6 +937,9 @@ class NoReplayTests(unittest.TestCase):
             "submitted",
             day_two + 2,
             provider_message_id_digest="a" * 64,
+            rfc_message_id_digest="d" * 64,
+            rfc_message_id_ciphertext="Y2lwaGVy",
+            thread_receipt="t" * 64,
         )
         adapter._begin_send(
             third_operation,
@@ -714,6 +947,9 @@ class NoReplayTests(unittest.TestCase):
             2,
             "3" * 64,
             day_two + adapter.MIN_SEND_SPACING_SECONDS,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         adapter._mark_send_terminal(
             third_operation,
@@ -722,6 +958,9 @@ class NoReplayTests(unittest.TestCase):
             "submitted",
             day_two + adapter.MIN_SEND_SPACING_SECONDS + 1,
             provider_message_id_digest="c" * 64,
+            rfc_message_id_digest="f" * 64,
+            rfc_message_id_ciphertext="Y2lwaGVyMw==",
+            thread_receipt="v" * 64,
         )
         resource = self.ddb.items[adapter._resource_key(self.resource_operation)]
         self.assertEqual(resource["warmupSettledDayCount"], 2)
@@ -739,24 +978,36 @@ class NoReplayTests(unittest.TestCase):
             2,
             self.message_binding,
             100,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         self.assertTrue(claimed)
         self.assertEqual(row["state"], "external_attempted")
         envelope = {
             "operationKey": self.send_operation,
-            "messageIdDigest": "d" * 64,
+            "messageId": "provider-message-0001",
+            "messageIdDigest": adapter.sha256_hex("provider-message-0001"),
+            "rfcMessageId": "<provider-message-0001>",
+            "rfcMessageIdDigest": adapter.sha256_hex(
+                "<provider-message-0001>"
+            ),
         }
         with self.assertRaisesRegex(
             AdapterRetryableError, "provider_receipt_settlement_wait"
         ):
-            events._settle_ambiguous_send(envelope, row, 110)
+            events._settle_ambiguous_send(envelope, row, self.secrets, 110)
         settled = events._settle_ambiguous_send(
             envelope,
             row,
+            self.secrets,
             100 + events.SEND_RECEIPT_SETTLEMENT_GRACE_SECONDS,
         )
         self.assertEqual(settled["state"], "event_confirmed")
-        self.assertEqual(settled["providerMessageIdDigest"], "d" * 64)
+        self.assertEqual(
+            settled["providerMessageIdDigest"],
+            adapter.sha256_hex("provider-message-0001"),
+        )
         self.assertEqual(
             self.ddb.items[adapter._resource_key(self.resource_operation)][
                 "unsettledSendCount"
@@ -766,6 +1017,17 @@ class NoReplayTests(unittest.TestCase):
         self.assertEqual(self.ses.send_count, 0)
 
     def test_event_redelivery_reuses_first_signed_body_and_semantic_receipt(self) -> None:
+        provider_digest, rfc_digest, ciphertext, thread_receipt = (
+            adapter._provider_thread_identity(
+                "provider-message-0001",
+                operation_key=self.send_operation,
+                resource_operation_key=self.resource_operation,
+                generation=2,
+                recipient_binding=self.recipient_binding,
+                sequence_step=0,
+                secrets=self.secrets,
+            )
+        )
         self.ddb.items[adapter._send_key(self.send_operation)] = {
             "pk": adapter._send_key(self.send_operation),
             "kind": "send",
@@ -774,7 +1036,13 @@ class NoReplayTests(unittest.TestCase):
             "resourceOperationKey": self.resource_operation,
             "generation": 2,
             "adapterVersion": adapter.ADAPTER_VERSION,
-            "providerMessageIdDigest": adapter.sha256_hex("provider-message-0001"),
+            "recipientBinding": self.recipient_binding,
+            "sequenceStep": 0,
+            "purpose": "outreach",
+            "providerMessageIdDigest": provider_digest,
+            "rfcMessageIdDigest": rfc_digest,
+            "rfcMessageIdCiphertext": ciphertext,
+            "threadReceipt": thread_receipt,
             "createdAt": 100,
             "updatedAt": 100,
         }
@@ -783,6 +1051,7 @@ class NoReplayTests(unittest.TestCase):
             "eventId": "12345678-1234-1234-1234-123456789abc",
             "eventTime": "2026-08-25T19:00:00Z",
             "messageId": "provider-message-0001",
+            "rfcMessageId": "<provider-message-0001>",
             "attempt": [self.send_operation],
         }
         second = {
@@ -799,12 +1068,7 @@ class NoReplayTests(unittest.TestCase):
                 raise AdapterRetryableError("webhook_retry")
 
             events._post_event = capture_retry
-            events._load_secrets = lambda: {
-                "current": "c" * 40,
-                "signWith": "current",
-                "resourceKey": "r" * 40,
-                "dispositionKey": "d" * 40,
-            }
+            events._load_secrets = lambda: self.secrets
             with self.assertRaisesRegex(AdapterRetryableError, "webhook_retry"):
                 events.process_envelope(first, now=200)
             with self.assertRaisesRegex(AdapterRetryableError, "webhook_retry"):
@@ -935,6 +1199,9 @@ class NoReplayTests(unittest.TestCase):
             2,
             self.message_binding,
             100,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         with self.assertRaisesRegex(AdapterRetryableError, "resource_has_unsettled_send"):
             adapter._release(
@@ -991,9 +1258,17 @@ class NoReplayTests(unittest.TestCase):
         late_event = events._settle_ambiguous_send(
             {
                 "operationKey": self.send_operation,
-                "messageIdDigest": "d" * 64,
+                "messageId": "provider-message-late",
+                "messageIdDigest": adapter.sha256_hex(
+                    "provider-message-late"
+                ),
+                "rfcMessageId": "<provider-message-late>",
+                "rfcMessageIdDigest": adapter.sha256_hex(
+                    "<provider-message-late>"
+                ),
             },
             persisted,
+            self.secrets,
             now + 1,
         )
         self.assertEqual(
@@ -1002,9 +1277,17 @@ class NoReplayTests(unittest.TestCase):
         repeated_event = events._settle_ambiguous_send(
             {
                 "operationKey": self.send_operation,
-                "messageIdDigest": "d" * 64,
+                "messageId": "provider-message-late",
+                "messageIdDigest": adapter.sha256_hex(
+                    "provider-message-late"
+                ),
+                "rfcMessageId": "<provider-message-late>",
+                "rfcMessageIdDigest": adapter.sha256_hex(
+                    "<provider-message-late>"
+                ),
             },
             late_event,
+            self.secrets,
             now + 2,
         )
         self.assertEqual(
@@ -1024,6 +1307,9 @@ class NoReplayTests(unittest.TestCase):
             2,
             self.message_binding,
             100,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         with self.assertRaisesRegex(AdapterRetryableError, "disposition_review_wait"):
             adapter._disposition(
@@ -1045,6 +1331,9 @@ class NoReplayTests(unittest.TestCase):
             2,
             self.message_binding,
             100,
+            recipient_binding=self.recipient_binding,
+            sequence_step=0,
+            parent_operation_key=None,
         )
         self.assertTrue(claimed)
         self.assertEqual(row["state"], "external_attempted")
@@ -1058,6 +1347,9 @@ class NoReplayTests(unittest.TestCase):
             "submitted",
             101,
             provider_message_id_digest="a" * 64,
+            rfc_message_id_digest="d" * 64,
+            rfc_message_id_ciphertext="Y2lwaGVy",
+            thread_receipt="t" * 64,
         )
         self.assertEqual(settled["state"], "submitted")
         self.assertEqual(resource["unsettledSendCount"], 0)

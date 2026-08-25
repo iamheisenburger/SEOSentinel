@@ -17,7 +17,7 @@ from email.headerregistry import Address
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr, getaddresses
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 ADAPTER_PROTOCOL_VERSION = 1
@@ -29,6 +29,12 @@ MAX_SUBJECT_CHARACTERS = 240
 MAX_TEXT_CHARACTERS = 40_000
 MAX_DISPLAY_NAME_CHARACTERS = 120
 MIN_SEND_SPACING_SECONDS = 30 * 60
+MAX_SEQUENCE_STEP = 20
+MAX_RFC_MESSAGE_ID_CHARACTERS = 512
+MAX_THREAD_HEADER_CHARACTERS = 900
+TERMINAL_DELIVERY_EVENT_TYPES = frozenset(
+    {"bounced", "complaint", "rejected", "rendering_failed"}
+)
 
 _OPAQUE_KEY = re.compile(r"^[A-Za-z0-9_-]{32,96}$")
 _ADAPTER_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
@@ -37,6 +43,7 @@ _RELAY_ALIAS = re.compile(
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
 )
 _SAFE_HEADER = re.compile(r"^[\x20-\x7e]{1,995}$")
+_SES_MESSAGE_ID_TOKEN = re.compile(r"^[A-Za-z0-9!#$%&'*+./=?^_`{|}~@-]+$")
 
 
 class AdapterInputError(Exception):
@@ -79,6 +86,16 @@ def require_opaque_key(value: Any, field: str) -> str:
 def require_generation(value: Any) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 2**31:
         raise AdapterInputError("invalid_generation")
+    return value
+
+
+def require_sequence_step(value: Any) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 <= value <= MAX_SEQUENCE_STEP
+    ):
+        raise AdapterInputError("invalid_sequence_step")
     return value
 
 
@@ -329,6 +346,300 @@ def derive_send_message_binding(
     ).hexdigest()
 
 
+def derive_recipient_binding(
+    resource_key: str,
+    resource_operation_key: str,
+    generation: int,
+    to_email: str,
+) -> str:
+    """Return a non-enumerable recipient equality binding for thread checks."""
+    if not isinstance(resource_key, str) or len(resource_key) < 32:
+        raise AdapterInputError("secret_contract_invalid")
+    resource_operation = require_opaque_key(
+        resource_operation_key, "resource_operation_key"
+    )
+    receipt_generation = require_generation(generation)
+    recipient = normalize_address(to_email)
+    if not recipient:
+        raise AdapterInputError("invalid_recipient")
+    material = (
+        "v1\nrecipient-binding\n"
+        f"{resource_operation}\n{receipt_generation}\n{recipient}"
+    ).encode("utf-8")
+    return hmac.new(
+        resource_key.encode("utf-8"), material, hashlib.sha256
+    ).hexdigest()
+
+
+def derive_inbox_binding(
+    resource_key: str,
+    *,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    reply_alias: str,
+) -> str:
+    """Bind a canary reply inbox without persisting its enumerable address."""
+    if not isinstance(resource_key, str) or len(resource_key) < 32:
+        raise AdapterInputError("secret_contract_invalid")
+    operation = require_opaque_key(operation_key, "operation_key")
+    resource_operation = require_opaque_key(
+        resource_operation_key, "resource_operation_key"
+    )
+    receipt_generation = require_generation(generation)
+    if not isinstance(reply_alias, str) or not reply_alias:
+        raise AdapterInputError("invalid_reply_to")
+    material = (
+        "v1\ninbox-binding\n"
+        f"{operation}\n{resource_operation}\n{receipt_generation}\n{reply_alias}"
+    ).encode("utf-8")
+    return hmac.new(
+        resource_key.encode("utf-8"), material, hashlib.sha256
+    ).hexdigest()
+
+
+def derive_thread_receipt(
+    resource_key: str,
+    *,
+    operation_key: str,
+    resource_operation_key: str,
+    generation: int,
+    adapter_version: str,
+    recipient_binding: str,
+    sequence_step: int,
+    provider_message_id_digest: str,
+    rfc_message_id_digest: str,
+) -> str:
+    """Bind an opaque public thread capability to one exact provider identity."""
+    if not isinstance(resource_key, str) or len(resource_key) < 32:
+        raise AdapterInputError("secret_contract_invalid")
+    operation = require_opaque_key(operation_key, "operation_key")
+    resource_operation = require_opaque_key(
+        resource_operation_key, "resource_operation_key"
+    )
+    receipt_generation = require_generation(generation)
+    version = require_adapter_version(adapter_version, adapter_version)
+    step = require_sequence_step(sequence_step)
+    if not isinstance(recipient_binding, str) or not re.fullmatch(
+        r"[a-f0-9]{64}", recipient_binding
+    ):
+        raise AdapterInputError("thread_receipt_invalid")
+    if not isinstance(provider_message_id_digest, str) or not re.fullmatch(
+        r"[a-f0-9]{64}", provider_message_id_digest
+    ):
+        raise AdapterInputError("thread_receipt_invalid")
+    if not isinstance(rfc_message_id_digest, str) or not re.fullmatch(
+        r"[a-f0-9]{64}", rfc_message_id_digest
+    ):
+        raise AdapterInputError("thread_receipt_invalid")
+    material = (
+        "v1\nthread-receipt\n"
+        f"{version}\n{operation}\n{resource_operation}\n"
+        f"{receipt_generation}\n{recipient_binding}\n{step}\n"
+        f"{provider_message_id_digest}\n{rfc_message_id_digest}"
+    ).encode("utf-8")
+    return hmac.new(
+        resource_key.encode("utf-8"), material, hashlib.sha256
+    ).hexdigest()
+
+
+def inbound_canary_signature(
+    secret: str,
+    *,
+    adapter_version: str,
+    resource_operation_key: str,
+    generation: int,
+    canary_operation_key: str,
+    inbox_binding: str,
+    relay_configuration_hash: str,
+    retention_policy_hash: str,
+    verified_at: int,
+) -> str:
+    if not isinstance(secret, str) or len(secret) < 32:
+        raise AdapterInputError("inbound_canary_secret_invalid")
+    version = require_adapter_version(adapter_version, adapter_version)
+    resource_operation = require_opaque_key(
+        resource_operation_key, "resource_operation_key"
+    )
+    canary_operation = require_opaque_key(
+        canary_operation_key, "canary_operation_key"
+    )
+    receipt_generation = require_generation(generation)
+    if any(
+        not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
+        for value in (
+            inbox_binding,
+            relay_configuration_hash,
+            retention_policy_hash,
+        )
+    ):
+        raise AdapterInputError("inbound_canary_receipt_invalid")
+    if not isinstance(verified_at, int) or isinstance(verified_at, bool):
+        raise AdapterInputError("inbound_canary_receipt_invalid")
+    material = (
+        "v1\ninbound-relay-canary\nreply+stop\n"
+        f"{version}\n{resource_operation}\n{receipt_generation}\n"
+        f"{canary_operation}\n"
+        f"{inbox_binding}\n{relay_configuration_hash}\n"
+        f"{retention_policy_hash}\n{verified_at}"
+    ).encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), material, hashlib.sha256).hexdigest()
+
+
+def verify_inbound_canary_receipt(
+    payload: Mapping[str, Any],
+    secret: str,
+    *,
+    adapter_version: str,
+    now: int,
+) -> tuple[str, int, str, str, str, str, int, str]:
+    version = require_adapter_version(
+        payload.get("adapterVersion"), adapter_version
+    )
+    resource_operation = require_opaque_key(
+        payload.get("resourceOperationKey"), "resource_operation_key"
+    )
+    generation = require_generation(payload.get("generation"))
+    canary_operation = require_opaque_key(
+        payload.get("operationKey"), "operation_key"
+    )
+    inbox_binding = payload.get("inboxBinding")
+    relay_configuration_hash = payload.get("relayConfigurationHash")
+    retention_policy_hash = payload.get("retentionPolicyHash")
+    verified_at = payload.get("verifiedAt")
+    receipt = payload.get("relayReceipt")
+    if (
+        payload.get("classifications") != ["reply", "stop"]
+        or any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value)
+            for value in (
+                inbox_binding,
+                relay_configuration_hash,
+                retention_policy_hash,
+            )
+        )
+        or not isinstance(verified_at, int)
+        or isinstance(verified_at, bool)
+        or abs(int(now) - verified_at) > AUTH_WINDOW_SECONDS
+        or not isinstance(receipt, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", receipt)
+    ):
+        raise AdapterInputError("inbound_canary_receipt_invalid")
+    expected = inbound_canary_signature(
+        secret,
+        adapter_version=version,
+        resource_operation_key=resource_operation,
+        generation=generation,
+        canary_operation_key=canary_operation,
+        inbox_binding=inbox_binding,
+        relay_configuration_hash=relay_configuration_hash,
+        retention_policy_hash=retention_policy_hash,
+        verified_at=verified_at,
+    )
+    if not hmac.compare_digest(receipt, expected):
+        raise AdapterInputError("inbound_canary_receipt_invalid")
+    return (
+        resource_operation,
+        generation,
+        canary_operation,
+        inbox_binding,
+        relay_configuration_hash,
+        retention_policy_hash,
+        verified_at,
+        receipt,
+    )
+
+
+def derive_inbound_activation_receipt(
+    resource_key: str,
+    *,
+    adapter_version: str,
+    resource_operation_key: str,
+    generation: int,
+    operation_key: str,
+    inbox_binding: str,
+    relay_configuration_hash: str,
+    retention_policy_hash: str,
+    verified_at: int,
+    relay_receipt: str,
+) -> str:
+    if not isinstance(resource_key, str) or len(resource_key) < 32:
+        raise AdapterInputError("secret_contract_invalid")
+    version = require_adapter_version(adapter_version, adapter_version)
+    resource_operation = require_opaque_key(
+        resource_operation_key, "resource_operation_key"
+    )
+    generation_value = require_generation(generation)
+    operation = require_opaque_key(operation_key, "operation_key")
+    if (
+        any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value)
+            for value in (
+                inbox_binding,
+                relay_configuration_hash,
+                retention_policy_hash,
+            )
+        )
+        or not isinstance(verified_at, int)
+        or isinstance(verified_at, bool)
+        or not isinstance(relay_receipt, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", relay_receipt)
+    ):
+        raise AdapterInputError("inbound_canary_receipt_invalid")
+    material = (
+        "v1\ninbound-canary-activation\nreply+stop\n"
+        f"{version}\n{resource_operation}\n{generation_value}\n"
+        f"{operation}\n{inbox_binding}\n{relay_configuration_hash}\n"
+        f"{retention_policy_hash}\n{verified_at}\n{relay_receipt}"
+    ).encode("utf-8")
+    return hmac.new(
+        resource_key.encode("utf-8"), material, hashlib.sha256
+    ).hexdigest()
+
+
+def derive_rfc_canary_receipt(
+    resource_key: str,
+    *,
+    adapter_version: str,
+    operation_key: str,
+    recipient_sha256: str,
+    rfc_message_id_suffix: str,
+    provider_message_id_digest: str,
+    rfc_message_id_digest: str,
+    thread_receipt: str,
+    event_key_digest: str,
+) -> str:
+    if not isinstance(resource_key, str) or len(resource_key) < 32:
+        raise AdapterInputError("secret_contract_invalid")
+    version = require_adapter_version(adapter_version, adapter_version)
+    operation = require_opaque_key(operation_key, "operation_key")
+    if rfc_message_id_suffix not in {"", "@email.amazonses.com"}:
+        raise AdapterInputError("rfc_message_id_invariant_invalid")
+    for value in (
+        recipient_sha256,
+        provider_message_id_digest,
+        rfc_message_id_digest,
+        event_key_digest,
+    ):
+        if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
+            raise AdapterInputError("rfc_canary_receipt_invalid")
+    if not isinstance(thread_receipt, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]{32,96}", thread_receipt
+    ):
+        raise AdapterInputError("rfc_canary_receipt_invalid")
+    material = (
+        "v1\nrfc-message-id-canary\ndelivered\n"
+        f"{version}\n{operation}\n{recipient_sha256}\n"
+        f"{rfc_message_id_suffix}\n{provider_message_id_digest}\n"
+        f"{rfc_message_id_digest}\n{thread_receipt}\n{event_key_digest}"
+    ).encode("utf-8")
+    return hmac.new(
+        resource_key.encode("utf-8"), material, hashlib.sha256
+    ).hexdigest()
+
+
 def utc_day(timestamp: int) -> str:
     return datetime.fromtimestamp(int(timestamp), tz=timezone.utc).strftime("%Y-%m-%d")
 
@@ -405,6 +716,81 @@ def require_reply_alias(value: Any, relay_domain: str) -> str:
     return address
 
 
+def canonical_provider_message_id(value: Any) -> str:
+    """Validate the exact SES API/event identifier without treating it as PII."""
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= MAX_RFC_MESSAGE_ID_CHARACTERS
+        or value != value.strip()
+        or "\r" in value
+        or "\n" in value
+        or value.startswith("<")
+        or value.endswith(">")
+        or not _SES_MESSAGE_ID_TOKEN.fullmatch(value)
+        or value.startswith(".")
+        or value.endswith(".")
+        or ".." in value
+        or value.count("@") > 1
+    ):
+        raise AdapterInputError("provider_message_id_invalid")
+    return value
+
+
+def canonical_rfc_message_id(value: Any) -> str:
+    """Validate one provider RFC Message-ID and return its canonical header form.
+
+    SES response and event payloads use the same identifier without consistently
+    documenting surrounding angle brackets.  Canonicalizing only those brackets
+    makes their digests comparable while rejecting whitespace, folding, lists,
+    comments, control bytes, and every other multi-header/injection shape.
+    """
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= MAX_RFC_MESSAGE_ID_CHARACTERS
+        or value != value.strip()
+        or "\r" in value
+        or "\n" in value
+    ):
+        raise AdapterInputError("provider_message_id_invalid")
+    paired_brackets = value.startswith("<") and value.endswith(">")
+    if (value.startswith("<") or value.endswith(">")) and not paired_brackets:
+        raise AdapterInputError("provider_message_id_invalid")
+    atom = value[1:-1] if paired_brackets else value
+    canonical = f"<{canonical_provider_message_id(atom)}>"
+    if len(canonical) > MAX_THREAD_HEADER_CHARACTERS:
+        raise AdapterInputError("provider_message_id_invalid")
+    return canonical
+
+
+def derive_rfc_message_id(provider_message_id: Any, suffix: Any = "") -> str:
+    provider = canonical_provider_message_id(provider_message_id)
+    if suffix not in {"", "@email.amazonses.com"}:
+        raise AdapterInputError("rfc_message_id_invariant_invalid")
+    if suffix and "@" in provider:
+        raise AdapterInputError("rfc_message_id_invariant_invalid")
+    return canonical_rfc_message_id(provider + suffix)
+
+
+def normalize_thread_references(
+    in_reply_to: Any, references: Sequence[Any] | None
+) -> tuple[str | None, tuple[str, ...]]:
+    if in_reply_to is None:
+        if references not in (None, (), []):
+            raise AdapterInputError("invalid_thread_headers")
+        return None, ()
+    parent = canonical_rfc_message_id(in_reply_to)
+    if not isinstance(references, (list, tuple)) or not references:
+        raise AdapterInputError("invalid_thread_headers")
+    canonical = tuple(canonical_rfc_message_id(value) for value in references)
+    if canonical[-1] != parent or len(set(canonical)) != len(canonical):
+        raise AdapterInputError("invalid_thread_headers")
+    # Bound the complete unfolded field body, independently of email library
+    # folding, so one logical References header cannot grow without limit.
+    if len(" ".join(canonical)) > MAX_THREAD_HEADER_CHARACTERS:
+        raise AdapterInputError("invalid_thread_headers")
+    return parent, canonical
+
+
 def build_raw_message(
     *,
     from_email: str,
@@ -414,6 +800,8 @@ def build_raw_message(
     text: str,
     reply_to: str,
     unsubscribe_url: str,
+    in_reply_to: str | None = None,
+    references: Sequence[str] | None = None,
 ) -> bytes:
     normalized_from = normalize_address(from_email)
     normalized_to = normalize_address(to_email)
@@ -439,6 +827,9 @@ def build_raw_message(
         raise AdapterInputError("invalid_body")
     if not _SAFE_HEADER.fullmatch(reply_to) or not _SAFE_HEADER.fullmatch(unsubscribe_url):
         raise AdapterInputError("invalid_header")
+    parent_message_id, ordered_references = normalize_thread_references(
+        in_reply_to, references
+    )
 
     message = EmailMessage(policy=SMTP)
     message["From"] = formataddr((display_name.strip(), normalized_from))
@@ -447,8 +838,20 @@ def build_raw_message(
     message["Reply-To"] = reply_to
     message["List-Unsubscribe"] = f"<{unsubscribe_url}>"
     message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    if parent_message_id is not None:
+        message["In-Reply-To"] = parent_message_id
+        message["References"] = " ".join(ordered_references)
     message.set_content(text, subtype="plain", charset="utf-8", cte="quoted-printable")
     encoded = message.as_bytes()
+    # Defense in depth: the generated message must contain exactly one logical
+    # instance of each thread header, or neither for a root message.
+    lowered = encoded.lower()
+    expected_count = 1 if parent_message_id is not None else 0
+    if (
+        lowered.count(b"\r\nin-reply-to:") != expected_count
+        or lowered.count(b"\r\nreferences:") != expected_count
+    ):
+        raise AdapterInputError("invalid_thread_headers")
     if len(encoded) > MAX_RAW_MESSAGE_BYTES:
         raise AdapterInputError("message_too_large")
     return encoded
@@ -465,13 +868,19 @@ EVENT_TYPES = {
 }
 
 
-def normalize_event_envelope(value: Any) -> dict[str, str]:
+def normalize_event_envelope(
+    value: Any,
+    *,
+    rfc_message_id_suffix: str = "",
+    allow_derived_rfc_message_id: bool = False,
+) -> dict[str, str]:
     if not isinstance(value, dict):
         raise AdapterInputError("event_invalid")
     event_type = EVENT_TYPES.get(value.get("eventType"))
     event_id = value.get("eventId")
     event_time = value.get("eventTime")
     message_id = value.get("messageId")
+    rfc_message_id = value.get("rfcMessageId")
     attempts = value.get("attempt")
     if not event_type:
         raise AdapterInputError("event_type_invalid")
@@ -481,24 +890,39 @@ def normalize_event_envelope(value: Any) -> dict[str, str]:
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", event_time
     ):
         raise AdapterInputError("event_invalid")
-    if not isinstance(message_id, str) or not 1 <= len(message_id) <= 256:
-        raise AdapterInputError("event_invalid")
+    try:
+        canonical_provider_id = canonical_provider_message_id(message_id)
+        expected_rfc_id = derive_rfc_message_id(
+            canonical_provider_id, rfc_message_id_suffix
+        )
+        if rfc_message_id is None and allow_derived_rfc_message_id:
+            canonical_rfc_id = expected_rfc_id
+        else:
+            canonical_rfc_id = canonical_rfc_message_id(rfc_message_id)
+    except AdapterInputError as exc:
+        raise AdapterInputError("event_invalid") from exc
+    if canonical_rfc_id != expected_rfc_id:
+        raise AdapterInputError("event_binding_conflict")
     if isinstance(attempts, str):
         attempts = [attempts]
     if not isinstance(attempts, list) or len(attempts) != 1:
         raise AdapterInputError("event_invalid")
     operation_key = require_opaque_key(attempts[0], "operation_key")
-    message_id_digest = sha256_hex(message_id)
+    message_id_digest = sha256_hex(canonical_provider_id)
+    rfc_message_id_digest = sha256_hex(canonical_rfc_id)
     event_key_digest = sha256_hex(
-        f"v1|{operation_key}|{event_type}|{message_id_digest}"
+        f"v1|{operation_key}|{event_type}|{message_id_digest}|"
+        f"{rfc_message_id_digest}"
     )
     return {
         "eventType": event_type,
         "eventIdDigest": sha256_hex(event_id),
         "eventKeyDigest": event_key_digest,
         "eventTime": event_time,
-        "messageId": message_id,
+        "messageId": canonical_provider_id,
         "messageIdDigest": message_id_digest,
+        "rfcMessageId": canonical_rfc_id,
+        "rfcMessageIdDigest": rfc_message_id_digest,
         "operationKey": operation_key,
     }
 
