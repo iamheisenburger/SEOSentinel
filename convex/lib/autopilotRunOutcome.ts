@@ -1,4 +1,5 @@
 import { MIN_APPROVED_BUFFER } from "./autopilotBuffer.ts";
+import type { Id } from "../_generated/dataModel";
 
 export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   autopilot_disabled: "blocked",
@@ -41,6 +42,9 @@ export type CadenceScheduleResult = {
   bufferCount?: number;
   blockers?: string[];
   eligibleAt?: number;
+  // Exact automatic-plan receipt observed/created by the scheduler. Cooldown
+  // runs use it only to bind a terminal observer; it is not queue authority.
+  planJobId?: Id<"jobs">;
 };
 
 const JOB_RUN_OUTCOME_HEALTH = {

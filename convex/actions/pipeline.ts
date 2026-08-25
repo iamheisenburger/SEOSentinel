@@ -7484,6 +7484,48 @@ export const autopilotTick = internalAction({
       internal.actions.scheduler.scheduleCadence,
       { siteId },
     );
+    const bindCooldownPlan = async (jobId: Id<"jobs">): Promise<boolean> => {
+      if (!topicPlanCooldown || !runId) return false;
+      const armArgs = {
+        siteId,
+        runId,
+        sourcePlanJobId: topicPlanCooldown.planJobId,
+        jobId,
+        rolloutEpoch: topicPlanCooldown.rolloutEpoch,
+        dueAt: topicPlanCooldown.dueAt,
+        claimNonce: topicPlanCooldown.claimNonce,
+        continuationAttempt: topicPlanCooldown.continuationAttempt,
+      };
+      try {
+        const armed = await ctx.runMutation(
+          internal.autopilot.armTopicPlanCooldownJobSettlement,
+          armArgs,
+        );
+        if (armed.bound || armed.reason === "run_already_settled") return true;
+        throw new Error(
+          `Cooldown scheduler returned an incompatible plan receipt: ${armed.reason}.`,
+        );
+      } catch (error) {
+        const inspection = await ctx.runQuery(
+          internal.autopilot.inspectTopicPlanCooldownJobSettlement,
+          armArgs,
+        );
+        if (inspection.state === "bound" || inspection.state === "settled") {
+          return true;
+        }
+        throw error;
+      }
+    };
+    if (
+      topicPlanCooldown &&
+      cadenceSchedule.planJobId &&
+      await bindCooldownPlan(cadenceSchedule.planJobId)
+    ) {
+      // Binding atomically dispatched a pending job and armed the exact
+      // provider-free terminal observer. This action must not dispatch it a
+      // second time or finish the run before the job receipt settles.
+      return { processed: 0 };
+    }
     if (cadenceSchedule.mode === "migration_pending") {
       return finish(
         { processed: 0 },
@@ -7606,6 +7648,13 @@ export const autopilotTick = internalAction({
         }
       }
       console.log(`Processing next job: ${nextJob.type} (${nextJob._id})`);
+      if (
+        topicPlanCooldown &&
+        nextJob.type === "plan" &&
+        await bindCooldownPlan(nextJob._id)
+      ) {
+        return { processed: 0 };
+      }
       if (runId) {
         // Article generation can exceed the nested-action wait boundary.
         // Dispatch one durable worker and let it close this exact run.

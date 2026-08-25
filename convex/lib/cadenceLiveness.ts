@@ -72,7 +72,7 @@ export function classifyCadenceFailure(args: {
     recordedAt: args.now,
   };
   if (
-    /retained zero exact candidates|no measured, authority-attainable|no new scheduler-eligible topics|honest inventory miss|zero accepted topic/.test(
+    /retained zero exact candidates|no measured, authority-attainable|no new scheduler-eligible topics|honest inventory miss|zero accepted topic|no topic survived live serp evidence/.test(
       normalized,
     )
   ) {
@@ -204,7 +204,7 @@ function resultCount(result: unknown): number | undefined {
 function semanticZero(row: PriorPlanReceipt): boolean {
   if (row.cadenceFailure?.category === "semantic_zero_yield") return true;
   if (resultCount(row.result) === 0) return true;
-  return /retained zero exact candidates|no measured, authority-attainable|no new scheduler-eligible topics|honest inventory miss/.test(
+  return /retained zero exact candidates|no measured, authority-attainable|no new scheduler-eligible topics|honest inventory miss|no topic survived live serp evidence/.test(
     (row.error ?? "").toLowerCase(),
   );
 }

@@ -491,6 +491,9 @@ export const scheduleCadence = internalAction({
         (job.workerAttempts ?? 0) === 1 &&
         isUnderfilledPlanContinuationPayload(job.payload),
     );
+    const activePlanJob = siteJobs.find(
+      (job: Doc<"jobs">) => job.type === "plan",
+    );
     // Execution two is already budgeted and cannot disappear, but it must sit
     // behind every usable topic proved by execution one. Excluding only this
     // exact pending marker lets overdue delivery and strict buffer fill queue
@@ -518,12 +521,14 @@ export const scheduleCadence = internalAction({
           scheduled: 1,
           mode: "pending_plan",
           bufferCount: buffer.length,
+          ...(activePlanJob ? { planJobId: activePlanJob._id } : {}),
         };
       }
       return {
         scheduled: 0,
         mode: "work_in_progress",
         bufferCount: buffer.length,
+        ...(activePlanJob ? { planJobId: activePlanJob._id } : {}),
       };
     }
 
@@ -936,6 +941,7 @@ export const scheduleCadence = internalAction({
           scheduled: 0,
           mode: "topic_replenishment_exhausted",
           bufferCount: buffer.length,
+          planJobId: replenishment.cooldownPlanJobId,
         };
       }
       if (
@@ -950,7 +956,14 @@ export const scheduleCadence = internalAction({
         };
       }
       if (!replenishment.queued) {
-        return { scheduled: 0, mode: "work_in_progress", bufferCount: buffer.length };
+        return {
+          scheduled: 0,
+          mode: "work_in_progress",
+          bufferCount: buffer.length,
+          ...(replenishment.jobId
+            ? { planJobId: replenishment.jobId }
+            : {}),
+        };
       }
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
@@ -969,6 +982,7 @@ export const scheduleCadence = internalAction({
         scheduled: 1,
         mode: "topic_replenishment",
         bufferCount: buffer.length,
+        planJobId: replenishment.jobId,
       };
     }
 

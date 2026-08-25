@@ -1046,6 +1046,10 @@ export default defineSchema({
     claimNonce: v.optional(v.string()),
     // Bounded durable continuation generation for exact scheduled wakes.
     continuationAttempt: v.optional(v.number()),
+    // CAS generation for the provider-free observer of the exact automatic
+    // plan created by a cooldown wake. `jobId` is the immutable binding; this
+    // counter prevents stale scheduled polls from fanning out or settling it.
+    topicPlanSettlementAttempt: v.optional(v.number()),
     // Immutable idempotency receipt for an operator recovery of one exact
     // failed run. Unlike `detail`, this field is never rewritten when a run
     // starts or finishes.

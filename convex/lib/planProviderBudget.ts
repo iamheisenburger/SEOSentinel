@@ -45,6 +45,12 @@ export const TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER = "topic_plan_cooldown";
 export const TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT = 200;
 export const TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS = 60_000;
 export const TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS = 3;
+// A bound plan is never re-executed by this monitor. The mutation only reads
+// the exact job receipt and advances one fenced poll generation; sixty
+// minutes is longer than the worker action plus its ambiguity lease while
+// remaining a finite, auditable recovery envelope.
+export const TOPIC_PLAN_SETTLEMENT_POLL_MS = 30_000;
+export const TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS = 120;
 
 export type BoundedRecentPlanWindow<T> =
   | { decision: "available"; counted: T[] }
@@ -193,6 +199,7 @@ export function topicPlanCooldownWatchdogDecision(args: {
 export function topicPlanCooldownTerminalWriteAllowed(args: {
   runClaimNonce?: string;
   runContinuationAttempt?: number;
+  runStatus?: string;
   claimNonce?: string;
   continuationAttempt?: number;
 }): boolean {
@@ -201,10 +208,67 @@ export function topicPlanCooldownTerminalWriteAllowed(args: {
       args.continuationAttempt === undefined;
   }
   return Boolean(
+    args.runStatus === "running" &&
     args.claimNonce === args.runClaimNonce &&
     Number.isSafeInteger(args.runContinuationAttempt) &&
     args.runContinuationAttempt === args.continuationAttempt
   );
+}
+
+export type TopicPlanSettlementDecision =
+  | { decision: "fence_changed" }
+  | { decision: "already_settled" }
+  | { decision: "terminal_done" }
+  | { decision: "terminal_failed" }
+  | { decision: "ambiguous"; reason: "lease_expired" | "monitor_exhausted" }
+  | { decision: "wait"; settlementAttempt: number };
+
+/**
+ * Provider-free terminal observer for the exact plan bound to a cooldown run.
+ * It never changes or requeues the job. `settlementAttempt` is a durable CAS
+ * generation, so an old poll cannot settle a newer binding or schedule an
+ * unbounded fan-out after an ambiguous scheduler response.
+ */
+export function topicPlanSettlementDecision(args: {
+  receiptState: TopicPlanCooldownReceiptState;
+  currentSettlementAttempt?: number;
+  expectedSettlementAttempt: number;
+  jobStatus?: string;
+  leaseExpiresAt?: number;
+  now: number;
+}): TopicPlanSettlementDecision {
+  if (args.receiptState === "settled") {
+    return { decision: "already_settled" };
+  }
+  if (
+    args.receiptState !== "claimed" ||
+    !Number.isSafeInteger(args.expectedSettlementAttempt) ||
+    args.expectedSettlementAttempt <= 0 ||
+    args.currentSettlementAttempt !== args.expectedSettlementAttempt ||
+    !Number.isSafeInteger(args.now)
+  ) return { decision: "fence_changed" };
+  if (args.jobStatus === "done") return { decision: "terminal_done" };
+  if (args.jobStatus === "failed") return { decision: "terminal_failed" };
+  if (
+    args.jobStatus === "running" &&
+    Number.isSafeInteger(args.leaseExpiresAt) &&
+    (args.leaseExpiresAt as number) <= args.now
+  ) {
+    return { decision: "ambiguous", reason: "lease_expired" };
+  }
+  if (!["pending", "running"].includes(args.jobStatus ?? "")) {
+    return { decision: "fence_changed" };
+  }
+  if (
+    args.expectedSettlementAttempt >=
+      TOPIC_PLAN_SETTLEMENT_MAX_ATTEMPTS
+  ) {
+    return { decision: "ambiguous", reason: "monitor_exhausted" };
+  }
+  return {
+    decision: "wait",
+    settlementAttempt: args.expectedSettlementAttempt + 1,
+  };
 }
 
 /** Exact shared-ledger trigger bound to the plan payload that owns it. */

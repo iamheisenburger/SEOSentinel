@@ -31,14 +31,17 @@ import { oneSetupPromotionBlockers } from "./lib/oneSetupRuntime.ts";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import {
   countsTowardTopicPlanRecentLimit,
+  PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION,
   topicPlanCooldownReceiptState,
   topicPlanCooldownTerminalWriteAllowed,
   topicPlanCooldownWatchdogDecision,
   topicPlanCooldownWakeAt,
+  topicPlanSettlementDecision,
   TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS,
   TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS,
   TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
   TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+  TOPIC_PLAN_SETTLEMENT_POLL_MS,
 } from "./lib/planProviderBudget";
 import { classifyAutopilotRunOutcome } from
   "./lib/autopilotRunOutcome.ts";
@@ -1126,6 +1129,373 @@ export const inspectTopicPlanCooldownWakeClaim = internalQuery({
   },
 });
 
+// Bind the cooldown run to the one new checkpoint plan returned by the
+// ordinary scheduler. The binding, worker dispatch, and terminal observer are
+// one transaction: action death after this mutation cannot lose either the
+// worker or its settlement watcher, while an ambiguous response cannot queue
+// a second worker because `run.jobId` is immutable for this fenced run.
+export const armTopicPlanCooldownJobSettlement = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    sourcePlanJobId: v.id("jobs"),
+    jobId: v.id("jobs"),
+    rolloutEpoch: v.number(),
+    dueAt: v.number(),
+    claimNonce: v.string(),
+    continuationAttempt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const timestamp = Date.now();
+    const [run, site, job] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.jobId),
+    ]);
+    const receiptState = topicPlanCooldownReceiptState({
+      run: run
+        ? {
+            siteId: String(run.siteId),
+            trigger: run.trigger,
+            claimNonce: run.claimNonce,
+            scheduledAt: run.scheduledAt,
+            status: run.status,
+          }
+        : null,
+      siteId: String(args.siteId),
+      planJobId: String(args.sourcePlanJobId),
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+    });
+    if (receiptState === "settled") {
+      return { bound: false as const, reason: "run_already_settled" };
+    }
+    const payload = job?.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    const executionAuthorized = site
+      ? await siteExecutionAuthorized(ctx, site)
+      : false;
+    const exactTarget = Boolean(
+      receiptState === "claimed" &&
+      run &&
+      run.siteId === args.siteId &&
+      run.continuationAttempt === args.continuationAttempt &&
+      site &&
+      executionAuthorized &&
+      site.autopilotEnabled === true &&
+      (site.cadencePerWeek ?? 0) > 0 &&
+      ["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") &&
+      site.expectedClickSchedulingEnabled === true &&
+      (site.autopilotRolloutEpoch ?? 0) === args.rolloutEpoch &&
+      job &&
+      job.siteId === args.siteId &&
+      job.type === "plan" &&
+      ["pending", "running", "done", "failed"].includes(job.status) &&
+      job.rolloutEpoch === args.rolloutEpoch &&
+      job.createdAt >= args.dueAt &&
+      job.createdAt >= (run.startedAt ?? args.dueAt) &&
+      payload.manual !== true &&
+      typeof payload.reason === "string" &&
+      payload.reason.startsWith("topic_") &&
+      payload.growthParentArticleId === undefined &&
+      payload.planCheckpointModeVersion ===
+        PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION &&
+      countsTowardTopicPlanRecentLimit(job) &&
+      job.providerSpendReservationId !== undefined &&
+      job.providerReservationReleasedAt === undefined &&
+      (job.status === "done" || job.status === "failed" ||
+        (job.workerAttempts ?? 0) === 0)
+    );
+    if (!exactTarget) {
+      return { bound: false as const, reason: "job_binding_incompatible" };
+    }
+    if (run!.jobId !== undefined) {
+      return run!.jobId === args.jobId
+        ? {
+            bound: true as const,
+            alreadyBound: true as const,
+            jobStatus: job!.status,
+          }
+        : { bound: false as const, reason: "different_job_already_bound" };
+    }
+    if (run!.topicPlanSettlementAttempt !== undefined) {
+      return {
+        bound: false as const,
+        reason: "settlement_generation_without_binding",
+      };
+    }
+
+    const settlementAttempt = 1;
+    await ctx.db.patch(args.runId, {
+      jobId: args.jobId,
+      topicPlanSettlementAttempt: settlementAttempt,
+      heartbeatAt: timestamp,
+      detail:
+        `Waiting for exact automatic plan ${args.jobId} to reach a durable terminal receipt.`,
+    });
+    if (job!.status === "pending") {
+      const workerArgs = {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        runId: args.runId,
+        runClaimNonce: args.claimNonce,
+        runContinuationAttempt: args.continuationAttempt,
+      };
+      if ((job!.nextAttemptAt ?? 0) > timestamp) {
+        await ctx.scheduler.runAt(
+          job!.nextAttemptAt!,
+          internal.actions.pipeline.processNextJob,
+          workerArgs,
+        );
+      } else {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.actions.pipeline.processNextJob,
+          workerArgs,
+        );
+      }
+    }
+    await ctx.scheduler.runAfter(
+      job!.status === "done" || job!.status === "failed"
+        ? 0
+        : TOPIC_PLAN_SETTLEMENT_POLL_MS,
+      internal.autopilot.settleTopicPlanCooldownJob,
+      {
+        ...args,
+        expectedSettlementAttempt: settlementAttempt,
+      },
+    );
+    return {
+      bound: true as const,
+      armed: true as const,
+      workerDispatched: job!.status === "pending",
+      jobStatus: job!.status,
+      settlementAttempt,
+    };
+  },
+});
+
+// Readback for an action that cannot distinguish a rejected arm from a
+// committed arm whose response was lost. It is deliberately receipt-only and
+// cannot dispatch or settle anything.
+export const inspectTopicPlanCooldownJobSettlement = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    sourcePlanJobId: v.id("jobs"),
+    jobId: v.id("jobs"),
+    rolloutEpoch: v.number(),
+    dueAt: v.number(),
+    claimNonce: v.string(),
+    continuationAttempt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    const receiptState = topicPlanCooldownReceiptState({
+      run: run
+        ? {
+            siteId: String(run.siteId),
+            trigger: run.trigger,
+            claimNonce: run.claimNonce,
+            scheduledAt: run.scheduledAt,
+            status: run.status,
+          }
+        : null,
+      siteId: String(args.siteId),
+      planJobId: String(args.sourcePlanJobId),
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+    });
+    if (receiptState === "settled") return { state: "settled" as const };
+    if (
+      receiptState !== "claimed" ||
+      run?.continuationAttempt !== args.continuationAttempt
+    ) return { state: "missing" as const };
+    if (run.jobId === undefined) return { state: "unbound" as const };
+    return run.jobId === args.jobId &&
+        Number.isSafeInteger(run.topicPlanSettlementAttempt)
+      ? { state: "bound" as const, jobId: run.jobId }
+      : { state: "missing" as const };
+  },
+});
+
+// Provider-free exact-job observer. Terminal jobs are handed to the existing
+// run finalizers; a confirmation generation is pre-armed in the same
+// transaction, so an ambiguous finalizer response is safely reinspected.
+// Pending/running jobs are never reset or requeued here.
+export const settleTopicPlanCooldownJob = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    sourcePlanJobId: v.id("jobs"),
+    jobId: v.id("jobs"),
+    rolloutEpoch: v.number(),
+    dueAt: v.number(),
+    claimNonce: v.string(),
+    continuationAttempt: v.number(),
+    expectedSettlementAttempt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const timestamp = Date.now();
+    const [run, job] = await Promise.all([
+      ctx.db.get(args.runId),
+      ctx.db.get(args.jobId),
+    ]);
+    const receiptState = topicPlanCooldownReceiptState({
+      run: run
+        ? {
+            siteId: String(run.siteId),
+            trigger: run.trigger,
+            claimNonce: run.claimNonce,
+            scheduledAt: run.scheduledAt,
+            status: run.status,
+          }
+        : null,
+      siteId: String(args.siteId),
+      planJobId: String(args.sourcePlanJobId),
+      rolloutEpoch: args.rolloutEpoch,
+      dueAt: args.dueAt,
+      claimNonce: args.claimNonce,
+    });
+    if (
+      !run ||
+      run.jobId !== args.jobId ||
+      run.continuationAttempt !== args.continuationAttempt ||
+      !job ||
+      job.siteId !== args.siteId ||
+      job.type !== "plan" ||
+      job.rolloutEpoch !== args.rolloutEpoch
+    ) return { settled: false as const, reason: "settlement_fence_changed" };
+    const decision = topicPlanSettlementDecision({
+      receiptState,
+      currentSettlementAttempt: run.topicPlanSettlementAttempt,
+      expectedSettlementAttempt: args.expectedSettlementAttempt,
+      jobStatus: job.status,
+      leaseExpiresAt: job.leaseExpiresAt,
+      now: timestamp,
+    });
+    if (decision.decision === "already_settled") {
+      return { settled: true as const, reason: "already_settled" };
+    }
+    if (decision.decision === "fence_changed") {
+      return { settled: false as const, reason: "settlement_fence_changed" };
+    }
+
+    const nextSettlementAttempt = args.expectedSettlementAttempt + 1;
+    if (decision.decision === "wait") {
+      await ctx.db.patch(args.runId, {
+        topicPlanSettlementAttempt: decision.settlementAttempt,
+        heartbeatAt: timestamp,
+        detail:
+          `Waiting for exact automatic plan ${args.jobId} (${job.status}); no provider work was replayed.`,
+      });
+      await ctx.scheduler.runAfter(
+        TOPIC_PLAN_SETTLEMENT_POLL_MS,
+        internal.autopilot.settleTopicPlanCooldownJob,
+        {
+          ...args,
+          expectedSettlementAttempt: decision.settlementAttempt,
+        },
+      );
+      return {
+        settled: false as const,
+        reason: "job_still_active",
+        settlementAttempt: decision.settlementAttempt,
+      };
+    }
+
+    // Advance the observer generation before scheduling either finalizer. A
+    // duplicate/stale poll therefore cannot fan out a second terminal write.
+    await ctx.db.patch(args.runId, {
+      topicPlanSettlementAttempt: nextSettlementAttempt,
+      heartbeatAt: timestamp,
+    });
+    if (decision.decision === "ambiguous") {
+      const ambiguityDetail =
+        `Exact automatic plan settlement became ambiguous (${decision.reason}); ` +
+        "the job and its consumed provider reservation were not replayed.";
+      // This mutation already owns the exact run/job/continuation/settlement
+      // CAS. Settle the ambiguity here rather than routing through the generic
+      // action-failure writer, which intentionally defers every bound job to
+      // this observer.
+      await ctx.db.patch(args.runId, {
+        status: "failed",
+        completedAt: timestamp,
+        heartbeatAt: timestamp,
+        outcome: "failed",
+        detail: ambiguityDetail,
+        topicPlanSettlementAttempt: nextSettlementAttempt,
+      });
+      await upsertHealth(ctx, args.siteId, {
+        lastRunId: args.runId,
+        heartbeatAt: timestamp,
+        status: "run_failed",
+        detail: ambiguityDetail,
+      });
+      await setAlert(ctx, {
+        siteId: args.siteId,
+        runId: args.runId,
+        kind: `${TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER}_run_failed`,
+        message: ambiguityDetail,
+      });
+      // Atomically pre-arm one no-op confirmation. A committed response loss
+      // observes `settled`; a rolled-back mutation also rolls this schedule
+      // back, so no stale generation can fan out.
+      await ctx.scheduler.runAfter(
+        TOPIC_PLAN_SETTLEMENT_POLL_MS,
+        internal.autopilot.settleTopicPlanCooldownJob,
+        {
+          ...args,
+          expectedSettlementAttempt: nextSettlementAttempt,
+        },
+      );
+      return {
+        settled: true as const,
+        reason: decision.reason,
+        replayed: false as const,
+      };
+    }
+    if (decision.decision === "terminal_done" ||
+        decision.decision === "terminal_failed") {
+      const result = job.result && typeof job.result === "object"
+        ? job.result as Record<string, unknown>
+        : {};
+      const count = Number.isInteger(result.count) ? result.count as number : 0;
+      await ctx.scheduler.runAfter(0, internal.autopilot.markRunFinished, {
+        runId: args.runId,
+        claimNonce: args.claimNonce,
+        continuationAttempt: args.continuationAttempt,
+        outcome: decision.decision === "terminal_failed"
+          ? "job_failed"
+          : "job_processed",
+        detail: decision.decision === "terminal_failed"
+          ? (job.error ?? "The exact automatic topic plan failed.")
+          : `The exact automatic topic plan completed with ${count} verified topic(s).`,
+        jobId: args.jobId,
+      });
+    }
+    // If the terminal finalizer's response/dispatch is lost, this exact next
+    // generation safely tries the same receipt again. Once the run settles,
+    // receipt classification makes the confirmation a no-op.
+    await ctx.scheduler.runAfter(
+      TOPIC_PLAN_SETTLEMENT_POLL_MS,
+      internal.autopilot.settleTopicPlanCooldownJob,
+      {
+        ...args,
+        expectedSettlementAttempt: nextSettlementAttempt,
+      },
+    );
+    return {
+      settled: false as const,
+      reason: decision.decision,
+      finalizerScheduled: true as const,
+    };
+  },
+});
+
 // Exactly-once watchdog for an at-most-once action continuation. It never
 // queues paid work itself. Each bounded retry must re-enter the complete claim
 // fence and ordinary scheduler before any reservation or provider call.
@@ -1177,6 +1547,18 @@ export const recoverTopicPlanCooldownContinuation = internalMutation({
       plan.rolloutEpoch !== args.rolloutEpoch ||
       topicPlanCooldownWakeAt(plan.createdAt) !== args.dueAt
     ) return { recovered: false as const, reason: "watchdog_fence_changed" };
+
+    // Once the exact new plan is transactionally bound, its worker dispatch
+    // and provider-free settlement observer own liveness. Advancing the run
+    // generation while that worker is alive would make its eventual terminal
+    // receipt stale—the production race this fence prevents.
+    if (run.jobId !== undefined) {
+      return {
+        recovered: false as const,
+        reason: "bound_job_settlement_owned",
+        jobId: run.jobId,
+      };
+    }
 
     const decision = topicPlanCooldownWatchdogDecision({
       receiptState,
@@ -1336,10 +1718,29 @@ export const markRunFinished = internalMutation({
     if (!topicPlanCooldownTerminalWriteAllowed({
       runClaimNonce: run.claimNonce,
       runContinuationAttempt: run.continuationAttempt,
+      runStatus: run.status,
       claimNonce: args.claimNonce,
       continuationAttempt: args.continuationAttempt,
     })) {
       return { updated: false as const, reason: "stale_continuation" };
+    }
+    if (run.claimNonce && run.jobId) {
+      const boundJob = await ctx.db.get(run.jobId);
+      if (
+        boundJob?.siteId !== run.siteId ||
+        boundJob.type !== "plan" ||
+        args.jobId !== run.jobId ||
+        !["done", "failed"].includes(boundJob.status)
+      ) {
+        // A duplicate scheduled worker can legitimately lose the atomic job
+        // claim while the exact winner remains alive. `claim_lost` (or any
+        // other non-terminal response) must leave the run to its bound job
+        // observer instead of reporting false completion.
+        return {
+          updated: false as const,
+          reason: "bound_job_settlement_owned",
+        };
+      }
     }
     const runSite = await ctx.db.get(run.siteId);
     const now = Date.now();
@@ -1561,10 +1962,28 @@ export const markRunFailed = internalMutation({
     if (!topicPlanCooldownTerminalWriteAllowed({
       runClaimNonce: run.claimNonce,
       runContinuationAttempt: run.continuationAttempt,
+      runStatus: run.status,
       claimNonce,
       continuationAttempt,
     })) {
       return { updated: false as const, reason: "stale_continuation" };
+    }
+    if (run.claimNonce && run.jobId) {
+      const boundJob = await ctx.db.get(run.jobId);
+      if (
+        boundJob?.siteId === run.siteId &&
+        boundJob.type === "plan" &&
+        ["pending", "running", "done", "failed"].includes(boundJob.status)
+      ) {
+        // An action/scheduler response failure must not overwrite an active or
+        // terminal exact-plan receipt with a generic failure. The atomically
+        // armed observer will wait for terminal state (or the ambiguity bound)
+        // and then settle the run without replay.
+        return {
+          updated: false as const,
+          reason: "bound_job_terminal_settlement_owned",
+        };
+      }
     }
     const now = Date.now();
     await ctx.db.patch(runId, {

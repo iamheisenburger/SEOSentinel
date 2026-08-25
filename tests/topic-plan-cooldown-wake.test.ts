@@ -126,6 +126,7 @@ test("a stale watchdog generation cannot finish or fail the current run", () => 
   const current = {
     runClaimNonce: "nonce-1",
     runContinuationAttempt: 2,
+    runStatus: "running",
   };
   assert.equal(topicPlanCooldownTerminalWriteAllowed({
     ...current,
@@ -137,6 +138,12 @@ test("a stale watchdog generation cannot finish or fail the current run", () => 
     claimNonce: "nonce-1",
     continuationAttempt: 2,
   }), true);
+  assert.equal(topicPlanCooldownTerminalWriteAllowed({
+    ...current,
+    runStatus: "completed",
+    claimNonce: "nonce-1",
+    continuationAttempt: 2,
+  }), false);
   assert.equal(topicPlanCooldownTerminalWriteAllowed({}), true);
 });
 

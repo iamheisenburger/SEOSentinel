@@ -3710,17 +3710,34 @@ export const markFailed = internalMutation({
     const job = await ctx.db.get(jobId);
     if (!job || !ownsJob(job, workerToken)) return { updated: false };
     const currentTime = now();
+    const classifiedCadenceFailure = job.type === "plan"
+      ? classifyCadenceFailure({ message: error, now: currentTime })
+      : undefined;
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    const semanticPlanEligibleAt = classifiedCadenceFailure?.category ===
+        "semantic_zero_yield" &&
+        payload.manual !== true &&
+        typeof payload.reason === "string" &&
+        payload.reason.startsWith("topic_") &&
+        automaticSingleExecutionCheckpointTargetFromPayload(job.payload)
+      ? topicPlanCooldownWakeAt(job.createdAt) ?? undefined
+      : undefined;
+    const cadenceFailure = classifiedCadenceFailure
+      ? {
+          ...classifiedCadenceFailure,
+          ...(semanticPlanEligibleAt !== undefined
+            ? { eligibleAt: semanticPlanEligibleAt }
+            : {}),
+        }
+      : undefined;
     await settleArticleProviderAttempt(ctx, job, "failed", currentTime);
     await releaseReservedUsage(ctx, job);
     await ctx.db.patch(jobId, {
       status: "failed",
       error,
-      ...(job.type === "plan"
-        ? { cadenceFailure: classifyCadenceFailure({
-            message: error,
-            now: currentTime,
-          }) }
-        : {}),
+      ...(cadenceFailure ? { cadenceFailure } : {}),
       reservationId: job.articleId ? job.reservationId : undefined,
       workerToken: undefined,
       heartbeatAt: undefined,
@@ -3731,6 +3748,54 @@ export const markFailed = internalMutation({
     if (job.type === "plan") {
       await terminallyClosePlanCheckpoints(ctx, jobId, currentTime);
       await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
+    }
+    // A strict zero-yield checkpoint is terminal for this paid job. Arm the
+    // next strategy only at the original 24-hour window boundary; the exact
+    // failed reservation remains consumed and no retry/replay is scheduled.
+    if (
+      semanticPlanEligibleAt !== undefined &&
+      semanticPlanEligibleAt > currentTime &&
+      job.siteId &&
+      job.rolloutEpoch !== undefined
+    ) {
+      const claimNonce = topicPlanCooldownClaimNonce({
+        planJobId: String(jobId),
+        rolloutEpoch: job.rolloutEpoch,
+        dueAt: semanticPlanEligibleAt,
+      });
+      const existingWake = await ctx.db
+        .query("autopilot_runs")
+        .withIndex("by_site_scheduled", (q) =>
+          q.eq("siteId", job.siteId!).eq("scheduledAt", semanticPlanEligibleAt)
+        )
+        .filter((q) =>
+          q.eq(q.field("trigger"), TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER)
+        )
+        .first();
+      if (!existingWake && claimNonce) {
+        const runId = await ctx.db.insert("autopilot_runs", {
+          siteId: job.siteId,
+          trigger: TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
+          claimNonce,
+          scheduledAt: semanticPlanEligibleAt,
+          heartbeatAt: currentTime,
+          status: "scheduled",
+          detail:
+            "Exact semantic zero-yield boundary; the next bounded discovery strategy may be considered without replaying this plan.",
+        });
+        await ctx.scheduler.runAt(
+          semanticPlanEligibleAt,
+          internal.autopilot.claimTopicPlanCooldownWake,
+          {
+            siteId: job.siteId,
+            runId,
+            planJobId: jobId,
+            rolloutEpoch: job.rolloutEpoch,
+            dueAt: semanticPlanEligibleAt,
+            claimNonce,
+          },
+        );
+      }
     }
     await reconcileJobTopicLifecycle(ctx, job);
     return { updated: true };
