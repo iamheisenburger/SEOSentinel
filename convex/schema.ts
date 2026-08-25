@@ -183,6 +183,10 @@ export default defineSchema({
         v.literal("blocked"),
       ),
       blockedReasonCode: v.optional(v.string()),
+      actionRequiredBy: v.optional(v.union(
+        v.literal("owner"),
+        v.literal("operator"),
+      )),
       requestedAt: v.number(),
       updatedAt: v.number(),
     }),
@@ -196,6 +200,10 @@ export default defineSchema({
         v.literal("blocked"),
       ),
       blockedReasonCode: v.optional(v.string()),
+      actionRequiredBy: v.optional(v.union(
+        v.literal("owner"),
+        v.literal("operator"),
+      )),
       requestedAt: v.number(),
       updatedAt: v.number(),
     }),
@@ -209,6 +217,10 @@ export default defineSchema({
         v.literal("blocked"),
       ),
       blockedReasonCode: v.optional(v.string()),
+      actionRequiredBy: v.optional(v.union(
+        v.literal("owner"),
+        v.literal("operator"),
+      )),
       requestedAt: v.number(),
       updatedAt: v.number(),
     }),
@@ -219,12 +231,31 @@ export default defineSchema({
       v.literal("ready"),
       v.literal("blocked"),
     ),
+    // Optional for additive rollout over v1 requests. Every new save and the
+    // recovery fleet populate this durable dispatcher lifecycle.
+    fulfillmentState: v.optional(v.union(
+      v.literal("queued"),
+      v.literal("leased"),
+      v.literal("waiting_action"),
+      v.literal("retry_wait"),
+      v.literal("complete"),
+      v.literal("cancelled"),
+    )),
+    fulfillmentAttempt: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    lastClaimedAt: v.optional(v.number()),
+    lastReconciledAt: v.optional(v.number()),
+    operatorActionRequiredAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
   })
     .index("by_site", ["siteId"])
-    .index("by_aggregate_updated", ["aggregateState", "updatedAt"]),
+    .index("by_aggregate_updated", ["aggregateState", "updatedAt"])
+    .index("by_fulfillment_due", ["nextAttemptAt"])
+    .index("by_operator_action", ["operatorActionRequiredAt"]),
 
   // Canonical account-level billing receipt. Site reconciliation is paged so
   // even an Enterprise account cannot make one mutation unbounded. While a

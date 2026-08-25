@@ -36,6 +36,7 @@ import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfil
 import type * as expectedClickEvidenceBackfill from "../expectedClickEvidenceBackfill.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
+import type * as managedProvisioning from "../managedProvisioning.js";
 import type * as planCandidateCheckpoints from "../planCandidateCheckpoints.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_articleGenerationAttempt from "../lib/articleGenerationAttempt.js";
@@ -143,6 +144,7 @@ declare const fullApi: ApiFromModules<{
   expectedClickEvidenceBackfill: typeof expectedClickEvidenceBackfill;
   http: typeof http;
   jobs: typeof jobs;
+  managedProvisioning: typeof managedProvisioning;
   planCandidateCheckpoints: typeof planCandidateCheckpoints;
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/articleGenerationAttempt": typeof lib_articleGenerationAttempt;

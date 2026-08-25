@@ -114,6 +114,15 @@ export function SetupReadiness({
         </div>
       )}
 
+      {readiness.aggregate.status !== "ready" &&
+        readiness.fulfillment?.nextAttemptAt && (
+          <p className="mt-3 text-[10px] leading-relaxed text-[#73788F]">
+            Automatic receipt recheck: {new Date(
+              readiness.fulfillment.nextAttemptAt,
+            ).toLocaleString()} · attempt {readiness.fulfillment.attempt}
+          </p>
+        )}
+
       <div className={`mt-4 grid gap-2 ${compact ? "sm:grid-cols-2" : ""}`}>
         {readiness.stages.map((stage) => {
           const stageCopy = STAGE_COPY[stage.state];
@@ -121,19 +130,31 @@ export function SetupReadiness({
           return (
             <div
               key={stage.key}
-              className="flex items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2.5"
+              className="rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2.5"
             >
-              <Icon
-                className={`h-3.5 w-3.5 shrink-0 ${stageCopy.className} ${
-                  stage.state === "in_progress" ? "animate-spin" : ""
-                }`}
-              />
-              <span className="flex-1 text-[11px] text-[#8B8FA3]">
-                {stage.label}
-              </span>
-              <span className={`text-[10px] font-medium ${stageCopy.className}`}>
-                {stageCopy.label}
-              </span>
+              <div className="flex items-center gap-2">
+                <Icon
+                  className={`h-3.5 w-3.5 shrink-0 ${stageCopy.className} ${
+                    stage.state === "in_progress" ? "animate-spin" : ""
+                  }`}
+                />
+                <span className="flex-1 text-[11px] text-[#8B8FA3]">
+                  {stage.label}
+                </span>
+                <span
+                  className={`text-[10px] font-medium ${stageCopy.className}`}
+                >
+                  {stageCopy.label}
+                </span>
+              </div>
+              {stage.actionRequiredBy && stage.actionMessage && (
+                <p className="mt-2 pl-5 text-[10px] leading-relaxed text-[#73788F]">
+                  {stage.actionRequiredBy === "owner"
+                    ? "Your action"
+                    : "Pentra action"}:
+                  {" "}{stage.actionMessage}
+                </p>
+              )}
             </div>
           );
         })}

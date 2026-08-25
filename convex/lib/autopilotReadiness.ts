@@ -55,6 +55,14 @@ const BLOCKER_COPY: Record<string, string> = {
   subscription_capacity_below_cadence:
     "lower the cadence or upgrade to a plan with enough monthly articles",
   sealed_buffer_incomplete: "let Pentra finish the strict-quality article buffer",
+  one_setup_request_stale:
+    "resubmit setup because the saved owner or domain binding changed",
+  one_setup_publisher_receipt_missing:
+    "wait for a verified publishing destination receipt",
+  one_setup_search_measurement_receipt_missing:
+    "authorize and verify Google Search Console",
+  one_setup_outreach_mailbox_receipt_missing:
+    "wait for a verified tenant outreach mailbox receipt",
 };
 
 export function describeAutopilotBlockers(blockers: string[]): string {

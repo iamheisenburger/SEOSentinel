@@ -27,6 +27,7 @@ import {
 import {
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
+import { oneSetupPromotionBlockers } from "./lib/oneSetupRuntime.ts";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import {
   countsTowardTopicPlanRecentLimit,
@@ -227,7 +228,12 @@ export const dispatchActiveSites = internalMutation({
         .query("pages")
         .withIndex("by_site", (q) => q.eq("siteId", site._id))
         .first());
-      const readiness = warmAutopilotReadiness(site, hasCrawledPage);
+      const baseReadiness = warmAutopilotReadiness(site, hasCrawledPage);
+      const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+      const readiness = {
+        ready: baseReadiness.ready && setupBlockers.length === 0,
+        blockers: [...baseReadiness.blockers, ...setupBlockers],
+      };
       if (!readiness.ready) {
         const blockerDetail = describeAutopilotBlockers(readiness.blockers);
         await setAlert(ctx, {
@@ -653,11 +659,16 @@ export const promoteWarmSiteIfReady = internalMutation({
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .first());
     const limits = getLimitsFromFeatures(site.planFeatures ?? []);
-    const readiness = liveAutopilotReadiness(
+    const baseReadiness = liveAutopilotReadiness(
       site,
       hasCrawledPage,
       limits.maxArticles,
     );
+    const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+    const readiness = {
+      ready: baseReadiness.ready && setupBlockers.length === 0,
+      blockers: [...baseReadiness.blockers, ...setupBlockers],
+    };
     const ready = await ctx.db
       .query("article_summaries")
       .withIndex("by_site_status", (q) =>

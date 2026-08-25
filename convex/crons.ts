@@ -30,6 +30,14 @@ crons.interval(
   internal.sites.recoverAccountDeletionsInternal,
   {},
 );
+// Exact per-request wakes are primary. This bounded tenant-generic pass
+// recovers scheduler silence, expired leases, and additive v1 setup requests.
+crons.interval(
+  "managed-provisioning-recovery",
+  { minutes: 5 },
+  internal.managedProvisioning.dispatchFleet,
+  {},
+);
 // The legacy body-to-summary migration is intentionally not cron-driven.
 // While the shared account is constrained, an operator must run the bounded
 // migration once and verify its completion marker before enabling a canary.

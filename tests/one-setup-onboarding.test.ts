@@ -19,6 +19,10 @@ const readinessUi = readFileSync(
   "src/components/onboarding/setup-readiness.tsx",
   "utf8",
 );
+const canonicalSetup = readFileSync(
+  "convex/lib/oneSetupCanonical.ts",
+  "utf8",
+);
 
 function exportedBlock(source: string, name: string): string {
   const start = source.indexOf(`export const ${name}`);
@@ -172,14 +176,17 @@ test("setup intent is owner/domain/version/cadence fenced and adapter progress u
 
 test("aggregate readiness trusts canonical publishing, GSC, mailbox, and plan receipts", () => {
   const readiness = exportedBlock(sites, "getOneSetupReadiness");
-  assert.match(readiness, /publicationDestinationBlockers\(site\)/);
-  assert.match(readiness, /site\.gscAccessToken && site\.gscProperty/);
-  assert.match(readiness, /inbox\.credentialOwnerAccountKey === ownerAccountKey/);
-  assert.match(readiness, /inbox\.spfVerifiedAt/);
-  assert.match(readiness, /inbox\.dkimVerifiedAt/);
-  assert.match(readiness, /inbox\.dmarcVerifiedAt/);
-  assert.match(readiness, /inbox\.complianceConfirmedAt/);
-  assert.match(readiness, /autonomousGmailCredentialIssues/);
+  assert.match(readiness, /oneSetupPublisherReceiptVerified\(site\)/);
+  assert.match(readiness, /oneSetupSearchMeasurementReceiptVerified\(site\)/);
+  assert.match(readiness, /oneSetupOutreachMailboxReceiptVerified/);
+  assert.match(canonicalSetup, /publicationDestinationBlockers\(site\)/);
+  assert.match(canonicalSetup, /site\.gscAccessToken && site\.gscProperty/);
+  assert.match(canonicalSetup, /inbox\.credentialOwnerAccountKey === args\.ownerAccountKey/);
+  assert.match(canonicalSetup, /inbox\.spfVerifiedAt/);
+  assert.match(canonicalSetup, /inbox\.dkimVerifiedAt/);
+  assert.match(canonicalSetup, /inbox\.dmarcVerifiedAt/);
+  assert.match(canonicalSetup, /inbox\.complianceConfirmedAt/);
+  assert.match(canonicalSetup, /autonomousGmailCredentialIssues/);
   assert.match(readiness, /accountCadenceSnapshot/);
   assert.match(readiness, /cadenceFitsMonthlyAllowance/);
   assert.match(readiness, /Automation mode authorized/);

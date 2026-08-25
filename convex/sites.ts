@@ -37,7 +37,6 @@ import {
 } from "./lib/expectedClickPortfolio";
 import {
   liveAutopilotReadiness,
-  publicationDestinationBlockers,
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
 import {
@@ -86,12 +85,21 @@ import {
   aggregateOneSetupReadiness,
   aggregateOneSetupRequestState,
   initialOneSetupProgress,
+  managedProvisioningRetryAt,
+  oneSetupActionMessage,
   oneSetupCapabilityReadiness,
   ONE_SETUP_CONTRACT_VERSION,
+  type OneSetupActionOwner,
   type OneSetupAutomationMode,
   type OneSetupMode,
   type OneSetupReadinessState,
 } from "./lib/oneSetup.ts";
+import {
+  oneSetupOutreachMailboxReceiptVerified,
+  oneSetupPublisherReceiptVerified,
+  oneSetupSearchMeasurementReceiptVerified,
+} from "./lib/oneSetupCanonical.ts";
+import { oneSetupPromotionBlockers } from "./lib/oneSetupRuntime.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -125,6 +133,10 @@ const ONE_SETUP_PROGRESS_VALIDATOR = v.union(
   v.literal("in_progress"),
   v.literal("ready"),
   v.literal("blocked"),
+);
+const ONE_SETUP_ACTION_OWNER_VALIDATOR = v.union(
+  v.literal("owner"),
+  v.literal("operator"),
 );
 const DELIVERY_CONFIG_KEYS = new Set([
   "domain", "publishMethod", "repoOwner", "repoName", "repoDefaultBranch", "githubToken",
@@ -952,7 +964,9 @@ function nextOneSetupCapability(
   timestamp: number,
   reset: boolean,
 ): ManagedProvisioningCapability {
-  if (!reset && previous?.mode === mode) return previous;
+  if (!reset && previous?.mode === mode && previous.state !== "ready") {
+    return previous;
+  }
   return {
     mode,
     state: initialOneSetupProgress(mode),
@@ -1057,25 +1071,38 @@ export const saveOneSetupRequest = mutation({
       searchMeasurement,
       outreachMailbox,
       aggregateState,
+      fulfillmentState: "queued" as const,
+      fulfillmentAttempt: reset ? 0 : existing?.fulfillmentAttempt ?? 0,
+      nextAttemptAt: timestamp,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operatorActionRequiredAt: undefined,
       updatedAt: timestamp,
-      completedAt: aggregateState === "ready" ? timestamp : undefined,
+      completedAt: undefined,
     };
+    let requestId: Id<"managed_provisioning_requests">;
     if (existing) {
       await ctx.db.patch(existing._id, record);
-      return { requestId: existing._id, revision };
+      requestId = existing._id;
+    } else {
+      requestId = await ctx.db.insert("managed_provisioning_requests", {
+        siteId: site._id,
+        ...record,
+        createdAt: timestamp,
+      });
     }
-    const requestId = await ctx.db.insert("managed_provisioning_requests", {
-      siteId: site._id,
-      ...record,
-      createdAt: timestamp,
-    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.managedProvisioning.dispatchRequest,
+      { requestId, expectedRevision: revision },
+    );
     return { requestId, revision };
   },
 });
 
 /** Provider adapters may report credential-free progress against an exact
- * revision. A "ready" report is still not a connection receipt; the owner
- * query below independently verifies each canonical integration record. */
+ * revision. They cannot report ready: only the canonical reconciler owns that
+ * transition. */
 export const setOneSetupCapabilityProgressInternal = internalMutation({
   args: {
     requestId: v.id("managed_provisioning_requests"),
@@ -1087,6 +1114,7 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
     ),
     state: ONE_SETUP_PROGRESS_VALIDATOR,
     blockedReasonCode: v.optional(v.string()),
+    actionRequiredBy: v.optional(ONE_SETUP_ACTION_OWNER_VALIDATOR),
   },
   handler: async (ctx, args) => {
     const request = await ctx.db.get(args.requestId);
@@ -1101,7 +1129,8 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
       site.deletionStatus ||
       site.accountDeletionRequestedAt ||
       request.ownerAccountKey !== accountDeletionKey(site.userId) ||
-      request.domainSnapshot !== domainSnapshot
+      request.domainSnapshot !== domainSnapshot ||
+      request.contractVersion !== ONE_SETUP_CONTRACT_VERSION
     ) {
       throw new Error("Provisioning request is no longer active");
     }
@@ -1111,6 +1140,11 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
         ? "outreachMailbox"
         : "publisher";
     const current = request[field];
+    if (args.state === "ready") {
+      throw new Error(
+        "Provider progress cannot mark a capability ready; canonical reconciliation is required",
+      );
+    }
     if (
       current.mode === "connect_existing" &&
       args.state !== "owner_action_required" &&
@@ -1121,13 +1155,32 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
     if (current.mode === "managed" && args.state === "owner_action_required") {
       throw new Error("Managed provisioning cannot delegate credential entry silently");
     }
+    const blockedReasonCode = args.state === "blocked"
+      ? safeOneSetupReasonCode(args.blockedReasonCode)
+      : undefined;
+    if (
+      args.state === "blocked" &&
+      (!blockedReasonCode || !args.actionRequiredBy)
+    ) {
+      throw new Error("Blocked provisioning progress requires an exact action owner and reason");
+    }
+    if (
+      current.mode === "connect_existing" &&
+      args.state === "blocked" &&
+      args.actionRequiredBy !== "owner"
+    ) {
+      throw new Error("Owner-managed connection blockers belong to the owner");
+    }
     const timestamp = now();
     const next: ManagedProvisioningCapability = {
       ...current,
       state: args.state,
-      blockedReasonCode: args.state === "blocked"
-        ? safeOneSetupReasonCode(args.blockedReasonCode)
-        : undefined,
+      blockedReasonCode,
+      actionRequiredBy: args.state === "blocked"
+        ? args.actionRequiredBy as OneSetupActionOwner
+        : args.state === "owner_action_required"
+          ? "owner"
+          : undefined,
       updatedAt: timestamp,
     };
     const capabilities = {
@@ -1144,14 +1197,36 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
       capabilities.searchMeasurement,
       capabilities.outreachMailbox,
     ]);
+    const operatorActionRequired = [
+      capabilities.publisher,
+      capabilities.searchMeasurement,
+      capabilities.outreachMailbox,
+    ].some((capability) => capability.actionRequiredBy === "operator");
+    const revision = request.revision + 1;
+    const nextAttemptAt = managedProvisioningRetryAt(timestamp);
     await ctx.db.patch(request._id, {
       ...capabilities,
       aggregateState,
-      revision: request.revision + 1,
+      fulfillmentState:
+        args.state === "blocked" || args.state === "owner_action_required"
+          ? "waiting_action"
+          : "retry_wait",
+      nextAttemptAt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operatorActionRequiredAt: operatorActionRequired
+        ? request.operatorActionRequiredAt ?? timestamp
+        : undefined,
+      revision,
       updatedAt: timestamp,
-      completedAt: aggregateState === "ready" ? timestamp : undefined,
+      completedAt: undefined,
     });
-    return { revision: request.revision + 1, aggregateState };
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.managedProvisioning.dispatchRequest,
+      { requestId: request._id, expectedRevision: revision },
+    );
+    return { revision, aggregateState, nextAttemptAt };
   },
 });
 
@@ -1213,25 +1288,13 @@ export const getOneSetupReadiness = query({
       ? request!.outreachMailbox
       : pendingOneSetupCapability("connect_existing");
 
-    const publisherVerified = publicationDestinationBlockers(site).length === 0;
-    const measurementVerified = Boolean(
-      site.gscAccessToken && site.gscProperty,
-    );
-    const inbox = inboxes.length === 1 ? inboxes[0] : null;
+    const publisherVerified = oneSetupPublisherReceiptVerified(site);
+    const measurementVerified = oneSetupSearchMeasurementReceiptVerified(site);
     const outreachMailboxVerified = Boolean(
-      inbox &&
-        ownerAccountKey &&
-        inbox.credentialOwnerAccountKey === ownerAccountKey &&
-        ["warming", "active"].includes(inbox.status) &&
-        inbox.verifiedAt &&
-        inbox.spfVerifiedAt &&
-        inbox.dkimVerifiedAt &&
-        inbox.dmarcVerifiedAt &&
-        inbox.complianceConfirmedAt &&
-        autonomousGmailCredentialIssues({
-          oauthScopes: inbox.oauthScopes,
-          hasRefreshToken: Boolean(inbox.oauthRefreshToken),
-        }).length === 0,
+      ownerAccountKey && oneSetupOutreachMailboxReceiptVerified({
+        inboxes,
+        ownerAccountKey,
+      }),
     );
 
     const websiteState: OneSetupReadinessState =
@@ -1276,6 +1339,9 @@ export const getOneSetupReadiness = query({
       label: string;
       state: OneSetupReadinessState;
       mode?: OneSetupMode;
+      actionRequiredBy?: OneSetupActionOwner;
+      reasonCode?: string;
+      actionMessage?: string;
     }> = [
       { key: "website", label: "Website analyzed", state: websiteState },
       { key: "content_plan", label: "Content plan prepared", state: planState },
@@ -1293,6 +1359,11 @@ export const getOneSetupReadiness = query({
           progress: publisherProgress,
         }),
         mode: publisherProgress.mode,
+        actionRequiredBy: publisherProgress.actionRequiredBy,
+        reasonCode: publisherProgress.blockedReasonCode,
+        actionMessage: oneSetupActionMessage(
+          publisherProgress.blockedReasonCode,
+        ),
       },
       {
         key: "search_measurement",
@@ -1302,6 +1373,11 @@ export const getOneSetupReadiness = query({
           progress: measurementProgress,
         }),
         mode: measurementProgress.mode,
+        actionRequiredBy: measurementProgress.actionRequiredBy,
+        reasonCode: measurementProgress.blockedReasonCode,
+        actionMessage: oneSetupActionMessage(
+          measurementProgress.blockedReasonCode,
+        ),
       },
       {
         key: "outreach_mailbox",
@@ -1311,6 +1387,11 @@ export const getOneSetupReadiness = query({
           progress: outreachProgress,
         }),
         mode: outreachProgress.mode,
+        actionRequiredBy: outreachProgress.actionRequiredBy,
+        reasonCode: outreachProgress.blockedReasonCode,
+        actionMessage: oneSetupActionMessage(
+          outreachProgress.blockedReasonCode,
+        ),
       },
     ];
     const aggregate = aggregateOneSetupReadiness(
@@ -1328,6 +1409,15 @@ export const getOneSetupReadiness = query({
         : site.cadenceRequestedPerWeek ?? site.cadencePerWeek ?? 0,
       aggregate,
       stages,
+      fulfillment: requestValid
+        ? {
+            state: request!.fulfillmentState ?? "queued",
+            attempt: request!.fulfillmentAttempt ?? 0,
+            nextAttemptAt: request!.nextAttemptAt,
+            lastClaimedAt: request!.lastClaimedAt,
+            lastReconciledAt: request!.lastReconciledAt,
+          }
+        : null,
       // This is a narrowly named publishing receipt. It must not be presented
       // as proof that outreach, ranking, or conversion outcomes are active.
       publishingRolloutLive: site.autopilotRolloutMode === "live",
@@ -4080,6 +4170,14 @@ export const setAutopilotRollout = internalMutation({
     if (!site.autopilotEnabled && mode !== "observe") {
       throw new Error("Autopilot must be enabled before controlled rollout");
     }
+    if (mode !== "observe") {
+      const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+      if (setupBlockers.length > 0) {
+        throw new Error(
+          `One-setup canonical receipts are incomplete: ${setupBlockers.join(", ")}`,
+        );
+      }
+    }
 
     if (mode === "live") {
       const hasCrawledPage = Boolean(await ctx.db
@@ -4159,16 +4257,23 @@ export const enforceLiveReadiness = internalMutation({
       .withIndex("by_site", (q) => q.eq("siteId", siteId))
       .first());
     const limits = getLimitsFromFeatures(site.planFeatures ?? []);
-    const live = liveAutopilotReadiness(
+    const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+    const liveReadiness = liveAutopilotReadiness(
       site,
       hasCrawledPage,
       limits.maxArticles,
     );
+    const live = {
+      ready: liveReadiness.ready && setupBlockers.length === 0,
+      blockers: [...liveReadiness.blockers, ...setupBlockers],
+    };
     if (live.ready) {
       return { ready: true, changed: false, mode: "live", blockers: [] as string[] };
     }
     const warm = warmAutopilotReadiness(site, hasCrawledPage);
-    const mode = warm.ready ? "warm" as const : "observe" as const;
+    const mode = warm.ready && setupBlockers.length === 0
+      ? "warm" as const
+      : "observe" as const;
     const cancelledJobs = await cancelAutonomousJobsForEpochTransition(
       ctx,
       siteId,
