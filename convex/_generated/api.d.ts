@@ -66,6 +66,8 @@ import type * as lib_linkReceipts from "../lib/linkReceipts.js";
 import type * as lib_linkRelevance from "../lib/linkRelevance.js";
 import type * as lib_markdownPublishing from "../lib/markdownPublishing.js";
 import type * as lib_managedOutreachMailbox from "../lib/managedOutreachMailbox.js";
+import type * as lib_managedSes from "../lib/managedSes.js";
+import type * as lib_managedSesPacing from "../lib/managedSesPacing.js";
 import type * as lib_mediaQuality from "../lib/mediaQuality.js";
 import type * as lib_onboardingClaim from "../lib/onboardingClaim.js";
 import type * as lib_oneSetup from "../lib/oneSetup.js";
@@ -195,6 +197,8 @@ declare const fullApi: ApiFromModules<{
   "lib/linkRelevance": typeof lib_linkRelevance;
   "lib/markdownPublishing": typeof lib_markdownPublishing;
   "lib/managedOutreachMailbox": typeof lib_managedOutreachMailbox;
+  "lib/managedSes": typeof lib_managedSes;
+  "lib/managedSesPacing": typeof lib_managedSesPacing;
   "lib/mediaQuality": typeof lib_mediaQuality;
   "lib/onboardingClaim": typeof lib_onboardingClaim;
   "lib/oneSetup": typeof lib_oneSetup;
