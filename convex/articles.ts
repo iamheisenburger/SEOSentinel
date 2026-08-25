@@ -33,6 +33,7 @@ import {
   evaluateTopicBusinessFit,
   migrationBlocksAutopilot,
   tenantTopicBusinessSignals,
+  terminalTopicFitSettlement,
 } from "./lib/autopilotBuffer";
 import {
   PUBLICATION_ADAPTER_VERSION,
@@ -1043,13 +1044,53 @@ export const recordPublicationCheck = internalMutation({
     const article = await ctx.db.get(articleId);
     if (!article) throw new Error("Article not found");
     assertNotPublishing(article);
+    const checkedAt = now();
     await ctx.db.patch(articleId, {
       publicationGateStatus: status,
       publicationGateIssues: issues,
       publicationGateWarnings: warnings,
-      publicationCheckedAt: now(),
-      updatedAt: now(),
+      publicationCheckedAt: checkedAt,
+      updatedAt: checkedAt,
     });
+
+    // A terminal product-fit rejection condemns the measured intent, not the
+    // prose. The generated-title gate can only fail after paid model work, so
+    // unless the linked topic is quarantined in this same transaction the next
+    // cadence pass re-selects it and pays to generate it again.
+    const [site, topic] = await Promise.all([
+      ctx.db.get(article.siteId),
+      article.topicId ? ctx.db.get(article.topicId) : Promise.resolve(null),
+    ]);
+    if (site) {
+      const settlement = terminalTopicFitSettlement({
+        gateStatus: status,
+        issues,
+        article: {
+          siteId: String(article.siteId),
+          title: article.title,
+          status: article.status,
+          topicId: article.topicId ? String(article.topicId) : null,
+        },
+        topic: topic
+          ? {
+            _id: String(topic._id),
+            siteId: String(topic.siteId),
+            primaryKeyword: topic.primaryKeyword,
+            label: topic.label,
+            status: topic.status,
+            businessFitEligible: topic.businessFitEligible,
+            planCheckpointTerminalFailureCode:
+              topic.planCheckpointTerminalFailureCode,
+          }
+          : null,
+        siteSignals: tenantTopicBusinessSignals(site),
+        checkedAt,
+      });
+      if (settlement && topic) {
+        await ctx.db.patch(topic._id, settlement.topicPatch);
+      }
+    }
+
     await syncSummary(ctx, articleId);
   },
 });

@@ -7,6 +7,7 @@ import {
   AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD,
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
 } from "./planProviderBudget.ts";
+import { planCheckpointTopicExecutionLocked } from "./planCandidateCheckpoint.ts";
 
 export const MIN_APPROVED_BUFFER = 2;
 export const TARGET_APPROVED_BUFFER = 3;
@@ -1133,6 +1134,106 @@ export function hasTerminalTopicFitFailure(
   return (issues ?? []).some((issue) =>
     TERMINAL_TOPIC_FIT_ISSUE_MARKERS.some((marker) => issue.includes(marker))
   );
+}
+
+export type TerminalTopicFitTopic = {
+  _id: string;
+  siteId: string;
+  primaryKeyword: string;
+  label?: string;
+  status?: string;
+  businessFitEligible?: boolean;
+  planCheckpointTerminalFailureCode?: string;
+};
+
+export type TerminalTopicFitSettlement = {
+  topicId: string;
+  topicPatch: {
+    status: "disqualified";
+    businessFitEligible: false;
+    businessFitScore: number;
+    businessFitVersion: number;
+    businessFitReasons: string[];
+    businessFitCheckedAt: number;
+    disqualifiedReason: string;
+    updatedAt: number;
+  };
+};
+
+/**
+ * Decide whether a terminal publication-gate result must also quarantine the
+ * linked topic.
+ *
+ * Both pre-generation admission gates score business fit against the topic's
+ * stored label, but the final gate scores the generated article title, which
+ * cannot exist before the model spend. A topic can therefore clear admission,
+ * consume a paid generation, and fail terminally on title drift. Freezing only
+ * the article leaves that intent schedulable, so the next cadence pass selects
+ * it again and pays again — a loop no article-level guard can break.
+ *
+ * Pure, so the decision is provable without a database, and returned as one
+ * patch so the caller settles the article and its exact topic in a single
+ * transaction instead of leaving a partial state between two mutations.
+ */
+export function terminalTopicFitSettlement(args: {
+  gateStatus: string;
+  issues: string[];
+  article: {
+    siteId: string;
+    title: string;
+    status?: string;
+    topicId?: string | null;
+  };
+  topic: TerminalTopicFitTopic | null | undefined;
+  siteSignals: {
+    coreBusinessSignals: string[];
+    productAnchorSignals?: string[];
+    businessModelSignals: string[];
+  };
+  checkedAt: number;
+}): TerminalTopicFitSettlement | null {
+  if (args.gateStatus !== "blocked") return null;
+  if (!hasTerminalTopicFitFailure(args.issues)) return null;
+
+  const topic = args.topic;
+  if (!topic) return null;
+  // The article must reference this exact topic, and both must belong to the
+  // same tenant. A publication check may never reach across a site boundary.
+  if (!args.article.topicId || String(args.article.topicId) !== String(topic._id)) {
+    return null;
+  }
+  if (topic.siteId !== args.article.siteId) return null;
+  // Published work is immutable here; it uses the audited refresh workflow.
+  if (args.article.status === "published") return null;
+  // A plan checkpoint owns the topic lifecycle and carries its own no-replay
+  // tombstone. Never race it.
+  if (planCheckpointTopicExecutionLocked(topic)) return null;
+  // Already settled. Rewriting would churn the receipt and its timestamp.
+  if (topic.status === "disqualified") return null;
+
+  // Re-evaluate against the generated title so the persisted receipt states the
+  // current reason, and so a topic that genuinely still fits the tenant is
+  // never destroyed by a stale recorded issue.
+  const fit = evaluateTopicBusinessFit({
+    keyword: topic.primaryKeyword,
+    label: args.article.title,
+    ...args.siteSignals,
+  });
+  if (fit.eligible) return null;
+
+  return {
+    topicId: String(topic._id),
+    topicPatch: {
+      status: "disqualified",
+      businessFitEligible: false,
+      businessFitScore: fit.score,
+      businessFitVersion: fit.version,
+      businessFitReasons: fit.reasons,
+      businessFitCheckedAt: args.checkedAt,
+      disqualifiedReason: fit.reasons.join("; "),
+      updatedAt: args.checkedAt,
+    },
+  };
 }
 
 export function evaluateTopicBusinessFit(args: {
