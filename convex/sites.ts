@@ -4785,6 +4785,9 @@ export const setGscTokenInternal = internalMutation({
     if (!gscProperty && expectedReceiptRevision === undefined) {
       throw new Error("A token refresh requires the exact connection receipt");
     }
+    if (!gscProperty && site.gscReceiptStatus === "revoked") {
+      throw new Error("A revoked Search Console connection cannot be refreshed");
+    }
     const timestamp = now();
     const sealsNewReceipt = Boolean(gscProperty);
     await ctx.db.patch(site._id, {
@@ -4895,9 +4898,10 @@ export const markGscReceiptRevokedInternal = internalMutation({
         "Search Console authorization was revoked",
       );
     }
-    const receiptRevision = args.expectedReceiptRevision === 0
-      ? 1
-      : args.expectedReceiptRevision;
+    // Revocation consumes the captured grant generation. Concurrent refresh or
+    // verification responses still carrying the old generation cannot restore
+    // either a credential or readiness after this mutation commits.
+    const receiptRevision = (site.gscReceiptRevision ?? 0) + 1;
     await ctx.db.patch(site._id, {
       gscAccessToken: undefined,
       gscRefreshToken: undefined,

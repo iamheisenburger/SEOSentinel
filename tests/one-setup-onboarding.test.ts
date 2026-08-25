@@ -297,12 +297,17 @@ test("Search Console readiness is fresh, revocable, and domain-bound", () => {
     /GSC access-token refresh was temporarily unavailable/,
   );
   assert.match(sites, /Search Console connection changed during token refresh/);
+  assert.match(sites, /A revoked Search Console connection cannot be refreshed/);
   assert.match(sites, /site\.gscReceiptStatus === "revoked"/);
   assert.match(
     sites,
     /args\.verifiedAt <= \(site\.gscReceiptRevokedAt \?\? 0\)/,
   );
   assert.match(sites, /autopilotRolloutMode: "warm"/);
+  assert.match(
+    exportedBlock(sites, "markGscReceiptRevokedInternal"),
+    /gscReceiptRevision \?\? 0\) \+ 1/,
+  );
 });
 
 test("one-setup UX defaults to managed Full Autopilot and hides provider controls", () => {
