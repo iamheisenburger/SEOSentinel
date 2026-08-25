@@ -175,7 +175,7 @@ test("action death before binding is recoverable without replaying a live bound 
   );
   assert.match(
     scheduler,
-    /topic_replenishment_exhausted[\s\S]*planJobId: replenishment\.cooldownPlanJobId/,
+    /topic_replenishment_exhausted[\s\S]*"cooldownPlanJobId" in replenishment[\s\S]*replenishment\.cooldownPlanJobId/,
   );
   assert.match(
     scheduler,

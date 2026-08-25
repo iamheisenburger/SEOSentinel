@@ -941,7 +941,9 @@ export const scheduleCadence = internalAction({
           scheduled: 0,
           mode: "topic_replenishment_exhausted",
           bufferCount: buffer.length,
-          planJobId: replenishment.cooldownPlanJobId,
+          planJobId: "cooldownPlanJobId" in replenishment
+            ? replenishment.cooldownPlanJobId
+            : undefined,
         };
       }
       if (
