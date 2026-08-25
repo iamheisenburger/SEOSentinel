@@ -158,6 +158,74 @@ export default defineSchema({
     .index("by_autopilot", ["autopilotEnabled"])
     .index("by_rollout", ["autopilotRolloutMode", "autopilotEnabled"]),
 
+  // Provider-neutral onboarding intent. This table deliberately stores no DNS
+  // values, OAuth tokens, mailbox passwords, or reseller identifiers. A
+  // managed worker may advance progress, but client readiness is derived from
+  // the real integration receipts in their canonical tables.
+  managed_provisioning_requests: defineTable({
+    siteId: v.id("sites"),
+    ownerAccountKey: v.string(),
+    domainSnapshot: v.string(),
+    contractVersion: v.number(),
+    revision: v.number(),
+    automationMode: v.union(
+      v.literal("assisted"),
+      v.literal("full"),
+    ),
+    requestedCadencePerWeek: v.number(),
+    publisher: v.object({
+      mode: v.union(v.literal("connect_existing"), v.literal("managed")),
+      state: v.union(
+        v.literal("owner_action_required"),
+        v.literal("requested"),
+        v.literal("in_progress"),
+        v.literal("ready"),
+        v.literal("blocked"),
+      ),
+      blockedReasonCode: v.optional(v.string()),
+      requestedAt: v.number(),
+      updatedAt: v.number(),
+    }),
+    searchMeasurement: v.object({
+      mode: v.union(v.literal("connect_existing"), v.literal("managed")),
+      state: v.union(
+        v.literal("owner_action_required"),
+        v.literal("requested"),
+        v.literal("in_progress"),
+        v.literal("ready"),
+        v.literal("blocked"),
+      ),
+      blockedReasonCode: v.optional(v.string()),
+      requestedAt: v.number(),
+      updatedAt: v.number(),
+    }),
+    outreachMailbox: v.object({
+      mode: v.union(v.literal("connect_existing"), v.literal("managed")),
+      state: v.union(
+        v.literal("owner_action_required"),
+        v.literal("requested"),
+        v.literal("in_progress"),
+        v.literal("ready"),
+        v.literal("blocked"),
+      ),
+      blockedReasonCode: v.optional(v.string()),
+      requestedAt: v.number(),
+      updatedAt: v.number(),
+    }),
+    aggregateState: v.union(
+      v.literal("owner_action_required"),
+      v.literal("requested"),
+      v.literal("in_progress"),
+      v.literal("ready"),
+      v.literal("blocked"),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_site", ["siteId"])
+    .index("by_aggregate_updated", ["aggregateState", "updatedAt"]),
+
   // Canonical account-level billing receipt. Site reconciliation is paged so
   // even an Enterprise account cannot make one mutation unbounded. While a
   // new receipt is reconciling, paid/write execution fails closed; the prior

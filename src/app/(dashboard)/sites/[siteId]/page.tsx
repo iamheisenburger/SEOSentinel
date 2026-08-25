@@ -1,11 +1,11 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useAction, useQuery, useMutation } from "convex/react";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
-import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -17,7 +17,6 @@ import {
   Trash2,
   ArrowRight,
   ArrowLeft,
-  Clock,
   Zap,
   Palette,
   Users,
@@ -44,12 +43,15 @@ import {
   cadenceLabel,
   cadenceOptionsForMonthlyLimit,
 } from "../../../../../convex/planLimits";
+import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 
 type Tab = "overview" | "articles" | "settings";
+type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
 
 export default function SiteDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const siteId = params.siteId as Id<"sites">;
   const site = useQuery(api.sites.get, { siteId });
   const cadenceCapacity = useQuery(api.sites.getCadenceCapacity, { siteId });
@@ -59,7 +61,9 @@ export default function SiteDetailPage() {
   const deleteArticle = useMutation(api.articles.deleteArticle);
   const updateSite = useMutation(api.sites.updateSite);
 
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [activeTab, setActiveTab] = useState<Tab>(
+    searchParams.get("tab") === "settings" ? "settings" : "overview",
+  );
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -305,7 +309,6 @@ export default function SiteDetailPage() {
           publishedCount={publishedCount}
           draftCount={draftCount}
           reviewCount={reviewCount}
-          brandColor={brandColor}
           onTabChange={setActiveTab}
         />
       )}
@@ -313,7 +316,6 @@ export default function SiteDetailPage() {
         <ArticlesTab
           articles={articles}
           onDelete={(id) => deleteArticle({ articleId: id })}
-          siteId={siteId}
         />
       )}
       {activeTab === "settings" && (
@@ -366,7 +368,6 @@ function OverviewTab({
   publishedCount,
   draftCount,
   reviewCount,
-  brandColor,
   onTabChange,
 }: {
   siteId: Id<"sites">;
@@ -394,7 +395,6 @@ function OverviewTab({
   publishedCount: number;
   draftCount: number;
   reviewCount: number;
-  brandColor: string;
   onTabChange: (tab: Tab) => void;
 }) {
   // Quick link cards
@@ -425,6 +425,7 @@ function OverviewTab({
 
   return (
     <div className="flex flex-col gap-5">
+      <SetupReadiness siteId={siteId} compact />
       {/* Article progress (live) */}
       <ArticleProgress siteId={siteId} />
 
@@ -582,7 +583,6 @@ function DetailRow({
 function ArticlesTab({
   articles,
   onDelete,
-  siteId,
 }: {
   articles: Array<{
     _id: Id<"articles">;
@@ -595,7 +595,6 @@ function ArticlesTab({
     createdAt: number;
   }> | undefined;
   onDelete: (id: Id<"articles">) => void;
-  siteId: Id<"sites">;
 }) {
   const [deletingId, setDeletingId] = useState<Id<"articles"> | null>(null);
 
@@ -750,7 +749,7 @@ function SettingsTab({
   cadenceCapacity,
   onSave,
 }: {
-  site: any;
+  site: SiteView;
   siteName: string; setSiteName: (v: string) => void;
   niche: string; setNiche: (v: string) => void;
   tone: string; setTone: (v: string) => void;
@@ -1015,11 +1014,12 @@ function SettingsTab({
 
 /* ── Connection Section ── */
 
-function ConnectionSection({ site }: { site: any }) {
+function ConnectionSection({ site }: { site: SiteView }) {
   const updateSite = useMutation(api.sites.upsert);
   const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [method, setMethod] = useState(site.publishMethod || "manual");
   const [repoOwner, setRepoOwner] = useState(site.repoOwner || "");
   const [repoName, setRepoName] = useState(site.repoName || "");
   const [wpUrl, setWpUrl] = useState(site.wpUrl || "");
@@ -1029,7 +1029,6 @@ function ConnectionSection({ site }: { site: any }) {
   const [webhookSecret, setWebhookSecret] = useState("");
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  const method = site.publishMethod || "github";
   const labels = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" } as Record<string, string>;
   const iconMap = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy } as Record<string, typeof GitBranch>;
   const MethodIcon = iconMap[method] || GitBranch;
@@ -1045,7 +1044,11 @@ function ConnectionSection({ site }: { site: any }) {
     setSaving(true);
     setConnectionError(null);
     try {
-      const updates: any = { id: site._id, domain: site.domain };
+      const updates: FunctionArgs<typeof api.sites.upsert> = {
+        id: site._id,
+        domain: site.domain,
+        publishMethod: method,
+      };
       if (isGithub) { updates.repoOwner = repoOwner.trim() || undefined; updates.repoName = repoName.trim() || undefined; }
       if (isWp) { updates.wpUrl = wpUrl.trim() || undefined; updates.wpUsername = wpUsername.trim() || undefined; updates.wpAppPassword = wpAppPassword.trim() || undefined; }
       if (isWebhook) { updates.webhookUrl = webhookUrl.trim() || undefined; updates.webhookSecret = webhookSecret.trim() || undefined; }
@@ -1089,13 +1092,26 @@ function ConnectionSection({ site }: { site: any }) {
                 <p className="text-[12px] text-[#565A6E]">Copy markdown or HTML from article pages</p>
               )}
             </div>
-            {!isManual && !editing && (
+            {!editing && (
               <button onClick={() => setEditing(true)} className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition">Edit</button>
             )}
           </div>
 
           {editing && (
             <div className="flex flex-col gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[12px] font-medium text-[#8B8FA3]">Publishing method</label>
+                <select
+                  value={method}
+                  onChange={(event) => setMethod(event.target.value)}
+                  className={inputCls}
+                >
+                  <option value="github">GitHub</option>
+                  <option value="wordpress">WordPress</option>
+                  <option value="webhook">Webhook</option>
+                  <option value="manual">Copy &amp; Paste</option>
+                </select>
+              </div>
               {isGithub && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
@@ -1209,7 +1225,7 @@ function ConnectionSection({ site }: { site: any }) {
 
 /* ── Google Search Console Section ── */
 
-function GSCSection({ site }: { site: any }) {
+function GSCSection({ site }: { site: SiteView }) {
   const disconnectGsc = useMutation(api.sites.disconnectGsc);
   const [disconnecting, setDisconnecting] = useState(false);
 

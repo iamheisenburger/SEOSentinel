@@ -37,6 +37,7 @@ import {
 } from "./lib/expectedClickPortfolio";
 import {
   liveAutopilotReadiness,
+  publicationDestinationBlockers,
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
 import {
@@ -80,6 +81,16 @@ import {
 import {
   materializeOutreachSuppressionTombstoneForAccount,
 } from "./lib/outreachSuppression.ts";
+import {
+  aggregateOneSetupReadiness,
+  aggregateOneSetupRequestState,
+  initialOneSetupProgress,
+  oneSetupCapabilityReadiness,
+  ONE_SETUP_CONTRACT_VERSION,
+  type OneSetupAutomationMode,
+  type OneSetupMode,
+  type OneSetupReadinessState,
+} from "./lib/oneSetup.ts";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -99,6 +110,21 @@ function inboundRelayRuntimeConfig() {
 
 const now = () => Date.now();
 const CADENCE_ALLOCATION_VERSION = 1;
+const ONE_SETUP_MODE_VALIDATOR = v.union(
+  v.literal("connect_existing"),
+  v.literal("managed"),
+);
+const ONE_SETUP_AUTOMATION_MODE_VALIDATOR = v.union(
+  v.literal("assisted"),
+  v.literal("full"),
+);
+const ONE_SETUP_PROGRESS_VALIDATOR = v.union(
+  v.literal("owner_action_required"),
+  v.literal("requested"),
+  v.literal("in_progress"),
+  v.literal("ready"),
+  v.literal("blocked"),
+);
 const DELIVERY_CONFIG_KEYS = new Set([
   "domain", "publishMethod", "repoOwner", "repoName", "repoDefaultBranch", "githubToken",
   "wpUrl", "wpUsername", "wpAppPassword", "webhookUrl", "webhookSecret",
@@ -860,6 +886,399 @@ export const get = query({
   },
 });
 
+type ManagedProvisioningCapability =
+  Doc<"managed_provisioning_requests">["publisher"];
+
+function nextOneSetupCapability(
+  previous: ManagedProvisioningCapability | undefined,
+  mode: OneSetupMode,
+  timestamp: number,
+  reset: boolean,
+): ManagedProvisioningCapability {
+  if (!reset && previous?.mode === mode) return previous;
+  return {
+    mode,
+    state: initialOneSetupProgress(mode),
+    requestedAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function safeOneSetupReasonCode(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_.-]{0,79}$/.test(normalized)) {
+    throw new Error("Invalid provisioning reason code");
+  }
+  return normalized;
+}
+
+/**
+ * Save owner intent only. This request cannot carry provider credentials and
+ * cannot make publishing, Search Console, or an outreach mailbox ready.
+ */
+export const saveOneSetupRequest = mutation({
+  args: {
+    siteId: v.id("sites"),
+    publisherMode: ONE_SETUP_MODE_VALIDATOR,
+    searchMeasurementMode: ONE_SETUP_MODE_VALIDATOR,
+    outreachMailboxMode: ONE_SETUP_MODE_VALIDATOR,
+    automationMode: ONE_SETUP_AUTOMATION_MODE_VALIDATOR,
+    requestedCadencePerWeek: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const site = await requireSiteOwner(ctx, args.siteId);
+    if (!site.userId || site.accountDeletionRequestedAt) {
+      throw new Error("Site not found");
+    }
+    if (
+      !Number.isFinite(args.requestedCadencePerWeek) ||
+      args.requestedCadencePerWeek <= 0 ||
+      args.requestedCadencePerWeek > 21
+    ) {
+      throw new Error("Invalid requested cadence");
+    }
+    const siteRequestedCadence =
+      site.cadenceRequestedPerWeek ?? site.cadencePerWeek ?? 0;
+    if (Math.abs(siteRequestedCadence - args.requestedCadencePerWeek) > 1e-9) {
+      throw new Error("Save the site cadence before submitting setup");
+    }
+    if (
+      site.autopilotEnabled !== true ||
+      Boolean(site.approvalRequired) !== (args.automationMode === "assisted")
+    ) {
+      throw new Error("Save the site automation mode before submitting setup");
+    }
+
+    const domainSnapshot = site.canonicalDomain ??
+      normalizedAuthorityDomain(site.domain);
+    if (!domainSnapshot) throw new Error("The site domain is invalid");
+    const ownerAccountKey = accountDeletionKey(site.userId);
+    const existing = await ctx.db
+      .query("managed_provisioning_requests")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .unique();
+    const timestamp = now();
+    const reset = Boolean(
+      existing &&
+        (existing.ownerAccountKey !== ownerAccountKey ||
+          existing.domainSnapshot !== domainSnapshot ||
+          existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION),
+    );
+    const publisher = nextOneSetupCapability(
+      existing?.publisher,
+      args.publisherMode,
+      timestamp,
+      reset,
+    );
+    const searchMeasurement = nextOneSetupCapability(
+      existing?.searchMeasurement,
+      args.searchMeasurementMode,
+      timestamp,
+      reset,
+    );
+    const outreachMailbox = nextOneSetupCapability(
+      existing?.outreachMailbox,
+      args.outreachMailboxMode,
+      timestamp,
+      reset,
+    );
+    const aggregateState = aggregateOneSetupRequestState([
+      publisher,
+      searchMeasurement,
+      outreachMailbox,
+    ]);
+    const revision = (existing?.revision ?? 0) + 1;
+    const record = {
+      ownerAccountKey,
+      domainSnapshot,
+      contractVersion: ONE_SETUP_CONTRACT_VERSION,
+      revision,
+      automationMode: args.automationMode,
+      requestedCadencePerWeek: args.requestedCadencePerWeek,
+      publisher,
+      searchMeasurement,
+      outreachMailbox,
+      aggregateState,
+      updatedAt: timestamp,
+      completedAt: aggregateState === "ready" ? timestamp : undefined,
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, record);
+      return { requestId: existing._id, revision };
+    }
+    const requestId = await ctx.db.insert("managed_provisioning_requests", {
+      siteId: site._id,
+      ...record,
+      createdAt: timestamp,
+    });
+    return { requestId, revision };
+  },
+});
+
+/** Provider adapters may report credential-free progress against an exact
+ * revision. A "ready" report is still not a connection receipt; the owner
+ * query below independently verifies each canonical integration record. */
+export const setOneSetupCapabilityProgressInternal = internalMutation({
+  args: {
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRevision: v.number(),
+    capability: v.union(
+      v.literal("publisher"),
+      v.literal("search_measurement"),
+      v.literal("outreach_mailbox"),
+    ),
+    state: ONE_SETUP_PROGRESS_VALIDATOR,
+    blockedReasonCode: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.revision !== args.expectedRevision) {
+      throw new Error("Provisioning request changed");
+    }
+    const site = await ctx.db.get(request.siteId);
+    const domainSnapshot = site?.canonicalDomain ??
+      (site ? normalizedAuthorityDomain(site.domain) : null);
+    if (
+      !site?.userId ||
+      site.deletionStatus ||
+      site.accountDeletionRequestedAt ||
+      request.ownerAccountKey !== accountDeletionKey(site.userId) ||
+      request.domainSnapshot !== domainSnapshot
+    ) {
+      throw new Error("Provisioning request is no longer active");
+    }
+    const field = args.capability === "search_measurement"
+      ? "searchMeasurement"
+      : args.capability === "outreach_mailbox"
+        ? "outreachMailbox"
+        : "publisher";
+    const current = request[field];
+    if (
+      current.mode === "connect_existing" &&
+      args.state !== "owner_action_required" &&
+      args.state !== "blocked"
+    ) {
+      throw new Error("Owner-managed connections cannot be advanced by a provider");
+    }
+    if (current.mode === "managed" && args.state === "owner_action_required") {
+      throw new Error("Managed provisioning cannot delegate credential entry silently");
+    }
+    const timestamp = now();
+    const next: ManagedProvisioningCapability = {
+      ...current,
+      state: args.state,
+      blockedReasonCode: args.state === "blocked"
+        ? safeOneSetupReasonCode(args.blockedReasonCode)
+        : undefined,
+      updatedAt: timestamp,
+    };
+    const capabilities = {
+      publisher: field === "publisher" ? next : request.publisher,
+      searchMeasurement: field === "searchMeasurement"
+        ? next
+        : request.searchMeasurement,
+      outreachMailbox: field === "outreachMailbox"
+        ? next
+        : request.outreachMailbox,
+    };
+    const aggregateState = aggregateOneSetupRequestState([
+      capabilities.publisher,
+      capabilities.searchMeasurement,
+      capabilities.outreachMailbox,
+    ]);
+    await ctx.db.patch(request._id, {
+      ...capabilities,
+      aggregateState,
+      revision: request.revision + 1,
+      updatedAt: timestamp,
+      completedAt: aggregateState === "ready" ? timestamp : undefined,
+    });
+    return { revision: request.revision + 1, aggregateState };
+  },
+});
+
+function pendingOneSetupCapability(mode: OneSetupMode): ManagedProvisioningCapability {
+  return {
+    mode,
+    state: initialOneSetupProgress(mode),
+    requestedAt: 0,
+    updatedAt: 0,
+  };
+}
+
+export const getOneSetupReadiness = query({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await requireSiteOwner(ctx, siteId);
+    const [request, crawledPage, plannedTopic, inboxes, cadenceSnapshot] =
+      await Promise.all([
+        ctx.db
+          .query("managed_provisioning_requests")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .unique(),
+        ctx.db
+          .query("pages")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .first(),
+        ctx.db
+          .query("topic_clusters")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .first(),
+        ctx.db
+          .query("outreach_inboxes")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .take(2),
+        accountCadenceSnapshot(
+          ctx,
+          site.userId!,
+          site,
+          site.planFeatures ?? [],
+        ),
+      ]);
+    const domainSnapshot = site.canonicalDomain ??
+      normalizedAuthorityDomain(site.domain);
+    const ownerAccountKey = site.userId ? accountDeletionKey(site.userId) : null;
+    const requestValid = Boolean(
+      request &&
+        ownerAccountKey &&
+        request.ownerAccountKey === ownerAccountKey &&
+        request.domainSnapshot === domainSnapshot &&
+        request.contractVersion === ONE_SETUP_CONTRACT_VERSION,
+    );
+    const publisherProgress = requestValid
+      ? request!.publisher
+      : pendingOneSetupCapability("connect_existing");
+    const measurementProgress = requestValid
+      ? request!.searchMeasurement
+      : pendingOneSetupCapability("connect_existing");
+    const outreachProgress = requestValid
+      ? request!.outreachMailbox
+      : pendingOneSetupCapability("connect_existing");
+
+    const publisherVerified = publicationDestinationBlockers(site).length === 0;
+    const measurementVerified = Boolean(
+      site.gscAccessToken && site.gscProperty,
+    );
+    const inbox = inboxes.length === 1 ? inboxes[0] : null;
+    const outreachMailboxVerified = Boolean(
+      inbox &&
+        ownerAccountKey &&
+        inbox.credentialOwnerAccountKey === ownerAccountKey &&
+        ["warming", "active"].includes(inbox.status) &&
+        inbox.verifiedAt &&
+        inbox.spfVerifiedAt &&
+        inbox.dkimVerifiedAt &&
+        inbox.dmarcVerifiedAt &&
+        inbox.complianceConfirmedAt &&
+        autonomousGmailCredentialIssues({
+          oauthScopes: inbox.oauthScopes,
+          hasRefreshToken: Boolean(inbox.oauthRefreshToken),
+        }).length === 0,
+    );
+
+    const websiteState: OneSetupReadinessState =
+      crawledPage && (site.siteSummary || site.niche)
+        ? "ready"
+        : requestValid
+          ? "queued"
+          : "action_required";
+    const planState: OneSetupReadinessState = plannedTopic
+      ? "ready"
+      : requestValid
+        ? "queued"
+        : "action_required";
+    const requestedCadence = requestValid
+      ? request!.requestedCadencePerWeek
+      : site.cadenceRequestedPerWeek ?? site.cadencePerWeek ?? 0;
+    const cadenceState: OneSetupReadinessState =
+      cadenceSnapshot.ready &&
+        requestedCadence > 0 &&
+        site.cadencePerWeek === requestedCadence &&
+        cadenceFitsMonthlyAllowance(
+          requestedCadence,
+          cadenceSnapshot.availableArticles,
+        ) &&
+        !site.planParkedAt &&
+        !site.domainOwnershipConflictAt
+        ? "ready"
+        : site.planParkedAt || site.domainOwnershipConflictAt
+          ? "blocked"
+          : requestValid
+            ? "queued"
+            : "action_required";
+    const automationState: OneSetupReadinessState = !requestValid
+      ? "action_required"
+      : site.autopilotEnabled === true &&
+          Boolean(site.approvalRequired) ===
+            (request!.automationMode === "assisted")
+        ? "ready"
+        : "action_required";
+    const stages: Array<{
+      key: string;
+      label: string;
+      state: OneSetupReadinessState;
+      mode?: OneSetupMode;
+    }> = [
+      { key: "website", label: "Website analyzed", state: websiteState },
+      { key: "content_plan", label: "Content plan prepared", state: planState },
+      { key: "cadence", label: "Cadence reserved", state: cadenceState },
+      {
+        key: "automation",
+        label: "Automation mode authorized",
+        state: automationState,
+      },
+      {
+        key: "publisher",
+        label: "Publishing destination verified",
+        state: oneSetupCapabilityReadiness({
+          connectionVerified: publisherVerified,
+          progress: publisherProgress,
+        }),
+        mode: publisherProgress.mode,
+      },
+      {
+        key: "search_measurement",
+        label: "Search measurement verified",
+        state: oneSetupCapabilityReadiness({
+          connectionVerified: measurementVerified,
+          progress: measurementProgress,
+        }),
+        mode: measurementProgress.mode,
+      },
+      {
+        key: "outreach_mailbox",
+        label: "Outreach mailbox verified",
+        state: oneSetupCapabilityReadiness({
+          connectionVerified: outreachMailboxVerified,
+          progress: outreachProgress,
+        }),
+        mode: outreachProgress.mode,
+      },
+    ];
+    const aggregate = aggregateOneSetupReadiness(
+      stages.map((stage) => stage.state),
+    );
+    return {
+      contractVersion: ONE_SETUP_CONTRACT_VERSION,
+      requestExists: requestValid,
+      requestRevision: requestValid ? request!.revision : 0,
+      automationMode: (requestValid
+        ? request!.automationMode
+        : "assisted") as OneSetupAutomationMode,
+      requestedCadencePerWeek: requestValid
+        ? request!.requestedCadencePerWeek
+        : site.cadenceRequestedPerWeek ?? site.cadencePerWeek ?? 0,
+      aggregate,
+      stages,
+      // This is a narrowly named publishing receipt. It must not be presented
+      // as proof that outreach, ranking, or conversion outcomes are active.
+      publishingRolloutLive: site.autopilotRolloutMode === "live",
+      updatedAt: Math.max(site.updatedAt, requestValid ? request!.updatedAt : 0),
+    };
+  },
+});
+
 export const getFull = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
@@ -1009,6 +1428,7 @@ export const patchInternal = internalMutation({
 export const upsert = mutation({
   args: {
     id: v.optional(v.id("sites")),
+    createOnly: v.optional(v.boolean()),
     domain: v.string(),
     clerkUserId: v.optional(v.string()),
     niche: v.optional(v.string()),
@@ -1262,6 +1682,9 @@ export const upsert = mutation({
     };
 
     if (args.id) {
+      if (args.createOnly) {
+        throw new Error("A create-only setup cannot update an existing site");
+      }
       // Strip undefined values — Convex patch with undefined CLEARS the field,
       // so partial step saves (e.g. profile step, audience step) would wipe
       // fields set by other steps (e.g. ctaUrl set in strategy step).
@@ -1320,6 +1743,9 @@ export const upsert = mutation({
     const existing = domainClaim;
 
     if (existing?._id) {
+      if (args.createOnly) {
+        throw new Error("This website is already connected to your account");
+      }
       if (existing.userId !== userId) {
         throw new Error("This domain is already connected to another account");
       }
@@ -1564,6 +1990,7 @@ const ACCOUNT_DELETION_RECEIPT_STAGES = [
   "usage_log",
 ] as const;
 const SITE_DELETION_STAGES = [
+  "managed_provisioning_requests",
   "outreach_inbound_relay_canaries",
   "outreach_inbound_relay_receipts",
   "outreach_messages",
@@ -2001,6 +2428,11 @@ async function deletionRowsForStage(
 ): Promise<Array<{ _id: Id<TableNames> }>> {
   const name = SITE_DELETION_STAGES[stage];
   switch (name) {
+    case "managed_provisioning_requests":
+      return ctx.db
+        .query("managed_provisioning_requests")
+        .withIndex("by_site", (q) => q.eq("siteId", siteId))
+        .take(SITE_DELETION_BATCH);
     case "outreach_inbound_relay_canaries":
       return ctx.db.query("outreach_inbound_relay_canaries").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_inbound_relay_receipts":

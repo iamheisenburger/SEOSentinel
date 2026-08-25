@@ -315,6 +315,10 @@ test("GitHub setup discovers and persists the repository's actual default branch
   const sites = readFileSync("convex/sites.ts", "utf8");
   const callback = readFileSync("src/app/api/github/callback/route.ts", "utf8");
   const wizard = readFileSync("src/components/onboarding/setup-wizard.tsx", "utf8");
+  const settings = readFileSync(
+    "src/app/(dashboard)/sites/[siteId]/page.tsx",
+    "utf8",
+  );
 
   assert.match(http, /api\.github\.com\/repos\/\$\{encodeURIComponent\(repoOwner\)\}\/\$\{encodeURIComponent\(repoName\)\}/);
   assert.match(http, /metadata\.default_branch/);
@@ -341,7 +345,10 @@ test("GitHub setup discovers and persists the repository's actual default branch
   assert.ok([...sites.matchAll(/clearStaleGitHubBranch\(/g)].length >= 4);
 
   assert.match(callback, /renderPage\(msg, saved,/);
-  assert.match(wizard, /await upsert\([\s\S]{0,180}repoOwner:[\s\S]{0,180}popup\.location\.href/);
+  assert.match(wizard, /Publishing settings/);
+  assert.match(wizard, /\/sites\/\$\{siteId\}\?tab=settings/);
+  assert.doesNotMatch(wizard, /repoOwner|repoName|github-oauth/);
+  assert.match(settings, /\/api\/github\/auth\?siteId=/);
   assert.doesNotMatch(wizard, /setGithubConnected\(true\)/);
 });
 
