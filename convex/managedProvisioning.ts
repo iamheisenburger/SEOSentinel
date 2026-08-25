@@ -19,6 +19,10 @@ import {
   normalizedOneSetupDomain,
   type OneSetupCapability,
 } from "./lib/oneSetup.ts";
+import {
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./lib/siteDomainBinding.ts";
 import { sha256Hex } from "./lib/publicationArtifact.ts";
 
 const MANAGED_PROVISIONING_FLEET_BATCH = 25;
@@ -55,6 +59,13 @@ function requestIdentityIsCurrent(args: {
       : undefined,
     requestDomainSnapshot: request.domainSnapshot,
     currentDomainSnapshot: activeRequestDomain(site),
+    requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+    currentCanonicalDomainRevision: site
+      ? siteCanonicalDomainRevision(site)
+      : 0,
+    legacyUnstampedAllowed: Boolean(
+      site && siteUsesLegacyDomainReceipts(site)
+    ),
     requestContractVersion: request.contractVersion,
   });
 }

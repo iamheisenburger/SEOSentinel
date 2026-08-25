@@ -36,6 +36,7 @@ import {
   topicPlanCooldownTerminalWriteAllowed,
   topicPlanCooldownWatchdogDecision,
   topicPlanCooldownWakeAt,
+  topicPlanProviderReservationTriggerFromPayload,
   topicPlanSettlementDecision,
   TOPIC_PLAN_COOLDOWN_CONTINUATION_LEASE_MS,
   TOPIC_PLAN_COOLDOWN_MAX_CONTINUATION_ATTEMPTS,
@@ -45,6 +46,16 @@ import {
 } from "./lib/planProviderBudget";
 import { classifyAutopilotRunOutcome } from
   "./lib/autopilotRunOutcome.ts";
+import {
+  OPERATOR_PLAN_CHECKPOINT_READ_LIMIT,
+  OPERATOR_PLAN_RECEIPT_LIMIT,
+  latestTerminalPlanJobs,
+  operatorContinuationRunReceipt,
+  operatorActiveJobReceipt,
+  operatorArticleReceipt,
+  operatorHealthReceipt,
+  operatorTerminalPlanReceipt,
+} from "./lib/operatorSnapshot.ts";
 import {
   articleMatchesCurrentDomain,
   normalizeCanonicalDomain,
@@ -2508,7 +2519,17 @@ export const getOperatorSnapshot = internalQuery({
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
     if (!site) throw new Error("Site not found");
-    const [health, runs, ready, review, pending, running] = await Promise.all([
+    const [
+      health,
+      runs,
+      ready,
+      review,
+      pending,
+      running,
+      donePlanJobs,
+      failedPlanJobs,
+    ] =
+      await Promise.all([
       ctx.db
         .query("autopilot_health")
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
@@ -2532,60 +2553,80 @@ export const getOperatorSnapshot = internalQuery({
           q.eq("siteId", siteId).eq("status", "running"),
         )
         .take(10),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_type_status_created", (q) =>
+          q.eq("siteId", siteId).eq("type", "plan").eq("status", "done")
+        )
+        .order("desc")
+        .take(OPERATOR_PLAN_RECEIPT_LIMIT),
+      ctx.db
+        .query("jobs")
+        .withIndex("by_site_type_status_created", (q) =>
+          q.eq("siteId", siteId).eq("type", "plan").eq("status", "failed")
+        )
+        .order("desc")
+        .take(OPERATOR_PLAN_RECEIPT_LIMIT),
     ]);
-    const articleView = (article: Doc<"article_summaries">) => ({
-      articleId: article.articleId,
-      title: article.title,
-      status: article.status,
-      editorialQualityScore: article.editorialQualityScore,
-      factCheckScore: article.factCheckScore,
-      mediaQualityStatus: article.mediaQualityStatus,
-      publicationGateStatus: article.publicationGateStatus,
-      publicationAuditVersion: article.publicationAuditVersion,
-      sealed: isSealedReady(article),
-      qualityRevisionCount: article.qualityRevisionCount,
-      createdAt: article.articleCreatedAt,
-      updatedAt: article.articleUpdatedAt,
-    });
-    const jobView = (job: Doc<"jobs">) => ({
-      jobId: job._id,
-      type: job.type,
-      status: job.status,
-      retries: job.retries,
-      workerAttempts: job.workerAttempts,
-      publicationAttempts: job.publicationAttempts,
-      stepProgress: job.stepProgress,
-      error: job.error,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-    });
+    const planJobs = latestTerminalPlanJobs(donePlanJobs, failedPlanJobs);
+    const planReceipts = await Promise.all(planJobs.map(async (job) => {
+      const [checkpointRows, reservation] = await Promise.all([
+        ctx.db
+          .query("plan_candidate_checkpoints")
+          .withIndex("by_plan_job", (q) => q.eq("planJobId", job._id))
+          .order("desc")
+          .take(OPERATOR_PLAN_CHECKPOINT_READ_LIMIT),
+        job.providerSpendReservationId
+          ? ctx.db.get(job.providerSpendReservationId)
+          : null,
+      ]);
+      const currentDomain = siteCanonicalDomain(site);
+      const hasDomainBinding = job.canonicalDomain !== undefined ||
+        job.domainRevision !== undefined;
+      const domainBinding = hasDomainBinding
+        ? normalizeCanonicalDomain(job.canonicalDomain ?? "") ===
+              currentDomain &&
+            job.domainRevision === siteCanonicalDomainRevision(site)
+          ? "current" as const
+          : "stale" as const
+        : siteUsesLegacyDomainReceipts(site)
+          ? "legacy_current" as const
+          : "stale" as const;
+      const expectedTrigger = topicPlanProviderReservationTriggerFromPayload(
+        job.payload,
+      );
+      return operatorTerminalPlanReceipt({
+        siteId,
+        siteUserId: site.userId,
+        job,
+        domainBinding,
+        expectedReservationTrigger: expectedTrigger,
+        checkpoints: checkpointRows,
+        reservation,
+      });
+    }));
     return {
       site: {
         siteId: site._id,
-        domain: site.domain,
         autopilotEnabled: site.autopilotEnabled,
-        rolloutMode: site.autopilotRolloutMode ?? "observe",
+        rolloutMode: ["observe", "warm", "live"].includes(
+            site.autopilotRolloutMode ?? "observe",
+          )
+          ? site.autopilotRolloutMode ?? "observe"
+          : "unclassified",
         rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
         rolloutStartedAt: site.autopilotRolloutStartedAt,
       },
-      health,
-      runs: runs.map((run) => ({
-        runId: run._id,
-        trigger: run.trigger,
-        recoveryOfRunId: run.recoveryOfRunId,
-        status: run.status,
-        outcome: run.outcome,
-        detail: run.detail,
-        jobId: run.jobId,
-        articleId: run.articleId,
-        scheduledAt: run.scheduledAt,
-        startedAt: run.startedAt,
-        heartbeatAt: run.heartbeatAt,
-        completedAt: run.completedAt,
-      })),
-      ready: ready.map(articleView),
-      review: review.map(articleView),
-      activeJobs: [...pending, ...running].map(jobView),
+      health: operatorHealthReceipt(health),
+      runs: runs.map(operatorContinuationRunReceipt),
+      planReceipts,
+      ready: ready.map((article) =>
+        operatorArticleReceipt(article, isSealedReady(article))
+      ),
+      review: review.map((article) =>
+        operatorArticleReceipt(article, isSealedReady(article))
+      ),
+      activeJobs: [...pending, ...running].map(operatorActiveJobReceipt),
     };
   },
 });

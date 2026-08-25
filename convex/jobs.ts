@@ -1925,6 +1925,7 @@ export const queuePlanIfAbsent = internalMutation({
       await ctx.db.patch(setupExecution._id, {
         status: "plan_queued",
         planJobId: jobId,
+        domainRevisionSnapshot: siteCanonicalDomainRevision(site),
         blockerCode: undefined,
         updatedAt: timestamp,
       });

@@ -9,6 +9,13 @@ import {
   normalizedOneSetupDomain,
   ONE_SETUP_CONTRACT_VERSION,
 } from "./oneSetup.ts";
+import {
+  oneSetupDomainRevisionReceiptMatches,
+} from "./oneSetupInitialPlan.ts";
+import {
+  siteCanonicalDomainRevision,
+  siteUsesLegacyDomainReceipts,
+} from "./siteDomainBinding.ts";
 
 export async function oneSetupPromotionBlockers(
   ctx: QueryCtx | MutationCtx,
@@ -28,6 +35,11 @@ export async function oneSetupPromotionBlockers(
     site.accountDeletionRequestedAt ||
     request.ownerAccountKey !== accountDeletionKey(site.userId) ||
     request.domainSnapshot !== domainSnapshot ||
+    !oneSetupDomainRevisionReceiptMatches({
+      currentCanonicalDomainRevision: siteCanonicalDomainRevision(site),
+      receiptDomainRevision: request.domainRevisionSnapshot,
+      legacyUnstampedAllowed: siteUsesLegacyDomainReceipts(site),
+    }) ||
     request.contractVersion !== ONE_SETUP_CONTRACT_VERSION
   ) {
     return ["one_setup_request_stale"];

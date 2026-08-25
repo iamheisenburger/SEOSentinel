@@ -966,6 +966,12 @@ export default defineSchema({
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_status_attempt", ["siteId", "status", "nextAttemptAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
+    .index("by_site_type_status_created", [
+      "siteId",
+      "type",
+      "status",
+      "createdAt",
+    ])
     .index("by_status", ["status"]),
 
   // One immutable pre-SERP manifest per automatic plan execution. Candidate

@@ -559,6 +559,60 @@ test("A0 J cannot execute or commit after A0 to B1 to A2 without a resave", asyn
   );
 });
 
+test("legacy queue migration binds request, execution, and job before immediate inspection", () => {
+  const currentCanonicalDomainRevision = 0;
+  const legacyUnstampedAllowed = true;
+  const migratedRequestRevision = 0;
+  const migratedExecutionRevision = 0;
+  const migratedJobRevision = 0;
+  for (const receiptDomainRevision of [
+    migratedRequestRevision,
+    migratedExecutionRevision,
+    migratedJobRevision,
+  ]) {
+    assert.equal(
+      oneSetupDomainRevisionReceiptMatches({
+        currentCanonicalDomainRevision,
+        receiptDomainRevision,
+        legacyUnstampedAllowed,
+      }),
+      true,
+    );
+  }
+  assert.equal(
+    migratedExecutionRevision === migratedRequestRevision,
+    true,
+    "the immediate inspect/settle read must see the same materialized epoch",
+  );
+
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const start = jobs.indexOf("export const queuePlanIfAbsent");
+  const end = jobs.indexOf(
+    "export const queueExpectedClickPlanMigrationAfterPreflight",
+    start,
+  );
+  const queue = jobs.slice(start, end);
+  const requestBindAt = queue.indexOf(
+    "domainRevisionSnapshot: siteCanonicalDomainRevision(site)",
+  );
+  const executionPatchAt = queue.indexOf(
+    'status: "plan_queued"',
+    requestBindAt,
+  );
+  const executionBindAt = queue.indexOf(
+    "domainRevisionSnapshot: siteCanonicalDomainRevision(site)",
+    requestBindAt + 1,
+  );
+  const returnAt = queue.indexOf("return { queued: true, jobId", executionBindAt);
+  assert.ok(
+    requestBindAt >= 0 &&
+      executionPatchAt > requestBindAt &&
+      executionBindAt > executionPatchAt &&
+      returnAt > executionBindAt,
+    "the reservation transaction must materialize all three epoch receipts before returning to inspectPlan/settleFromPlan",
+  );
+});
+
 test("only exact released pre-provider receipts can back off without paid replay", () => {
   const exact = {
     recoveryCount: 0,
@@ -960,7 +1014,7 @@ test("the job and configuration receipt bind atomically before any retry can res
   assert.match(queue, /oneSetupCanonicalDomainRevision/);
   assert.match(
     queue,
-    /initialPlanJobId: jobId[\s\S]*status: "plan_queued"[\s\S]*planJobId: jobId/,
+    /initialPlanJobId: jobId[\s\S]*status: "plan_queued"[\s\S]*planJobId: jobId[\s\S]*domainRevisionSnapshot: siteCanonicalDomainRevision\(site\)/,
     "the request receipt and source execution must bind in the reservation mutation",
   );
   assert.match(

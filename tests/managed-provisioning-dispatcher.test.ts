@@ -195,6 +195,9 @@ test("tenant deletion, owner change, domain change, and contract change fail clo
     currentOwnerAccountKey: "owner-a",
     requestDomainSnapshot: "example.com",
     currentDomainSnapshot: "example.com",
+    requestDomainRevisionSnapshot: 0,
+    currentCanonicalDomainRevision: 0,
+    legacyUnstampedAllowed: false,
     requestContractVersion: ONE_SETUP_CONTRACT_VERSION,
   };
   assert.equal(managedProvisioningIdentityIsCurrent(base), true);
@@ -222,6 +225,32 @@ test("tenant deletion, owner change, domain change, and contract change fail clo
       requestContractVersion: ONE_SETUP_CONTRACT_VERSION + 1,
     }),
     false,
+  );
+  assert.equal(
+    managedProvisioningIdentityIsCurrent({
+      ...base,
+      requestDomainRevisionSnapshot: 0,
+      currentCanonicalDomainRevision: 2,
+    }),
+    false,
+    "A0 intent must not revive after A0 -> B1 -> A2",
+  );
+  assert.equal(
+    managedProvisioningIdentityIsCurrent({
+      ...base,
+      requestDomainRevisionSnapshot: undefined,
+    }),
+    false,
+    "an explicit revision-zero site must reject an unstamped request",
+  );
+  assert.equal(
+    managedProvisioningIdentityIsCurrent({
+      ...base,
+      requestDomainRevisionSnapshot: undefined,
+      legacyUnstampedAllowed: true,
+    }),
+    true,
+    "only a raw-undefined legacy site may accept an unstamped request",
   );
   assert.match(dispatcher, /fulfillmentState: "cancelled"/);
   assert.match(dispatcher, /nextAttemptAt: undefined/);
@@ -265,6 +294,8 @@ test("warm content is publisher-only while live rollout also requires fresh meas
   assert.match(sites, /oneSetupPromotionBlockers\(ctx, site, "live"\)/);
   assert.match(sites, /oneSetupPromotionBlockers\(ctx, site, "warm"\)/);
   const runtime = readFileSync("convex/lib/oneSetupRuntime.ts", "utf8");
+  assert.match(runtime, /oneSetupDomainRevisionReceiptMatches/);
+  assert.match(runtime, /siteUsesLegacyDomainReceipts\(site\)/);
   assert.match(runtime, /oneSetupPublisherReceiptVerified\(site\)/);
   assert.match(runtime, /oneSetupSearchMeasurementReceiptVerified\(site\)/);
   assert.doesNotMatch(runtime, /oneSetupOutreachMailboxReceiptVerified/);

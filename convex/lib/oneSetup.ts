@@ -185,12 +185,23 @@ export function managedProvisioningIdentityIsCurrent(args: {
   currentOwnerAccountKey?: string;
   requestDomainSnapshot: string;
   currentDomainSnapshot: string | null;
+  requestDomainRevisionSnapshot?: unknown;
+  currentCanonicalDomainRevision: number;
+  legacyUnstampedAllowed: boolean;
   requestContractVersion: number;
 }): boolean {
+  const domainRevisionMatches =
+    args.requestDomainRevisionSnapshot === undefined
+      ? args.legacyUnstampedAllowed
+      : Number.isSafeInteger(args.requestDomainRevisionSnapshot) &&
+        (args.requestDomainRevisionSnapshot as number) >= 0 &&
+        args.requestDomainRevisionSnapshot ===
+          args.currentCanonicalDomainRevision;
   return args.siteActive &&
     Boolean(args.currentOwnerAccountKey) &&
     args.requestOwnerAccountKey === args.currentOwnerAccountKey &&
     args.requestDomainSnapshot === args.currentDomainSnapshot &&
+    domainRevisionMatches &&
     args.requestContractVersion === ONE_SETUP_CONTRACT_VERSION;
 }
 

@@ -1816,8 +1816,11 @@ export const setOneSetupCapabilityProgressInternal = internalMutation({
       site.accountDeletionRequestedAt ||
       request.ownerAccountKey !== accountDeletionKey(site.userId) ||
       request.domainSnapshot !== domainSnapshot ||
-      (request.domainRevisionSnapshot ?? 0) !==
-        siteCanonicalDomainRevision(site) ||
+      !oneSetupDomainRevisionReceiptMatches({
+        currentCanonicalDomainRevision: siteCanonicalDomainRevision(site),
+        receiptDomainRevision: request.domainRevisionSnapshot,
+        legacyUnstampedAllowed: siteUsesLegacyDomainReceipts(site),
+      }) ||
       request.contractVersion !== ONE_SETUP_CONTRACT_VERSION
     ) {
       throw new Error("Provisioning request is no longer active");

@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync("convex/autopilot.ts", "utf8");
+const operatorProjection = readFileSync(
+  "convex/lib/operatorSnapshot.ts",
+  "utf8",
+);
 const start = source.indexOf(
   "export const recoverFailedPublicUrlVerifiedFollowup",
 );
@@ -65,7 +69,11 @@ test("run completion may overwrite detail without erasing replay idempotency", (
   assert.doesNotMatch(finish, /recoveryOfRunId:/);
   assert.match(recovery, /withIndex\("by_site_recovery_source"/);
   assert.doesNotMatch(recovery, /q\.field\("detail"\)/);
-  assert.match(source, /recoveryOfRunId: run\.recoveryOfRunId/);
+  assert.match(source, /runs\.map\(operatorContinuationRunReceipt\)/);
+  assert.match(
+    operatorProjection,
+    /recoveryOfRunId: run\.recoveryOfRunId/,
+  );
 });
 
 test("post-verification recovery cannot republish or move the cadence", () => {

@@ -174,6 +174,9 @@ test("setup intent is owner/domain/version/cadence fenced and adapter progress u
   assert.match(progress, /request\.ownerAccountKey !== accountDeletionKey/);
   assert.match(progress, /request\.domainSnapshot !== domainSnapshot/);
   assert.match(progress, /request\.domainRevisionSnapshot/);
+  assert.match(progress, /oneSetupDomainRevisionReceiptMatches/);
+  assert.match(progress, /siteUsesLegacyDomainReceipts\(site\)/);
+  assert.doesNotMatch(progress, /domainRevisionSnapshot \?\? 0/);
   assert.match(
     progress,
     /Owner-managed connections cannot be advanced by a provider/,
