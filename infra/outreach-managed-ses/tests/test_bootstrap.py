@@ -51,6 +51,7 @@ class BootstrapTests(unittest.TestCase):
         receipt = bootstrap.inventory(runner, "us-east-1", "pentra-managed-ses-v1")
         self.assertEqual(receipt["accountId"], "123456789012")
         self.assertEqual(receipt["ses"]["identityCount"], 0)
+        self.assertEqual(receipt["ses"]["foreignIdentityCount"], 0)
         self.assertFalse(receipt["organizationMember"])
         self.assertFalse(receipt["stack"]["exists"])
         joined = " ".join(" ".join(call[0]) for call in runner.calls)

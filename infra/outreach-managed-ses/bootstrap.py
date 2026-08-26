@@ -122,6 +122,23 @@ def inventory(runner: Runner, region: str, stack_name: str) -> dict[str, Any]:
     )
     stacks = stack.get("Stacks", [])
     stack_row = stacks[0] if stacks else {}
+    identity_rows = identities.get("EmailIdentities", [])
+    configuration_set_names = configuration_sets.get("ConfigurationSets", [])
+    tenant_rows = tenants.get("Tenants", []) if tenants_result.returncode == 0 else []
+    expected_identities = {"mail.pentra.dev", "reply.pentra.dev"}
+    expected_configuration_sets = {f"{RESOURCE_PREFIX}-events"}
+    foreign_identities = [
+        row for row in identity_rows
+        if row.get("IdentityName") not in expected_identities
+    ]
+    foreign_configuration_sets = [
+        name for name in configuration_set_names
+        if name not in expected_configuration_sets
+    ]
+    foreign_tenants = [
+        row for row in tenant_rows
+        if not str(row.get("TenantName", "")).startswith("pentra-")
+    ]
     return {
         "version": 1,
         "accountId": identity.get("Account"),
@@ -133,11 +150,15 @@ def inventory(runner: Runner, region: str, stack_name: str) -> dict[str, Any]:
             "productionAccessEnabled": account.get("ProductionAccessEnabled"),
             "sendingEnabled": account.get("SendingEnabled"),
             "enforcementStatus": account.get("EnforcementStatus"),
-            "identityCount": len(identities.get("EmailIdentities", [])),
-            "configurationSetCount": len(
-                configuration_sets.get("ConfigurationSets", [])
-            ),
-            "tenantCount": len(tenants.get("Tenants", []))
+            "identityCount": len(identity_rows),
+            "managedIdentityCount": len(identity_rows) - len(foreign_identities),
+            "foreignIdentityCount": len(foreign_identities),
+            "configurationSetCount": len(configuration_set_names),
+            "foreignConfigurationSetCount": len(foreign_configuration_sets),
+            "tenantCount": len(tenant_rows)
+            if tenants_result.returncode == 0
+            else None,
+            "foreignTenantCount": len(foreign_tenants)
             if tenants_result.returncode == 0
             else None,
         },
@@ -205,6 +226,17 @@ def deploy(args: argparse.Namespace, runner: Runner) -> dict[str, Any]:
     state = inventory(runner, args.region, args.stack_name)
     if state["accountId"] != args.expected_account_id:
         raise BootstrapError("Authenticated AWS account does not match --expected-account-id")
+    if any(
+        (state["ses"].get(field) or 0) > 0
+        for field in (
+            "foreignIdentityCount",
+            "foreignConfigurationSetCount",
+            "foreignTenantCount",
+        )
+    ):
+        raise BootstrapError(
+            "Refusing deploy because the SES inventory contains a non-Pentra workload"
+        )
     recipient_hash = validate_hex_digest(
         args.canary_recipient_sha256, "--canary-recipient-sha256"
     )
