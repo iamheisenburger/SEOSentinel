@@ -2580,7 +2580,7 @@ async function handlePlan(
       : 0;
     const seedCycle =
       existingTopics.length + replenishmentSequence * 11 + jobRotation;
-    const rotatingSeeds = topicDiscoverySeedWindow(baseSeeds, seedCycle, 20);
+    const rotatingSeeds = topicDiscoverySeedWindow(baseSeeds, seedCycle, 32);
     // Rotation should expand discovery, not erase what the tenant actually
     // sells. Keep the strongest configured product anchors in every request
     // and rotate only the remaining feature/problem vocabulary.
@@ -2632,8 +2632,14 @@ async function handlePlan(
         // searches yet still yield no low-difficulty product query. Expand a
         // bounded set of exact tenant anchors before allowing the planner to
         // conclude that the inventory is empty.
-        maxLabsSeeds: 4,
-        maxRelatedSeeds: 2,
+        // Discovery breadth decides how much winnable long tail exists at all,
+        // and four Labs seeds sampled a narrow slice of the niche — which is
+        // how a tenant exhausts its inventory at 205 topics. Doubling the Labs
+        // fan-out adds roughly $0.055 per execution against the strict $0.913
+        // worst case, so it stays inside the existing $1.00 per-execution
+        // provider ceiling without touching the reservation contract.
+        maxLabsSeeds: 8,
+        maxRelatedSeeds: 3,
         expandProductAnchors: true,
         // Keep what this tenant can actually win. Without its measured
         // authority the shortlist collapses to the highest-volume head terms,

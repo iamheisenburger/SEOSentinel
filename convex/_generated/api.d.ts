@@ -116,6 +116,7 @@ import type * as lib_siteSecurity from "../lib/siteSecurity.js";
 import type * as lib_sourceQuality from "../lib/sourceQuality.js";
 import type * as lib_topicLifecycle from "../lib/topicLifecycle.js";
 import type * as lib_topicLifecycleDb from "../lib/topicLifecycleDb.js";
+import type * as lib_winnableDiscovery from "../lib/winnableDiscovery.js";
 import type * as managedOutreachMailbox from "../managedOutreachMailbox.js";
 import type * as managedProvisioning from "../managedProvisioning.js";
 import type * as onboardingClaims from "../onboardingClaims.js";
@@ -249,6 +250,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sourceQuality": typeof lib_sourceQuality;
   "lib/topicLifecycle": typeof lib_topicLifecycle;
   "lib/topicLifecycleDb": typeof lib_topicLifecycleDb;
+  "lib/winnableDiscovery": typeof lib_winnableDiscovery;
   managedOutreachMailbox: typeof managedOutreachMailbox;
   managedProvisioning: typeof managedProvisioning;
   onboardingClaims: typeof onboardingClaims;

@@ -207,8 +207,8 @@ test("verified discovery expands product anchors even when broad suggestions are
 
 test("planner source keeps a bounded multi-anchor Labs recovery budget", () => {
   const source = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(source, /maxLabsSeeds:\s*4/);
-  assert.match(source, /maxRelatedSeeds:\s*2/);
+  assert.match(source, /maxLabsSeeds:\s*8/);
+  assert.match(source, /maxRelatedSeeds:\s*3/);
   assert.match(source, /expandProductAnchors:\s*true/);
   assert.match(source, /Verified keyword funnel:/);
   assert.match(source, /Deterministically selected/);
