@@ -35,7 +35,9 @@ import {
   filterNonCannibalizingIntentTopics,
   hasTerminalTopicFitFailure,
   isUnderfilledPlanContinuationPayload,
+  MAX_AUDIT_REFRESH_PER_PASS,
   isSealedReady,
+  needsPublicationAuditRefresh,
   tenantTopicBusinessSignals,
   topicReplenishmentBudget,
 } from "../lib/autopilotBuffer";
@@ -258,6 +260,33 @@ export const scheduleCadence = internalAction({
       ? effectivePublishedAt(state.latestPublished)
       : undefined;
     const publicationDue = !lastPublishedAt || now >= lastPublishedAt + cadenceMs;
+
+    // Reclaim ready inventory stranded by an audit-version increment before
+    // judging the buffer. Re-auditing is deterministic and spends nothing with
+    // any provider, so a customer's finished work is never silently abandoned
+    // because the seal contract moved underneath it. The mutation revalidates
+    // authoritatively; summaries do not carry the delivery-lease fields.
+    const stranded = (state.ready as ArticleSummary[])
+      .filter(needsPublicationAuditRefresh)
+      .slice(0, MAX_AUDIT_REFRESH_PER_PASS);
+    if (stranded.length > 0) {
+      for (const article of stranded) {
+        try {
+          await ctx.runMutation(internal.articles.refreshPublicationAudit, {
+            articleId: article._id,
+          });
+        } catch {
+          // A locked or concurrently delivered article simply stays stranded
+          // for this pass; it must never abort the cadence run.
+        }
+      }
+      const refreshed = await ctx.runQuery(internal.articles.getAutopilotState, {
+        siteId,
+        since: candidateWindowStart,
+      });
+      state.ready = refreshed.ready;
+    }
+
     const buffer = (state.ready as ArticleSummary[])
       .filter(isSealedReady)
       .sort(

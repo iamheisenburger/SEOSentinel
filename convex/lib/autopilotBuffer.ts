@@ -299,6 +299,46 @@ export function isSealedReady(article: BufferArticle): boolean {
   );
 }
 
+/** Bounded work per cadence pass: reclaiming inventory must never turn one
+ * natural run into an unbounded rewrite of a large tenant's back catalogue. */
+export const MAX_AUDIT_REFRESH_PER_PASS = 5;
+
+export type AuditRefreshArticle = BufferArticle & {
+  publicationAttemptedAt?: number;
+  publicationLeaseOwner?: string;
+  publicationLeaseHash?: string;
+  publicationAmbiguityDispositionAt?: number;
+};
+
+/**
+ * Ready inventory stranded by an audit-version increment.
+ *
+ * When PUBLICATION_AUDIT_VERSION moves, an article sealed under the previous
+ * version keeps status "ready" and gate "passed" but stops satisfying
+ * isSealedReady. Nothing reclaimed it: the quality-revision and mechanical
+ * repair paths only inspect articles in "review", so it counted toward no
+ * buffer, blocked nothing, and was never re-audited — a customer's finished
+ * work silently stopped existing.
+ *
+ * Re-evaluating strict publication quality is deterministic and costs no
+ * provider call, so this is safe to run on the natural cadence path. The
+ * article must not be mid-delivery or hold a reviewed external ambiguity;
+ * those carry their own contract and must never be re-sealed underneath it.
+ */
+export function needsPublicationAuditRefresh(
+  article: AuditRefreshArticle,
+): boolean {
+  return (
+    article.status === "ready" &&
+    article.publicationGateStatus === "passed" &&
+    article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION &&
+    !article.publicationAttemptedAt &&
+    !article.publicationLeaseOwner &&
+    !article.publicationLeaseHash &&
+    !article.publicationAmbiguityDispositionAt
+  );
+}
+
 /**
  * A coarse fleet cron is allowed to discover work, but it must not define a
  * tenant's publication time. Once an autonomous tenant has a sealed artifact,

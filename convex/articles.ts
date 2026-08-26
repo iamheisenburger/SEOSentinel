@@ -32,6 +32,7 @@ import {
   effectivePublishedAt,
   evaluateTopicBusinessFit,
   migrationBlocksAutopilot,
+  needsPublicationAuditRefresh,
   tenantTopicBusinessSignals,
   terminalTopicFitSettlement,
 } from "./lib/autopilotBuffer";
@@ -2292,6 +2293,74 @@ export const applyQualityReview = internalMutation({
       updatedAt: now(),
     });
     await syncSummary(ctx, args.articleId);
+  },
+});
+
+/**
+ * Reclaim ready inventory stranded by an audit-version increment.
+ *
+ * Re-evaluates strict publication quality against the tenant's current
+ * delivery configuration. This is deterministic and spends nothing with any
+ * provider, so it is safe on the natural cadence path. An article that still
+ * passes is re-sealed at the current version; one that no longer passes is
+ * demoted to review with its exact issues rather than being left as a
+ * plausible-looking artifact that can never publish.
+ */
+export const refreshPublicationAudit = internalMutation({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    // Re-checked here on the authoritative document: the scheduler selects
+    // from summaries, which do not carry the delivery-lease fields.
+    assertNotPublishing(article);
+    if (!needsPublicationAuditRefresh(article)) {
+      return { refreshed: false as const, reason: "not_stranded" as const };
+    }
+    const site = await ctx.db.get(article.siteId);
+    if (!site) throw new Error("Site not found");
+    if (!articleMatchesCurrentDomain(site, article)) {
+      return { refreshed: false as const, reason: "domain_changed" as const };
+    }
+
+    const deliveryConfig = publicationDeliveryConfig(site);
+    const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
+    const candidate = { ...article, publicationConfigHash: deliveryConfigHash };
+    const quality = evaluatePublicationQuality(candidate, "strict");
+    const checkedAt = now();
+
+    if (!quality.passed) {
+      await ctx.db.patch(articleId, {
+        status: "review",
+        publicationGateStatus: "blocked",
+        publicationGateIssues: quality.issues,
+        publicationGateWarnings: quality.warnings,
+        publicationCheckedAt: checkedAt,
+        publicationAuditVersion: undefined,
+        publicationConfigHash: undefined,
+        publicationConfigSnapshot: undefined,
+        auditedContentHash: undefined,
+        auditedAt: undefined,
+        updatedAt: checkedAt,
+      });
+      await syncSummary(ctx, articleId);
+      return { refreshed: false as const, reason: "quality_failed" as const };
+    }
+
+    await ctx.db.patch(articleId, {
+      publicationGateStatus: "passed",
+      publicationGateIssues: quality.issues,
+      publicationGateWarnings: quality.warnings,
+      publicationCheckedAt: checkedAt,
+      publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+      publicationConfigHash: deliveryConfigHash,
+      publicationConfigSnapshot: deliveryConfig,
+      auditedContentHash: publicationArtifactHash(candidate),
+      auditedAt: checkedAt,
+      updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, articleId);
+    return { refreshed: true as const, reason: "resealed" as const };
   },
 });
 
