@@ -70,6 +70,7 @@ import {
 } from "./lib/siteDomainBinding";
 
 const SITE_STAGGER_MS = 5_000;
+const LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS = 24 * 60 * 60 * 1000;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
 const PUBLIC_URL_VERIFIED_TRIGGER = "public_url_verified";
@@ -310,6 +311,26 @@ export const dispatchActiveSites = internalMutation({
         blockers: [...baseReadiness.blockers, ...setupBlockers],
       };
       if (!readiness.ready) {
+        const canNaturallyVerifyLegacyPublisher =
+          readiness.blockers.length === 1 &&
+          readiness.blockers[0] === "publication_adapter_unverified" &&
+          site.approvalRequired !== true &&
+          ["wordpress", "webhook"].includes(site.publishMethod ?? "") &&
+          now - (site.publicationAdapterVerificationAttemptedAt ?? 0) >=
+            LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS;
+        if (canNaturallyVerifyLegacyPublisher) {
+          await ctx.db.patch(site._id, {
+            publicationAdapterVerificationAttemptedAt: now,
+            publicationAdapterVerificationFailedAt: undefined,
+            publicationAdapterVerificationFailureCode: undefined,
+            updatedAt: now,
+          });
+          await ctx.scheduler.runAfter(
+            0,
+            internal.publisher.verifyLegacyPublicationDestinationInternal,
+            { siteId: site._id, attemptedAt: now },
+          );
+        }
         const blockerDetail = describeAutopilotBlockers(readiness.blockers);
         await setAlert(ctx, {
           siteId: site._id,

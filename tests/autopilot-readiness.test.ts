@@ -150,4 +150,19 @@ test("configured adapters cannot promote until the exact credentials pass prefli
   assert.match(sites, /live readiness regressed/);
   assert.match(scheduler, /internal\.sites\.enforceLiveReadiness/);
   assert.match(sites, /Live rollout prerequisites are incomplete/);
+
+  const autopilot = readFileSync("convex/autopilot.ts", "utf8");
+  const publisher = readFileSync("convex/publisher.ts", "utf8");
+  assert.match(
+    autopilot,
+    /LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS[\s\S]*publication_adapter_unverified[\s\S]*verifyLegacyPublicationDestinationInternal/,
+  );
+  assert.match(
+    publisher,
+    /publicationAdapterVerificationAttemptedAt !== args\.attemptedAt[\s\S]*publicationAdapterConfigHash\(current\) !== configHash/,
+  );
+  assert.match(
+    publisher,
+    /verifyPublicationDestinationHandler[\s\S]*settleLegacyPublicationAdapterPreflightInternal/,
+  );
 });

@@ -2824,6 +2824,37 @@ export const setPublicationAdapterVerificationInternal = internalMutation({
   },
 });
 
+export const settleLegacyPublicationAdapterPreflightInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    attemptedAt: v.number(),
+    expectedConfigHash: v.string(),
+    failureCode: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (
+      !site ||
+      site.publicationAdapterVerificationAttemptedAt !== args.attemptedAt ||
+      publicationAdapterConfigHash(site) !== args.expectedConfigHash
+    ) return { settled: false as const };
+    const timestamp = now();
+    await ctx.db.patch(site._id, args.failureCode
+      ? {
+          publicationAdapterVerificationFailedAt: timestamp,
+          publicationAdapterVerificationFailureCode:
+            args.failureCode.slice(0, 80),
+          updatedAt: timestamp,
+        }
+      : {
+          publicationAdapterVerificationFailedAt: undefined,
+          publicationAdapterVerificationFailureCode: undefined,
+          updatedAt: timestamp,
+        });
+    return { settled: true as const };
+  },
+});
+
 /**
  * Persist only the exact proof assembled around a successful provider
  * preflight. Recomputing every tenant/configuration field in this mutation is

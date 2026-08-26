@@ -45,6 +45,9 @@ export default defineSchema({
     publicationAdapterVerifiedAt: v.optional(v.number()),
     publicationAdapterVersion: v.optional(v.string()),
     publicationAdapterConfigHash: v.optional(v.string()),
+    publicationAdapterVerificationAttemptedAt: v.optional(v.number()),
+    publicationAdapterVerificationFailedAt: v.optional(v.number()),
+    publicationAdapterVerificationFailureCode: v.optional(v.string()),
     // Monotonic local epoch for the configured publication connection. Every
     // destination or credential edit advances it and invalidates the exact
     // proof below, including same-domain disconnect/reconnect races.

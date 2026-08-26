@@ -1030,6 +1030,93 @@ export const verifyPublicationDestinationInternal = internalAction({
   handler: async (ctx, { siteId }) => verifyPublicationDestinationHandler(ctx, siteId),
 });
 
+function legacyPublicationPreflightFailureCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("connection check failed")) return "destination_http_failed";
+  if (message.includes("acknowledge the signed preflight nonce")) {
+    return "webhook_acknowledgement_invalid";
+  }
+  if (message.includes("cannot publish posts")) return "publisher_permission_missing";
+  if (message.includes("credentials are incomplete") ||
+      message.includes("URL and signing secret are required")) {
+    return "publisher_connection_incomplete";
+  }
+  if (message.includes("lease lost") || message.includes("snapshot mismatch")) {
+    return "publisher_preflight_stale";
+  }
+  return "publisher_preflight_failed";
+}
+
+/**
+ * Legacy configured tenants predate One Setup's managed provisioning receipt.
+ * The natural fleet may run one signed, provider-read-only preflight per day;
+ * exact attempt and configuration fences prevent retries from authorizing a
+ * changed destination or turning this bridge into a publication path.
+ */
+export const verifyLegacyPublicationDestinationInternal = internalAction({
+  args: {
+    siteId: v.id("sites"),
+    attemptedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.runQuery(internal.sites.getFull, {
+      siteId: args.siteId,
+    }) as SiteRecord & {
+      publicationAdapterVerificationAttemptedAt?: number;
+    } | null;
+    const configHash = site ? publicationAdapterConfigHash(site) : null;
+    if (
+      !site ||
+      !configHash ||
+      site.autopilotRolloutMode !== "observe" ||
+      site.approvalRequired === true ||
+      !["wordpress", "webhook"].includes(site.publishMethod ?? "") ||
+      site.publicationAdapterVerificationAttemptedAt !== args.attemptedAt
+    ) return { verified: false as const, reason: "publisher_preflight_stale" };
+
+    const assertAttemptCurrent: PublisherPreflightFence = async () => {
+      const current = await ctx.runQuery(internal.sites.getFull, {
+        siteId: args.siteId,
+      }) as typeof site;
+      if (
+        !current ||
+        current.autopilotRolloutMode !== "observe" ||
+        current.approvalRequired === true ||
+        current.publicationAdapterVerificationAttemptedAt !== args.attemptedAt ||
+        publicationAdapterConfigHash(current) !== configHash
+      ) throw new Error("Legacy publisher preflight lease lost");
+    };
+
+    try {
+      await verifyPublicationDestinationHandler(ctx, args.siteId, {
+        siteSnapshot: site,
+        beforeExternalRead: assertAttemptCurrent,
+      });
+      await ctx.runMutation(
+        internal.sites.settleLegacyPublicationAdapterPreflightInternal,
+        {
+          siteId: args.siteId,
+          attemptedAt: args.attemptedAt,
+          expectedConfigHash: configHash,
+        },
+      );
+      return { verified: true as const };
+    } catch (error) {
+      const failureCode = legacyPublicationPreflightFailureCode(error);
+      await ctx.runMutation(
+        internal.sites.settleLegacyPublicationAdapterPreflightInternal,
+        {
+          siteId: args.siteId,
+          attemptedAt: args.attemptedAt,
+          expectedConfigHash: configHash,
+          failureCode,
+        },
+      );
+      return { verified: false as const, reason: failureCode };
+    }
+  },
+});
+
 export const verifyPublicationDestination = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
