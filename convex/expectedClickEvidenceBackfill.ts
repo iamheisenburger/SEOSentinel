@@ -1110,6 +1110,41 @@ export const getFleetReadinessInternal = internalQuery({
     expectedClickEvidenceFleetReadiness(ctx, siteId),
 });
 
+/**
+ * Natural fleet inspection with a durable refusal receipt.
+ *
+ * A non-ready result prevents the provider preflight and reservation mutation
+ * from running. Persist that provider-free decision in the same transaction
+ * that re-evaluates it, rather than trying to record a potentially stale
+ * action-level query result.
+ */
+export const inspectAndRecordFleetReadinessInternal = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const evaluatedAt = Date.now();
+    const readiness = await expectedClickEvidenceFleetReadiness(
+      ctx,
+      siteId,
+      evaluatedAt,
+    );
+    if (readiness && !readiness.ready) {
+      await recordExpectedClickReservationOutcome(ctx, {
+        siteId,
+        kind: "evidence",
+        policyVersion: EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
+        evaluatedAt,
+        outcome: {
+          queued: false,
+          reason: readiness.reason,
+          candidateCounts: readiness.candidateCounts,
+          selectedCandidateCount: readiness.candidateCount,
+        },
+      });
+    }
+    return readiness;
+  },
+});
+
 export const getFleetRecoveryInternal = internalQuery({
   args: {
     siteId: v.id("sites"),

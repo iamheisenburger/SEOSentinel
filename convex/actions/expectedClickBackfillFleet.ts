@@ -252,8 +252,9 @@ export const runSite = internalAction({
           reason: plan?.failClosedReason ?? "site_unavailable",
         };
       }
-      const readiness = await ctx.runQuery(
-        internal.expectedClickDemandBackfill.getFleetReadinessInternal,
+      const readiness = await ctx.runMutation(
+        internal.expectedClickDemandBackfill
+          .inspectAndRecordFleetReadinessInternal,
         { siteId },
       );
       if (!readiness?.ready) {
@@ -316,8 +317,9 @@ export const runEvidenceSite = internalAction({
           reason: plan?.failClosedReason ?? "site_unavailable",
         };
       }
-      const readiness = await ctx.runQuery(
-        internal.expectedClickEvidenceBackfill.getFleetReadinessInternal,
+      const readiness = await ctx.runMutation(
+        internal.expectedClickEvidenceBackfill
+          .inspectAndRecordFleetReadinessInternal,
         { siteId },
       );
       if (!readiness?.ready) {

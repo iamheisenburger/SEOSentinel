@@ -933,6 +933,43 @@ export const getFleetReadinessInternal = internalQuery({
     expectedClickDemandFleetReadiness(ctx, siteId),
 });
 
+/**
+ * Natural fleet inspection with a durable refusal receipt.
+ *
+ * The cheap fleet gate intentionally runs before the provider wallet
+ * preflight and authoritative reservation. When it refuses work, the
+ * reservation mutation is never reached, so recording only inside
+ * `reserveAndQueue` makes a healthy skip indistinguishable from scheduler
+ * silence. Re-evaluate and record in one transaction so a concurrent queued
+ * receipt can never be overwritten by a stale query result.
+ */
+export const inspectAndRecordFleetReadinessInternal = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const evaluatedAt = Date.now();
+    const readiness = await expectedClickDemandFleetReadiness(
+      ctx,
+      siteId,
+      evaluatedAt,
+    );
+    if (readiness && !readiness.ready) {
+      await recordExpectedClickReservationOutcome(ctx, {
+        siteId,
+        kind: "demand",
+        policyVersion: EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
+        evaluatedAt,
+        outcome: {
+          queued: false,
+          reason: readiness.reason,
+          candidateCounts: readiness.candidateCounts,
+          selectedCandidateCount: readiness.candidateCount,
+        },
+      });
+    }
+    return readiness;
+  },
+});
+
 export const getFleetRecoveryInternal = internalQuery({
   args: {
     siteId: v.id("sites"),

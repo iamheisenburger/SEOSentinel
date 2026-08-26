@@ -31,10 +31,21 @@ export const EXPECTED_CLICK_SKIP_REASONS = [
   // Tenant/site state
   "site_unavailable",
   "rollout_ineligible",
+  "cadence_paused",
+  "verified_keyword_mode_required",
+  "plan_entitlement_missing",
+  "site_limit_reached",
+  "article_usage_read_limit_exhausted",
+  "article_quota_no_headroom",
   // Phase sequencing
   "evidence_phase_already_started",
   "prior_fleet_job_incomplete",
   "unresolved_job_read_limit_exhausted",
+  "provider_attempt_ambiguous",
+  "demand_fleet_job_incomplete",
+  "evidence_fleet_job_incomplete",
+  "demand_phase_incomplete",
+  "demand_phase_unavailable",
   "demand_prerequisite_missing",
   // Existing work for the reservation day
   "daily_batch_exists",
@@ -46,6 +57,8 @@ export const EXPECTED_CLICK_SKIP_REASONS = [
   // Candidate selection
   "no_eligible_legacy_topics",
   "covered_evidence_precedes_planned",
+  "demand_candidates_remaining",
+  "no_current_demand_candidates",
   // Operator recovery guards
   "planned_recovery_origin_invalid",
   "planned_recovery_precondition_changed",
