@@ -8,6 +8,8 @@ import {
   serpIsWinnableNow,
   winnabilityScore,
   winnableAuthorityBand,
+  orderDiscoveryByWinnability,
+  preSerpWinnability,
 } from "../convex/lib/winnableDiscovery.ts";
 
 /**
@@ -148,4 +150,53 @@ test("a goal already covered by winnable opportunity is reported attainable", ()
   });
   assert.equal(forecast.goalAttainableFromCurrentEvidence, true);
   assert.equal(forecast.goalGap, 0);
+});
+
+test("discovery ordering keeps the winnable long tail instead of head terms", () => {
+  // A realistic provider response: a few huge head terms and a long tail.
+  const raw = [
+    { keyword: "crm software", searchVolume: 90_000, difficulty: 92, difficultyMeasured: true },
+    { keyword: "sales team", searchVolume: 1000, difficulty: 78, difficultyMeasured: true },
+    { keyword: "ai sales agent", searchVolume: 1300, difficulty: 64, difficultyMeasured: true },
+    { keyword: "chatbot for plumber website", searchVolume: 90, difficulty: 6, difficultyMeasured: true },
+    { keyword: "qualify leads without a form", searchVolume: 140, difficulty: 11, difficultyMeasured: true },
+    { keyword: "book demos from live chat", searchVolume: 70, difficulty: 4, difficultyMeasured: true },
+  ];
+
+  // The old rule: rank by volume and truncate to what can be measured.
+  const byVolume = raw.slice().sort((a, b) => b.searchVolume - a.searchVolume)
+    .slice(0, 3).map((c) => c.keyword);
+  assert.deepEqual(byVolume, ["crm software", "ai sales agent", "sales team"]);
+
+  // The new rule at authority 4: keep only what this domain can enter.
+  const winnable = orderDiscoveryByWinnability(4, raw).slice(0, 3)
+    .map((c) => c.keyword);
+  assert.deepEqual(winnable, [
+    "qualify leads without a form",
+    "chatbot for plumber website",
+    "book demos from live chat",
+  ]);
+
+  // A strong tenant legitimately gets the head terms back.
+  assert.equal(orderDiscoveryByWinnability(75, raw)[0].keyword, "crm software");
+});
+
+test("unmeasured difficulty never outranks a measured winnable keyword", () => {
+  const guessed = preSerpWinnability({
+    tenantAuthority: 4,
+    keywordDifficulty: undefined,
+    monthlySearches: 5000,
+  });
+  const measured = preSerpWinnability({
+    tenantAuthority: 4,
+    keywordDifficulty: 8,
+    keywordDifficultyMeasured: true,
+    monthlySearches: 200,
+  });
+  assert.ok(measured > 0);
+  assert.ok(
+    guessed < measured * 40,
+    "an unverified head term must not dominate the shortlist on volume alone",
+  );
+  assert.equal(preSerpWinnability({ tenantAuthority: 4, monthlySearches: 0 }), 0);
 });

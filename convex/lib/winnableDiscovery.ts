@@ -110,6 +110,105 @@ export function winnabilityScore(args: {
   return Math.round(volume * probability * 100) / 100;
 }
 
+/**
+ * How far past its own authority a tenant may shortlist on keyword difficulty
+ * alone.
+ *
+ * Deliberately looser than `winnableAuthorityBand`, which decides publication
+ * from measured page-one authority. Difficulty is a noisier proxy, and this
+ * stage only chooses which candidates are worth paying to measure — so it
+ * admits two sigmoid scales rather than one, and the strict band still applies
+ * afterwards.
+ */
+export function preSerpReachCeiling(tenantAuthority: number): number {
+  const authority = Number.isFinite(tenantAuthority)
+    ? Math.max(0, tenantAuthority)
+    : 0;
+  return Math.max(
+    OPEN_SERP_AUTHORITY + AUTHORITY_GAP_SCALE,
+    authority + 2 * AUTHORITY_GAP_SCALE,
+  );
+}
+
+/**
+ * Pre-SERP winnability, used to order candidates before any SERP is measured.
+ *
+ * Measuring page-one authority costs a provider call per keyword, so discovery
+ * cannot afford it for every candidate. Keyword difficulty is the cheap proxy
+ * that already arrives with the candidate, and it tracks the authority a page
+ * one demands closely enough to order a shortlist.
+ *
+ * This exists because discovery previously ordered candidates by raw search
+ * volume and truncated, which is precisely the rule that keeps the keywords a
+ * weak tenant cannot win and discards the long tail where it could.
+ */
+export function preSerpWinnability(args: {
+  tenantAuthority: number;
+  keywordDifficulty?: number | null;
+  keywordDifficultyMeasured?: boolean;
+  monthlySearches?: number;
+}): number {
+  const volume = Math.max(0, args.monthlySearches ?? 0);
+  if (volume === 0) return 0;
+  const difficulty = typeof args.keywordDifficulty === "number" &&
+      Number.isFinite(args.keywordDifficulty)
+    ? Math.max(0, Math.min(100, args.keywordDifficulty))
+    : undefined;
+  // Difficulty is roughly the authority a page one demands, so the same
+  // sigmoid the portfolio uses keeps discovery and scoring consistent.
+  const authority = Number.isFinite(args.tenantAuthority)
+    ? Math.max(0, args.tenantAuthority)
+    : 0;
+  // Unmeasured difficulty is treated as the open-SERP boundary rather than as
+  // easy: it must never let an unverified head term outrank a measured
+  // long-tail keyword.
+  const assumed = difficulty ?? OPEN_SERP_AUTHORITY;
+  // Expected value alone is not a strategy for a weak domain: 90,000 searches
+  // at a 0.07% chance outscores 140 searches at 36%, which is how the
+  // highest-volume unreachable head term wins a shortlist it can never convert.
+  // Anything past the reach ceiling scores zero regardless of volume.
+  if (assumed > preSerpReachCeiling(authority)) return 0;
+  const probability = 1 / (1 + Math.exp(-(authority - assumed) / AUTHORITY_GAP_SCALE));
+  // A measured value is worth more than an assumption of the same size.
+  const confidence = args.keywordDifficultyMeasured && difficulty !== undefined
+    ? 1
+    : 0.6;
+  return Math.round(volume * probability * confidence * 100) / 100;
+}
+
+/**
+ * Order raw discovery output so the tenant keeps what it can win.
+ *
+ * Truncation is unavoidable — providers return far more candidates than can be
+ * measured — so the ordering rule decides what a tenant ever gets to publish.
+ */
+export function orderDiscoveryByWinnability<
+  T extends {
+    keyword: string;
+    searchVolume?: number;
+    difficulty?: number | null;
+    difficultyMeasured?: boolean;
+  },
+>(tenantAuthority: number, candidates: T[]): T[] {
+  return candidates
+    .map((candidate) => ({
+      candidate,
+      score: preSerpWinnability({
+        tenantAuthority,
+        keywordDifficulty: candidate.difficulty,
+        keywordDifficultyMeasured: candidate.difficultyMeasured,
+        monthlySearches: candidate.searchVolume,
+      }),
+    }))
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        (right.candidate.searchVolume ?? 0) - (left.candidate.searchVolume ?? 0) ||
+        left.candidate.keyword.localeCompare(right.candidate.keyword),
+    )
+    .map((entry) => entry.candidate);
+}
+
 export type DiscoveryCandidate = {
   keyword: string;
   monthlySearches?: number;

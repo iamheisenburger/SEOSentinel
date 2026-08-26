@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import OpenAI from "openai";
+import { orderDiscoveryByWinnability } from "../lib/winnableDiscovery.ts";
 import { dataForSeoLanguageCode } from "../lib/dataForSeoLocale.ts";
 import { topicDiscoverySeedBatches } from "../lib/autopilotBuffer.ts";
 import { computeAuthorityKeywordDifficultyCeiling } from
@@ -96,6 +97,12 @@ export type KeywordDiscoveryRequest = (
 ) => Promise<any>;
 
 export interface KeywordDiscoveryOptions {
+  /**
+   * Measured domain authority of the tenant. When present, discovery keeps the
+   * candidates this tenant can realistically win instead of the highest-volume
+   * head terms, which are owned by incumbents a weak domain cannot displace.
+   */
+  tenantAuthority?: number;
   targetDomain?: string;
   minimumResults?: number;
   maxGoogleAdsBatches?: number;
@@ -1083,7 +1090,15 @@ export async function discoverKeywords(
     throw new Error(sourceErrors.join(" | "));
   }
 
-  const topResults = [...resultsByKeyword.values()]
+  // Truncation is unavoidable, so this ordering decides what the tenant ever
+  // gets to publish. Ranking by raw volume keeps exactly the head terms an
+  // incumbent owns and discards the long tail a weak domain can win, which is
+  // how a rank-4 tenant ended up with 205 topics and no reachable SERP.
+  const discovered = [...resultsByKeyword.values()];
+  const byWinnability = typeof options.tenantAuthority === "number"
+    ? orderDiscoveryByWinnability(options.tenantAuthority, discovered)
+    : discovered.slice().sort((a, b) => b.searchVolume - a.searchVolume);
+  const topResults = byWinnability
     .sort((a, b) => {
       if (options.expandProductAnchors === true) {
         const productDelta =
@@ -1091,7 +1106,7 @@ export async function discoverKeywords(
           Number(productExpandedKeywords.has(a.keyword.trim().toLowerCase()));
         if (productDelta !== 0) return productDelta;
       }
-      return b.searchVolume - a.searchVolume;
+      return 0;
     })
     .slice(0, limit);
   console.log(
