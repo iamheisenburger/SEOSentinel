@@ -169,6 +169,10 @@ export const reclaimStrandedPublicationInventory = internalAction({
     await ctx.runMutation(internal.autopilot.reconcileSealedBufferCount, {
       siteId,
     });
+    await ctx.runMutation(
+      internal.autopilot.promoteObserveSiteAfterReadinessMaintenance,
+      { siteId },
+    );
     return { reclaimed };
   },
 });

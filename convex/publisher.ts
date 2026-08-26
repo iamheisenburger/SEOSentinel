@@ -1133,6 +1133,10 @@ export const verifyLegacyPublicationDestinationInternal = internalAction({
           expectedConfigHash: configHash,
         },
       );
+      await ctx.runMutation(
+        internal.autopilot.promoteObserveSiteAfterReadinessMaintenance,
+        { siteId: args.siteId },
+      );
       return { verified: true as const };
     } catch (error) {
       const failureCode = legacyPublicationPreflightFailureCode(error);

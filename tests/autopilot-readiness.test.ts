@@ -166,6 +166,10 @@ test("configured adapters cannot promote until the exact credentials pass prefli
     /export const reconcileSealedBufferCount = internalMutation[\s\S]*approvedBufferCount/,
   );
   assert.match(
+    autopilot,
+    /export const promoteObserveSiteAfterReadinessMaintenance = internalMutation[\s\S]*warmAutopilotReadiness[\s\S]*oneSetupPromotionBlockers[\s\S]*publicationCommitBlocksRolloutTransition[\s\S]*autopilotRolloutMode: "warm"/,
+  );
+  assert.match(
     publisher,
     /publicationAdapterVerificationAttemptedAt !== args\.attemptedAt[\s\S]*publicationAdapterConfigHash\(current\) !== configHash/,
   );
@@ -174,4 +178,8 @@ test("configured adapters cannot promote until the exact credentials pass prefli
     /verifyPublicationDestinationHandler[\s\S]*settleLegacyPublicationAdapterPreflightInternal/,
   );
   assert.match(publisher, /destination_content_type_invalid/);
+  assert.match(
+    publisher,
+    /settleLegacyPublicationAdapterPreflightInternal[\s\S]*promoteObserveSiteAfterReadinessMaintenance/,
+  );
 });

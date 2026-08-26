@@ -437,6 +437,76 @@ export const dispatchActiveSites = internalMutation({
   },
 });
 
+/**
+ * Receipt-driven observe promotion for maintenance spawned by a natural fleet
+ * pass. Both the legacy publisher preflight and provider-free inventory repair
+ * may complete after the fleet mutation has already evaluated readiness. This
+ * exact re-check removes the three-hour polling gap without bypassing a single
+ * warm-readiness or publication-ambiguity fence.
+ */
+export const promoteObserveSiteAfterReadinessMaintenance = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.autopilotEnabled ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      (site.autopilotRolloutMode ?? "observe") !== "observe"
+    ) {
+      return { promoted: false as const, blockers: ["site_not_observing"] };
+    }
+    const hasCrawledPage = await hasCurrentDomainPage(ctx, site);
+    const baseReadiness = warmAutopilotReadiness(site, hasCrawledPage);
+    const setupBlockers = await oneSetupPromotionBlockers(ctx, site);
+    const blockers = [...baseReadiness.blockers, ...setupBlockers];
+    if (blockers.length > 0) {
+      return { promoted: false as const, blockers };
+    }
+    if (await publicationCommitBlocksRolloutTransition(ctx, site)) {
+      return {
+        promoted: false as const,
+        blockers: ["publication_commit_unresolved"],
+      };
+    }
+
+    const promotedAt = Date.now();
+    const rolloutEpoch = (site.autopilotRolloutEpoch ?? 0) + 1;
+    await ctx.db.patch(siteId, {
+      autopilotRolloutMode: "warm",
+      autopilotRolloutEpoch: rolloutEpoch,
+      autopilotRolloutStartedAt: promotedAt,
+      expectedClickSchedulingEnabled: true,
+      verifiedKeywordDataRequired: true,
+      updatedAt: promotedAt,
+    });
+    await resolveAlert(ctx, siteId, "autopilot_readiness_blocked");
+    const runId = await ctx.db.insert("autopilot_runs", {
+      siteId,
+      trigger: "automatic_warm_promotion",
+      scheduledAt: promotedAt,
+      heartbeatAt: promotedAt,
+      status: "scheduled",
+      detail:
+        "Natural readiness maintenance completed; warm buffer scheduling resumed.",
+    });
+    await upsertHealth(ctx, siteId, {
+      lastRunId: runId,
+      heartbeatAt: promotedAt,
+      status: "recovering",
+      detail:
+        "Natural readiness maintenance promoted the tenant to warm automation.",
+    });
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.autopilotTick, {
+      siteId,
+      runId,
+      trigger: "automatic_warm_promotion",
+    });
+    return { promoted: true as const, blockers: [], rolloutEpoch, runId };
+  },
+});
+
 export const dispatchSiteFollowup = internalMutation({
   args: {
     siteId: v.id("sites"),
