@@ -48,6 +48,7 @@ export default defineSchema({
     publicationAdapterVerificationAttemptedAt: v.optional(v.number()),
     publicationAdapterVerificationFailedAt: v.optional(v.number()),
     publicationAdapterVerificationFailureCode: v.optional(v.string()),
+    publicationAdapterVerificationPolicyVersion: v.optional(v.number()),
     // Monotonic local epoch for the configured publication connection. Every
     // destination or credential edit advances it and invalidates the exact
     // proof below, including same-domain disconnect/reconnect races.
@@ -858,6 +859,7 @@ export default defineSchema({
     publicationAmbiguityDispositionBy: v.optional(v.string()),
     publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
+    deterministicInternalLinkRepairVersion: v.optional(v.number()),
 
     // ── Content SEO Score (computed after generation) ──
     contentScore: v.optional(v.number()), // 0-100 overall SEO content score
@@ -974,6 +976,7 @@ export default defineSchema({
     publicationAmbiguityDispositionAt: v.optional(v.number()),
     publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
+    deterministicInternalLinkRepairVersion: v.optional(v.number()),
     entityCoverage: v.optional(v.number()),
     topicCompleteness: v.optional(v.number()),
     serpDifficulty: v.optional(v.string()),

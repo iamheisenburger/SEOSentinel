@@ -29,9 +29,11 @@ import {
   reviewedAmbiguityDispositionAllowed,
 } from "./lib/publicationLease";
 import {
+  DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
   effectivePublishedAt,
   evaluateTopicBusinessFit,
   migrationBlocksAutopilot,
+  needsDeterministicInternalLinkRepair,
   needsPublicationAuditRefresh,
   tenantTopicBusinessSignals,
   terminalTopicFitSettlement,
@@ -63,6 +65,7 @@ import {
 } from "./lib/growthSupportDelivery";
 import {
   articleMatchesCurrentDomain,
+  pageMatchesCurrentDomain,
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
   siteUsesLegacyDomainReceipts,
@@ -70,6 +73,12 @@ import {
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
+import {
+  appendRelatedInternalLinks,
+  publishedArticleInternalHref,
+  selectRelatedInternalLinks,
+  validateInternalLinkSuggestions,
+} from "./lib/internalLinks";
 
 const now = () => Date.now();
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
@@ -136,6 +145,8 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     publicationAmbiguityDispositionDetail:
       article.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: article.qualityRevisionCount,
+    deterministicInternalLinkRepairVersion:
+      article.deterministicInternalLinkRepairVersion,
     entityCoverage: article.entityCoverage,
     topicCompleteness: article.topicCompleteness,
     serpDifficulty: article.serpDifficulty,
@@ -2296,6 +2307,77 @@ export const applyQualityReview = internalMutation({
   },
 });
 
+async function deterministicInternalLinkRepair(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+  article: Doc<"articles">,
+): Promise<{
+  markdown: string;
+  internalLinks: { anchor: string; href: string }[];
+  inserted: number;
+}> {
+  const [sitePages, siteArticles] = await Promise.all([
+    ctx.db
+      .query("pages")
+      .withIndex("by_site", (q) => q.eq("siteId", site._id))
+      .take(100),
+    takeCurrentDomainArticles(ctx, site, 100),
+  ]);
+  const destinations = [
+    ...sitePages
+      .filter((page) => pageMatchesCurrentDomain(site, page))
+      .map((page) => ({
+        href: page.slug,
+        title: page.title ?? "",
+        summary: page.summary ?? "",
+        keywords: page.keywords ?? [],
+      })),
+    ...siteArticles
+      .filter((candidate) =>
+        candidate._id !== article._id &&
+        candidate.status === "published" &&
+        Boolean(candidate.slug)
+      )
+      .map((candidate) => ({
+        href: publishedArticleInternalHref(
+          site.urlStructure,
+          candidate.slug,
+        ),
+        title: candidate.title,
+        summary: candidate.metaDescription ?? "",
+        keywords: candidate.metaKeywords ?? [],
+      })),
+  ].filter(
+    (destination, index, all) =>
+      all.findIndex((candidate) => candidate.href === destination.href) ===
+        index,
+  );
+  const selfHref = publishedArticleInternalHref(
+    site.urlStructure,
+    article.slug,
+  );
+  const selected = selectRelatedInternalLinks({
+    currentTitle: article.title,
+    currentKeywords: article.metaKeywords,
+    destinations,
+    limit: 1,
+  });
+  const links = validateInternalLinkSuggestions(
+    selected,
+    destinations.map((destination) => destination.href),
+    selfHref,
+  );
+  const appended = appendRelatedInternalLinks(article.markdown, links);
+  return {
+    markdown: appended.markdown,
+    internalLinks: [
+      ...(article.internalLinks ?? []),
+      ...appended.inserted,
+    ],
+    inserted: appended.inserted.length,
+  };
+}
+
 /**
  * Reclaim ready inventory stranded by an audit-version increment.
  *
@@ -2314,7 +2396,9 @@ export const refreshPublicationAudit = internalMutation({
     // Re-checked here on the authoritative document: the scheduler selects
     // from summaries, which do not carry the delivery-lease fields.
     assertNotPublishing(article);
-    if (!needsPublicationAuditRefresh(article)) {
+    const stranded = needsPublicationAuditRefresh(article);
+    const orphanRepair = needsDeterministicInternalLinkRepair(article);
+    if (!stranded && !orphanRepair) {
       return { refreshed: false as const, reason: "not_stranded" as const };
     }
     const site = await ctx.db.get(article.siteId);
@@ -2325,8 +2409,30 @@ export const refreshPublicationAudit = internalMutation({
 
     const deliveryConfig = publicationDeliveryConfig(site);
     const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
-    const candidate = { ...article, publicationConfigHash: deliveryConfigHash };
-    const quality = evaluatePublicationQuality(candidate, "strict");
+    let candidate = { ...article, publicationConfigHash: deliveryConfigHash };
+    let quality = evaluatePublicationQuality(candidate, "strict");
+    const shouldRepairOrphan = !quality.passed &&
+      needsDeterministicInternalLinkRepair({
+        ...article,
+        status: "review",
+        publicationGateStatus: "blocked",
+        publicationGateIssues: quality.issues,
+      });
+    let internalLinkRepairAttempted = false;
+    let internalLinkRepairInserted = 0;
+    if (shouldRepairOrphan) {
+      internalLinkRepairAttempted = true;
+      const repaired = await deterministicInternalLinkRepair(ctx, site, article);
+      internalLinkRepairInserted = repaired.inserted;
+      if (repaired.inserted > 0) {
+        candidate = {
+          ...candidate,
+          markdown: repaired.markdown,
+          internalLinks: repaired.internalLinks,
+        };
+        quality = evaluatePublicationQuality(candidate, "strict");
+      }
+    }
     const checkedAt = now();
 
     if (!quality.passed) {
@@ -2341,6 +2447,12 @@ export const refreshPublicationAudit = internalMutation({
         publicationConfigSnapshot: undefined,
         auditedContentHash: undefined,
         auditedAt: undefined,
+        ...(internalLinkRepairAttempted
+          ? {
+              deterministicInternalLinkRepairVersion:
+                DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
+            }
+          : {}),
         updatedAt: checkedAt,
       });
       await syncSummary(ctx, articleId);
@@ -2348,6 +2460,14 @@ export const refreshPublicationAudit = internalMutation({
     }
 
     await ctx.db.patch(articleId, {
+      ...(internalLinkRepairInserted > 0
+        ? {
+            markdown: candidate.markdown,
+            internalLinks: candidate.internalLinks,
+            deterministicInternalLinkRepairVersion:
+              DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
+          }
+        : {}),
       publicationGateStatus: "passed",
       publicationGateIssues: quality.issues,
       publicationGateWarnings: quality.warnings,
@@ -2360,7 +2480,12 @@ export const refreshPublicationAudit = internalMutation({
       updatedAt: checkedAt,
     });
     await syncSummary(ctx, articleId);
-    return { refreshed: true as const, reason: "resealed" as const };
+    return {
+      refreshed: true as const,
+      reason: internalLinkRepairInserted > 0
+        ? "internal_link_repaired" as const
+        : "resealed" as const,
+    };
   },
 });
 

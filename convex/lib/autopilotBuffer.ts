@@ -302,6 +302,9 @@ export function isSealedReady(article: BufferArticle): boolean {
 /** Bounded work per cadence pass: reclaiming inventory must never turn one
  * natural run into an unbounded rewrite of a large tenant's back catalogue. */
 export const MAX_AUDIT_REFRESH_PER_PASS = 5;
+export const DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION = 1;
+const STRICT_INTERNAL_LINK_ISSUE =
+  "Strict publication requires at least one internal link so the page joins a topic cluster.";
 
 export type AuditRefreshArticle = BufferArticle & {
   publicationAttemptedAt?: number;
@@ -337,6 +340,22 @@ export function needsPublicationAuditRefresh(
     !article.publicationLeaseHash &&
     !article.publicationAmbiguityDispositionAt
   );
+}
+
+/** One bounded, provider-free repair for an otherwise finished orphan page. */
+export function needsDeterministicInternalLinkRepair(article: {
+  status?: string;
+  publicationGateStatus?: string;
+  publicationGateIssues?: string[];
+  deterministicInternalLinkRepairVersion?: number;
+}): boolean {
+  const issues = article.publicationGateIssues ?? [];
+  return article.status === "review" &&
+    article.publicationGateStatus === "blocked" &&
+    (article.deterministicInternalLinkRepairVersion ?? 0) <
+      DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION &&
+    issues.length === 1 &&
+    issues[0] === STRICT_INTERNAL_LINK_ISSUE;
 }
 
 /**

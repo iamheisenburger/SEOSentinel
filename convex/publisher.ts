@@ -1031,7 +1031,17 @@ export const verifyPublicationDestinationInternal = internalAction({
 });
 
 function legacyPublicationPreflightFailureCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
+  const messages: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current instanceof Error) {
+      messages.push(current.message);
+      current = current.cause;
+    } else {
+      break;
+    }
+  }
+  const message = messages.join(" ").toLowerCase();
   if (message.includes("connection check failed")) return "destination_http_failed";
   if (message.includes("acknowledge the signed preflight nonce")) {
     return "webhook_acknowledgement_invalid";
@@ -1043,6 +1053,29 @@ function legacyPublicationPreflightFailureCode(error: unknown): string {
   }
   if (message.includes("lease lost") || message.includes("snapshot mismatch")) {
     return "publisher_preflight_stale";
+  }
+  if (message.includes("unsupported outbound content type")) {
+    return "destination_content_type_invalid";
+  }
+  if (
+    message.includes("unexpected token") ||
+    message.includes("json") && message.includes("parse")
+  ) {
+    return "destination_response_invalid";
+  }
+  if (message.includes("must not redirect")) return "destination_redirected";
+  if (message.includes("timed out") || message.includes("etimedout")) {
+    return "destination_timeout";
+  }
+  if (
+    message.includes("not an allowed public https destination") ||
+    message.includes("private or reserved address") ||
+    message.includes("enotfound") ||
+    message.includes("eai_again") ||
+    message.includes("econnrefused") ||
+    message.includes("certificate")
+  ) {
+    return "destination_unreachable";
   }
   return "publisher_preflight_failed";
 }

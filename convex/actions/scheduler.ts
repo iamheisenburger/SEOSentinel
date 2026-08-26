@@ -37,6 +37,7 @@ import {
   isUnderfilledPlanContinuationPayload,
   MAX_AUDIT_REFRESH_PER_PASS,
   isSealedReady,
+  needsDeterministicInternalLinkRepair,
   needsPublicationAuditRefresh,
   tenantTopicBusinessSignals,
   topicReplenishmentBudget,
@@ -67,6 +68,7 @@ type ArticleSummary = {
   publicUrlStatus?: "pending" | "verified" | "failed";
   publicUrlCheckError?: string;
   qualityRevisionCount?: number;
+  deterministicInternalLinkRepairVersion?: number;
   metaKeywords?: string[];
 };
 
@@ -115,8 +117,12 @@ async function reclaimStrandedInventory(
     since,
   });
   if (state.migrationPending) return 0;
-  const stranded = (state.ready as ArticleSummary[])
-    .filter(needsPublicationAuditRefresh)
+  const stranded = [
+    ...(state.ready as ArticleSummary[]).filter(needsPublicationAuditRefresh),
+    ...(state.review as ArticleSummary[]).filter(
+      needsDeterministicInternalLinkRepair,
+    ),
+  ]
     .slice(0, MAX_AUDIT_REFRESH_PER_PASS);
   let reclaimed = 0;
   for (const article of stranded) {
@@ -155,13 +161,15 @@ export const reclaimStrandedPublicationInventory = internalAction({
     ) {
       return { reclaimed: 0 };
     }
-    return {
-      reclaimed: await reclaimStrandedInventory(
-        ctx,
-        siteId,
-        Date.now() - DAY_MS,
-      ),
-    };
+    const reclaimed = await reclaimStrandedInventory(
+      ctx,
+      siteId,
+      Date.now() - DAY_MS,
+    );
+    await ctx.runMutation(internal.autopilot.reconcileSealedBufferCount, {
+      siteId,
+    });
+    return { reclaimed };
   },
 });
 

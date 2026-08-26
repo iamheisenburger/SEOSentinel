@@ -3,10 +3,16 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
   isSealedReady,
+  needsDeterministicInternalLinkRepair,
   needsPublicationAuditRefresh,
 } from "../convex/lib/autopilotBuffer.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
+import {
+  appendRelatedInternalLinks,
+  selectRelatedInternalLinks,
+} from "../convex/lib/internalLinks.ts";
 
 /**
  * Regression for stranded sealed inventory.
@@ -29,6 +35,10 @@ const autopilotSource = readFileSync(
 );
 const schedulerSource = readFileSync(
   new URL("../convex/actions/scheduler.ts", import.meta.url),
+  "utf8",
+);
+const articlesSource = readFileSync(
+  new URL("../convex/articles.ts", import.meta.url),
   "utf8",
 );
 
@@ -82,6 +92,45 @@ test("the natural fleet reaches provider-free refresh before observe promotion",
   assert.match(
     schedulerSource,
     /export const reclaimStrandedPublicationInventory = internalAction\([\s\S]*reclaimStrandedInventory/,
+  );
+});
+
+test("an exhausted orphan gets one provider-free same-tenant related-link repair", () => {
+  const issue =
+    "Strict publication requires at least one internal link so the page joins a topic cluster.";
+  const article = {
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [issue],
+  };
+  assert.equal(needsDeterministicInternalLinkRepair(article), true);
+  assert.equal(
+    needsDeterministicInternalLinkRepair({
+      ...article,
+      deterministicInternalLinkRepairVersion:
+        DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
+    }),
+    false,
+  );
+
+  const links = selectRelatedInternalLinks({
+    currentTitle: "How to Create a Construction Programme for Residential Projects",
+    destinations: [{
+      href: "/deliverables",
+      title: "Deliverables",
+      keywords: ["construction programme", "subcontractor pricing"],
+    }],
+    limit: 1,
+  });
+  assert.deepEqual(links, [{
+    anchor: "construction programme",
+    href: "/deliverables",
+  }]);
+  const repaired = appendRelatedInternalLinks("# Programme\n\nBody.", links);
+  assert.match(repaired.markdown, /\[construction programme\]\(\/deliverables\)/);
+  assert.match(
+    articlesSource,
+    /deterministicInternalLinkRepair[\s\S]*evaluatePublicationQuality\(candidate, "strict"\)/,
   );
 });
 

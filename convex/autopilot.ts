@@ -71,6 +71,7 @@ import {
 
 const SITE_STAGGER_MS = 5_000;
 const LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS = 24 * 60 * 60 * 1000;
+const LEGACY_PUBLISHER_PREFLIGHT_POLICY_VERSION = 2;
 const NATURAL_RUN_STALE_MS = 4 * 60 * 60 * 1000;
 const PUBLICATION_INTEGRITY_MIGRATION_KEY = "publication-integrity-v4";
 const PUBLIC_URL_VERIFIED_TRIGGER = "public_url_verified";
@@ -322,18 +323,26 @@ export const dispatchActiveSites = internalMutation({
         blockers: [...baseReadiness.blockers, ...setupBlockers],
       };
       if (!readiness.ready) {
+        const legacyFailureNeedsClassification =
+          site.publicationAdapterVerificationFailureCode ===
+              "publisher_preflight_failed" &&
+          (site.publicationAdapterVerificationPolicyVersion ?? 0) <
+            LEGACY_PUBLISHER_PREFLIGHT_POLICY_VERSION;
         const canNaturallyVerifyLegacyPublisher =
           readiness.blockers.length === 1 &&
           readiness.blockers[0] === "publication_adapter_unverified" &&
           site.approvalRequired !== true &&
           ["wordpress", "webhook"].includes(site.publishMethod ?? "") &&
-          now - (site.publicationAdapterVerificationAttemptedAt ?? 0) >=
-            LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS;
+          (legacyFailureNeedsClassification ||
+            now - (site.publicationAdapterVerificationAttemptedAt ?? 0) >=
+              LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS);
         if (canNaturallyVerifyLegacyPublisher) {
           await ctx.db.patch(site._id, {
             publicationAdapterVerificationAttemptedAt: now,
             publicationAdapterVerificationFailedAt: undefined,
             publicationAdapterVerificationFailureCode: undefined,
+            publicationAdapterVerificationPolicyVersion:
+              LEGACY_PUBLISHER_PREFLIGHT_POLICY_VERSION,
             updatedAt: now,
           });
           await ctx.scheduler.runAfter(
@@ -2502,6 +2511,31 @@ export const refreshSiteCadenceHealth = internalMutation({
       approvedBufferCount,
       status,
     };
+  },
+});
+
+/** Keep the operator buffer projection truthful after provider-free audit
+ * maintenance that does not own an autopilot run receipt. */
+export const reconcileSealedBufferCount = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      return { reconciled: false as const, approvedBufferCount: 0 };
+    }
+    const ready = await takeCurrentDomainArticleSummariesByStatus(
+      ctx,
+      site,
+      "ready",
+      10,
+    );
+    const approvedBufferCount = ready.filter(isSealedReady).length;
+    await upsertHealth(ctx, siteId, {
+      approvedBufferCount,
+      bufferMinimum: MIN_APPROVED_BUFFER,
+      bufferTarget: TARGET_APPROVED_BUFFER,
+    });
+    return { reconciled: true as const, approvedBufferCount };
   },
 });
 
