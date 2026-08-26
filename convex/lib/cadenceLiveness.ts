@@ -326,9 +326,24 @@ export function adaptiveDiscoverySeeds(args: {
     : args.strategy.sourceMode === "profile_gsc"
       ? [profile, variants, gsc, args.rotatingSeeds]
       : [problems, variants, profile, gsc, args.rotatingSeeds];
+  // The paid discovery path intentionally consumes only the first fifteen of
+  // these twenty seeds in three five-seed Google Ads batches. Concatenating a
+  // large first family therefore made the recovery strategy mostly cosmetic:
+  // commercial/workflow variants existed, but never reached the primary
+  // provider requests. Preserve the strategy's preferred family first, then
+  // round-robin the bounded families so every available recovery source is
+  // represented before any one family can consume the request window.
+  const interleaved: string[] = [];
+  const maximumFamilyLength = Math.max(0, ...ordered.map((group) => group.length));
+  for (let index = 0; index < maximumFamilyLength; index += 1) {
+    for (const group of ordered) {
+      const value = group[index];
+      if (value !== undefined) interleaved.push(value);
+    }
+  }
   const values = [
     ...(args.growthSeed ? [args.growthSeed] : []),
-    ...ordered.flat(),
+    ...interleaved,
   ];
   const result: string[] = [];
   for (const value of values) {

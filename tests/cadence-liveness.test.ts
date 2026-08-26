@@ -145,6 +145,45 @@ test("alternative discovery stays tenant-derived and hard-bounded", () => {
   assert.ok(seeds.every((seed) => seed.split(/\s+/).length <= 6));
 });
 
+test("recovery seed families reach the provider-consumed first fifteen slots", () => {
+  const strategy = deriveCadenceRecoveryStrategy({
+    recentPlans: [{
+      status: "failed",
+      cadenceFailure: {
+        category: "semantic_zero_yield",
+        code: "strict_zero_yield",
+      },
+    }],
+    targetBufferShortfall: 3,
+    requiredVerifiedYield: 7,
+  });
+  const profileSeeds = Array.from(
+    { length: 16 },
+    (_, index) => `tenant product anchor ${index}`,
+  );
+  const gscSeeds = ["measured search demand query"];
+  const rotatingSeeds = Array.from(
+    { length: 20 },
+    (_, index) => `rotating discovery phrase ${index}`,
+  );
+  const seeds = adaptiveDiscoverySeeds({
+    strategy,
+    gscSeeds,
+    profileSeeds,
+    problemSeeds: ["slow lead response"],
+    rotatingSeeds,
+  });
+  const providerWindow = seeds.slice(0, 15);
+
+  assert.equal(strategy.sourceMode, "profile_gsc");
+  assert.equal(strategy.intentMode, "commercial");
+  assert.equal(seeds.length, 20);
+  assert.equal(providerWindow[0], profileSeeds[0]);
+  assert.ok(providerWindow.some((seed) => seed.endsWith(" software")));
+  assert.ok(providerWindow.includes(gscSeeds[0]));
+  assert.ok(providerWindow.some((seed) => seed.startsWith("rotating discovery")));
+});
+
 test("GSC rank/CTR and attributed conversions only add a bounded priority bonus", () => {
   const neutral = adaptiveOpportunityScore({
     keyword: "lead qualification chatbot",
