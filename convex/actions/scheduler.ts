@@ -96,6 +96,44 @@ function hasTerminalTargetAlignmentFailure(article: ArticleSummary): boolean {
 
 // Operator-safe inventory audit. It changes only topic eligibility metadata
 // and status for one explicit tenant; it cannot queue generation or delivery.
+/**
+ * Reclaim ready inventory stranded by an audit-version increment.
+ *
+ * Re-auditing is deterministic and spends nothing with any provider, so it is
+ * neither generation nor publication. It therefore runs even in fail-closed
+ * observe mode: a tenant is promoted out of observe on proven readiness, and
+ * leaving finished work permanently unsealed would make that readiness
+ * unreachable and the reported buffer untrue.
+ */
+async function reclaimStrandedInventory(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+  since: number,
+): Promise<number> {
+  const state = await ctx.runQuery(internal.articles.getAutopilotState, {
+    siteId,
+    since,
+  });
+  if (state.migrationPending) return 0;
+  const stranded = (state.ready as ArticleSummary[])
+    .filter(needsPublicationAuditRefresh)
+    .slice(0, MAX_AUDIT_REFRESH_PER_PASS);
+  let reclaimed = 0;
+  for (const article of stranded) {
+    try {
+      const result = await ctx.runMutation(
+        internal.articles.refreshPublicationAudit,
+        { articleId: article._id },
+      );
+      if (result.refreshed) reclaimed += 1;
+    } catch {
+      // A locked or concurrently delivered article stays stranded for this
+      // pass; reclaiming must never abort a cadence run.
+    }
+  }
+  return reclaimed;
+}
+
 export const auditTopicBusinessFit = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (
@@ -199,6 +237,14 @@ export const scheduleCadence = internalAction({
 
     const rolloutMode = site.autopilotRolloutMode ?? "observe";
     if (rolloutMode === "observe") {
+      // Truthful readiness is exactly what observe mode exists to report, and
+      // promotion depends on a sealed buffer, so reclaiming stranded inventory
+      // must not wait for a mode this tenant cannot reach without it.
+      await reclaimStrandedInventory(
+        ctx,
+        siteId,
+        Date.now() - 24 * 60 * 60 * 1000,
+      );
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
         kind: "rollout_observe",
@@ -266,20 +312,10 @@ export const scheduleCadence = internalAction({
     // any provider, so a customer's finished work is never silently abandoned
     // because the seal contract moved underneath it. The mutation revalidates
     // authoritatively; summaries do not carry the delivery-lease fields.
-    const stranded = (state.ready as ArticleSummary[])
-      .filter(needsPublicationAuditRefresh)
-      .slice(0, MAX_AUDIT_REFRESH_PER_PASS);
-    if (stranded.length > 0) {
-      for (const article of stranded) {
-        try {
-          await ctx.runMutation(internal.articles.refreshPublicationAudit, {
-            articleId: article._id,
-          });
-        } catch {
-          // A locked or concurrently delivered article simply stays stranded
-          // for this pass; it must never abort the cadence run.
-        }
-      }
+    if (
+      (state.ready as ArticleSummary[]).some(needsPublicationAuditRefresh) &&
+      await reclaimStrandedInventory(ctx, siteId, candidateWindowStart) > 0
+    ) {
       const refreshed = await ctx.runQuery(internal.articles.getAutopilotState, {
         siteId,
         since: candidateWindowStart,
