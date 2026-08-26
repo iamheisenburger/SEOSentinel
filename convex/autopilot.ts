@@ -276,6 +276,17 @@ export const dispatchActiveSites = internalMutation({
       }
       await resolveAlert(ctx, site._id, "cadence_paused");
       const currentMode = site.autopilotRolloutMode ?? "observe";
+      if (currentMode === "observe") {
+        // A blocked observe tenant is not admitted to autopilotTick, so its
+        // provider-free publication-audit refresh must be scheduled from the
+        // natural fleet boundary itself. The action re-checks all execution
+        // fences and cannot generate, publish, or call a provider.
+        await ctx.scheduler.runAfter(
+          0,
+          internal.actions.scheduler.reclaimStrandedPublicationInventory,
+          { siteId: site._id },
+        );
+      }
       if (["warm", "live"].includes(currentMode)) {
         // Expected-click planning is part of every advertised plan. Preserve
         // an explicit false emergency stop, but enroll legacy warm/live sites

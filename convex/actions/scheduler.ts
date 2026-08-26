@@ -134,6 +134,37 @@ async function reclaimStrandedInventory(
   return reclaimed;
 }
 
+/**
+ * Natural observe-mode entrypoint for the provider-free audit refresh.
+ *
+ * Observe tenants that are not yet promotion-ready are deliberately excluded
+ * from `autopilotTick`. Without this separate bounded action, the refresh in
+ * `scheduleCadence` is unreachable for precisely the tenants that need it to
+ * regain truthful readiness.
+ */
+export const reclaimStrandedPublicationInventory = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (
+      !site ||
+      !site.autopilotEnabled ||
+      site.deletionStatus !== undefined ||
+      site.planParkedAt !== undefined ||
+      (site.cadencePerWeek ?? 0) <= 0
+    ) {
+      return { reclaimed: 0 };
+    }
+    return {
+      reclaimed: await reclaimStrandedInventory(
+        ctx,
+        siteId,
+        Date.now() - DAY_MS,
+      ),
+    };
+  },
+});
+
 export const auditTopicBusinessFit = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (

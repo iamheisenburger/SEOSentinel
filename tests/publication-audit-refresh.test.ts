@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -22,6 +23,14 @@ import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts"
  */
 
 const STALE_VERSION = PUBLICATION_AUDIT_VERSION - 1;
+const autopilotSource = readFileSync(
+  new URL("../convex/autopilot.ts", import.meta.url),
+  "utf8",
+);
+const schedulerSource = readFileSync(
+  new URL("../convex/actions/scheduler.ts", import.meta.url),
+  "utf8",
+);
 
 function readyArticle(overrides: Record<string, unknown> = {}) {
   return {
@@ -51,6 +60,28 @@ test("stranded ready inventory is identified for re-audit", () => {
     needsPublicationAuditRefresh(readyArticle({ publicationAuditVersion: undefined })),
     true,
     "an article never stamped with a version is also stranded",
+  );
+});
+
+test("the natural fleet reaches provider-free refresh before observe promotion", () => {
+  const observeBranch = autopilotSource.indexOf(
+    'if (currentMode === "observe")',
+  );
+  const refreshDispatch = autopilotSource.indexOf(
+    "internal.actions.scheduler.reclaimStrandedPublicationInventory",
+    observeBranch,
+  );
+  const promotionReadiness = autopilotSource.indexOf(
+    "oneSetupPromotionBlockers(ctx, site)",
+    observeBranch,
+  );
+
+  assert.ok(observeBranch >= 0);
+  assert.ok(refreshDispatch > observeBranch);
+  assert.ok(promotionReadiness > refreshDispatch);
+  assert.match(
+    schedulerSource,
+    /export const reclaimStrandedPublicationInventory = internalAction\([\s\S]*reclaimStrandedInventory/,
   );
 });
 
