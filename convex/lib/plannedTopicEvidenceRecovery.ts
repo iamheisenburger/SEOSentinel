@@ -110,6 +110,35 @@ export function filterPlannedTopicRecoveryCoverage<
   );
 }
 
+/**
+ * Separate genuinely distinct planned recovery from rows that the exact
+ * recovery gate can never select. Apply the cardinality limit only after the
+ * partition so valid overflow is not misclassified as cannibalizing.
+ */
+export function partitionPlannedTopicRecoveryCoverage<
+  T extends SerpCoverageTopic,
+>(
+  topics: T[],
+  coveredTopics: SerpCoverageTopic[],
+  limit = Number.POSITIVE_INFINITY,
+): { eligible: T[]; blocked: T[] } {
+  const eligibleWithoutLimit = filterPlannedTopicRecoveryCoverage(
+    topics,
+    coveredTopics,
+  );
+  const eligibleKeywords = new Set(
+    eligibleWithoutLimit.map((topic) => normalizeAttemptKeyword(
+      topic.primaryKeyword,
+    )),
+  );
+  return {
+    eligible: eligibleWithoutLimit.slice(0, limit),
+    blocked: topics.filter((topic) =>
+      !eligibleKeywords.has(normalizeAttemptKeyword(topic.primaryKeyword))
+    ),
+  };
+}
+
 export type PlannedRecoverySelectedTopic = {
   topicId: Id<"topic_clusters">;
   keyword: string;

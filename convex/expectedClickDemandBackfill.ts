@@ -66,7 +66,7 @@ import {
 import {
   activeArticleJobTopicIds,
   expectedClickTargetKind,
-  filterPlannedTopicRecoveryCoverage,
+  partitionPlannedTopicRecoveryCoverage,
   plannedTargetsAllowedForQueue,
   plannedTopicDemandAdmission,
   plannedTopicSiteGate,
@@ -441,11 +441,12 @@ function demandCandidateInventory(args: {
       String(left.topicId).localeCompare(String(right.topicId))
     ),
   );
-  const plannedCandidates = filterPlannedTopicRecoveryCoverage(
+  const plannedCoverage = partitionPlannedTopicRecoveryCoverage(
     orderedPlannedCandidates,
     coveredTopics,
     EXPECTED_CLICK_DEMAND_BACKFILL_TOPIC_LIMIT,
   );
+  const plannedCandidates = plannedCoverage.eligible;
   candidateCounts.artifactEligible = artifactCandidates.length;
   candidateCounts.plannedUnmaterialized = plannedCandidates.length;
   // Planned rows are fallback-only. Existing covered-page measurement always
@@ -460,6 +461,9 @@ function demandCandidateInventory(args: {
     candidates,
     artifactCandidates,
     plannedCandidates,
+    plannedCoverageBlockedTopicIds: plannedCoverage.blocked.map(
+      (candidate) => candidate.topicId,
+    ),
     artifactEvidencePending,
     candidateCounts,
   };
@@ -914,6 +918,8 @@ export async function expectedClickDemandFleetReadiness(
       candidateCount,
       candidateCounts: inventory.candidateCounts,
       plannedSelection: selectedPlannedDescriptors(selected),
+      plannedCoverageBlockedTopicIds:
+        inventory.plannedCoverageBlockedTopicIds,
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       reservationDay,
       continueToEvidence: candidateCount === 0 &&
@@ -952,6 +958,15 @@ export const inspectAndRecordFleetReadinessInternal = internalMutation({
       siteId,
       evaluatedAt,
     );
+    for (const topicId of readiness?.plannedCoverageBlockedTopicIds ?? []) {
+      const topic = await ctx.db.get(topicId);
+      if (topic?.siteId !== siteId || topic.status !== "planned") continue;
+      await ctx.db.patch(topicId, {
+        status: "cannibalizing",
+        disqualifiedReason: "planned_recovery_coverage_conflict",
+        updatedAt: evaluatedAt,
+      });
+    }
     if (readiness && !readiness.ready) {
       await recordExpectedClickReservationOutcome(ctx, {
         siteId,

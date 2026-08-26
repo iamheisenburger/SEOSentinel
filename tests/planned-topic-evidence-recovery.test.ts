@@ -14,6 +14,7 @@ import {
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
   hasExactPlannedEvidenceAttempt,
+  partitionPlannedTopicRecoveryCoverage,
   plannedTargetsAllowedForQueue,
   plannedTopicDemandAdmission,
   plannedTopicEvidenceAdmission,
@@ -348,7 +349,7 @@ test("planned recovery and micro admission cannot trust legacy SERPs past lexica
   );
   assert.match(
     demand,
-    /plannedCandidates = filterPlannedTopicRecoveryCoverage/,
+    /plannedCoverage = partitionPlannedTopicRecoveryCoverage/,
   );
   assert.match(
     evidence,
@@ -437,6 +438,51 @@ test("guarded recovery and micro admission share the exact executable phase sele
     reason: "demand_candidates_remaining",
   }), "expected_click_recovery_unresolved");
   assert.match(operatorRecovery, /selectPlannedRecoveryPhase/);
+});
+
+test("planned recovery terminally separates covered intent without classifying valid overflow", () => {
+  const covered = [{
+    primaryKeyword: "b2b lead scoring",
+    serpTopUrls: [
+      "https://one.example/a",
+      "https://two.example/b",
+      "https://three.example/c",
+      "https://four.example/d",
+      "https://five.example/e",
+    ],
+  }];
+  const conflicting = {
+    primaryKeyword: "lead scoring saas",
+    serpTopUrls: [
+      "https://legacy.example/1",
+      "https://legacy.example/2",
+      "https://legacy.example/3",
+      "https://legacy.example/4",
+      "https://legacy.example/5",
+    ],
+  };
+  const distinct = [
+    { primaryKeyword: "inbound qualification checklist" },
+    { primaryKeyword: "sales routing automation" },
+  ];
+  const result = partitionPlannedTopicRecoveryCoverage(
+    [conflicting, ...distinct],
+    covered,
+    1,
+  );
+
+  assert.deepEqual(
+    result.eligible.map((candidate) => candidate.primaryKeyword),
+    ["inbound qualification checklist"],
+  );
+  assert.deepEqual(
+    result.blocked.map((candidate) => candidate.primaryKeyword),
+    ["lead scoring saas"],
+  );
+  assert.match(demand, /readiness\?\.plannedCoverageBlockedTopicIds/);
+  assert.match(demand, /topic\?\.siteId !== siteId \|\| topic\.status !== "planned"/);
+  assert.match(demand, /status: "cannibalizing"/);
+  assert.match(demand, /planned_recovery_coverage_conflict/);
 });
 
 test("phase fingerprint binds keyword observations, locale, domain, and tenant profile", () => {
