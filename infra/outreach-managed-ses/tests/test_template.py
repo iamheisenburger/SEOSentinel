@@ -100,7 +100,7 @@ class TemplateSafetyTests(unittest.TestCase):
         self.assertIn('Default: "false"', self.template)
         self.assertIn("DkimTokenName1", self.template)
         self.assertIn("cannot make DKIM valid without", self.readme)
-        self.assertIn("currently rolled-back inbound relay stack", self.readme)
+        self.assertIn("separately deployed inbound relay healthy", self.readme)
 
     def test_source_has_no_request_body_or_exception_logging(self) -> None:
         combined = self.adapter + self.events

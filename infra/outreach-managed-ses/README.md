@@ -272,9 +272,28 @@ These are one-time Pentra platform operations, not customer setup:
    may the application reconciler install normal `managed_ses` outreach.
 
 The template creates the platform identity but cannot make DKIM valid without
-the DNS records. It also cannot grant SES production access or resurrect the
-currently rolled-back inbound relay stack. Those remain explicit release
+the DNS records. It also cannot grant SES production access or prove the
+separately deployed inbound relay healthy. Those remain explicit release
 receipts, never inferred readiness.
+
+## Operator bootstrap
+
+`bootstrap.py` makes the one-time account work reproducible without turning a
+source review into a deployment. Its default command is a credential-free-of-
+Pentra, read-only AWS inventory that prints counts and statuses only:
+
+```sh
+python3 infra/outreach-managed-ses/bootstrap.py inventory
+```
+
+The `deploy` command refuses any region other than `us-east-1`, requires the
+exact authenticated account id plus an explicit dedicated-account
+acknowledgement, creates three purpose-separated Secrets Manager documents
+without putting key material in argv or output, then runs the reviewed SAM
+build/deploy. It does **not** request SES production access, change DNS, send a
+canary, or enable application delivery. The alert address, webhook URL,
+controlled-recipient SHA-256 and stable opaque canary operation key are all
+required explicitly; use `--help` for the exact flags.
 
 ## Local verification
 
