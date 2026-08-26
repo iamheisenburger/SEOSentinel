@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import {
   coveredIntentTopics,
+  filterNonCannibalizingIntentTopics,
   serpFingerprintOverlap,
 } from "./lib/autopilotBuffer";
 import {
@@ -48,6 +49,8 @@ import {
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
   siteUsesLegacyDomainReceipts,
+  takeCurrentDomainArticles,
+  takeCurrentDomainTopics,
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 
@@ -312,6 +315,82 @@ export const getSerpCorpusAudit = internalQuery({
         (topic) => (topic.serpTopUrls?.length ?? 0) >= 5,
       ).length,
       overlaps,
+    };
+  },
+});
+
+/**
+ * Bounded operator projection for the exact conservative coverage gate used by
+ * planned-topic evidence recovery. It returns only conflicting keywords and
+ * never exposes article bodies, provider payloads, credentials, or tokens.
+ */
+export const getPlannedRecoveryCoverageAudit = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    topicId: v.id("topic_clusters"),
+  },
+  handler: async (ctx, { siteId, topicId }) => {
+    const site = await ctx.db.get(siteId);
+    const target = await ctx.db.get(topicId);
+    if (
+      !site ||
+      !target ||
+      target.siteId !== siteId ||
+      !topicMatchesCurrentDomain(site, target)
+    ) return null;
+
+    const [topics, articles] = await Promise.all([
+      takeCurrentDomainTopics(ctx, site, 2_001),
+      takeCurrentDomainArticles(ctx, site, 1_001),
+    ]);
+    if (topics.length > 2_000 || articles.length > 1_000) {
+      return {
+        targetTopicId: topicId,
+        targetKeyword: target.primaryKeyword,
+        readLimitExhausted: true,
+        coverageCount: 0,
+        conflicts: [],
+      };
+    }
+
+    const coverage = coveredIntentTopics(
+      topics.map((topic) => ({
+        _id: String(topic._id),
+        status: topic.status ?? "planned",
+        primaryKeyword: topic.primaryKeyword,
+        serpTopUrls: topic.serpTopUrls,
+      })),
+      articles.map((article) => ({
+        topicId: article.topicId ? String(article.topicId) : undefined,
+        slug: article.slug,
+        status: article.status,
+        publicationGateStatus: article.publicationGateStatus,
+        publicationAuditVersion: article.publicationAuditVersion,
+        auditedContentHash: article.auditedContentHash,
+      })),
+    );
+    const conflicts = coverage
+      .filter((covered) =>
+        filterNonCannibalizingIntentTopics(
+          [{ primaryKeyword: target.primaryKeyword, serpTopUrls: undefined }],
+          [covered],
+          0.4,
+          0.35,
+          1,
+        ).length === 0
+      )
+      .slice(0, 50)
+      .map((covered) => ({
+        keyword: covered.primaryKeyword,
+        hasReliableSerpFingerprint: (covered.serpTopUrls?.length ?? 0) >= 5,
+      }));
+
+    return {
+      targetTopicId: topicId,
+      targetKeyword: target.primaryKeyword,
+      readLimitExhausted: false,
+      coverageCount: coverage.length,
+      conflicts,
     };
   },
 });
