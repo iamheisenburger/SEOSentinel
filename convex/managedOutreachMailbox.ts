@@ -60,6 +60,10 @@ import {
 } from "./lib/outreachInboundRelay.ts";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import {
+  SMARTLEAD_ADAPTER_VERSION,
+  SMARTLEAD_MANAGED_TRANSPORT,
+} from "./lib/smartlead.ts";
+import {
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
 } from "./lib/siteDomainBinding.ts";
@@ -176,7 +180,12 @@ function managedInboxMatchesResource(
         inbox.managedTransportKind === MANAGED_SES_TRANSPORT &&
         inbox.managedTransportResourceReceipt === resource.resourceReceipt,
       )
-    : Boolean(inbox && inbox.managedTransportKind === undefined);
+    : Boolean(
+        inbox &&
+        inbox.provider === "smartlead" &&
+        inbox.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+        inbox.managedTransportResourceReceipt === resource.resourceReceipt,
+      );
   return Boolean(
     inbox &&
       transportMatches &&
@@ -230,10 +239,13 @@ async function quarantineManagedCanonicalInbox(
       inbox.managedTransportOperationKey === resource.operationKey &&
       inbox.managedTransportGeneration === resource.generation &&
       inbox.managedTransportAdapterVersion === resource.adapterVersion &&
-      (resource.transportKind !== MANAGED_SES_TRANSPORT ||
-        (inbox.provider === MANAGED_SES_TRANSPORT &&
+      (resource.transportKind === MANAGED_SES_TRANSPORT
+        ? inbox.provider === MANAGED_SES_TRANSPORT &&
           inbox.managedTransportKind === MANAGED_SES_TRANSPORT &&
-          inbox.managedTransportResourceReceipt === resource.resourceReceipt)),
+          inbox.managedTransportResourceReceipt === resource.resourceReceipt
+        : inbox.provider === "smartlead" &&
+          inbox.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+          inbox.managedTransportResourceReceipt === resource.resourceReceipt),
   );
   const legacyResourceBoundInbox = Boolean(
     inbox &&
@@ -264,9 +276,9 @@ async function quarantineManagedCanonicalInbox(
       : null;
   await ctx.db.patch(inbox._id, {
     credentialSource: "managed_adapter_retiring",
-    managedTransportKind: resource.transportKind === MANAGED_SES_TRANSPORT
-      ? MANAGED_SES_TRANSPORT
-      : undefined,
+    managedTransportKind: resource.transportKind === SMARTLEAD_MANAGED_TRANSPORT
+      ? SMARTLEAD_MANAGED_TRANSPORT
+      : MANAGED_SES_TRANSPORT,
     managedTransportOperationKey: resource.operationKey,
     managedTransportGeneration: resource.generation,
     managedTransportAdapterVersion: resource.adapterVersion,
@@ -1174,7 +1186,9 @@ export const reconcileProvisioningResource = internalMutation({
           requestContractVersion: request.contractVersion,
           generation: args.expectedGeneration,
           operationKey,
-          transportKind: MANAGED_SES_TRANSPORT,
+          transportKind: request.outreachTransport === SMARTLEAD_MANAGED_TRANSPORT
+            ? SMARTLEAD_MANAGED_TRANSPORT
+            : MANAGED_SES_TRANSPORT,
           lifecycleState: "queued",
           releaseState: "not_required",
           attempt: 0,
@@ -1350,12 +1364,20 @@ export const getProvisioningOperation = internalMutation({
       installTarget: { siteId: resource.siteId },
       operation: {
         contractVersion: MANAGED_OUTREACH_MAILBOX_CONTRACT_VERSION,
-        transport: MANAGED_SES_TRANSPORT,
+        transport: resource.transportKind === SMARTLEAD_MANAGED_TRANSPORT
+          ? SMARTLEAD_MANAGED_TRANSPORT
+          : MANAGED_SES_TRANSPORT,
         operationKey: resource.operationKey,
         generation: resource.generation,
         configurationRevision: resource.requestConfigurationRevision,
         externalDeadlineAt: resource.leaseExpiresAt!,
         tenantDomain: resource.domainSnapshot,
+        senderDomainChoice: profile.senderDomainChoice,
+        providerState: {
+          encryptedBinding: resource.encryptedProviderBinding,
+          clientRequestedAt: resource.smartleadClientRequestedAt,
+          mailboxRequestedAt: resource.smartleadMailboxRequestedAt,
+        },
         senderProfile: {
           fromName: profile.fromName,
           physicalMailingAddress: profile.physicalMailingAddress,
@@ -1624,7 +1646,9 @@ export const recordProvisioningAdapterProgress = internalMutation({
         args.expectedConfigurationRevision ||
       resource.generation !== args.expectedGeneration ||
       resource.lifecycleState !== "leased" ||
-      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      ![MANAGED_SES_TRANSPORT, SMARTLEAD_MANAGED_TRANSPORT].includes(
+        resource.transportKind as typeof MANAGED_SES_TRANSPORT | typeof SMARTLEAD_MANAGED_TRANSPORT,
+      ) ||
       !["not_required", "active"].includes(resource.releaseState) ||
       resource.externalProvisioningAttemptedAt === undefined ||
       resource.adapterVersion !== args.adapterVersion ||
@@ -1703,6 +1727,80 @@ export const recordProvisioningAdapterProgress = internalMutation({
       { requestId: request._id, expectedRevision: request.revision },
     );
     return { recorded: true as const, nextAttemptAt };
+  },
+});
+
+/** Persist each Smartlead external sub-boundary before the provider call.
+ * The timestamps make an acknowledgement loss distinguishable from a safe
+ * first attempt, while the encrypted binding never exposes provider ids. */
+export const recordSmartleadProvisioningBoundaryInternal = internalMutation({
+  args: {
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRequestRevision: v.number(),
+    expectedConfigurationRevision: v.number(),
+    expectedGeneration: v.number(),
+    leaseToken: v.string(),
+    phase: v.union(
+      v.literal("binding"),
+      v.literal("client"),
+      v.literal("mailbox"),
+    ),
+    encryptedProviderBinding: v.optional(v.string()),
+    configurationHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const [resource, request] = await Promise.all([
+      ctx.db.get(args.resourceId),
+      ctx.db.get(args.requestId),
+    ]);
+    const timestamp = Date.now();
+    if (
+      !resource || !request ||
+      resource.requestId !== request._id ||
+      resource.siteId !== request.siteId ||
+      request.revision !== args.expectedRequestRevision ||
+      resource.requestConfigurationRevision !== args.expectedConfigurationRevision ||
+      resource.generation !== args.expectedGeneration ||
+      resource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      resource.lifecycleState !== "leased" ||
+      resource.releaseState !== "active" ||
+      resource.adapterVersion !== SMARTLEAD_ADAPTER_VERSION ||
+      !managedOutreachMailboxLeaseIsCurrent({
+        expectedLeaseToken: args.leaseToken,
+        actualLeaseToken: resource.leaseToken,
+        leaseExpiresAt: resource.leaseExpiresAt,
+        timestamp,
+      }) ||
+      !/^[a-f0-9]{64}$/.test(args.configurationHash) ||
+      (args.encryptedProviderBinding !== undefined &&
+        !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+          args.encryptedProviderBinding,
+        ))
+    ) return { recorded: false as const };
+    const site = await ctx.db.get(request.siteId);
+    const lifecycleIssues = requestFenceIssues({
+      request,
+      site,
+      expectedConfigurationRevision: args.expectedConfigurationRevision,
+      expectedGeneration: args.expectedGeneration,
+    });
+    if (lifecycleIssues.length > 0 || !site || !(await siteExecutionAuthorized(ctx, site))) {
+      return { recorded: false as const };
+    }
+    const patch = args.phase === "client"
+      ? { smartleadClientRequestedAt: resource.smartleadClientRequestedAt ?? timestamp }
+      : args.phase === "mailbox"
+        ? { smartleadMailboxRequestedAt: resource.smartleadMailboxRequestedAt ?? timestamp }
+        : {};
+    await ctx.db.patch(resource._id, {
+      ...patch,
+      encryptedProviderBinding:
+        args.encryptedProviderBinding ?? resource.encryptedProviderBinding,
+      configurationHash: args.configurationHash,
+      updatedAt: timestamp,
+    });
+    return { recorded: true as const, recordedAt: timestamp };
   },
 });
 
@@ -3443,10 +3541,14 @@ export const getReleaseOperation = internalQuery({
     return {
       operation: {
         contractVersion: MANAGED_OUTREACH_MAILBOX_CONTRACT_VERSION,
-        transport: MANAGED_SES_TRANSPORT,
+        transport: resource.transportKind === SMARTLEAD_MANAGED_TRANSPORT
+          ? SMARTLEAD_MANAGED_TRANSPORT
+          : MANAGED_SES_TRANSPORT,
         operationKey: resource.operationKey,
         generation: resource.generation,
         provisioningAdapterVersion: resource.adapterVersion,
+        encryptedProviderBinding: resource.encryptedProviderBinding,
+        senderDomainChoice: request?.managedOutreachProfile?.senderDomainChoice,
         releaseReason: resource.releaseReason ?? tombstone.releaseReason,
         requirements: {
           reconcileProvisioningStatusByOperationKey: true,
@@ -3526,7 +3628,9 @@ export const recordReleaseAdapterProgress = internalMutation({
     const timestamp = Date.now();
     if (
       !resource ||
-      resource.transportKind !== MANAGED_SES_TRANSPORT ||
+      ![MANAGED_SES_TRANSPORT, SMARTLEAD_MANAGED_TRANSPORT].includes(
+        resource.transportKind as typeof MANAGED_SES_TRANSPORT | typeof SMARTLEAD_MANAGED_TRANSPORT,
+      ) ||
       resource.lifecycleState !== "cancelled" ||
       resource.releaseState !== "leased" ||
       !managedOutreachMailboxLeaseIsCurrent({

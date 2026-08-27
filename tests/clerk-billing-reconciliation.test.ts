@@ -421,7 +421,7 @@ test("account deletion fails closed and remains retryable", async () => {
 });
 
 test("the billing routes use fresh server-side Clerk Billing and user metadata", () => {
-  const middleware = readFileSync("src/middleware.ts", "utf8");
+  const middleware = readFileSync("src/proxy.ts", "utf8");
   const syncRoute = readFileSync("src/app/api/billing/sync-plan/route.ts", "utf8");
   const clientHook = readFileSync("src/hooks/usePlanLimits.ts", "utf8");
   assert.match(middleware, /"\/api\/webhooks\/clerk-billing"/);

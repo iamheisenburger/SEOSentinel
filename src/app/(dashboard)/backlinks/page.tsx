@@ -15,6 +15,7 @@ import {
   Mail,
   Search,
   Send,
+  Settings2,
   ShieldCheck,
   RefreshCw,
   XCircle,
@@ -28,6 +29,7 @@ import {
   OUTREACH_AUTONOMY_MAX_DAILY_SEND_CAP,
   OUTREACH_AUTONOMY_POLICY_HASH,
 } from "../../../../convex/lib/outreachAutonomy";
+import { SMTP_PRESETS } from "../../../../convex/lib/outreachSmtp";
 import { Button } from "@/components/ui/button";
 import { useActiveSite } from "@/contexts/site-context";
 
@@ -87,6 +89,15 @@ export default function BacklinksPage() {
   const [showRejected, setShowRejected] = useState(false);
   const [autonomyConsentAccepted, setAutonomyConsentAccepted] = useState(false);
   const [autonomyDailyCap, setAutonomyDailyCap] = useState(5);
+  const [showSmtpForm, setShowSmtpForm] = useState(false);
+  const [smtpPreset, setSmtpPreset] = useState("gmail");
+
+  useEffect(() => {
+    const requestedTransport = new URLSearchParams(window.location.search).get(
+      "configure",
+    );
+    if (requestedTransport === "smtp") setShowSmtpForm(true);
+  }, []);
 
   const opportunities = useQuery(
     api.seoAuthority.listForSite,
@@ -98,6 +109,10 @@ export default function BacklinksPage() {
   );
   const inbox = useQuery(
     api.outreach.getInbox,
+    site?._id ? { siteId: site._id } : "skip",
+  );
+  const oneSetup = useQuery(
+    api.sites.getOneSetupReadiness,
     site?._id ? { siteId: site._id } : "skip",
   );
   const autonomyConsentConfigurationKey = [
@@ -117,6 +132,7 @@ export default function BacklinksPage() {
   const sendGmailSelfTest = useAction(
     api.actions.outreach.sendGmailConnectionSelfTest,
   );
+  const verifySmtpInbox = useAction(api.actions.outreach.verifySmtpInbox);
   const syncInbound = useAction(api.actions.outreach.syncInboundReplies);
   const verifyLinks = useAction(api.actions.outreach.verifyAcquiredLinks);
   const approveMessage = useMutation(api.outreach.approveMessage);
@@ -126,6 +142,7 @@ export default function BacklinksPage() {
     api.outreach.enableAutonomousOutreach,
   );
   const setInboxMode = useMutation(api.outreach.setInboxMode);
+  const configureSmtpInbox = useMutation(api.outreach.configureSmtpInbox);
   const rotateDsnRoutingTarget = useMutation(
     api.outreach.rotateInboundRelayDsnRoutingTarget,
   );
@@ -171,6 +188,11 @@ export default function BacklinksPage() {
   const inboxNeedsReconnect = !inbox ||
     !Boolean(inbox.credentialsPresent) ||
     ["disconnected", "suspended"].includes(String(inbox.status));
+  const inboxProvider = String(inbox?.provider ?? "");
+  const isSmtpInbox = inboxProvider === "smtp";
+  const isGmailInbox = inboxProvider === "gmail";
+  const isManagedInbox = ["smartlead", "managed_ses"].includes(inboxProvider) ||
+    String(inbox?.managedTransportKind ?? "") === "smartlead_managed";
   const dsnRoutingAddress =
     typeof inbox?.inboundRelayDsnRoutingTargetAddress === "string"
       ? inbox.inboundRelayDsnRoutingTargetAddress
@@ -339,7 +361,8 @@ export default function BacklinksPage() {
               ) : (
                 <>
                   <p className="mt-1 text-[13px] text-[#8B8FA3]">
-                    Connect a secondary-domain Gmail inbox. Your primary transactional domain stays isolated.
+                    Connect a secondary-domain Gmail inbox or SMTP mailbox you control,
+                    or let Pentra manage a warmed Smartlead sender.
                   </p>
                   <p className="mt-1 text-[11px] text-[#565A6E]">
                     New inboxes remain in approval mode and start at the safe warm-up allowance.
@@ -355,10 +378,9 @@ export default function BacklinksPage() {
                 </p>
               )}
               <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
-                New connections grant Gmail send access only. Before any prospect message can be
-                released, an owner-triggered hard-bounce canary must prove this mailbox&apos;s Workspace
-                routing into the audited receiving-only relay. Inbound bodies and attachments are
-                discarded after transient parsing; Pentra stores only evidence digests.
+                {isManagedInbox
+                  ? "Managed outreach remains blocked until the isolated sender is authenticated, warmed, and all controlled delivery-event canaries have passed."
+                  : "Customer-managed connections grant outbound send access only. Before any prospect message can be released, an owner-triggered hard-bounce canary must prove this mailbox's routing into the audited receiving-only relay. Inbound bodies and attachments are discarded after transient parsing; Pentra stores only evidence digests."}
               </p>
               {dsnRoutingAddress && (
                 <div className="mt-3 rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.05] p-3">
@@ -407,7 +429,14 @@ export default function BacklinksPage() {
               )}
               {inbox && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <ReadinessBadge label="Gmail OAuth" ready={Boolean(inbox.credentialsPresent)} />
+                  <ReadinessBadge
+                    label={isSmtpInbox
+                      ? "SMTP connection"
+                      : isManagedInbox
+                        ? "Managed sender"
+                        : "Gmail OAuth"}
+                    ready={Boolean(inbox.credentialsPresent)}
+                  />
                   <ReadinessBadge
                     label={String(inbox.inboundMonitoringMode) === "legacy_gmail" ? "Legacy reply sync" : "Inbound relay"}
                     ready={Boolean(inbox.inboundMonitoringReady)}
@@ -435,7 +464,7 @@ export default function BacklinksPage() {
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
             {inbox &&
-              String(inbox.provider) === "gmail" &&
+              isGmailInbox &&
               Boolean(inbox.credentialsPresent) &&
               !["disconnected", "suspended"].includes(String(inbox.status)) && (
                 <Button
@@ -452,6 +481,26 @@ export default function BacklinksPage() {
                 </Button>
               )}
             {inbox &&
+              isSmtpInbox &&
+              Boolean(inbox.credentialsPresent) && (
+                <Button
+                  variant="secondary"
+                  loading={pending === "smtp-verify"}
+                  onClick={() => runOperation("smtp-verify", async () => {
+                    const result = await verifySmtpInbox({ siteId: site._id });
+                    setNotice({
+                      tone: result.senderAuthenticationReady ? "success" : "error",
+                      text: result.senderAuthenticationReady
+                        ? "SMTP connection and SPF, DKIM, and DMARC are verified. Bounce routing must still pass before delivery."
+                        : "SMTP accepted the credentials, but SPF, DKIM, and DMARC have not all verified yet.",
+                    });
+                  })}
+                  icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                >
+                  Verify SMTP
+                </Button>
+              )}
+            {inbox &&
               Boolean(inbox.inboundRelayConfigured) &&
               !Boolean(inbox.inboundRelayDsnRoutingReady) &&
               String(inbox.inboundMonitoringMode) !== "legacy_gmail" && (
@@ -464,7 +513,7 @@ export default function BacklinksPage() {
                     setNotice({
                       tone: result.accepted ? "success" : "error",
                       text: result.accepted
-                        ? "Gmail accepted the canary. Outreach remains blocked until its exact signed hard-bounce receipt arrives."
+                        ? "The mailbox accepted the canary. Outreach remains blocked until its exact signed hard-bounce receipt arrives."
                         : result.reason,
                     });
                   })}
@@ -473,15 +522,64 @@ export default function BacklinksPage() {
                   Verify bounce routing
                 </Button>
               )}
-            <Button
-              variant={inboxNeedsReconnect ? "primary" : "secondary"}
-              onClick={connectGmail}
-              icon={<Mail className="h-3.5 w-3.5" />}
-            >
-              {inboxNeedsReconnect ? (inbox ? "Reconnect Gmail" : "Connect Gmail") : "Refresh Gmail connection"}
-            </Button>
+            {!isManagedInbox && (
+              <>
+                <Button
+                  variant={inboxNeedsReconnect && !isSmtpInbox ? "primary" : "secondary"}
+                  onClick={connectGmail}
+                  icon={<Mail className="h-3.5 w-3.5" />}
+                >
+                  {isGmailInbox
+                    ? (inboxNeedsReconnect ? "Reconnect Gmail" : "Refresh Gmail connection")
+                    : "Connect Gmail"}
+                </Button>
+                <Button
+                  variant={isSmtpInbox || showSmtpForm ? "primary" : "secondary"}
+                  onClick={() => setShowSmtpForm((shown) => !shown)}
+                  icon={<Settings2 className="h-3.5 w-3.5" />}
+                >
+                  {isSmtpInbox ? "Replace SMTP settings" : "Configure SMTP"}
+                </Button>
+              </>
+            )}
           </div>
         </div>
+        {showSmtpForm && !isManagedInbox && (
+          <SmtpConfigurationForm
+            pending={pending === "smtp-configure"}
+            selectedPreset={smtpPreset}
+            defaultFromName={String(
+              oneSetup?.outreachSenderProfile?.fromName ?? inbox?.fromName ?? "",
+            )}
+            defaultPhysicalMailingAddress={String(
+              oneSetup?.outreachSenderProfile?.physicalMailingAddress ??
+                inbox?.physicalMailingAddress ?? "",
+            )}
+            onPresetChange={setSmtpPreset}
+            onCancel={() => setShowSmtpForm(false)}
+            onSubmit={(form) => runOperation("smtp-configure", async () => {
+              const configured = await configureSmtpInbox({
+                siteId: site._id,
+                ...form,
+              });
+              if (!configured.configured) {
+                setNotice({
+                  tone: "error",
+                  text: "The previous managed sender is being released safely. Pentra will expose the SMTP connection after that immutable release settles.",
+                });
+                return;
+              }
+              const verified = await verifySmtpInbox({ siteId: site._id });
+              setShowSmtpForm(false);
+              setNotice({
+                tone: verified.senderAuthenticationReady ? "success" : "error",
+                text: verified.senderAuthenticationReady
+                  ? "SMTP saved and verified. Complete the displayed bounce-routing canary before delivery can begin."
+                  : "SMTP saved and the socket is valid, but SPF, DKIM, and DMARC must all verify before delivery can begin.",
+              });
+            })}
+          />
+        )}
         {inbox && (
           <form
             className="mt-5 grid gap-3 border-t border-white/[0.05] pt-5 md:grid-cols-[1fr_2fr_auto] md:items-end"
@@ -923,7 +1021,7 @@ export default function BacklinksPage() {
                         variant="ghost"
                         loading={pending === reviewNotSentKey}
                         onClick={() => runOperation(reviewNotSentKey, async () => {
-                          if (!window.confirm("After checking Gmail's Sent folder, confirm this message was not sent? A fresh draft and approval will be required.")) return;
+                          if (!window.confirm("After checking the mailbox's Sent folder, confirm this message was not sent? A fresh draft and approval will be required.")) return;
                           await resolveUnverified({
                             siteId: site._id,
                             messageId: message._id,
@@ -938,13 +1036,13 @@ export default function BacklinksPage() {
                         size="sm"
                         loading={pending === reviewSentKey}
                         onClick={() => runOperation(reviewSentKey, async () => {
-                          if (!window.confirm("Confirm that you found this exact message in Gmail's Sent folder?")) return;
+                          if (!window.confirm("Confirm that you found this exact message in the mailbox's Sent folder?")) return;
                           await resolveUnverified({
                             siteId: site._id,
                             messageId: message._id,
                             resolution: "confirmed_sent",
                           });
-                          setNotice({ tone: "success", text: "Manual Gmail review recorded as sent. The audit trail identifies it as manually verified." });
+                          setNotice({ tone: "success", text: "Manual mailbox review recorded as sent. The audit trail identifies it as manually verified." });
                         })}
                       >
                         Found in Sent
@@ -988,7 +1086,7 @@ export default function BacklinksPage() {
                   )}
                   {message.status === "delivery_reviewed_sent" && (
                     <span className="text-[#FBBF24]">
-                      Confirmed manually in Gmail&apos;s Sent folder; Pentra did not capture a provider receipt.
+                      Confirmed manually in the mailbox&apos;s Sent folder; Pentra did not capture a provider receipt.
                     </span>
                   )}
                 </div>
@@ -1005,6 +1103,213 @@ export default function BacklinksPage() {
         </div>
       )}
     </div>
+  );
+}
+
+type SmtpConfiguration = {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  fromEmail: string;
+  fromName: string;
+  physicalMailingAddress: string;
+  dkimSelector: string;
+};
+
+function SmtpConfigurationForm({
+  pending,
+  selectedPreset,
+  defaultFromName,
+  defaultPhysicalMailingAddress,
+  onPresetChange,
+  onCancel,
+  onSubmit,
+}: {
+  pending: boolean;
+  selectedPreset: string;
+  defaultFromName: string;
+  defaultPhysicalMailingAddress: string;
+  onPresetChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: (configuration: SmtpConfiguration) => Promise<void>;
+}) {
+  const preset = SMTP_PRESETS.find((entry) => entry.id === selectedPreset);
+
+  return (
+    <form
+      key={selectedPreset}
+      className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.035] p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        void onSubmit({
+          host: String(data.get("smtpHost") ?? ""),
+          port: Number(data.get("smtpPort") ?? 0),
+          username: String(data.get("smtpUsername") ?? ""),
+          password: String(data.get("smtpPassword") ?? ""),
+          fromEmail: String(data.get("smtpFromEmail") ?? ""),
+          fromName: String(data.get("smtpFromName") ?? ""),
+          physicalMailingAddress: String(
+            data.get("smtpPhysicalMailingAddress") ?? "",
+          ),
+          dkimSelector: String(data.get("smtpDkimSelector") ?? ""),
+        });
+      }}
+    >
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-[13px] font-semibold text-[#EDEEF1]">
+            Connect an SMTP mailbox
+          </h3>
+          <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-[#707589]">
+            Use a dedicated secondary-domain mailbox and an app password. Pentra
+            verifies the socket and sender authentication without sending an email;
+            no credential value is returned by the dashboard API.
+          </p>
+        </div>
+        {preset?.appPasswordUrl && (
+          <a
+            href={preset.appPasswordUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-[#38BDF8] hover:underline sm:mt-0"
+          >
+            Create app password <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SmtpField label="Provider">
+          <select
+            value={selectedPreset}
+            onChange={(event) => onPresetChange(event.target.value)}
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-[#090B10] px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          >
+            {SMTP_PRESETS.map((entry) => (
+              <option key={entry.id} value={entry.id}>{entry.label}</option>
+            ))}
+            <option value="custom">Other SMTP provider</option>
+          </select>
+        </SmtpField>
+        <SmtpField label="SMTP server">
+          <input
+            name="smtpHost"
+            required
+            defaultValue={preset?.host ?? ""}
+            placeholder="smtp.example.com"
+            autoComplete="off"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="Port">
+          <input
+            name="smtpPort"
+            type="number"
+            required
+            min={1}
+            max={65535}
+            defaultValue={preset?.port ?? 587}
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="DKIM selector">
+          <input
+            name="smtpDkimSelector"
+            required
+            pattern="[A-Za-z0-9_-]{1,63}"
+            defaultValue={selectedPreset === "gmail" ? "google" : "selector1"}
+            placeholder="selector1"
+            autoComplete="off"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="SMTP username">
+          <input
+            name="smtpUsername"
+            type="email"
+            required
+            placeholder="outreach@secondary-domain.com"
+            autoComplete="username"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="App password">
+          <input
+            name="smtpPassword"
+            type="password"
+            required
+            minLength={4}
+            placeholder="Never your normal password"
+            autoComplete="new-password"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="From email">
+          <input
+            name="smtpFromEmail"
+            type="email"
+            required
+            placeholder="outreach@secondary-domain.com"
+            autoComplete="email"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="Sender name">
+          <input
+            name="smtpFromName"
+            required
+            minLength={2}
+            maxLength={100}
+            defaultValue={defaultFromName}
+            placeholder="Real person or business"
+            autoComplete="name"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+      </div>
+      <div className="mt-3">
+        <SmtpField label="Physical mailing address (included in outreach)">
+          <input
+            name="smtpPhysicalMailingAddress"
+            required
+            minLength={15}
+            maxLength={300}
+            defaultValue={defaultPhysicalMailingAddress}
+            placeholder="Full business postal address"
+            autoComplete="street-address"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+      </div>
+      <p className="mt-3 text-[10px] text-[#707589]">{preset?.note}</p>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
+          Cancel
+        </Button>
+        <Button type="submit" loading={pending} icon={<ShieldCheck className="h-3.5 w-3.5" />}>
+          Save and verify SMTP
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function SmtpField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }
 

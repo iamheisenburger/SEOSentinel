@@ -286,6 +286,24 @@ test("durable lifecycle is additive, credential-free, and visible to the owner",
   assert.match(readinessUi, /Pentra action/);
 });
 
+test("legacy tenants enter the universal explicit-adapter contract without guessing", () => {
+  const start = schema.indexOf("managed_provisioning_requests: defineTable");
+  const end = schema.indexOf("account_plan_entitlements: defineTable", start);
+  const table = schema.slice(start, end);
+  assert.match(table, /universalContractMigrationVersion/);
+  assert.match(table, /by_universal_contract_migration/);
+  assert.match(dispatcher, /migrateUniversalOneSetupContract/);
+  assert.match(dispatcher, /UNIVERSAL_CONTRACT_MIGRATION_BATCH = 25/);
+  assert.match(dispatcher, /explicit_publisher_selection_required/);
+  assert.match(dispatcher, /explicit_outreach_transport_selection_required/);
+  assert.match(dispatcher, /managedTransportKind === "smartlead_managed"/);
+  assert.doesNotMatch(
+    dispatcher,
+    /managedTransportKind === "managed_ses"[\s\S]{0,100}return "smartlead_managed"/,
+  );
+  assert.match(sites, /universalContractMigrationVersion: 1/);
+});
+
 test("warm content is publisher-only while live rollout also requires fresh measurement", () => {
   assert.match(autopilot, /oneSetupPromotionBlockers\(ctx, site\)/);
   assert.match(autopilot, /oneSetupPromotionBlockers\(ctx, site, "live"\)/);

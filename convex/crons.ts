@@ -19,6 +19,18 @@ crons.daily("autopilot-8", { hourUTC: 21, minuteUTC: 0 }, internal.autopilot.dis
 // cadence independently of the generation pipeline itself.
 crons.interval("autopilot-sla-watchdog", { hours: 1 }, internal.autopilot.auditSla);
 crons.interval(
+  "growth-loop-ga-rollout-start",
+  { minutes: 15 },
+  internal.growthLoop.ensureEligibleRolloutInternal,
+  {},
+);
+crons.interval(
+  "growth-loop-ga-rollout",
+  { minutes: 15 },
+  internal.growthLoop.advanceRolloutInternal,
+  {},
+);
+crons.interval(
   "plan-entitlement-reconciliation-recovery",
   { minutes: 5 },
   internal.sites.recoverStalePlanFeatureSyncsInternal,

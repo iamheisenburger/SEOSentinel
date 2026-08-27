@@ -78,11 +78,34 @@ export function SetupReadiness({
   async function runOwnerAction(
     kind:
       | "connect_publishing"
+      | "connect_search_measurement"
+      | "connect_gmail_outreach"
+      | "configure_smtp_outreach"
       | "accept_publisher_autopublish"
       | "review_publishing",
   ) {
     if (kind === "connect_publishing" || kind === "review_publishing") {
       window.location.assign(`/sites/${siteId}?tab=settings`);
+      return;
+    }
+    if (kind === "connect_search_measurement") {
+      window.open(
+        `/api/gsc/auth?siteId=${siteId}`,
+        "gsc-connect",
+        "width=600,height=720,popup=yes",
+      );
+      return;
+    }
+    if (kind === "connect_gmail_outreach") {
+      window.open(
+        `/api/outreach/gmail/auth?siteId=${siteId}&returnTo=${encodeURIComponent("/onboarding")}`,
+        "outreach-connect",
+        "width=600,height=720,popup=yes",
+      );
+      return;
+    }
+    if (kind === "configure_smtp_outreach") {
+      window.location.assign("/backlinks?configure=smtp");
       return;
     }
     setPendingAction(kind);

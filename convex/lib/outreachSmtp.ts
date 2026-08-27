@@ -11,11 +11,9 @@
  * verification is under review; until it completes, only approved accounts can
  * connect.
  *
- * SMTP still matters: it works with any provider, needs no verification
- * queue, and gives a tenant a route when OAuth is unavailable. Managed SES
- * would be the better One-Setup default, but it requires affirming that every
- * recipient explicitly requested the mail, which is untrue of backlink
- * prospects.
+ * SMTP still matters: it works with any provider, needs no OAuth verification
+ * queue, and gives a tenant a customer-managed fallback. Smartlead is the
+ * managed One-Setup default; SMTP never impersonates that managed path.
  *
  * Pure and deterministic so credential and pacing decisions are provable
  * without opening a socket.

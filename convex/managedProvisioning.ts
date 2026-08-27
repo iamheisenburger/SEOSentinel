@@ -34,6 +34,8 @@ import { stageManagedOutreachMailboxRelease } from
 
 const MANAGED_PROVISIONING_FLEET_BATCH = 25;
 const MANAGED_PROVISIONING_LEGACY_BATCH = 25;
+const UNIVERSAL_CONTRACT_MIGRATION_BATCH = 25;
+const UNIVERSAL_CONTRACT_MIGRATION_VERSION = 1;
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -53,6 +55,130 @@ function inboundRelayRuntimeConfig() {
 
 type ManagedProvisioningRequest = Doc<"managed_provisioning_requests">;
 type ManagedProvisioningCapability = ManagedProvisioningRequest["publisher"];
+
+function exactLegacyPublisherKind(
+  request: ManagedProvisioningRequest,
+  site: Doc<"sites">,
+) {
+  if (request.publisherKind) return request.publisherKind;
+  if (request.publisher.mode !== "connect_existing") return undefined;
+  return site.publishMethod === "github" ||
+      site.publishMethod === "wordpress" ||
+      site.publishMethod === "webhook"
+    ? site.publishMethod
+    : undefined;
+}
+
+function exactLegacyOutreachTransport(
+  request: ManagedProvisioningRequest,
+  inboxes: Doc<"outreach_inboxes">[],
+) {
+  if (request.outreachTransport) return request.outreachTransport;
+  const inbox = inboxes.find((candidate) =>
+    candidate.status === "active" || candidate.status === "connected" ||
+    candidate.status === "warming"
+  );
+  if (!inbox) return undefined;
+  if (
+    request.outreachMailbox.mode === "managed" &&
+    inbox.managedTransportKind === "smartlead_managed"
+  ) return "smartlead_managed" as const;
+  if (request.outreachMailbox.mode !== "connect_existing") return undefined;
+  const provider = inbox.provider.trim().toLowerCase();
+  if (provider === "gmail" || provider === "gmail_oauth") {
+    return "gmail_oauth" as const;
+  }
+  if (provider === "smtp") return "smtp" as const;
+  return undefined;
+}
+
+async function migrateUniversalOneSetupContract(
+  ctx: MutationCtx,
+  request: ManagedProvisioningRequest,
+  timestamp: number,
+) {
+  if (
+    (request.universalContractMigrationVersion ?? 0) >=
+      UNIVERSAL_CONTRACT_MIGRATION_VERSION
+  ) return request;
+  if (
+    request.fulfillmentState === "leased" && request.leaseExpiresAt &&
+    request.leaseExpiresAt > timestamp
+  ) return request;
+  const site = await ctx.db.get(request.siteId);
+  if (!site || !requestIdentityIsCurrent({ request, site })) {
+    await ctx.db.patch(request._id, {
+      universalContractMigrationVersion:
+        UNIVERSAL_CONTRACT_MIGRATION_VERSION,
+      updatedAt: timestamp,
+    });
+    return ctx.db.get(request._id);
+  }
+  const inboxes = await ctx.db.query("outreach_inboxes")
+    .withIndex("by_site", (q) => q.eq("siteId", request.siteId))
+    .take(11);
+  if (inboxes.length > 10) {
+    // Require owner selection for an ambiguous identity set; never guess which
+    // of many historical mailboxes is authoritative.
+    inboxes.length = 0;
+  }
+  const publisherKind = exactLegacyPublisherKind(request, site);
+  const outreachTransport = exactLegacyOutreachTransport(request, inboxes);
+  const publisher: ManagedProvisioningCapability = publisherKind
+    ? request.publisher
+    : {
+        ...request.publisher,
+        state: "owner_action_required",
+        blockedReasonCode: "explicit_publisher_selection_required",
+        actionRequiredBy: "owner",
+        updatedAt: timestamp,
+      };
+  const outreachMailbox: ManagedProvisioningCapability = outreachTransport
+    ? request.outreachMailbox
+    : {
+        ...request.outreachMailbox,
+        state: "owner_action_required",
+        blockedReasonCode: "explicit_outreach_transport_selection_required",
+        actionRequiredBy: "owner",
+        updatedAt: timestamp,
+      };
+  const aggregateState = aggregateOneSetupRequestState([
+    publisher,
+    request.searchMeasurement,
+    outreachMailbox,
+  ]);
+  const revision = request.revision + 1;
+  const nextAttemptAt = publisherKind && outreachTransport
+    ? timestamp
+    : managedProvisioningRetryAt(timestamp);
+  await ctx.db.patch(request._id, {
+    publisherKind,
+    outreachTransport,
+    universalContractMigrationVersion: UNIVERSAL_CONTRACT_MIGRATION_VERSION,
+    publisher,
+    outreachMailbox,
+    aggregateState,
+    fulfillmentState: publisherKind && outreachTransport
+      ? request.fulfillmentState ?? "queued"
+      : "waiting_action",
+    nextAttemptAt,
+    leaseToken: undefined,
+    leaseExpiresAt: undefined,
+    revision,
+    updatedAt: timestamp,
+    completedAt: publisherKind && outreachTransport
+      ? request.completedAt
+      : undefined,
+  });
+  const migrated = await ctx.db.get(request._id);
+  if (publisherKind && outreachTransport && migrated) {
+    await ctx.scheduler.runAfter(0, internal.managedProvisioning.dispatchRequest, {
+      requestId: request._id,
+      expectedRevision: revision,
+    });
+  }
+  return migrated;
+}
 
 function activeRequestDomain(
   site: Doc<"sites"> | null,
@@ -764,6 +890,24 @@ export const dispatchFleet = internalMutation({
   args: {},
   handler: async (ctx) => {
     const timestamp = Date.now();
+    const universalContractLegacy = await ctx.db
+      .query("managed_provisioning_requests")
+      .withIndex("by_universal_contract_migration", (q) =>
+        q.eq("universalContractMigrationVersion", undefined)
+      )
+      .take(UNIVERSAL_CONTRACT_MIGRATION_BATCH);
+    let migrated = 0;
+    for (const request of universalContractLegacy) {
+      const result = await migrateUniversalOneSetupContract(
+        ctx,
+        request,
+        timestamp,
+      );
+      if (
+        result?.universalContractMigrationVersion ===
+          UNIVERSAL_CONTRACT_MIGRATION_VERSION
+      ) migrated += 1;
+    }
     const due = await ctx.db
       .query("managed_provisioning_requests")
       .withIndex("by_fulfillment_due", (q) =>
@@ -791,8 +935,10 @@ export const dispatchFleet = internalMutation({
       scheduled: unique.size,
       due: due.length,
       legacy: legacy.length,
+      migrated,
       boundedAt: MANAGED_PROVISIONING_FLEET_BATCH +
-        MANAGED_PROVISIONING_LEGACY_BATCH,
+        MANAGED_PROVISIONING_LEGACY_BATCH +
+        UNIVERSAL_CONTRACT_MIGRATION_BATCH,
     };
   },
 });

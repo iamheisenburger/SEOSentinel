@@ -21,6 +21,10 @@ const wizard = readFileSync(
   "src/components/onboarding/setup-wizard.tsx",
   "utf8",
 );
+const adapterChoices = readFileSync(
+  "src/components/onboarding/one-setup-adapter-choices.tsx",
+  "utf8",
+);
 const readinessUi = readFileSync(
   "src/components/onboarding/setup-readiness.tsx",
   "utf8",
@@ -206,7 +210,7 @@ test("aggregate readiness trusts canonical publishing, GSC, mailbox, and plan re
   assert.match(canonicalSetup, /inbox\.dkimVerifiedAt/);
   assert.match(canonicalSetup, /inbox\.dmarcVerifiedAt/);
   assert.match(canonicalSetup, /inbox\.complianceConfirmedAt/);
-  assert.match(canonicalSetup, /autonomousGmailCredentialIssues/);
+  assert.match(canonicalSetup, /autonomousOutreachTransportIssues/);
   assert.match(readiness, /accountCadenceSnapshot/);
   assert.match(readiness, /cadenceFitsMonthlyAllowance/);
   assert.match(readiness, /Automation mode authorized/);
@@ -319,16 +323,32 @@ test("Search Console readiness is fresh, revocable, and domain-bound", () => {
   );
 });
 
-test("one-setup UX defaults to managed Full Autopilot and hides provider controls", () => {
-  assert.match(wizard, /useState<SetupMode>\("managed"\)/);
-  assert.ok(
-    [...wizard.matchAll(/useState<SetupMode>\("managed"\)/g)].length >= 3,
-  );
+test("one-setup UX requires explicit publisher selection and defaults outreach to managed Smartlead", () => {
+  assert.match(wizard, /useState<PublisherKind>\("github"\)/);
+  assert.match(wizard, /useState<OutreachTransport>\("smartlead_managed"\)/);
+  assert.match(wizard, /const publisherMode: SetupMode = "connect_existing"/);
+  assert.match(wizard, /const measurementMode: SetupMode = "connect_existing"/);
+  assert.match(wizard, /outreachTransport === "smartlead_managed"/);
   assert.match(wizard, /useState<AutomationMode>\("full"\)/);
   assert.match(wizard, /Managed setup/);
   assert.match(wizard, /Connect existing/);
-  assert.match(wizard, /Enter your website and choose a cadence\. Pentra takes it from there\./);
-  assert.match(wizard, /Pentra-managed setup/);
+  assert.match(wizard, /Describe the business once, authorize each connection/);
+  assert.match(wizard, /Business and target market/);
+  assert.match(wizard, /targetAudienceSummary: targetAudience\.trim\(\)/);
+  assert.match(wizard, /productUsage: productUsage\.trim\(\)/);
+  assert.match(wizard, /Authority sender identity/);
+  assert.match(schema, /outreachSenderProfile: v\.optional\(v\.object/);
+  assert.match(readinessUi, /connect_search_measurement/);
+  assert.match(readinessUi, /connect_gmail_outreach/);
+  assert.match(readinessUi, /configure_smtp_outreach/);
+  assert.match(wizard, /One guided setup/);
+  assert.match(adapterChoices, /Publishing destination/);
+  assert.match(adapterChoices, /GitHub/);
+  assert.match(adapterChoices, /WordPress/);
+  assert.match(adapterChoices, /Signed webhook/);
+  assert.match(adapterChoices, /Managed sender/);
+  assert.match(adapterChoices, /Gmail/);
+  assert.match(adapterChoices, /SMTP/);
   assert.match(
     wizard,
     /Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts after the required production readiness gates verify/,
@@ -344,7 +364,7 @@ test("one-setup UX defaults to managed Full Autopilot and hides provider control
   assert.doesNotMatch(wizard, /repoOwner|repoName|App Password|webhookSecret/);
   assert.doesNotMatch(wizard, /LeadPilot/i);
   assert.doesNotMatch(wizard, /engine is running/i);
-  const primaryManagedSummary = wizard.indexOf("Pentra-managed setup");
+  const primaryManagedSummary = wizard.indexOf("One guided setup");
   const advancedSetup = wizard.indexOf("Advanced setup options");
   const integrationChoices = wizard.indexOf("Integration ownership");
   assert.ok(

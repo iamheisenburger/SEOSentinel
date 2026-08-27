@@ -24,7 +24,7 @@ const layout = readFileSync(
   "utf8",
 );
 const middleware = readFileSync(
-  new URL("../src/middleware.ts", import.meta.url),
+  new URL("../src/proxy.ts", import.meta.url),
   "utf8",
 );
 const landingNav = readFileSync(
@@ -152,4 +152,17 @@ test("fallback screens remain visibly inside Pentra", () => {
   );
   assert.match(fallback, /Pentra/);
   assert.match(fallback, /Back to Pentra/);
+});
+
+test("public unsubscribe confirmation and settlement remain Pentra-branded", () => {
+  const route = readFileSync(
+    new URL("../src/app/unsubscribe/[token]/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(route, /brandedPage/);
+  assert.match(route, /<span>Pentra<\/span>/);
+  assert.match(route, /Stop outreach emails/);
+  assert.match(route, /You are unsubscribed/);
+  assert.match(route, /Cache-Control[\s\S]*no-store/);
+  assert.match(route, /frame-ancestors 'none'/);
 });

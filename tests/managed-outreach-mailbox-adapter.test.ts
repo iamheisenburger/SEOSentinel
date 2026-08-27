@@ -325,7 +325,7 @@ test("managed readiness requires canonical Gmail identity, compliance, refresh s
     "claim-time live DNS remains in the delivery implementation");
 });
 
-test("the Node boundary uses the signed managed-SES adapter behind the durable external boundary", () => {
+test("the Node boundary keeps legacy managed SES behind its signed adapter", () => {
   assert.equal(managedOutreachMailboxAdapterConfiguration({}), null);
   assert.equal(managedOutreachMailboxAdapterConfiguration({
     endpoint: "http://adapter.invalid",
@@ -360,9 +360,11 @@ test("the Node boundary uses the signed managed-SES adapter behind the durable e
     action.indexOf("markProvisioningExternalBoundaryInternal") <
       action.indexOf('route: "provision"'),
   );
-  assert.doesNotMatch(
+  assert.doesNotMatch(action, /from ["']googleapis|admin\.directory\s*\(/i);
+  assert.match(
     action,
-    /\bfetch\s*\(|from ["']googleapis|admin\.directory\s*\(/i,
+    /fetch\(url, \{[\s\S]*redirect: "error"/,
+    "the Smartlead path is allowed to call its bounded provider API directly",
   );
   assert.match(action, /recordReleaseCompletedInternal/);
   assert.match(action, /internal\.managedOutreachMailbox\.markProvisioningExternalBoundaryInternal/);
@@ -519,6 +521,14 @@ test("mode and domain retirement quarantine the exact managed inbox before relea
     "configurationVersion:",
     "cancelAutonomousSequenceInternal",
   ]) assert.match(quarantine, new RegExp(fence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(
+    quarantine,
+    /managedTransportKind: resource\.transportKind === SMARTLEAD_MANAGED_TRANSPORT/,
+  );
+  assert.match(
+    ledger,
+    /inbox\.provider === "smartlead"[\s\S]*inbox\.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT[\s\S]*inbox\.managedTransportResourceReceipt === resource\.resourceReceipt/,
+  );
 
   const releaseRequest = ledger.slice(
     ledger.indexOf("async function requestResourceRelease"),
@@ -591,7 +601,10 @@ test("release defers provider deprovision across provision, send, and canary amb
   );
   assert.match(ledger, /reconcileProvisioningStatusByOperationKey: true/);
   assert.match(ledger, /releaseWinsLateProvision: true/);
-  const release = action.slice(action.indexOf("export const release"));
+  const releaseAction = action.slice(action.indexOf("export const release"));
+  const release = releaseAction.slice(
+    releaseAction.indexOf("const config = adapterConfig()"),
+  );
   assert.ok(
     release.indexOf("getReleaseOperation") < release.indexOf('route: "release"'),
   );
@@ -794,7 +807,8 @@ test("owner OAuth cannot overwrite managed provenance and a managed legacy drain
     outreach.indexOf("export const getGmailReconnectReadinessInternal"),
     outreach.indexOf("export const listLegacyInboundFleetPage"),
   );
-  assert.match(ownerPreflight, /setupRequest\?\.outreachMailbox\.mode === "managed"/);
+  assert.match(ownerPreflight, /setupRequest\.outreachMailbox\.mode !== "connect_existing"/);
+  assert.match(ownerPreflight, /setupRequest\.outreachTransport !== "gmail_oauth"/);
   assert.match(ownerPreflight, /managed_adapter_retiring/);
   assert.match(http, /outreach-gmail\/preflight[\s\S]*return json\(result\)/);
   assert.match(gmailAuthRoute, /if \(!preflight\.ready\)[\s\S]*status: 409/);

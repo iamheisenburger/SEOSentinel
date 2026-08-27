@@ -4571,7 +4571,7 @@ async function handleArticle(
   // ── Step 3: Fact Check (graceful degradation) ──
   await reportProgress(8, "Fact-checking claims...");
   let finalMarkdown = article.markdown;
-  let finalSources = dedupedSources;
+  const finalSources = dedupedSources;
   let factCheckScore: number | undefined;
   let factCheckNotes: string | undefined;
   const allBannedNames = [

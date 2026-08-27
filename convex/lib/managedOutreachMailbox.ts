@@ -14,6 +14,11 @@ import {
   normalizeDomain,
   outreachSenderReadinessIssues,
 } from "./outreachPacing.ts";
+import {
+  SMARTLEAD_ADAPTER_VERSION,
+  SMARTLEAD_MANAGED_TRANSPORT,
+  SMARTLEAD_MINIMUM_WARMUP_MS,
+} from "./smartlead.ts";
 
 export const MANAGED_OUTREACH_MAILBOX_CONTRACT_VERSION = 1;
 export const MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION = 1;
@@ -67,6 +72,9 @@ export function managedSesRotationCandidateEligible(args: {
 export type ManagedOutreachMailboxProfile = {
   fromName: string;
   physicalMailingAddress: string;
+  /** Owner-selected secondary sending domain. Required for every new
+   * Smartlead-managed generation; optional only on legacy settlement rows. */
+  senderDomainChoice?: string;
   attestationVersion: number;
   senderIdentityAndAddressAttestedAt: number;
   dedicatedSenderIdentityAttestedAt: number;
@@ -227,11 +235,18 @@ export function managedOutreachMailboxProfileIssues(
   const issues: string[] = [];
   const fromName = profile?.fromName?.trim() ?? "";
   const address = profile?.physicalMailingAddress?.trim() ?? "";
+  const senderDomain = normalizeDomain(profile?.senderDomainChoice ?? "");
   if (fromName.length < 2 || fromName.length > 100) {
     issues.push("sender_name_invalid");
   }
   if (address.length < 15 || address.length > 300) {
     issues.push("physical_mailing_address_invalid");
+  }
+  if (
+    profile?.senderDomainChoice !== undefined &&
+    (!senderDomain || senderDomain !== profile.senderDomainChoice)
+  ) {
+    issues.push("sender_domain_choice_invalid");
   }
   if (
     profile?.attestationVersion !==
@@ -298,6 +313,55 @@ export function managedOutreachMailboxOperationalIssues(args: {
     return ["owner_sender_attestation_missing"];
   }
   const expectedProfile = args.expectedProfile as ManagedOutreachMailboxProfile;
+  if (resource.transportKind === SMARTLEAD_MANAGED_TRANSPORT) {
+    const issues: string[] = [];
+    const senderDomain = normalizeDomain(inbox.senderDomain ?? "");
+    const fromDomain = normalizeDomain(inbox.fromEmail.split("@")[1] ?? "");
+    if (
+      inbox.provider !== "smartlead" ||
+      inbox.managedTransportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      inbox.credentialSource !== "managed_adapter" ||
+      inbox.managedTransportAdapterVersion !== SMARTLEAD_ADAPTER_VERSION ||
+      resource.adapterVersion !== SMARTLEAD_ADAPTER_VERSION ||
+      !resource.encryptedProviderBinding ||
+      !resource.configurationHash ||
+      resource.canonicalInboxId !== inbox._id
+    ) issues.push("smartlead_resource_binding_invalid");
+    if (
+      !expectedProfile.senderDomainChoice ||
+      senderDomain !== expectedProfile.senderDomainChoice ||
+      fromDomain !== senderDomain
+    ) issues.push("smartlead_sender_domain_mismatch");
+    if (!resource.domainAuthenticationReceipt) {
+      issues.push("smartlead_domain_authentication_pending");
+    }
+    if (
+      resource.warmupState !== "verified" ||
+      !resource.warmupStartedAt ||
+      !resource.warmupEligibleAt ||
+      resource.warmupEligibleAt > args.now ||
+      resource.warmupEligibleAt <
+        resource.warmupStartedAt + SMARTLEAD_MINIMUM_WARMUP_MS
+    ) issues.push("smartlead_mailbox_warming");
+    if (!resource.deliveryCanaryReceipt) issues.push("smartlead_delivery_canary_pending");
+    if (!resource.replyCanaryReceipt) issues.push("smartlead_reply_canary_pending");
+    if (!resource.bounceCanaryReceipt) issues.push("smartlead_bounce_canary_pending");
+    if (!resource.unsubscribeCanaryReceipt) issues.push("smartlead_unsubscribe_canary_pending");
+    if (!resource.cancellationCanaryReceipt) issues.push("smartlead_cancellation_canary_pending");
+    if (inbox.credentialOwnerAccountKey !== args.ownerAccountKey) {
+      issues.push("credential_owner_mismatch");
+    }
+    if (inbox.fromName?.trim() !== expectedProfile.fromName) {
+      issues.push("sender_identity_mismatch");
+    }
+    if (inbox.physicalMailingAddress?.trim() !== expectedProfile.physicalMailingAddress) {
+      issues.push("physical_mailing_address_mismatch");
+    }
+    if (!inbox.verifiedAt || !["warming", "active"].includes(inbox.status)) {
+      issues.push("mailbox_not_operational");
+    }
+    return [...new Set(issues)];
+  }
   if (inbox.provider === MANAGED_SES_TRANSPORT) {
     const issues: string[] = [];
     const senderDomain = normalizeDomain(inbox.senderDomain ?? "");
@@ -417,7 +481,7 @@ export function managedOutreachMailboxReleaseSealed(args: {
 
 export type ManagedOutreachMailboxProvisionOperation = {
   contractVersion: number;
-  transport: "managed_ses";
+  transport: "managed_ses" | "smartlead_managed";
   operationKey: string;
   generation: number;
   configurationRevision: number;
@@ -425,6 +489,12 @@ export type ManagedOutreachMailboxProvisionOperation = {
   // deadline. Release additionally waits through a late-result grace window.
   externalDeadlineAt: number;
   tenantDomain: string;
+  senderDomainChoice?: string;
+  providerState: {
+    encryptedBinding?: string;
+    clientRequestedAt?: number;
+    mailboxRequestedAt?: number;
+  };
   senderProfile: {
     fromName: string;
     physicalMailingAddress: string;
@@ -450,10 +520,12 @@ export type ManagedOutreachMailboxProvisionOperation = {
 
 export type ManagedOutreachMailboxReleaseOperation = {
   contractVersion: number;
-  transport: "managed_ses";
+  transport: "managed_ses" | "smartlead_managed";
   operationKey: string;
   generation: number;
   provisioningAdapterVersion?: string;
+  encryptedProviderBinding?: string;
+  senderDomainChoice?: string;
   releaseReason: string;
   requirements: {
     reconcileProvisioningStatusByOperationKey: true;

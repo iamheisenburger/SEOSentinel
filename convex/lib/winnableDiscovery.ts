@@ -55,6 +55,10 @@ export const OPEN_SERP_AUTHORITY = 20;
  * correct response to a topic too thin to support a good article is to not
  * select it, never to publish a worse article.
  */
+/**
+ * Legacy calibration reference only. It is no longer an admission boundary:
+ * content-depth and commercial evidence make that decision downstream.
+ */
 export const MIN_VIABLE_MONTHLY_DEMAND = 50;
 
 export type WinnableBand = {
@@ -125,8 +129,10 @@ export function winnabilityScore(args: {
   observedCompetitors?: number;
 }): number {
   const volume = Math.max(0, args.monthlySearches ?? 0);
-  // Too thin to sustain a publishable article, however winnable it looks.
-  if (volume < MIN_VIABLE_MONTHLY_DEMAND) return 0;
+  // Demand is a ranking signal, not a universal admission floor. A measured
+  // low-volume commercial query may be more valuable and more supportable
+  // than a broad head term; the OpportunityDecision owns the depth gate.
+  if (volume <= 0) return 0;
   if (!serpIsWinnableNow(args)) return 0;
   const gap = args.tenantAuthority - (args.medianSerpAuthority as number);
   const probability = 1 / (1 + Math.exp(-gap / AUTHORITY_GAP_SCALE));
@@ -172,7 +178,7 @@ export function preSerpWinnability(args: {
   monthlySearches?: number;
 }): number {
   const volume = Math.max(0, args.monthlySearches ?? 0);
-  if (volume < MIN_VIABLE_MONTHLY_DEMAND) return 0;
+  if (volume <= 0) return 0;
   const difficulty = typeof args.keywordDifficulty === "number" &&
       Number.isFinite(args.keywordDifficulty)
     ? Math.max(0, Math.min(100, args.keywordDifficulty))

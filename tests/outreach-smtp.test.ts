@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -10,12 +11,25 @@ import {
   smtpConfigIssues,
   smtpTransportOptions,
 } from "../convex/lib/outreachSmtp.ts";
+import { sanitizeInboxForClient } from "../convex/lib/outreachSecurity.ts";
+
+const OUTREACH_MUTATIONS = readFileSync(
+  new URL("../convex/outreach.ts", import.meta.url),
+  "utf8",
+);
+const OUTREACH_ACTIONS = readFileSync(
+  new URL("../convex/actions/outreach.ts", import.meta.url),
+  "utf8",
+);
+const BACKLINKS_UI = readFileSync(
+  new URL("../src/app/(dashboard)/backlinks/page.tsx", import.meta.url),
+  "utf8",
+);
 
 /**
- * SMTP exists because Gmail OAuth cannot be the only path: gmail.send is a
- * Google restricted scope, so an unverified app serves only hand-added
- * testers. A general SaaS cannot require the operator to approve each paying
- * customer, so every tenant must be able to connect a mailbox unaided.
+ * SMTP exists because Gmail OAuth cannot be the only path: an app awaiting
+ * Google's sensitive-scope verification can serve only hand-added testers.
+ * A general SaaS therefore needs a customer-managed non-OAuth fallback.
  */
 
 const VALID = {
@@ -110,4 +124,72 @@ test("classification never echoes the provider's raw text", () => {
   const classified = classifySmtpFailure(raw);
   assert.equal(classified.operatorMessage.includes("sender@example.com"), false);
   assert.equal(classified.operatorMessage.includes("mail.internal.corp"), false);
+});
+
+test("the public inbox projection never exposes SMTP credentials", () => {
+  const projected = sanitizeInboxForClient({
+    _id: "inbox",
+    siteId: "site",
+    provider: "smtp",
+    fromEmail: "sender@example.com",
+    smtpHost: "smtp.internal.example.com",
+    smtpUsername: "credential-owner@example.com",
+    smtpPassword: "never-return-this-secret",
+    status: "connected",
+  }, Date.now());
+  const serialized = JSON.stringify(projected);
+  assert.doesNotMatch(serialized, /never-return-this-secret/);
+  assert.doesNotMatch(serialized, /credential-owner@example\.com/);
+  assert.doesNotMatch(serialized, /smtp\.internal\.example\.com/);
+  assert.equal(projected?.credentialsPresent, true);
+});
+
+test("SMTP configuration, verification and delivery are wired end to end", () => {
+  assert.match(OUTREACH_MUTATIONS, /export const configureSmtpInbox = mutation/);
+  assert.match(
+    OUTREACH_MUTATIONS,
+    /export const settleSmtpVerificationInternal = internalMutation/,
+  );
+  assert.match(
+    OUTREACH_MUTATIONS,
+    /export const markSmtpDeliveryExternalBoundary = internalMutation/,
+  );
+  assert.match(OUTREACH_ACTIONS, /export const verifySmtpInbox = action/);
+  assert.match(OUTREACH_ACTIONS, /await transport\.verify\(\)/);
+  assert.match(OUTREACH_ACTIONS, /await transport\.sendMail\(/);
+  assert.match(
+    OUTREACH_ACTIONS,
+    /smtp\s*\? internal\.outreach\.markSmtpDeliveryExternalBoundary/,
+  );
+  assert.match(
+    OUTREACH_ACTIONS,
+    /unverified: failure\.reason === "connection_failed"[\s\S]*failure\.reason === "unknown"/,
+  );
+});
+
+test("the branded backlinks UI exposes SMTP setup without echoing a saved password", () => {
+  for (const field of [
+    "smtpHost",
+    "smtpPort",
+    "smtpUsername",
+    "smtpPassword",
+    "smtpFromEmail",
+    "smtpDkimSelector",
+  ]) {
+    assert.match(BACKLINKS_UI, new RegExp(`name="${field}"`), field);
+  }
+  assert.match(BACKLINKS_UI, /Save and verify SMTP/);
+  assert.match(BACKLINKS_UI, /type="password"/);
+  assert.doesNotMatch(BACKLINKS_UI, /defaultValue=\{String\(inbox\.smtpPassword/);
+});
+
+test("the controlled hard-bounce canary accepts both customer-managed transports", () => {
+  assert.match(
+    OUTREACH_ACTIONS,
+    /!\["gmail", "smtp"\]\.includes\(inbox\.provider\)/,
+  );
+  assert.match(
+    OUTREACH_ACTIONS,
+    /only the later signed structured DSN can/,
+  );
 });

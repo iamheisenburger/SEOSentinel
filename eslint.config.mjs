@@ -12,7 +12,17 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "convex/_generated/**",
   ]),
+  {
+    // Existing integration boundaries still contain deliberately untyped
+    // provider payloads. Keep them visible while allowing lint to become a
+    // real CI gate; new code is expected to use validated unknown records.
+    rules: {
+      "@typescript-eslint/no-explicit-any": "warn",
+      "react-hooks/set-state-in-effect": "warn",
+    },
+  },
 ]);
 
 export default eslintConfig;

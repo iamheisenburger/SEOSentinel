@@ -199,6 +199,16 @@ const ONE_SETUP_AUTOMATION_MODE_VALIDATOR = v.union(
   v.literal("assisted"),
   v.literal("full"),
 );
+const ONE_SETUP_PUBLISHER_KIND_VALIDATOR = v.union(
+  v.literal("github"),
+  v.literal("wordpress"),
+  v.literal("webhook"),
+);
+const ONE_SETUP_OUTREACH_TRANSPORT_VALIDATOR = v.union(
+  v.literal("smartlead_managed"),
+  v.literal("gmail_oauth"),
+  v.literal("smtp"),
+);
 const ONE_SETUP_PROGRESS_VALIDATOR = v.union(
   v.literal("owner_action_required"),
   v.literal("requested"),
@@ -1641,8 +1651,11 @@ function safeOneSetupReasonCode(value: string | undefined): string | undefined {
 
 function managedOutreachProfileFromOwnerInput(args: {
   mode: OneSetupMode;
+  requiresSenderDomain: boolean;
+  tenantDomain: string;
   fromName?: string;
   physicalMailingAddress?: string;
+  senderDomainChoice?: string;
   attestationVersion?: number;
   canaryConsentVersion?: number;
   confirmsSenderIdentityAndAddress?: boolean;
@@ -1657,6 +1670,17 @@ function managedOutreachProfileFromOwnerInput(args: {
     .replace(/[\r\n<>]/g, " ").replace(/\s+/g, " ").trim();
   const physicalMailingAddress = String(args.physicalMailingAddress ?? "")
     .replace(/[\r\n]+/g, ", ").replace(/\s+/g, " ").trim();
+  const senderDomainChoice = normalizeCanonicalDomain(
+    String(args.senderDomainChoice ?? ""),
+  );
+  if (
+    args.requiresSenderDomain &&
+    (!senderDomainChoice || senderDomainChoice === args.tenantDomain)
+  ) {
+    throw new Error(
+      "Choose a valid secondary sending domain that is separate from the website domain",
+    );
+  }
   if (
     args.attestationVersion !==
       MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION ||
@@ -1674,6 +1698,7 @@ function managedOutreachProfileFromOwnerInput(args: {
   const profileUnchanged = Boolean(
     args.previousProfile?.fromName === fromName &&
       args.previousProfile.physicalMailingAddress === physicalMailingAddress &&
+      args.previousProfile.senderDomainChoice === senderDomainChoice &&
       args.previousProfile.attestationVersion === args.attestationVersion &&
       args.previousProfile.canaryConsentVersion === args.canaryConsentVersion &&
       managedOutreachMailboxProfileIssues(args.previousProfile).length === 0,
@@ -1683,6 +1708,7 @@ function managedOutreachProfileFromOwnerInput(args: {
     : {
         fromName,
         physicalMailingAddress,
+        senderDomainChoice: senderDomainChoice || undefined,
         attestationVersion: args.attestationVersion,
         senderIdentityAndAddressAttestedAt: args.timestamp,
         dedicatedSenderIdentityAttestedAt: args.timestamp,
@@ -1703,6 +1729,8 @@ function managedOutreachProfileFromOwnerInput(args: {
 export const saveOneSetupRequest = mutation({
   args: {
     siteId: v.id("sites"),
+    publisherKind: ONE_SETUP_PUBLISHER_KIND_VALIDATOR,
+    outreachTransport: ONE_SETUP_OUTREACH_TRANSPORT_VALIDATOR,
     publisherMode: ONE_SETUP_MODE_VALIDATOR,
     searchMeasurementMode: ONE_SETUP_MODE_VALIDATOR,
     outreachMailboxMode: ONE_SETUP_MODE_VALIDATOR,
@@ -1711,6 +1739,7 @@ export const saveOneSetupRequest = mutation({
     requestedCadencePerWeek: v.number(),
     managedOutreachFromName: v.optional(v.string()),
     managedOutreachPhysicalMailingAddress: v.optional(v.string()),
+    managedOutreachSenderDomain: v.optional(v.string()),
     managedOutreachAttestationVersion: v.optional(v.number()),
     managedOutreachCanaryConsentVersion: v.optional(v.number()),
     confirmsSenderIdentityAndAddress: v.optional(v.boolean()),
@@ -1746,6 +1775,25 @@ export const saveOneSetupRequest = mutation({
         "Authorize automatic publishing before enabling Full Autopilot",
       );
     }
+    if (args.publisherMode !== "connect_existing") {
+      throw new Error(
+        "Choose GitHub, WordPress, or signed webhook and authorize that exact destination",
+      );
+    }
+    if (args.searchMeasurementMode !== "connect_existing") {
+      throw new Error(
+        "Search Console OAuth must be authorized by the website owner during One Setup",
+      );
+    }
+    const expectedMailboxMode = args.outreachTransport === "smartlead_managed"
+      ? "managed"
+      : "connect_existing";
+    if (args.outreachMailboxMode !== expectedMailboxMode) {
+      throw new Error("The outreach transport and setup ownership do not match");
+    }
+    if (site.publishMethod !== args.publisherKind) {
+      throw new Error("Save the selected publishing destination before submitting setup");
+    }
 
     const domainSnapshot = siteCanonicalDomain(site) ??
       normalizedAuthorityDomain(site.domain);
@@ -1759,6 +1807,57 @@ export const saveOneSetupRequest = mutation({
       .withIndex("by_site", (q) => q.eq("siteId", site._id))
       .unique();
     const timestamp = now();
+    const reset = Boolean(
+      existing &&
+        (existing.ownerAccountKey !== ownerAccountKey ||
+          existing.domainSnapshot !== domainSnapshot ||
+          existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION ||
+          !oneSetupDomainRevisionReceiptMatches({
+            currentCanonicalDomainRevision: domainRevisionSnapshot,
+            receiptDomainRevision: existing.domainRevisionSnapshot,
+            legacyUnstampedAllowed: legacyDomainReceiptsAllowed,
+          })),
+    );
+    const outreachFromName = String(args.managedOutreachFromName ?? "")
+      .replace(/[\r\n<>]/g, " ").replace(/\s+/g, " ").trim();
+    const outreachPhysicalMailingAddress = String(
+      args.managedOutreachPhysicalMailingAddress ?? "",
+    ).replace(/[\r\n]+/g, ", ").replace(/\s+/g, " ").trim();
+    if (
+      outreachFromName.length < 2 ||
+      outreachPhysicalMailingAddress.length < 15 ||
+      args.managedOutreachAttestationVersion !==
+        MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION ||
+      args.managedOutreachCanaryConsentVersion !==
+        MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION ||
+      args.confirmsSenderIdentityAndAddress !== true ||
+      args.authorizesManagedDeliveryEventCanary !== true ||
+      args.confirmsAutonomousSendingRequiresSeparateConsent !== true
+    ) {
+      throw new Error(
+        "Confirm the sender identity, mailing address, signed delivery-event canary, and separate automatic-sending consent boundary",
+      );
+    }
+    const priorSenderProfile = reset ? undefined : existing?.outreachSenderProfile;
+    const senderProfileUnchanged = Boolean(
+      priorSenderProfile?.fromName === outreachFromName &&
+      priorSenderProfile.physicalMailingAddress ===
+        outreachPhysicalMailingAddress &&
+      priorSenderProfile.attestationVersion ===
+        args.managedOutreachAttestationVersion &&
+      priorSenderProfile.canaryConsentVersion ===
+        args.managedOutreachCanaryConsentVersion,
+    );
+    const outreachSenderProfile = senderProfileUnchanged
+      ? priorSenderProfile
+      : {
+          fromName: outreachFromName,
+          physicalMailingAddress: outreachPhysicalMailingAddress,
+          attestationVersion: args.managedOutreachAttestationVersion!,
+          senderIdentityAndAddressAttestedAt: timestamp,
+          deliveryEventCanaryAuthorizedAt: timestamp,
+          canaryConsentVersion: args.managedOutreachCanaryConsentVersion!,
+        };
     const desiredApprovalRequired = args.automationMode === "assisted";
     if (Boolean(site.approvalRequired) !== desiredApprovalRequired) {
       await assertConfigUnlocked(ctx, site);
@@ -1777,19 +1876,11 @@ export const saveOneSetupRequest = mutation({
         updatedAt: timestamp,
       });
     }
-    const reset = Boolean(
-      existing &&
-        (existing.ownerAccountKey !== ownerAccountKey ||
-          existing.domainSnapshot !== domainSnapshot ||
-          existing.contractVersion !== ONE_SETUP_CONTRACT_VERSION ||
-          !oneSetupDomainRevisionReceiptMatches({
-            currentCanonicalDomainRevision: domainRevisionSnapshot,
-            receiptDomainRevision: existing.domainRevisionSnapshot,
-            legacyUnstampedAllowed: legacyDomainReceiptsAllowed,
-          })),
-    );
     const mailboxHardReset = Boolean(
-      reset || existing?.fulfillmentState === "cancelled",
+      reset ||
+        existing?.fulfillmentState === "cancelled" ||
+        (existing?.outreachTransport !== undefined &&
+          existing.outreachTransport !== args.outreachTransport),
     );
     if (
       existing?.outreachMailbox.mode === "managed" &&
@@ -1806,8 +1897,11 @@ export const saveOneSetupRequest = mutation({
     }
     const managedOutreachProfile = managedOutreachProfileFromOwnerInput({
       mode: args.outreachMailboxMode,
+      requiresSenderDomain: args.outreachTransport === "smartlead_managed",
+      tenantDomain: domainSnapshot,
       fromName: args.managedOutreachFromName,
       physicalMailingAddress: args.managedOutreachPhysicalMailingAddress,
+      senderDomainChoice: args.managedOutreachSenderDomain,
       attestationVersion: args.managedOutreachAttestationVersion,
       canaryConsentVersion: args.managedOutreachCanaryConsentVersion,
       confirmsSenderIdentityAndAddress:
@@ -2041,6 +2135,10 @@ export const saveOneSetupRequest = mutation({
           })
         : undefined,
       requestedCadencePerWeek: args.requestedCadencePerWeek,
+      publisherKind: args.publisherKind,
+      outreachTransport: args.outreachTransport,
+      universalContractMigrationVersion: 1,
+      outreachSenderProfile,
       outreachMailboxGeneration,
       managedOutreachProfile,
       publisher,
@@ -2553,6 +2651,9 @@ export const getOneSetupReadiness = query({
       actionMessage?: string;
       actionKind?:
         | "connect_publishing"
+        | "connect_search_measurement"
+        | "connect_gmail_outreach"
+        | "configure_smtp_outreach"
         | "accept_publisher_autopublish"
         | "review_publishing";
       actionLabel?: string;
@@ -2641,6 +2742,12 @@ export const getOneSetupReadiness = query({
         actionMessage: oneSetupActionMessage(
           measurementProgress.blockedReasonCode,
         ),
+        actionKind: measurementProgress.actionRequiredBy === "owner"
+          ? "connect_search_measurement"
+          : undefined,
+        actionLabel: measurementProgress.actionRequiredBy === "owner"
+          ? "Connect Search Console"
+          : undefined,
       },
       {
         key: "outreach_mailbox",
@@ -2655,6 +2762,16 @@ export const getOneSetupReadiness = query({
         actionMessage: oneSetupActionMessage(
           outreachProgress.blockedReasonCode,
         ),
+        actionKind: outreachProgress.actionRequiredBy === "owner"
+          ? request?.outreachTransport === "smtp"
+            ? "configure_smtp_outreach"
+            : "connect_gmail_outreach"
+          : undefined,
+        actionLabel: outreachProgress.actionRequiredBy === "owner"
+          ? request?.outreachTransport === "smtp"
+            ? "Configure SMTP mailbox"
+            : "Connect Gmail mailbox"
+          : undefined,
       },
     ];
     const aggregate = aggregateOneSetupReadiness(
@@ -2682,6 +2799,9 @@ export const getOneSetupReadiness = query({
         policyHash: PUBLISHER_AUTOPUBLISH_CONSENT_POLICY_HASH,
         text: PUBLISHER_AUTOPUBLISH_CONSENT_TEXT,
       },
+      outreachSenderProfile: requestValid
+        ? request!.outreachSenderProfile
+        : undefined,
       aggregate,
       stages,
       fulfillment: requestValid
@@ -3699,6 +3819,8 @@ const SITE_DELETION_STAGES = [
   "managed_ses_event_canaries",
   "outreach_inbound_relay_canaries",
   "outreach_inbound_relay_receipts",
+  "smartlead_canary_operations",
+  "smartlead_webhook_events",
   "outreach_messages",
   // A signed event may settle while its exact message/canary row is being
   // drained. Sweep the event index again after both parent tables are gone;
@@ -3713,6 +3835,9 @@ const SITE_DELETION_STAGES = [
   "outcome_ingest_credentials",
   "seo_authority_runs",
   "seo_authority_opportunities",
+  "opportunity_decision_receipts",
+  "outreach_policy_decisions",
+  "growth_loop_canary_receipts",
   "expected_click_demand_jobs",
   "expected_click_evidence_jobs",
   "cadence_micro_seed_jobs",
@@ -4342,6 +4467,10 @@ async function deletionRowsForStage(
       return ctx.db.query("outreach_inbound_relay_canaries").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_inbound_relay_receipts":
       return ctx.db.query("outreach_inbound_relay_receipts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "smartlead_canary_operations":
+      return ctx.db.query("smartlead_canary_operations").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "smartlead_webhook_events":
+      return ctx.db.query("smartlead_webhook_events").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_messages":
       return ctx.db.query("outreach_messages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_contacts":
@@ -4360,6 +4489,12 @@ async function deletionRowsForStage(
       return ctx.db.query("seo_authority_runs").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "seo_authority_opportunities":
       return ctx.db.query("seo_authority_opportunities").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "opportunity_decision_receipts":
+      return ctx.db.query("opportunity_decision_receipts").withIndex("by_site_classification", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "outreach_policy_decisions":
+      return ctx.db.query("outreach_policy_decisions").withIndex("by_site_decision", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "growth_loop_canary_receipts":
+      return ctx.db.query("growth_loop_canary_receipts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "expected_click_demand_jobs":
       return ctx.db.query("expected_click_demand_jobs").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "expected_click_evidence_jobs":

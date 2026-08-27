@@ -125,11 +125,11 @@ export function sanitizeInboxForClient(
   const relayReady = Boolean(
     relayConfigured &&
     relayDsnRoutingReady &&
-    inbox.provider === "gmail" &&
+    ["gmail", "smtp"].includes(String(inbox.provider ?? "")) &&
     !["disconnected", "suspended"].includes(String(inbox.status ?? "")),
   );
   const safeDsnRoutingTarget = Boolean(
-    inbox.provider === "gmail" &&
+    ["gmail", "smtp"].includes(String(inbox.provider ?? "")) &&
     credentialsPresent &&
     !["disconnected", "suspended"].includes(String(inbox.status ?? "")) &&
     typeof relayDsnRoutingTargetAddress === "string" &&
@@ -147,6 +147,7 @@ export function sanitizeInboxForClient(
     _id: inbox._id,
     siteId: inbox.siteId,
     provider: inbox.provider,
+    managedTransportKind: inbox.managedTransportKind,
     fromEmail: inbox.fromEmail,
     fromName: inbox.fromName,
     replyToEmail: inbox.replyToEmail,

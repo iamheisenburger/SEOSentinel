@@ -222,7 +222,7 @@ test("target proof occurs before persistence, drafting, and the delivery claim",
   assert.ok(
     prepare.indexOf("fetchLiveAuthorityTarget({") >= 0 &&
       prepare.indexOf("fetchLiveAuthorityTarget({") <
-        prepare.indexOf("const draft = draftOutreachMessage({"),
+        prepare.indexOf("const draft = draftOutreachMessage("),
   );
   const liveEvidence = drafting.slice(
     drafting.indexOf("async function liveOpportunityEvidence"),
