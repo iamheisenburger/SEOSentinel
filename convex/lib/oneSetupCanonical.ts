@@ -1,6 +1,6 @@
 import type { Doc } from "../_generated/dataModel";
 import { publicationDestinationBlockers } from "./autopilotReadiness.ts";
-import { autonomousGmailCredentialIssues } from "./outreachDelivery.ts";
+import { autonomousOutreachTransportIssues } from "./outreachDelivery.ts";
 import {
   managedOutreachMailboxOperationallyReady,
   type ManagedOutreachMailboxProfile,
@@ -127,9 +127,9 @@ export function oneSetupOutreachMailboxReceiptVerified(args: {
       inbox.dkimVerifiedAt &&
       inbox.dmarcVerifiedAt &&
       inbox.complianceConfirmedAt &&
-      autonomousGmailCredentialIssues({
-        oauthScopes: inbox.oauthScopes,
-        hasRefreshToken: Boolean(inbox.oauthRefreshToken),
+      autonomousOutreachTransportIssues({
+        inbox,
+        now: Date.now(),
       }).length === 0,
   );
 }

@@ -44,7 +44,7 @@ const outreach = source("convex/outreach.ts");
 const http = source("convex/http.ts");
 const schema = source("convex/schema.ts");
 const sites = source("convex/sites.ts");
-const middleware = source("src/middleware.ts");
+const middleware = source("src/proxy.ts");
 const unsubscribeRoute = source("src/app/unsubscribe/[token]/route.ts");
 
 function block(
@@ -935,7 +935,7 @@ test("unsubscribe GET is scanner-safe and POST reports durable settlement failur
     else process.env.CONVEX_SITE_URL = originalUrl;
   }
   assert.match(unsubscribeRoute, /export async function GET/);
-  assert.match(middleware, /"\/unsubscribe\(\.\*\)"/);
+  assert.match(middleware, /PUBLIC_ROUTE_PREFIXES[\s\S]*"\/unsubscribe"/);
   assert.match(middleware, /"analytics", "backlinks", "unsubscribe"/);
   assert.doesNotMatch(
     block(http, "const managedSesUnsubscribeHandler", "http.route({\n  pathPrefix: \"/unsubscribe/\""),

@@ -255,6 +255,33 @@ export default defineSchema({
       domainRevision: v.number(),
     })),
     requestedCadencePerWeek: v.number(),
+    // Explicit public setup choices. Legacy rows omit these and are projected
+    // conservatively from their canonical site/inbox receipts.
+    publisherKind: v.optional(v.union(
+      v.literal("github"),
+      v.literal("wordpress"),
+      v.literal("webhook"),
+    )),
+    outreachTransport: v.optional(v.union(
+      v.literal("smartlead_managed"),
+      v.literal("gmail_oauth"),
+      v.literal("smtp"),
+    )),
+    // Bounded fleet migration marker. A migrated legacy row can still leave
+    // either choice undefined, but then its capability carries an explicit
+    // owner blocker instead of remaining silently ambiguous.
+    universalContractMigrationVersion: v.optional(v.number()),
+    // Versioned sender identity collected once for every outreach transport.
+    // Gmail/SMTP consume the same owner receipt; Smartlead additionally binds
+    // its isolated managed-domain attestations below.
+    outreachSenderProfile: v.optional(v.object({
+      fromName: v.string(),
+      physicalMailingAddress: v.string(),
+      attestationVersion: v.number(),
+      senderIdentityAndAddressAttestedAt: v.number(),
+      deliveryEventCanaryAuthorizedAt: v.number(),
+      canaryConsentVersion: v.number(),
+    })),
     // Stable managed-mailbox generation. Passive reconciliation and ordinary
     // owner retries never advance it; only a hard tenant/domain reset or an
     // ownership-mode transition can name a new external resource.
@@ -265,6 +292,7 @@ export default defineSchema({
     managedOutreachProfile: v.optional(v.object({
       fromName: v.string(),
       physicalMailingAddress: v.string(),
+      senderDomainChoice: v.optional(v.string()),
       attestationVersion: v.number(),
       senderIdentityAndAddressAttestedAt: v.number(),
       dedicatedSenderIdentityAttestedAt: v.number(),
@@ -357,6 +385,10 @@ export default defineSchema({
     .index("by_aggregate_updated", ["aggregateState", "updatedAt"])
     .index("by_fulfillment_due", ["nextAttemptAt"])
     .index("by_fulfillment_updated", ["fulfillmentState", "updatedAt"])
+    .index("by_universal_contract_migration", [
+      "universalContractMigrationVersion",
+      "updatedAt",
+    ])
     .index("by_operator_action", ["operatorActionRequiredAt"]),
 
   // Credential-free ledger for an exact managed mailbox generation. The
@@ -374,7 +406,33 @@ export default defineSchema({
     operationKey: v.string(),
     // Explicit application transport. Missing remains the pre-SES managed
     // Gmail framework; only the canonical managed_ses installer may stamp it.
-    transportKind: v.optional(v.literal("managed_ses")),
+    transportKind: v.optional(v.union(
+      v.literal("managed_ses"),
+      v.literal("smartlead_managed"),
+    )),
+    // Provider identifiers are stored only as encrypted application blobs;
+    // public projections expose operationKey and state, never these values.
+    encryptedProviderBinding: v.optional(v.string()),
+    smartleadClientRequestedAt: v.optional(v.number()),
+    smartleadMailboxRequestedAt: v.optional(v.number()),
+    smartleadCampaignRequestedAt: v.optional(v.number()),
+    smartleadCampaignConfigurationRequestedAt: v.optional(v.number()),
+    smartleadWebhookRequestedAt: v.optional(v.number()),
+    encryptedProviderCampaignBinding: v.optional(v.string()),
+    campaignGeneration: v.optional(v.number()),
+    campaignConfigurationHash: v.optional(v.string()),
+    campaignConfiguredAt: v.optional(v.number()),
+    configurationHash: v.optional(v.string()),
+    warmupState: v.optional(v.string()),
+    warmupStartedAt: v.optional(v.number()),
+    warmupEligibleAt: v.optional(v.number()),
+    warmupReputationScore: v.optional(v.number()),
+    domainAuthenticationReceipt: v.optional(v.string()),
+    deliveryCanaryReceipt: v.optional(v.string()),
+    replyCanaryReceipt: v.optional(v.string()),
+    bounceCanaryReceipt: v.optional(v.string()),
+    unsubscribeCanaryReceipt: v.optional(v.string()),
+    cancellationCanaryReceipt: v.optional(v.string()),
     lifecycleState: v.union(
       v.literal("queued"),
       v.literal("leased"),
@@ -420,6 +478,7 @@ export default defineSchema({
     .index("by_request", ["requestId"])
     .index("by_request_generation", ["requestId", "generation"])
     .index("by_canonical_inbox", ["canonicalInboxId"])
+    .index("by_lifecycle_lease", ["lifecycleState", "leaseExpiresAt"])
     .index("by_release_due", ["releaseState", "nextAttemptAt"]),
 
   // Durable proof that release was requested before site-local rows vanished.
@@ -1108,6 +1167,7 @@ export default defineSchema({
     .index("by_site", ["siteId"])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_status_attempt", ["siteId", "status", "nextAttemptAt"])
+    .index("by_status_heartbeat", ["status", "heartbeatAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
     .index("by_site_type_status_created", [
       "siteId",
@@ -1213,11 +1273,16 @@ export default defineSchema({
     detail: v.optional(v.string()),
     jobId: v.optional(v.id("jobs")),
     articleId: v.optional(v.id("articles")),
+    // Immutable readiness evidence captured by automatic warm->live
+    // promotion. Later publication may consume the buffer, so the canary
+    // cannot truthfully reconstruct this count from current inventory.
+    sealedBufferCount: v.optional(v.number()),
   })
     .index("by_site", ["siteId"])
     .index("by_site_recovery_source", ["siteId", "recoveryOfRunId"])
     .index("by_site_scheduled", ["siteId", "scheduledAt"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_status_heartbeat", ["status", "heartbeatAt"]),
 
   autopilot_health: defineTable({
     siteId: v.id("sites"),
@@ -1258,7 +1323,8 @@ export default defineSchema({
   })
     .index("by_site", ["siteId"])
     .index("by_site_status", ["siteId", "status"])
-    .index("by_site_kind_status", ["siteId", "kind", "status"]),
+    .index("by_site_kind_status", ["siteId", "kind", "status"])
+    .index("by_status_created", ["status", "createdAt"]),
 
   // Search growth is a separate lifecycle from content generation. Each page
   // has at most one current measured action, with old actions retained as an
@@ -2008,7 +2074,7 @@ export default defineSchema({
   // no query that returns a site can ever leak a mailbox token.
   outreach_inboxes: defineTable({
     siteId: v.id("sites"),
-    provider: v.string(), // gmail | smtp | resend
+    provider: v.string(), // smartlead | gmail | smtp | legacy managed transport
     fromEmail: v.string(),
     fromName: v.optional(v.string()),
     replyToEmail: v.optional(v.string()),
@@ -2052,7 +2118,10 @@ export default defineSchema({
     managedTransportOperationKey: v.optional(v.string()),
     managedTransportGeneration: v.optional(v.number()),
     managedTransportAdapterVersion: v.optional(v.string()),
-    managedTransportKind: v.optional(v.literal("managed_ses")),
+    managedTransportKind: v.optional(v.union(
+      v.literal("managed_ses"),
+      v.literal("smartlead_managed"),
+    )),
     managedTransportResourceReceipt: v.optional(v.string()),
     managedTransportResourceVerifiedAt: v.optional(v.number()),
     managedTransportEventCanaryVerifiedAt: v.optional(v.number()),
@@ -2161,6 +2230,15 @@ export default defineSchema({
     opportunityEvidenceHash: v.optional(v.string()),
     opportunitySourceUrl: v.optional(v.string()),
     opportunityTargetUrl: v.optional(v.string()),
+    outreachPolicyDecisionId: v.optional(v.id("outreach_policy_decisions")),
+    outreachPolicyDecision: v.optional(v.union(
+      v.literal("allowed_auto"),
+      v.literal("approval_only"),
+      v.literal("blocked"),
+      v.literal("needs_evidence"),
+    )),
+    outreachPolicyVersion: v.optional(v.number()),
+    outreachPolicyConfigurationHash: v.optional(v.string()),
     approvedAt: v.optional(v.number()),
     approvedInboxId: v.optional(v.id("outreach_inboxes")),
     approvedInboxConfigurationVersion: v.optional(v.number()),
@@ -2197,7 +2275,34 @@ export default defineSchema({
     // managed_ses never stores SES MessageId or provider resource ids. The
     // exact application operation/binding and a one-way provider digest are
     // sufficient for event correlation, no replay and reply verification.
-    deliveryTransport: v.optional(v.literal("managed_ses")),
+    deliveryTransport: v.optional(v.union(
+      v.literal("managed_ses"),
+      v.literal("smartlead_managed"),
+      v.literal("gmail_oauth"),
+      v.literal("smtp"),
+    )),
+    providerOperationKey: v.optional(v.string()),
+    providerLeadBindingHash: v.optional(v.string()),
+    providerCampaignBindingHash: v.optional(v.string()),
+    providerRecipientHash: v.optional(v.string()),
+    encryptedProviderLeadBinding: v.optional(v.string()),
+    providerCampaignGeneration: v.optional(v.number()),
+    providerCampaignConfigurationHash: v.optional(v.string()),
+    providerPlannedSequence: v.optional(v.array(v.object({
+      sequenceStep: v.number(),
+      subject: v.string(),
+      body: v.string(),
+      delayDays: v.number(),
+    }))),
+    providerAcknowledgementState: v.optional(v.string()),
+    providerPauseState: v.optional(v.string()),
+    providerPauseAttempt: v.optional(v.number()),
+    providerPauseNextEligibleAt: v.optional(v.number()),
+    providerGlobalUnsubscribeState: v.optional(v.string()),
+    providerGlobalUnsubscribeAttemptedAt: v.optional(v.number()),
+    providerReconciledAt: v.optional(v.number()),
+    providerReconciliationAttempt: v.optional(v.number()),
+    providerReconciliationNextEligibleAt: v.optional(v.number()),
     managedSesOperationKey: v.optional(v.string()),
     managedSesResourceOperationKey: v.optional(v.string()),
     managedSesGeneration: v.optional(v.number()),
@@ -2245,6 +2350,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_status", ["siteId", "status"])
+    .index("by_status_lease", ["status", "deliveryLeaseExpiresAt"])
     .index("by_site_owner_lineage_status", [
       "siteId",
       "ownerAccountKey",
@@ -2377,6 +2483,11 @@ export default defineSchema({
       "sentAt",
     ])
     .index("by_managed_ses_operation", ["managedSesOperationKey"])
+    .index("by_provider_operation", ["providerOperationKey"])
+    .index("by_provider_campaign_recipient", [
+      "providerCampaignBindingHash",
+      "providerRecipientHash",
+    ])
     .index("by_managed_resource_status_disposition", [
       "managedSesResourceOperationKey",
       "status",
@@ -2656,6 +2767,90 @@ export default defineSchema({
     ])
     .index("by_owner", ["ownerAccountKey"]),
 
+  // Privacy-minimized Smartlead webhook receipts. Raw reply bodies, subjects,
+  // provider API keys and provider resource ids are never persisted.
+  smartlead_webhook_events: defineTable({
+    requestId: v.string(),
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.optional(v.id("outreach_messages")),
+    canaryOperationId: v.optional(v.id("smartlead_canary_operations")),
+    operationKey: v.string(),
+    campaignBindingHash: v.string(),
+    recipientHash: v.string(),
+    kind: v.union(
+      v.literal("sent"),
+      v.literal("reply"),
+      v.literal("bounce"),
+      v.literal("unsubscribe"),
+    ),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    sequenceStep: v.optional(v.number()),
+    stopRequest: v.optional(v.boolean()),
+    providerPauseState: v.optional(v.string()),
+    observedAt: v.number(),
+    settledAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_request_id", ["requestId"])
+    .index("by_operation_kind", ["operationKey", "kind"])
+    .index("by_message", ["messageId"])
+    .index("by_canary_operation", ["canaryOperationId"])
+    .index("by_site", ["siteId"]),
+
+  // Provider canaries are isolated from prospect outreach. Targets come only
+  // from production secret storage; the database keeps one-way recipient
+  // hashes and encrypted provider bindings. A canary can never satisfy an
+  // ordinary authority opportunity or increment customer delivery activity.
+  smartlead_canary_operations: defineTable({
+    siteId: v.id("sites"),
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    kind: v.union(
+      v.literal("delivery"),
+      v.literal("reply"),
+      v.literal("bounce"),
+      v.literal("unsubscribe"),
+    ),
+    operationKey: v.string(),
+    targetHash: v.string(),
+    state: v.union(
+      v.literal("queued"),
+      v.literal("leased"),
+      v.literal("provider_queued"),
+      v.literal("event_verified"),
+      v.literal("pause_required"),
+      v.literal("passed"),
+      v.literal("failed"),
+    ),
+    attempt: v.number(),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
+    externalAttemptedAt: v.optional(v.number()),
+    campaignRequestedAt: v.optional(v.number()),
+    webhookRequestedAt: v.optional(v.number()),
+    configurationRequestedAt: v.optional(v.number()),
+    configurationCompletedAt: v.optional(v.number()),
+    leadRequestedAt: v.optional(v.number()),
+    encryptedProviderBinding: v.optional(v.string()),
+    campaignBindingHash: v.optional(v.string()),
+    recipientHash: v.optional(v.string()),
+    eventEvidenceHash: v.optional(v.string()),
+    cancellationReceiptHash: v.optional(v.string()),
+    pauseAttempt: v.optional(v.number()),
+    lastReasonCode: v.optional(v.string()),
+    observedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_operation", ["operationKey"])
+    .index("by_resource_kind", ["resourceId", "kind"])
+    .index("by_campaign_recipient", ["campaignBindingHash", "recipientHash"])
+    .index("by_state_due", ["state", "nextAttemptAt"])
+    .index("by_site", ["siteId"]),
+
   // PII-minimized STOP/bounce/manual suppression receipts scoped to the
   // account-wide tenant scope. There is intentionally no siteId or mutable
   // domain: deletion, recreation, and domain edits must not erase an opt-out.
@@ -2756,6 +2951,16 @@ export default defineSchema({
     email: v.string(),
     name: v.optional(v.string()),
     role: v.optional(v.string()),
+    recipientClass: v.optional(v.union(
+      v.literal("corporate"),
+      v.literal("sole_trader"),
+      v.literal("personal"),
+    )),
+    jurisdiction: v.optional(v.string()),
+    jurisdictionEvidenceHash: v.optional(v.string()),
+    businessRoleEvidenceHash: v.optional(v.string()),
+    lawfulBasisClass: v.optional(v.string()),
+    policyEvidenceUpdatedAt: v.optional(v.number()),
     discoveredFromUrl: v.string(),
     discoveryMethod: v.string(), // page_scan | mailto | author_byline
     verifiedAt: v.number(),
@@ -2885,6 +3090,153 @@ export default defineSchema({
       "date",
     ])
     .index("by_article_date", ["articleId", "date"]),
+
+  // One durable classification for each topic evidence version. Refusals are
+  // first-class receipts: no eligible work may disappear into scheduler logs.
+  opportunity_decision_receipts: defineTable({
+    siteId: v.id("sites"),
+    topicId: v.optional(v.id("topic_clusters")),
+    opportunityKey: v.string(),
+    evidenceVersion: v.number(),
+    classification: v.union(
+      v.literal("eligible"),
+      v.literal("needs_evidence"),
+      v.literal("too_thin"),
+      v.literal("coverage_conflict"),
+      v.literal("business_fit_failed"),
+      v.literal("cooldown"),
+      v.literal("opportunity_space_exhausted"),
+    ),
+    admitted: v.boolean(),
+    score: v.number(),
+    reasonCodes: v.array(v.string()),
+    nextEligibleAt: v.optional(v.number()),
+    automaticWakeAt: v.optional(v.number()),
+    inputHash: v.string(),
+    version: v.number(),
+    evaluatedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_site_opportunity_version", [
+      "siteId",
+      "opportunityKey",
+      "evidenceVersion",
+    ])
+    .index("by_site_classification", ["siteId", "classification"])
+    .index("by_site_evaluated", ["siteId", "evaluatedAt"])
+    .index("by_next_eligible", ["nextEligibleAt"]),
+
+  // Immutable, machine-enforceable outreach policy evidence. Provider
+  // delivery is forbidden unless this exact receipt says allowed_auto.
+  outreach_policy_decisions: defineTable({
+    siteId: v.id("sites"),
+    opportunityId: v.optional(v.id("seo_authority_opportunities")),
+    recipientHash: v.string(),
+    recipientClass: v.string(),
+    jurisdiction: v.optional(v.string()),
+    jurisdictionEvidenceHash: v.optional(v.string()),
+    businessRoleEvidenceHash: v.optional(v.string()),
+    businessRelevanceHash: v.optional(v.string()),
+    contactSourceHash: v.optional(v.string()),
+    lawfulBasisClass: v.optional(v.string()),
+    requiredDisclosures: v.array(v.string()),
+    tenantConsentVersion: v.optional(v.number()),
+    decision: v.union(
+      v.literal("allowed_auto"),
+      v.literal("approval_only"),
+      v.literal("blocked"),
+      v.literal("needs_evidence"),
+    ),
+    reasonCodes: v.array(v.string()),
+    policyVersion: v.number(),
+    configurationHash: v.string(),
+    evaluatedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_site_recipient_policy", [
+      "siteId",
+      "recipientHash",
+      "policyVersion",
+    ])
+    .index("by_site_decision", ["siteId", "decision"]),
+
+  // The only database record allowed to label Pentra generally available.
+  // It is immutable and can be created only after all real canary receipts
+  // have been independently verified by the release mutation.
+  growth_loop_release_receipts: defineTable({
+    releaseCommit: v.string(),
+    adapterMatrixHash: v.string(),
+    publisherCanaryReceiptHashes: v.array(v.string()),
+    tenantCanaryReceiptHashes: v.array(v.string()),
+    smartleadCanaryReceiptHashes: v.array(v.string()),
+    acquiredBacklinkReceiptHash: v.string(),
+    rolloutPercent: v.number(),
+    contractVersion: v.number(),
+    acceptedAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_release_commit", ["releaseCommit"]),
+
+  // Controlled production canaries are immutable evidence, never feature
+  // flags. Only internal adapter settlement paths may create them.
+  growth_loop_canary_receipts: defineTable({
+    releaseCommit: v.string(),
+    siteId: v.optional(v.id("sites")),
+    canaryKey: v.string(),
+    kind: v.union(
+      v.literal("publisher_github"),
+      v.literal("publisher_wordpress"),
+      v.literal("publisher_webhook"),
+      v.literal("tenant_natural_loop"),
+      v.literal("measurement_decision"),
+      v.literal("smartlead_provisioning"),
+      v.literal("smartlead_warmup"),
+      v.literal("smartlead_delivery"),
+      v.literal("smartlead_reply"),
+      v.literal("smartlead_bounce"),
+      v.literal("smartlead_unsubscribe"),
+      v.literal("smartlead_cancellation"),
+      v.literal("acquired_backlink"),
+    ),
+    articleId: v.optional(v.id("articles")),
+    opportunityId: v.optional(v.id("seo_authority_opportunities")),
+    growthActionId: v.optional(v.id("seo_growth_actions")),
+    managedResourceId: v.optional(v.id("managed_outreach_mailbox_resources")),
+    promotionRunId: v.optional(v.id("autopilot_runs")),
+    status: v.union(v.literal("passed"), v.literal("failed")),
+    receiptHash: v.string(),
+    observedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_canary_key", ["canaryKey"])
+    .index("by_release", ["releaseCommit"])
+    .index("by_release_kind", ["releaseCommit", "kind"])
+    .index("by_site", ["siteId"]),
+
+  // Fleet-wide GA widening. A deterministic tenant cohort is enabled at
+  // 10%, then 50%, then 100%. Severe incidents pause the shared control;
+  // existing per-capability receipts remain intact and affected work fails
+  // closed until the controller naturally re-evaluates.
+  growth_loop_rollout_controls: defineTable({
+    releaseCommit: v.string(),
+    status: v.union(
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("complete"),
+    ),
+    targetPercent: v.number(),
+    stageStartedAt: v.number(),
+    nextEvaluationAt: v.optional(v.number()),
+    blockerCode: v.optional(v.string()),
+    unresolvedSevereIncidentCount: v.number(),
+    silentStateCount: v.number(),
+    contractVersion: v.number(),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_release_commit", ["releaseCommit"])
+    .index("by_status_next", ["status", "nextEvaluationAt"])
+    .index("by_next", ["nextEvaluationAt"]),
 
   maintenance_state: defineTable({
     key: v.string(),

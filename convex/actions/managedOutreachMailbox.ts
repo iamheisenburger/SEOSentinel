@@ -1,6 +1,7 @@
 "use node";
 
-import { randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { resolveCname, resolveTxt } from "node:dns/promises";
 import { internal } from "../_generated/api";
 import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
@@ -17,6 +18,12 @@ import {
   parseManagedSesResourceReceipt,
   parseManagedSesSendReceipt,
 } from "../lib/managedSes.ts";
+import {
+  SMARTLEAD_ADAPTER_VERSION,
+  SMARTLEAD_MANAGED_TRANSPORT,
+  smartleadRuntimeIssues,
+} from "../lib/smartlead.ts";
+import { sha256Hex } from "../lib/publicationArtifact.ts";
 
 function adapterConfig() {
   return managedSesAdapterConfiguration({
@@ -30,6 +37,207 @@ function adapterConfig() {
 
 function nonce(): string {
   return randomBytes(32).toString("base64url");
+}
+
+async function txtRecords(name: string): Promise<string[]> {
+  try {
+    return (await resolveTxt(name)).map((parts) => parts.join("").trim());
+  } catch {
+    return [];
+  }
+}
+
+async function hasCname(name: string): Promise<boolean> {
+  try { return (await resolveCname(name)).length > 0; } catch { return false; }
+}
+
+/** Public DNS proof only. Provider assertions are insufficient for sender
+ * authentication; the exact observed SPF, DMARC and bounded DKIM selector
+ * evidence is hashed and the raw records are deliberately not persisted. */
+async function smartleadDnsAuthenticationReceipt(
+  domain: string,
+): Promise<string | undefined> {
+  const selectors = [
+    "default", "google", "selector1", "selector2", "s1", "s2",
+    "k1", "k2", "dkim", "mail",
+  ];
+  const [spf, dmarc, ...dkim] = await Promise.all([
+    txtRecords(domain),
+    txtRecords(`_dmarc.${domain}`),
+    ...selectors.map(async (selector) => {
+      const name = `${selector}._domainkey.${domain}`;
+      const [txt, cname] = await Promise.all([txtRecords(name), hasCname(name)]);
+      return { selector, txt, cname };
+    }),
+  ]);
+  const spfEvidence = spf.filter((value) => /^v=spf1\b/i.test(value)).sort();
+  const dmarcEvidence = dmarc.filter((value) => /^v=dmarc1\b/i.test(value)).sort();
+  const dkimEvidence = dkim.filter((entry) =>
+    entry.cname || entry.txt.some((value) => /^v=dkim1\b/i.test(value))
+  ).map((entry) => ({
+    selector: entry.selector,
+    cname: entry.cname,
+    txt: entry.txt.filter((value) => /^v=dkim1\b/i.test(value)).sort(),
+  }));
+  if (!spfEvidence.length || !dmarcEvidence.length || !dkimEvidence.length) {
+    return undefined;
+  }
+  return sha256Hex(JSON.stringify({
+    version: 1,
+    domain,
+    spfEvidence,
+    dmarcEvidence,
+    dkimEvidence,
+  }));
+}
+
+type SmartleadConfig = {
+  apiKey: string;
+  vendorId: string;
+  clientEmailDomain: string;
+  encryptionKey: Buffer;
+};
+
+function smartleadConfig(): SmartleadConfig | null {
+  const apiKey = process.env.SMARTLEAD_API_KEY?.trim() ?? "";
+  const vendorId = process.env.SMARTLEAD_SMART_SENDERS_VENDOR_ID?.trim() ?? "";
+  const clientEmailDomain = process.env.SMARTLEAD_CLIENT_EMAIL_DOMAIN
+    ?.trim().toLowerCase() ?? "";
+  const rawKey = process.env.SMARTLEAD_BINDING_ENCRYPTION_KEY?.trim() ?? "";
+  let encryptionKey = Buffer.alloc(0);
+  let webhookUrl: URL | null = null;
+  try {
+    webhookUrl = new URL(process.env.SMARTLEAD_WEBHOOK_URL?.trim() ?? "");
+  } catch {
+    webhookUrl = null;
+  }
+  try {
+    encryptionKey = /^[a-f0-9]{64}$/i.test(rawKey)
+      ? Buffer.from(rawKey, "hex")
+      : Buffer.from(rawKey, "base64");
+  } catch {
+    encryptionKey = Buffer.alloc(0);
+  }
+  if (
+    smartleadRuntimeIssues({
+      apiKey,
+      webhookSecret: process.env.SMARTLEAD_WEBHOOK_SECRET,
+      smartSendersAccess: process.env.SMARTLEAD_SMART_SENDERS_ACCESS,
+    }).length > 0 ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(vendorId) ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(
+      clientEmailDomain,
+    ) ||
+    encryptionKey.length !== 32
+    || !webhookUrl || webhookUrl.protocol !== "https:" ||
+    !webhookUrl.pathname.endsWith("/webhooks/smartlead")
+  ) return null;
+  return { apiKey, vendorId, clientEmailDomain, encryptionKey };
+}
+
+function encryptSmartleadBinding(
+  config: SmartleadConfig,
+  binding: { clientId: number; mailboxId?: number },
+): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", config.encryptionKey, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(binding), "utf8"),
+    cipher.final(),
+  ]);
+  return [
+    "v1",
+    iv.toString("base64url"),
+    ciphertext.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+  ].join(".");
+}
+
+function decryptSmartleadBinding(
+  config: SmartleadConfig,
+  encrypted: string | undefined,
+): { clientId: number; mailboxId?: number } | null {
+  if (!encrypted) return null;
+  const [version, ivValue, ciphertextValue, tagValue] = encrypted.split(".");
+  if (version !== "v1" || !ivValue || !ciphertextValue || !tagValue) return null;
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      config.encryptionKey,
+      Buffer.from(ivValue, "base64url"),
+    );
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(ciphertextValue, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
+    const parsed = record(JSON.parse(plaintext));
+    const clientId = positiveInteger(parsed?.clientId);
+    const mailboxId = positiveInteger(parsed?.mailboxId) ?? undefined;
+    return clientId ? { clientId, mailboxId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.map(record).filter((row): row is Record<string, unknown> => Boolean(row))
+    : [];
+}
+
+function positiveInteger(value: unknown): number | null {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+async function smartleadRequest(args: {
+  config: SmartleadConfig;
+  origin: "core" | "senders";
+  path: string;
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  body?: Record<string, unknown>;
+}): Promise<{ ok: boolean; status: number; json: unknown }> {
+  const base = args.origin === "senders"
+    ? "https://smart-senders.smartlead.ai"
+    : "https://server.smartlead.ai";
+  const url = new URL(args.path, base);
+  url.searchParams.set("api_key", args.config.apiKey);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(url, {
+      method: args.method ?? "GET",
+      headers: args.body ? { "Content-Type": "application/json" } : undefined,
+      body: args.body ? JSON.stringify(args.body) : undefined,
+      signal: controller.signal,
+      redirect: "error",
+    });
+    const declared = Number(response.headers.get("content-length") ?? 0);
+    if (Number.isFinite(declared) && declared > 256 * 1024) {
+      return { ok: false, status: 502, json: null };
+    }
+    const text = await response.text();
+    if (text.length > 256 * 1024) return { ok: false, status: 502, json: null };
+    let json: unknown = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    return { ok: response.ok, status: response.status, json };
+  } catch {
+    return { ok: false, status: 0, json: null };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function smartleadData(value: unknown): unknown {
+  const envelope = record(value);
+  return envelope && "data" in envelope ? envelope.data : value;
 }
 
 const provisionArgs = {
@@ -49,6 +257,250 @@ export const provision = internalAction({
       args,
     );
     if (!claim) return { accepted: false as const, reason: "fence_changed" };
+    if (claim.operation.transport === SMARTLEAD_MANAGED_TRANSPORT) {
+      const config = smartleadConfig();
+      if (!config || !claim.operation.senderDomainChoice) {
+        const receipt = await ctx.runMutation(
+          internal.managedOutreachMailbox.recordProvisioningAdapterBlocked,
+          {
+            ...args,
+            reasonCode: MANAGED_OUTREACH_MAILBOX_ADAPTER_UNAVAILABLE,
+          },
+        );
+        return {
+          accepted: false as const,
+          reason: config
+            ? "smartlead_sender_domain_missing"
+            : "smartlead_runtime_unavailable",
+          recorded: receipt.recorded,
+        };
+      }
+      const configurationHash = sha256Hex(JSON.stringify({
+        version: SMARTLEAD_ADAPTER_VERSION,
+        operationKey: claim.operation.operationKey,
+        generation: claim.operation.generation,
+        senderDomain: claim.operation.senderDomainChoice,
+        vendorId: config.vendorId,
+      }));
+      const boundary = await ctx.runMutation(
+        internal.managedOutreachMailbox.markProvisioningExternalBoundaryInternal,
+        { ...args, adapterVersion: SMARTLEAD_ADAPTER_VERSION },
+      );
+      if (!boundary.marked) {
+        return { accepted: false as const, reason: "fence_changed" };
+      }
+      const progress = async (reasonCode: string, retryAfterSeconds = 300) =>
+        ctx.runMutation(
+          internal.managedOutreachMailbox.recordProvisioningAdapterProgress,
+          {
+            ...args,
+            adapterVersion: SMARTLEAD_ADAPTER_VERSION,
+            reasonCode,
+            retryAfterSeconds,
+          },
+        );
+      const clientEmail = `pentra-${claim.operation.operationKey.slice(0, 24)}@${config.clientEmailDomain}`;
+      const clientsResponse = await smartleadRequest({
+        config,
+        origin: "core",
+        path: "/api/v1/client/",
+      });
+      if (!clientsResponse.ok) {
+        await progress("smartlead_client_reconciliation_failed");
+        return { accepted: false as const, reason: "smartlead_client_reconciliation_failed" };
+      }
+      const matchingClients = records(smartleadData(clientsResponse.json)).filter(
+        (row) => String(row.email ?? "").trim().toLowerCase() === clientEmail,
+      );
+      if (matchingClients.length > 1) {
+        await progress("smartlead_client_identity_conflict", 900);
+        return { accepted: false as const, reason: "smartlead_client_identity_conflict" };
+      }
+      let clientId = matchingClients.length === 1
+        ? positiveInteger(matchingClients[0].id)
+        : null;
+      if (!clientId) {
+        if (claim.operation.providerState.clientRequestedAt) {
+          await progress("smartlead_client_ack_ambiguous", 900);
+          return { accepted: false as const, reason: "smartlead_client_ack_ambiguous" };
+        }
+        const marked = await ctx.runMutation(
+          internal.managedOutreachMailbox.recordSmartleadProvisioningBoundaryInternal,
+          {
+            ...args,
+            phase: "client",
+            configurationHash,
+          },
+        );
+        if (!marked.recorded) {
+          return { accepted: false as const, reason: "fence_changed" };
+        }
+        const created = await smartleadRequest({
+          config,
+          origin: "core",
+          path: "/api/v1/client/save",
+          method: "POST",
+          body: {
+            email: clientEmail,
+            name: `Pentra ${claim.operation.operationKey.slice(0, 12)}`,
+            permission: ["campaigns", "email_accounts", "leads"],
+            is_credit_assigned: false,
+          },
+        });
+        clientId = positiveInteger(record(smartleadData(created.json))?.id);
+        if (!created.ok || !clientId) {
+          await progress("smartlead_client_ack_ambiguous", 900);
+          return { accepted: false as const, reason: "smartlead_client_ack_ambiguous" };
+        }
+      }
+      const clientBinding = encryptSmartleadBinding(config, { clientId });
+      const persisted = await ctx.runMutation(
+        internal.managedOutreachMailbox.recordSmartleadProvisioningBoundaryInternal,
+        {
+          ...args,
+          phase: "binding",
+          encryptedProviderBinding: clientBinding,
+          configurationHash,
+        },
+      );
+      if (!persisted.recorded) {
+        return { accepted: false as const, reason: "fence_changed" };
+      }
+      const accountResponse = await smartleadRequest({
+        config,
+        origin: "core",
+        path: `/api/v1/email-accounts/?limit=100&username=${encodeURIComponent(claim.operation.senderDomainChoice)}`,
+      });
+      if (!accountResponse.ok) {
+        await progress("smartlead_mailbox_reconciliation_failed");
+        return { accepted: false as const, reason: "smartlead_mailbox_reconciliation_failed" };
+      }
+      const accounts = records(smartleadData(accountResponse.json)).filter((row) => {
+        const email = String(row.from_email ?? row.username ?? "").trim().toLowerCase();
+        return email.endsWith(`@${claim.operation.senderDomainChoice}`);
+      });
+      if (accounts.length > 1) {
+        await progress("smartlead_mailbox_identity_conflict", 900);
+        return { accepted: false as const, reason: "smartlead_mailbox_identity_conflict" };
+      }
+      if (accounts.length === 0) {
+        if (claim.operation.providerState.mailboxRequestedAt) {
+          await progress("smartlead_mailbox_generation_pending", 900);
+          return { accepted: false as const, reason: "smartlead_mailbox_generation_pending" };
+        }
+        const marked = await ctx.runMutation(
+          internal.managedOutreachMailbox.recordSmartleadProvisioningBoundaryInternal,
+          {
+            ...args,
+            phase: "mailbox",
+            encryptedProviderBinding: clientBinding,
+            configurationHash,
+          },
+        );
+        if (!marked.recorded) {
+          return { accepted: false as const, reason: "fence_changed" };
+        }
+        await smartleadRequest({
+          config,
+          origin: "senders",
+          path: "/api/v1/smart-senders/auto-generate-mailboxes",
+          method: "POST",
+          body: {
+            vendor_id: config.vendorId,
+            domains: { [claim.operation.senderDomainChoice]: { count: 1 } },
+          },
+        });
+        await progress("smartlead_mailbox_generation_pending", 900);
+        return { accepted: false as const, reason: "smartlead_mailbox_generation_pending" };
+      }
+      const account = accounts[0];
+      const mailboxId = positiveInteger(account.id);
+      const fromEmail = String(account.from_email ?? "").trim().toLowerCase();
+      if (!mailboxId || !fromEmail) {
+        await progress("smartlead_mailbox_receipt_invalid", 900);
+        return { accepted: false as const, reason: "smartlead_mailbox_receipt_invalid" };
+      }
+      const assignedClientId = positiveInteger(account.client_id);
+      if (assignedClientId && assignedClientId !== clientId) {
+        await progress("smartlead_mailbox_client_conflict", 900);
+        return { accepted: false as const, reason: "smartlead_mailbox_client_conflict" };
+      }
+      if (assignedClientId !== clientId) {
+        const assignment = await smartleadRequest({
+          config,
+          origin: "core",
+          path: `/api/v1/email-accounts/${mailboxId}`,
+          method: "POST",
+          body: {
+            client_id: clientId,
+            from_name: claim.operation.senderProfile.fromName,
+            max_email_per_day: 20,
+            time_to_wait_in_mins: 15,
+          },
+        });
+        if (!assignment.ok) {
+          await progress("smartlead_mailbox_assignment_unverified", 900);
+          return { accepted: false as const, reason: "smartlead_mailbox_assignment_unverified" };
+        }
+      }
+      const warmup = record(account.warmup_details);
+      const warmupActive = String(warmup?.status ?? "").toUpperCase() === "ACTIVE";
+      const warmupReputationScore = Number(
+        String(warmup?.warmup_reputation ?? "").replace(/%$/, ""),
+      );
+      const warmupProviderHealthy = Boolean(
+        account.is_smtp_success === true &&
+        account.is_imap_success === true &&
+        !warmup?.blocked_reason && warmup?.is_warmup_blocked !== true,
+      );
+      if (!warmupActive) {
+        const warmupResponse = await smartleadRequest({
+          config,
+          origin: "core",
+          path: `/api/v1/email-accounts/${mailboxId}/warmup`,
+          method: "POST",
+          body: {
+            warmup_enabled: true,
+            total_warmup_per_day: 10,
+            daily_rampup: 5,
+            reply_rate_percentage: 30,
+            auto_adjust_warmup: true,
+            is_rampup_enabled: true,
+          },
+        });
+        if (!warmupResponse.ok) {
+          await progress("smartlead_warmup_activation_unverified", 900);
+          return { accepted: false as const, reason: "smartlead_warmup_activation_unverified" };
+        }
+      }
+      const warmupStartedAt = Date.parse(String(
+        warmup?.warmup_created_at ?? warmup?.created_at ?? "",
+      ));
+      const encryptedProviderBinding = encryptSmartleadBinding(config, {
+        clientId,
+        mailboxId,
+      });
+      const senderDomain = fromEmail.split("@")[1] ?? "";
+      const domainAuthenticationReceipt =
+        await smartleadDnsAuthenticationReceipt(senderDomain);
+      return ctx.runMutation(internal.outreach.installSmartleadManagedInboxInternal, {
+        ...args,
+        siteId: claim.installTarget.siteId,
+        fromEmail,
+        encryptedProviderBinding,
+        configurationHash,
+        providerVerifiedAt: Date.now(),
+        warmupStartedAt: Number.isFinite(warmupStartedAt)
+          ? warmupStartedAt
+          : undefined,
+        warmupProviderActive: warmupActive,
+        warmupProviderHealthy,
+        warmupReputationScore: Number.isFinite(warmupReputationScore)
+          ? warmupReputationScore
+          : undefined,
+        domainAuthenticationReceipt,
+      });
+    }
     const config = adapterConfig();
     if (!config) {
       const receipt = await ctx.runMutation(
@@ -712,6 +1164,104 @@ export const release = internalAction({
       args,
     );
     if (!claim) return { accepted: false as const, reason: "fence_changed" };
+    if (claim.operation.transport === SMARTLEAD_MANAGED_TRANSPORT) {
+      const config = smartleadConfig();
+      if (!config) {
+        const blocked = await ctx.runMutation(
+          internal.managedOutreachMailbox.recordReleaseAdapterBlocked,
+          { ...args, reasonCode: MANAGED_OUTREACH_MAILBOX_ADAPTER_UNAVAILABLE },
+        );
+        return { accepted: false as const, reason: "smartlead_runtime_unavailable", recorded: blocked.recorded };
+      }
+      const progress = async (reasonCode: string, retryAfterSeconds = 300) =>
+        ctx.runMutation(
+          internal.managedOutreachMailbox.recordReleaseAdapterProgress,
+          {
+            ...args,
+            adapterVersion: SMARTLEAD_ADAPTER_VERSION,
+            reasonCode,
+            retryAfterSeconds,
+          },
+        );
+      let binding = decryptSmartleadBinding(
+        config,
+        claim.operation.encryptedProviderBinding,
+      );
+      if (!binding) {
+        const clientEmail = `pentra-${claim.operation.operationKey.slice(0, 24)}@${config.clientEmailDomain}`;
+        const clients = await smartleadRequest({
+          config,
+          origin: "core",
+          path: "/api/v1/client/",
+        });
+        if (!clients.ok) {
+          await progress("smartlead_release_reconciliation_failed");
+          return { accepted: false as const, reason: "smartlead_release_reconciliation_failed" };
+        }
+        const matches = records(smartleadData(clients.json)).filter(
+          (row) => String(row.email ?? "").trim().toLowerCase() === clientEmail,
+        );
+        if (matches.length > 1) {
+          await progress("smartlead_release_identity_conflict", 900);
+          return { accepted: false as const, reason: "smartlead_release_identity_conflict" };
+        }
+        const clientId = positiveInteger(matches[0]?.id);
+        if (!clientId) {
+          return ctx.runMutation(
+            internal.managedOutreachMailbox.recordReleaseCompletedInternal,
+            { ...args, adapterVersion: SMARTLEAD_ADAPTER_VERSION },
+          );
+        }
+        binding = { clientId };
+      }
+      const accountsResponse = await smartleadRequest({
+        config,
+        origin: "core",
+        path: `/api/v1/email-accounts/?limit=100&client_id=${binding.clientId}`,
+      });
+      if (!accountsResponse.ok) {
+        await progress("smartlead_release_reconciliation_failed");
+        return { accepted: false as const, reason: "smartlead_release_reconciliation_failed" };
+      }
+      const accounts = records(smartleadData(accountsResponse.json)).filter((row) => {
+        const mailboxId = positiveInteger(row.id);
+        if (binding?.mailboxId) return mailboxId === binding.mailboxId;
+        const email = String(row.from_email ?? "").trim().toLowerCase();
+        return Boolean(
+          mailboxId &&
+          claim.operation.senderDomainChoice &&
+          email.endsWith(`@${claim.operation.senderDomainChoice}`),
+        );
+      });
+      if (accounts.length > 1) {
+        await progress("smartlead_release_mailbox_conflict", 900);
+        return { accepted: false as const, reason: "smartlead_release_mailbox_conflict" };
+      }
+      const mailboxId = positiveInteger(accounts[0]?.id);
+      if (!mailboxId) {
+        return ctx.runMutation(
+          internal.managedOutreachMailbox.recordReleaseCompletedInternal,
+          { ...args, adapterVersion: SMARTLEAD_ADAPTER_VERSION },
+        );
+      }
+      const deleted = await smartleadRequest({
+        config,
+        origin: "core",
+        path: `/api/v1/email-accounts/${mailboxId}`,
+        method: "DELETE",
+      });
+      const deletedBody = record(deleted.json);
+      const definitelyMissing = deleted.status === 404 ||
+        deletedBody?.errorCode === "ACCOUNT_NOT_FOUND";
+      if (!deleted.ok && !definitelyMissing) {
+        await progress("smartlead_release_delete_unverified", 900);
+        return { accepted: false as const, reason: "smartlead_release_delete_unverified" };
+      }
+      return ctx.runMutation(
+        internal.managedOutreachMailbox.recordReleaseCompletedInternal,
+        { ...args, adapterVersion: SMARTLEAD_ADAPTER_VERSION },
+      );
+    }
     const config = adapterConfig();
     if (!config) {
       const blocked = await ctx.runMutation(

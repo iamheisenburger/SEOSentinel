@@ -18,11 +18,12 @@
 
 import { action, internalAction } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { resolveCname, resolveTxt } from "node:dns/promises";
+import nodemailer from "nodemailer";
 import { safeFetchPublicText, validatePublicHttpsUrl } from "../lib/safeOutbound";
 import {
   contactDiscoveryUrls,
@@ -31,6 +32,7 @@ import {
   selectBestContact,
 } from "../lib/outreachContacts";
 import {
+  draftFollowUp,
   draftOutreachMessage,
   outreachThreadKey,
 } from "../lib/outreachDrafting";
@@ -100,6 +102,14 @@ import {
   parseManagedSesResourceReceipt,
   parseManagedSesSendReceipt,
 } from "../lib/managedSes";
+import {
+  SMARTLEAD_MANAGED_TRANSPORT,
+} from "../lib/smartlead";
+import {
+  classifySmtpFailure,
+  smtpConfigIssues,
+  smtpTransportOptions,
+} from "../lib/outreachSmtp";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -487,7 +497,7 @@ async function prepareHandler(
     }
 
     // For a broken-link opportunity the stored context is the dead URL.
-    const draft = draftOutreachMessage({
+    const draftEvidence = {
       type: opportunity.type,
       sourceUrl: opportunity.sourceUrl,
       sourceDomain: opportunity.sourceDomain,
@@ -498,7 +508,8 @@ async function prepareHandler(
       brandName,
       senderName,
       physicalMailingAddress: inbox?.physicalMailingAddress,
-    });
+    };
+    const draft = draftOutreachMessage(draftEvidence);
     if (!draft) {
       result.skipped++;
       note("Evidence was not specific enough to write a truthful message.");
@@ -517,6 +528,23 @@ async function prepareHandler(
     }
 
     const toEmail = contact?.email ?? "";
+    const providerPlannedSequence =
+      inbox?.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT
+        ? [
+            { sequenceStep: 0, subject: draft.subject, body: draft.body, delayDays: 0 },
+            ...[1, 2].flatMap((sequenceStep) => {
+              const followUp = draftFollowUp({ evidence: draftEvidence, sequenceStep });
+              return followUp
+                ? [{
+                    sequenceStep,
+                    subject: followUp.subject,
+                    body: followUp.body,
+                    delayDays: sequenceStep === 1 ? 4 : 5,
+                  }]
+                : [];
+            }),
+          ]
+        : undefined;
     const complianceIssues = outreachComplianceIssues({
       body: draft.body,
       toEmail,
@@ -543,6 +571,7 @@ async function prepareHandler(
       toDomain: opportunity.sourceDomain,
       subject: draft.subject,
       body: draft.body,
+      providerPlannedSequence,
       status,
       sequenceStep: 0,
       threadKey: outreachThreadKey(siteId, opportunity.sourceDomain),
@@ -737,6 +766,9 @@ type DeliveryOutcome = {
   terminalEventSettled?: boolean;
   /** Terminal integrity quarantine remains no-replay without blocking fleet. */
   preserveContactClaim?: boolean;
+  /** Smartlead accepted the exact lead into a provider-managed sequence;
+   * only a later signed webhook may call it sent. */
+  providerQueued?: boolean;
 };
 
 type LiveDnsEvidence = {
@@ -767,6 +799,7 @@ async function boundedDns<T>(operation: Promise<T>): Promise<T | null> {
 }
 
 async function liveDnsEvidence(inbox: {
+  provider?: string;
   senderDomain?: string;
   dkimSelector?: string;
 }): Promise<LiveDnsEvidence> {
@@ -795,9 +828,13 @@ async function liveDnsEvidence(inbox: {
     checkedAt: Date.now(),
     spf: rootTxt.some((value) => {
       const normalized = value.toLowerCase();
-      return normalized.startsWith("v=spf1") &&
-        (normalized.includes("include:_spf.google.com") ||
-          normalized.includes("redirect=_spf.google.com"));
+      if (!normalized.startsWith("v=spf1")) return false;
+      return inbox.provider === "smtp"
+        ? /\s(?:include:|redirect=|a(?=\s|:)|mx(?=\s|:)|ip4:|ip6:)/.test(
+            normalized,
+          )
+        : normalized.includes("include:_spf.google.com") ||
+          normalized.includes("redirect=_spf.google.com");
     }),
     dkim: dkimTxt.some((value) => {
       const normalized = value.replace(/\s+/g, "").toLowerCase();
@@ -806,6 +843,89 @@ async function liveDnsEvidence(inbox: {
     dmarc: dmarcTxt.some((value) => /^v=dmarc1\s*;/i.test(value.trim())),
   };
 }
+
+/** Owner-triggered SMTP socket and sender-authentication verification. It
+ * never sends a message and never returns provider diagnostics or secrets. */
+type SmtpInboxVerificationResult = {
+  connected: true;
+  senderAuthenticationReady: boolean;
+  checkedAt: number;
+};
+
+export const verifySmtpInbox = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<SmtpInboxVerificationResult> => {
+    await requireOwnedSite(ctx, siteId);
+    const inbox: Doc<"outreach_inboxes"> | null = await ctx.runQuery(
+      internal.outreach.getInboxInternal,
+      {
+      siteId,
+      },
+    );
+    if (!inbox || inbox.provider !== "smtp") {
+      throw new Error("No SMTP mailbox is configured for this site");
+    }
+    const issues = smtpConfigIssues({
+      host: inbox.smtpHost,
+      port: inbox.smtpPort,
+      username: inbox.smtpUsername,
+      password: inbox.smtpPassword,
+      fromEmail: inbox.fromEmail,
+    });
+    if (issues.length) throw new Error("SMTP credentials are incomplete");
+    const transport = nodemailer.createTransport({
+      ...smtpTransportOptions({
+        host: inbox.smtpHost,
+        port: inbox.smtpPort,
+        username: inbox.smtpUsername,
+        password: inbox.smtpPassword,
+        fromEmail: inbox.fromEmail,
+      }),
+      connectionTimeout: 15_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+    });
+    try {
+      await transport.verify();
+    } catch (error) {
+      const failure = classifySmtpFailure(
+        error instanceof Error ? error.message : "unknown",
+      );
+      await ctx.runMutation(internal.outreach.recordInboxError, {
+        inboxId: inbox._id,
+        siteId,
+        error: failure.operatorMessage,
+        suspend: failure.reason === "authentication_failed" ||
+          failure.reason === "tls_failed",
+        expectedConfigurationVersion: inbox.configurationVersion ?? 0,
+      });
+      throw new Error(failure.operatorMessage);
+    } finally {
+      transport.close();
+    }
+    const dns = await liveDnsEvidence(inbox);
+    const settled: { recorded: boolean; ready?: boolean } = await ctx.runMutation(
+      internal.outreach.settleSmtpVerificationInternal,
+      {
+        siteId,
+        inboxId: inbox._id,
+        expectedConfigurationVersion: inbox.configurationVersion ?? 0,
+        checkedAt: dns.checkedAt,
+        spfVerified: dns.spf,
+        dkimVerified: dns.dkim,
+        dmarcVerified: dns.dmarc,
+      },
+    );
+    if (!settled.recorded) {
+      throw new Error("SMTP configuration changed during verification");
+    }
+    return {
+      connected: true,
+      senderAuthenticationReady: Boolean(settled.ready),
+      checkedAt: dns.checkedAt,
+    };
+  },
+});
 
 async function liveOpportunityEvidence(
   ctx: ActionCtx,
@@ -940,6 +1060,10 @@ type DeliveryInbox = {
   oauthRefreshToken?: string;
   oauthAccessToken?: string;
   apiKey?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUsername?: string;
+  smtpPassword?: string;
 };
 
 async function prepareGmailAccessToken(
@@ -1065,6 +1189,74 @@ async function deliver(
     return { ok: true, providerMessageId, providerThreadId };
   }
 
+  if (inbox.provider === "smtp") {
+    const issues = smtpConfigIssues({
+      host: inbox.smtpHost,
+      port: inbox.smtpPort,
+      username: inbox.smtpUsername,
+      password: inbox.smtpPassword,
+      fromEmail: inbox.fromEmail,
+    });
+    if (issues.length) {
+      return { ok: false, error: "SMTP credentials are incomplete", suspend: true };
+    }
+    const transport = nodemailer.createTransport({
+      ...smtpTransportOptions({
+        host: inbox.smtpHost,
+        port: inbox.smtpPort,
+        username: inbox.smtpUsername,
+        password: inbox.smtpPassword,
+        fromEmail: inbox.fromEmail,
+      }),
+      connectionTimeout: 15_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+    });
+    try {
+      const info = await transport.sendMail({
+        from: inbox.fromName
+          ? { name: inbox.fromName, address: inbox.fromEmail }
+          : inbox.fromEmail,
+        to: message.toEmail,
+        replyTo: message.replyTo ?? inbox.replyToEmail,
+        subject: message.subject,
+        text: message.body,
+        messageId: message.outboundRfcMessageId,
+        inReplyTo: message.inReplyToRfcMessageId,
+        references: message.inReplyToRfcMessageId,
+      });
+      const accepted = Array.isArray(info.accepted) && info.accepted.length > 0;
+      if (!accepted || !info.messageId) {
+        return {
+          ok: false,
+          error: "SMTP response missing an accepted delivery receipt",
+          unverified: true,
+        };
+      }
+      return {
+        ok: true,
+        providerMessageId: createHash("sha256")
+          .update(String(info.messageId))
+          .digest("hex"),
+      };
+    } catch (error) {
+      const failure = classifySmtpFailure(
+        error instanceof Error ? error.message : "unknown",
+      );
+      return {
+        ok: false,
+        error: failure.operatorMessage,
+        bounced: failure.reason === "recipient_rejected",
+        suspend: failure.reason === "authentication_failed" ||
+          failure.reason === "tls_failed",
+        unverified: failure.reason === "connection_failed" ||
+          failure.reason === "rate_limited" || failure.reason === "unknown",
+      };
+    } finally {
+      transport.close();
+    }
+  }
+
   return { ok: false, error: `No transport for provider "${inbox.provider}"` };
 }
 
@@ -1101,6 +1293,9 @@ async function sendHandler(
   }
 
   const managedSes = inboxSnapshot.provider === MANAGED_SES_TRANSPORT;
+  const smartleadManaged =
+    inboxSnapshot.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT;
+  const smtp = inboxSnapshot.provider === "smtp";
   const managedSesConfig = managedSes ? managedSesRuntimeConfig() : null;
   if (
     managedSes &&
@@ -1116,7 +1311,9 @@ async function sendHandler(
   }
   const relayDomain = process.env.OUTREACH_INBOUND_RELAY_DOMAIN;
   const relayConfigured = inboundRelayConfigured(inboundRelayRuntimeConfig());
-  const relayReady = managedSes
+  const relayReady = smartleadManaged
+    ? true
+    : managedSes
     ? relayConfigured && managedSesInboxReceiptCurrent({
         inbox: inboxSnapshot,
         now: Date.now(),
@@ -1168,10 +1365,11 @@ async function sendHandler(
   }
 
   const attemptId = randomUUID();
-  const relayAliasToken = relayReady
+  const usesInboundRelay = relayReady && !smartleadManaged;
+  const relayAliasToken = usesInboundRelay
     ? randomBytes(24).toString("base64url")
     : undefined;
-  const dsnRoutingTarget = relayReady
+  const dsnRoutingTarget = usesInboundRelay
     ? await inboundRelayDsnRoutingTarget({
         siteId: String(siteId),
         inboxId: String(inboxSnapshot._id),
@@ -1184,7 +1382,7 @@ async function sendHandler(
   const relayAlias = relayAliasToken && relayDomain
     ? inboundRelayAliasAddress(relayAliasToken, relayDomain)
     : null;
-  const outboundRfcMessageId = relayReady
+  const outboundRfcMessageId = usesInboundRelay
     ? await inboundRelayOutboundMessageIdForAttempt({
         siteId: String(siteId),
         inboxId: String(inboxSnapshot._id),
@@ -1205,7 +1403,7 @@ async function sendHandler(
           inboxSnapshot.inboundRelayDsnRoutingTargetGeneration ?? 1,
       }
     : undefined;
-  if (relayReady && !relayBinding) {
+  if (usesInboundRelay && !relayBinding) {
     return {
       ...result,
       stopped: "The signed inbound relay configuration is invalid. Nothing was sent.",
@@ -1216,10 +1414,13 @@ async function sendHandler(
   // mutation rejects evidence older than one minute and reloads every tenant,
   // sender, message, opportunity, suppression and pacing record itself.
   const [dnsEvidence, opportunityEvidenceResult] = await Promise.all([
-    managedSes
+    managedSes || smartleadManaged
       ? Promise.resolve({
-          senderDomain: MANAGED_SES_PLATFORM_SENDER_DOMAIN,
-          dkimSelector: inboxSnapshot.dkimSelector ?? "managed-ses",
+          senderDomain: smartleadManaged
+            ? inboxSnapshot.senderDomain ?? ""
+            : MANAGED_SES_PLATFORM_SENDER_DOMAIN,
+          dkimSelector: inboxSnapshot.dkimSelector ??
+            (smartleadManaged ? "smartlead" : "managed-ses"),
           checkedAt: Date.now(),
           spf: true,
           dkim: true,
@@ -1536,11 +1737,45 @@ async function sendHandler(
           }
         }
       }
+    } else if (smartleadManaged) {
+      const boundary = await ctx.runMutation(
+        internal.outreach.markSmartleadDeliveryExternalBoundary,
+        deliveryBoundaryBinding,
+      );
+      if (!boundary.marked) {
+        outcome = {
+          ok: false,
+          error: boundary.externalAttempted
+            ? "Smartlead delivery boundary was already crossed"
+            : "Smartlead delivery authorization changed before enrollment",
+          unverified: boundary.externalAttempted,
+          preBoundaryTerminalized:
+            "terminalized" in boundary && boundary.terminalized,
+        };
+      } else {
+        const submitted = await ctx.runAction(
+          internal.actions.smartlead.submitSequence,
+          {
+            siteId,
+            messageId: claim.message._id,
+            attemptId,
+          },
+        );
+        outcome = submitted.ok
+          ? { ok: true, providerQueued: true }
+          : {
+              ok: false,
+              error: "Smartlead sequence receipt is unverified",
+              unverified: submitted.ambiguous,
+            };
+      }
     } else {
-      // OAuth refresh may make a credential-only provider call, but the final
-      // serializable authorization fence remains immediately before the Gmail
-      // message boundary. A concurrent reply/STOP/unsubscribe therefore wins.
-      const prepared = await prepareGmailAccessToken(claim.inbox);
+      // Credential preparation may happen before the final serializable
+      // authorization fence, but no message leaves Pentra until that exact
+      // boundary. A concurrent reply/STOP/unsubscribe therefore wins.
+      const prepared = smtp
+        ? { ok: true as const, accessToken: undefined }
+        : await prepareGmailAccessToken(claim.inbox);
       if (!prepared.ok) {
         outcome = {
           ok: false,
@@ -1549,15 +1784,17 @@ async function sendHandler(
         };
       } else {
         const boundary = await ctx.runMutation(
-          internal.outreach.markGmailDeliveryExternalBoundary,
+          smtp
+            ? internal.outreach.markSmtpDeliveryExternalBoundary
+            : internal.outreach.markGmailDeliveryExternalBoundary,
           deliveryBoundaryBinding,
         );
         if (!boundary.marked) {
           outcome = {
             ok: false,
             error: boundary.externalAttempted
-              ? "Gmail delivery boundary was already crossed"
-              : "Gmail delivery authorization changed before delivery",
+              ? `${smtp ? "SMTP" : "Gmail"} delivery boundary was already crossed`
+              : `${smtp ? "SMTP" : "Gmail"} delivery authorization changed before delivery`,
             unverified: boundary.externalAttempted,
             preBoundaryTerminalized:
               "terminalized" in boundary && boundary.terminalized,
@@ -1580,7 +1817,9 @@ async function sendHandler(
       ok: false,
       error: managedSes
         ? "Managed sender delivery outcome is ambiguous"
-        : "Gmail delivery timeout",
+        : smartleadManaged
+          ? "Smartlead delivery outcome is ambiguous"
+        : `${smtp ? "SMTP" : "Gmail"} delivery timeout`,
       unverified: true,
     };
   }
@@ -1590,6 +1829,14 @@ async function sendHandler(
       failed: 1,
       stopped:
         "A signed terminal managed-sender event settled this attempt; it was not counted as sent and no follow-up was queued.",
+    };
+  }
+  if (outcome.providerQueued) {
+    return {
+      sent: 0,
+      failed: 0,
+      stopped:
+        "Smartlead accepted the exact recipient sequence. Pentra will count delivery only after a signed sent event.",
     };
   }
   if (outcome.ok) {
@@ -1634,9 +1881,9 @@ async function sendHandler(
           siteId,
           messageId: claim.message._id,
           attemptId,
-          reason: managedSes
+              reason: managedSes
             ? "Managed sender receipt finalization failed"
-            : "Gmail receipt finalization failed",
+            : `${smtp ? "SMTP" : "Gmail"} receipt finalization failed`,
           unverified: true,
         });
       } catch {
@@ -1649,7 +1896,9 @@ async function sendHandler(
       failed: 1,
       stopped: managedSes
         ? "The managed sender accepted the request but Pentra could not seal its signed receipt; the attempt will not be replayed."
-        : "Gmail accepted the request but the receipt is unverified; manual review is required.",
+        : smartleadManaged
+          ? "Smartlead accepted an external operation but Pentra could not seal its exact receipt; it will be reconciled and not replayed."
+        : `${smtp ? "SMTP" : "Gmail"} accepted the request but the receipt is unverified; manual review is required.`,
     };
   }
 
@@ -1673,6 +1922,23 @@ async function sendHandler(
   result.failed = 1;
   let failed;
   try {
+    if (smartleadManaged && outcome.unverified) {
+      const ambiguous = await ctx.runMutation(
+        internal.outreach.recordSmartleadProviderProgressInternal,
+        {
+          siteId,
+          messageId: claim.message._id,
+          attemptId,
+          phase: "ambiguous",
+        },
+      );
+      return {
+        ...result,
+        stopped: ambiguous.recorded
+          ? "Smartlead acknowledgement is ambiguous. The operation is quarantined for exact reconciliation and will not be replayed."
+          : "Pentra could not seal the Smartlead ambiguity; the delivery lease remains the no-replay recovery fence.",
+      };
+    }
     failed = await ctx.runMutation(internal.outreach.failDeliveryAttempt, {
       siteId,
       messageId: claim.message._id,
@@ -1714,7 +1980,7 @@ async function sendHandler(
       ...result,
       stopped: managedSes
         ? "The managed sender did not return a verified receipt; this operation is quarantined and will not be replayed."
-        : "Gmail did not return a verified receipt; manual review is required.",
+        : `${smtp ? "SMTP" : "Gmail"} did not return a verified receipt; manual review is required.`,
     };
   }
   return result;
@@ -1792,16 +2058,16 @@ export const sendAutomaticOutreachInternal = internalAction({
     sendHandler(ctx, siteId, "automatic"),
 });
 
-/** Explicitly owner-trigger one fixed-recipient Gmail hard-DSN canary. This is
- * separate from prospect delivery and has no cron/fleet caller. Gmail's send
- * receipt never seals readiness; only the later signed structured DSN can. */
+/** Explicitly owner-trigger one fixed-recipient customer-mailbox hard-DSN canary. This is
+ * separate from prospect delivery and has no cron/fleet caller. The transport's
+ * send receipt never seals readiness; only the later signed structured DSN can. */
 export const sendInboundRelayDsnCanary = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     await requireOwnedSite(ctx, siteId);
     const inbox = await ctx.runQuery(internal.outreach.getInboxInternal, { siteId });
-    if (!inbox || inbox.provider !== "gmail") {
-      throw new Error("A verified Gmail outreach inbox is required");
+    if (!inbox || !["gmail", "smtp"].includes(inbox.provider)) {
+      throw new Error("A verified customer-managed outreach inbox is required");
     }
     const runtimeConfig = inboundRelayRuntimeConfig();
     const relayDomain = process.env.OUTREACH_INBOUND_RELAY_DOMAIN;
@@ -1896,7 +2162,7 @@ export const sendInboundRelayDsnCanary = action({
         verified: false as const,
         retryAfter: expiresAt,
         reason:
-          "Pentra could not seal the Gmail canary outcome. Outreach remains blocked and this challenge will not be retried automatically.",
+          "Pentra could not seal the mailbox canary outcome. Outreach remains blocked and this challenge will not be retried automatically.",
       };
     }
     if (!outcome.ok) {
@@ -1918,8 +2184,8 @@ export const sendInboundRelayDsnCanary = action({
         verified: false as const,
         retryAfter: expiresAt,
         reason: outcome.unverified
-          ? "Gmail's canary outcome is ambiguous; Pentra will wait for the signed DSN and will not send another canary before this challenge expires."
-          : "Gmail did not accept the fixed-recipient canary.",
+          ? "The mailbox canary outcome is ambiguous; Pentra will wait for the signed DSN and will not send another canary before this challenge expires."
+          : "The mailbox did not accept the fixed-recipient canary.",
       };
     }
     return {
@@ -1927,7 +2193,7 @@ export const sendInboundRelayDsnCanary = action({
       verified: false as const,
       expiresAt,
       message:
-        "Gmail accepted the canary. Outreach remains blocked until the receiving-only adapter returns the exact signed structured hard-DSN.",
+        "The mailbox accepted the canary. Outreach remains blocked until the receiving-only adapter returns the exact signed structured hard-DSN.",
     };
   },
 });

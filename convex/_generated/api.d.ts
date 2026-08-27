@@ -25,6 +25,7 @@ import type * as actions_plannedTopicEvidenceRecovery from "../actions/plannedTo
 import type * as actions_scheduler from "../actions/scheduler.js";
 import type * as actions_seoData from "../actions/seoData.js";
 import type * as actions_seoGrowth from "../actions/seoGrowth.js";
+import type * as actions_smartlead from "../actions/smartlead.js";
 import type * as actions_syndication from "../actions/syndication.js";
 import type * as actions_underfilledPlanRecovery from "../actions/underfilledPlanRecovery.js";
 import type * as articles from "../articles.js";
@@ -35,6 +36,7 @@ import type * as crons from "../crons.js";
 import type * as executionAuthorization from "../executionAuthorization.js";
 import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfill.js";
 import type * as expectedClickEvidenceBackfill from "../expectedClickEvidenceBackfill.js";
+import type * as growthLoop from "../growthLoop.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
@@ -60,6 +62,7 @@ import type * as lib_expectedClickPortfolio from "../lib/expectedClickPortfolio.
 import type * as lib_expectedClickSkipReceipt from "../lib/expectedClickSkipReceipt.js";
 import type * as lib_expectedClickSkipReceiptStore from "../lib/expectedClickSkipReceiptStore.js";
 import type * as lib_growthSupportDelivery from "../lib/growthSupportDelivery.js";
+import type * as lib_growthLoopContracts from "../lib/growthLoopContracts.js";
 import type * as lib_gscSearchAnalytics from "../lib/gscSearchAnalytics.js";
 import type * as lib_internalHttpAuth from "../lib/internalHttpAuth.js";
 import type * as lib_internalLinks from "../lib/internalLinks.js";
@@ -114,6 +117,8 @@ import type * as lib_seoGrowth from "../lib/seoGrowth.js";
 import type * as lib_serpAttainability from "../lib/serpAttainability.js";
 import type * as lib_siteDomainBinding from "../lib/siteDomainBinding.js";
 import type * as lib_siteSecurity from "../lib/siteSecurity.js";
+import type * as lib_smartlead from "../lib/smartlead.js";
+import type * as lib_smartleadNode from "../lib/smartleadNode.js";
 import type * as lib_sourceQuality from "../lib/sourceQuality.js";
 import type * as lib_topicLifecycle from "../lib/topicLifecycle.js";
 import type * as lib_topicLifecycleDb from "../lib/topicLifecycleDb.js";
@@ -160,6 +165,7 @@ declare const fullApi: ApiFromModules<{
   "actions/scheduler": typeof actions_scheduler;
   "actions/seoData": typeof actions_seoData;
   "actions/seoGrowth": typeof actions_seoGrowth;
+  "actions/smartlead": typeof actions_smartlead;
   "actions/syndication": typeof actions_syndication;
   "actions/underfilledPlanRecovery": typeof actions_underfilledPlanRecovery;
   articles: typeof articles;
@@ -170,6 +176,7 @@ declare const fullApi: ApiFromModules<{
   executionAuthorization: typeof executionAuthorization;
   expectedClickDemandBackfill: typeof expectedClickDemandBackfill;
   expectedClickEvidenceBackfill: typeof expectedClickEvidenceBackfill;
+  growthLoop: typeof growthLoop;
   http: typeof http;
   jobs: typeof jobs;
   "lib/accountDeletion": typeof lib_accountDeletion;
@@ -195,6 +202,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expectedClickSkipReceipt": typeof lib_expectedClickSkipReceipt;
   "lib/expectedClickSkipReceiptStore": typeof lib_expectedClickSkipReceiptStore;
   "lib/growthSupportDelivery": typeof lib_growthSupportDelivery;
+  "lib/growthLoopContracts": typeof lib_growthLoopContracts;
   "lib/gscSearchAnalytics": typeof lib_gscSearchAnalytics;
   "lib/internalHttpAuth": typeof lib_internalHttpAuth;
   "lib/internalLinks": typeof lib_internalLinks;
@@ -249,6 +257,8 @@ declare const fullApi: ApiFromModules<{
   "lib/serpAttainability": typeof lib_serpAttainability;
   "lib/siteDomainBinding": typeof lib_siteDomainBinding;
   "lib/siteSecurity": typeof lib_siteSecurity;
+  "lib/smartlead": typeof lib_smartlead;
+  "lib/smartleadNode": typeof lib_smartleadNode;
   "lib/sourceQuality": typeof lib_sourceQuality;
   "lib/topicLifecycle": typeof lib_topicLifecycle;
   "lib/topicLifecycleDb": typeof lib_topicLifecycleDb;

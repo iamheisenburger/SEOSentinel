@@ -180,6 +180,7 @@ async function inventoryAuditHandler(
       byStatus,
       schedulerEvidenceReady: schedulerReadiness.schedulerReadyTopicIds.length,
       schedulerReadyTopicIds: schedulerReadiness.schedulerReadyTopicIds,
+      opportunityDecisions: schedulerReadiness.opportunityDecisions,
       expectedClickPortfolio: schedulerReadiness.portfolio,
       recent: topics
         .slice()

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-typecheck:
+  release-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -22,6 +22,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Schema compatibility compares the candidate with the base branch.
+          # A shallow single-commit checkout cannot resolve origin/main (or
+          # HEAD^) and turns a healthy additive schema into a false CI failure.
+          fetch-depth: 0
 
       - name: Use Node 24
         uses: actions/setup-node@v4
@@ -35,5 +39,38 @@ jobs:
       - name: Run full tests
         run: npm test
 
+      - name: Lint application and backend
+        run: npm run lint
+
       - name: Type-check
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: Check additive schema compatibility
+        env:
+          SCHEMA_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }}
+        run: npm run check:schema
+
+      - name: Scan tracked source for secrets
+        run: npm run scan:secrets
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build production application with non-secret configuration
+        env:
+          NEXT_PUBLIC_CONVEX_URL: https://example.convex.cloud
+          NEXT_PUBLIC_SITE_URL: https://pentra.dev
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+          CLERK_SECRET_KEY: sk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+        run: npm run build
+
+      - name: Install browser acceptance runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Run public browser acceptance tests
+        env:
+          NEXT_PUBLIC_CONVEX_URL: https://example.convex.cloud
+          NEXT_PUBLIC_SITE_URL: https://pentra.dev
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+          CLERK_SECRET_KEY: sk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+        run: npm run test:e2e

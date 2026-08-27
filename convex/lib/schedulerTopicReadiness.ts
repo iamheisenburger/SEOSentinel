@@ -13,6 +13,11 @@ import {
   evaluateSerpAttainability,
   evaluateSerpBusinessIntent,
 } from "./serpAttainability.ts";
+import {
+  decideOpportunity,
+  type OpportunityDecision,
+} from "./growthLoopContracts.ts";
+import { sha256Hex } from "./publicationArtifact.ts";
 
 export const SCHEDULER_TOPIC_INVENTORY_READ_LIMIT = 2_000;
 
@@ -66,23 +71,27 @@ const SCHEDULABLE_TOPIC_STATUSES = new Set(["planned", "pending"]);
  */
 export function schedulerReadyTopic(args: {
   topic: SchedulerReadyTopic;
-  businessFitEligible: boolean;
-  serpBusinessIntentAligned: boolean;
+  opportunityAdmitted?: boolean;
+  // Compatibility inputs for pure callers while the persisted v1
+  // OpportunityDecision is rolled out across existing tenants.
+  businessFitEligible?: boolean;
+  serpBusinessIntentAligned?: boolean;
   expectedClickStatus?: string;
-  serpAttainable: boolean;
+  serpAttainable?: boolean;
 }): boolean {
   const { topic } = args;
+  const admitted = args.opportunityAdmitted ?? Boolean(
+    args.businessFitEligible && args.serpBusinessIntentAligned &&
+    args.expectedClickStatus === "eligible" && args.serpAttainable,
+  );
   return SCHEDULABLE_TOPIC_STATUSES.has(topic.status ?? "planned") &&
     !planCheckpointTopicExecutionLocked(topic) &&
-    args.businessFitEligible &&
-    args.serpBusinessIntentAligned &&
     Number.isFinite(topic.searchVolume) &&
     Number.isFinite(topic.keywordDifficulty) &&
     topic.keywordDifficultyMeasured === true &&
     Boolean(topic.serpIntent?.trim()) &&
     (topic.serpTopUrls?.length ?? 0) >= 5 &&
-    args.expectedClickStatus === "eligible" &&
-    args.serpAttainable;
+    admitted;
 }
 
 export function evaluateSchedulerReadyTopicInventory(args: {
@@ -94,11 +103,19 @@ export function evaluateSchedulerReadyTopicInventory(args: {
 }): {
   portfolio: ExpectedClickPortfolioEvaluation;
   schedulerReadyTopicIds: string[];
+  opportunityDecisions: Array<OpportunityDecision & {
+    topicId: string;
+    opportunityKey: string;
+    evidenceVersion: number;
+    inputHash: string;
+  }>;
 } {
+  // Only unconsumed inventory can support a forward click goal. Published or
+  // otherwise consumed topics remain in GSC/outcome analysis, never in the
+  // pool that claims another article can be produced.
   const portfolioTopics = args.topics.filter((topic) =>
-    !["cannibalizing", "disqualified", "plan_checkpoint"].includes(
-      topic.status ?? "planned",
-    ) && !topic.planCheckpointTerminalFailureCode
+    SCHEDULABLE_TOPIC_STATUSES.has(topic.status ?? "planned") &&
+    !topic.planCheckpointTerminalFailureCode
   );
   const portfolio = evaluateStoredExpectedClickPortfolio({
     topics: portfolioTopics.map((topic) => ({
@@ -135,7 +152,8 @@ export function evaluateSchedulerReadyTopicInventory(args: {
     .replace(/^https?:\/\//i, "")
     .replace(/^www\./i, "")
     .split("/")[0];
-  const schedulerReadyTopicIds = args.topics.flatMap((topic) => {
+  const forwardCandidateCount = portfolioTopics.length;
+  const opportunityDecisions = args.topics.map((topic) => {
     const fit = evaluateTopicBusinessFit({
       keyword: topic.primaryKeyword,
       label: topic.label,
@@ -147,19 +165,60 @@ export function evaluateSchedulerReadyTopicInventory(args: {
           businessModelSignals: businessSignals.businessModelSignals,
         })
       : { aligned: false };
+    const attainable = evaluateSerpAttainability({
+      serpTopUrls: topic.serpTopUrls,
+      siteHost,
+    }).attainable;
+    const estimate = expectedClickByTopic.get(String(topic._id));
+    const status = topic.status ?? "planned";
+    const decision = decideOpportunity({
+      businessFitScore: fit.score,
+      businessFitEligible: fit.eligible && serpIntent.aligned,
+      monthlyDemand: topic.searchVolume,
+      expectedClicksMonthly: estimate?.expectedClicksMonthly,
+      serpAttainable: attainable,
+      commercialRelevance: fit.score / 100,
+      // A broad, measured page-one source set is the current deterministic
+      // pre-generation depth evidence. Publication still enforces full source,
+      // factual, media, metadata and rendering gates before sealing.
+      contentDepthScore: Math.min(1, (topic.serpTopUrls?.length ?? 0) / 8),
+      evidenceFresh: estimate?.status === "eligible" &&
+        Number.isFinite(topic.keywordDifficulty) &&
+        topic.keywordDifficultyMeasured === true &&
+        Boolean(topic.serpIntent?.trim()),
+      coverageConflict: !SCHEDULABLE_TOPIC_STATUSES.has(status),
+      remainingCandidateCount: forwardCandidateCount,
+    }, Date.now());
+    const topicId = String(topic._id);
+    return {
+      ...decision,
+      topicId,
+      opportunityKey: topicId,
+      evidenceVersion: estimate?.version ?? decision.version,
+      inputHash: sha256Hex(JSON.stringify({
+        topicId,
+        status,
+        fitScore: fit.score,
+        serpIntentAligned: serpIntent.aligned,
+        attainable,
+        expectedClickStatus: estimate?.status,
+        expectedClicksMonthly: estimate?.expectedClicksMonthly,
+        searchVolume: topic.searchVolume,
+        serpResultCount: topic.serpTopUrls?.length ?? 0,
+      })),
+    };
+  });
+  const decisionByTopicId = new Map(
+    opportunityDecisions.map((decision) => [decision.topicId, decision]),
+  );
+  const schedulerReadyTopicIds = args.topics.flatMap((topic) => {
+    const decision = decisionByTopicId.get(String(topic._id));
     return schedulerReadyTopic({
       topic,
-      businessFitEligible: fit.eligible,
-      serpBusinessIntentAligned: serpIntent.aligned,
-      expectedClickStatus:
-        expectedClickByTopic.get(String(topic._id))?.status,
-      serpAttainable: evaluateSerpAttainability({
-        serpTopUrls: topic.serpTopUrls,
-        siteHost,
-      }).attainable,
+      opportunityAdmitted: decision?.admitted === true,
     })
       ? [String(topic._id)]
       : [];
   });
-  return { portfolio, schedulerReadyTopicIds };
+  return { portfolio, schedulerReadyTopicIds, opportunityDecisions };
 }

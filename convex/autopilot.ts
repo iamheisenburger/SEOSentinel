@@ -20,7 +20,8 @@ import {
   requiredMonthlyArticlesForCadence,
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
-import { getLimitsFromFeatures } from "./planLimits";
+import { getLimitsFromFeatures, resolvePlanFromFeatures } from "./planLimits";
+import { growthLoopRolloutAllowsSite } from "./lib/growthLoopContracts.ts";
 import {
   autopilotAlertRequiresAttention,
   isRecoveredByHealthyAutopilotReceipt,
@@ -842,6 +843,37 @@ export const promoteWarmSiteIfReady = internalMutation({
         blockers: ["publication_commit_unresolved"],
       };
     }
+    const paidPlan = resolvePlanFromFeatures(site.planFeatures ?? []).tier !== "free";
+    const fleetRollout = paidPlan
+      ? await ctx.db.query("growth_loop_rollout_controls").order("desc").first()
+      : null;
+    if (
+      fleetRollout?.status === "paused" ||
+      (fleetRollout && !growthLoopRolloutAllowsSite(
+        String(siteId),
+        fleetRollout.targetPercent,
+      ))
+    ) {
+      const blockers = [fleetRollout.status === "paused"
+        ? fleetRollout.blockerCode ?? "growth_loop_rollout_paused"
+        : "growth_loop_rollout_cohort_not_enabled"];
+      await setAlert(ctx, {
+        siteId,
+        kind: "autopilot_readiness_blocked",
+        message: "Autonomous publication is waiting for the staged GA cohort.",
+        details: {
+          blockers,
+          releaseCommit: fleetRollout.releaseCommit,
+          targetPercent: fleetRollout.targetPercent,
+          nextEligibleAt: fleetRollout.nextEvaluationAt,
+        },
+      });
+      return {
+        promoted: false,
+        blockers,
+        nextEligibleAt: fleetRollout.nextEvaluationAt,
+      };
+    }
     const hasCrawledPage = await hasCurrentDomainPage(ctx, site);
     const limits = getLimitsFromFeatures(site.planFeatures ?? []);
     const baseReadiness = liveAutopilotReadiness(
@@ -889,6 +921,7 @@ export const promoteWarmSiteIfReady = internalMutation({
     const runId = await ctx.db.insert("autopilot_runs", {
       siteId,
       trigger: "automatic_live_promotion",
+      sealedBufferCount: sealedCount,
       scheduledAt: promotedAt,
       heartbeatAt: promotedAt,
       status: "scheduled",
@@ -1819,6 +1852,82 @@ export const recordTopicPortfolioAudit = internalMutation({
       portfolioVersion: args.version,
     });
     return { recorded: true };
+  },
+});
+
+export const recordOpportunityDecisionBatch = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    evaluatedAt: v.number(),
+    decisions: v.array(v.object({
+      topicId: v.id("topic_clusters"),
+      opportunityKey: v.string(),
+      evidenceVersion: v.number(),
+      classification: v.union(
+        v.literal("eligible"),
+        v.literal("needs_evidence"),
+        v.literal("too_thin"),
+        v.literal("coverage_conflict"),
+        v.literal("business_fit_failed"),
+        v.literal("cooldown"),
+        v.literal("opportunity_space_exhausted"),
+      ),
+      admitted: v.boolean(),
+      score: v.number(),
+      reasons: v.array(v.string()),
+      nextEligibleAt: v.optional(v.number()),
+      inputHash: v.string(),
+      version: v.number(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    if (args.decisions.length > 50) throw new Error("Opportunity receipt batch exceeds limit");
+    const site = await ctx.db.get(args.siteId);
+    if (
+      !site || !(await siteExecutionAuthorized(ctx, site)) ||
+      siteCanonicalDomain(site) !== args.expectedCanonicalDomain ||
+      siteCanonicalDomainRevision(site) !== args.expectedDomainRevision
+    ) throw new Error("Site not found");
+    let inserted = 0;
+    for (const decision of args.decisions) {
+      const topic = await ctx.db.get(decision.topicId);
+      if (!topic || topic.siteId !== args.siteId) continue;
+      const existing = await ctx.db.query("opportunity_decision_receipts")
+        .withIndex("by_site_opportunity_version", (q) =>
+          q.eq("siteId", args.siteId)
+            .eq("opportunityKey", decision.opportunityKey)
+            .eq("evidenceVersion", decision.evidenceVersion)
+        )
+        .unique();
+      if (existing) {
+        if (
+          existing.inputHash !== decision.inputHash ||
+          existing.classification !== decision.classification ||
+          existing.admitted !== decision.admitted
+        ) throw new Error("Opportunity evidence version already has a different decision");
+        continue;
+      }
+      await ctx.db.insert("opportunity_decision_receipts", {
+        siteId: args.siteId,
+        topicId: decision.topicId,
+        opportunityKey: decision.opportunityKey,
+        evidenceVersion: decision.evidenceVersion,
+        classification: decision.classification,
+        admitted: decision.admitted,
+        score: decision.score,
+        reasonCodes: decision.reasons.map((reason) => reason.slice(0, 240)),
+        nextEligibleAt: decision.nextEligibleAt,
+        automaticWakeAt: decision.nextEligibleAt,
+        inputHash: decision.inputHash,
+        version: decision.version,
+        evaluatedAt: args.evaluatedAt,
+        createdAt: args.evaluatedAt,
+      });
+      inserted += 1;
+    }
+    return { inserted };
   },
 });
 

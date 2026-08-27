@@ -32,7 +32,6 @@ import {
   outreachDeliverySettlementDecision,
   outreachSendDecision,
   outreachSenderConnectionIssues,
-  outreachSenderReadinessIssues,
   isConsumerMailDomain,
   utcDayKey,
 } from "./lib/outreachPacing.ts";
@@ -61,9 +60,9 @@ import {
 } from "./lib/outreachSecurity.ts";
 import {
   OUTREACH_DELIVERY_LEASE_MS,
+  SMARTLEAD_DELIVERY_LEASE_MS,
   OUTREACH_LIVE_OPPORTUNITY_EVIDENCE_MAX_AGE_MS,
   approvalMatchesInbox,
-  autonomousGmailCredentialIssues,
   autonomousOutreachTransportIssues,
   deliveryExternalBoundaryDecision,
   deliveryLeaseRecoveryDecision,
@@ -76,7 +75,6 @@ import {
 } from "./lib/outreachDelivery.ts";
 import {
   MANAGED_SES_AMBIGUOUS_DISPOSITION_MS,
-  MANAGED_SES_EVENT_CANARY_TTL_MS,
   MANAGED_SES_PLATFORM_RELAY_DOMAIN,
   MANAGED_SES_PLATFORM_SENDER_DOMAIN,
   MANAGED_SES_TRANSPORT,
@@ -162,6 +160,23 @@ import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
 import { stageManagedOutreachMailboxRelease } from
   "./managedOutreachMailbox.ts";
 import { sha256Hex } from "./lib/publicationArtifact.ts";
+import {
+  decideOutreachPolicy,
+  OUTREACH_POLICY_VERSION,
+} from "./lib/growthLoopContracts.ts";
+import {
+  SMARTLEAD_ADAPTER_VERSION,
+  SMARTLEAD_MANAGED_TRANSPORT,
+  SMARTLEAD_MAX_SEQUENCE_STEP,
+  SMARTLEAD_MINIMUM_WARMUP_MS,
+  smartleadCanaryOperationKey,
+  smartleadManagedInboxIssues,
+  smartleadOperationKey,
+} from "./lib/smartlead.ts";
+import {
+  describeSmtpIssue,
+  smtpConfigIssues,
+} from "./lib/outreachSmtp.ts";
 
 function authorityOpportunityMatchesCurrentDomain(
   site: Doc<"sites">,
@@ -686,9 +701,13 @@ export const getInbox = query({
     const runtimeConfig = inboundRelayRuntimeConfig();
     const routingTarget =
       inbox &&
-      inbox.provider === "gmail" &&
+      ["gmail", "smtp"].includes(inbox.provider) &&
       !["disconnected", "suspended"].includes(inbox.status) &&
-      Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken) &&
+      Boolean(
+        inbox.provider === "smtp"
+          ? inbox.smtpPassword
+          : inbox.oauthRefreshToken || inbox.oauthAccessToken,
+      ) &&
       executionAuthorized
         ? await inboundRelayDsnRoutingTarget({
             siteId: String(site._id),
@@ -727,20 +746,243 @@ export const getInbox = query({
           autonomousOutreachReconciliationComplete(inbox) &&
           (await outreachDurabilityMigrationComplete(ctx, site)) &&
           inbox.credentialOwnerAccountKey === accountDeletionKey(site.userId!) &&
-          autonomousGmailCredentialIssues({
-            oauthScopes: inbox.oauthScopes,
-            hasRefreshToken: Boolean(inbox.oauthRefreshToken),
+          autonomousOutreachTransportIssues({
+            inbox,
+            now: Date.now(),
           }).length === 0,
       ),
     );
   },
 });
 
-/**
- * Mailbox credentials are accepted only from Pentra's signed server-side
- * Google OAuth callback. Keeping this internal prevents a browser client from
- * injecting SMTP/transactional-provider secrets into the cold-mail path.
- */
+/** Customer-managed SMTP fallback. It remains approval-only until the socket,
+ * sender authentication, compliance profile, and signed inbound routing
+ * canary all verify. Managed Smartlead remains the default One Setup path. */
+export const configureSmtpInbox = mutation({
+  args: {
+    siteId: v.id("sites"),
+    host: v.string(),
+    port: v.number(),
+    username: v.string(),
+    password: v.string(),
+    fromEmail: v.string(),
+    fromName: v.string(),
+    physicalMailingAddress: v.string(),
+    dkimSelector: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const site = await requireSiteOwner(ctx, args.siteId);
+    if (!(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("This site is not eligible to configure outreach");
+    }
+    const request = await ctx.db.query("managed_provisioning_requests")
+      .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
+      .unique();
+    if (
+      request &&
+      (request.outreachTransport !== "smtp" ||
+        request.outreachMailbox.mode !== "connect_existing")
+    ) {
+      throw new Error("Select SMTP in One Setup before saving SMTP credentials");
+    }
+    if (
+      request?.outreachSenderProfile &&
+      (request.outreachSenderProfile.fromName !== args.fromName.trim() ||
+        request.outreachSenderProfile.physicalMailingAddress !==
+          args.physicalMailingAddress.trim())
+    ) {
+      throw new Error(
+        "The SMTP sender identity must match the exact profile authorized in One Setup",
+      );
+    }
+    const issues = smtpConfigIssues({
+      host: args.host,
+      port: args.port,
+      username: args.username,
+      password: args.password,
+      fromEmail: args.fromEmail,
+    });
+    if (issues.length) {
+      throw new Error(issues.map(describeSmtpIssue).join(" "));
+    }
+    const fromEmail = args.fromEmail.trim().toLowerCase();
+    const senderDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
+    if (
+      args.fromName.trim().length < 2 ||
+      args.physicalMailingAddress.trim().length < 15 ||
+      !/^[a-z0-9_-]{1,63}$/i.test(args.dkimSelector.trim())
+    ) {
+      throw new Error("Sender identity, mailing address, or DKIM selector is incomplete");
+    }
+    const connectionIssues = outreachSenderConnectionIssues({
+      siteDomain: site.domain,
+      provider: "smtp",
+      fromEmail,
+    });
+    if (connectionIssues.length) throw new Error(connectionIssues.join(" "));
+    if (
+      await outboundIdentityUsedByAnotherTenant(
+        ctx,
+        args.siteId,
+        fromEmail,
+        senderDomain,
+        "smtp",
+      )
+    ) {
+      throw new Error("This SMTP mailbox or sender domain belongs to another tenant");
+    }
+    const existing = await inboxForSite(ctx, args.siteId);
+    if (
+      existing &&
+      (existing.credentialSource === "managed_adapter" ||
+        existing.credentialSource === "managed_adapter_retiring" ||
+        existing.managedTransportOperationKey)
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        args.siteId,
+        Date.now(),
+        "owner_selected_connect_existing",
+      );
+      return {
+        configured: false as const,
+        releasePending: true as const,
+      };
+    }
+    const ownerAccountKey = accountDeletionKey(site.userId!);
+    if (
+      existing?.credentialOwnerAccountKey &&
+      existing.credentialOwnerAccountKey !== ownerAccountKey
+    ) throw new Error("This mailbox belongs to another account");
+    if (existing && !existing.credentialOwnerAccountKey) {
+      await quarantineLegacyUnownedDeliveryBeforeReconnect(
+        ctx,
+        args.siteId,
+        existing._id,
+      );
+    } else {
+      await assertNoActiveDelivery(ctx, args.siteId);
+    }
+    const timestamp = Date.now();
+    const record = {
+      provider: "smtp",
+      fromEmail,
+      fromName: args.fromName.trim(),
+      physicalMailingAddress: args.physicalMailingAddress.trim(),
+      complianceConfirmedAt: timestamp,
+      status: "connected",
+      mode: "approval",
+      credentialOwnerAccountKey: ownerAccountKey,
+      credentialSource: "owner_smtp",
+      smtpHost: args.host.trim().toLowerCase(),
+      smtpPort: args.port,
+      smtpUsername: args.username.trim(),
+      smtpPassword: args.password,
+      senderDomain,
+      dkimSelector: args.dkimSelector.trim().toLowerCase(),
+      dailySendCap: Math.min(
+        existing?.dailySendCap ?? DEFAULT_DAILY_SEND_CAP,
+        DEFAULT_DAILY_SEND_CAP,
+      ),
+      warmupStartedAt: undefined,
+      sentToday: 0,
+      sentTodayDay: utcDayKey(timestamp),
+      oauthAccessToken: undefined,
+      oauthRefreshToken: undefined,
+      oauthExpiresAt: undefined,
+      oauthScopes: undefined,
+      apiKey: undefined,
+      managedTransportOperationKey: undefined,
+      managedTransportGeneration: undefined,
+      managedTransportAdapterVersion: undefined,
+      managedTransportKind: undefined,
+      managedTransportResourceReceipt: undefined,
+      verifiedAt: undefined,
+      dnsCheckedAt: undefined,
+      spfVerifiedAt: undefined,
+      dkimVerifiedAt: undefined,
+      dmarcVerifiedAt: undefined,
+      autonomyConsentVersion: undefined,
+      autonomyConsentPolicyHash: undefined,
+      autonomyConsentAcceptedAt: undefined,
+      autonomyConsentAcceptedBy: undefined,
+      autonomyConsentInboxConfigurationVersion: undefined,
+      autonomyReconciliationStatus: undefined,
+      autonomyReconciliationStage: undefined,
+      autonomyReconciliationCursor: undefined,
+      inboundRelayDsnRoutingVerifiedAt: undefined,
+      inboundRelayDsnRoutingConfigurationVersion: undefined,
+      inboundRelayDsnRoutingRolloutEpoch: undefined,
+      inboundRelayDsnRoutingSenderDomain: undefined,
+      inboundRelayDsnRoutingRelayConfigurationHash: undefined,
+      inboundRelayDsnRoutingEvidenceHash: undefined,
+      inboundRelayDsnRoutingAdapterVersion: undefined,
+      inboundRelayDsnRoutingRetentionPolicyHash: undefined,
+      inboundRelayDsnRoutingTargetHash: undefined,
+      inboundRelayDsnRoutingTargetVersion: undefined,
+      inboundRelayDsnRoutingTargetGeneration:
+        (existing?.inboundRelayDsnRoutingTargetGeneration ?? 0) + 1,
+      configurationVersion: (existing?.configurationVersion ?? 0) + 1,
+      lastError: "Verify the SMTP connection and sender authentication before sending.",
+      updatedAt: timestamp,
+    };
+    const inboxId = existing
+      ? (await ctx.db.patch(existing._id, record), existing._id)
+      : await ctx.db.insert("outreach_inboxes", {
+          siteId: args.siteId,
+          ...record,
+          createdAt: timestamp,
+        });
+    return { configured: true as const, inboxId };
+  },
+});
+
+export const settleSmtpVerificationInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    expectedConfigurationVersion: v.number(),
+    checkedAt: v.number(),
+    spfVerified: v.boolean(),
+    dkimVerified: v.boolean(),
+    dmarcVerified: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const [site, inbox] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+    ]);
+    if (
+      !site?.userId || !inbox || inbox.siteId !== args.siteId ||
+      inbox.provider !== "smtp" ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
+      (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion ||
+      args.checkedAt < Date.now() - 10 * 60 * 1000 ||
+      args.checkedAt > Date.now() + 60 * 1000
+    ) return { recorded: false as const };
+    const authenticated = args.spfVerified && args.dkimVerified &&
+      args.dmarcVerified;
+    await ctx.db.patch(inbox._id, {
+      dnsCheckedAt: args.checkedAt,
+      spfVerifiedAt: args.spfVerified ? args.checkedAt : undefined,
+      dkimVerifiedAt: args.dkimVerified ? args.checkedAt : undefined,
+      dmarcVerifiedAt: args.dmarcVerified ? args.checkedAt : undefined,
+      verifiedAt: authenticated ? args.checkedAt : undefined,
+      status: authenticated ? "warming" : "connected",
+      warmupStartedAt: authenticated
+        ? inbox.warmupStartedAt ?? args.checkedAt
+        : undefined,
+      lastError: authenticated
+        ? undefined
+        : "SMTP connected, but SPF, DKIM, and DMARC have not all verified.",
+      updatedAt: args.checkedAt,
+    });
+    return { recorded: true as const, ready: authenticated };
+  },
+});
+
+/** Gmail credentials are accepted only from Pentra's signed server-side
+ * OAuth callback. */
 const GMAIL_INBOX_INSTALLATION_ARGS = {
   siteId: v.id("sites"),
   fromEmail: v.string(),
@@ -810,11 +1052,31 @@ async function installCanonicalGmailInbox(
           .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
           .unique()
       : null;
-    if (ownerSetupRequest?.outreachMailbox.mode === "managed") {
+    if (
+      ownerSetupRequest &&
+      (ownerSetupRequest.outreachMailbox.mode !== "connect_existing" ||
+        ownerSetupRequest.outreachTransport !== "gmail_oauth")
+    ) {
       throw new Error(
-        "Select Connect existing in One Setup before connecting an owner mailbox",
+        "Select Gmail OAuth in One Setup before connecting an owner Gmail mailbox",
       );
     }
+    const oneSetupOwnerProfile = !managedBinding &&
+        ownerSetupRequest?.ownerAccountKey === credentialOwnerAccountKey &&
+        ownerSetupRequest.contractVersion === ONE_SETUP_CONTRACT_VERSION &&
+        ownerSetupRequest.domainSnapshot === siteCanonicalDomain(site) &&
+        ownerSetupRequest.domainRevisionSnapshot ===
+          siteCanonicalDomainRevision(site) &&
+        ownerSetupRequest.outreachSenderProfile
+      ? {
+          fromName: ownerSetupRequest.outreachSenderProfile.fromName,
+          physicalMailingAddress:
+            ownerSetupRequest.outreachSenderProfile.physicalMailingAddress,
+          complianceConfirmedAt: ownerSetupRequest.outreachSenderProfile
+            .senderIdentityAndAddressAttestedAt,
+        }
+      : undefined;
+    const connectionProfile = managedProfile ?? oneSetupOwnerProfile;
     const existing = await inboxForSite(ctx, args.siteId);
     if (
       existing &&
@@ -1091,11 +1353,11 @@ async function installCanonicalGmailInbox(
         : undefined,
     };
     const reconnectProfile = resolveGmailReconnectProfile({
-      requestedFromName: managedProfile?.fromName ?? args.fromName,
+      requestedFromName: connectionProfile?.fromName ?? args.fromName,
       existingFromName: existingOwnerMatches ? existing?.fromName : undefined,
-      physicalMailingAddress: managedProfile?.physicalMailingAddress ??
+      physicalMailingAddress: connectionProfile?.physicalMailingAddress ??
         existingComplianceProfile.physicalMailingAddress,
-      complianceConfirmedAt: managedProfile?.complianceConfirmedAt ??
+      complianceConfirmedAt: connectionProfile?.complianceConfirmedAt ??
         existingComplianceProfile.complianceConfirmedAt,
     });
     const complianceReady = reconnectProfile.complianceReady;
@@ -1134,9 +1396,9 @@ async function installCanonicalGmailInbox(
       fromEmail,
       fromName: reconnectProfile.fromName,
       replyToEmail: existingOwnerMatches ? existing?.replyToEmail : undefined,
-      physicalMailingAddress: managedProfile?.physicalMailingAddress ??
+      physicalMailingAddress: connectionProfile?.physicalMailingAddress ??
         existingComplianceProfile.physicalMailingAddress,
-      complianceConfirmedAt: managedProfile?.complianceConfirmedAt ??
+      complianceConfirmedAt: connectionProfile?.complianceConfirmedAt ??
         existingComplianceProfile.complianceConfirmedAt,
       oauthAccessToken: args.oauthAccessToken,
       oauthRefreshToken: args.oauthRefreshToken ??
@@ -1780,6 +2042,239 @@ export const installManagedSesInboxInternal = internalMutation({
       nextRequiredReceipt: operationallyReady
         ? undefined
         : "signed_managed_ses_event_canary" as const,
+    };
+  },
+});
+
+/** Canonicalize a reconciled Smartlead mailbox without accepting provider
+ * credentials or plaintext provider ids. Readiness remains warming until the
+ * independent domain, duration, and canary receipts are all present. */
+export const installSmartleadManagedInboxInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    requestId: v.id("managed_provisioning_requests"),
+    expectedRequestRevision: v.number(),
+    expectedConfigurationRevision: v.number(),
+    expectedGeneration: v.number(),
+    leaseToken: v.string(),
+    fromEmail: v.string(),
+    encryptedProviderBinding: v.string(),
+    configurationHash: v.string(),
+    providerVerifiedAt: v.number(),
+    warmupStartedAt: v.optional(v.number()),
+    warmupProviderActive: v.boolean(),
+    warmupProviderHealthy: v.boolean(),
+    warmupReputationScore: v.optional(v.number()),
+    domainAuthenticationReceipt: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const [resource, request] = await Promise.all([
+      ctx.db.get(args.resourceId),
+      ctx.db.get(args.requestId),
+    ]);
+    const timestamp = Date.now();
+    if (
+      !resource || !request ||
+      resource.requestId !== request._id ||
+      resource.siteId !== request.siteId ||
+      resource.ownerAccountKey !== request.ownerAccountKey ||
+      request.outreachTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      resource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      args.siteId !== request.siteId ||
+      request.revision !== args.expectedRequestRevision ||
+      resource.requestConfigurationRevision !== args.expectedConfigurationRevision ||
+      resource.generation !== args.expectedGeneration ||
+      resource.lifecycleState !== "leased" ||
+      resource.releaseState !== "active" ||
+      resource.adapterVersion !== SMARTLEAD_ADAPTER_VERSION ||
+      !resource.externalProvisioningAttemptedAt ||
+      !managedOutreachMailboxLeaseIsCurrent({
+        expectedLeaseToken: args.leaseToken,
+        actualLeaseToken: resource.leaseToken,
+        leaseExpiresAt: resource.leaseExpiresAt,
+        timestamp,
+      }) ||
+      !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+        args.encryptedProviderBinding,
+      ) ||
+      !/^[a-f0-9]{64}$/.test(args.configurationHash) ||
+      (args.domainAuthenticationReceipt !== undefined &&
+        !/^[a-f0-9]{64}$/.test(args.domainAuthenticationReceipt)) ||
+      (args.warmupReputationScore !== undefined &&
+        (!Number.isFinite(args.warmupReputationScore) ||
+          args.warmupReputationScore < 0 || args.warmupReputationScore > 100)) ||
+      !Number.isFinite(args.providerVerifiedAt) ||
+      args.providerVerifiedAt <= 0 ||
+      args.providerVerifiedAt > timestamp + 5 * 60 * 1000
+    ) throw new Error("Smartlead install lease or receipt changed");
+    const site = await ctx.db.get(request.siteId);
+    const fenceIssues = managedOutreachMailboxRequestFenceIssues({
+      siteActive: Boolean(site?.userId && !site.deletionStatus && !site.accountDeletionRequestedAt),
+      requestMode: request.outreachMailbox.mode,
+      requestOwnerAccountKey: request.ownerAccountKey,
+      currentOwnerAccountKey: site?.userId ? accountDeletionKey(site.userId) : undefined,
+      requestDomainSnapshot: request.domainSnapshot,
+      currentDomainSnapshot: site ? siteCanonicalDomain(site) : null,
+      requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+      currentDomainRevision: site ? siteCanonicalDomainRevision(site) : -1,
+      expectedConfigurationRevision: args.expectedConfigurationRevision,
+      actualConfigurationRevision: request.configurationRevision,
+      expectedGeneration: args.expectedGeneration,
+      actualGeneration: request.outreachMailboxGeneration,
+      expectedContractVersion: ONE_SETUP_CONTRACT_VERSION,
+      actualContractVersion: request.contractVersion,
+    });
+    const profile = request.managedOutreachProfile;
+    const fromEmail = args.fromEmail.trim().toLowerCase();
+    const senderDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
+    if (
+      fenceIssues.length > 0 || !site || !(await siteExecutionAuthorized(ctx, site)) ||
+      !profile || managedOutreachMailboxProfileIssues(profile).length > 0 ||
+      !profile.senderDomainChoice || senderDomain !== profile.senderDomainChoice ||
+      !/^[^@\s<>\r\n]+@[^@\s<>\r\n]+\.[a-z]{2,63}$/i.test(fromEmail)
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        request.siteId,
+        timestamp,
+        "smartlead_install_lifecycle_invalidated",
+      );
+      return { installed: false as const, reason: "lifecycle_fence" as const };
+    }
+    const [existingRows, sameAddress] = await Promise.all([
+      ctx.db.query("outreach_inboxes").withIndex("by_site", (q) => q.eq("siteId", args.siteId)).take(2),
+      ctx.db.query("outreach_inboxes").withIndex("by_from_email", (q) => q.eq("fromEmail", fromEmail)).take(2),
+    ]);
+    const existing = existingRows.length === 1 ? existingRows[0] : null;
+    const exactExisting = Boolean(
+      existing &&
+      existing.provider === "smartlead" &&
+      existing.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+      existing.managedTransportOperationKey === resource.operationKey &&
+      existing.managedTransportGeneration === resource.generation,
+    );
+    if (
+      existingRows.length > 1 ||
+      (existing && !exactExisting) ||
+      sameAddress.some((row) => row.siteId !== args.siteId)
+    ) {
+      await stageManagedOutreachMailboxRelease(
+        ctx,
+        request.siteId,
+        timestamp,
+        "smartlead_canonical_identity_conflict",
+      );
+      return { installed: false as const, reason: "canonical_identity_conflict" as const };
+    }
+    const warmupStartedAt = args.warmupStartedAt;
+    const warmupEligibleAt = warmupStartedAt
+      ? warmupStartedAt + SMARTLEAD_MINIMUM_WARMUP_MS
+      : undefined;
+    const warmupVerified = Boolean(
+      args.warmupProviderActive && args.warmupProviderHealthy &&
+      (args.warmupReputationScore ?? 0) >= 90 &&
+      warmupEligibleAt && warmupEligibleAt <= timestamp,
+    );
+    const configurationVersion = exactExisting
+      ? existing!.configurationVersion ?? 1
+      : (existing?.configurationVersion ?? 0) + 1;
+    const resourceReceipt = sha256Hex(JSON.stringify({
+      adapterVersion: SMARTLEAD_ADAPTER_VERSION,
+      operationKey: resource.operationKey,
+      generation: resource.generation,
+      configurationHash: args.configurationHash,
+      fromEmailHash: sha256Hex(fromEmail),
+    }));
+    const record = {
+      provider: "smartlead",
+      fromEmail,
+      fromName: profile.fromName,
+      physicalMailingAddress: profile.physicalMailingAddress,
+      complianceConfirmedAt: profile.senderIdentityAndAddressAttestedAt,
+      status: "warming",
+      mode: "approval",
+      dailySendCap: Math.min(DEFAULT_DAILY_SEND_CAP, 20),
+      warmupStartedAt,
+      credentialOwnerAccountKey: request.ownerAccountKey,
+      credentialSource: "managed_adapter",
+      managedTransportKind: SMARTLEAD_MANAGED_TRANSPORT,
+      managedTransportOperationKey: resource.operationKey,
+      managedTransportGeneration: resource.generation,
+      managedTransportAdapterVersion: SMARTLEAD_ADAPTER_VERSION,
+      managedTransportResourceReceipt: resourceReceipt,
+      managedTransportResourceVerifiedAt: args.providerVerifiedAt,
+      senderDomain,
+      verifiedAt: args.providerVerifiedAt,
+      configurationVersion,
+      oauthAccessToken: undefined,
+      oauthRefreshToken: undefined,
+      oauthExpiresAt: undefined,
+      oauthScopes: undefined,
+      smtpPassword: undefined,
+      apiKey: undefined,
+      lastError: !args.domainAuthenticationReceipt
+        ? "Managed sender exists; waiting for exact SPF, DKIM, and DMARC authentication evidence."
+        : !warmupVerified
+          ? "Managed sender is warming. Pentra will recheck it automatically."
+          : "Managed sender is waiting for controlled delivery, reply, bounce, unsubscribe, and cancellation canaries.",
+      updatedAt: timestamp,
+    };
+    let inboxId: Id<"outreach_inboxes">;
+    if (exactExisting) {
+      inboxId = existing!._id;
+      await ctx.db.patch(inboxId, record);
+    } else {
+      inboxId = await ctx.db.insert("outreach_inboxes", {
+        ...record,
+        siteId: args.siteId,
+        createdAt: timestamp,
+      });
+    }
+    await ctx.db.patch(resource._id, {
+      lifecycleState: "canonicalized",
+      releaseState: "active",
+      canonicalInboxId: inboxId,
+      externalAllocatedAt: resource.externalAllocatedAt ?? timestamp,
+      encryptedProviderBinding: args.encryptedProviderBinding,
+      configurationHash: args.configurationHash,
+      resourceReceipt,
+      externalVerifiedAt: args.providerVerifiedAt,
+      warmupState: warmupVerified ? "verified" : args.warmupProviderActive ? "warming" : "provider_inactive",
+      warmupStartedAt,
+      warmupEligibleAt,
+      warmupReputationScore: args.warmupReputationScore,
+      domainAuthenticationReceipt: args.domainAuthenticationReceipt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      externalProvisioningSettleAfter: undefined,
+      nextAttemptAt: warmupVerified ? timestamp + 15 * 60 * 1000 : warmupEligibleAt,
+      lastReasonCode: warmupVerified
+        ? "smartlead_canaries_pending"
+        : "smartlead_warmup_pending",
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.managedProvisioning.dispatchRequest,
+      { requestId: request._id, expectedRevision: request.revision },
+    );
+    if (warmupVerified && args.domainAuthenticationReceipt) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.actions.smartlead.runControlledCanaries,
+        { resourceId: resource._id },
+      );
+    }
+    return {
+      installed: true as const,
+      inboxId,
+      operationallyReady: false as const,
+      nextRequiredReceipt: !args.domainAuthenticationReceipt
+        ? "smartlead_domain_authentication"
+        : !warmupVerified
+          ? "smartlead_warmup"
+          : "smartlead_controlled_canaries",
     };
   },
 });
@@ -4310,11 +4805,15 @@ export const getGmailReconnectReadinessInternal = internalQuery({
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .unique(),
     ]);
-    if (setupRequest?.outreachMailbox.mode === "managed") {
+    if (
+      setupRequest &&
+      (setupRequest.outreachMailbox.mode !== "connect_existing" ||
+        setupRequest.outreachTransport !== "gmail_oauth")
+    ) {
       return {
         ready: false,
         reason:
-          "Select Connect existing in One Setup before starting owner Gmail authorization.",
+          "Select Gmail OAuth in One Setup before starting owner Gmail authorization.",
       };
     }
     if (
@@ -4693,6 +5192,12 @@ export const insertDraft = internalMutation({
     toDomain: v.string(),
     subject: v.string(),
     body: v.string(),
+    providerPlannedSequence: v.optional(v.array(v.object({
+      sequenceStep: v.number(),
+      subject: v.string(),
+      body: v.string(),
+      delayDays: v.number(),
+    }))),
     status: v.string(),
     sequenceStep: v.number(),
     threadKey: v.string(),
@@ -4853,6 +5358,96 @@ export const insertDraft = internalMutation({
       };
     }
 
+    const contact = await ctx.db.query("outreach_contacts")
+      .withIndex("by_site_email", (q) =>
+        q.eq("siteId", args.siteId).eq(
+          "email",
+          args.toEmail.trim().toLowerCase(),
+        )
+      )
+      .unique();
+    const recipientDomain = args.toEmail.trim().toLowerCase().split("@")[1] ?? "";
+    const recipientClass = contact?.recipientClass ??
+      (isConsumerMailDomain(recipientDomain) ? "personal" : "corporate");
+    const enabledJurisdictions = new Set(
+      String(process.env.OUTREACH_AUTO_JURISDICTIONS ?? "")
+        .split(",")
+        .map((value) => value.trim().toUpperCase())
+        .filter(Boolean),
+    );
+    const policy = decideOutreachPolicy({
+      recipientClass,
+      jurisdiction: contact?.jurisdiction,
+      jurisdictionEvidence: contact?.jurisdictionEvidenceHash,
+      businessRoleEvidence: contact?.businessRoleEvidenceHash ?? contact?.role,
+      businessRelevance: opportunity.evidenceHash,
+      contactSource: contact?.discoveredFromUrl,
+      lawfulBasisClass: contact?.lawfulBasisClass,
+      requiredDisclosuresPresent: Boolean(
+        draftInbox?.fromName && draftInbox.physicalMailingAddress &&
+        (args.complianceIssues ?? []).length === 0,
+      ),
+      tenantConsentVersion: draftInbox?.autonomyConsentVersion,
+      suppressed: false,
+      legalRuleEnabled: Boolean(
+        contact?.jurisdiction &&
+        enabledJurisdictions.has(contact.jurisdiction.toUpperCase()),
+      ),
+    });
+    const recipientHash = sha256Hex(args.toEmail.trim().toLowerCase());
+    const policyConfigurationHash = sha256Hex(JSON.stringify({
+      version: OUTREACH_POLICY_VERSION,
+      siteId: String(args.siteId),
+      recipientHash,
+      recipientClass,
+      jurisdiction: contact?.jurisdiction,
+      jurisdictionEvidenceHash: contact?.jurisdictionEvidenceHash,
+      businessRoleEvidenceHash: contact?.businessRoleEvidenceHash,
+      lawfulBasisClass: contact?.lawfulBasisClass,
+      opportunityEvidenceHash: opportunity.evidenceHash,
+      contactSource: contact?.discoveredFromUrl,
+      disclosuresPresent: (args.complianceIssues ?? []).length === 0,
+      tenantConsentVersion: draftInbox?.autonomyConsentVersion,
+      decision: policy.decision,
+    }));
+    const priorPolicyRows = await ctx.db.query("outreach_policy_decisions")
+      .withIndex("by_site_recipient_policy", (q) =>
+        q.eq("siteId", args.siteId)
+          .eq("recipientHash", recipientHash)
+          .eq("policyVersion", OUTREACH_POLICY_VERSION)
+      )
+      .take(50);
+    let policyReceipt = priorPolicyRows.find((row) =>
+      row.configurationHash === policyConfigurationHash
+    );
+    if (!policyReceipt) {
+      const policyReceiptId = await ctx.db.insert("outreach_policy_decisions", {
+        siteId: args.siteId,
+        opportunityId: opportunity._id,
+        recipientHash,
+        recipientClass,
+        jurisdiction: contact?.jurisdiction,
+        jurisdictionEvidenceHash: contact?.jurisdictionEvidenceHash,
+        businessRoleEvidenceHash: contact?.businessRoleEvidenceHash,
+        businessRelevanceHash: sha256Hex(opportunity.evidenceHash),
+        contactSourceHash: contact?.discoveredFromUrl
+          ? sha256Hex(contact.discoveredFromUrl)
+          : undefined,
+        lawfulBasisClass: contact?.lawfulBasisClass,
+        requiredDisclosures: (args.complianceIssues ?? []).length === 0
+          ? ["sender_identity", "physical_address", "one_click_unsubscribe"]
+          : [],
+        tenantConsentVersion: draftInbox?.autonomyConsentVersion,
+        decision: policy.decision,
+        reasonCodes: policy.reasons,
+        policyVersion: OUTREACH_POLICY_VERSION,
+        configurationHash: policyConfigurationHash,
+        evaluatedAt: now,
+        createdAt: now,
+      });
+      policyReceipt = (await ctx.db.get(policyReceiptId))!;
+    }
+
     // And one live thread per recipient domain. Two opportunities on the same
     // site are two reasons to write, not two emails: sending both is the
     // behaviour that gets a sender marked as spam. A second opportunity is
@@ -4873,6 +5468,7 @@ export const insertDraft = internalMutation({
         ) &&
         autonomousOutreachConsentActive(draftInbox, site.userId) &&
         autonomousOutreachReconciliationComplete(draftInbox) &&
+        policy.decision === "allowed_auto" &&
         (args.complianceIssues ?? []).length === 0 &&
         !args.blockedReason,
     );
@@ -4896,6 +5492,10 @@ export const insertDraft = internalMutation({
       // Written explicitly so a refreshed message clears a stale issue list
       // rather than keeping one it no longer has.
       complianceIssues: args.complianceIssues,
+      outreachPolicyDecisionId: policyReceipt._id,
+      outreachPolicyDecision: policy.decision,
+      outreachPolicyVersion: policy.version,
+      outreachPolicyConfigurationHash: policyConfigurationHash,
       ...(authorizeRecord
         ? {
             approvedAt: now,
@@ -4963,6 +5563,23 @@ export const approveMessage = mutation({
         "Autonomous follow-ups are released only from an exact verified predecessor receipt and cannot be manually approved.",
       );
     }
+    if (
+      !message.outreachPolicyDecisionId ||
+      !["allowed_auto", "approval_only"].includes(
+        message.outreachPolicyDecision ?? "needs_evidence",
+      )
+    ) {
+      throw new Error(
+        "This recipient needs jurisdiction and lawful-basis evidence before outreach can be approved",
+      );
+    }
+    const policyReceipt = await ctx.db.get(message.outreachPolicyDecisionId);
+    if (
+      !policyReceipt || policyReceipt.siteId !== siteId ||
+      policyReceipt.decision !== message.outreachPolicyDecision ||
+      policyReceipt.policyVersion !== message.outreachPolicyVersion ||
+      policyReceipt.configurationHash !== message.outreachPolicyConfigurationHash
+    ) throw new Error("The outreach policy receipt is missing or stale");
     if (message.status !== "draft") {
       throw new Error(`Only a draft can be approved (status is "${message.status}")`);
     }
@@ -5351,7 +5968,9 @@ export const claimApprovedDelivery = internalMutation({
       };
     }
     const managedSes = inbox.provider === MANAGED_SES_TRANSPORT;
-    const managedResourceRows = managedSes
+    const smartleadManaged =
+      inbox.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT;
+    const managedResourceRows = managedSes || smartleadManaged
       ? await ctx.db
         .query("managed_outreach_mailbox_resources")
         .withIndex("by_canonical_inbox", (q) =>
@@ -5359,7 +5978,7 @@ export const claimApprovedDelivery = internalMutation({
         )
         .take(20)
       : [];
-    const managedResource = managedSes
+    const managedResource = managedSes || smartleadManaged
       ? managedResourceRows.find((row) =>
           row.operationKey === inbox.managedTransportOperationKey &&
           row.generation === inbox.managedTransportGeneration &&
@@ -5421,6 +6040,36 @@ export const claimApprovedDelivery = internalMutation({
     }
     if (!managedSes && managedSesReceipt) {
       return { claimed: false as const, reason: "Transport receipt mismatch." };
+    }
+    if (
+      smartleadManaged &&
+      (!managedResource ||
+        managedResource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+        managedResource.lifecycleState !== "canonicalized" ||
+        managedResource.releaseState !== "active" ||
+        managedResource.canonicalInboxId !== inbox._id ||
+        managedResource.operationKey !== inbox.managedTransportOperationKey ||
+        managedResource.generation !== inbox.managedTransportGeneration ||
+        managedResource.adapterVersion !== SMARTLEAD_ADAPTER_VERSION ||
+        managedResource.resourceReceipt !== inbox.managedTransportResourceReceipt ||
+        !managedResource.encryptedProviderBinding ||
+        !managedResource.configurationHash ||
+        !managedResource.domainAuthenticationReceipt ||
+        managedResource.warmupState !== "verified" ||
+        !managedResource.warmupEligibleAt ||
+        managedResource.warmupEligibleAt > now ||
+        !managedResource.deliveryCanaryReceipt ||
+        !managedResource.replyCanaryReceipt ||
+        !managedResource.bounceCanaryReceipt ||
+        !managedResource.unsubscribeCanaryReceipt ||
+        !managedResource.cancellationCanaryReceipt ||
+        smartleadManagedInboxIssues({ inbox, now }).length > 0)
+    ) {
+      return {
+        claimed: false as const,
+        reason:
+          "The Smartlead sender has not completed domain authentication, warm-up, and all controlled safety canaries.",
+      };
     }
     if (
       release === "automatic" &&
@@ -5489,14 +6138,14 @@ export const claimApprovedDelivery = internalMutation({
       ) &&
       (inbox.oauthRefreshToken || inbox.oauthAccessToken),
     );
-    if (release === "automatic" && !inboundRelay) {
+    if (release === "automatic" && !inboundRelay && !smartleadManaged) {
       return {
         claimed: false as const,
         reason:
           "Automatic outreach requires the current signed reply/bounce/STOP relay.",
       };
     }
-    if (!inboundRelay && !legacyGmailReadReady) {
+    if (!inboundRelay && !legacyGmailReadReady && !smartleadManaged) {
       return {
         claimed: false as const,
         reason:
@@ -5568,7 +6217,7 @@ export const claimApprovedDelivery = internalMutation({
     // this mutation and merge it monotonically before the authoritative pacing
     // decision. The indexed read also serializes against a concurrent receipt
     // update, so the action preflight can never be the only cap boundary.
-    const durablePacing = managedSes
+    const durablePacing = managedSes || smartleadManaged
       ? null
       : await readDurablePacingReceipt(
           ctx,
@@ -5580,7 +6229,7 @@ export const claimApprovedDelivery = internalMutation({
         ? durablePacing
         : null;
     if (
-      !managedSes &&
+      !managedSes && !smartleadManaged &&
       activeDurablePacing &&
       activeDurablePacing.accountKey !== accountDeletionKey(site.userId!)
     ) {
@@ -5614,7 +6263,7 @@ export const claimApprovedDelivery = internalMutation({
       hasCredential: Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken),
       senderDomain: inbox.senderDomain,
     });
-    const dnsIssues = managedSes ? [] : liveDnsEvidenceIssues({
+    const dnsIssues = managedSes || smartleadManaged ? [] : liveDnsEvidenceIssues({
       checkedAt: dnsEvidence.checkedAt,
       now,
       senderDomain: dnsEvidence.senderDomain,
@@ -5627,7 +6276,7 @@ export const claimApprovedDelivery = internalMutation({
     });
     if (senderIssues.length > 0 || dnsIssues.length > 0) {
       await ctx.db.patch(inbox._id, {
-        ...(managedSes
+        ...(managedSes || smartleadManaged
           ? {
               managedTransportResourceVerifiedAt:
                 managedSesReceipt?.providerVerifiedAt,
@@ -5692,6 +6341,30 @@ export const claimApprovedDelivery = internalMutation({
       return {
         claimed: false as const,
         reason: "The outreach sequence step is invalid.",
+      };
+    }
+    if (
+      smartleadManaged &&
+      (message.sequenceStep !== 0 ||
+        !message.providerPlannedSequence ||
+        message.providerPlannedSequence.length < 1 ||
+        message.providerPlannedSequence.length > 3 ||
+        message.providerPlannedSequence.some((entry, index) =>
+          entry.sequenceStep !== index ||
+          entry.delayDays < 0 || entry.delayDays > 30 ||
+          !entry.subject.trim() || entry.subject.length > 240 ||
+          !entry.body.trim() || entry.body.length > 20_000
+        ))
+    ) {
+      await ctx.db.patch(message._id, {
+        status: "failed",
+        failureReason:
+          "The Smartlead sequence is not an exact bounded one-to-three-message Pentra plan.",
+        updatedAt: now,
+      });
+      return {
+        claimed: false as const,
+        reason: "The managed sequence requires a fresh policy-approved draft.",
       };
     }
     if (message.sequenceStep > 0 && release !== "automatic") {
@@ -6050,7 +6723,11 @@ export const claimApprovedDelivery = internalMutation({
       }
     }
 
-    const deliveryLeaseExpiresAt = now + OUTREACH_DELIVERY_LEASE_MS;
+    const deliveryLeaseExpiresAt = now + (
+      smartleadManaged
+        ? SMARTLEAD_DELIVERY_LEASE_MS
+        : OUTREACH_DELIVERY_LEASE_MS
+    );
     await ctx.db.patch(inbox._id, {
       ...effectivePacing,
       ...(managedSes
@@ -6058,6 +6735,8 @@ export const claimApprovedDelivery = internalMutation({
             managedTransportResourceVerifiedAt:
               managedSesReceipt!.providerVerifiedAt,
           }
+        : smartleadManaged
+          ? {}
         : {
             dnsCheckedAt: dnsEvidence.checkedAt,
             spfVerifiedAt: dnsEvidence.checkedAt,
@@ -6088,7 +6767,24 @@ export const claimApprovedDelivery = internalMutation({
             managedSesUnsubscribeTokenHash:
               managedSesReceipt!.unsubscribeTokenHash,
           }
-        : {}),
+        : smartleadManaged
+          ? {
+              deliveryTransport: SMARTLEAD_MANAGED_TRANSPORT,
+              providerOperationKey: smartleadOperationKey({
+                siteId: String(siteId),
+                inboxGeneration: inbox.managedTransportGeneration!,
+                campaignGeneration: inbox.managedTransportGeneration!,
+                messageId: String(message._id),
+                sequenceStep: message.sequenceStep,
+              }),
+              providerCampaignGeneration: inbox.managedTransportGeneration!,
+              providerAcknowledgementState: "claimed",
+            }
+        : {
+            deliveryTransport: inbox.provider === "smtp"
+              ? "smtp"
+              : "gmail_oauth",
+          }),
       ...(inboundRelay
         ? {
             inboundRelayAliasHash: inboundRelay.aliasHash,
@@ -6138,7 +6834,11 @@ export const claimApprovedDelivery = internalMutation({
   },
 });
 
-type DeliveryBoundaryTransport = "gmail" | typeof MANAGED_SES_TRANSPORT;
+type DeliveryBoundaryTransport =
+  | "gmail"
+  | "smtp"
+  | typeof MANAGED_SES_TRANSPORT
+  | typeof SMARTLEAD_MANAGED_TRANSPORT;
 
 type DeliveryBoundaryArgs = {
   siteId: Id<"sites">;
@@ -6303,6 +7003,7 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
     ? accountDeletionKey(site.userId)
     : undefined;
   const managedSes = expectedTransport === MANAGED_SES_TRANSPORT;
+  const smartleadManaged = expectedTransport === SMARTLEAD_MANAGED_TRANSPORT;
   const releaseAuthorized = Boolean(
     site?.userId &&
       inbox &&
@@ -6366,9 +7067,21 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
         ? message.deliveryTransport === MANAGED_SES_TRANSPORT &&
           inbox.provider === MANAGED_SES_TRANSPORT &&
           inbox.credentialSource === "managed_adapter"
-        : message.deliveryTransport !== MANAGED_SES_TRANSPORT &&
-          inbox.provider === "gmail" &&
-          Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken)) &&
+        : smartleadManaged
+          ? message.deliveryTransport === SMARTLEAD_MANAGED_TRANSPORT &&
+            inbox.provider === "smartlead" &&
+            inbox.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+            inbox.credentialSource === "managed_adapter"
+        : expectedTransport === "smtp"
+          ? message.deliveryTransport === "smtp" &&
+            inbox.provider === "smtp" &&
+            Boolean(
+              inbox.smtpHost && inbox.smtpPort && inbox.smtpUsername &&
+              inbox.smtpPassword,
+            )
+          : message.deliveryTransport === "gmail_oauth" &&
+            inbox.provider === "gmail" &&
+            Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken)) &&
       message.parentMessageId === args.expectedParentMessageId &&
       message.deliveryExpectedThreadId === args.expectedProviderThreadId &&
       message.inReplyToRfcMessageIdHash ===
@@ -6406,7 +7119,7 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
   // Managed SES proves its separate signed resource/inbound canary below.
   // A relay-bound Gmail message must re-prove the finite DSN canary here;
   // an intentional legacy readonly delivery has no relay binding to recheck.
-  const inboundRelayCurrent = managedSes ||
+  const inboundRelayCurrent = managedSes || smartleadManaged ||
     !message.inboundRelayAliasHash ||
     inboundRelayDsnRoutingReady({
       inbox,
@@ -6670,6 +7383,482 @@ export const markManagedSesDeliveryExternalBoundary = internalMutation({
   },
 });
 
+const smartleadDeliveryBoundaryArgs = {
+  siteId: v.id("sites"),
+  messageId: v.id("outreach_messages"),
+  attemptId: v.string(),
+  release: deliveryReleaseValidator,
+  expectedParentMessageId: v.optional(v.id("outreach_messages")),
+  expectedProviderThreadId: v.optional(v.string()),
+  expectedInReplyToRfcMessageIdHash: v.optional(v.string()),
+  expectedManagedParentOperationKey: v.optional(v.string()),
+  expectedManagedParentThreadReceipt: v.optional(v.string()),
+};
+
+/** Last serializable authorization check before any Smartlead campaign or
+ * lead write. All five controlled canaries and the 14-day warm-up receipt are
+ * re-read in this transaction. */
+export const markSmartleadDeliveryExternalBoundary = internalMutation({
+  args: smartleadDeliveryBoundaryArgs,
+  handler: async (ctx, args) => {
+    const authorization = await authorizeClaimedDeliveryAtExternalBoundary(
+      ctx,
+      args,
+      SMARTLEAD_MANAGED_TRANSPORT,
+    );
+    if (!authorization.authorized) return authorization;
+    const { message, site, inbox, timestamp } = authorization;
+    const resources = await ctx.db
+      .query("managed_outreach_mailbox_resources")
+      .withIndex("by_canonical_inbox", (q) =>
+        q.eq("canonicalInboxId", inbox._id))
+      .take(20);
+    const resource = resources.find((row) =>
+      row.transportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+      row.operationKey === inbox.managedTransportOperationKey &&
+      row.generation === inbox.managedTransportGeneration &&
+      row.adapterVersion === SMARTLEAD_ADAPTER_VERSION
+    ) ?? null;
+    const request = resource ? await ctx.db.get(resource.requestId) : null;
+    const requestFence = request && resource
+      ? managedOutreachMailboxRequestFenceIssues({
+          siteActive: Boolean(
+            site.userId && !site.deletionStatus && !site.accountDeletionRequestedAt,
+          ),
+          requestMode: request.outreachMailbox.mode,
+          requestOwnerAccountKey: request.ownerAccountKey,
+          currentOwnerAccountKey: accountDeletionKey(site.userId!),
+          requestDomainSnapshot: request.domainSnapshot,
+          currentDomainSnapshot: siteCanonicalDomain(site),
+          requestDomainRevisionSnapshot: request.domainRevisionSnapshot,
+          currentDomainRevision: siteCanonicalDomainRevision(site),
+          expectedConfigurationRevision: resource.requestConfigurationRevision,
+          actualConfigurationRevision: request.configurationRevision,
+          expectedGeneration: resource.generation,
+          actualGeneration: request.outreachMailboxGeneration,
+          expectedContractVersion: ONE_SETUP_CONTRACT_VERSION,
+          actualContractVersion: request.contractVersion,
+        })
+      : ["smartlead_resource_or_request_missing"];
+    const planned = message.providerPlannedSequence ?? [];
+    const campaignConfigurationHash = sha256Hex(JSON.stringify({
+      adapterVersion: SMARTLEAD_ADAPTER_VERSION,
+      resourceOperationKey: resource?.operationKey,
+      generation: resource?.generation,
+      sequence: planned.map((entry) => ({
+        sequenceStep: entry.sequenceStep,
+        delayDays: entry.delayDays,
+      })),
+      maxSequenceStep: SMARTLEAD_MAX_SEQUENCE_STEP,
+      stopOnReply: true,
+      unsubscribe: true,
+    }));
+    const expectedOperationKey = smartleadOperationKey({
+      siteId: String(site._id),
+      inboxGeneration: inbox.managedTransportGeneration!,
+      campaignGeneration: inbox.managedTransportGeneration!,
+      messageId: String(message._id),
+      sequenceStep: message.sequenceStep,
+    });
+    if (
+      !resource || !request || requestFence.length > 0 ||
+      request.outreachTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" ||
+      resource.releaseState !== "active" ||
+      resource.canonicalInboxId !== inbox._id ||
+      !resource.encryptedProviderBinding || !resource.configurationHash ||
+      !resource.domainAuthenticationReceipt ||
+      resource.warmupState !== "verified" ||
+      !resource.warmupStartedAt || !resource.warmupEligibleAt ||
+      resource.warmupEligibleAt > timestamp ||
+      resource.warmupEligibleAt <
+        resource.warmupStartedAt + SMARTLEAD_MINIMUM_WARMUP_MS ||
+      !resource.deliveryCanaryReceipt || !resource.replyCanaryReceipt ||
+      !resource.bounceCanaryReceipt || !resource.unsubscribeCanaryReceipt ||
+      !resource.cancellationCanaryReceipt ||
+      smartleadManagedInboxIssues({ inbox, now: timestamp }).length > 0 ||
+      message.sequenceStep !== 0 || planned.length < 1 || planned.length > 3 ||
+      message.providerOperationKey !== expectedOperationKey ||
+      message.providerCampaignGeneration !== resource.generation ||
+      (resource.campaignGeneration !== undefined &&
+        resource.campaignGeneration !== resource.generation) ||
+      (resource.campaignConfigurationHash !== undefined &&
+        resource.campaignConfigurationHash !== campaignConfigurationHash)
+    ) {
+      return terminalizeClaimedDeliveryBeforeProvider(
+        ctx,
+        message,
+        args.attemptId,
+        timestamp,
+        "The Smartlead resource, warm-up, canary, campaign, or sequence binding changed before the provider boundary.",
+      );
+    }
+    await Promise.all([
+      ctx.db.patch(resource._id, {
+        campaignGeneration: resource.generation,
+        campaignConfigurationHash,
+        updatedAt: timestamp,
+      }),
+      ctx.db.patch(message._id, {
+        deliveryExternalAttemptedAt: timestamp,
+        providerCampaignConfigurationHash: campaignConfigurationHash,
+        providerAcknowledgementState: "attempted",
+        updatedAt: timestamp,
+      }),
+    ]);
+    await ctx.scheduler.runAt(
+      message.deliveryLeaseExpiresAt! + 1_000,
+      internal.outreach.recoverApprovedDeliveryBoundaryLease,
+      { siteId: message.siteId, messageId: message._id, attemptId: args.attemptId },
+    );
+    return { marked: true as const, externalAttempted: true as const };
+  },
+});
+
+export const getSmartleadDeliveryOperationInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.status !== "sending" ||
+      message.deliveryAttemptId !== args.attemptId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      !message.deliveryExternalAttemptedAt || !message.inboxId ||
+      !message.providerOperationKey ||
+      !message.providerCampaignConfigurationHash ||
+      (message.deliveryLeaseExpiresAt ?? 0) <= Date.now()
+    ) return null;
+    const inbox = await ctx.db.get(message.inboxId);
+    if (
+      !inbox || inbox.siteId !== args.siteId ||
+      inbox.provider !== "smartlead" ||
+      inbox.managedTransportKind !== SMARTLEAD_MANAGED_TRANSPORT
+    ) return null;
+    const resources = await ctx.db
+      .query("managed_outreach_mailbox_resources")
+      .withIndex("by_canonical_inbox", (q) => q.eq("canonicalInboxId", inbox._id))
+      .take(20);
+    const resource = resources.find((row) =>
+      row.transportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+      row.operationKey === inbox.managedTransportOperationKey &&
+      row.generation === message.providerCampaignGeneration &&
+      row.adapterVersion === SMARTLEAD_ADAPTER_VERSION
+    );
+    if (
+      !resource || !resource.encryptedProviderBinding ||
+      resource.campaignConfigurationHash !==
+        message.providerCampaignConfigurationHash
+    ) return null;
+    return {
+      message,
+      inbox,
+      resource: {
+        _id: resource._id,
+        operationKey: resource.operationKey,
+        generation: resource.generation,
+        encryptedProviderBinding: resource.encryptedProviderBinding,
+        encryptedProviderCampaignBinding:
+          resource.encryptedProviderCampaignBinding,
+        campaignRequestedAt: resource.smartleadCampaignRequestedAt,
+        campaignConfigurationRequestedAt:
+          resource.smartleadCampaignConfigurationRequestedAt,
+        webhookRequestedAt: resource.smartleadWebhookRequestedAt,
+        campaignConfigurationHash: resource.campaignConfigurationHash,
+        campaignConfiguredAt: resource.campaignConfiguredAt,
+      },
+    };
+  },
+});
+
+export const recordSmartleadProviderProgressInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+    phase: v.union(
+      v.literal("campaign"),
+      v.literal("webhook"),
+      v.literal("configuration"),
+      v.literal("lead"),
+      v.literal("queued"),
+      v.literal("ambiguous"),
+    ),
+    encryptedCampaignBinding: v.optional(v.string()),
+    encryptedLeadBinding: v.optional(v.string()),
+    providerLeadBindingHash: v.optional(v.string()),
+    providerCampaignBindingHash: v.optional(v.string()),
+    providerRecipientHash: v.optional(v.string()),
+    completed: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    const timestamp = Date.now();
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.status !== "sending" ||
+      message.deliveryAttemptId !== args.attemptId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      !message.deliveryExternalAttemptedAt || !message.inboxId ||
+      !message.providerCampaignConfigurationHash ||
+      (message.deliveryLeaseExpiresAt ?? 0) <= timestamp ||
+      (args.encryptedCampaignBinding !== undefined &&
+        !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+          args.encryptedCampaignBinding,
+        )) ||
+      (args.encryptedLeadBinding !== undefined &&
+        !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+          args.encryptedLeadBinding,
+        )) ||
+      (args.providerLeadBindingHash !== undefined &&
+        !/^[a-f0-9]{64}$/.test(args.providerLeadBindingHash)) ||
+      (args.providerCampaignBindingHash !== undefined &&
+        !/^[a-f0-9]{64}$/.test(args.providerCampaignBindingHash)) ||
+      (args.providerRecipientHash !== undefined &&
+        !/^[a-f0-9]{64}$/.test(args.providerRecipientHash))
+    ) return { recorded: false as const };
+    const inbox = await ctx.db.get(message.inboxId);
+    if (!inbox || inbox.siteId !== args.siteId) return { recorded: false as const };
+    const resources = await ctx.db
+      .query("managed_outreach_mailbox_resources")
+      .withIndex("by_canonical_inbox", (q) => q.eq("canonicalInboxId", inbox._id))
+      .take(20);
+    const resource = resources.find((row) =>
+      row.transportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+      row.operationKey === inbox.managedTransportOperationKey &&
+      row.generation === message.providerCampaignGeneration &&
+      row.campaignConfigurationHash ===
+        message.providerCampaignConfigurationHash
+    );
+    if (!resource) return { recorded: false as const };
+    if (args.phase === "campaign") {
+      await ctx.db.patch(resource._id, {
+        smartleadCampaignRequestedAt:
+          resource.smartleadCampaignRequestedAt ?? timestamp,
+        encryptedProviderCampaignBinding:
+          args.encryptedCampaignBinding ??
+          resource.encryptedProviderCampaignBinding,
+        updatedAt: timestamp,
+      });
+    } else if (args.phase === "webhook") {
+      await ctx.db.patch(resource._id, {
+        smartleadWebhookRequestedAt:
+          resource.smartleadWebhookRequestedAt ?? timestamp,
+        encryptedProviderCampaignBinding:
+          args.encryptedCampaignBinding ??
+          resource.encryptedProviderCampaignBinding,
+        updatedAt: timestamp,
+      });
+    } else if (args.phase === "configuration") {
+      await ctx.db.patch(resource._id, {
+        smartleadCampaignConfigurationRequestedAt:
+          resource.smartleadCampaignConfigurationRequestedAt ?? timestamp,
+        encryptedProviderCampaignBinding:
+          args.encryptedCampaignBinding ??
+          resource.encryptedProviderCampaignBinding,
+        campaignConfiguredAt: args.completed
+          ? timestamp
+          : resource.campaignConfiguredAt,
+        updatedAt: timestamp,
+      });
+    } else if (args.phase === "lead") {
+      await ctx.db.patch(message._id, {
+        providerAcknowledgementState: "lead_boundary_crossed",
+        updatedAt: timestamp,
+      });
+    } else if (args.phase === "queued") {
+      if (
+        !args.encryptedLeadBinding || !args.providerLeadBindingHash ||
+        !args.providerCampaignBindingHash || !args.providerRecipientHash
+      ) {
+        return { recorded: false as const };
+      }
+      await ctx.db.patch(message._id, {
+        status: "provider_queued",
+        encryptedProviderLeadBinding: args.encryptedLeadBinding,
+        providerLeadBindingHash: args.providerLeadBindingHash,
+        providerCampaignBindingHash: args.providerCampaignBindingHash,
+        providerRecipientHash: args.providerRecipientHash,
+        providerAcknowledgementState: "acknowledged",
+        providerReconciledAt: timestamp,
+        deliveryLeaseExpiresAt: undefined,
+        updatedAt: timestamp,
+      });
+    } else {
+      const nextEligibleAt = timestamp + 5 * 60 * 1000;
+      await ctx.db.patch(message._id, {
+        status: "delivery_unverified",
+        providerAcknowledgementState: "ambiguous",
+        providerReconciledAt: timestamp,
+        providerReconciliationAttempt: 0,
+        providerReconciliationNextEligibleAt: nextEligibleAt,
+        deliveryLeaseExpiredAt: timestamp,
+        deliveryLeaseExpiresAt: undefined,
+        failureReason:
+          "Smartlead crossed an external boundary without an exact provider receipt. Pentra will reconcile this operation key and will not create a second sequence.",
+        updatedAt: timestamp,
+      });
+      await ctx.scheduler.runAt(
+        nextEligibleAt,
+        internal.actions.smartlead.reconcileSequence,
+        {
+          siteId: args.siteId,
+          messageId: args.messageId,
+          operationKey: message.providerOperationKey!,
+        },
+      );
+    }
+    return { recorded: true as const, resourceId: resource._id };
+  },
+});
+
+export const getSmartleadReconciliationOperationInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.status !== "delivery_unverified" ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "ambiguous" ||
+      !message.inboxId
+    ) return null;
+    const inbox = await ctx.db.get(message.inboxId);
+    if (!inbox || inbox.siteId !== args.siteId) return null;
+    const resources = await ctx.db.query("managed_outreach_mailbox_resources")
+      .withIndex("by_canonical_inbox", (q) => q.eq("canonicalInboxId", inbox._id))
+      .take(20);
+    const resource = resources.find((row) =>
+      row.transportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+      row.operationKey === inbox.managedTransportOperationKey &&
+      row.generation === message.providerCampaignGeneration
+    );
+    if (!resource?.encryptedProviderBinding) return null;
+    return {
+      message: {
+        toEmail: message.toEmail,
+        toDomain: message.toDomain,
+        providerOperationKey: message.providerOperationKey,
+      },
+      resource: {
+        _id: resource._id,
+        operationKey: resource.operationKey,
+        generation: resource.generation,
+        encryptedProviderBinding: resource.encryptedProviderBinding,
+        encryptedProviderCampaignBinding:
+          resource.encryptedProviderCampaignBinding,
+      },
+    };
+  },
+});
+
+export const recordSmartleadReconciliationInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+    found: v.boolean(),
+    encryptedCampaignBinding: v.optional(v.string()),
+    encryptedLeadBinding: v.optional(v.string()),
+    providerLeadBindingHash: v.optional(v.string()),
+    providerCampaignBindingHash: v.optional(v.string()),
+    providerRecipientHash: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    const timestamp = Date.now();
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.status !== "delivery_unverified" ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "ambiguous" ||
+      !message.inboxId
+    ) return { recorded: false as const };
+    const inbox = await ctx.db.get(message.inboxId);
+    if (!inbox || inbox.siteId !== args.siteId) return { recorded: false as const };
+    const resources = await ctx.db.query("managed_outreach_mailbox_resources")
+      .withIndex("by_canonical_inbox", (q) => q.eq("canonicalInboxId", inbox._id))
+      .take(20);
+    const resource = resources.find((row) =>
+      row.transportKind === SMARTLEAD_MANAGED_TRANSPORT &&
+      row.operationKey === inbox.managedTransportOperationKey &&
+      row.generation === message.providerCampaignGeneration
+    );
+    if (!resource) return { recorded: false as const };
+    if (args.found) {
+      if (
+        !args.encryptedCampaignBinding || !args.encryptedLeadBinding ||
+        !args.providerLeadBindingHash || !args.providerCampaignBindingHash ||
+        !args.providerRecipientHash ||
+        !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+          args.encryptedCampaignBinding,
+        ) ||
+        !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+          args.encryptedLeadBinding,
+        ) ||
+        ![args.providerLeadBindingHash, args.providerCampaignBindingHash,
+          args.providerRecipientHash].every((value) => /^[a-f0-9]{64}$/.test(value))
+      ) return { recorded: false as const };
+      await Promise.all([
+        ctx.db.patch(resource._id, {
+          encryptedProviderCampaignBinding: args.encryptedCampaignBinding,
+          updatedAt: timestamp,
+        }),
+        ctx.db.patch(message._id, {
+          status: "provider_queued",
+          encryptedProviderLeadBinding: args.encryptedLeadBinding,
+          providerLeadBindingHash: args.providerLeadBindingHash,
+          providerCampaignBindingHash: args.providerCampaignBindingHash,
+          providerRecipientHash: args.providerRecipientHash,
+          providerAcknowledgementState: "reconciled",
+          providerReconciledAt: timestamp,
+          providerReconciliationNextEligibleAt: undefined,
+          failureReason: undefined,
+          updatedAt: timestamp,
+        }),
+      ]);
+      return { recorded: true as const, found: true as const };
+    }
+    const attempt = Math.min(10, (message.providerReconciliationAttempt ?? 0) + 1);
+    const terminal = attempt >= 10;
+    const nextEligibleAt = timestamp + Math.min(
+      6 * 60 * 60 * 1000,
+      5 * 60 * 1000 * 2 ** Math.max(0, attempt - 1),
+    );
+    await ctx.db.patch(message._id, {
+      providerReconciliationAttempt: attempt,
+      providerReconciliationNextEligibleAt: terminal ? undefined : nextEligibleAt,
+      providerAcknowledgementState: terminal ? "terminal_alert" : "ambiguous",
+      failureReason: terminal
+        ? "Smartlead reconciliation exhausted ten bounded read-only checks. The external outcome remains unresolved and will not be replayed."
+        : "Smartlead acknowledgement remains unresolved; a durable read-only reconciliation wake is scheduled.",
+      updatedAt: timestamp,
+    });
+    if (!terminal) {
+      await ctx.scheduler.runAt(
+        nextEligibleAt,
+        internal.actions.smartlead.reconcileSequence,
+        {
+          siteId: args.siteId,
+          messageId: args.messageId,
+          operationKey: args.operationKey,
+        },
+      );
+    }
+    return { recorded: true as const, found: false as const, terminal };
+  },
+});
+
 export const markGmailDeliveryExternalBoundary = internalMutation({
   args: {
     siteId: v.id("sites"),
@@ -6687,6 +7876,42 @@ export const markGmailDeliveryExternalBoundary = internalMutation({
       ctx,
       args,
       "gmail",
+    );
+    if (!authorization.authorized) return authorization;
+    await ctx.db.patch(authorization.message._id, {
+      deliveryExternalAttemptedAt: authorization.timestamp,
+      updatedAt: authorization.timestamp,
+    });
+    await ctx.scheduler.runAt(
+      authorization.message.deliveryLeaseExpiresAt! + 1_000,
+      internal.outreach.recoverApprovedDeliveryBoundaryLease,
+      {
+        siteId: authorization.message.siteId,
+        messageId: authorization.message._id,
+        attemptId: args.attemptId,
+      },
+    );
+    return { marked: true as const, externalAttempted: true as const };
+  },
+});
+
+export const markSmtpDeliveryExternalBoundary = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    attemptId: v.string(),
+    release: deliveryReleaseValidator,
+    expectedParentMessageId: v.optional(v.id("outreach_messages")),
+    expectedProviderThreadId: v.optional(v.string()),
+    expectedInReplyToRfcMessageIdHash: v.optional(v.string()),
+    expectedManagedParentOperationKey: v.optional(v.string()),
+    expectedManagedParentThreadReceipt: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authorization = await authorizeClaimedDeliveryAtExternalBoundary(
+      ctx,
+      args,
+      "smtp",
     );
     if (!authorization.authorized) return authorization;
     await ctx.db.patch(authorization.message._id, {
@@ -6967,6 +8192,21 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
           .order("asc")
           .first();
     if (!message) return null;
+    const policyReceipt = message.outreachPolicyDecisionId
+      ? await ctx.db.get(message.outreachPolicyDecisionId)
+      : null;
+    const policyAllowed = release === "automatic"
+      ? message.outreachPolicyDecision === "allowed_auto"
+      : ["allowed_auto", "approval_only"].includes(
+          message.outreachPolicyDecision ?? "needs_evidence",
+        );
+    if (
+      !policyAllowed || !policyReceipt || policyReceipt.siteId !== siteId ||
+      policyReceipt.decision !== message.outreachPolicyDecision ||
+      policyReceipt.policyVersion !== OUTREACH_POLICY_VERSION ||
+      policyReceipt.policyVersion !== message.outreachPolicyVersion ||
+      policyReceipt.configurationHash !== message.outreachPolicyConfigurationHash
+    ) return null;
     const opportunity = await ctx.db.get(message.opportunityId);
     const permanentlyInvalid = (
       reason: "source_changed" | "target_missing" | "contact_changed",
@@ -7176,7 +8416,7 @@ async function queueNextVerifiedAutonomousFollowUp(
   args: {
     siteId: Id<"sites">;
     parentMessageId: Id<"outreach_messages">;
-    transport: "gmail" | typeof MANAGED_SES_TRANSPORT;
+    transport: "gmail" | "smtp" | typeof MANAGED_SES_TRANSPORT;
     providerThreadId: string | undefined;
     outboundRfcMessageId: string | undefined;
     managedSesOperationKey?: string;
@@ -7190,11 +8430,13 @@ async function queueNextVerifiedAutonomousFollowUp(
   const normalizedOutboundMessageId = normalizeRfcMessageId(
     args.outboundRfcMessageId,
   );
-  const gmailParentIdentityMatches = Boolean(
-    args.transport === "gmail" &&
-      args.providerThreadId &&
-      /^[a-zA-Z0-9_-]{1,200}$/.test(args.providerThreadId) &&
-      parent?.providerThreadId === args.providerThreadId &&
+  const customerManagedParentIdentityMatches = Boolean(
+    (args.transport === "gmail" || args.transport === "smtp") &&
+      (args.transport === "smtp" || (
+        args.providerThreadId &&
+        /^[a-zA-Z0-9_-]{1,200}$/.test(args.providerThreadId) &&
+        parent?.providerThreadId === args.providerThreadId
+      )) &&
       normalizedOutboundMessageId &&
       parent?.inboundRelayOutboundMessageIdHash &&
       inboundRelayMessageIdHash(normalizedOutboundMessageId) ===
@@ -7224,7 +8466,7 @@ async function queueNextVerifiedAutonomousFollowUp(
     !Number.isSafeInteger(parent.sequenceStep) ||
     parent.sequenceStep < 0 ||
     parent.sequenceStep >= MAX_SEQUENCE_STEP ||
-    (!gmailParentIdentityMatches && !managedParentIdentityMatches)
+    (!customerManagedParentIdentityMatches && !managedParentIdentityMatches)
   ) {
     return { queued: false, reason: "verified_parent_unavailable" };
   }
@@ -7323,6 +8565,8 @@ async function queueNextVerifiedAutonomousFollowUp(
     inbox.siteId !== args.siteId ||
     inbox._id !== parent.inboxId ||
     inbox.credentialOwnerAccountKey !== ownerAccountKey ||
+    (args.transport === "gmail" && inbox.provider !== "gmail") ||
+    (args.transport === "smtp" && inbox.provider !== "smtp") ||
     !autonomousOutreachRuntimeEnabled(
       process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
     ) ||
@@ -7336,6 +8580,9 @@ async function queueNextVerifiedAutonomousFollowUp(
       approvalConsentPolicyHash: parent.approvalConsentPolicyHash,
       approvalConsentAcceptedAt: parent.approvalConsentAcceptedAt,
     }) ||
+    !parent.outreachPolicyDecisionId ||
+    parent.outreachPolicyDecision !== "allowed_auto" ||
+    parent.outreachPolicyVersion !== OUTREACH_POLICY_VERSION ||
     !approvalMatchesInbox({
       messageInboxId: parent.inboxId,
       approvedInboxId: parent.approvedInboxId,
@@ -7444,13 +8691,22 @@ async function queueNextVerifiedAutonomousFollowUp(
           managedSesParentOperationKey: args.managedSesOperationKey!,
           managedSesParentThreadReceipt: args.managedSesThreadReceipt!,
         }
-      : { deliveryExpectedThreadId: args.providerThreadId }),
+      : {
+          deliveryTransport: args.transport === "smtp"
+            ? "smtp"
+            : "gmail_oauth",
+          deliveryExpectedThreadId: args.providerThreadId,
+        }),
     inReplyToRfcMessageIdHash:
       parent.inboundRelayOutboundMessageIdHash,
     inboxConfigurationVersion: inbox.configurationVersion ?? 0,
     opportunityEvidenceHash: opportunity.evidenceHash,
     opportunitySourceUrl: opportunity.sourceUrl,
     opportunityTargetUrl: opportunity.targetUrl,
+    outreachPolicyDecisionId: parent.outreachPolicyDecisionId,
+    outreachPolicyDecision: parent.outreachPolicyDecision,
+    outreachPolicyVersion: parent.outreachPolicyVersion,
+    outreachPolicyConfigurationHash: parent.outreachPolicyConfigurationHash,
     approvedAt: args.sentAt,
     approvedInboxId: inbox._id,
     approvedInboxConfigurationVersion: inbox.configurationVersion ?? 0,
@@ -7807,6 +9063,8 @@ export const completeDeliveryAttempt = internalMutation({
     const message = await ctx.db.get(messageId);
     if (!message || message.siteId !== siteId) throw new Error("Message not found for site");
     const now = Date.now();
+    const smtpDelivery = message.deliveryTransport === "smtp";
+    const transportLabel = smtpDelivery ? "SMTP" : "Gmail";
     if (
       message.status !== "sending" ||
       message.deliveryAttemptId !== attemptId
@@ -7818,7 +9076,7 @@ export const completeDeliveryAttempt = internalMutation({
         status: "delivery_unverified",
         deliveryLeaseExpiredAt: now,
         failureReason:
-          "Gmail returned after the delivery lease expired. The outcome requires manual review and will not be retried automatically.",
+          `${transportLabel} returned after the delivery lease expired. The outcome requires manual review and will not be retried automatically.`,
         updatedAt: now,
       });
       return { recorded: false, reason: "Delivery lease expired before receipt finalization." };
@@ -7842,7 +9100,7 @@ export const completeDeliveryAttempt = internalMutation({
         status: "delivery_unverified",
         deliveryLeaseExpiredAt: now,
         failureReason:
-          "The Gmail receipt did not match the claimed outbound message identity. Manual review is required.",
+          `The ${transportLabel} receipt did not match the claimed outbound message identity. Manual review is required.`,
         updatedAt: now,
       });
       return {
@@ -7855,7 +9113,7 @@ export const completeDeliveryAttempt = internalMutation({
         status: "delivery_unverified",
         deliveryLeaseExpiredAt: now,
         failureReason:
-          "Gmail did not return a valid delivery receipt. Manual review is required and the message will not be retried automatically.",
+          `${transportLabel} did not return a valid delivery receipt. Manual review is required and the message will not be retried automatically.`,
         updatedAt: now,
       });
       return { recorded: false, reason: "Gmail receipt was missing or invalid." };
@@ -7878,13 +9136,13 @@ export const completeDeliveryAttempt = internalMutation({
         sentAt: now,
         deliveryLeaseExpiredAt: now,
         failureReason:
-          "Gmail accepted this attempt after the site owner changed. The original account's durable cooldown was preserved, but provider identifiers were not exposed to the new owner.",
+          `${transportLabel} accepted this attempt after the site owner changed. The original account's durable cooldown was preserved, but provider identifiers were not exposed to the new owner.`,
         updatedAt: now,
       });
       return { recorded: true, ownerChanged: true };
     }
     if (
-      message.sequenceStep > 0 &&
+      !smtpDelivery && message.sequenceStep > 0 &&
       (!message.deliveryExpectedThreadId ||
         safeProviderThreadId !== message.deliveryExpectedThreadId)
     ) {
@@ -7955,7 +9213,7 @@ export const completeDeliveryAttempt = internalMutation({
     const next = await queueNextVerifiedAutonomousFollowUp(ctx, {
       siteId,
       parentMessageId: messageId,
-      transport: "gmail",
+      transport: smtpDelivery ? "smtp" : "gmail",
       providerThreadId: safeProviderThreadId,
       outboundRfcMessageId: safeOutboundRfcMessageId,
       sentAt: now,
@@ -9964,6 +11222,985 @@ export const recordInboundReceipt = internalMutation({
       });
     }
     return { recorded: true as const, kind: args.kind };
+  },
+});
+
+const smartleadCanaryKindValidator = v.union(
+  v.literal("delivery"),
+  v.literal("reply"),
+  v.literal("bounce"),
+  v.literal("unsubscribe"),
+);
+const SMARTLEAD_CANARY_LEASE_MS = 10 * 60 * 1000;
+const SMARTLEAD_CANARY_EVENT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+async function promoteSmartleadResourceAfterCanaries(
+  ctx: MutationCtx,
+  resource: Doc<"managed_outreach_mailbox_resources">,
+  patch: Partial<Pick<Doc<"managed_outreach_mailbox_resources">,
+    "deliveryCanaryReceipt" | "replyCanaryReceipt" | "bounceCanaryReceipt" |
+    "unsubscribeCanaryReceipt" | "cancellationCanaryReceipt">>,
+  timestamp: number,
+) {
+  const projected = { ...resource, ...patch };
+  if (
+    !projected.deliveryCanaryReceipt || !projected.replyCanaryReceipt ||
+    !projected.bounceCanaryReceipt || !projected.unsubscribeCanaryReceipt ||
+    !projected.cancellationCanaryReceipt || !projected.canonicalInboxId
+  ) return false;
+  const inbox = await ctx.db.get(projected.canonicalInboxId);
+  if (
+    !inbox || inbox.siteId !== projected.siteId ||
+    inbox.managedTransportOperationKey !== projected.operationKey ||
+    inbox.managedTransportGeneration !== projected.generation
+  ) return false;
+  await Promise.all([
+    ctx.db.patch(inbox._id, {
+      status: "active",
+      lastError: undefined,
+      updatedAt: timestamp,
+    }),
+    ctx.db.patch(projected._id, {
+      nextAttemptAt: undefined,
+      lastReasonCode: undefined,
+      updatedAt: timestamp,
+    }),
+  ]);
+  const request = await ctx.db.get(projected.requestId);
+  if (request) {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.managedProvisioning.dispatchRequest,
+      { requestId: request._id, expectedRevision: request.revision },
+    );
+  }
+  return true;
+}
+
+/** Create one deterministic controlled operation per safety event. Targets
+ * are one-way hashes supplied by the Node action from production secrets. */
+export const ensureSmartleadControlledCanariesInternal = internalMutation({
+  args: {
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    targets: v.array(v.object({
+      kind: smartleadCanaryKindValidator,
+      targetHash: v.string(),
+    })),
+  },
+  handler: async (ctx, { resourceId, targets }) => {
+    const resource = await ctx.db.get(resourceId);
+    const timestamp = Date.now();
+    if (
+      !resource || resource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" || resource.releaseState !== "active" ||
+      !resource.canonicalInboxId || !resource.encryptedProviderBinding ||
+      !resource.domainAuthenticationReceipt || resource.warmupState !== "verified" ||
+      !resource.warmupEligibleAt || resource.warmupEligibleAt > timestamp
+    ) throw new Error("Smartlead resource is not ready for controlled canaries");
+    const kinds = new Set(targets.map((target) => target.kind));
+    if (
+      targets.length !== 4 || kinds.size !== 4 ||
+      targets.some((target) => !/^[a-f0-9]{64}$/.test(target.targetHash))
+    ) throw new Error("All four isolated Smartlead canary targets are required");
+    const operationIds = [];
+    let allPassed = true;
+    for (const target of targets) {
+      const operationKey = smartleadCanaryOperationKey({
+        siteId: String(resource.siteId),
+        resourceOperationKey: resource.operationKey,
+        generation: resource.generation,
+        kind: target.kind,
+        targetHash: target.targetHash,
+      });
+      const rows = await ctx.db.query("smartlead_canary_operations")
+        .withIndex("by_resource_kind", (q) =>
+          q.eq("resourceId", resource._id).eq("kind", target.kind))
+        .take(2);
+      if (rows.length > 1) throw new Error("Smartlead canary identity is ambiguous");
+      const existing = rows[0];
+      if (existing) {
+        if (
+          existing.siteId !== resource.siteId || existing.operationKey !== operationKey ||
+          existing.targetHash !== target.targetHash
+        ) throw new Error("Smartlead canary target changed inside a resource generation");
+        operationIds.push(existing._id);
+        if (existing.state !== "passed") allPassed = false;
+        if (["queued", "leased"].includes(existing.state)) continue;
+        if (["provider_queued", "event_verified", "pause_required", "passed"].includes(existing.state)) continue;
+        continue;
+      }
+      const operationId = await ctx.db.insert("smartlead_canary_operations", {
+        siteId: resource.siteId,
+        resourceId: resource._id,
+        kind: target.kind,
+        operationKey,
+        targetHash: target.targetHash,
+        state: "queued",
+        attempt: 0,
+        nextAttemptAt: timestamp,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      operationIds.push(operationId);
+      allPassed = false;
+      await ctx.scheduler.runAfter(0, internal.actions.smartlead.runControlledCanary, {
+        operationId,
+      });
+    }
+    if (allPassed) {
+      await promoteSmartleadResourceAfterCanaries(ctx, resource, {}, timestamp);
+    } else {
+      await ctx.db.patch(resource._id, {
+        lastReasonCode: "smartlead_canaries_pending",
+        nextAttemptAt: timestamp + 15 * 60 * 1000,
+        updatedAt: timestamp,
+      });
+    }
+    return { ensured: true as const, operationIds };
+  },
+});
+
+export const recordSmartleadCanaryCoordinatorBlockerInternal = internalMutation({
+  args: {
+    resourceId: v.id("managed_outreach_mailbox_resources"),
+    reason: v.union(
+      v.literal("runtime_unavailable"),
+      v.literal("canary_targets_unavailable"),
+      v.literal("resource_not_ready"),
+    ),
+  },
+  handler: async (ctx, { resourceId, reason }) => {
+    const resource = await ctx.db.get(resourceId);
+    if (
+      !resource || resource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" ||
+      resource.releaseState !== "active"
+    ) {
+      return { recorded: false as const };
+    }
+    const nextAttemptAt = Date.now() + 60 * 60 * 1000;
+    await ctx.db.patch(resource._id, {
+      lastReasonCode: reason,
+      nextAttemptAt,
+      updatedAt: Date.now(),
+    });
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.actions.smartlead.runControlledCanaries,
+      { resourceId },
+    );
+    return { recorded: true as const, nextAttemptAt };
+  },
+});
+
+export const claimSmartleadControlledCanaryInternal = internalMutation({
+  args: { operationId: v.id("smartlead_canary_operations") },
+  handler: async (ctx, { operationId }) => {
+    const operation = await ctx.db.get(operationId);
+    const timestamp = Date.now();
+    if (
+      !operation || operation.state !== "queued" ||
+      (operation.nextAttemptAt ?? 0) > timestamp || operation.attempt >= 10
+    ) return null;
+    const resource = await ctx.db.get(operation.resourceId);
+    if (
+      !resource || resource.siteId !== operation.siteId ||
+      resource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      resource.lifecycleState !== "canonicalized" || resource.releaseState !== "active" ||
+      !resource.encryptedProviderBinding || !resource.canonicalInboxId ||
+      !resource.domainAuthenticationReceipt || resource.warmupState !== "verified" ||
+      !resource.warmupEligibleAt || resource.warmupEligibleAt > timestamp
+    ) return null;
+    const attempt = operation.attempt + 1;
+    const leaseToken = sha256Hex(JSON.stringify({
+      operationKey: operation.operationKey,
+      attempt,
+      timestamp,
+    }));
+    const leaseExpiresAt = timestamp + SMARTLEAD_CANARY_LEASE_MS;
+    await ctx.db.patch(operation._id, {
+      state: "leased",
+      attempt,
+      leaseToken,
+      leaseExpiresAt,
+      nextAttemptAt: undefined,
+      lastReasonCode: undefined,
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAt(
+      leaseExpiresAt + 1_000,
+      internal.outreach.recoverSmartleadControlledCanaryLeaseInternal,
+      { operationId: operation._id, leaseToken },
+    );
+    return {
+      operation: { ...operation, attempt, leaseToken, leaseExpiresAt },
+      resource: {
+        operationKey: resource.operationKey,
+        generation: resource.generation,
+        encryptedProviderBinding: resource.encryptedProviderBinding,
+        canonicalInboxId: resource.canonicalInboxId,
+      },
+    };
+  },
+});
+
+export const recordSmartleadControlledCanaryProgressInternal = internalMutation({
+  args: {
+    operationId: v.id("smartlead_canary_operations"),
+    leaseToken: v.string(),
+    phase: v.union(
+      v.literal("campaign"), v.literal("webhook"),
+      v.literal("configuration"), v.literal("lead"),
+    ),
+    encryptedProviderBinding: v.optional(v.string()),
+    completed: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const operation = await ctx.db.get(args.operationId);
+    const timestamp = Date.now();
+    if (
+      !operation || operation.state !== "leased" ||
+      operation.leaseToken !== args.leaseToken ||
+      (operation.leaseExpiresAt ?? 0) <= timestamp ||
+      (args.encryptedProviderBinding !== undefined &&
+        !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+          args.encryptedProviderBinding))
+    ) return { recorded: false as const };
+    await ctx.db.patch(operation._id, {
+      externalAttemptedAt: operation.externalAttemptedAt ?? timestamp,
+      campaignRequestedAt: args.phase === "campaign"
+        ? operation.campaignRequestedAt ?? timestamp : operation.campaignRequestedAt,
+      webhookRequestedAt: args.phase === "webhook"
+        ? operation.webhookRequestedAt ?? timestamp : operation.webhookRequestedAt,
+      configurationRequestedAt: args.phase === "configuration"
+        ? operation.configurationRequestedAt ?? timestamp : operation.configurationRequestedAt,
+      configurationCompletedAt: args.phase === "configuration" && args.completed
+        ? timestamp : operation.configurationCompletedAt,
+      leadRequestedAt: args.phase === "lead"
+        ? operation.leadRequestedAt ?? timestamp : operation.leadRequestedAt,
+      encryptedProviderBinding:
+        args.encryptedProviderBinding ?? operation.encryptedProviderBinding,
+      updatedAt: timestamp,
+    });
+    return { recorded: true as const };
+  },
+});
+
+export const recordSmartleadControlledCanaryQueuedInternal = internalMutation({
+  args: {
+    operationId: v.id("smartlead_canary_operations"),
+    leaseToken: v.string(),
+    encryptedProviderBinding: v.string(),
+    campaignBindingHash: v.string(),
+    recipientHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const operation = await ctx.db.get(args.operationId);
+    const timestamp = Date.now();
+    if (
+      !operation || operation.state !== "leased" ||
+      operation.leaseToken !== args.leaseToken ||
+      (operation.leaseExpiresAt ?? 0) <= timestamp ||
+      !/^v1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/.test(
+        args.encryptedProviderBinding) ||
+      ![args.campaignBindingHash, args.recipientHash].every((value) =>
+        /^[a-f0-9]{64}$/.test(value)) ||
+      args.recipientHash !== operation.targetHash
+    ) return { recorded: false as const };
+    const nextAttemptAt = timestamp + SMARTLEAD_CANARY_EVENT_TIMEOUT_MS;
+    await ctx.db.patch(operation._id, {
+      state: "provider_queued",
+      encryptedProviderBinding: args.encryptedProviderBinding,
+      campaignBindingHash: args.campaignBindingHash,
+      recipientHash: args.recipientHash,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      nextAttemptAt,
+      lastReasonCode: "smartlead_canary_event_pending",
+      updatedAt: timestamp,
+    });
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.outreach.expireSmartleadControlledCanaryInternal,
+      { operationId: operation._id },
+    );
+    return { recorded: true as const, nextAttemptAt };
+  },
+});
+
+export const failSmartleadControlledCanaryInternal = internalMutation({
+  args: {
+    operationId: v.id("smartlead_canary_operations"),
+    leaseToken: v.string(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const operation = await ctx.db.get(args.operationId);
+    if (!operation || operation.state !== "leased" || operation.leaseToken !== args.leaseToken) {
+      return { recorded: false as const };
+    }
+    const timestamp = Date.now();
+    const terminal = operation.attempt >= 10;
+    const nextAttemptAt = timestamp + Math.min(
+      6 * 60 * 60 * 1000,
+      5 * 60 * 1000 * 2 ** Math.max(0, operation.attempt - 1),
+    );
+    await ctx.db.patch(operation._id, {
+      state: terminal ? "failed" : "queued",
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      nextAttemptAt: terminal ? undefined : nextAttemptAt,
+      lastReasonCode: args.reason.replace(/[^a-z0-9_]/g, "_").slice(0, 120),
+      completedAt: terminal ? timestamp : undefined,
+      updatedAt: timestamp,
+    });
+    if (!terminal) {
+      await ctx.scheduler.runAt(
+        nextAttemptAt,
+        internal.actions.smartlead.runControlledCanary,
+        { operationId: operation._id },
+      );
+    }
+    return { recorded: true as const, terminal, nextAttemptAt };
+  },
+});
+
+export const recoverSmartleadControlledCanaryLeaseInternal = internalMutation({
+  args: {
+    operationId: v.id("smartlead_canary_operations"),
+    leaseToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const operation = await ctx.db.get(args.operationId);
+    if (
+      !operation || operation.state !== "leased" ||
+      operation.leaseToken !== args.leaseToken ||
+      (operation.leaseExpiresAt ?? 0) > Date.now()
+    ) return { recovered: false as const };
+    const nextAttemptAt = Date.now() + 60_000;
+    await ctx.db.patch(operation._id, {
+      state: operation.attempt >= 10 ? "failed" : "queued",
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      nextAttemptAt: operation.attempt >= 10 ? undefined : nextAttemptAt,
+      lastReasonCode: operation.externalAttemptedAt
+        ? "smartlead_canary_external_ack_ambiguous"
+        : "smartlead_canary_preboundary_action_lost",
+      completedAt: operation.attempt >= 10 ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    });
+    if (operation.attempt < 10) {
+      await ctx.scheduler.runAt(
+        nextAttemptAt,
+        internal.actions.smartlead.runControlledCanary,
+        { operationId: operation._id },
+      );
+    }
+    return { recovered: true as const };
+  },
+});
+
+export const expireSmartleadControlledCanaryInternal = internalMutation({
+  args: { operationId: v.id("smartlead_canary_operations") },
+  handler: async (ctx, { operationId }) => {
+    const operation = await ctx.db.get(operationId);
+    if (
+      !operation || operation.state !== "provider_queued" ||
+      (operation.nextAttemptAt ?? 0) > Date.now()
+    ) return { expired: false as const };
+    await ctx.db.patch(operation._id, {
+      state: "failed",
+      nextAttemptAt: undefined,
+      lastReasonCode: "smartlead_canary_signed_event_timeout",
+      completedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return { expired: true as const };
+  },
+});
+
+export const getSmartleadControlledCanaryWebhookCandidate = internalQuery({
+  args: { campaignBindingHash: v.string(), recipientHash: v.string() },
+  handler: async (ctx, args) => {
+    if (![args.campaignBindingHash, args.recipientHash].every((value) =>
+      /^[a-f0-9]{64}$/.test(value))) return null;
+    const operation = await ctx.db.query("smartlead_canary_operations")
+      .withIndex("by_campaign_recipient", (q) =>
+        q.eq("campaignBindingHash", args.campaignBindingHash)
+          .eq("recipientHash", args.recipientHash))
+      .unique();
+    if (!operation || !["provider_queued", "event_verified", "pause_required"].includes(operation.state)) {
+      return null;
+    }
+    const resource = await ctx.db.get(operation.resourceId);
+    if (!resource?.canonicalInboxId || resource.siteId !== operation.siteId) return null;
+    return {
+      siteId: operation.siteId,
+      inboxId: resource.canonicalInboxId,
+      operationId: operation._id,
+      operationKey: operation.operationKey,
+    };
+  },
+});
+
+export const recordSmartleadControlledCanaryWebhookReceipt = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    operationId: v.id("smartlead_canary_operations"),
+    operationKey: v.string(),
+    requestId: v.string(),
+    campaignBindingHash: v.string(),
+    recipientHash: v.string(),
+    kind: v.union(
+      v.literal("sent"), v.literal("reply"),
+      v.literal("bounce"), v.literal("unsubscribe"),
+    ),
+    observedAt: v.number(),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    sequenceStep: v.optional(v.number()),
+    stopRequest: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const prior = await ctx.db.query("smartlead_webhook_events")
+      .withIndex("by_request_id", (q) => q.eq("requestId", args.requestId))
+      .unique();
+    if (prior) {
+      if (prior.payloadHash !== args.payloadHash) {
+        throw new Error("Smartlead request id was reused with different evidence");
+      }
+      return { recorded: false as const, replay: true as const };
+    }
+    const [operation, resource] = await Promise.all([
+      ctx.db.get(args.operationId),
+      ctx.db.query("managed_outreach_mailbox_resources")
+        .withIndex("by_canonical_inbox", (q) => q.eq("canonicalInboxId", args.inboxId))
+        .unique(),
+    ]);
+    const timestamp = Date.now();
+    const expectedKind = operation?.kind === "delivery" ? "sent" : operation?.kind;
+    if (
+      !operation || operation.siteId !== args.siteId ||
+      operation.operationKey !== args.operationKey ||
+      !["provider_queued", "event_verified", "pause_required"].includes(operation.state) ||
+      operation.campaignBindingHash !== args.campaignBindingHash ||
+      operation.recipientHash !== args.recipientHash || expectedKind !== args.kind ||
+      !resource || resource._id !== operation.resourceId ||
+      resource.siteId !== args.siteId || resource.transportKind !== SMARTLEAD_MANAGED_TRANSPORT ||
+      ![args.payloadHash, args.evidenceHash].every((value) => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isFinite(args.observedAt) || args.observedAt > timestamp + 5 * 60 * 1000
+    ) throw new Error("Smartlead canary receipt crossed its isolated boundary");
+    const requiresPause = args.kind !== "sent";
+    const resourcePatch = args.kind === "sent"
+      ? { deliveryCanaryReceipt: args.evidenceHash }
+      : args.kind === "reply"
+        ? { replyCanaryReceipt: args.evidenceHash }
+        : args.kind === "bounce"
+          ? { bounceCanaryReceipt: args.evidenceHash }
+          : { unsubscribeCanaryReceipt: args.evidenceHash };
+    await Promise.all([
+      ctx.db.patch(resource._id, { ...resourcePatch, updatedAt: timestamp }),
+      ctx.db.patch(operation._id, {
+        state: requiresPause ? "pause_required" : "passed",
+        eventEvidenceHash: args.evidenceHash,
+        observedAt: args.observedAt,
+        nextAttemptAt: requiresPause ? timestamp : undefined,
+        lastReasonCode: requiresPause ? "smartlead_canary_pause_pending" : undefined,
+        completedAt: requiresPause ? undefined : timestamp,
+        updatedAt: timestamp,
+      }),
+    ]);
+    await promoteSmartleadResourceAfterCanaries(
+      ctx,
+      resource,
+      resourcePatch,
+      timestamp,
+    );
+    await ctx.db.insert("smartlead_webhook_events", {
+      requestId: args.requestId,
+      siteId: args.siteId,
+      inboxId: args.inboxId,
+      canaryOperationId: operation._id,
+      operationKey: operation.operationKey,
+      campaignBindingHash: args.campaignBindingHash,
+      recipientHash: args.recipientHash,
+      kind: args.kind,
+      payloadHash: args.payloadHash,
+      evidenceHash: args.evidenceHash,
+      sequenceStep: args.sequenceStep,
+      stopRequest: args.stopRequest,
+      providerPauseState: requiresPause ? "requested" : undefined,
+      observedAt: args.observedAt,
+      settledAt: timestamp,
+      createdAt: timestamp,
+    });
+    if (requiresPause) {
+      await ctx.scheduler.runAfter(0, internal.actions.smartlead.pauseControlledCanary, {
+        operationId: operation._id,
+      });
+    }
+    return { recorded: true as const, replay: false as const };
+  },
+});
+
+export const getSmartleadControlledCanaryPauseOperationInternal = internalQuery({
+  args: { operationId: v.id("smartlead_canary_operations") },
+  handler: async (ctx, { operationId }) => {
+    const operation = await ctx.db.get(operationId);
+    if (operation?.state !== "pause_required" || !operation.encryptedProviderBinding) return null;
+    return { encryptedProviderBinding: operation.encryptedProviderBinding };
+  },
+});
+
+export const recordSmartleadControlledCanaryPauseReceiptInternal = internalMutation({
+  args: {
+    operationId: v.id("smartlead_canary_operations"),
+    providerResponseHash: v.string(),
+  },
+  handler: async (ctx, { operationId, providerResponseHash }) => {
+    const operation = await ctx.db.get(operationId);
+    if (
+      operation?.state !== "pause_required" || !operation.eventEvidenceHash ||
+      !/^[a-f0-9]{64}$/.test(providerResponseHash)
+    ) return { recorded: false as const };
+    const resource = await ctx.db.get(operation.resourceId);
+    if (!resource || resource.siteId !== operation.siteId) return { recorded: false as const };
+    const timestamp = Date.now();
+    const cancellationReceiptHash = sha256Hex(JSON.stringify({
+      operationKey: operation.operationKey,
+      eventEvidenceHash: operation.eventEvidenceHash,
+      providerResponseHash,
+    }));
+    await Promise.all([
+      ctx.db.patch(operation._id, {
+        state: "passed",
+        cancellationReceiptHash,
+        nextAttemptAt: undefined,
+        lastReasonCode: undefined,
+        completedAt: timestamp,
+        updatedAt: timestamp,
+      }),
+      ctx.db.patch(resource._id, {
+        cancellationCanaryReceipt: cancellationReceiptHash,
+        updatedAt: timestamp,
+      }),
+    ]);
+    await promoteSmartleadResourceAfterCanaries(
+      ctx,
+      resource,
+      { cancellationCanaryReceipt: cancellationReceiptHash },
+      timestamp,
+    );
+    const events = await ctx.db.query("smartlead_webhook_events")
+      .withIndex("by_canary_operation", (q) => q.eq("canaryOperationId", operation._id))
+      .take(10);
+    await Promise.all(events.map((event) => ctx.db.patch(event._id, {
+      providerPauseState: "confirmed",
+      settledAt: timestamp,
+    })));
+    return { recorded: true as const, cancellationReceiptHash };
+  },
+});
+
+export const recordSmartleadControlledCanaryPauseFailureInternal = internalMutation({
+  args: {
+    operationId: v.id("smartlead_canary_operations"),
+    reason: v.string(),
+  },
+  handler: async (ctx, { operationId, reason }) => {
+    const operation = await ctx.db.get(operationId);
+    if (operation?.state !== "pause_required") return { recorded: false as const };
+    const attempt = (operation.pauseAttempt ?? 0) + 1;
+    const terminal = attempt >= 10;
+    const nextAttemptAt = Date.now() + Math.min(
+      15 * 60 * 1000,
+      60 * 1000 * 2 ** Math.max(0, attempt - 1),
+    );
+    await ctx.db.patch(operation._id, {
+      pauseAttempt: attempt,
+      state: terminal ? "failed" : "pause_required",
+      nextAttemptAt: terminal ? undefined : nextAttemptAt,
+      lastReasonCode: reason.replace(/[^a-z0-9_]/g, "_").slice(0, 120),
+      completedAt: terminal ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    });
+    if (!terminal) {
+      await ctx.scheduler.runAt(
+        nextAttemptAt,
+        internal.actions.smartlead.pauseControlledCanary,
+        { operationId: operation._id },
+      );
+    }
+    return { recorded: true as const, terminal, nextAttemptAt };
+  },
+});
+
+export const getSmartleadWebhookCandidate = internalQuery({
+  args: {
+    campaignBindingHash: v.string(),
+    recipientHash: v.string(),
+  },
+  handler: async (ctx, { campaignBindingHash, recipientHash }) => {
+    if (
+      !/^[a-f0-9]{64}$/.test(campaignBindingHash) ||
+      !/^[a-f0-9]{64}$/.test(recipientHash)
+    ) return null;
+    const message = await ctx.db.query("outreach_messages")
+      .withIndex("by_provider_campaign_recipient", (q) =>
+        q.eq("providerCampaignBindingHash", campaignBindingHash)
+          .eq("providerRecipientHash", recipientHash))
+      .unique();
+    if (
+      !message || message.deliveryTransport !== "smartlead_managed" ||
+      !message.inboxId || !message.deliveryOwnerAccountKey
+    ) return null;
+    const inbox = await ctx.db.get(message.inboxId);
+    if (
+      !inbox || inbox.siteId !== message.siteId ||
+      inbox.managedTransportKind !== "smartlead_managed" ||
+      inbox.credentialOwnerAccountKey !== message.deliveryOwnerAccountKey
+    ) return null;
+    return {
+      siteId: message.siteId,
+      inboxId: inbox._id,
+      messageId: message._id,
+      operationKey: message.providerOperationKey!,
+      expectedOwnerAccountKey: message.deliveryOwnerAccountKey,
+      expectedCampaignGeneration: message.providerCampaignGeneration ?? 0,
+    };
+  },
+});
+
+export const getSmartleadPauseOperationInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "pause_required" ||
+      message.providerPauseState === "confirmed" ||
+      !message.encryptedProviderLeadBinding
+    ) return null;
+    return {
+      encryptedProviderLeadBinding: message.encryptedProviderLeadBinding,
+      requiresGlobalUnsubscribe:
+        message.providerGlobalUnsubscribeState !== undefined &&
+        message.providerGlobalUnsubscribeState !== "confirmed",
+      globalUnsubscribeAttemptedAt:
+        message.providerGlobalUnsubscribeAttemptedAt,
+    };
+  },
+});
+
+export const recordSmartleadGlobalUnsubscribeBoundaryInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "pause_required" ||
+      message.providerGlobalUnsubscribeState !== "required" ||
+      message.providerGlobalUnsubscribeAttemptedAt ||
+      !message.encryptedProviderLeadBinding
+    ) return { recorded: false as const };
+    await ctx.db.patch(message._id, {
+      providerGlobalUnsubscribeState: "external_attempted",
+      providerGlobalUnsubscribeAttemptedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return { recorded: true as const };
+  },
+});
+
+export const recordSmartleadGlobalUnsubscribeReceiptInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "pause_required" ||
+      !["required", "external_attempted", "confirmed"].includes(
+        message.providerGlobalUnsubscribeState ?? "",
+      ) || !message.encryptedProviderLeadBinding
+    ) return { recorded: false as const };
+    await ctx.db.patch(message._id, {
+      providerGlobalUnsubscribeState: "confirmed",
+      providerReconciledAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return { recorded: true as const };
+  },
+});
+
+export const recordSmartleadPauseReceiptInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "pause_required" ||
+      (message.providerGlobalUnsubscribeState !== undefined &&
+        message.providerGlobalUnsubscribeState !== "confirmed") ||
+      !message.encryptedProviderLeadBinding
+    ) return { recorded: false as const };
+    const timestamp = Date.now();
+    await ctx.db.patch(message._id, {
+      providerPauseState: "confirmed",
+      providerPauseNextEligibleAt: undefined,
+      providerReconciledAt: timestamp,
+      updatedAt: timestamp,
+    });
+    const events = await ctx.db.query("smartlead_webhook_events")
+      .withIndex("by_message", (q) => q.eq("messageId", message._id))
+      .take(100);
+    await Promise.all(events
+      .filter((event) =>
+        event.operationKey === args.operationKey &&
+        event.kind !== "sent" &&
+        event.providerPauseState !== "confirmed")
+      .map((event) => ctx.db.patch(event._id, {
+        providerPauseState: "confirmed",
+        settledAt: timestamp,
+      })));
+    return { recorded: true as const };
+  },
+});
+
+export const recordSmartleadPauseFailureInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+    reason: v.union(
+      v.literal("runtime_unavailable"),
+      v.literal("binding_invalid"),
+      v.literal("pause_unverified"),
+      v.literal("global_unsubscribe_unverified"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.deliveryTransport !== SMARTLEAD_MANAGED_TRANSPORT ||
+      message.providerOperationKey !== args.operationKey ||
+      message.providerAcknowledgementState !== "pause_required" ||
+      message.providerPauseState === "confirmed"
+    ) return { recorded: false as const };
+    const timestamp = Date.now();
+    const attempt = Math.min(10, (message.providerPauseAttempt ?? 0) + 1);
+    const nextEligibleAt = timestamp + Math.min(
+      15 * 60 * 1000,
+      60 * 1000 * 2 ** Math.max(0, attempt - 1),
+    );
+    await ctx.db.patch(message._id, {
+      providerPauseState: attempt >= 10 ? "terminal_alert" : "retry_wait",
+      providerPauseAttempt: attempt,
+      providerPauseNextEligibleAt: attempt >= 10 ? undefined : nextEligibleAt,
+      failureReason: attempt >= 10
+        ? "Smartlead did not confirm lead cancellation after ten bounded attempts. The sequence remains locally suppressed and requires provider incident response."
+        : "Smartlead lead cancellation is awaiting a bounded provider retry; local suppression is already active.",
+      updatedAt: timestamp,
+    });
+    if (attempt < 10) {
+      await ctx.scheduler.runAt(
+        nextEligibleAt,
+        internal.actions.smartlead.pauseLead,
+        {
+          siteId: args.siteId,
+          messageId: args.messageId,
+          operationKey: args.operationKey,
+        },
+      );
+    }
+    return { recorded: true as const, nextEligibleAt, terminal: attempt >= 10 };
+  },
+});
+
+/** Atomically dedupe and settle a signed Smartlead event without raw content. */
+export const recordSmartleadWebhookReceipt = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.id("outreach_messages"),
+    expectedOwnerAccountKey: v.string(),
+    expectedCampaignGeneration: v.number(),
+    requestId: v.string(),
+    operationKey: v.string(),
+    campaignBindingHash: v.string(),
+    recipientHash: v.string(),
+    kind: v.union(
+      v.literal("sent"),
+      v.literal("reply"),
+      v.literal("bounce"),
+      v.literal("unsubscribe"),
+    ),
+    observedAt: v.number(),
+    payloadHash: v.string(),
+    evidenceHash: v.string(),
+    sequenceStep: v.optional(v.number()),
+    stopRequest: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const prior = await ctx.db.query("smartlead_webhook_events")
+      .withIndex("by_request_id", (q) => q.eq("requestId", args.requestId))
+      .unique();
+    if (prior) {
+      if (prior.payloadHash !== args.payloadHash) {
+        throw new Error("Smartlead request id was reused with different evidence");
+      }
+      return { recorded: false as const, replay: true as const };
+    }
+    const [site, inbox, message] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+      ctx.db.get(args.messageId),
+    ]);
+    const timestamp = Date.now();
+    if (
+      !site || !(await relaySettlementAuthorized(ctx, site, message?.deliveryClaimedAt ?? message?.sentAt)) ||
+      !inbox || inbox.siteId !== args.siteId ||
+      inbox.managedTransportKind !== "smartlead_managed" ||
+      inbox.credentialOwnerAccountKey !== args.expectedOwnerAccountKey ||
+      !message || message.siteId !== args.siteId || message.inboxId !== args.inboxId ||
+      message.deliveryTransport !== "smartlead_managed" ||
+      message.deliveryOwnerAccountKey !== args.expectedOwnerAccountKey ||
+      message.providerOperationKey !== args.operationKey ||
+      !/^[a-f0-9]{64}$/.test(args.campaignBindingHash) ||
+      !/^[a-f0-9]{64}$/.test(args.recipientHash) ||
+      message.providerCampaignBindingHash !== args.campaignBindingHash ||
+      message.providerRecipientHash !== args.recipientHash ||
+      (message.providerCampaignGeneration ?? 0) !== args.expectedCampaignGeneration ||
+      !/^[a-f0-9]{64}$/.test(args.payloadHash) ||
+      !/^[a-f0-9]{64}$/.test(args.evidenceHash) ||
+      !Number.isFinite(args.observedAt) || args.observedAt > timestamp + 5 * 60 * 1000
+    ) throw new Error("Smartlead receipt crossed a tenant or delivery boundary");
+
+    const ownsCurrentSite = Boolean(
+      site.userId && accountDeletionKey(site.userId) === args.expectedOwnerAccountKey,
+    );
+    if (!ownsCurrentSite) throw new Error("Smartlead settlement owner changed");
+
+    if (
+      args.kind === "sent" &&
+      (args.sequenceStep ?? 0) === 0 &&
+      ["sending", "provider_queued", "delivery_unverified"].includes(message.status)
+    ) {
+      const deliveredAt = args.observedAt;
+      await settleAcceptedDeliveryCounter(ctx, message, args.siteId, deliveredAt);
+      const opportunity = await ctx.db.get(message.opportunityId);
+      const lifecycle = outreachDeliverySettlementDecision({
+        sequenceStep: message.sequenceStep,
+        messageSiteId: String(message.siteId),
+        opportunitySiteId: opportunity ? String(opportunity.siteId) : undefined,
+        messageEvidenceHash: message.opportunityEvidenceHash,
+        opportunityEvidenceHash: opportunity?.evidenceHash,
+        messageSourceUrl: message.opportunitySourceUrl,
+        opportunitySourceUrl: opportunity?.sourceUrl,
+        messageTargetUrl: message.opportunityTargetUrl,
+        opportunityTargetUrl: opportunity?.targetUrl,
+        opportunityStatus: opportunity?.status,
+      });
+      if (opportunity && lifecycle.shouldMarkContacted) {
+        await ctx.db.patch(opportunity._id, {
+          status: "contacted",
+          contactedAt: deliveredAt,
+          updatedAt: timestamp,
+        });
+      }
+      await ctx.db.patch(message._id, {
+        status: "sent",
+        sentAt: deliveredAt,
+        providerAcknowledgementState: "webhook_confirmed",
+        providerReconciledAt: timestamp,
+        updatedAt: timestamp,
+      });
+    } else if (args.kind !== "sent") {
+      if (args.kind === "unsubscribe") {
+        await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+        await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
+      } else if (args.kind === "bounce") {
+        await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
+      }
+      await cancelQueuedThread(ctx, args.siteId, message.threadKey, message._id, args.kind);
+      const promote = shouldPromoteOutreachInbound({
+        existingKind: message.inboundReceiptKind as "reply" | "unsubscribe" | "bounce" | undefined,
+        existingAt: message.inboundReceiptAt,
+        nextKind: args.kind,
+        nextAt: args.observedAt,
+      });
+      await ctx.db.patch(message._id, {
+        providerAcknowledgementState: "pause_required",
+        providerPauseState: "requested",
+        ...(args.kind === "unsubscribe" ? {
+          providerGlobalUnsubscribeState: args.stopRequest
+            ? "required"
+            : "confirmed",
+        } : {}),
+        ...(promote ? {
+          status: args.kind === "bounce" ? "bounced" : "replied",
+          repliedAt: args.kind === "bounce" ? message.repliedAt : args.observedAt,
+          bouncedAt: args.kind === "bounce" ? args.observedAt : message.bouncedAt,
+          inboundReceiptHash: args.evidenceHash,
+          inboundReceiptKind: args.kind,
+          inboundReceiptAt: args.observedAt,
+        } : {}),
+        updatedAt: timestamp,
+      });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.actions.smartlead.pauseLead,
+        {
+          siteId: args.siteId,
+          messageId: message._id,
+          operationKey: args.operationKey,
+        },
+      );
+    }
+    await ctx.db.insert("smartlead_webhook_events", {
+      requestId: args.requestId,
+      siteId: args.siteId,
+      inboxId: args.inboxId,
+      messageId: args.messageId,
+      operationKey: args.operationKey,
+      campaignBindingHash: args.campaignBindingHash,
+      recipientHash: args.recipientHash,
+      kind: args.kind,
+      payloadHash: args.payloadHash,
+      evidenceHash: args.evidenceHash,
+      sequenceStep: args.sequenceStep,
+      stopRequest: args.stopRequest,
+      providerPauseState: args.kind === "sent" ? undefined : "requested",
+      observedAt: args.observedAt,
+      settledAt: timestamp,
+      createdAt: timestamp,
+    });
+    return { recorded: true as const, replay: false as const };
   },
 });
 

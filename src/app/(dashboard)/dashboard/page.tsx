@@ -33,6 +33,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
+import { GrowthLoopStatus } from "@/components/growth-loop/growth-loop-status";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
@@ -283,6 +284,8 @@ export default function DashboardPage() {
 
       {/* ─── Article Progress (live) ────────────── */}
       {site && <ArticleProgress siteId={site._id} />}
+
+      {site && <GrowthLoopStatus siteId={site._id} />}
 
       {/* ─── Search Performance (GSC) ────────────── */}
       {hasGSC && (

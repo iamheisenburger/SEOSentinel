@@ -34,6 +34,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
+import {
+  OneSetupAdapterChoices,
+  type OutreachTransport,
+  type PublisherKind,
+} from "@/components/onboarding/one-setup-adapter-choices";
 
 type SetupMode = "connect_existing" | "managed";
 type AutomationMode = "assisted" | "full";
@@ -114,14 +119,26 @@ function ModeChoice({
 export function SetupWizard() {
   const { userId, isLoaded } = useAuth();
   const [domain, setDomain] = useState("");
-  const [publisherMode, setPublisherMode] = useState<SetupMode>("managed");
-  const [measurementMode, setMeasurementMode] = useState<SetupMode>("managed");
-  const [outreachMode, setOutreachMode] = useState<SetupMode>("managed");
+  const [businessName, setBusinessName] = useState("");
+  const [businessSummary, setBusinessSummary] = useState("");
+  const [targetCountry, setTargetCountry] = useState("");
+  const [targetAudience, setTargetAudience] = useState("");
+  const [productUsage, setProductUsage] = useState("");
+  const [painPoints, setPainPoints] = useState("");
+  const [publisherKind, setPublisherKind] = useState<PublisherKind>("github");
+  const [outreachTransport, setOutreachTransport] =
+    useState<OutreachTransport>("smartlead_managed");
+  const publisherMode: SetupMode = "connect_existing";
+  const measurementMode: SetupMode = "connect_existing";
+  const outreachMode: SetupMode = outreachTransport === "smartlead_managed"
+    ? "managed"
+    : "connect_existing";
   const [automationMode, setAutomationMode] = useState<AutomationMode>("full");
   const [autopublishConsentAccepted, setAutopublishConsentAccepted] =
     useState(false);
   const [managedSenderName, setManagedSenderName] = useState("");
   const [managedPhysicalAddress, setManagedPhysicalAddress] = useState("");
+  const [managedSenderDomain, setManagedSenderDomain] = useState("");
   const [confirmsSenderIdentityAndAddress, setConfirmsSenderIdentityAndAddress] =
     useState(false);
   const [
@@ -157,13 +174,15 @@ export function SetupWizard() {
     ? capacity.availableMonthlyArticles
     : 0;
   const cadenceOptions = cadenceOptionsForMonthlyLimit(monthlyAllowance);
-  const managedMailboxInputReady = outreachMode !== "managed" || Boolean(
+  const senderProfileInputReady = Boolean(
     managedSenderName.trim().length >= 2 &&
       managedPhysicalAddress.trim().length >= 15 &&
       confirmsSenderIdentityAndAddress &&
-      confirmsDedicatedManagedSenderIdentity &&
       authorizesManagedDeliveryEventCanary &&
-      confirmsSeparateAutomaticSendingConsent,
+      confirmsSeparateAutomaticSendingConsent &&
+      (outreachMode !== "managed" ||
+        (managedSenderDomain.trim().length >= 4 &&
+          confirmsDedicatedManagedSenderIdentity)),
   );
 
   useEffect(() => {
@@ -187,6 +206,8 @@ export function SetupWizard() {
         setActiveOperation("Recording your connection choices…");
         receipt = await saveOneSetupRequest({
           siteId: createdSiteId,
+          publisherKind,
+          outreachTransport,
           publisherMode,
           searchMeasurementMode: measurementMode,
           outreachMailboxMode: outreachMode,
@@ -194,20 +215,21 @@ export function SetupWizard() {
           publisherAutopublishConsentAccepted:
             automationMode === "full" && autopublishConsentAccepted,
           requestedCadencePerWeek: cadence,
+          managedOutreachFromName: managedSenderName,
+          managedOutreachPhysicalMailingAddress:
+            managedPhysicalAddress,
+          managedOutreachAttestationVersion:
+            MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION,
+          managedOutreachCanaryConsentVersion:
+            MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION,
+          confirmsSenderIdentityAndAddress,
+          authorizesManagedDeliveryEventCanary,
+          confirmsAutonomousSendingRequiresSeparateConsent:
+            confirmsSeparateAutomaticSendingConsent,
           ...(outreachMode === "managed"
             ? {
-                managedOutreachFromName: managedSenderName,
-                managedOutreachPhysicalMailingAddress:
-                  managedPhysicalAddress,
-                managedOutreachAttestationVersion:
-                  MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION,
-                managedOutreachCanaryConsentVersion:
-                  MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION,
-                confirmsSenderIdentityAndAddress,
+                managedOutreachSenderDomain: managedSenderDomain,
                 confirmsDedicatedManagedSenderIdentity,
-                authorizesManagedDeliveryEventCanary,
-                confirmsAutonomousSendingRequiresSeparateConsent:
-                  confirmsSeparateAutomaticSendingConsent,
               }
             : {}),
         });
@@ -278,6 +300,18 @@ export function SetupWizard() {
       setError("Enter your website URL.");
       return;
     }
+    if (
+      businessName.trim().length < 2 ||
+      businessSummary.trim().length < 20 ||
+      targetCountry.trim().length < 2 ||
+      targetAudience.trim().length < 10 ||
+      productUsage.trim().length < 10
+    ) {
+      setError(
+        "Complete the business profile and target market so Pentra can make tenant-specific opportunity decisions.",
+      );
+      return;
+    }
     if (!capacity?.ready || cadence <= 0) {
       setError("Choose an active cadence after your plan capacity finishes loading.");
       return;
@@ -286,19 +320,9 @@ export function SetupWizard() {
       setError("Authorize automatic publishing, or choose Assisted review.");
       return;
     }
-    if (
-      outreachMode === "managed" &&
-      (
-        managedSenderName.trim().length < 2 ||
-        managedPhysicalAddress.trim().length < 15 ||
-        !confirmsSenderIdentityAndAddress ||
-        !confirmsDedicatedManagedSenderIdentity ||
-        !authorizesManagedDeliveryEventCanary ||
-        !confirmsSeparateAutomaticSendingConsent
-      )
-    ) {
+    if (!senderProfileInputReady) {
       setError(
-        "Complete the managed mailbox sender profile and every mailbox attestation.",
+        "Complete the sender profile and every mailbox attestation.",
       );
       return;
     }
@@ -311,8 +335,18 @@ export function SetupWizard() {
       const createdSiteId = await upsertSite({
         domain: domain.trim(),
         clerkUserId: userId,
+        siteName: businessName.trim(),
+        siteSummary: businessSummary.trim(),
+        targetCountry: targetCountry.trim(),
+        targetAudienceSummary: targetAudience.trim(),
+        productUsage: productUsage.trim(),
+        painPoints: painPoints
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .slice(0, 12),
         cadencePerWeek: cadence,
-        publishMethod: "manual",
+        publishMethod: publisherKind,
         // Site creation stays review-safe. saveOneSetupRequest atomically
         // applies Full Autopilot only with the versioned consent receipt.
         approvalRequired: true,
@@ -353,8 +387,7 @@ export function SetupWizard() {
   }
 
   if (siteId) {
-    const hasSelfManaged = [publisherMode, measurementMode, outreachMode]
-      .includes("connect_existing");
+    const hasSelfManaged = true;
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 py-6 sm:py-10">
         <div>
@@ -429,7 +462,7 @@ export function SetupWizard() {
                     Connect search data
                   </Button>
                 )}
-                {outreachMode === "connect_existing" && (
+                {outreachMode === "connect_existing" && outreachTransport === "gmail_oauth" && (
                   <Button
                     size="sm"
                     variant="secondary"
@@ -442,6 +475,18 @@ export function SetupWizard() {
                     icon={<Mail className="h-3.5 w-3.5" />}
                   >
                     Connect business mailbox
+                  </Button>
+                )}
+                {outreachMode === "connect_existing" && outreachTransport === "smtp" && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      window.location.assign("/backlinks?configure=smtp")
+                    }
+                    icon={<Mail className="h-3.5 w-3.5" />}
+                  >
+                    Configure SMTP mailbox
                   </Button>
                 )}
               </div>
@@ -472,7 +517,7 @@ export function SetupWizard() {
           Set up Pentra once
         </h1>
         <p className="mx-auto mt-1 max-w-lg text-[12px] leading-relaxed text-[#565A6E]">
-          Enter your website and choose a cadence. Pentra takes it from there.
+          Describe the business once, authorize each connection, and Pentra takes it from there.
         </p>
       </div>
 
@@ -493,6 +538,81 @@ export function SetupWizard() {
           }}
         />
 
+        <div className="mt-5 rounded-xl border border-white/[0.06] bg-white/[0.015] p-4">
+          <div>
+            <p className="text-[12px] font-medium text-[#EDEEF1]">
+              Business and target market
+            </p>
+            <p className="mt-1 text-[10px] leading-relaxed text-[#707589]">
+              This profile is stored with the tenant and gates every topic,
+              article, and outreach decision. The website crawl can enrich it,
+              but cannot silently replace what you state here.
+            </p>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Input
+              label="Business or product name"
+              placeholder="Acme Analytics"
+              value={businessName}
+              onChange={(event) => setBusinessName(event.target.value)}
+            />
+            <Input
+              label="Primary target country"
+              placeholder="United States"
+              value={targetCountry}
+              onChange={(event) => setTargetCountry(event.target.value)}
+            />
+          </div>
+          <label className="mt-3 block">
+            <span className="mb-1.5 block text-[11px] font-medium text-[#8B8FA3]">
+              What the business sells and why it is different
+            </span>
+            <textarea
+              required
+              minLength={20}
+              maxLength={1200}
+              value={businessSummary}
+              onChange={(event) => setBusinessSummary(event.target.value)}
+              placeholder="Describe the product, service, customer problem, and differentiators."
+              className="min-h-24 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            />
+          </label>
+          <label className="mt-3 block">
+            <span className="mb-1.5 block text-[11px] font-medium text-[#8B8FA3]">
+              Ideal customer
+            </span>
+            <textarea
+              required
+              minLength={10}
+              maxLength={800}
+              value={targetAudience}
+              onChange={(event) => setTargetAudience(event.target.value)}
+              placeholder="Who buys, their role, company type, and buying problem."
+              className="min-h-20 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            />
+          </label>
+          <label className="mt-3 block">
+            <span className="mb-1.5 block text-[11px] font-medium text-[#8B8FA3]">
+              How customers use it
+            </span>
+            <textarea
+              required
+              minLength={10}
+              maxLength={800}
+              value={productUsage}
+              onChange={(event) => setProductUsage(event.target.value)}
+              placeholder="Describe the workflow and outcome a successful customer gets."
+              className="min-h-20 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            />
+          </label>
+          <Input
+            label="Customer pain points (comma-separated)"
+            placeholder="manual reporting, slow follow-up, unclear attribution"
+            value={painPoints}
+            onChange={(event) => setPainPoints(event.target.value)}
+          />
+        </div>
+
         <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] p-4">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
@@ -500,16 +620,23 @@ export function SetupWizard() {
             </div>
             <div>
               <p className="text-[12px] font-medium text-[#EDEEF1]">
-                Pentra-managed setup
+                One guided setup
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
-                Publishing, search measurement, and a dedicated authority
-                mailbox enter one managed setup queue. Pentra asks for a
-                provider approval only when the provider requires it.
+                Choose the exact publishing destination and sender path now.
+                Provider authorization remains inside this guided flow, and
+                every unfinished step keeps a durable blocker and automatic wake.
               </p>
             </div>
           </div>
         </div>
+
+        <OneSetupAdapterChoices
+          publisherKind={publisherKind}
+          outreachTransport={outreachTransport}
+          onPublisherChange={setPublisherKind}
+          onOutreachTransportChange={setOutreachTransport}
+        />
 
         <div className="mt-5">
           <label className="mb-2 block text-[11px] font-medium text-[#8B8FA3]">
@@ -573,20 +700,17 @@ export function SetupWizard() {
           )}
         </div>
 
-        {outreachMode === "managed" && (
-          <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.025] p-4">
+        <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.025] p-4">
             <div className="flex items-start gap-3">
               <Mail className="mt-0.5 h-4 w-4 shrink-0 text-[#38BDF8]" />
               <div className="min-w-0 flex-1">
                 <p className="text-[12px] font-medium text-[#EDEEF1]">
-                  Managed authority sender
+                  Authority sender identity
                 </p>
                 <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
                   Enter the truthful identity and physical mailing address that
-                  may appear in compliant outreach. Pentra will request a
-                  dedicated managed sender identity isolated from your primary
-                  mailbox; the active transport must pass its own domain,
-                  authentication, and delivery-event checks.
+                  may appear in compliant outreach. This one receipt follows the
+                  exact Gmail, SMTP, or managed Smartlead sender you selected.
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <Input
@@ -603,6 +727,16 @@ export function SetupWizard() {
                       setManagedPhysicalAddress(event.target.value)
                     }
                   />
+                  {outreachMode === "managed" && (
+                    <Input
+                      label="Secondary sending domain"
+                      placeholder="outreach.example.com"
+                      value={managedSenderDomain}
+                      onChange={(event) =>
+                        setManagedSenderDomain(event.target.value)
+                      }
+                    />
+                  )}
                 </div>
                 <div className="mt-3 space-y-2">
                   {[
@@ -611,11 +745,11 @@ export function SetupWizard() {
                       setChecked: setConfirmsSenderIdentityAndAddress,
                       text: "I confirm the sender identity and physical mailing address are accurate and may be included in outreach.",
                     },
-                    {
+                    ...(outreachMode === "managed" ? [{
                       checked: confirmsDedicatedManagedSenderIdentity,
                       setChecked: setConfirmsDedicatedManagedSenderIdentity,
                       text: "I authorize Pentra to request a dedicated managed sender identity and its required sender-domain configuration.",
-                    },
+                    }] : []),
                     {
                       checked: authorizesManagedDeliveryEventCanary,
                       setChecked: setAuthorizesManagedDeliveryEventCanary,
@@ -643,8 +777,7 @@ export function SetupWizard() {
                 </div>
               </div>
             </div>
-          </div>
-        )}
+        </div>
 
         <details className="group mt-3 rounded-xl border border-white/[0.05] bg-white/[0.015]">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[10px] text-[#565A6E] hover:text-[#8B8FA3]">
@@ -658,17 +791,11 @@ export function SetupWizard() {
                 Integration ownership
               </p>
               <div className="space-y-3">
-                {CAPABILITIES.map((capability) => {
-                  const mode = capability.key === "publisher"
-                    ? publisherMode
-                    : capability.key === "measurement"
-                      ? measurementMode
-                      : outreachMode;
-                  const setMode = capability.key === "publisher"
-                    ? setPublisherMode
-                    : capability.key === "measurement"
-                      ? setMeasurementMode
-                      : setOutreachMode;
+                {CAPABILITIES.filter((capability) => capability.key !== "publisher" && capability.key !== "measurement").map((capability) => {
+                  const mode = outreachMode;
+                  const setMode = (mode: SetupMode) => {
+                    setOutreachTransport(mode === "managed" ? "smartlead_managed" : "gmail_oauth");
+                  };
                   const Icon = capability.icon;
                   return (
                     <div key={capability.key}>
@@ -724,8 +851,13 @@ export function SetupWizard() {
             !capacity?.ready ||
             cadence <= 0 ||
             !domain.trim() ||
+            businessName.trim().length < 2 ||
+            businessSummary.trim().length < 20 ||
+            targetCountry.trim().length < 2 ||
+            targetAudience.trim().length < 10 ||
+            productUsage.trim().length < 10 ||
             (automationMode === "full" && !autopublishConsentAccepted) ||
-            !managedMailboxInputReady
+            !senderProfileInputReady
           }
           icon={<Globe className="h-3.5 w-3.5" />}
         >

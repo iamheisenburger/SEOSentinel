@@ -147,8 +147,8 @@ test("every post-send settlement preserves newer terminal authority evidence", (
   const backend = readFileSync("convex/outreach.ts", "utf8");
   assert.equal(
     backend.match(/outreachDeliverySettlementDecision\(\{/g)?.length,
-    6,
-    "Gmail receipt, owner review, signed relay, and exact managed_ses receipt/event/status paths must share the terminal-state fence",
+    7,
+    "Gmail receipt, owner review, signed relay, exact managed_ses, and signed Smartlead paths must share the terminal-state fence",
   );
   assert.equal(
     backend.match(/settlementLifecycle\.shouldMarkContacted/g)?.length,

@@ -3,9 +3,22 @@ import {
   MANAGED_SES_TRANSPORT,
   managedSesInboxReceiptCurrent,
 } from "./managedSes.ts";
+import {
+  SMARTLEAD_MANAGED_TRANSPORT,
+  smartleadManagedInboxIssues,
+} from "./smartlead.ts";
+import { smtpConfigIssues } from "./outreachSmtp.ts";
 
 /** Long enough for one bounded Gmail request, short enough to surface uncertainty. */
 export const OUTREACH_DELIVERY_LEASE_MS = 2 * 60 * 1000;
+
+/**
+ * Smartlead performs a bounded campaign/lead reconciliation before it is
+ * allowed to enqueue the recipient. The longer lease keeps a second worker
+ * from treating that deliberately serial provider boundary as abandoned,
+ * while remaining below the fifteen-minute silent-state objective.
+ */
+export const SMARTLEAD_DELIVERY_LEASE_MS = 10 * 60 * 1000;
 
 /** DNS is resolved immediately before the atomic claim, not trusted from OAuth day. */
 export const OUTREACH_LIVE_DNS_EVIDENCE_MAX_AGE_MS = 60 * 1000;
@@ -59,6 +72,26 @@ export function autonomousOutreachTransportIssues(args: {
     })
       ? []
       : ["Pentra's managed sender needs current signed resource and delivery-event receipts."];
+  }
+  if (args.inbox?.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT) {
+    return smartleadManagedInboxIssues({ inbox: args.inbox, now: args.now });
+  }
+  if (args.inbox?.provider === "smtp") {
+    const issues = smtpConfigIssues({
+      host: typeof args.inbox.smtpHost === "string"
+        ? args.inbox.smtpHost : undefined,
+      port: typeof args.inbox.smtpPort === "number"
+        ? args.inbox.smtpPort : undefined,
+      username: typeof args.inbox.smtpUsername === "string"
+        ? args.inbox.smtpUsername : undefined,
+      password: typeof args.inbox.smtpPassword === "string"
+        ? args.inbox.smtpPassword : undefined,
+      fromEmail: typeof args.inbox.fromEmail === "string"
+        ? args.inbox.fromEmail : undefined,
+    });
+    return issues.length === 0
+      ? []
+      : ["SMTP credentials are incomplete or no longer current."];
   }
   return autonomousGmailCredentialIssues({
     oauthScopes:
@@ -362,6 +395,7 @@ export function senderClaimIssues(args: {
   }
   if (
     args.provider !== MANAGED_SES_TRANSPORT &&
+    args.provider !== "smartlead" &&
     (!args.oauthScopes
       ?.split(/\s+/)
       .includes("https://www.googleapis.com/auth/gmail.send") ||

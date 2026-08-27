@@ -41,6 +41,11 @@ import {
   parseManagedSesEventPayload,
   verifyManagedSesWebhookSignature,
 } from "./lib/managedSes";
+import {
+  parseSmartleadWebhookEvent,
+  SMARTLEAD_WEBHOOK_MAX_BYTES,
+  verifySmartleadWebhookSignature,
+} from "./lib/smartlead";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -79,6 +84,54 @@ function isAuthorized(request: Request) {
     ],
   );
 }
+
+http.route({
+  path: "/webhooks/smartlead",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await readBoundedRawJson(request, SMARTLEAD_WEBHOOK_MAX_BYTES);
+    if (!body) return json({ error: "Invalid Smartlead payload" }, 400);
+    const signatureValid = await verifySmartleadWebhookSignature({
+      rawBody: body.bytes,
+      signatureHeader: request.headers.get("x-smartlead-signature"),
+      secret: process.env.SMARTLEAD_WEBHOOK_SECRET,
+    });
+    if (!signatureValid) return json({ error: "Invalid Smartlead signature" }, 401);
+    const event = parseSmartleadWebhookEvent({
+      rawText: body.text,
+      requestIdHeader: request.headers.get("x-request-id"),
+      now: Date.now(),
+    });
+    if (!event) return json({ error: "Invalid Smartlead event" }, 400);
+    const candidate = await ctx.runQuery(
+      internal.outreach.getSmartleadWebhookCandidate,
+      {
+        campaignBindingHash: event.campaignBindingHash,
+        recipientHash: event.recipientHash,
+      },
+    );
+    const canaryCandidate = candidate ? null : await ctx.runQuery(
+      internal.outreach.getSmartleadControlledCanaryWebhookCandidate,
+      {
+        campaignBindingHash: event.campaignBindingHash,
+        recipientHash: event.recipientHash,
+      },
+    );
+    if (!candidate && !canaryCandidate) {
+      return json({ error: "Unknown Smartlead operation" }, 404);
+    }
+    const result = candidate
+      ? await ctx.runMutation(
+          internal.outreach.recordSmartleadWebhookReceipt,
+          { ...candidate, ...event },
+        )
+      : await ctx.runMutation(
+          internal.outreach.recordSmartleadControlledCanaryWebhookReceipt,
+          { ...canaryCandidate!, ...event },
+        );
+    return json({ received: true, replay: result.replay === true });
+  }),
+});
 
 async function readBody(request: Request) {
   try {

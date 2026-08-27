@@ -489,6 +489,20 @@ export const scheduleCadence = internalAction({
     const inventoryAudit: {
       expectedClickPortfolio: ExpectedClickPortfolioEvaluation;
       schedulerReadyTopicIds: string[];
+      opportunityDecisions: Array<{
+        topicId: string;
+        opportunityKey: string;
+        evidenceVersion: number;
+        classification: "eligible" | "needs_evidence" | "too_thin" |
+          "coverage_conflict" | "business_fit_failed" | "cooldown" |
+          "opportunity_space_exhausted";
+        admitted: boolean;
+        score: number;
+        reasons: string[];
+        nextEligibleAt?: number;
+        inputHash: string;
+        version: number;
+      }>;
     } = await ctx.runQuery(internal.topics.getInventoryAuditInternal, {
       siteId,
       recentLimit: 10,
@@ -517,6 +531,18 @@ export const scheduleCadence = internalAction({
       evaluatedAt: now,
       version: portfolio.version,
     });
+    for (let offset = 0; offset < inventoryAudit.opportunityDecisions.length; offset += 50) {
+      await ctx.runMutation(internal.autopilot.recordOpportunityDecisionBatch, {
+        siteId,
+        expectedCanonicalDomain: siteCanonicalDomain(site)!,
+        expectedDomainRevision: siteCanonicalDomainRevision(site),
+        evaluatedAt: now,
+        decisions: inventoryAudit.opportunityDecisions.slice(offset, offset + 50).map((decision) => ({
+          ...decision,
+          topicId: decision.topicId as Id<"topic_clusters">,
+        })),
+      });
+    }
     const portfolioAlertKind = portfolio.status === "below_goal"
       ? "topic_portfolio_below_goal"
       : "topic_portfolio_evidence_missing";

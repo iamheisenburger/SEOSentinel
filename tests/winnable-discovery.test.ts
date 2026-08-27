@@ -202,7 +202,7 @@ test("unmeasured difficulty never outranks a measured winnable keyword", () => {
   assert.equal(preSerpWinnability({ tenantAuthority: 4, monthlySearches: 0 }), 0);
 });
 
-test("a winnable topic too thin to write about is not selected", () => {
+test("discovery does not use demand alone as a terminal content-depth verdict", () => {
   // The exact production failure: winnability discovery selected volume-10,
   // KD-0 topics like "intent detection datasets". Seven consecutive articles
   // came out at 1,016-1,055 words against a 1,200 minimum and 73-82 against an
@@ -216,17 +216,16 @@ test("a winnable topic too thin to write about is not selected", () => {
     medianSerpAuthority: 4,
     observedCompetitors: 7,
   };
-  assert.equal(winnabilityScore({ tenantAuthority: 4, ...tooThin }), 0);
-  assert.equal(
+  assert.ok(winnabilityScore({ tenantAuthority: 4, ...tooThin }) > 0);
+  assert.ok(
     preSerpWinnability({
       tenantAuthority: 4,
       keywordDifficulty: 0,
       keywordDifficultyMeasured: true,
       monthlySearches: 10,
-    }),
-    0,
+    }) > 0,
   );
-  assert.deepEqual(rankWinnableCandidates(4, [tooThin]), []);
+  assert.equal(rankWinnableCandidates(4, [tooThin]).length, 1);
 });
 
 test("the demand floor does not reject genuine long-tail opportunity", () => {
@@ -240,20 +239,19 @@ test("the demand floor does not reject genuine long-tail opportunity", () => {
   assert.equal(rankWinnableCandidates(4, [viable]).length, 1);
 });
 
-test("thin topics never outrank viable ones in the shortlist", () => {
+test("low-demand topics remain measurable but do not outrank stronger opportunity", () => {
   const ranked = orderDiscoveryByWinnability(4, [
     { keyword: "intent detection datasets", searchVolume: 10, difficulty: 0, difficultyMeasured: true },
     { keyword: "chatbot for plumber website", searchVolume: 90, difficulty: 6, difficultyMeasured: true },
   ]);
   assert.equal(ranked[0].keyword, "chatbot for plumber website");
-  assert.equal(
+  assert.ok(
     preSerpWinnability({
       tenantAuthority: 4,
       keywordDifficulty: 0,
       keywordDifficultyMeasured: true,
       monthlySearches: 10,
-    }),
-    0,
-    "a thin topic must score zero, not merely rank lower",
+    }) > 0,
+    "demand alone must not become a terminal article-admission rule",
   );
 });

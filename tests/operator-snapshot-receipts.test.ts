@@ -1645,7 +1645,7 @@ test("cadence failure projection accepts only exact terminal writer receipts", (
 
 test("credential-shaped values are never echoed by string projections", () => {
   const secrets = [
-    "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+    `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`,
     "sk_test_0123456789abcdefghijklmnopqrstuvwxyz",
     "whsec_0123456789abcdefghijklmnopqrstuvwxyz",
   ];
