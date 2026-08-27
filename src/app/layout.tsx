@@ -59,6 +59,11 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0B1120] text-[#F1F5F9]`}
       >
         <ClerkProvider
+          // Without these, auth.protect() redirects to Clerk's hosted Account
+          // Portal on accounts.pentra.dev, which carries no Pentra branding.
+          // The branded pages already exist at /sign-in and /sign-up.
+          signInUrl="/sign-in"
+          signUpUrl="/sign-up"
           appearance={{
             theme: dark,
             elements: {

@@ -29,8 +29,13 @@ export default function SignInPage() {
       {/* Left — branding & value props */}
       <div className="hidden lg:flex lg:w-1/2 flex-col items-center justify-center bg-[#0F1117] px-12">
         <div className="max-w-md">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.1] mb-6">
-            <Radar className="h-6 w-6 text-[#0EA5E9]" />
+          <div className="flex items-center gap-3 mb-6">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.1]">
+              <Radar className="h-6 w-6 text-[#0EA5E9]" />
+            </div>
+            <span className="text-[20px] font-semibold tracking-tight text-[#F1F5F9]">
+              Pentra
+            </span>
           </div>
           <h1 className="text-[28px] font-bold tracking-tight text-[#F1F5F9]">
             Welcome back
