@@ -24,6 +24,8 @@ import { v } from "convex/values";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { resolveCname, resolveTxt } from "node:dns/promises";
 import nodemailer from "nodemailer";
+import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
 import { safeFetchPublicText, validatePublicHttpsUrl } from "../lib/safeOutbound";
 import {
   contactDiscoveryUrls,
@@ -79,6 +81,16 @@ import {
   type OutreachInboundEvidence,
 } from "../lib/outreachInbound";
 import {
+  OUTREACH_IMAP_LOOKBACK_MS,
+  OUTREACH_IMAP_MAX_MESSAGE_BYTES,
+  OUTREACH_IMAP_MAX_RESULTS,
+  classifyImapEvidence,
+  imapEventKey,
+  imapEvidenceHash,
+  type ImapCandidate,
+  type ImapEvidence,
+} from "../lib/outreachImap";
+import {
   OUTREACH_INBOUND_RELAY_CANARY_TTL_MS,
   OUTREACH_INBOUND_RELAY_CANARY_SEND_LEASE_MS,
   inboundRelayDsnRoutingTarget,
@@ -93,7 +105,6 @@ import {
   inboundRelayOutboundMessageIdForAttempt,
 } from "../lib/outreachInboundRelay";
 import {
-  MANAGED_SES_PLATFORM_RELAY_DOMAIN,
   MANAGED_SES_PLATFORM_SENDER_DOMAIN,
   MANAGED_SES_TRANSPORT,
   callManagedSesAdapter,
@@ -107,9 +118,17 @@ import {
 } from "../lib/smartlead";
 import {
   classifySmtpFailure,
+  imapConfigIssues,
+  imapPresetForSmtpHost,
   smtpConfigIssues,
   smtpTransportOptions,
 } from "../lib/outreachSmtp";
+import {
+  decryptOutreachCredentials,
+  encryptOutreachCredentials,
+  outreachCredentialBinding,
+  outreachCredentialKeyConfig,
+} from "../lib/outreachCredentialEncryption";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -865,20 +884,33 @@ export const verifySmtpInbox = action({
     if (!inbox || inbox.provider !== "smtp") {
       throw new Error("No SMTP mailbox is configured for this site");
     }
+    const secrets = await decryptedMailboxSecrets(siteId, inbox);
+    const legacyImapPreset = imapPresetForSmtpHost(inbox.smtpHost);
+    const imapHost = inbox.imapHost ?? legacyImapPreset?.host;
+    const imapPort = inbox.imapPort ?? legacyImapPreset?.port;
+    const imapUsername = inbox.imapUsername ?? inbox.smtpUsername;
     const issues = smtpConfigIssues({
       host: inbox.smtpHost,
       port: inbox.smtpPort,
       username: inbox.smtpUsername,
-      password: inbox.smtpPassword,
+      password: secrets.smtpPassword,
       fromEmail: inbox.fromEmail,
     });
-    if (issues.length) throw new Error("SMTP credentials are incomplete");
+    const imapIssues = imapConfigIssues({
+      host: imapHost,
+      port: imapPort,
+      username: imapUsername,
+      password: secrets.imapPassword,
+    });
+    if (issues.length || imapIssues.length) {
+      throw new Error("SMTP/IMAP credentials are incomplete");
+    }
     const transport = nodemailer.createTransport({
       ...smtpTransportOptions({
         host: inbox.smtpHost,
         port: inbox.smtpPort,
         username: inbox.smtpUsername,
-        password: inbox.smtpPassword,
+        password: secrets.smtpPassword,
         fromEmail: inbox.fromEmail,
       }),
       connectionTimeout: 15_000,
@@ -903,7 +935,57 @@ export const verifySmtpInbox = action({
     } finally {
       transport.close();
     }
+    const imap = new ImapFlow({
+      host: imapHost!,
+      port: imapPort!,
+      secure: true,
+      auth: { user: imapUsername!, pass: secrets.imapPassword },
+      logger: false,
+      socketTimeout: 20_000,
+      greetingTimeout: 10_000,
+    });
+    try {
+      await imap.connect();
+    } catch {
+      await ctx.runMutation(internal.outreach.recordInboxError, {
+        inboxId: inbox._id,
+        siteId,
+        error:
+          "The mailbox rejected the IMAP connection. Confirm IMAP is enabled and use an app password.",
+        suspend: true,
+        expectedConfigurationVersion: inbox.configurationVersion ?? 0,
+      });
+      throw new Error(
+        "The mailbox rejected the IMAP connection. Confirm IMAP is enabled and use an app password.",
+      );
+    } finally {
+      if (imap.usable) await imap.logout().catch(() => undefined);
+    }
     const dns = await liveDnsEvidence(inbox);
+    const currentCredentialKey = outreachCredentialKeyConfig(process.env);
+    const migration = (
+      !inbox.credentialCiphertext ||
+      inbox.credentialKeyId !== currentCredentialKey.keyId
+    )
+      ? await (async () => {
+          const binding = outreachCredentialBinding({
+            siteId: String(siteId),
+            configurationVersion: inbox.configurationVersion ?? 0,
+            fromEmail: inbox.fromEmail,
+            smtpHost: inbox.smtpHost!,
+            smtpPort: inbox.smtpPort!,
+            smtpUsername: inbox.smtpUsername!,
+            imapHost: imapHost!,
+            imapPort: imapPort!,
+            imapUsername: imapUsername!,
+          });
+          return encryptOutreachCredentials({
+            secrets,
+            binding,
+            key: currentCredentialKey,
+          });
+        })()
+      : undefined;
     const settled: { recorded: boolean; ready?: boolean } = await ctx.runMutation(
       internal.outreach.settleSmtpVerificationInternal,
       {
@@ -914,6 +996,10 @@ export const verifySmtpInbox = action({
         spfVerified: dns.spf,
         dkimVerified: dns.dkim,
         dmarcVerified: dns.dmarc,
+        imapHost: imapHost!,
+        imapPort: imapPort!,
+        imapUsername: imapUsername!,
+        credentialMigration: migration,
       },
     );
     if (!settled.recorded) {
@@ -1064,7 +1150,66 @@ type DeliveryInbox = {
   smtpPort?: number;
   smtpUsername?: string;
   smtpPassword?: string;
+  credentialCiphertext?: string;
+  credentialKeyId?: string;
+  credentialEncryptionVersion?: number;
+  credentialBindingHash?: string;
+  configurationVersion?: number;
+  imapHost?: string;
+  imapPort?: number;
+  imapUsername?: string;
 };
+
+function credentialBindingForInbox(
+  siteId: Id<"sites">,
+  inbox: Doc<"outreach_inboxes">,
+): string {
+  if (
+    !inbox.smtpHost || !inbox.smtpPort || !inbox.smtpUsername ||
+    !inbox.imapHost || !inbox.imapPort || !inbox.imapUsername
+  ) throw new Error("SMTP/IMAP configuration is incomplete");
+  return outreachCredentialBinding({
+    siteId: String(siteId),
+    configurationVersion: inbox.configurationVersion ?? 0,
+    fromEmail: inbox.fromEmail,
+    smtpHost: inbox.smtpHost,
+    smtpPort: inbox.smtpPort,
+    smtpUsername: inbox.smtpUsername,
+    imapHost: inbox.imapHost,
+    imapPort: inbox.imapPort,
+    imapUsername: inbox.imapUsername,
+  });
+}
+
+async function decryptedMailboxSecrets(
+  siteId: Id<"sites">,
+  inbox: Doc<"outreach_inboxes">,
+): Promise<{ smtpPassword: string; imapPassword: string }> {
+  if (
+    inbox.credentialCiphertext && inbox.credentialKeyId &&
+    inbox.credentialEncryptionVersion && inbox.credentialBindingHash
+  ) {
+    return decryptOutreachCredentials({
+      encrypted: {
+        credentialCiphertext: inbox.credentialCiphertext,
+        credentialKeyId: inbox.credentialKeyId,
+        credentialEncryptionVersion: inbox.credentialEncryptionVersion,
+        credentialBindingHash: inbox.credentialBindingHash,
+      },
+      binding: credentialBindingForInbox(siteId, inbox),
+      key: outreachCredentialKeyConfig(process.env, inbox.credentialKeyId),
+    });
+  }
+  if (inbox.smtpPassword) {
+    // Additive migration only. This fallback never appears in a public
+    // projection and is removed after the first successful dual-socket check.
+    return {
+      smtpPassword: inbox.smtpPassword,
+      imapPassword: inbox.smtpPassword,
+    };
+  }
+  throw new Error("Mailbox credentials are unavailable");
+}
 
 async function prepareGmailAccessToken(
   inbox: DeliveryInbox,
@@ -1331,18 +1476,25 @@ async function sendHandler(
       "https://www.googleapis.com/auth/gmail.readonly",
     ),
   );
-  if (!relayReady && !legacyGmailReadReady) {
+  const imapReady = Boolean(
+    smtp && inboxSnapshot.imapVerifiedAt &&
+      inboxSnapshot.credentialCiphertext &&
+      !["disconnected", "suspended"].includes(inboxSnapshot.status),
+  );
+  if (!relayReady && !legacyGmailReadReady && !imapReady) {
     return {
       ...result,
       stopped:
-        relayConfigured
+        smtp
+          ? "The IMAP reply, bounce, and STOP monitor is not verified. Nothing was sent."
+          : relayConfigured
           ? "The signed inbound relay has not passed a current hard-bounce routing canary for this inbox. Nothing was sent."
           : "The signed inbound relay is not configured, so replies and opt-outs cannot be handled safely. Nothing was sent.",
     };
   }
   if (
     release === "automatic" &&
-      (!inboxSnapshot.automaticDeliveryAuthorized ||
+      (smtp || !inboxSnapshot.automaticDeliveryAuthorized ||
       autonomousOutreachTransportIssues({
         inbox: inboxSnapshot,
         now: Date.now(),
@@ -1364,8 +1516,28 @@ async function sendHandler(
     return { ...result, stopped: pacingPreflight.reason };
   }
 
+  let preparedSmtpSecrets:
+    | { smtpPassword: string; imapPassword: string }
+    | undefined;
+  if (smtp) {
+    try {
+      preparedSmtpSecrets = await decryptedMailboxSecrets(siteId, inboxSnapshot);
+    } catch {
+      return {
+        ...result,
+        stopped:
+          "The encrypted SMTP/IMAP credential cannot be opened. Reconnect the mailbox; nothing was sent.",
+      };
+    }
+  }
+
   const attemptId = randomUUID();
-  const usesInboundRelay = relayReady && !smartleadManaged;
+  const usesInboundRelay = relayReady && !smartleadManaged && !imapReady;
+  const imapOutboundRfcMessageId = imapReady
+    ? `<${randomBytes(24).toString("hex")}@${normalizeDomain(
+        inboxSnapshot.senderDomain ?? inboxSnapshot.fromEmail.split("@")[1] ?? "",
+      )}>`
+    : undefined;
   const relayAliasToken = usesInboundRelay
     ? randomBytes(24).toString("base64url")
     : undefined;
@@ -1547,6 +1719,12 @@ async function sendHandler(
       dnsEvidence,
       opportunityEvidence,
       inboundRelay: relayBinding,
+      imapBinding: imapOutboundRfcMessageId
+        ? {
+            outboundMessageIdHash:
+              inboundRelayMessageIdHash(imapOutboundRfcMessageId),
+          }
+        : undefined,
       managedSesReceipt: managedSesClaimReceipt,
     });
   } catch {
@@ -1773,6 +1951,7 @@ async function sendHandler(
       // Credential preparation may happen before the final serializable
       // authorization fence, but no message leaves Pentra until that exact
       // boundary. A concurrent reply/STOP/unsubscribe therefore wins.
+      const smtpSecrets = preparedSmtpSecrets;
       const prepared = smtp
         ? { ok: true as const, accessToken: undefined }
         : await prepareGmailAccessToken(claim.inbox);
@@ -1800,12 +1979,18 @@ async function sendHandler(
               "terminalized" in boundary && boundary.terminalized,
           };
         } else {
-          outcome = await deliver(claim.inbox, {
+          outcome = await deliver({
+            ...claim.inbox,
+            ...(smtpSecrets
+              ? { smtpPassword: smtpSecrets.smtpPassword }
+              : {}),
+          }, {
             toEmail: claim.message.toEmail,
             subject: claim.message.subject,
             body: claim.message.body,
             replyTo: relayBinding?.aliasAddress,
-            outboundRfcMessageId: relayBinding?.outboundRfcMessageId,
+            outboundRfcMessageId:
+              relayBinding?.outboundRfcMessageId ?? imapOutboundRfcMessageId,
             providerThreadId: claim.deliveryThreadId,
             inReplyToRfcMessageId: claim.deliveryInReplyToRfcMessageId,
           }, prepared.accessToken);
@@ -2129,7 +2314,13 @@ export const sendInboundRelayDsnCanary = action({
       dnsEvidence,
       },
     );
-    const outcome = await deliver(inbox, {
+    const canaryInbox = inbox.provider === "smtp"
+      ? {
+          ...inbox,
+          smtpPassword: (await decryptedMailboxSecrets(siteId, inbox)).smtpPassword,
+        }
+      : inbox;
+    const outcome = await deliver(canaryInbox, {
       toEmail: testRecipient,
       subject: "Pentra hard-bounce routing canary",
       body:
@@ -2223,6 +2414,220 @@ type InboundSyncResult = {
   partial: boolean;
   stopped?: string;
 };
+
+function rfcMessageIdHashes(source: string): string[] {
+  const hashes = new Set<string>();
+  for (const match of source.matchAll(/<[^<>\s\r\n]{3,250}>/g)) {
+    hashes.add(inboundRelayMessageIdHash(match[0]));
+  }
+  return [...hashes];
+}
+
+function dsnFailedRecipients(source: string): string[] {
+  const emails = new Set<string>();
+  const pattern = /(?:Final|Original)-Recipient:\s*(?:rfc822\s*;\s*)?([^\s<>;]+@[^\s<>;]+)/gi;
+  for (const match of source.matchAll(pattern)) {
+    const email = match[1]?.trim().toLowerCase();
+    if (email && /^[^@\s]+@[^@\s]+\.[a-z]{2,24}$/i.test(email)) emails.add(email);
+  }
+  return [...emails];
+}
+
+async function pollImapHandler(
+  ctx: ActionCtx,
+  siteId: Id<"sites">,
+): Promise<InboundSyncResult> {
+  const result: InboundSyncResult = {
+    checked: 0, replied: 0, optedOut: 0, bounced: 0,
+    ignored: 0, partial: false,
+  };
+  const attemptId = randomUUID();
+  const claim = await ctx.runMutation(internal.outreach.claimImapPollInternal, {
+    siteId, attemptId,
+  });
+  if (!claim.claimed) return { ...result, stopped: claim.reason };
+  const fail = async (
+    reason: "imap_connection_failed" | "imap_parse_failed" |
+      "imap_receipt_failed" | "imap_deadline",
+  ) => {
+    await ctx.runMutation(internal.outreach.failImapPollInternal, {
+      siteId, inboxId: claim.inbox._id, attemptId,
+      expectedConfigurationVersion: claim.expectedConfigurationVersion,
+      reason,
+    }).catch(() => undefined);
+    return {
+      ...result,
+      stopped:
+        "IMAP reply monitoring failed closed; the mailbox cursor did not advance.",
+    };
+  };
+  let secrets: { smtpPassword: string; imapPassword: string };
+  try {
+    secrets = await decryptedMailboxSecrets(siteId, claim.inbox);
+  } catch {
+    return fail("imap_connection_failed");
+  }
+  const client = new ImapFlow({
+    host: claim.inbox.imapHost!, port: claim.inbox.imapPort!, secure: true,
+    auth: { user: claim.inbox.imapUsername!, pass: secrets.imapPassword },
+    logger: false, socketTimeout: 45_000, greetingTimeout: 10_000,
+  });
+  const deadlineAt = Date.now() + 60_000;
+  let lock: Awaited<ReturnType<ImapFlow["getMailboxLock"]>> | undefined;
+  try {
+    await client.connect();
+    lock = await client.getMailboxLock("INBOX", { readOnly: true });
+    if (!client.mailbox) throw new Error("imap_parse_failed");
+    const uidValidity = client.mailbox.uidValidity.toString();
+    const cursorCurrent = claim.uidValidity === uidValidity;
+    const search = cursorCurrent && claim.lastUid > 0
+      ? await client.search({ uid: `${claim.lastUid + 1}:*` }, { uid: true })
+      : await client.search(
+          { since: new Date(Date.now() - OUTREACH_IMAP_LOOKBACK_MS) },
+          { uid: true },
+        );
+    const allUids = (Array.isArray(search) ? search : [])
+      .filter((uid) => Number.isSafeInteger(uid) && uid > 0)
+      .sort((left, right) => left - right);
+    const uids = allUids.slice(0, OUTREACH_IMAP_MAX_RESULTS);
+    const candidates = claim.candidates as ImapCandidate[];
+    let lastUid = cursorCurrent ? claim.lastUid : 0;
+    for (const uid of uids) {
+      if (Date.now() >= deadlineAt) throw new Error("imap_deadline");
+      const row = await client.fetchOne(
+        uid,
+        {
+          source: { start: 0, maxLength: OUTREACH_IMAP_MAX_MESSAGE_BYTES },
+          internalDate: true,
+        },
+        { uid: true },
+      );
+      if (row === false || !row.source) throw new Error("imap_parse_failed");
+      const raw = row.source.toString("utf8");
+      const eventKey = imapEventKey({
+        siteId: String(siteId), inboxId: String(claim.inbox._id),
+        uidValidity, uid,
+      });
+      const parsed = await simpleParser(row.source, {
+        skipHtmlToText: true,
+        skipTextToHtml: true,
+        skipImageLinks: true,
+        maxHtmlLengthToParse: 64_000,
+      });
+      const fromEmail = parsed.from?.value[0]?.address?.toLowerCase() ?? "";
+      const parsedReceivedAt = parsed.date?.getTime() ?? (
+        row.internalDate
+          ? new Date(row.internalDate).getTime()
+          : Date.now()
+      );
+      const receivedAt = Number.isSafeInteger(parsedReceivedAt) && parsedReceivedAt > 0
+        ? parsedReceivedAt
+        : Date.now();
+      const inboundMessageIdHash = createHash("sha256")
+        .update(parsed.messageId ?? `${uidValidity}:${uid}`)
+        .digest("hex");
+      const evidence: ImapEvidence = {
+        uidValidity, uid, inboundMessageIdHash,
+        referencedMessageIdHashes: rfcMessageIdHashes(raw),
+        fromEmail,
+        subject: parsed.subject ?? "",
+        bodyText: parsed.text?.slice(0, 100_000) ?? "",
+        mimeTypes: parsed.attachments.map((attachment) => attachment.contentType),
+        failedRecipients: dsnFailedRecipients(raw),
+        authenticationResults:
+          String(parsed.headers.get("authentication-results") ?? ""),
+        autoSubmitted: String(parsed.headers.get("auto-submitted") ?? ""),
+        receivedAt,
+      };
+      const match = classifyImapEvidence({
+        evidence, candidates, mailboxEmail: claim.inbox.fromEmail,
+      });
+      const common = {
+        siteId, inboxId: claim.inbox._id, attemptId,
+        expectedConfigurationVersion: claim.expectedConfigurationVersion,
+        eventKey, uidValidity, uid, inboundMessageIdHash, receivedAt,
+      };
+      if (!match) {
+        const evidenceHash = createHash("sha256").update(JSON.stringify({
+          version: 1, eventKey, inboundMessageIdHash,
+          references: evidence.referencedMessageIdHashes,
+          receivedAt,
+        })).digest("hex");
+        const recorded = await ctx.runMutation(
+          internal.outreach.recordImapReceiptInternal,
+          { ...common, kind: "ignored", evidenceHash },
+        );
+        if (!recorded.recorded && recorded.reason !== "already_recorded") {
+          throw new Error("imap_receipt_failed");
+        }
+        result.ignored++;
+      } else {
+        const fromEmailHash = createHash("sha256").update(fromEmail).digest("hex");
+        const evidenceHash = imapEvidenceHash({
+          eventKey, messageId: match.candidate.messageId, kind: match.kind,
+          inboundMessageIdHash, fromEmailHash, receivedAt,
+          subjectHash: createHash("sha256").update(evidence.subject).digest("hex"),
+          bodyHash: createHash("sha256").update(evidence.bodyText).digest("hex"),
+        });
+        const recorded = await ctx.runMutation(
+          internal.outreach.recordImapReceiptInternal,
+          {
+            ...common,
+            messageId: match.candidate.messageId as Id<"outreach_messages">,
+            kind: match.kind, evidenceHash,
+            outboundMessageIdHash: match.candidate.outboundMessageIdHash,
+            fromEmail,
+          },
+        );
+        if (!recorded.recorded && recorded.reason !== "already_recorded") {
+          throw new Error("imap_receipt_failed");
+        }
+        if (recorded.recorded) {
+          if (match.kind === "reply") result.replied++;
+          else if (match.kind === "unsubscribe") result.optedOut++;
+          else result.bounced++;
+        }
+      }
+      result.checked++;
+      lastUid = uid;
+    }
+    result.partial = allUids.length > uids.length;
+    const completed = await ctx.runMutation(
+      internal.outreach.completeImapPollInternal,
+      {
+        siteId, inboxId: claim.inbox._id, attemptId,
+        expectedConfigurationVersion: claim.expectedConfigurationVersion,
+        uidValidity, lastUid, partial: result.partial,
+      },
+    );
+    if (!completed.recorded) throw new Error("imap_receipt_failed");
+    return result;
+  } catch (error) {
+    const reason = error instanceof Error && [
+      "imap_parse_failed", "imap_receipt_failed", "imap_deadline",
+    ].includes(error.message)
+      ? error.message as "imap_parse_failed" | "imap_receipt_failed" | "imap_deadline"
+      : "imap_connection_failed";
+    return fail(reason);
+  } finally {
+    lock?.release();
+    if (client.usable) await client.logout().catch(() => undefined);
+  }
+}
+
+export const syncImapInbox = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<InboundSyncResult> => {
+    await requireOwnedSite(ctx, siteId);
+    return pollImapHandler(ctx, siteId);
+  },
+});
+
+export const syncImapInboxInternal = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<InboundSyncResult> =>
+    pollImapHandler(ctx, siteId),
+});
 
 function gmailHeader(payload: GmailPayload | undefined, name: string): string {
   return payload?.headers?.find(

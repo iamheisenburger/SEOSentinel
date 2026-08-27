@@ -48,21 +48,21 @@ test("invalid OAuth returns stay branded and fail closed", async ({ page }) => {
   }
 });
 
-test("One Setup renders and selects every supported adapter without side effects", async ({ page }) => {
+test("One Setup exposes bootstrap-v1 adapters and visibly gates managed beta choices", async ({ page }) => {
   await page.goto("/e2e-acceptance/one-setup");
   await expect(page.getByRole("heading", { name: "Set up Pentra once" })).toBeVisible();
-  for (const label of ["GitHub", "WordPress", "Signed webhook"]) {
+  for (const label of ["GitHub", "Gmail", "SMTP"]) {
     const choice = page.getByRole("button", { name: new RegExp(label) });
     await expect(choice).toBeVisible();
     await choice.click();
     await expect(choice).toHaveClass(/border-\[#0EA5E9\]/);
   }
-  for (const label of ["Managed sender", "Gmail", "SMTP"]) {
+  for (const label of ["WordPress", "Signed webhook", "Managed sender"]) {
     const choice = page.getByRole("button", { name: new RegExp(label) });
     await expect(choice).toBeVisible();
-    await choice.click();
-    await expect(choice).toHaveClass(/border-\[#0EA5E9\]/);
+    await expect(choice).toBeDisabled();
   }
+  await expect(page.getByText(/mandatory approval mode/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /Start one setup/ })).toBeDisabled();
 });
 

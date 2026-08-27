@@ -10,8 +10,10 @@ import { sha256Hex } from "./publicationArtifact.ts";
 export const GROWTH_LOOP_CONTRACT_VERSION = 1;
 export const OPPORTUNITY_DECISION_VERSION = 1;
 export const OUTREACH_POLICY_VERSION = 1;
-export const GROWTH_LOOP_RELEASE_VERSION = 1;
+export const GROWTH_LOOP_RELEASE_VERSION = 2;
 export const GROWTH_LOOP_ROLLOUT_STAGES = [10, 50, 100] as const;
+
+export type GrowthLoopReleaseProfile = "bootstrap_v1" | "full_managed";
 
 export function growthLoopRolloutBucket(siteId: string): number {
   return Number.parseInt(sha256Hex(`growth-loop-rollout:${siteId}`).slice(0, 8), 16) % 100;
@@ -335,22 +337,31 @@ export type GrowthLoopStatus = {
 };
 
 export type GrowthLoopReleaseEvidence = {
+  profile?: GrowthLoopReleaseProfile;
   releaseCommit: string;
-  publisherCanaries: PublisherKind[];
+  publisherCanaries: readonly PublisherKind[];
   tenantCanaryIds: string[];
   unrelatedTenantCount: number;
   naturalPlanningVerified: boolean;
   sealedBufferVerified: boolean;
   publicationVerified: boolean;
   measurementDecisionExecuted: boolean;
-  smartleadProvisioningVerified: boolean;
-  smartleadWarmupVerified: boolean;
-  smartleadDeliveryVerified: boolean;
-  smartleadReplyVerified: boolean;
-  smartleadBounceVerified: boolean;
-  smartleadUnsubscribeVerified: boolean;
-  smartleadCancellationVerified: boolean;
+  smartleadProvisioningVerified?: boolean;
+  smartleadWarmupVerified?: boolean;
+  smartleadDeliveryVerified?: boolean;
+  smartleadReplyVerified?: boolean;
+  smartleadBounceVerified?: boolean;
+  smartleadUnsubscribeVerified?: boolean;
+  smartleadCancellationVerified?: boolean;
   acquiredBacklinkVerified: boolean;
+  terminalConvergenceVerified?: boolean;
+  smtpConnectionVerified?: boolean;
+  smtpDeliveryVerified?: boolean;
+  imapReplyVerified?: boolean;
+  imapBounceVerified?: boolean;
+  imapStopVerified?: boolean;
+  smtpFollowupCancellationVerified?: boolean;
+  controlledConversionVerified?: boolean;
   unresolvedSevereIncidentCount: number;
   silentStateCount: number;
 };
@@ -360,6 +371,39 @@ export function growthLoopReleaseBlockers(
 ): string[] {
   const blockers: string[] = [];
   if (!/^[0-9a-f]{7,64}$/i.test(evidence.releaseCommit)) blockers.push("release_commit_unbound");
+  if (evidence.profile === "bootstrap_v1") {
+    if (!evidence.publisherCanaries.includes("github")) {
+      blockers.push("publisher_canary_github_missing");
+    }
+    if (
+      new Set(evidence.tenantCanaryIds).size < 2 ||
+      evidence.unrelatedTenantCount < 2
+    ) blockers.push("two_authorized_tenant_canaries_missing");
+    const bootstrapChecks = {
+      natural_planning_missing: evidence.naturalPlanningVerified,
+      sealed_buffer_missing: evidence.sealedBufferVerified,
+      verified_publication_missing: evidence.publicationVerified,
+      measured_improvement_missing: evidence.measurementDecisionExecuted,
+      terminal_convergence_missing: evidence.terminalConvergenceVerified,
+      smtp_connection_missing: evidence.smtpConnectionVerified,
+      smtp_delivery_missing: evidence.smtpDeliveryVerified,
+      imap_reply_missing: evidence.imapReplyVerified,
+      imap_bounce_missing: evidence.imapBounceVerified,
+      imap_stop_missing: evidence.imapStopVerified,
+      smtp_followup_cancellation_missing:
+        evidence.smtpFollowupCancellationVerified,
+      controlled_conversion_missing: evidence.controlledConversionVerified,
+      acquired_backlink_missing: evidence.acquiredBacklinkVerified,
+    };
+    for (const [code, complete] of Object.entries(bootstrapChecks)) {
+      if (!complete) blockers.push(code);
+    }
+    if (evidence.unresolvedSevereIncidentCount > 0) {
+      blockers.push("unresolved_severe_incidents");
+    }
+    if (evidence.silentStateCount > 0) blockers.push("silent_states_present");
+    return blockers;
+  }
   for (const publisher of ["github", "wordpress", "webhook"] as const) {
     if (!evidence.publisherCanaries.includes(publisher)) blockers.push(`publisher_canary_${publisher}_missing`);
   }

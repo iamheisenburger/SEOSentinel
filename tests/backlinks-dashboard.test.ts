@@ -49,10 +49,17 @@ test("Backlinks workflow keeps approval, send, verification and blocked evidence
   assert.match(dashboard, /Send next owner-approved \(1 of/);
   assert.match(dashboard, /api\.outreach\.enableAutonomousOutreach/);
   assert.match(dashboard, /Authority autopilot/);
+  assert.match(
+    dashboard,
+    /\{inbox && managedAutonomyBetaAvailable && \([\s\S]*Authority autopilot/,
+  );
+  assert.match(dashboard, /Bootstrap v1 never sends to a prospect automatically/);
   assert.match(dashboard, /autonomousDeliveryReleaseAvailable/);
   assert.match(dashboard, /api\.actions\.outreach\.syncInboundReplies/);
+  assert.match(dashboard, /api\.actions\.outreach\.syncImapInbox/);
+  assert.match(dashboard, /IMAP reply sync/);
   assert.match(dashboard, /Check replies/);
-  assert.match(dashboard, /discarded after transient parsing; Pentra stores only evidence digests/);
+  assert.match(dashboard, /discarded after transient parsing, and Pentra stores only evidence digests/);
   assert.match(dashboard, /api\.actions\.outreach\.sendInboundRelayDsnCanary/);
   assert.match(dashboard, /Verify bounce routing/);
   assert.match(dashboard, /inboundRelayDsnRoutingTargetAddress/);
@@ -82,7 +89,7 @@ test("bounded outreach preparation reports partial queue work honestly", () => {
 test("Gmail connection starts through the tenant-scoped OAuth entry point", () => {
   assert.match(dashboard, /\/api\/outreach\/gmail\/auth\?siteId=/);
   assert.match(dashboard, /returnTo=.*backlinks/);
-  assert.match(dashboard, /Connect a secondary-domain Gmail inbox/);
+  assert.match(dashboard, /Connect a customer-managed SMTP\/IMAP mailbox/);
   assert.match(dashboard, /approval mode/);
   assert.match(dashboard, /credentialsPresent/);
   assert.match(dashboard, /spfVerifiedAt/);

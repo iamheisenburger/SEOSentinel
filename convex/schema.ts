@@ -2148,7 +2148,24 @@ export default defineSchema({
     smtpHost: v.optional(v.string()),
     smtpPort: v.optional(v.number()),
     smtpUsername: v.optional(v.string()),
+    // Legacy plaintext write retained only for an additive migration window.
+    // New configuration writes a versioned AES-GCM envelope and clears this.
     smtpPassword: v.optional(v.string()),
+    credentialCiphertext: v.optional(v.string()),
+    credentialKeyId: v.optional(v.string()),
+    credentialEncryptionVersion: v.optional(v.number()),
+    credentialBindingHash: v.optional(v.string()),
+    imapHost: v.optional(v.string()),
+    imapPort: v.optional(v.number()),
+    imapUsername: v.optional(v.string()),
+    imapVerifiedAt: v.optional(v.number()),
+    imapUidValidity: v.optional(v.string()),
+    imapLastUid: v.optional(v.number()),
+    imapLastPolledAt: v.optional(v.number()),
+    imapNextPollAt: v.optional(v.number()),
+    imapLeaseToken: v.optional(v.string()),
+    imapLeaseExpiresAt: v.optional(v.number()),
+    imapLastError: v.optional(v.string()),
     apiKey: v.optional(v.string()),
     verifiedAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
@@ -2189,7 +2206,8 @@ export default defineSchema({
     // These indexes let every connect, opt-in and send claim fail closed if
     // another active tenant is already using either identity.
     .index("by_from_email", ["fromEmail"])
-    .index("by_sender_domain", ["senderDomain"]),
+    .index("by_sender_domain", ["senderDomain"])
+    .index("by_provider_imap_next", ["provider", "imapNextPollAt"]),
 
   // Every outbound message, including ones that were never sent. A blocked or
   // skipped draft is evidence too: it is how a tenant sees why outreach did
@@ -2331,6 +2349,11 @@ export default defineSchema({
     inboundReceiptProviderMessageId: v.optional(v.string()),
     inboundReceiptHash: v.optional(v.string()),
     inboundReceiptKind: v.optional(v.string()), // reply | unsubscribe | bounce
+    inboundReceiptTransport: v.optional(v.union(
+      v.literal("relay"),
+      v.literal("gmail_oauth"),
+      v.literal("imap"),
+    )),
     inboundReceiptAt: v.optional(v.number()),
     inboundReceiptFrom: v.optional(v.string()),
     // Receiving-only relay binding. The random alias itself is never stored;
@@ -2744,6 +2767,34 @@ export default defineSchema({
     .index("by_site_message", ["siteId", "messageId"])
     .index("by_message_inbound_id", ["messageId", "inboundMessageId"]),
 
+  // Bodyless IMAP receipts. UIDVALIDITY + UID is the mailbox replay boundary;
+  // only hashes and classifications survive transient MIME parsing.
+  outreach_imap_receipts: defineTable({
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.optional(v.id("outreach_messages")),
+    eventKey: v.string(),
+    uidValidity: v.string(),
+    uid: v.number(),
+    evidenceHash: v.string(),
+    inboundMessageIdHash: v.string(),
+    outboundMessageIdHash: v.optional(v.string()),
+    kind: v.union(
+      v.literal("reply"),
+      v.literal("unsubscribe"),
+      v.literal("bounce"),
+      v.literal("ignored"),
+    ),
+    fromEmailHash: v.optional(v.string()),
+    receivedAt: v.number(),
+    processedAt: v.number(),
+  })
+    .index("by_event_key", ["eventKey"])
+    .index("by_inbox_uid", ["inboxId", "uidValidity", "uid"])
+    .index("by_message", ["messageId"])
+    .index("by_message_kind", ["messageId", "kind"])
+    .index("by_site", ["siteId"]),
+
   // Unsubscribes, bounces and complaints. Checked before every send and never
   // expires: an opt-out is permanent.
   outreach_suppressions: defineTable({
@@ -3027,6 +3078,9 @@ export default defineSchema({
     goalKey: v.string(),
     occurredAt: v.number(),
     receivedAt: v.number(),
+    // Controlled SDK/API acceptance canaries prove ingestion but are excluded
+    // from every customer growth aggregate.
+    isCanary: v.optional(v.boolean()),
   })
     .index("by_site_event", ["siteId", "eventId"])
     .index("by_site_session", ["siteId", "sessionId"])
@@ -3165,10 +3219,18 @@ export default defineSchema({
   // have been independently verified by the release mutation.
   growth_loop_release_receipts: defineTable({
     releaseCommit: v.string(),
+    profile: v.optional(v.union(
+      v.literal("bootstrap_v1"),
+      v.literal("full_managed"),
+    )),
+    deploymentReceiptHash: v.optional(v.string()),
+    deployedAt: v.optional(v.number()),
     adapterMatrixHash: v.string(),
+    supportedMatrixHash: v.optional(v.string()),
     publisherCanaryReceiptHashes: v.array(v.string()),
     tenantCanaryReceiptHashes: v.array(v.string()),
     smartleadCanaryReceiptHashes: v.array(v.string()),
+    customerManagedCanaryReceiptHashes: v.optional(v.array(v.string())),
     acquiredBacklinkReceiptHash: v.string(),
     rolloutPercent: v.number(),
     contractVersion: v.number(),
@@ -3180,14 +3242,32 @@ export default defineSchema({
   // flags. Only internal adapter settlement paths may create them.
   growth_loop_canary_receipts: defineTable({
     releaseCommit: v.string(),
+    profile: v.optional(v.union(
+      v.literal("bootstrap_v1"),
+      v.literal("full_managed"),
+    )),
+    deploymentReceiptHash: v.optional(v.string()),
+    deployedAt: v.optional(v.number()),
     siteId: v.optional(v.id("sites")),
+    bootstrapTenantRole: v.optional(v.union(
+      v.literal("primary_natural"),
+      v.literal("secondary_convergence"),
+    )),
     canaryKey: v.string(),
     kind: v.union(
       v.literal("publisher_github"),
       v.literal("publisher_wordpress"),
       v.literal("publisher_webhook"),
       v.literal("tenant_natural_loop"),
+      v.literal("tenant_terminal_convergence"),
       v.literal("measurement_decision"),
+      v.literal("smtp_connection"),
+      v.literal("smtp_delivery"),
+      v.literal("imap_reply"),
+      v.literal("imap_bounce"),
+      v.literal("imap_stop"),
+      v.literal("smtp_followup_cancellation"),
+      v.literal("controlled_conversion"),
       v.literal("smartlead_provisioning"),
       v.literal("smartlead_warmup"),
       v.literal("smartlead_delivery"),
@@ -3200,6 +3280,11 @@ export default defineSchema({
     articleId: v.optional(v.id("articles")),
     opportunityId: v.optional(v.id("seo_authority_opportunities")),
     growthActionId: v.optional(v.id("seo_growth_actions")),
+    opportunityDecisionReceiptId:
+      v.optional(v.id("opportunity_decision_receipts")),
+    inboxId: v.optional(v.id("outreach_inboxes")),
+    messageId: v.optional(v.id("outreach_messages")),
+    outcomeReceiptId: v.optional(v.id("outcome_receipts")),
     managedResourceId: v.optional(v.id("managed_outreach_mailbox_resources")),
     promotionRunId: v.optional(v.id("autopilot_runs")),
     status: v.union(v.literal("passed"), v.literal("failed")),
@@ -3218,6 +3303,12 @@ export default defineSchema({
   // closed until the controller naturally re-evaluates.
   growth_loop_rollout_controls: defineTable({
     releaseCommit: v.string(),
+    profile: v.optional(v.union(
+      v.literal("bootstrap_v1"),
+      v.literal("full_managed"),
+    )),
+    deploymentReceiptHash: v.optional(v.string()),
+    deployedAt: v.optional(v.number()),
     status: v.union(
       v.literal("active"),
       v.literal("paused"),

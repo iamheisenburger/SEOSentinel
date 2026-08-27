@@ -25,7 +25,9 @@
     "@types/nodemailer": "^8.0.1",
     "convex": "^1.30.0",
     "date-fns": "^4.1.0",
+    "imapflow": "^1.7.6",
     "lucide-react": "^0.575.0",
+    "mailparser": "^3.9.16",
     "next": "^16.3.0",
     "nodemailer": "^9.0.5",
     "openai": "^6.10.0",
@@ -46,6 +48,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

@@ -162,6 +162,7 @@ test("verified deletion scrubs outreach owned through a foreign current site", (
   assert.match(finalize, /deliveryLeaseExpiresAt/);
   assert.match(sites, /outreach_inbound_relay_receipts/);
   assert.match(sites, /outreach_inbound_relay_canaries/);
+  assert.match(sites, /outreach_imap_receipts/);
   assert.match(sites, /withIndex\("by_owner"/);
   const foreignInboxBranch = finalize.slice(
     finalize.indexOf('name === "outreach_foreign_owner_inboxes"'),

@@ -7,7 +7,7 @@ import {
   SMARTLEAD_MANAGED_TRANSPORT,
   smartleadManagedInboxIssues,
 } from "./smartlead.ts";
-import { smtpConfigIssues } from "./outreachSmtp.ts";
+import { imapConfigIssues, smtpConfigIssues } from "./outreachSmtp.ts";
 
 /** Long enough for one bounded Gmail request, short enough to surface uncertainty. */
 export const OUTREACH_DELIVERY_LEASE_MS = 2 * 60 * 1000;
@@ -77,6 +77,10 @@ export function autonomousOutreachTransportIssues(args: {
     return smartleadManagedInboxIssues({ inbox: args.inbox, now: args.now });
   }
   if (args.inbox?.provider === "smtp") {
+    const hasEncryptedCredentials =
+      typeof args.inbox.credentialCiphertext === "string" &&
+      typeof args.inbox.credentialKeyId === "string" &&
+      typeof args.inbox.credentialBindingHash === "string";
     const issues = smtpConfigIssues({
       host: typeof args.inbox.smtpHost === "string"
         ? args.inbox.smtpHost : undefined,
@@ -84,14 +88,26 @@ export function autonomousOutreachTransportIssues(args: {
         ? args.inbox.smtpPort : undefined,
       username: typeof args.inbox.smtpUsername === "string"
         ? args.inbox.smtpUsername : undefined,
-      password: typeof args.inbox.smtpPassword === "string"
-        ? args.inbox.smtpPassword : undefined,
+      password: hasEncryptedCredentials
+        ? "encrypted-credential"
+        : typeof args.inbox.smtpPassword === "string"
+          ? args.inbox.smtpPassword : undefined,
       fromEmail: typeof args.inbox.fromEmail === "string"
         ? args.inbox.fromEmail : undefined,
     });
-    return issues.length === 0
+    const imapIssues = imapConfigIssues({
+      host: typeof args.inbox.imapHost === "string"
+        ? args.inbox.imapHost : undefined,
+      port: typeof args.inbox.imapPort === "number"
+        ? args.inbox.imapPort : undefined,
+      username: typeof args.inbox.imapUsername === "string"
+        ? args.inbox.imapUsername : undefined,
+      password: hasEncryptedCredentials ? "encrypted-credential" : undefined,
+    });
+    return issues.length === 0 && imapIssues.length === 0 &&
+        Boolean(args.inbox.imapVerifiedAt)
       ? []
-      : ["SMTP credentials are incomplete or no longer current."];
+      : ["SMTP/IMAP credentials are incomplete or no longer current."];
   }
   return autonomousGmailCredentialIssues({
     oauthScopes:

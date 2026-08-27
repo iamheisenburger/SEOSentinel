@@ -245,7 +245,7 @@ function TheLoop() {
             icon={GitBranch}
             color="#22C55E"
             items={[
-              "Auto-publishes to GitHub, WordPress, or Webhook",
+              "Auto-publishes through the verified GitHub adapter",
               "Injects JSON-LD schema markup (Article, FAQ, HowTo)",
               "Weaves in internal links across your content",
               "Verifies the exact destination receipt before marking published",
@@ -378,12 +378,12 @@ function Features() {
     {
       icon: ShieldCheck,
       title: "Publication receipts",
-      desc: "Records a verified GitHub, WordPress, or webhook receipt before treating an article as published.",
+      desc: "Records a verified GitHub receipt before treating an article as published. WordPress and signed webhooks remain beta.",
     },
     {
       icon: GitBranch,
       title: "Multi-platform publishing",
-      desc: "GitHub, WordPress, webhooks — publish wherever your content lives.",
+      desc: "GitHub publishing is supported in v1. WordPress and signed webhooks remain visibly beta-gated.",
     },
     {
       icon: Zap,
@@ -673,7 +673,7 @@ function Differentiators() {
                   <span className="inline-block h-4 w-4 rounded-full bg-white shadow-sm mt-0.5 ml-0.5 translate-x-4" />
                 </div>
               </div>
-              <SettingRow label="Publish to" value="GitHub / WordPress / Webhook" />
+              <SettingRow label="Publish to" value="GitHub (v1 GA)" />
               <SettingRow label="Delivery" value="Exact destination receipt" />
               <SettingRow label="GSC Connected" value="✓ Daily rank tracking" />
             </div>
@@ -719,7 +719,11 @@ const faqs = [
   },
   {
     q: "What publishing platforms do you support?",
-    a: "GitHub (commits MDX with frontmatter and schema markup), WordPress (via REST API), webhooks (for custom CMS), and manual copy or download. Automatic Medium and LinkedIn syndication is not currently available.",
+    a: "Bootstrap v1 supports GitHub publishing (MDX with frontmatter and schema markup). WordPress and signed-webhook publishing remain beta and are not advertised as generally available. Manual copy or download remains available.",
+  },
+  {
+    q: "Does Pentra syndicate content to Medium or LinkedIn?",
+    a: "Automatic Medium and LinkedIn syndication is not currently available. Pentra does not collect those platform credentials or claim downstream delivery without an audited adapter receipt.",
   },
   {
     q: "Can I review articles before they go live?",
@@ -886,7 +890,7 @@ const organizationSchema = {
     "Automated fact-checking with citations",
     "Google Search Console rank tracking",
     "Content decay detection and recovery actions",
-    "Multi-platform publishing (GitHub, WordPress, Webhook)",
+    "Verified GitHub publishing (WordPress and webhook in beta)",
     "Verified backlink opportunities and approval-first outreach",
     "JSON-LD schema markup generation",
     "Internal linking optimization",

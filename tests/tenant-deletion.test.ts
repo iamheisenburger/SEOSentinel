@@ -20,6 +20,7 @@ test("tenant deletion drains every site-scoped sensitive and growth table", () =
     "managed_provisioning_requests",
     "outreach_inbound_relay_canaries",
     "outreach_inbound_relay_receipts",
+    "outreach_imap_receipts",
     "outreach_messages",
     "outreach_contacts",
     "outreach_suppressions",
@@ -85,6 +86,11 @@ test("credentials are revoked before resumable data deletion begins", () => {
     "oauthAccessToken",
     "oauthRefreshToken",
     "smtpPassword",
+    "credentialCiphertext",
+    "credentialKeyId",
+    "credentialBindingHash",
+    "imapHost",
+    "imapUsername",
     "apiKey",
   ]) {
     assert.match(sites, new RegExp(`${field}: undefined`));

@@ -11,7 +11,7 @@ import {
 export function OneSetupAcceptanceClient() {
   const [publisherKind, setPublisherKind] = useState<PublisherKind>("github");
   const [outreachTransport, setOutreachTransport] =
-    useState<OutreachTransport>("smartlead_managed");
+    useState<OutreachTransport>("smtp");
   return (
     <main className="mx-auto min-h-screen max-w-2xl bg-[#08090E] px-5 py-10 text-[#EDEEF1]">
       <h1 className="text-xl font-semibold">Set up Pentra once</h1>
