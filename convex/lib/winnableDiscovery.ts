@@ -35,6 +35,28 @@ const AUTHORITY_GAP_SCALE = 12;
 /** Below this, a SERP is effectively open to anyone with better content. */
 export const OPEN_SERP_AUTHORITY = 20;
 
+/**
+ * Minimum monthly demand worth an article.
+ *
+ * Winnability alone is not sufficient. Ranking discovery purely by what a weak
+ * domain can win pushes selection into the extreme tail, where a keyword like
+ * "intent detection datasets" at ten searches a month has no page-one
+ * competition precisely because there is not enough substance to write about.
+ *
+ * LeadPilot proved this in production: seven consecutive articles on such
+ * topics came out at 1,016-1,055 words against a 1,200 minimum and scored
+ * 73-82 against an 85 editorial minimum. Media generation is deferred until
+ * prose clears strict review, so the hero image was never produced, the gate
+ * then failed for the missing image as well, and two bounded revisions could
+ * not converge because no rewrite can add substance a topic does not have.
+ * Every run ended quality_budget_exhausted with an empty buffer.
+ *
+ * The floor is a demand threshold rather than a relaxed quality gate: the
+ * correct response to a topic too thin to support a good article is to not
+ * select it, never to publish a worse article.
+ */
+export const MIN_VIABLE_MONTHLY_DEMAND = 50;
+
 export type WinnableBand = {
   /** Ideal page-one median authority to hunt for right now. */
   target: number;
@@ -103,7 +125,8 @@ export function winnabilityScore(args: {
   observedCompetitors?: number;
 }): number {
   const volume = Math.max(0, args.monthlySearches ?? 0);
-  if (volume === 0) return 0;
+  // Too thin to sustain a publishable article, however winnable it looks.
+  if (volume < MIN_VIABLE_MONTHLY_DEMAND) return 0;
   if (!serpIsWinnableNow(args)) return 0;
   const gap = args.tenantAuthority - (args.medianSerpAuthority as number);
   const probability = 1 / (1 + Math.exp(-gap / AUTHORITY_GAP_SCALE));
@@ -149,7 +172,7 @@ export function preSerpWinnability(args: {
   monthlySearches?: number;
 }): number {
   const volume = Math.max(0, args.monthlySearches ?? 0);
-  if (volume === 0) return 0;
+  if (volume < MIN_VIABLE_MONTHLY_DEMAND) return 0;
   const difficulty = typeof args.keywordDifficulty === "number" &&
       Number.isFinite(args.keywordDifficulty)
     ? Math.max(0, Math.min(100, args.keywordDifficulty))

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MIN_VIABLE_MONTHLY_DEMAND,
   OPEN_SERP_AUTHORITY,
   authorityLimitedForecast,
   rankWinnableCandidates,
@@ -199,4 +200,60 @@ test("unmeasured difficulty never outranks a measured winnable keyword", () => {
     "an unverified head term must not dominate the shortlist on volume alone",
   );
   assert.equal(preSerpWinnability({ tenantAuthority: 4, monthlySearches: 0 }), 0);
+});
+
+test("a winnable topic too thin to write about is not selected", () => {
+  // The exact production failure: winnability discovery selected volume-10,
+  // KD-0 topics like "intent detection datasets". Seven consecutive articles
+  // came out at 1,016-1,055 words against a 1,200 minimum and 73-82 against an
+  // 85 editorial minimum. Media is deferred until prose clears strict review,
+  // so no hero image was ever produced, the gate then also failed for the
+  // missing image, and two bounded revisions could not converge. Every run
+  // ended quality_budget_exhausted with an empty buffer.
+  const tooThin = {
+    keyword: "intent detection datasets",
+    monthlySearches: 10,
+    medianSerpAuthority: 4,
+    observedCompetitors: 7,
+  };
+  assert.equal(winnabilityScore({ tenantAuthority: 4, ...tooThin }), 0);
+  assert.equal(
+    preSerpWinnability({
+      tenantAuthority: 4,
+      keywordDifficulty: 0,
+      keywordDifficultyMeasured: true,
+      monthlySearches: 10,
+    }),
+    0,
+  );
+  assert.deepEqual(rankWinnableCandidates(4, [tooThin]), []);
+});
+
+test("the demand floor does not reject genuine long-tail opportunity", () => {
+  const viable = {
+    keyword: "qualify leads without a form",
+    monthlySearches: MIN_VIABLE_MONTHLY_DEMAND,
+    medianSerpAuthority: 12,
+    observedCompetitors: 7,
+  };
+  assert.ok(winnabilityScore({ tenantAuthority: 4, ...viable }) > 0);
+  assert.equal(rankWinnableCandidates(4, [viable]).length, 1);
+});
+
+test("thin topics never outrank viable ones in the shortlist", () => {
+  const ranked = orderDiscoveryByWinnability(4, [
+    { keyword: "intent detection datasets", searchVolume: 10, difficulty: 0, difficultyMeasured: true },
+    { keyword: "chatbot for plumber website", searchVolume: 90, difficulty: 6, difficultyMeasured: true },
+  ]);
+  assert.equal(ranked[0].keyword, "chatbot for plumber website");
+  assert.equal(
+    preSerpWinnability({
+      tenantAuthority: 4,
+      keywordDifficulty: 0,
+      keywordDifficultyMeasured: true,
+      monthlySearches: 10,
+    }),
+    0,
+    "a thin topic must score zero, not merely rank lower",
+  );
 });

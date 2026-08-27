@@ -1,17 +1,21 @@
 /**
  * SMTP sending identity for outreach.
  *
- * Gmail OAuth cannot be Pentra's only path. `gmail.send` is a Google
- * restricted scope, so an unverified app may only serve testers the operator
- * adds by hand — which is not a product. Verification requires a CASA security
- * assessment and takes weeks, and managed SES requires an affirmation that
- * every recipient explicitly requested the mail, which is untrue of backlink
- * prospects.
+ * SMTP is a provider-independent fallback, not the primary path.
  *
- * SMTP with an app password is the path that works for every tenant on day
- * one: Gmail, Workspace, Outlook, Zoho or any provider, with no gatekeeper and
- * no per-user approval. OAuth remains the nicer experience where it is
- * available; SMTP is what makes the feature general.
+ * `gmail.send` is a Google *sensitive* scope, not a restricted one. Google's
+ * console lists it under sensitive scopes with no restricted scopes present,
+ * so this project's verification does not automatically require a CASA
+ * security assessment. An earlier version of this comment claimed otherwise
+ * and was wrong. Gmail OAuth remains the primary customer path and Pentra's
+ * verification is under review; until it completes, only approved accounts can
+ * connect.
+ *
+ * SMTP still matters: it works with any provider, needs no verification
+ * queue, and gives a tenant a route when OAuth is unavailable. Managed SES
+ * would be the better One-Setup default, but it requires affirming that every
+ * recipient explicitly requested the mail, which is untrue of backlink
+ * prospects.
  *
  * Pure and deterministic so credential and pacing decisions are provable
  * without opening a socket.
