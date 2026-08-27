@@ -43,7 +43,11 @@ import {
 } from "../../../../convex/lib/autopilotAlerts";
 
 export default function DashboardPage() {
-  const forceSetup = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("setup") === "new";
+  const setupMode = typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("setup")
+    : null;
+  const forceSetup = setupMode === "new";
+  const finishExistingSetup = setupMode === "existing";
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
   const { userId } = useAuth();
@@ -147,6 +151,10 @@ export default function DashboardPage() {
 
   if (loading) {
     return <DashboardSkeleton />;
+  }
+
+  if (finishExistingSetup && site) {
+    return <SetupWizard existingSite={site} />;
   }
 
   if (!site || forceSetup) {

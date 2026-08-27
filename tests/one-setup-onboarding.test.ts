@@ -29,6 +29,10 @@ const readinessUi = readFileSync(
   "src/components/onboarding/setup-readiness.tsx",
   "utf8",
 );
+const dashboard = readFileSync(
+  "src/app/(dashboard)/dashboard/page.tsx",
+  "utf8",
+);
 const canonicalSetup = readFileSync(
   "convex/lib/oneSetupCanonical.ts",
   "utf8",
@@ -47,6 +51,22 @@ test("managed setup queues work while owner-managed setup requests owner action"
   assert.equal(
     initialOneSetupProgress("connect_existing"),
     "owner_action_required",
+  );
+});
+
+test("existing tenants have an explicit current-contract One Setup migration path", () => {
+  assert.match(readinessUi, /!readiness\.requestExists/);
+  assert.match(readinessUi, /\/dashboard\?setup=existing/);
+  assert.match(dashboard, /setupMode === "existing"/);
+  assert.match(dashboard, /<SetupWizard existingSite=\{site\}/);
+  assert.match(wizard, /existingSite\?: ExistingSiteSetup/);
+  assert.match(wizard, /existingSite \? "smtp" : "smartlead_managed"/);
+  assert.match(wizard, /readOnly=\{Boolean\(existingSite\)\}/);
+  assert.match(wizard, /existingSite \? \{ id: existingSite\._id \} : \{\}/);
+  assert.match(wizard, /!existingSite \? \{ createOnly: true \} : \{\}/);
+  assert.match(
+    wizard,
+    /preserve the same tenant and continue from durable receipts/i,
   );
 });
 
@@ -323,13 +343,20 @@ test("Search Console readiness is fresh, revocable, and domain-bound", () => {
   );
 });
 
-test("one-setup UX requires explicit publisher selection and defaults outreach to managed Smartlead", () => {
-  assert.match(wizard, /useState<PublisherKind>\("github"\)/);
-  assert.match(wizard, /useState<OutreachTransport>\("smartlead_managed"\)/);
+test("one-setup UX keeps managed Smartlead for new tenants and gives legacy tenants a zero-cost sender path", () => {
+  assert.match(wizard, /existingPublisherKind\(existingSite\?\.publishMethod\)/);
+  assert.match(wizard, /: "github";/);
+  assert.match(
+    wizard,
+    /useState<OutreachTransport>\(existingSite \? "smtp" : "smartlead_managed"\)/,
+  );
   assert.match(wizard, /const publisherMode: SetupMode = "connect_existing"/);
   assert.match(wizard, /const measurementMode: SetupMode = "connect_existing"/);
   assert.match(wizard, /outreachTransport === "smartlead_managed"/);
-  assert.match(wizard, /useState<AutomationMode>\("full"\)/);
+  assert.match(
+    wizard,
+    /existingSite\?\.approvalRequired === true \? "assisted" : "full"/,
+  );
   assert.match(wizard, /Managed setup/);
   assert.match(wizard, /Connect existing/);
   assert.match(wizard, /Describe the business once, authorize each connection/);

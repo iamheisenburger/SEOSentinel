@@ -181,6 +181,26 @@ export function SetupReadiness({
         </div>
       )}
 
+      {!readiness.requestExists && (
+        <div className="mt-4 rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-3 py-3">
+          <p className="text-[11px] font-medium text-[#FBBF24]">
+            Finish the current One Setup contract
+          </p>
+          <p className="mt-1 text-[10px] leading-relaxed text-[#73788F]">
+            This website predates the current setup contract. Confirm its
+            existing business, publishing, measurement, and sender choices;
+            Pentra will keep the same tenant and continue from durable receipts.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.assign("/dashboard?setup=existing")}
+            className="mt-3 rounded-md bg-[#0EA5E9] px-3 py-1.5 text-[10px] font-medium text-white transition hover:bg-[#0284C7]"
+          >
+            Finish One Setup
+          </button>
+        </div>
+      )}
+
       {readiness.aggregate.status !== "ready" &&
         readiness.fulfillment?.nextAttemptAt && (
           <p className="mt-3 text-[10px] leading-relaxed text-[#73788F]">

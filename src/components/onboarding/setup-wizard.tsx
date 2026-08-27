@@ -48,6 +48,27 @@ type OneSetupReceipt = {
   configurationRevision: number;
 };
 
+type ExistingSiteSetup = {
+  _id: Id<"sites">;
+  domain: string;
+  siteName?: string;
+  siteSummary?: string;
+  targetCountry?: string;
+  targetAudienceSummary?: string;
+  productUsage?: string;
+  painPoints?: string[];
+  publishMethod?: string;
+  cadencePerWeek?: number;
+  cadenceRequestedPerWeek?: number;
+  approvalRequired?: boolean;
+};
+
+function existingPublisherKind(value?: string): PublisherKind {
+  return value === "wordpress" || value === "webhook" || value === "github"
+    ? value
+    : "github";
+}
+
 const CAPABILITIES = [
   {
     key: "publisher",
@@ -116,27 +137,47 @@ function ModeChoice({
   );
 }
 
-export function SetupWizard() {
+export function SetupWizard({
+  existingSite,
+}: {
+  existingSite?: ExistingSiteSetup;
+} = {}) {
   const { userId, isLoaded } = useAuth();
-  const [domain, setDomain] = useState("");
-  const [businessName, setBusinessName] = useState("");
-  const [businessSummary, setBusinessSummary] = useState("");
-  const [targetCountry, setTargetCountry] = useState("");
-  const [targetAudience, setTargetAudience] = useState("");
-  const [productUsage, setProductUsage] = useState("");
-  const [painPoints, setPainPoints] = useState("");
-  const [publisherKind, setPublisherKind] = useState<PublisherKind>("github");
+  const [domain, setDomain] = useState(existingSite?.domain ?? "");
+  const [businessName, setBusinessName] = useState(existingSite?.siteName ?? "");
+  const [businessSummary, setBusinessSummary] = useState(
+    existingSite?.siteSummary ?? "",
+  );
+  const [targetCountry, setTargetCountry] = useState(
+    existingSite?.targetCountry ?? "",
+  );
+  const [targetAudience, setTargetAudience] = useState(
+    existingSite?.targetAudienceSummary ?? "",
+  );
+  const [productUsage, setProductUsage] = useState(
+    existingSite?.productUsage ?? "",
+  );
+  const [painPoints, setPainPoints] = useState(
+    existingSite?.painPoints?.join(", ") ?? "",
+  );
+  const [publisherKind, setPublisherKind] = useState<PublisherKind>(
+    existingPublisherKind(existingSite?.publishMethod),
+  );
   const [outreachTransport, setOutreachTransport] =
-    useState<OutreachTransport>("smartlead_managed");
+    useState<OutreachTransport>(existingSite ? "smtp" : "smartlead_managed");
   const publisherMode: SetupMode = "connect_existing";
   const measurementMode: SetupMode = "connect_existing";
   const outreachMode: SetupMode = outreachTransport === "smartlead_managed"
     ? "managed"
     : "connect_existing";
-  const [automationMode, setAutomationMode] = useState<AutomationMode>("full");
+  const [automationMode, setAutomationMode] = useState<AutomationMode>(
+    existingSite?.approvalRequired === true ? "assisted" : "full",
+  );
   const [autopublishConsentAccepted, setAutopublishConsentAccepted] =
     useState(false);
-  const [managedSenderName, setManagedSenderName] = useState("");
+  const [managedSenderName, setManagedSenderName] = useState(
+    existingSite?.siteName ?? "",
+  );
   const [managedPhysicalAddress, setManagedPhysicalAddress] = useState("");
   const [managedSenderDomain, setManagedSenderDomain] = useState("");
   const [confirmsSenderIdentityAndAddress, setConfirmsSenderIdentityAndAddress] =
@@ -150,7 +191,9 @@ export function SetupWizard() {
     useState(false);
   const [confirmsSeparateAutomaticSendingConsent, setConfirmsSeparateAutomaticSendingConsent] =
     useState(false);
-  const [cadence, setCadence] = useState(0);
+  const [cadence, setCadence] = useState(
+    existingSite?.cadenceRequestedPerWeek ?? existingSite?.cadencePerWeek ?? 0,
+  );
   const automaticCadence = useRef(0);
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null);
   const [setupReceipt, setSetupReceipt] = useState<OneSetupReceipt | null>(null);
@@ -331,8 +374,13 @@ export function SetupWizard() {
     setError(null);
     setNotice(null);
     try {
-      setActiveOperation("Creating the tenant setup record…");
+      setActiveOperation(
+        existingSite
+          ? "Updating the existing tenant setup record…"
+          : "Creating the tenant setup record…",
+      );
       const createdSiteId = await upsertSite({
+        ...(existingSite ? { id: existingSite._id } : {}),
         domain: domain.trim(),
         clerkUserId: userId,
         siteName: businessName.trim(),
@@ -353,7 +401,7 @@ export function SetupWizard() {
         autopilotEnabled: true,
         inferToneNiche: true,
         language: "en",
-        createOnly: true,
+        ...(!existingSite ? { createOnly: true } : {}),
       });
       setSiteId(createdSiteId);
       await finishSetup(createdSiteId);
@@ -514,10 +562,12 @@ export function SetupWizard() {
           <Zap className="h-5 w-5 text-[#0EA5E9]" />
         </div>
         <h1 className="mt-3 text-xl font-semibold text-[#EDEEF1]">
-          Set up Pentra once
+          {existingSite ? "Finish One Setup" : "Set up Pentra once"}
         </h1>
         <p className="mx-auto mt-1 max-w-lg text-[12px] leading-relaxed text-[#565A6E]">
-          Describe the business once, authorize each connection, and Pentra takes it from there.
+          {existingSite
+            ? "Confirm this existing site's business, connections, and automation choices once. Pentra will preserve the same tenant and continue from durable receipts."
+            : "Describe the business once, authorize each connection, and Pentra takes it from there."}
         </p>
       </div>
 
@@ -532,6 +582,7 @@ export function SetupWizard() {
           label="Website"
           placeholder="https://example.com"
           value={domain}
+          readOnly={Boolean(existingSite)}
           onChange={(event) => setDomain(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !busy) void startSetup();
@@ -861,7 +912,11 @@ export function SetupWizard() {
           }
           icon={<Globe className="h-3.5 w-3.5" />}
         >
-          {busy ? "Starting setup…" : `Start one setup · ${cadenceLabel(cadence)}`}
+          {busy
+            ? existingSite
+              ? "Finishing setup…"
+              : "Starting setup…"
+            : `${existingSite ? "Finish" : "Start"} one setup · ${cadenceLabel(cadence)}`}
         </Button>
       </div>
     </div>
