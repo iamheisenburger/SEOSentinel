@@ -11,7 +11,7 @@ const allFeatures = [
   "Hero images & infographics",
   "Internal linking",
   "Schema markup (JSON-LD)",
-  "Multi-platform publishing",
+  "Verified GitHub publishing",
   "Autopilot scheduling",
   "Keyword strategy & topic clusters",
 ];

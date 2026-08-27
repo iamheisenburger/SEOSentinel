@@ -112,7 +112,12 @@ export function sanitizeInboxForClient(
   const sentTodayDay = typeof inbox.sentTodayDay === "string" ? inbox.sentTodayDay : undefined;
   const oauthScopes = typeof inbox.oauthScopes === "string" ? inbox.oauthScopes : "";
   const credentialsPresent = Boolean(
-    inbox.oauthAccessToken || inbox.oauthRefreshToken || inbox.smtpPassword || inbox.apiKey,
+    inbox.oauthAccessToken || inbox.oauthRefreshToken || inbox.smtpPassword ||
+      inbox.credentialCiphertext || inbox.apiKey,
+  );
+  const imapReady = Boolean(
+    inbox.provider === "smtp" && inbox.imapVerifiedAt &&
+      !["disconnected", "suspended"].includes(String(inbox.status ?? "")),
   );
   const legacyGmailReadReady = Boolean(
     inbox.provider === "gmail" &&
@@ -137,7 +142,7 @@ export function sanitizeInboxForClient(
   )
     ? relayDsnRoutingTargetAddress!.toLowerCase()
     : undefined;
-  const inboundMonitoringReady = relayReady || legacyGmailReadReady;
+  const inboundMonitoringReady = imapReady || relayReady || legacyGmailReadReady;
   const storedAutonomyConsentActive = autonomousOutreachConsentActive(
     inbox,
     autonomousConsentOwnerId,
@@ -177,6 +182,10 @@ export function sanitizeInboxForClient(
         ? inbox.sentToday
         : 0,
     verifiedAt: inbox.verifiedAt,
+    imapVerifiedAt: inbox.imapVerifiedAt,
+    imapLastPolledAt: inbox.imapLastPolledAt,
+    imapNextPollAt: inbox.imapNextPollAt,
+    imapLastError: inbox.imapLastError,
     senderDomain: inbox.senderDomain,
     dkimSelector: inbox.dkimSelector,
     dnsCheckedAt: inbox.dnsCheckedAt,
@@ -196,7 +205,9 @@ export function sanitizeInboxForClient(
     ),
     inboundRelayDsnRoutingVerifiedAt:
       inbox.inboundRelayDsnRoutingVerifiedAt,
-    inboundMonitoringMode: legacyDrainRequired && legacyGmailReadReady
+    inboundMonitoringMode: imapReady
+      ? "imap"
+      : legacyDrainRequired && legacyGmailReadReady
       ? "legacy_gmail"
       : relayReady
       ? "signed_relay"

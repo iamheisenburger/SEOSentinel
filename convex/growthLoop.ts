@@ -14,6 +14,7 @@ import {
   GROWTH_LOOP_STAGE_KEYS,
   growthLoopReleaseBlockers,
   type CapabilityState,
+  type GrowthLoopReleaseProfile,
   type GrowthLoopStageKey,
   type PublisherKind,
 } from "./lib/growthLoopContracts";
@@ -23,7 +24,15 @@ const CANARY_KIND = v.union(
   v.literal("publisher_wordpress"),
   v.literal("publisher_webhook"),
   v.literal("tenant_natural_loop"),
+  v.literal("tenant_terminal_convergence"),
   v.literal("measurement_decision"),
+  v.literal("smtp_connection"),
+  v.literal("smtp_delivery"),
+  v.literal("imap_reply"),
+  v.literal("imap_bounce"),
+  v.literal("imap_stop"),
+  v.literal("smtp_followup_cancellation"),
+  v.literal("controlled_conversion"),
   v.literal("smartlead_provisioning"),
   v.literal("smartlead_warmup"),
   v.literal("smartlead_delivery"),
@@ -33,6 +42,48 @@ const CANARY_KIND = v.union(
   v.literal("smartlead_cancellation"),
   v.literal("acquired_backlink"),
 );
+
+const RELEASE_PROFILE = v.union(
+  v.literal("bootstrap_v1"),
+  v.literal("full_managed"),
+);
+
+const BOOTSTRAP_TENANT_ROLE = v.union(
+  v.literal("primary_natural"),
+  v.literal("secondary_convergence"),
+);
+
+const BOOTSTRAP_V1_CANARY_KINDS = new Set([
+  "publisher_github",
+  "tenant_natural_loop",
+  "tenant_terminal_convergence",
+  "measurement_decision",
+  "smtp_connection",
+  "smtp_delivery",
+  "imap_reply",
+  "imap_bounce",
+  "imap_stop",
+  "smtp_followup_cancellation",
+  "controlled_conversion",
+  "acquired_backlink",
+]);
+
+function releaseProfileAllowsCanary(
+  profile: GrowthLoopReleaseProfile,
+  kind: string,
+): boolean {
+  if (profile === "bootstrap_v1") return BOOTSTRAP_V1_CANARY_KINDS.has(kind);
+  return ![
+    "tenant_terminal_convergence",
+    "smtp_connection",
+    "smtp_delivery",
+    "imap_reply",
+    "imap_bounce",
+    "imap_stop",
+    "smtp_followup_cancellation",
+    "controlled_conversion",
+  ].includes(kind);
+}
 
 function stateForSetupProgress(state: string | undefined): CapabilityState {
   switch (state) {
@@ -130,26 +181,34 @@ export const getStatus = query({
         inboxes,
         ownerAccountKey: accountDeletionKey(site.userId),
       }) &&
-      inboundRelayDsnRoutingReady({
-        inbox: currentInbox,
-        now: timestamp,
-        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-        runtimeConfig: {
-          domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
-          secrets: [
-            process.env.OUTREACH_INBOUND_RELAY_SECRET,
-            process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
-          ],
-          dsnTargetSecret:
-            process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
-          adapterVersion:
-            process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
-          retentionPolicyHash:
-            process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
-          retentionAudited:
-            process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
-        },
-      })
+      (currentInbox.provider === "smtp"
+        ? Boolean(
+            currentInbox.imapVerifiedAt &&
+              currentInbox.credentialCiphertext &&
+              currentInbox.credentialKeyId &&
+              currentInbox.credentialBindingHash &&
+              currentInbox.smtpPassword === undefined,
+          )
+        : inboundRelayDsnRoutingReady({
+            inbox: currentInbox,
+            now: timestamp,
+            rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+            runtimeConfig: {
+              domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+              secrets: [
+                process.env.OUTREACH_INBOUND_RELAY_SECRET,
+                process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+              ],
+              dsnTargetSecret:
+                process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
+              adapterVersion:
+                process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+              retentionPolicyHash:
+                process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+              retentionAudited:
+                process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+            },
+          }))
     );
     const outreachReady = smartleadInbox
       ? smartleadCanariesReady
@@ -179,7 +238,9 @@ export const getStatus = query({
               ? "managed_sender_warming"
               : smartleadInbox
                 ? "smartlead_canaries_pending"
-                : "sender_authentication_or_bounce_canary_required";
+                : currentInbox?.provider === "smtp"
+                  ? "sender_authentication_or_imap_verification_required"
+                  : "sender_authentication_or_bounce_canary_required";
     const setupState = stateForSetupProgress(request?.aggregateState);
     const setupBlocker = setupState === "ready"
       ? undefined
@@ -338,16 +399,23 @@ function rolloutCanaryBlockers(
     kind: string;
     status: string;
     siteId?: unknown;
+    bootstrapTenantRole?: unknown;
     managedResourceId?: unknown;
   }>,
+  profile: GrowthLoopReleaseProfile,
 ): string[] {
   const passed = canaries.filter((row) => row.status === "passed");
-  const tenantIds = new Set(passed
+  const naturalTenantIds = new Set(passed
     .filter((row) => row.kind === "tenant_natural_loop" && row.siteId)
+    .map((row) => String(row.siteId)));
+  const terminalTenantIds = new Set(passed
+    .filter((row) =>
+      row.kind === "tenant_terminal_convergence" && row.siteId
+    )
     .map((row) => String(row.siteId)));
   const publisherRows = passed.filter((row) =>
     row.kind.startsWith("publisher_") &&
-    row.siteId && tenantIds.has(String(row.siteId))
+    row.siteId && naturalTenantIds.has(String(row.siteId))
   );
   const publisherKinds = new Set(publisherRows.map((row) => row.kind));
   const smartleadRows = passed.filter((row) =>
@@ -357,8 +425,47 @@ function rolloutCanaryBlockers(
     .map((row) => row.managedResourceId ? String(row.managedResourceId) : "")
     .filter(Boolean));
   const blockers: string[] = [];
-  if (tenantIds.size < 3) blockers.push("three_unrelated_tenant_canaries_missing");
-  if ([...tenantIds].some((siteId) =>
+  if (profile === "bootstrap_v1") {
+    const primaryNatural = passed.filter((row) =>
+      row.kind === "tenant_natural_loop" &&
+      row.bootstrapTenantRole === "primary_natural" && row.siteId
+    );
+    const secondary = passed.filter((row) =>
+      ["tenant_natural_loop", "tenant_terminal_convergence"].includes(row.kind) &&
+      row.bootstrapTenantRole === "secondary_convergence" && row.siteId
+    );
+    if (
+      primaryNatural.length < 1 || secondary.length < 1 ||
+      String(primaryNatural[0]?.siteId) === String(secondary[0]?.siteId)
+    ) {
+      blockers.push("two_authorized_tenant_canaries_missing");
+    }
+    if (primaryNatural.length < 1) blockers.push("tenant_natural_loop_missing");
+    if (secondary.length < 1) blockers.push("tenant_terminal_convergence_missing");
+    if (!publisherKinds.has("publisher_github")) {
+      blockers.push("publisher_github_missing");
+    }
+    for (const kind of [
+      "measurement_decision",
+      "smtp_connection",
+      "smtp_delivery",
+      "imap_reply",
+      "imap_bounce",
+      "imap_stop",
+      "smtp_followup_cancellation",
+      "controlled_conversion",
+      "acquired_backlink",
+    ]) {
+      if (!passed.some((row) => row.kind === kind)) {
+        blockers.push(`${kind}_missing`);
+      }
+    }
+    return blockers;
+  }
+  if (naturalTenantIds.size < 3) {
+    blockers.push("three_unrelated_tenant_canaries_missing");
+  }
+  if ([...naturalTenantIds].some((siteId) =>
     !publisherRows.some((row) => String(row.siteId) === siteId)
   )) blockers.push("tenant_canary_publisher_receipt_missing");
   for (const kind of ["publisher_github", "publisher_wordpress", "publisher_webhook"]) {
@@ -378,11 +485,11 @@ function rolloutCanaryBlockers(
   }
   if (!passed.some((row) =>
     row.kind === "measurement_decision" && row.siteId &&
-    tenantIds.has(String(row.siteId))
+    naturalTenantIds.has(String(row.siteId))
   )) blockers.push("measurement_decision_missing");
   if (!passed.some((row) =>
     row.kind === "acquired_backlink" && row.siteId &&
-    tenantIds.has(String(row.siteId))
+    naturalTenantIds.has(String(row.siteId))
   )) blockers.push("acquired_backlink_missing");
   return blockers;
 }
@@ -428,18 +535,33 @@ async function rolloutOperationalBlockers(ctx: MutationCtx, timestamp: number) {
 async function startEligibleRollout(
   ctx: MutationCtx,
   releaseCommit: string,
+  profile: GrowthLoopReleaseProfile,
+  deploymentReceiptHash: string,
+  deployedAt: number,
 ) {
   const existing = await ctx.db.query("growth_loop_rollout_controls")
     .withIndex("by_release_commit", (q) => q.eq("releaseCommit", releaseCommit))
     .unique();
-  if (existing) return { control: existing, blockers: [] as string[] };
+  if (existing) {
+    if (
+      (existing.profile ?? "full_managed") !== profile ||
+      existing.deploymentReceiptHash !== deploymentReceiptHash ||
+      existing.deployedAt !== deployedAt
+    ) throw new Error("Release commit is bound to a different deployment profile");
+    return { control: existing, blockers: [] as string[] };
+  }
   const canaries = await ctx.db.query("growth_loop_canary_receipts")
     .withIndex("by_release", (q) => q.eq("releaseCommit", releaseCommit))
     .take(101);
   if (canaries.length > 100) {
     return { control: null, blockers: ["release_canary_read_limit_exceeded"] };
   }
-  const blockers = rolloutCanaryBlockers(canaries);
+  const eligibleCanaries = canaries.filter((canary) =>
+    (canary.profile ?? "full_managed") === profile &&
+    canary.deploymentReceiptHash === deploymentReceiptHash &&
+    canary.deployedAt === deployedAt
+  );
+  const blockers = rolloutCanaryBlockers(eligibleCanaries, profile);
   if (blockers.length) return { control: null, blockers };
   const timestamp = Date.now();
   const operational = await rolloutOperationalBlockers(ctx, timestamp);
@@ -452,6 +574,9 @@ async function startEligibleRollout(
   if (blockers.length) return { control: null, blockers };
   const id = await ctx.db.insert("growth_loop_rollout_controls", {
     releaseCommit,
+    profile,
+    deploymentReceiptHash,
+    deployedAt,
     status: "active",
     targetPercent: GROWTH_LOOP_ROLLOUT_STAGES[0],
     stageStartedAt: timestamp,
@@ -468,12 +593,28 @@ async function startEligibleRollout(
 /** Begin widening only after the release candidate already has every source-
  * bound production canary. The mutation cannot invent a canary result. */
 export const startRolloutInternal = internalMutation({
-  args: { releaseCommit: v.string() },
-  handler: async (ctx, { releaseCommit }) => {
+  args: {
+    releaseCommit: v.string(),
+    profile: RELEASE_PROFILE,
+    deploymentReceiptHash: v.string(),
+    deployedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { releaseCommit } = args;
     if (!RELEASE_COMMIT_PATTERN.test(releaseCommit)) {
       throw new Error("Release commit must be a full immutable git commit");
     }
-    const result = await startEligibleRollout(ctx, releaseCommit);
+    requireHash(args.deploymentReceiptHash, "deployment receipt");
+    if (!Number.isSafeInteger(args.deployedAt) || args.deployedAt <= 0) {
+      throw new Error("Deployment timestamp is invalid");
+    }
+    const result = await startEligibleRollout(
+      ctx,
+      releaseCommit,
+      args.profile,
+      args.deploymentReceiptHash,
+      args.deployedAt,
+    );
     if (!result.control) {
       throw new Error(`Growth-loop rollout blocked: ${result.blockers.join(",")}`);
     }
@@ -492,10 +633,24 @@ export const ensureEligibleRolloutInternal = internalMutation({
     if (!latestCanary) {
       return { started: false as const, reason: "no_release_canaries" };
     }
+    if (
+      !latestCanary.deploymentReceiptHash ||
+      !HASH_PATTERN.test(latestCanary.deploymentReceiptHash) ||
+      !latestCanary.deployedAt
+    ) {
+      return {
+        started: false as const,
+        releaseCommit: latestCanary.releaseCommit,
+        blockers: ["deployment_receipt_missing"],
+      };
+    }
     try {
       const result = await startEligibleRollout(
         ctx,
         latestCanary.releaseCommit,
+        latestCanary.profile ?? "full_managed",
+        latestCanary.deploymentReceiptHash ?? "",
+        latestCanary.deployedAt ?? 0,
       );
       return result.control
         ? {
@@ -597,17 +752,47 @@ export const advanceRolloutInternal = internalMutation({
 export const recordCanaryInternal = internalMutation({
   args: {
     releaseCommit: v.string(),
+    profile: RELEASE_PROFILE,
+    deploymentReceiptHash: v.string(),
+    deployedAt: v.number(),
     siteId: v.id("sites"),
+    bootstrapTenantRole: v.optional(BOOTSTRAP_TENANT_ROLE),
     kind: CANARY_KIND,
     articleId: v.optional(v.id("articles")),
     opportunityId: v.optional(v.id("seo_authority_opportunities")),
     growthActionId: v.optional(v.id("seo_growth_actions")),
+    opportunityDecisionReceiptId:
+      v.optional(v.id("opportunity_decision_receipts")),
+    inboxId: v.optional(v.id("outreach_inboxes")),
+    messageId: v.optional(v.id("outreach_messages")),
+    outcomeReceiptId: v.optional(v.id("outcome_receipts")),
     managedResourceId: v.optional(v.id("managed_outreach_mailbox_resources")),
     promotionRunId: v.optional(v.id("autopilot_runs")),
   },
   handler: async (ctx, args) => {
     if (!RELEASE_COMMIT_PATTERN.test(args.releaseCommit)) {
       throw new Error("Release commit must be a full immutable git commit");
+    }
+    requireHash(args.deploymentReceiptHash, "deployment receipt");
+    if (!Number.isSafeInteger(args.deployedAt) || args.deployedAt <= 0) {
+      throw new Error("Deployment timestamp is invalid");
+    }
+    if (!releaseProfileAllowsCanary(args.profile, args.kind)) {
+      throw new Error("Canary kind is not allowed for this release profile");
+    }
+    const tenantCanaryKind = [
+      "tenant_natural_loop",
+      "tenant_terminal_convergence",
+    ].includes(args.kind);
+    if (
+      (args.profile === "bootstrap_v1" && tenantCanaryKind &&
+        !args.bootstrapTenantRole) ||
+      (args.kind === "tenant_terminal_convergence" &&
+        args.bootstrapTenantRole !== "secondary_convergence") ||
+      (!tenantCanaryKind && args.bootstrapTenantRole) ||
+      (args.profile === "full_managed" && args.bootstrapTenantRole)
+    ) {
+      throw new Error("Release canary tenant role is invalid");
     }
     const site = await ctx.db.get(args.siteId);
     if (!site || site.deletionStatus) throw new Error("Canary site is unavailable");
@@ -688,6 +873,33 @@ export const recordCanaryInternal = internalMutation({
         publicUrlVerifiedAt: article.publicUrlVerifiedAt,
       }));
       observedAt = article.publicUrlVerifiedAt!;
+    } else if (args.kind === "tenant_terminal_convergence") {
+      if (!args.opportunityDecisionReceiptId) {
+        throw new Error("Terminal opportunity decision evidence is required");
+      }
+      const decision = await ctx.db.get(args.opportunityDecisionReceiptId);
+      if (
+        !decision || decision.siteId !== args.siteId ||
+        decision.classification !== "opportunity_space_exhausted" ||
+        decision.admitted || !decision.inputHash ||
+        !decision.automaticWakeAt ||
+        decision.automaticWakeAt <= decision.evaluatedAt
+      ) {
+        throw new Error(
+          "Terminal convergence lacks an exact exhausted-opportunity receipt",
+        );
+      }
+      sourceIds.opportunityDecisionReceiptId = String(decision._id);
+      receiptHash = sha256Hex(JSON.stringify({
+        kind: args.kind,
+        siteId: String(args.siteId),
+        decisionId: String(decision._id),
+        classification: decision.classification,
+        inputHash: decision.inputHash,
+        evaluatedAt: decision.evaluatedAt,
+        automaticWakeAt: decision.automaticWakeAt,
+      }));
+      observedAt = decision.evaluatedAt;
     } else if (args.kind === "measurement_decision") {
       if (!args.growthActionId) throw new Error("Growth action evidence is required");
       const action = await ctx.db.get(args.growthActionId);
@@ -721,6 +933,152 @@ export const recordCanaryInternal = internalMutation({
         resolvedAt: action.resolvedAt,
       }));
       observedAt = action.automatedAt ?? action.resolvedAt ?? action.lastObservedAt;
+    } else if (args.kind === "smtp_connection") {
+      if (!args.inboxId) throw new Error("SMTP inbox evidence is required");
+      const inbox = await ctx.db.get(args.inboxId);
+      if (
+        !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
+        !inbox.verifiedAt || !inbox.imapVerifiedAt ||
+        !inbox.credentialCiphertext || !inbox.credentialKeyId ||
+        inbox.smtpPassword !== undefined ||
+        !["connected", "warming", "active"].includes(inbox.status)
+      ) {
+        throw new Error(
+          "SMTP/IMAP connection lacks encrypted credentials and verified sockets",
+        );
+      }
+      sourceIds.inboxId = String(inbox._id);
+      receiptHash = sha256Hex(JSON.stringify({
+        kind: args.kind,
+        siteId: String(args.siteId),
+        inboxId: String(inbox._id),
+        configurationVersion: inbox.configurationVersion,
+        credentialKeyId: inbox.credentialKeyId,
+        verifiedAt: inbox.verifiedAt,
+        imapVerifiedAt: inbox.imapVerifiedAt,
+      }));
+      observedAt = Math.max(inbox.verifiedAt, inbox.imapVerifiedAt);
+    } else if (args.kind === "smtp_delivery") {
+      if (!args.inboxId || !args.messageId) {
+        throw new Error("SMTP delivery evidence is required");
+      }
+      const [inbox, message] = await Promise.all([
+        ctx.db.get(args.inboxId),
+        ctx.db.get(args.messageId),
+      ]);
+      if (
+        !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
+        !message || message.siteId !== args.siteId ||
+        message.inboxId !== inbox._id || message.deliveryTransport !== "smtp" ||
+        !message.sentAt || !message.deliveryAttemptId ||
+        !["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(
+          message.status,
+        )
+      ) throw new Error("SMTP message lacks an exact accepted-delivery receipt");
+      sourceIds.inboxId = String(inbox._id);
+      sourceIds.messageId = String(message._id);
+      receiptHash = sha256Hex(JSON.stringify({
+        kind: args.kind,
+        siteId: String(args.siteId),
+        inboxId: String(inbox._id),
+        messageId: String(message._id),
+        attemptId: message.deliveryAttemptId,
+        providerMessageIdDigest: message.inboundRelayOutboundMessageIdHash,
+        sentAt: message.sentAt,
+      }));
+      observedAt = message.sentAt;
+    } else if (["imap_reply", "imap_bounce", "imap_stop"].includes(args.kind)) {
+      if (!args.inboxId || !args.messageId) {
+        throw new Error("IMAP settlement evidence is required");
+      }
+      const [inbox, message] = await Promise.all([
+        ctx.db.get(args.inboxId),
+        ctx.db.get(args.messageId),
+      ]);
+      const expectedKind = args.kind === "imap_reply"
+        ? "reply"
+        : args.kind === "imap_bounce"
+          ? "bounce"
+          : "unsubscribe";
+      if (
+        !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
+        !message || message.siteId !== args.siteId ||
+        message.inboxId !== inbox._id ||
+        message.inboundReceiptTransport !== "imap" ||
+        message.inboundReceiptKind !== expectedKind ||
+        !message.inboundReceiptHash || !message.inboundReceiptAt
+      ) throw new Error("IMAP event lacks an exact tenant-bound receipt");
+      sourceIds.inboxId = String(inbox._id);
+      sourceIds.messageId = String(message._id);
+      receiptHash = sha256Hex(JSON.stringify({
+        kind: args.kind,
+        siteId: String(args.siteId),
+        inboxId: String(inbox._id),
+        messageId: String(message._id),
+        evidenceHash: message.inboundReceiptHash,
+        receivedAt: message.inboundReceiptAt,
+      }));
+      observedAt = message.inboundReceiptAt;
+    } else if (args.kind === "smtp_followup_cancellation") {
+      if (!args.messageId) throw new Error("Cancellation source message is required");
+      const message = await ctx.db.get(args.messageId);
+      if (
+        !message || message.siteId !== args.siteId ||
+        message.inboundReceiptTransport !== "imap" ||
+        !["reply", "bounce", "unsubscribe"].includes(
+          message.inboundReceiptKind ?? "",
+        )
+      ) throw new Error("Cancellation source lacks a settled IMAP stop event");
+      const children = await ctx.db.query("outreach_messages")
+        .withIndex("by_site_status", (q) => q.eq("siteId", args.siteId))
+        .take(500);
+      const threadChildren = children.filter((row) =>
+        row.threadKey === message.threadKey && row.sequenceStep > message.sequenceStep
+      );
+      if (
+        threadChildren.some((row) =>
+          ["draft", "approved", "sending", "sent"].includes(row.status)
+        ) || !threadChildren.some((row) =>
+          ["blocked", "skipped"].includes(row.status)
+        )
+      ) throw new Error("A pending follow-up survived the IMAP stop event");
+      sourceIds.messageId = String(message._id);
+      receiptHash = sha256Hex(JSON.stringify({
+        kind: args.kind,
+        siteId: String(args.siteId),
+        messageId: String(message._id),
+        threadKey: message.threadKey,
+        children: threadChildren.map((row) => ({
+          id: String(row._id),
+          step: row.sequenceStep,
+          status: row.status,
+          blockedReason: row.blockedReason,
+        })),
+      }));
+      observedAt = Math.max(
+        message.inboundReceiptAt ?? 0,
+        ...threadChildren.map((row) => row.updatedAt),
+      );
+    } else if (args.kind === "controlled_conversion") {
+      if (!args.outcomeReceiptId) {
+        throw new Error("Controlled conversion receipt evidence is required");
+      }
+      const receipt = await ctx.db.get(args.outcomeReceiptId);
+      if (
+        !receipt || receipt.siteId !== args.siteId || !receipt.isCanary ||
+        receipt.eventType !== "qualified_action"
+      ) throw new Error("Outcome receipt is not an isolated conversion canary");
+      sourceIds.outcomeReceiptId = String(receipt._id);
+      receiptHash = sha256Hex(JSON.stringify({
+        kind: args.kind,
+        siteId: String(args.siteId),
+        outcomeReceiptId: String(receipt._id),
+        articleId: String(receipt.articleId),
+        eventId: receipt.eventId,
+        occurredAt: receipt.occurredAt,
+        receivedAt: receipt.receivedAt,
+      }));
+      observedAt = receipt.receivedAt;
     } else if (args.kind.startsWith("smartlead_")) {
       if (!args.managedResourceId) throw new Error("Smartlead resource evidence is required");
       const resource = await ctx.db.get(args.managedResourceId);
@@ -806,8 +1164,16 @@ export const recordCanaryInternal = internalMutation({
       throw new Error("Unsupported canary kind");
     }
 
+    if (observedAt < args.deployedAt) {
+      throw new Error("Canary evidence predates the bound production deployment");
+    }
+
     const canaryKey = sha256Hex(JSON.stringify({
       releaseCommit: args.releaseCommit,
+      profile: args.profile,
+      deploymentReceiptHash: args.deploymentReceiptHash,
+      deployedAt: args.deployedAt,
+      bootstrapTenantRole: args.bootstrapTenantRole,
       siteId: String(args.siteId),
       kind: args.kind,
       ...sourceIds,
@@ -817,6 +1183,10 @@ export const recordCanaryInternal = internalMutation({
       .unique();
     if (existing) {
       const same = existing.releaseCommit === args.releaseCommit &&
+        (existing.profile ?? "full_managed") === args.profile &&
+        existing.deploymentReceiptHash === args.deploymentReceiptHash &&
+        existing.deployedAt === args.deployedAt &&
+        existing.bootstrapTenantRole === args.bootstrapTenantRole &&
         existing.siteId === args.siteId && existing.kind === args.kind &&
         existing.status === "passed" && existing.receiptHash === receiptHash &&
         existing.observedAt === observedAt;
@@ -825,12 +1195,20 @@ export const recordCanaryInternal = internalMutation({
     }
     const canaryId = await ctx.db.insert("growth_loop_canary_receipts", {
       releaseCommit: args.releaseCommit,
+      profile: args.profile,
+      deploymentReceiptHash: args.deploymentReceiptHash,
+      deployedAt: args.deployedAt,
+      bootstrapTenantRole: args.bootstrapTenantRole,
       siteId: args.siteId,
       canaryKey,
       kind: args.kind,
       articleId: args.articleId,
       opportunityId: args.opportunityId,
       growthActionId: args.growthActionId,
+      opportunityDecisionReceiptId: args.opportunityDecisionReceiptId,
+      inboxId: args.inboxId,
+      messageId: args.messageId,
+      outcomeReceiptId: args.outcomeReceiptId,
       managedResourceId: args.managedResourceId,
       promotionRunId: args.promotionRunId,
       status: "passed",
@@ -842,7 +1220,13 @@ export const recordCanaryInternal = internalMutation({
     // same transaction. Incomplete evidence remains a durable canary rather
     // than producing an operator-only recovery step.
     try {
-      await startEligibleRollout(ctx, args.releaseCommit);
+      await startEligibleRollout(
+        ctx,
+        args.releaseCommit,
+        args.profile,
+        args.deploymentReceiptHash,
+        args.deployedAt,
+      );
     } catch {
       // Rollout diagnostics must never erase a valid immutable canary. The
       // 15-minute controller can re-evaluate once operational reads recover.
@@ -858,7 +1242,11 @@ export const recordCanaryInternal = internalMutation({
 export const createReleaseReceiptInternal = internalMutation({
   args: {
     releaseCommit: v.string(),
+    profile: RELEASE_PROFILE,
+    deploymentReceiptHash: v.string(),
+    deployedAt: v.number(),
     adapterMatrixHash: v.string(),
+    supportedMatrixHash: v.string(),
   },
   handler: async (ctx, args) => {
     if (!RELEASE_COMMIT_PATTERN.test(args.releaseCommit)) {
@@ -867,17 +1255,36 @@ export const createReleaseReceiptInternal = internalMutation({
     if (!HASH_PATTERN.test(args.adapterMatrixHash)) {
       throw new Error("Adapter matrix must be an exact SHA-256 receipt");
     }
+    requireHash(args.deploymentReceiptHash, "deployment receipt");
+    requireHash(args.supportedMatrixHash, "supported matrix");
+    if (!Number.isSafeInteger(args.deployedAt) || args.deployedAt <= 0) {
+      throw new Error("Deployment timestamp is invalid");
+    }
     const existing = await ctx.db.query("growth_loop_release_receipts")
       .withIndex("by_release_commit", (q) => q.eq("releaseCommit", args.releaseCommit))
       .unique();
-    if (existing) return existing;
+    if (existing) {
+      if (
+        (existing.profile ?? "full_managed") !== args.profile ||
+        existing.deploymentReceiptHash !== args.deploymentReceiptHash ||
+        existing.deployedAt !== args.deployedAt ||
+        existing.adapterMatrixHash !== args.adapterMatrixHash ||
+        existing.supportedMatrixHash !== args.supportedMatrixHash
+      ) {
+        throw new Error("Release commit is already bound to a different GA receipt");
+      }
+      return existing;
+    }
     const rolloutControl = await ctx.db.query("growth_loop_rollout_controls")
       .withIndex("by_release_commit", (q) =>
         q.eq("releaseCommit", args.releaseCommit))
       .unique();
     if (
       !rolloutControl || rolloutControl.status !== "complete" ||
-      rolloutControl.targetPercent !== 100 || !rolloutControl.completedAt
+      rolloutControl.targetPercent !== 100 || !rolloutControl.completedAt ||
+      (rolloutControl.profile ?? "full_managed") !== args.profile ||
+      rolloutControl.deploymentReceiptHash !== args.deploymentReceiptHash ||
+      rolloutControl.deployedAt !== args.deployedAt
     ) throw new Error("GA receipt blocked: staged_rollout_incomplete");
     const canaries = await ctx.db.query("growth_loop_canary_receipts")
       .withIndex("by_release", (q) => q.eq("releaseCommit", args.releaseCommit))
@@ -927,39 +1334,77 @@ export const createReleaseReceiptInternal = internalMutation({
       sendingMessages.filter((message) =>
         !message.deliveryLeaseExpiresAt || message.deliveryLeaseExpiresAt <= timestamp
       ).length;
+    const passed = canaries.filter((canary) =>
+      canary.status === "passed" &&
+      (canary.profile ?? "full_managed") === args.profile &&
+      canary.deploymentReceiptHash === args.deploymentReceiptHash &&
+      canary.deployedAt === args.deployedAt
+    );
+    const kinds = new Set(passed.map((canary) => canary.kind));
+    const tenantCanaries = passed.filter((canary) => canary.kind === "tenant_natural_loop" && canary.siteId);
+    const terminalTenantCanaries = passed.filter((canary) =>
+      canary.kind === "tenant_terminal_convergence" && canary.siteId
+    );
+    const tenantSiteIds = new Set([
+      ...tenantCanaries.map((canary) => String(canary.siteId)),
+      ...terminalTenantCanaries.map((canary) => String(canary.siteId)),
+    ]);
+    const primaryNaturalCanaries = tenantCanaries.filter((canary) =>
+      canary.bootstrapTenantRole === "primary_natural"
+    );
+    const secondaryCanaries = passed.filter((canary) =>
+      canary.bootstrapTenantRole === "secondary_convergence" &&
+      ["tenant_natural_loop", "tenant_terminal_convergence"].includes(canary.kind) &&
+      canary.siteId
+    );
     const eligibleSites = enrolledSites.filter((site) =>
-      !site.deletionStatus && !site.planParkedAt && (site.cadencePerWeek ?? 0) > 0
+      !site.deletionStatus && !site.planParkedAt &&
+      (site.cadencePerWeek ?? 0) > 0 &&
+      (args.profile === "bootstrap_v1"
+        ? tenantSiteIds.has(String(site._id))
+        : true)
+    );
+    const terminalSiteIds = new Set(
+      terminalTenantCanaries.map((canary) => String(canary.siteId)),
     );
     const liveEligibleSites = eligibleSites.filter((site) =>
-      site.autopilotRolloutMode === "live"
+      site.autopilotRolloutMode === "live" ||
+      (args.profile === "bootstrap_v1" && terminalSiteIds.has(String(site._id)))
     );
     const rolloutPercent = eligibleSites.length === 0
       ? 0
       : Math.floor((100 * liveEligibleSites.length) / eligibleSites.length);
-    const passed = canaries.filter((canary) => canary.status === "passed");
-    const kinds = new Set(passed.map((canary) => canary.kind));
-    const tenantCanaries = passed.filter((canary) => canary.kind === "tenant_natural_loop" && canary.siteId);
-    const tenantSiteIds = new Set(tenantCanaries.map((canary) => String(canary.siteId)));
     const publisherRows = passed.filter((canary) =>
       canary.kind.startsWith("publisher_") &&
       canary.siteId && tenantSiteIds.has(String(canary.siteId))
     );
     const publisherKinds = new Set(publisherRows.map((row) => row.kind));
-    const everyTenantHasPublisherProof = [...tenantSiteIds].every((siteId) =>
+    const naturalTenantSiteIds = new Set(
+      tenantCanaries.map((canary) => String(canary.siteId)),
+    );
+    const everyTenantHasPublisherProof = [...naturalTenantSiteIds].every((siteId) =>
       publisherRows.some((row) => String(row.siteId) === siteId)
     );
     const smartleadRows = passed.filter((canary) => canary.kind.startsWith("smartlead_"));
     const smartleadResourceIds = new Set(smartleadRows.map((row) => String(row.managedResourceId)));
     const smartleadCoherent = smartleadResourceIds.size === 1 && !smartleadResourceIds.has("undefined");
+    const bootstrap = args.profile === "bootstrap_v1";
     const evidence = {
+      profile: args.profile,
       releaseCommit: args.releaseCommit,
       publisherCanaries: (["github", "wordpress", "webhook"] as PublisherKind[])
         .filter((kind) => publisherKinds.has(`publisher_${kind}` as typeof passed[number]["kind"])),
-      tenantCanaryIds: tenantCanaries.map((canary) => String(canary.siteId)),
-      unrelatedTenantCount: new Set(tenantCanaries.map((canary) => String(canary.siteId))).size,
-      naturalPlanningVerified: tenantCanaries.length >= 3 && everyTenantHasPublisherProof,
-      sealedBufferVerified: tenantCanaries.length >= 3 && everyTenantHasPublisherProof,
-      publicationVerified: tenantCanaries.length >= 3 && everyTenantHasPublisherProof,
+      tenantCanaryIds: [...tenantSiteIds],
+      unrelatedTenantCount: tenantSiteIds.size,
+      naturalPlanningVerified: bootstrap
+        ? primaryNaturalCanaries.length >= 1 && everyTenantHasPublisherProof
+        : tenantCanaries.length >= 3 && everyTenantHasPublisherProof,
+      sealedBufferVerified: bootstrap
+        ? primaryNaturalCanaries.length >= 1 && everyTenantHasPublisherProof
+        : tenantCanaries.length >= 3 && everyTenantHasPublisherProof,
+      publicationVerified: bootstrap
+        ? primaryNaturalCanaries.length >= 1 && everyTenantHasPublisherProof
+        : tenantCanaries.length >= 3 && everyTenantHasPublisherProof,
       measurementDecisionExecuted: kinds.has("measurement_decision"),
       smartleadProvisioningVerified: smartleadCoherent && kinds.has("smartlead_provisioning"),
       smartleadWarmupVerified: smartleadCoherent && kinds.has("smartlead_warmup"),
@@ -968,6 +1413,16 @@ export const createReleaseReceiptInternal = internalMutation({
       smartleadBounceVerified: smartleadCoherent && kinds.has("smartlead_bounce"),
       smartleadUnsubscribeVerified: smartleadCoherent && kinds.has("smartlead_unsubscribe"),
       smartleadCancellationVerified: smartleadCoherent && kinds.has("smartlead_cancellation"),
+      terminalConvergenceVerified:
+        secondaryCanaries.length >= 1,
+      smtpConnectionVerified: kinds.has("smtp_connection"),
+      smtpDeliveryVerified: kinds.has("smtp_delivery"),
+      imapReplyVerified: kinds.has("imap_reply"),
+      imapBounceVerified: kinds.has("imap_bounce"),
+      imapStopVerified: kinds.has("imap_stop"),
+      smtpFollowupCancellationVerified:
+        kinds.has("smtp_followup_cancellation"),
+      controlledConversionVerified: kinds.has("controlled_conversion"),
       acquiredBacklinkVerified: kinds.has("acquired_backlink"),
       unresolvedSevereIncidentCount,
       silentStateCount,
@@ -981,10 +1436,25 @@ export const createReleaseReceiptInternal = internalMutation({
     const acquired = passed.find((row) => row.kind === "acquired_backlink")!;
     const receiptId = await ctx.db.insert("growth_loop_release_receipts", {
       releaseCommit: args.releaseCommit,
+      profile: args.profile,
+      deploymentReceiptHash: args.deploymentReceiptHash,
+      deployedAt: args.deployedAt,
       adapterMatrixHash: args.adapterMatrixHash,
+      supportedMatrixHash: args.supportedMatrixHash,
       publisherCanaryReceiptHashes: publisherHashes,
-      tenantCanaryReceiptHashes: tenantHashes,
+      tenantCanaryReceiptHashes: [
+        ...tenantHashes,
+        ...terminalTenantCanaries.map((row) => row.receiptHash),
+      ],
       smartleadCanaryReceiptHashes: smartleadHashes,
+      customerManagedCanaryReceiptHashes: passed.filter((row) => [
+        "smtp_connection",
+        "smtp_delivery",
+        "imap_reply",
+        "imap_bounce",
+        "imap_stop",
+        "smtp_followup_cancellation",
+      ].includes(row.kind)).map((row) => row.receiptHash),
       acquiredBacklinkReceiptHash: acquired.receiptHash,
       rolloutPercent,
       contractVersion: GROWTH_LOOP_RELEASE_VERSION,

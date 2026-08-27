@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -54,7 +55,10 @@ test("GA widening uses stable 10, 50, and 100 percent tenant cohorts", async () 
   ]);
   assert.match(growthLoop, /export const startRolloutInternal/);
   assert.match(growthLoop, /export const ensureEligibleRolloutInternal/);
-  assert.match(growthLoop, /await startEligibleRollout\(ctx, args\.releaseCommit\)/);
+  assert.match(
+    growthLoop,
+    /await startEligibleRollout\([\s\S]*args\.releaseCommit,[\s\S]*args\.profile,[\s\S]*args\.deploymentReceiptHash/,
+  );
   assert.match(growthLoop, /export const advanceRolloutInternal/);
   assert.match(growthLoop, /staged_rollout_incomplete/);
   assert.match(growthLoop, /silent_state_over_15_minutes/);
@@ -142,4 +146,65 @@ test("GA cannot be stamped without every real adapter and outcome canary", () =>
     publisherCanaries: [...base.publisherCanaries],
     acquiredBacklinkVerified: false,
   }).includes("acquired_backlink_missing"));
+});
+
+test("bootstrap v1 has a separate truthful zero-cost acceptance profile", () => {
+  const base = {
+    profile: "bootstrap_v1" as const,
+    releaseCommit: "a".repeat(40),
+    publisherCanaries: ["github"] as const,
+    tenantCanaryIds: ["pentra", "leadpilot"],
+    unrelatedTenantCount: 2,
+    naturalPlanningVerified: true,
+    sealedBufferVerified: true,
+    publicationVerified: true,
+    measurementDecisionExecuted: true,
+    terminalConvergenceVerified: true,
+    smtpConnectionVerified: true,
+    smtpDeliveryVerified: true,
+    imapReplyVerified: true,
+    imapBounceVerified: true,
+    imapStopVerified: true,
+    smtpFollowupCancellationVerified: true,
+    controlledConversionVerified: true,
+    acquiredBacklinkVerified: true,
+    unresolvedSevereIncidentCount: 0,
+    silentStateCount: 0,
+  };
+  assert.deepEqual(growthLoopReleaseBlockers(base), []);
+  assert.ok(growthLoopReleaseBlockers({ ...base, imapStopVerified: false })
+    .includes("imap_stop_missing"));
+  assert.ok(growthLoopReleaseBlockers({ ...base, unrelatedTenantCount: 1 })
+    .includes("two_authorized_tenant_canaries_missing"));
+});
+
+test("the controlled conversion proves ingestion without entering customer metrics", () => {
+  const outcomes = readFileSync("convex/outcomes.ts", "utf8");
+  const start = outcomes.indexOf(
+    "export const recordControlledConversionCanaryInternal",
+  );
+  const end = outcomes.indexOf("async function requireSiteOwner", start);
+  assert.ok(start >= 0 && end > start);
+  const block = outcomes.slice(start, end);
+  assert.match(block, /isCanary: true/);
+  assert.match(block, /__pentra_controlled_canary__/);
+  assert.doesNotMatch(block, /outcome_daily_rollups/);
+});
+
+test("bootstrap release evidence binds Pentra's natural role separately from the secondary convergence canary", () => {
+  const release = readFileSync("convex/growthLoop.ts", "utf8");
+  assert.match(release, /primary_natural/);
+  assert.match(release, /secondary_convergence/);
+  assert.match(
+    release,
+    /tenant_terminal_convergence[\s\S]*bootstrapTenantRole !== "secondary_convergence"/,
+  );
+  assert.match(
+    release,
+    /primaryNaturalCanaries\.length >= 1/,
+  );
+  assert.match(
+    release,
+    /currentInbox\.provider === "smtp"[\s\S]*currentInbox\.imapVerifiedAt[\s\S]*currentInbox\.credentialCiphertext/,
+  );
 });

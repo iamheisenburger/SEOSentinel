@@ -40,8 +40,72 @@ import {
   siteUsesLegacyDomainReceipts,
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding.ts";
+import { sha256Hex } from "./lib/publicationArtifact.ts";
 
 const OUTCOME_SUMMARY_ROLLUP_READ_LIMIT = 5_000;
+
+/** Controlled release-only canary. It proves the production ingestion storage
+ * boundary without touching customer growth rollups or dashboard metrics. */
+export const recordControlledConversionCanaryInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+    canaryKey: v.string(),
+    occurredAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^[a-f0-9]{64}$/.test(args.canaryKey)) {
+      throw new Error("Controlled conversion canary key is invalid");
+    }
+    const [site, article] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.articleId),
+    ]);
+    const now = Date.now();
+    if (
+      !site || site.deletionStatus || !article ||
+      article.siteId !== args.siteId || article.status !== "published" ||
+      article.publicUrlStatus !== "verified" || !article.publicUrl ||
+      !article.publicUrlVerifiedAt ||
+      !Number.isSafeInteger(args.occurredAt) ||
+      args.occurredAt < article.publicUrlVerifiedAt ||
+      args.occurredAt > now + 60_000
+    ) throw new Error("Controlled conversion lacks a verified publication");
+    const eventId = `canary_${args.canaryKey}`;
+    const prior = await ctx.db.query("outcome_receipts")
+      .withIndex("by_site_event", (q) =>
+        q.eq("siteId", args.siteId).eq("eventId", eventId))
+      .take(2);
+    if (prior.length > 1) throw new Error("Controlled conversion identity is ambiguous");
+    if (prior[0]) {
+      if (
+        !prior[0].isCanary || prior[0].articleId !== article._id ||
+        prior[0].eventType !== "qualified_action"
+      ) throw new Error("Controlled conversion key was reused");
+      return prior[0];
+    }
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) {
+      throw new Error("Controlled conversion lacks a canonical domain binding");
+    }
+    const receiptId = await ctx.db.insert("outcome_receipts", {
+      siteId: site._id,
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
+      articleId: article._id,
+      publicationDeliveryKey: article.publicationReceipt?.deliveryKey ?? undefined,
+      eventId,
+      eventType: "qualified_action",
+      articleUrl: article.publicUrl,
+      sessionId: `canary_${sha256Hex(`${args.canaryKey}:session`)}`,
+      goalKey: "__pentra_controlled_canary__",
+      occurredAt: args.occurredAt,
+      receivedAt: now,
+      isCanary: true,
+    });
+    return ctx.db.get(receiptId);
+  },
+});
 
 async function requireSiteOwner(
   ctx: QueryCtx,

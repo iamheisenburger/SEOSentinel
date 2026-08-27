@@ -1,7 +1,9 @@
 /**
  * SMTP sending identity for outreach.
  *
- * SMTP is a provider-independent fallback, not the primary path.
+ * SMTP/IMAP is the customer-managed transport for the zero-cost bootstrap-v1
+ * profile. It is deliberately approval-only: the owner must approve and
+ * trigger every outbound message.
  *
  * `gmail.send` is a Google *sensitive* scope, not a restricted one. Google's
  * console lists it under sensitive scopes with no restricted scopes present,
@@ -11,21 +13,22 @@
  * verification is under review; until it completes, only approved accounts can
  * connect.
  *
- * SMTP still matters: it works with any provider, needs no OAuth verification
- * queue, and gives a tenant a customer-managed fallback. Smartlead is the
- * managed One-Setup default; SMTP never impersonates that managed path.
+ * Gmail OAuth remains an optional convenience path while its verification is
+ * under review. Managed Smartlead belongs to the separate full-managed beta
+ * profile and is never implied by an SMTP/IMAP connection.
  *
  * Pure and deterministic so credential and pacing decisions are provable
  * without opening a socket.
  */
 
-export const OUTREACH_SMTP_VERSION = 1;
+export const OUTREACH_SMTP_VERSION = 2;
 
 /** Submission port. 465 is implicit TLS; 587 upgrades with STARTTLS. */
 export const SMTP_IMPLICIT_TLS_PORT = 465;
 export const SMTP_SUBMISSION_PORT = 587;
 
 const ALLOWED_PORTS = new Set([SMTP_IMPLICIT_TLS_PORT, SMTP_SUBMISSION_PORT, 2525]);
+export const IMAP_TLS_PORT = 993;
 
 export type SmtpCredentials = {
   host?: string;
@@ -44,6 +47,38 @@ export type SmtpConfigIssue =
   | "password_missing"
   | "from_email_invalid"
   | "plaintext_port";
+
+export type ImapCredentials = {
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+};
+
+export type ImapConfigIssue =
+  | "imap_host_missing"
+  | "imap_host_invalid"
+  | "imap_port_missing"
+  | "imap_port_unsupported"
+  | "imap_username_missing"
+  | "imap_password_missing";
+
+export function imapConfigIssues(credentials: ImapCredentials): ImapConfigIssue[] {
+  const issues: ImapConfigIssue[] = [];
+  const host = credentials.host?.trim().toLowerCase() ?? "";
+  if (!host) issues.push("imap_host_missing");
+  else if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+    issues.push("imap_host_invalid");
+  }
+  if (typeof credentials.port !== "number" || !Number.isFinite(credentials.port)) {
+    issues.push("imap_port_missing");
+  } else if (credentials.port !== IMAP_TLS_PORT) {
+    issues.push("imap_port_unsupported");
+  }
+  if (!credentials.username?.trim()) issues.push("imap_username_missing");
+  if (!credentials.password?.trim()) issues.push("imap_password_missing");
+  return issues;
+}
 
 /**
  * Validate a tenant-supplied SMTP configuration.
@@ -147,6 +182,8 @@ export const SMTP_PRESETS: Array<{
   label: string;
   host: string;
   port: number;
+  imapHost: string;
+  imapPort: number;
   appPasswordUrl?: string;
   note: string;
 }> = [
@@ -155,6 +192,8 @@ export const SMTP_PRESETS: Array<{
     label: "Gmail / Google Workspace",
     host: "smtp.gmail.com",
     port: SMTP_SUBMISSION_PORT,
+    imapHost: "imap.gmail.com",
+    imapPort: IMAP_TLS_PORT,
     appPasswordUrl: "https://myaccount.google.com/apppasswords",
     note: "Requires 2-Step Verification, then an app password.",
   },
@@ -163,6 +202,8 @@ export const SMTP_PRESETS: Array<{
     label: "Outlook / Microsoft 365",
     host: "smtp-mail.outlook.com",
     port: SMTP_SUBMISSION_PORT,
+    imapHost: "outlook.office365.com",
+    imapPort: IMAP_TLS_PORT,
     note: "Use an app password if security defaults are enabled.",
   },
   {
@@ -170,6 +211,8 @@ export const SMTP_PRESETS: Array<{
     label: "Zoho Mail",
     host: "smtp.zoho.com",
     port: SMTP_SUBMISSION_PORT,
+    imapHost: "imap.zoho.com",
+    imapPort: IMAP_TLS_PORT,
     appPasswordUrl: "https://accounts.zoho.com/home#security/apppasswords",
     note: "Generate an application-specific password.",
   },
@@ -178,9 +221,20 @@ export const SMTP_PRESETS: Array<{
     label: "Fastmail",
     host: "smtp.fastmail.com",
     port: SMTP_IMPLICIT_TLS_PORT,
+    imapHost: "imap.fastmail.com",
+    imapPort: IMAP_TLS_PORT,
     note: "Create an app password scoped to SMTP.",
   },
 ];
+
+export function imapPresetForSmtpHost(host: string | undefined): {
+  host: string;
+  port: number;
+} | null {
+  const normalized = host?.trim().toLowerCase();
+  const preset = SMTP_PRESETS.find((entry) => entry.host === normalized);
+  return preset ? { host: preset.imapHost, port: preset.imapPort } : null;
+}
 
 /**
  * Classify an SMTP failure so the tenant is told what to change.

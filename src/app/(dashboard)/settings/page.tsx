@@ -74,7 +74,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
   const [repoName, setRepoName] = useState(pubSite.repoName || "");
 
   const method = pubSite.publishMethod || "github";
-  const labels: Record<string, string> = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" };
+  const labels: Record<string, string> = { github: "GitHub", wordpress: "WordPress · Beta", webhook: "Webhook · Beta", manual: "Copy & Paste" };
   const iconMap: Record<string, typeof GitBranch> = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy };
   const MethodIcon = iconMap[method] || GitBranch;
   const isGithub = method === "github";
@@ -119,6 +119,9 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
       <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
         <Upload className="h-4 w-4 text-[#0EA5E9]" />
         <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
+        <span className="rounded-full border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.06] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-[#38BDF8]">
+          GitHub v1 GA
+        </span>
         <span className="ml-auto text-[11px] text-[#565A6E]">{pubSite.domain}</span>
       </div>
       <div className="px-5 py-5">

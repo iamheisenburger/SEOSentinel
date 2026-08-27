@@ -353,7 +353,7 @@ test("claim-time sender validation rejects primary domains and stale or failed D
 test("Gmail is called only after the atomic claim and outcomes require the matching attempt", () => {
   const action = readFileSync("convex/actions/outreach.ts", "utf8");
   const claimAt = action.indexOf("internal.outreach.claimApprovedDelivery");
-  const deliverAt = action.indexOf("await deliver(claim.inbox");
+  const deliverAt = action.indexOf("outcome = await deliver({");
   assert.ok(claimAt > 0 && deliverAt > claimAt);
   assert.match(action, /completeDeliveryAttempt/);
   assert.match(action, /failDeliveryAttempt/);

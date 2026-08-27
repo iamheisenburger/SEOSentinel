@@ -8,7 +8,6 @@ import {
   Check,
   ChevronDown,
   Globe,
-  Link2,
   Mail,
   Settings2,
   Sparkles,
@@ -90,53 +89,6 @@ const CAPABILITIES = [
   },
 ] as const;
 
-function ModeChoice({
-  value,
-  onChange,
-}: {
-  value: SetupMode;
-  onChange: (mode: SetupMode) => void;
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-2">
-      <button
-        type="button"
-        onClick={() => onChange("managed")}
-        className={`rounded-lg border px-3 py-2 text-left transition ${
-          value === "managed"
-            ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.07]"
-            : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"
-        }`}
-      >
-        <span className="flex items-center gap-1.5 text-[11px] font-medium text-[#EDEEF1]">
-          <Sparkles className="h-3 w-3 text-[#0EA5E9]" />
-          Managed setup
-        </span>
-        <span className="mt-1 block text-[9px] leading-relaxed text-[#565A6E]">
-          Pentra owns the setup queue
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("connect_existing")}
-        className={`rounded-lg border px-3 py-2 text-left transition ${
-          value === "connect_existing"
-            ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.07]"
-            : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"
-        }`}
-      >
-        <span className="flex items-center gap-1.5 text-[11px] font-medium text-[#EDEEF1]">
-          <Link2 className="h-3 w-3 text-[#8B8FA3]" />
-          Connect existing
-        </span>
-        <span className="mt-1 block text-[9px] leading-relaxed text-[#565A6E]">
-          Use an account you control
-        </span>
-      </button>
-    </div>
-  );
-}
-
 export function SetupWizard({
   existingSite,
 }: {
@@ -164,7 +116,7 @@ export function SetupWizard({
     existingPublisherKind(existingSite?.publishMethod),
   );
   const [outreachTransport, setOutreachTransport] =
-    useState<OutreachTransport>(existingSite ? "smtp" : "smartlead_managed");
+    useState<OutreachTransport>("smtp");
   const publisherMode: SetupMode = "connect_existing";
   const measurementMode: SetupMode = "connect_existing";
   const outreachMode: SetupMode = outreachTransport === "smartlead_managed"
@@ -483,7 +435,7 @@ export function SetupWizard({
             <div className="border-t border-white/[0.04] px-5 py-4">
               <p className="mb-3 text-[10px] leading-relaxed text-[#565A6E]">
                 These controls are only for accounts you chose to connect yourself.
-                Managed setup never asks you to edit DNS here.
+                One Setup keeps provider authorization inside this guided flow.
               </p>
               <div className="flex flex-wrap gap-2">
                 {publisherMode === "connect_existing" && (
@@ -843,10 +795,6 @@ export function SetupWizard({
               </p>
               <div className="space-y-3">
                 {CAPABILITIES.filter((capability) => capability.key !== "publisher" && capability.key !== "measurement").map((capability) => {
-                  const mode = outreachMode;
-                  const setMode = (mode: SetupMode) => {
-                    setOutreachTransport(mode === "managed" ? "smartlead_managed" : "gmail_oauth");
-                  };
                   const Icon = capability.icon;
                   return (
                     <div key={capability.key}>
@@ -859,7 +807,11 @@ export function SetupWizard({
                           {capability.detail}
                         </span>
                       </div>
-                      <ModeChoice value={mode} onChange={setMode} />
+                      <div className="rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] px-3 py-2 text-[10px] leading-relaxed text-[#8B8FA3]">
+                        Customer-managed SMTP/IMAP · approval only. Managed
+                        sending remains beta-gated and cannot be selected in
+                        bootstrap v1.
+                      </div>
                     </div>
                   );
                 })}

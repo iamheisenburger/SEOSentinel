@@ -1780,6 +1780,18 @@ export const saveOneSetupRequest = mutation({
         "Choose GitHub, WordPress, or signed webhook and authorize that exact destination",
       );
     }
+    const fullManagedBetaEnabled =
+      process.env.PENTRA_FULL_MANAGED_BETA_ENABLED === "true";
+    if (!fullManagedBetaEnabled && args.publisherKind !== "github") {
+      throw new Error(
+        "WordPress and signed-webhook publishing remain beta and are not included in bootstrap v1 GA",
+      );
+    }
+    if (!fullManagedBetaEnabled && args.outreachTransport === "smartlead_managed") {
+      throw new Error(
+        "Managed Smartlead outreach remains beta; choose customer-managed SMTP/IMAP",
+      );
+    }
     if (args.searchMeasurementMode !== "connect_existing") {
       throw new Error(
         "Search Console OAuth must be authorized by the website owner during One Setup",
@@ -3220,6 +3232,16 @@ export const upsert = mutation({
     const domain = normalizedAuthorityDomain(args.domain);
     if (!domain) throw new Error("Enter a valid website domain");
     const currentSite = args.id ? await requireSiteOwner(ctx, args.id) : null;
+    if (
+      args.publishMethod &&
+      ["wordpress", "webhook"].includes(args.publishMethod) &&
+      currentSite?.publishMethod !== args.publishMethod &&
+      process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
+    ) {
+      throw new Error(
+        "WordPress and signed-webhook publishing are beta and are not enabled for bootstrap v1",
+      );
+    }
     const canonicalClaims = await ctx.db
       .query("sites")
       .withIndex("by_canonical_domain", (q) =>
@@ -3674,6 +3696,16 @@ export const updateSite = mutation({
   },
   handler: async (ctx, { siteId, ...fields }) => {
     const site = await requireSiteOwner(ctx, siteId);
+    if (
+      fields.publishMethod &&
+      ["wordpress", "webhook"].includes(fields.publishMethod) &&
+      site.publishMethod !== fields.publishMethod &&
+      process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
+    ) {
+      throw new Error(
+        "WordPress and signed-webhook publishing are beta and are not enabled for bootstrap v1",
+      );
+    }
     const accountDeletion = site.userId
       ? await ctx.db
           .query("account_deletion_receipts")
@@ -3819,6 +3851,7 @@ const SITE_DELETION_STAGES = [
   "managed_ses_event_canaries",
   "outreach_inbound_relay_canaries",
   "outreach_inbound_relay_receipts",
+  "outreach_imap_receipts",
   "smartlead_canary_operations",
   "smartlead_webhook_events",
   "outreach_messages",
@@ -4273,6 +4306,21 @@ async function requestSiteDeletion(
       oauthAccessToken: undefined,
       oauthRefreshToken: undefined,
       smtpPassword: undefined,
+      credentialCiphertext: undefined,
+      credentialKeyId: undefined,
+      credentialEncryptionVersion: undefined,
+      credentialBindingHash: undefined,
+      imapHost: undefined,
+      imapPort: undefined,
+      imapUsername: undefined,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       apiKey: undefined,
       verifiedAt: undefined,
       inboundRelayDsnRoutingVerifiedAt: undefined,
@@ -4355,6 +4403,21 @@ async function revokeSiteCredentialsForAccountDeletion(
       oauthAccessToken: undefined,
       oauthRefreshToken: undefined,
       smtpPassword: undefined,
+      credentialCiphertext: undefined,
+      credentialKeyId: undefined,
+      credentialEncryptionVersion: undefined,
+      credentialBindingHash: undefined,
+      imapHost: undefined,
+      imapPort: undefined,
+      imapUsername: undefined,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       apiKey: undefined,
       verifiedAt: undefined,
       inboundRelayDsnRoutingVerifiedAt: undefined,
@@ -4467,6 +4530,8 @@ async function deletionRowsForStage(
       return ctx.db.query("outreach_inbound_relay_canaries").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "outreach_inbound_relay_receipts":
       return ctx.db.query("outreach_inbound_relay_receipts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "outreach_imap_receipts":
+      return ctx.db.query("outreach_imap_receipts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "smartlead_canary_operations":
       return ctx.db.query("smartlead_canary_operations").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "smartlead_webhook_events":
@@ -5297,6 +5362,12 @@ async function scrubForeignAccountOutreachMessage(
     await ctx.db.delete(relayReceipt._id);
   }
   if (relayReceipts.length >= 10) return "progress";
+  const imapReceipts = await ctx.db
+    .query("outreach_imap_receipts")
+    .withIndex("by_message", (q) => q.eq("messageId", message._id))
+    .take(10);
+  for (const receipt of imapReceipts) await ctx.db.delete(receipt._id);
+  if (imapReceipts.length >= 10) return "progress";
 
   const inbox = message.inboxId ? await ctx.db.get(message.inboxId) : null;
   const acceptedAt = message.sentAt ?? (

@@ -175,8 +175,19 @@ import {
 } from "./lib/smartlead.ts";
 import {
   describeSmtpIssue,
+  imapConfigIssues,
   smtpConfigIssues,
 } from "./lib/outreachSmtp.ts";
+import {
+  encryptOutreachCredentials,
+  outreachCredentialBinding,
+  outreachCredentialKeyConfig,
+} from "./lib/outreachCredentialEncryption.ts";
+import {
+  OUTREACH_IMAP_LEASE_MS,
+  OUTREACH_IMAP_POLL_INTERVAL_MS,
+  imapEventKey,
+} from "./lib/outreachImap.ts";
 
 function authorityOpportunityMatchesCurrentDomain(
   site: Doc<"sites">,
@@ -737,7 +748,7 @@ export const getInbox = query({
       routingTarget?.address,
       autonomousOutreachRuntimeEnabled(
         process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
-      ),
+      ) && process.env.PENTRA_FULL_MANAGED_BETA_ENABLED === "true",
       site.userId,
       Boolean(
         inbox &&
@@ -755,9 +766,8 @@ export const getInbox = query({
   },
 });
 
-/** Customer-managed SMTP fallback. It remains approval-only until the socket,
- * sender authentication, compliance profile, and signed inbound routing
- * canary all verify. Managed Smartlead remains the default One Setup path. */
+/** Zero-cost customer-managed SMTP/IMAP. Every message remains approval-only;
+ * SMTP sends while IMAP supplies bounded reply, bounce and STOP evidence. */
 export const configureSmtpInbox = mutation({
   args: {
     siteId: v.id("sites"),
@@ -765,6 +775,10 @@ export const configureSmtpInbox = mutation({
     port: v.number(),
     username: v.string(),
     password: v.string(),
+    imapHost: v.string(),
+    imapPort: v.number(),
+    imapUsername: v.string(),
+    imapPassword: v.optional(v.string()),
     fromEmail: v.string(),
     fromName: v.string(),
     physicalMailingAddress: v.string(),
@@ -804,6 +818,18 @@ export const configureSmtpInbox = mutation({
     });
     if (issues.length) {
       throw new Error(issues.map(describeSmtpIssue).join(" "));
+    }
+    const imapPassword = args.imapPassword?.trim() || args.password;
+    const imapIssues = imapConfigIssues({
+      host: args.imapHost,
+      port: args.imapPort,
+      username: args.imapUsername,
+      password: imapPassword,
+    });
+    if (imapIssues.length) {
+      throw new Error(
+        "Enter a valid TLS IMAP server on port 993, username, and app password.",
+      );
     }
     const fromEmail = args.fromEmail.trim().toLowerCase();
     const senderDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
@@ -864,6 +890,27 @@ export const configureSmtpInbox = mutation({
       await assertNoActiveDelivery(ctx, args.siteId);
     }
     const timestamp = Date.now();
+    const configurationVersion = (existing?.configurationVersion ?? 0) + 1;
+    const smtpHost = args.host.trim().toLowerCase();
+    const smtpUsername = args.username.trim();
+    const imapHost = args.imapHost.trim().toLowerCase();
+    const imapUsername = args.imapUsername.trim();
+    const credentialBinding = outreachCredentialBinding({
+      siteId: String(args.siteId),
+      configurationVersion,
+      fromEmail,
+      smtpHost,
+      smtpPort: args.port,
+      smtpUsername,
+      imapHost,
+      imapPort: args.imapPort,
+      imapUsername,
+    });
+    const encryptedCredentials = await encryptOutreachCredentials({
+      secrets: { smtpPassword: args.password, imapPassword },
+      binding: credentialBinding,
+      key: outreachCredentialKeyConfig(process.env),
+    });
     const record = {
       provider: "smtp",
       fromEmail,
@@ -874,10 +921,22 @@ export const configureSmtpInbox = mutation({
       mode: "approval",
       credentialOwnerAccountKey: ownerAccountKey,
       credentialSource: "owner_smtp",
-      smtpHost: args.host.trim().toLowerCase(),
+      smtpHost,
       smtpPort: args.port,
-      smtpUsername: args.username.trim(),
-      smtpPassword: args.password,
+      smtpUsername,
+      smtpPassword: undefined,
+      ...encryptedCredentials,
+      imapHost,
+      imapPort: args.imapPort,
+      imapUsername,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       senderDomain,
       dkimSelector: args.dkimSelector.trim().toLowerCase(),
       dailySendCap: Math.min(
@@ -922,8 +981,9 @@ export const configureSmtpInbox = mutation({
       inboundRelayDsnRoutingTargetVersion: undefined,
       inboundRelayDsnRoutingTargetGeneration:
         (existing?.inboundRelayDsnRoutingTargetGeneration ?? 0) + 1,
-      configurationVersion: (existing?.configurationVersion ?? 0) + 1,
-      lastError: "Verify the SMTP connection and sender authentication before sending.",
+      configurationVersion,
+      lastError:
+        "Verify the SMTP/IMAP connection and sender authentication before sending.",
       updatedAt: timestamp,
     };
     const inboxId = existing
@@ -946,6 +1006,15 @@ export const settleSmtpVerificationInternal = internalMutation({
     spfVerified: v.boolean(),
     dkimVerified: v.boolean(),
     dmarcVerified: v.boolean(),
+    imapHost: v.string(),
+    imapPort: v.number(),
+    imapUsername: v.string(),
+    credentialMigration: v.optional(v.object({
+      credentialCiphertext: v.string(),
+      credentialKeyId: v.string(),
+      credentialEncryptionVersion: v.number(),
+      credentialBindingHash: v.string(),
+    })),
   },
   handler: async (ctx, args) => {
     const [site, inbox] = await Promise.all([
@@ -957,6 +1026,9 @@ export const settleSmtpVerificationInternal = internalMutation({
       inbox.provider !== "smtp" ||
       inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion ||
+      (inbox.imapHost ?? args.imapHost) !== args.imapHost ||
+      (inbox.imapPort ?? args.imapPort) !== args.imapPort ||
+      (inbox.imapUsername ?? args.imapUsername) !== args.imapUsername ||
       args.checkedAt < Date.now() - 10 * 60 * 1000 ||
       args.checkedAt > Date.now() + 60 * 1000
     ) return { recorded: false as const };
@@ -967,6 +1039,18 @@ export const settleSmtpVerificationInternal = internalMutation({
       spfVerifiedAt: args.spfVerified ? args.checkedAt : undefined,
       dkimVerifiedAt: args.dkimVerified ? args.checkedAt : undefined,
       dmarcVerifiedAt: args.dmarcVerified ? args.checkedAt : undefined,
+      imapHost: args.imapHost,
+      imapPort: args.imapPort,
+      imapUsername: args.imapUsername,
+      imapVerifiedAt: args.checkedAt,
+      imapNextPollAt: args.checkedAt,
+      imapLastError: undefined,
+      ...(args.credentialMigration
+        ? {
+            ...args.credentialMigration,
+            smtpPassword: undefined,
+          }
+        : {}),
       verifiedAt: authenticated ? args.checkedAt : undefined,
       status: authenticated ? "warming" : "connected",
       warmupStartedAt: authenticated
@@ -1406,6 +1490,21 @@ async function installCanonicalGmailInbox(
       oauthExpiresAt: args.oauthExpiresAt,
       oauthScopes: args.oauthScopes,
       smtpPassword: undefined,
+      credentialCiphertext: undefined,
+      credentialKeyId: undefined,
+      credentialEncryptionVersion: undefined,
+      credentialBindingHash: undefined,
+      imapHost: undefined,
+      imapPort: undefined,
+      imapUsername: undefined,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       apiKey: undefined,
       credentialOwnerAccountKey,
       credentialSource: managedBinding
@@ -1810,6 +1909,7 @@ export const installManagedSesInboxInternal = internalMutation({
       !existing.oauthAccessToken &&
       !existing.oauthRefreshToken &&
       !existing.smtpPassword &&
+      !existing.credentialCiphertext &&
       !existing.apiKey
     ) {
       const [oldResources, pendingMessages, pendingCanaries] =
@@ -1893,6 +1993,7 @@ export const installManagedSesInboxInternal = internalMutation({
             !existing.oauthAccessToken &&
             !existing.oauthRefreshToken &&
             !existing.smtpPassword &&
+            !existing.credentialCiphertext &&
             !existing.apiKey,
           noPendingWork: !pendingMessages && !pendingCanaries,
         }));
@@ -1982,6 +2083,21 @@ export const installManagedSesInboxInternal = internalMutation({
       oauthExpiresAt: undefined,
       oauthScopes: undefined,
       smtpPassword: undefined,
+      credentialCiphertext: undefined,
+      credentialKeyId: undefined,
+      credentialEncryptionVersion: undefined,
+      credentialBindingHash: undefined,
+      imapHost: undefined,
+      imapPort: undefined,
+      imapUsername: undefined,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       apiKey: undefined,
       lastError:
         "Managed sender provisioned; waiting for the signed delivery-event canary.",
@@ -2212,6 +2328,21 @@ export const installSmartleadManagedInboxInternal = internalMutation({
       oauthExpiresAt: undefined,
       oauthScopes: undefined,
       smtpPassword: undefined,
+      credentialCiphertext: undefined,
+      credentialKeyId: undefined,
+      credentialEncryptionVersion: undefined,
+      credentialBindingHash: undefined,
+      imapHost: undefined,
+      imapPort: undefined,
+      imapUsername: undefined,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       apiKey: undefined,
       lastError: !args.domainAuthenticationReceipt
         ? "Managed sender exists; waiting for exact SPF, DKIM, and DMARC authentication evidence."
@@ -3735,6 +3866,15 @@ export const enableAutonomousOutreach = mutation({
     const inbox = await inboxForSite(ctx, args.siteId);
     if (!inbox) throw new Error("Connect the dedicated Gmail outreach inbox first");
     if (
+      process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true" ||
+      inbox.provider !== "smartlead" ||
+      inbox.managedTransportKind !== SMARTLEAD_MANAGED_TRANSPORT
+    ) {
+      throw new Error(
+        "Bootstrap v1 outreach is approval-only; automatic delivery belongs to the managed beta profile",
+      );
+    }
+    if (
       inbox._id !== args.expectedInboxId ||
       (inbox.configurationVersion ?? 0) !==
         args.expectedInboxConfigurationVersion
@@ -3786,26 +3926,6 @@ export const enableAutonomousOutreach = mutation({
     if (autonomousCredentialIssues.length > 0) {
       throw new Error(autonomousCredentialIssues[0]);
     }
-    if (
-      !inboundRelayConfigured(inboundRelayRuntimeConfig()) ||
-      (inbox.provider === MANAGED_SES_TRANSPORT
-        ? !managedSesInboxReceiptCurrent({
-            inbox,
-            now: Date.now(),
-            expectedAdapterVersion: process.env.MANAGED_SES_ADAPTER_VERSION,
-          })
-        : !inboundRelayDsnRoutingReady({
-            inbox,
-            now: Date.now(),
-            rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-            runtimeConfig: inboundRelayRuntimeConfig(),
-          }))
-    ) {
-      throw new Error(
-        "The signed reply/bounce/STOP relay must pass its current routing canary first",
-      );
-    }
-
     const enabledAt = Date.now();
     const configurationVersion = inbox.configurationVersion ?? 0;
     const reusesCurrentConsentReceipt = Boolean(
@@ -4437,7 +4557,9 @@ export const reconcileAutonomousInitialMessagesInternal = internalMutation({
     }
     if (!autonomousOutreachRuntimeEnabled(
       process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
-    )) {
+    ) || process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true" ||
+      inbox.provider !== "smartlead" ||
+      inbox.managedTransportKind !== SMARTLEAD_MANAGED_TRANSPORT) {
       return { completed: false, stopped: "release_paused" as const };
     }
     const timestamp = Date.now();
@@ -4703,6 +4825,21 @@ export const disconnectInbox = mutation({
       oauthScopes: undefined,
       complianceConfirmedAt: undefined,
       smtpPassword: undefined,
+      credentialCiphertext: undefined,
+      credentialKeyId: undefined,
+      credentialEncryptionVersion: undefined,
+      credentialBindingHash: undefined,
+      imapHost: undefined,
+      imapPort: undefined,
+      imapUsername: undefined,
+      imapVerifiedAt: undefined,
+      imapUidValidity: undefined,
+      imapLastUid: undefined,
+      imapLastPolledAt: undefined,
+      imapNextPollAt: undefined,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
       apiKey: undefined,
       verifiedAt: undefined,
       inboundSyncPageToken: undefined,
@@ -4894,9 +5031,8 @@ export const getGmailReconnectReadinessInternal = internalQuery({
   },
 });
 
-/** Legacy readonly polling is retained only as post-send compliance
- * settlement. Unlike growth work, it may finish replies for messages sent
- * before plan parking/reconciliation, but never after deletion or conflict. */
+/** Bounded customer-managed inbound settlement. SMTP/IMAP is the bootstrap-v1
+ * path; legacy Gmail readonly remains only for already-sent compatibility. */
 export const listLegacyInboundFleetPage = internalQuery({
   args: { cursor: v.optional(v.string()) },
   handler: async (ctx, { cursor }) => {
@@ -4917,16 +5053,24 @@ export const listLegacyInboundFleetPage = internalQuery({
       hasApprovedMessages: boolean;
       hasLinksToVerify: boolean;
       inboundMonitoringReady: boolean;
-      inboundMonitoringMode: "legacy_gmail";
+      inboundMonitoringMode: "imap" | "legacy_gmail";
       hasMessagesToMonitor: boolean;
     }> = [];
     for (const inbox of result.page) {
-      if (
-        inbox.provider !== "gmail" ||
-        !inbox.oauthScopes?.split(/\s+/).includes(
+      const gmailReady = Boolean(
+        inbox.provider === "gmail" &&
+        inbox.oauthScopes?.split(/\s+/).includes(
           "https://www.googleapis.com/auth/gmail.readonly",
-        ) ||
-        !(inbox.oauthRefreshToken || inbox.oauthAccessToken) ||
+        ) &&
+        (inbox.oauthRefreshToken || inbox.oauthAccessToken),
+      );
+      const imapReady = Boolean(
+        inbox.provider === "smtp" && inbox.imapVerifiedAt &&
+        inbox.credentialCiphertext && inbox.credentialKeyId &&
+        inbox.imapHost && inbox.imapPort === 993 && inbox.imapUsername,
+      );
+      if (
+        (!gmailReady && !imapReady) ||
         ["disconnected", "suspended"].includes(inbox.status)
       ) continue;
       const [site, inboxes] = await Promise.all([
@@ -4944,10 +5088,22 @@ export const listLegacyInboundFleetPage = internalQuery({
       ) continue;
       const policy = await outreachSettlementPolicy(ctx, site);
       if (policy.maximumDeliveryBoundaryAt === 0) continue;
-      const [candidate] = await legacyUnboundMessages(ctx, inbox._id, {
-        limit: 1,
-        maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
-      });
+      const candidate = imapReady
+        ? (await Promise.all(["sent", "delivery_reviewed_sent", "replied"].map(
+            (status) => ctx.db.query("outreach_messages")
+              .withIndex("by_site_status", (q) =>
+                q.eq("siteId", inbox.siteId).eq("status", status))
+              .order("desc").take(10),
+          ))).flat().find((message) =>
+            message.inboxId === inbox._id &&
+            message.deliveryTransport === "smtp" &&
+            Boolean(message.inboundRelayOutboundMessageIdHash) &&
+            policy.allows(message.deliveryClaimedAt ?? message.sentAt)
+          )
+        : (await legacyUnboundMessages(ctx, inbox._id, {
+            limit: 1,
+            maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
+          }))[0];
       if (!candidate || !policy.allows(
         candidate.deliveryClaimedAt ?? candidate.sentAt,
       )) {
@@ -4967,7 +5123,7 @@ export const listLegacyInboundFleetPage = internalQuery({
         hasApprovedMessages: false,
         hasLinksToVerify: false,
         inboundMonitoringReady: true,
-        inboundMonitoringMode: "legacy_gmail",
+        inboundMonitoringMode: imapReady ? "imap" : "legacy_gmail",
         hasMessagesToMonitor: true,
       });
     }
@@ -4993,20 +5149,39 @@ export const getLegacyInboundFleetState = internalQuery({
         "The Gmail credential belongs to a previous site owner; reconnect it before approval",
       );
     }
-    if (
-      inbox.provider !== "gmail" ||
-      !inbox.oauthScopes?.split(/\s+/).includes(
+    const gmailReady = Boolean(
+      inbox.provider === "gmail" &&
+      inbox.oauthScopes?.split(/\s+/).includes(
         "https://www.googleapis.com/auth/gmail.readonly",
-      ) ||
-      !(inbox.oauthRefreshToken || inbox.oauthAccessToken) ||
+      ) && (inbox.oauthRefreshToken || inbox.oauthAccessToken),
+    );
+    const imapReady = Boolean(
+      inbox.provider === "smtp" && inbox.imapVerifiedAt &&
+      inbox.credentialCiphertext && inbox.credentialKeyId &&
+      inbox.imapHost && inbox.imapPort === 993 && inbox.imapUsername,
+    );
+    if (
+      (!gmailReady && !imapReady) ||
       ["disconnected", "suspended"].includes(inbox.status)
     ) return null;
     const policy = await outreachSettlementPolicy(ctx, site);
     if (policy.maximumDeliveryBoundaryAt === 0) return null;
-    const [candidate] = await legacyUnboundMessages(ctx, inbox._id, {
-      limit: 1,
-      maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
-    });
+    const candidate = imapReady
+      ? (await Promise.all(["sent", "delivery_reviewed_sent", "replied"].map(
+          (status) => ctx.db.query("outreach_messages")
+            .withIndex("by_site_status", (q) =>
+              q.eq("siteId", siteId).eq("status", status))
+            .order("desc").take(10),
+        ))).flat().find((message) =>
+          message.inboxId === inbox._id &&
+          message.deliveryTransport === "smtp" &&
+          Boolean(message.inboundRelayOutboundMessageIdHash) &&
+          policy.allows(message.deliveryClaimedAt ?? message.sentAt)
+        )
+      : (await legacyUnboundMessages(ctx, inbox._id, {
+          limit: 1,
+          maximumDeliveryBoundaryAt: policy.maximumDeliveryBoundaryAt,
+        }))[0];
     if (!candidate || !policy.allows(
       candidate.deliveryClaimedAt ?? candidate.sentAt,
     )) return null;
@@ -5024,7 +5199,7 @@ export const getLegacyInboundFleetState = internalQuery({
       hasApprovedMessages: false,
       hasLinksToVerify: false,
       inboundMonitoringReady: true,
-      inboundMonitoringMode: "legacy_gmail" as const,
+      inboundMonitoringMode: imapReady ? "imap" as const : "legacy_gmail" as const,
       hasMessagesToMonitor: true,
     };
   },
@@ -5695,6 +5870,10 @@ const inboundRelayBindingValidator = v.object({
   dsnRoutingTargetGeneration: v.number(),
 });
 
+const imapDeliveryBindingValidator = v.object({
+  outboundMessageIdHash: v.string(),
+});
+
 const managedSesClaimReceiptValidator = v.object({
   resourceOperationKey: v.string(),
   generation: v.number(),
@@ -5724,6 +5903,7 @@ export const claimApprovedDelivery = internalMutation({
     dnsEvidence: dnsEvidenceValidator,
     opportunityEvidence: liveOpportunityEvidenceValidator,
     inboundRelay: v.optional(inboundRelayBindingValidator),
+    imapBinding: v.optional(imapDeliveryBindingValidator),
     managedSesReceipt: v.optional(managedSesClaimReceiptValidator),
   },
   handler: async (
@@ -5735,6 +5915,7 @@ export const claimApprovedDelivery = internalMutation({
       dnsEvidence,
       opportunityEvidence,
       inboundRelay,
+      imapBinding,
       managedSesReceipt,
     },
   ) => {
@@ -5970,6 +6151,26 @@ export const claimApprovedDelivery = internalMutation({
     const managedSes = inbox.provider === MANAGED_SES_TRANSPORT;
     const smartleadManaged =
       inbox.managedTransportKind === SMARTLEAD_MANAGED_TRANSPORT;
+    if (
+      release === "automatic" &&
+      (
+        process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true" ||
+        inbox.provider !== "smartlead" ||
+        !smartleadManaged
+      )
+    ) {
+      return {
+        claimed: false as const,
+        reason:
+          "Bootstrap v1 outreach is approval-only; automatic delivery belongs to the managed beta profile.",
+      };
+    }
+    const smtpImapReady = Boolean(
+      inbox.provider === "smtp" && inbox.imapVerifiedAt &&
+      inbox.credentialCiphertext && inbox.credentialKeyId &&
+      inbox.credentialEncryptionVersion && inbox.credentialBindingHash &&
+      inbox.imapHost && inbox.imapPort === 993 && inbox.imapUsername,
+    );
     const managedResourceRows = managedSes || smartleadManaged
       ? await ctx.db
         .query("managed_outreach_mailbox_resources")
@@ -6071,6 +6272,13 @@ export const claimApprovedDelivery = internalMutation({
           "The Smartlead sender has not completed domain authentication, warm-up, and all controlled safety canaries.",
       };
     }
+    if (release === "automatic" && inbox.provider === "smtp") {
+      return {
+        claimed: false as const,
+        reason:
+          "Customer-managed SMTP/IMAP is approval-only in the bootstrap v1 release.",
+      };
+    }
     if (
       release === "automatic" &&
       autonomousOutreachTransportIssues({
@@ -6145,12 +6353,27 @@ export const claimApprovedDelivery = internalMutation({
           "Automatic outreach requires the current signed reply/bounce/STOP relay.",
       };
     }
-    if (!inboundRelay && !legacyGmailReadReady && !smartleadManaged) {
+    if (
+      !inboundRelay && !legacyGmailReadReady && !smartleadManaged &&
+      !smtpImapReady
+    ) {
       return {
         claimed: false as const,
         reason:
           "The signed inbound relay is unavailable, so replies and opt-outs cannot be handled safely.",
       };
+    }
+    if (
+      smtpImapReady &&
+      (!imapBinding || !/^[a-f0-9]{64}$/.test(imapBinding.outboundMessageIdHash))
+    ) {
+      return {
+        claimed: false as const,
+        reason: "The SMTP delivery lacks its exact IMAP correlation binding.",
+      };
+    }
+    if (!smtpImapReady && imapBinding) {
+      return { claimed: false as const, reason: "Transport receipt mismatch." };
     }
     if (inboundRelay) {
       const aliasDomain = normalizeInboundRelayDomain(inboundRelay.aliasDomain);
@@ -6260,7 +6483,10 @@ export const claimApprovedDelivery = internalMutation({
       complianceConfirmedAt: inbox.complianceConfirmedAt,
       verifiedAt: inbox.verifiedAt,
       oauthScopes: inbox.oauthScopes,
-      hasCredential: Boolean(inbox.oauthRefreshToken || inbox.oauthAccessToken),
+      hasCredential: Boolean(
+        inbox.oauthRefreshToken || inbox.oauthAccessToken ||
+        inbox.credentialCiphertext,
+      ),
       senderDomain: inbox.senderDomain,
     });
     const dnsIssues = managedSes || smartleadManaged ? [] : liveDnsEvidenceIssues({
@@ -6811,7 +7037,17 @@ export const claimApprovedDelivery = internalMutation({
             inboundRelayDsnRoutingTargetGeneration:
               inboundRelay.dsnRoutingTargetGeneration,
           }
-        : {}),
+        : imapBinding
+          ? {
+              inboundRelayOutboundMessageIdHash:
+                imapBinding.outboundMessageIdHash,
+              inboundRelayInboxConfigurationVersion:
+                inbox.configurationVersion ?? 0,
+              inboundRelaySenderDomain: normalizeDomain(
+                inbox.senderDomain ?? "",
+              ),
+            }
+          : {}),
       updatedAt: now,
     });
     // Claim-owned wake closes action death before either provider-boundary
@@ -7008,7 +7244,9 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
     site?.userId &&
       inbox &&
       (args.release === "automatic"
-        ? autonomousOutreachRuntimeEnabled(
+        ? process.env.PENTRA_FULL_MANAGED_BETA_ENABLED === "true" &&
+          smartleadManaged &&
+          autonomousOutreachRuntimeEnabled(
             process.env.OUTREACH_AUTONOMOUS_DELIVERY_ENABLED,
           ) &&
           isSeoGrowthActuationEligible(site) &&
@@ -7077,7 +7315,8 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
             inbox.provider === "smtp" &&
             Boolean(
               inbox.smtpHost && inbox.smtpPort && inbox.smtpUsername &&
-              inbox.smtpPassword,
+              inbox.credentialCiphertext && inbox.credentialKeyId &&
+              inbox.credentialBindingHash && inbox.imapVerifiedAt,
             )
           : message.deliveryTransport === "gmail_oauth" &&
             inbox.provider === "gmail" &&
@@ -10754,6 +10993,320 @@ export const recordInboundRelayReceipt = internalMutation({
       updatedAt: now,
     });
     return { recorded: true as const, kind: args.kind };
+  },
+});
+
+// ── Customer-managed SMTP/IMAP inbound receipts ──
+
+const imapReceiptKindValidator = v.union(
+  v.literal("reply"),
+  v.literal("unsubscribe"),
+  v.literal("bounce"),
+  v.literal("ignored"),
+);
+
+export const claimImapPollInternal = internalMutation({
+  args: { siteId: v.id("sites"), attemptId: v.string() },
+  handler: async (ctx, { siteId, attemptId }) => {
+    const now = Date.now();
+    if (!/^[a-z0-9-]{20,100}$/i.test(attemptId)) {
+      throw new Error("IMAP polling attempt identifier is invalid");
+    }
+    const site = await ctx.db.get(siteId);
+    if (!(await outreachSettlementLifecycleActive(ctx, site)) || !site?.userId) {
+      return { claimed: false as const, reason: "Tenant is unavailable." };
+    }
+    const inboxes = await ctx.db.query("outreach_inboxes")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId)).take(2);
+    if (inboxes.length !== 1) {
+      return { claimed: false as const, reason: "Exactly one outreach inbox is required." };
+    }
+    const inbox = inboxes[0];
+    if (
+      inbox.provider !== "smtp" || !inbox.imapHost || inbox.imapPort !== 993 ||
+      !inbox.imapUsername || !inbox.imapVerifiedAt ||
+      !inbox.credentialCiphertext || !inbox.credentialKeyId ||
+      !inbox.credentialEncryptionVersion || !inbox.credentialBindingHash ||
+      inbox.smtpPassword !== undefined ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
+      ["disconnected", "suspended"].includes(inbox.status)
+    ) return { claimed: false as const, reason: "SMTP/IMAP monitoring is not ready." };
+    if ((inbox.imapNextPollAt ?? 0) > now) {
+      return {
+        claimed: false as const,
+        reason: "IMAP monitoring is not due.",
+        nextEligibleAt: inbox.imapNextPollAt,
+      };
+    }
+    if (inbox.imapLeaseToken && (inbox.imapLeaseExpiresAt ?? 0) > now) {
+      return { claimed: false as const, reason: "IMAP monitoring is already running." };
+    }
+    const candidateRows = (await Promise.all([
+      "sent", "delivery_reviewed_sent", "replied",
+    ].map((status) => ctx.db.query("outreach_messages")
+      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", status))
+      .order("desc").take(100)))).flat();
+    const candidates = candidateRows
+      .filter((message) =>
+        message.inboxId === inbox._id && message.deliveryTransport === "smtp" &&
+        message.sentAt && message.inboundRelayOutboundMessageIdHash &&
+        message.deliveryOwnerAccountKey === inbox.credentialOwnerAccountKey &&
+        message.sentAt >= now - 90 * 24 * 60 * 60 * 1000
+      )
+      .sort((left, right) => (right.sentAt ?? 0) - (left.sentAt ?? 0))
+      .slice(0, 200)
+      .map((message) => ({
+        messageId: message._id,
+        toEmail: message.toEmail,
+        toDomain: message.toDomain,
+        sentAt: message.sentAt!,
+        outboundMessageIdHash: message.inboundRelayOutboundMessageIdHash!,
+      }));
+    if (candidates.length === 0) {
+      await ctx.db.patch(inbox._id, {
+        imapLastPolledAt: now,
+        imapNextPollAt: now + OUTREACH_IMAP_POLL_INTERVAL_MS,
+        imapLastError: undefined,
+        updatedAt: now,
+      });
+      return {
+        claimed: false as const,
+        reason: "No delivered SMTP message needs monitoring.",
+        nextEligibleAt: now + OUTREACH_IMAP_POLL_INTERVAL_MS,
+      };
+    }
+    const leaseExpiresAt = now + OUTREACH_IMAP_LEASE_MS;
+    await ctx.db.patch(inbox._id, {
+      imapLeaseToken: attemptId,
+      imapLeaseExpiresAt: leaseExpiresAt,
+      imapLastError: undefined,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAt(
+      leaseExpiresAt + 1_000,
+      internal.outreach.recoverImapPollLeaseInternal,
+      { siteId, inboxId: inbox._id, attemptId },
+    );
+    return {
+      claimed: true as const,
+      inbox,
+      expectedConfigurationVersion: inbox.configurationVersion ?? 0,
+      attemptId,
+      uidValidity: inbox.imapUidValidity,
+      lastUid: inbox.imapLastUid ?? 0,
+      candidates,
+    };
+  },
+});
+
+export const recordImapReceiptInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    inboxId: v.id("outreach_inboxes"),
+    messageId: v.optional(v.id("outreach_messages")),
+    attemptId: v.string(),
+    expectedConfigurationVersion: v.number(),
+    eventKey: v.string(),
+    uidValidity: v.string(),
+    uid: v.number(),
+    kind: imapReceiptKindValidator,
+    evidenceHash: v.string(),
+    inboundMessageIdHash: v.string(),
+    outboundMessageIdHash: v.optional(v.string()),
+    fromEmail: v.optional(v.string()),
+    receivedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const prior = await ctx.db.query("outreach_imap_receipts")
+      .withIndex("by_event_key", (q) => q.eq("eventKey", args.eventKey)).unique();
+    if (prior) {
+      if (prior.evidenceHash !== args.evidenceHash) {
+        throw new Error("IMAP UID was reused with different evidence");
+      }
+      return { recorded: false as const, reason: "already_recorded" as const };
+    }
+    const [site, inbox, message] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.inboxId),
+      args.messageId ? ctx.db.get(args.messageId) : null,
+    ]);
+    if (
+      !site?.userId || !inbox || inbox.siteId !== args.siteId ||
+      inbox.provider !== "smtp" || inbox.imapLeaseToken !== args.attemptId ||
+      (inbox.imapLeaseExpiresAt ?? 0) <= now ||
+      (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion ||
+      inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
+      !/^[0-9]{1,30}$/.test(args.uidValidity) ||
+      !Number.isSafeInteger(args.uid) || args.uid <= 0 ||
+      args.eventKey !== imapEventKey({
+        siteId: String(args.siteId), inboxId: String(args.inboxId),
+        uidValidity: args.uidValidity, uid: args.uid,
+      }) ||
+      !/^[a-f0-9]{64}$/.test(args.evidenceHash) ||
+      !/^[a-f0-9]{64}$/.test(args.inboundMessageIdHash) ||
+      !Number.isSafeInteger(args.receivedAt) ||
+      args.receivedAt > now + 5 * 60 * 1000
+    ) throw new Error("IMAP receipt crossed a tenant or mailbox boundary");
+
+    if (args.kind === "ignored") {
+      if (args.messageId || args.outboundMessageIdHash || args.fromEmail) {
+        throw new Error("Ignored IMAP receipts cannot carry recipient evidence");
+      }
+      await ctx.db.insert("outreach_imap_receipts", {
+        siteId: args.siteId, inboxId: args.inboxId, eventKey: args.eventKey,
+        uidValidity: args.uidValidity, uid: args.uid,
+        evidenceHash: args.evidenceHash,
+        inboundMessageIdHash: args.inboundMessageIdHash,
+        kind: "ignored", receivedAt: args.receivedAt, processedAt: now,
+      });
+      return { recorded: true as const, kind: "ignored" as const };
+    }
+    const fromEmail = args.fromEmail?.trim().toLowerCase() ?? "";
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.inboxId !== args.inboxId || message.deliveryTransport !== "smtp" ||
+      message.deliveryOwnerAccountKey !== inbox.credentialOwnerAccountKey ||
+      !["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(message.status) ||
+      !message.sentAt || args.receivedAt < message.sentAt - 60_000 ||
+      !args.outboundMessageIdHash ||
+      args.outboundMessageIdHash !== message.inboundRelayOutboundMessageIdHash ||
+      !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash) ||
+      !/^[^@\s<>\r\n]+@[^@\s<>\r\n]+\.[a-z]{2,24}$/i.test(fromEmail)
+    ) throw new Error("IMAP receipt does not match the sealed SMTP delivery");
+    if (args.kind === "unsubscribe" && fromEmail !== message.toEmail.toLowerCase()) {
+      throw new Error("Only the exact recipient can issue a permanent opt-out");
+    }
+    const shouldPromote = shouldPromoteOutreachInbound({
+      existingKind: message.inboundReceiptKind as
+        | "reply" | "unsubscribe" | "bounce" | undefined,
+      existingAt: message.inboundReceiptAt,
+      nextKind: args.kind,
+      nextAt: args.receivedAt,
+    });
+    if (args.kind === "unsubscribe") {
+      await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+      await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
+    } else if (args.kind === "bounce") {
+      await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
+    }
+    await cancelQueuedThread(ctx, args.siteId, message.threadKey, message._id, args.kind);
+    await ctx.db.patch(message._id, {
+      inboundCheckedAt: now,
+      ...(shouldPromote ? {
+        status: args.kind === "bounce" ? "bounced" : "replied",
+        repliedAt: args.kind === "bounce" ? message.repliedAt : args.receivedAt,
+        bouncedAt: args.kind === "bounce" ? args.receivedAt : message.bouncedAt,
+        inboundReceiptHash: args.evidenceHash,
+        inboundReceiptKind: args.kind,
+        inboundReceiptTransport: "imap",
+        inboundReceiptAt: args.receivedAt,
+        inboundReceiptFrom: fromEmail,
+      } : {}),
+      updatedAt: now,
+    });
+    await ctx.db.insert("outreach_imap_receipts", {
+      siteId: args.siteId, inboxId: args.inboxId, messageId: message._id,
+      eventKey: args.eventKey, uidValidity: args.uidValidity, uid: args.uid,
+      evidenceHash: args.evidenceHash,
+      inboundMessageIdHash: args.inboundMessageIdHash,
+      outboundMessageIdHash: args.outboundMessageIdHash,
+      kind: args.kind, fromEmailHash: sha256Hex(fromEmail),
+      receivedAt: args.receivedAt, processedAt: now,
+    });
+    return { recorded: true as const, kind: args.kind };
+  },
+});
+
+export const completeImapPollInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"), inboxId: v.id("outreach_inboxes"),
+    attemptId: v.string(), expectedConfigurationVersion: v.number(),
+    uidValidity: v.string(), lastUid: v.number(), partial: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const inbox = await ctx.db.get(args.inboxId);
+    const now = Date.now();
+    if (
+      !inbox || inbox.siteId !== args.siteId ||
+      inbox.imapLeaseToken !== args.attemptId ||
+      (inbox.imapLeaseExpiresAt ?? 0) <= now ||
+      (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion ||
+      !/^[0-9]{1,30}$/.test(args.uidValidity) ||
+      !Number.isSafeInteger(args.lastUid) || args.lastUid < 0
+    ) return { recorded: false as const };
+    const reset = inbox.imapUidValidity !== args.uidValidity;
+    if (!reset && args.lastUid < (inbox.imapLastUid ?? 0)) {
+      throw new Error("IMAP cursor cannot move backwards");
+    }
+    const nextEligibleAt = now + (args.partial ? 1_000 : OUTREACH_IMAP_POLL_INTERVAL_MS);
+    await ctx.db.patch(inbox._id, {
+      imapUidValidity: args.uidValidity,
+      imapLastUid: args.lastUid,
+      imapLastPolledAt: now,
+      imapNextPollAt: nextEligibleAt,
+      imapLeaseToken: undefined,
+      imapLeaseExpiresAt: undefined,
+      imapLastError: undefined,
+      inboundLastCompletedAt: now,
+      inboundLastError: undefined,
+      updatedAt: now,
+    });
+    return { recorded: true as const, nextEligibleAt };
+  },
+});
+
+export const failImapPollInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"), inboxId: v.id("outreach_inboxes"),
+    attemptId: v.string(), expectedConfigurationVersion: v.number(),
+    reason: v.union(
+      v.literal("imap_connection_failed"),
+      v.literal("imap_parse_failed"),
+      v.literal("imap_receipt_failed"),
+      v.literal("imap_deadline"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const inbox = await ctx.db.get(args.inboxId);
+    if (
+      !inbox || inbox.siteId !== args.siteId ||
+      inbox.imapLeaseToken !== args.attemptId ||
+      (inbox.configurationVersion ?? 0) !== args.expectedConfigurationVersion
+    ) return { recorded: false as const };
+    const now = Date.now();
+    const nextEligibleAt = now + OUTREACH_IMAP_POLL_INTERVAL_MS;
+    await ctx.db.patch(inbox._id, {
+      imapLeaseToken: undefined, imapLeaseExpiresAt: undefined,
+      imapLastPolledAt: now, imapNextPollAt: nextEligibleAt,
+      imapLastError: args.reason, inboundLastError: args.reason,
+      updatedAt: now,
+    });
+    return { recorded: true as const, nextEligibleAt };
+  },
+});
+
+export const recoverImapPollLeaseInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"), inboxId: v.id("outreach_inboxes"), attemptId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const inbox = await ctx.db.get(args.inboxId);
+    const now = Date.now();
+    if (
+      !inbox || inbox.siteId !== args.siteId ||
+      inbox.imapLeaseToken !== args.attemptId ||
+      (inbox.imapLeaseExpiresAt ?? 0) > now
+    ) return { recovered: false as const };
+    const nextEligibleAt = now + 1_000;
+    await ctx.db.patch(inbox._id, {
+      imapLeaseToken: undefined, imapLeaseExpiresAt: undefined,
+      imapNextPollAt: nextEligibleAt,
+      imapLastError: "imap_lease_expired",
+      inboundLastError: "imap_lease_expired",
+      updatedAt: now,
+    });
+    return { recovered: true as const, nextEligibleAt };
   },
 });
 

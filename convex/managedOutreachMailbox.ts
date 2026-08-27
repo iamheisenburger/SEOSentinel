@@ -212,6 +212,7 @@ function managedInboxIsQuarantinedForResource(
       !inbox.oauthAccessToken &&
       !inbox.oauthRefreshToken &&
       !inbox.smtpPassword &&
+      !inbox.credentialCiphertext &&
       !inbox.apiKey &&
       !inbox.autonomyConsentAcceptedAt &&
       !inbox.inboundRelayDsnRoutingVerifiedAt &&
@@ -289,6 +290,21 @@ async function quarantineManagedCanonicalInbox(
     oauthExpiresAt: undefined,
     oauthScopes: undefined,
     smtpPassword: undefined,
+    credentialCiphertext: undefined,
+    credentialKeyId: undefined,
+    credentialEncryptionVersion: undefined,
+    credentialBindingHash: undefined,
+    imapHost: undefined,
+    imapPort: undefined,
+    imapUsername: undefined,
+    imapVerifiedAt: undefined,
+    imapUidValidity: undefined,
+    imapLastUid: undefined,
+    imapLastPolledAt: undefined,
+    imapNextPollAt: undefined,
+    imapLeaseToken: undefined,
+    imapLeaseExpiresAt: undefined,
+    imapLastError: undefined,
     apiKey: undefined,
     verifiedAt: undefined,
     dnsCheckedAt: undefined,
@@ -962,6 +978,7 @@ async function managedSuccessorHandoffResource(
         !inbox.oauthAccessToken &&
         !inbox.oauthRefreshToken &&
         !inbox.smtpPassword &&
+        !inbox.credentialCiphertext &&
         !inbox.apiKey,
       noPendingWork: true,
     })) eligible.push(resource);

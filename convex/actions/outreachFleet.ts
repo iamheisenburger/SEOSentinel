@@ -33,7 +33,7 @@ export type OutreachFleetSiteState = {
   hasDueAutomaticMessages?: boolean;
   hasLinksToVerify: boolean;
   inboundMonitoringReady?: boolean;
-  inboundMonitoringMode?: "signed_relay" | "legacy_gmail" | "unavailable";
+  inboundMonitoringMode?: "imap" | "signed_relay" | "legacy_gmail" | "unavailable";
   hasMessagesToMonitor?: boolean;
 };
 
@@ -104,14 +104,16 @@ export function planOutreachFleetSite(
       deliver: false,
       verify: false,
       monitor:
-        state.inboundMonitoringMode === "legacy_gmail" &&
+        ["imap", "legacy_gmail"].includes(
+          state.inboundMonitoringMode ?? "unavailable",
+        ) &&
         state.inboundMonitoringReady === true &&
         state.hasMessagesToMonitor === true,
       ...(state.inboundMonitoringReady === true
         ? {}
         : {
             failClosedReason:
-              "Configure the signed inbound relay or retain the legacy Gmail monitoring grant.",
+              "Configure IMAP, the signed inbound relay, or retain the legacy Gmail monitoring grant.",
           }),
     };
   }
@@ -443,7 +445,9 @@ export const runSite = internalAction({
         phase,
         stage: "inbound",
         execute: () => ctx.runAction(
-          internal.actions.outreach.syncInboundRepliesInternal,
+          state.inboundMonitoringMode === "imap"
+            ? internal.actions.outreach.syncImapInboxInternal
+            : internal.actions.outreach.syncInboundRepliesInternal,
           { siteId },
         ),
       });

@@ -133,8 +133,9 @@ crons.interval(
 );
 
 // Reply/bounce monitoring is independent of outbound delivery. It reads only
-// dedicated outreach inboxes whose owners granted the isolated Gmail read
-// scope, stores no inbound body, and applies durable tenant suppressions.
+// dedicated outreach inboxes through either bounded customer-managed IMAP or
+// the legacy isolated Gmail read scope. It stores no inbound body and applies
+// durable tenant suppressions.
 crons.interval(
   "outreach-inbound-fleet",
   { minutes: 15 },

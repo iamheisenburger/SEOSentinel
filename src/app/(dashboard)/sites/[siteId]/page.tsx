@@ -1015,6 +1015,8 @@ function SettingsTab({
 /* ── Connection Section ── */
 
 function ConnectionSection({ site }: { site: SiteView }) {
+  const fullManagedBetaEnabled =
+    process.env.NEXT_PUBLIC_PENTRA_FULL_MANAGED_BETA === "true";
   const updateSite = useMutation(api.sites.upsert);
   const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
   const [editing, setEditing] = useState(false);
@@ -1029,7 +1031,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const [webhookSecret, setWebhookSecret] = useState("");
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  const labels = { github: "GitHub", wordpress: "WordPress", webhook: "Webhook", manual: "Copy & Paste" } as Record<string, string>;
+  const labels = { github: "GitHub", wordpress: "WordPress · Beta", webhook: "Webhook · Beta", manual: "Copy & Paste" } as Record<string, string>;
   const iconMap = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy } as Record<string, typeof GitBranch>;
   const MethodIcon = iconMap[method] || GitBranch;
   const isGithub = method === "github";
@@ -1107,8 +1109,8 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   className={inputCls}
                 >
                   <option value="github">GitHub</option>
-                  <option value="wordpress">WordPress</option>
-                  <option value="webhook">Webhook</option>
+                  <option value="wordpress" disabled={!fullManagedBetaEnabled && method !== "wordpress"}>WordPress · Beta</option>
+                  <option value="webhook" disabled={!fullManagedBetaEnabled && method !== "webhook"}>Signed webhook · Beta</option>
                   <option value="manual">Copy &amp; Paste</option>
                 </select>
               </div>

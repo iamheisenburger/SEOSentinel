@@ -60,7 +60,7 @@ test("existing tenants have an explicit current-contract One Setup migration pat
   assert.match(dashboard, /setupMode === "existing"/);
   assert.match(dashboard, /<SetupWizard existingSite=\{site\}/);
   assert.match(wizard, /existingSite\?: ExistingSiteSetup/);
-  assert.match(wizard, /existingSite \? "smtp" : "smartlead_managed"/);
+  assert.match(wizard, /useState<OutreachTransport>\("smtp"\)/);
   assert.match(wizard, /readOnly=\{Boolean\(existingSite\)\}/);
   assert.match(wizard, /existingSite \? \{ id: existingSite\._id \} : \{\}/);
   assert.match(wizard, /!existingSite \? \{ createOnly: true \} : \{\}/);
@@ -343,12 +343,12 @@ test("Search Console readiness is fresh, revocable, and domain-bound", () => {
   );
 });
 
-test("one-setup UX keeps managed Smartlead for new tenants and gives legacy tenants a zero-cost sender path", () => {
+test("one-setup UX defaults every bootstrap-v1 tenant to zero-cost SMTP/IMAP", () => {
   assert.match(wizard, /existingPublisherKind\(existingSite\?\.publishMethod\)/);
   assert.match(wizard, /: "github";/);
   assert.match(
     wizard,
-    /useState<OutreachTransport>\(existingSite \? "smtp" : "smartlead_managed"\)/,
+    /useState<OutreachTransport>\("smtp"\)/,
   );
   assert.match(wizard, /const publisherMode: SetupMode = "connect_existing"/);
   assert.match(wizard, /const measurementMode: SetupMode = "connect_existing"/);
@@ -357,8 +357,7 @@ test("one-setup UX keeps managed Smartlead for new tenants and gives legacy tena
     wizard,
     /existingSite\?\.approvalRequired === true \? "assisted" : "full"/,
   );
-  assert.match(wizard, /Managed setup/);
-  assert.match(wizard, /Connect existing/);
+  assert.match(wizard, /One Setup keeps provider authorization inside this guided flow/);
   assert.match(wizard, /Describe the business once, authorize each connection/);
   assert.match(wizard, /Business and target market/);
   assert.match(wizard, /targetAudienceSummary: targetAudience\.trim\(\)/);
@@ -368,6 +367,8 @@ test("one-setup UX keeps managed Smartlead for new tenants and gives legacy tena
   assert.match(readinessUi, /connect_search_measurement/);
   assert.match(readinessUi, /connect_gmail_outreach/);
   assert.match(readinessUi, /configure_smtp_outreach/);
+  assert.match(wizard, /Customer-managed SMTP\/IMAP · approval only/);
+  assert.doesNotMatch(wizard, /mode === "managed" \? "smartlead_managed" : "smtp"/);
   assert.match(wizard, /One guided setup/);
   assert.match(adapterChoices, /Publishing destination/);
   assert.match(adapterChoices, /GitHub/);
@@ -376,6 +377,8 @@ test("one-setup UX keeps managed Smartlead for new tenants and gives legacy tena
   assert.match(adapterChoices, /Managed sender/);
   assert.match(adapterChoices, /Gmail/);
   assert.match(adapterChoices, /SMTP/);
+  assert.match(adapterChoices, /Beta — not included in bootstrap v1 GA/);
+  assert.match(adapterChoices, /NEXT_PUBLIC_PENTRA_FULL_MANAGED_BETA/);
   assert.match(
     wizard,
     /Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts after the required production readiness gates verify/,
@@ -387,7 +390,7 @@ test("one-setup UX keeps managed Smartlead for new tenants and gives legacy tena
   assert.match(wizard, /Advanced setup options/);
   assert.match(wizard, /Advanced connection controls/);
   assert.match(wizard, /hasSelfManaged/);
-  assert.match(wizard, /Managed setup never asks you to edit DNS here/);
+  assert.match(wizard, /One Setup keeps provider authorization inside this guided flow/);
   assert.doesNotMatch(wizard, /repoOwner|repoName|App Password|webhookSecret/);
   assert.doesNotMatch(wizard, /LeadPilot/i);
   assert.doesNotMatch(wizard, /engine is running/i);

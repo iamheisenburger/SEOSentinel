@@ -134,6 +134,7 @@ export default function BacklinksPage() {
   );
   const verifySmtpInbox = useAction(api.actions.outreach.verifySmtpInbox);
   const syncInbound = useAction(api.actions.outreach.syncInboundReplies);
+  const syncImap = useAction(api.actions.outreach.syncImapInbox);
   const verifyLinks = useAction(api.actions.outreach.verifyAcquiredLinks);
   const approveMessage = useMutation(api.outreach.approveMessage);
   const discardMessage = useMutation(api.outreach.discardMessage);
@@ -193,6 +194,11 @@ export default function BacklinksPage() {
   const isGmailInbox = inboxProvider === "gmail";
   const isManagedInbox = ["smartlead", "managed_ses"].includes(inboxProvider) ||
     String(inbox?.managedTransportKind ?? "") === "smartlead_managed";
+  const managedAutonomyBetaAvailable = Boolean(
+    isManagedInbox &&
+    inboxProvider === "smartlead" &&
+    process.env.NEXT_PUBLIC_PENTRA_FULL_MANAGED_BETA === "true",
+  );
   const dsnRoutingAddress =
     typeof inbox?.inboundRelayDsnRoutingTargetAddress === "string"
       ? inbox.inboundRelayDsnRoutingTargetAddress
@@ -264,11 +270,15 @@ export default function BacklinksPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {String(inbox?.inboundMonitoringMode) === "legacy_gmail" && (
+          {["imap", "legacy_gmail"].includes(
+            String(inbox?.inboundMonitoringMode),
+          ) && (
             <Button
               variant="secondary"
               onClick={() => runOperation("inbound", async () => {
-                const result = await syncInbound({ siteId: site._id });
+                const result = String(inbox?.inboundMonitoringMode) === "imap"
+                  ? await syncImap({ siteId: site._id })
+                  : await syncInbound({ siteId: site._id });
                 setNotice({
                   tone: result.stopped ? "error" : "success",
                   text: result.stopped
@@ -279,7 +289,7 @@ export default function BacklinksPage() {
               loading={pending === "inbound"}
               icon={<Inbox className="h-3.5 w-3.5" />}
             >
-              Check replies (legacy)
+              Check replies
             </Button>
           )}
           <Button
@@ -361,8 +371,8 @@ export default function BacklinksPage() {
               ) : (
                 <>
                   <p className="mt-1 text-[13px] text-[#8B8FA3]">
-                    Connect a secondary-domain Gmail inbox or SMTP mailbox you control,
-                    or let Pentra manage a warmed Smartlead sender.
+                    Connect a customer-managed SMTP/IMAP mailbox. Gmail OAuth
+                    and managed Smartlead remain optional beta paths.
                   </p>
                   <p className="mt-1 text-[11px] text-[#565A6E]">
                     New inboxes remain in approval mode and start at the safe warm-up allowance.
@@ -380,7 +390,9 @@ export default function BacklinksPage() {
               <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
                 {isManagedInbox
                   ? "Managed outreach remains blocked until the isolated sender is authenticated, warmed, and all controlled delivery-event canaries have passed."
-                  : "Customer-managed connections grant outbound send access only. Before any prospect message can be released, an owner-triggered hard-bounce canary must prove this mailbox's routing into the audited receiving-only relay. Inbound bodies and attachments are discarded after transient parsing; Pentra stores only evidence digests."}
+                  : isSmtpInbox
+                    ? "SMTP sends only messages you approve. Bounded IMAP monitoring classifies replies, hard bounces, and STOP requests; bodies and attachments are discarded after transient parsing, and Pentra stores only evidence digests."
+                    : "Gmail OAuth is optional. Before any prospect message can be released, its inbound compliance lane must be verified."}
               </p>
               {dsnRoutingAddress && (
                 <div className="mt-3 rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.05] p-3">
@@ -438,13 +450,19 @@ export default function BacklinksPage() {
                     ready={Boolean(inbox.credentialsPresent)}
                   />
                   <ReadinessBadge
-                    label={String(inbox.inboundMonitoringMode) === "legacy_gmail" ? "Legacy reply sync" : "Inbound relay"}
+                    label={String(inbox.inboundMonitoringMode) === "legacy_gmail"
+                      ? "Legacy reply sync"
+                      : String(inbox.inboundMonitoringMode) === "imap"
+                        ? "IMAP reply sync"
+                        : "Inbound relay"}
                     ready={Boolean(inbox.inboundMonitoringReady)}
                   />
-                  <ReadinessBadge
-                    label="Bounce routing canary"
-                    ready={Boolean(inbox.inboundRelayDsnRoutingReady)}
-                  />
+                  {!isSmtpInbox && (
+                    <ReadinessBadge
+                      label="Bounce routing canary"
+                      ready={Boolean(inbox.inboundRelayDsnRoutingReady)}
+                    />
+                  )}
                   <ReadinessBadge label="SPF" ready={Boolean(inbox.spfVerifiedAt)} />
                   <ReadinessBadge label="DKIM" ready={Boolean(inbox.dkimVerifiedAt)} />
                   <ReadinessBadge label="DMARC" ready={Boolean(inbox.dmarcVerifiedAt)} />
@@ -574,13 +592,13 @@ export default function BacklinksPage() {
               setNotice({
                 tone: verified.senderAuthenticationReady ? "success" : "error",
                 text: verified.senderAuthenticationReady
-                  ? "SMTP saved and verified. Complete the displayed bounce-routing canary before delivery can begin."
-                  : "SMTP saved and the socket is valid, but SPF, DKIM, and DMARC must all verify before delivery can begin.",
+                  ? "SMTP and IMAP are encrypted, connected, and verified. Outreach remains approval-only."
+                  : "SMTP and IMAP are connected, but SPF, DKIM, and DMARC must all verify before delivery can begin.",
               });
             })}
           />
         )}
-        {inbox && (
+        {inbox && managedAutonomyBetaAvailable && (
           <form
             className="mt-5 grid gap-3 border-t border-white/[0.05] pt-5 md:grid-cols-[1fr_2fr_auto] md:items-end"
             onSubmit={(event) => {
@@ -636,7 +654,7 @@ export default function BacklinksPage() {
             </Button>
           </form>
         )}
-        {inbox && (
+        {inbox && managedAutonomyBetaAvailable && (
           <div className="mt-5 border-t border-white/[0.05] pt-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="max-w-3xl">
@@ -756,6 +774,18 @@ export default function BacklinksPage() {
                   : "This environment has not released autonomous delivery."}
               </p>
             )}
+          </div>
+        )}
+        {inbox && !managedAutonomyBetaAvailable && (
+          <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] p-4">
+            <p className="text-[12px] font-semibold text-[#EDEEF1]">
+              Approval-only outreach
+            </p>
+            <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
+              Bootstrap v1 never sends to a prospect automatically. You review,
+              approve, and trigger each message. Reply, bounce, and exact STOP
+              evidence cancels pending follow-ups before another approval.
+            </p>
           </div>
         )}
       </section>
@@ -1111,6 +1141,10 @@ type SmtpConfiguration = {
   port: number;
   username: string;
   password: string;
+  imapHost: string;
+  imapPort: number;
+  imapUsername: string;
+  imapPassword?: string;
   fromEmail: string;
   fromName: string;
   physicalMailingAddress: string;
@@ -1148,6 +1182,10 @@ function SmtpConfigurationForm({
           port: Number(data.get("smtpPort") ?? 0),
           username: String(data.get("smtpUsername") ?? ""),
           password: String(data.get("smtpPassword") ?? ""),
+          imapHost: String(data.get("imapHost") ?? ""),
+          imapPort: Number(data.get("imapPort") ?? 0),
+          imapUsername: String(data.get("imapUsername") ?? ""),
+          imapPassword: String(data.get("imapPassword") ?? "") || undefined,
           fromEmail: String(data.get("smtpFromEmail") ?? ""),
           fromName: String(data.get("smtpFromName") ?? ""),
           physicalMailingAddress: String(
@@ -1160,12 +1198,12 @@ function SmtpConfigurationForm({
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 className="text-[13px] font-semibold text-[#EDEEF1]">
-            Connect an SMTP mailbox
+            Connect an SMTP/IMAP mailbox
           </h3>
           <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-[#707589]">
             Use a dedicated secondary-domain mailbox and an app password. Pentra
-            verifies the socket and sender authentication without sending an email;
-            no credential value is returned by the dashboard API.
+            verifies both encrypted sockets without sending an email; no
+            credential value is returned by the dashboard API.
           </p>
         </div>
         {preset?.appPasswordUrl && (
@@ -1219,7 +1257,7 @@ function SmtpConfigurationForm({
             name="smtpDkimSelector"
             required
             pattern="[A-Za-z0-9_-]{1,63}"
-            defaultValue={selectedPreset === "gmail" ? "google" : "selector1"}
+            defaultValue={selectedPreset === "gmail" ? "20230601" : "selector1"}
             placeholder="selector1"
             autoComplete="off"
             className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
@@ -1232,6 +1270,47 @@ function SmtpConfigurationForm({
             required
             placeholder="outreach@secondary-domain.com"
             autoComplete="username"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="IMAP server">
+          <input
+            name="imapHost"
+            required
+            defaultValue={preset?.imapHost ?? ""}
+            placeholder="imap.example.com"
+            autoComplete="off"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="IMAP port">
+          <input
+            name="imapPort"
+            type="number"
+            required
+            min={1}
+            max={65535}
+            defaultValue={preset?.imapPort ?? 993}
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="IMAP username">
+          <input
+            name="imapUsername"
+            type="email"
+            required
+            placeholder="Same mailbox address"
+            autoComplete="username"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+          />
+        </SmtpField>
+        <SmtpField label="IMAP app password (optional)">
+          <input
+            name="imapPassword"
+            type="password"
+            minLength={4}
+            placeholder="Uses SMTP app password if blank"
+            autoComplete="new-password"
             className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
           />
         </SmtpField>
@@ -1289,7 +1368,7 @@ function SmtpConfigurationForm({
           Cancel
         </Button>
         <Button type="submit" loading={pending} icon={<ShieldCheck className="h-3.5 w-3.5" />}>
-          Save and verify SMTP
+          Save and verify SMTP/IMAP
         </Button>
       </div>
     </form>
