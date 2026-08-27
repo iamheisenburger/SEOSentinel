@@ -60,7 +60,14 @@ export default clerkMiddleware(async (auth, request) => {
   }
 
   if (!isPublicRoute(request)) {
-    await auth.protect();
+    // Redirect to Pentra's own branded sign-in. Without an explicit
+    // unauthenticatedUrl, auth.protect() sends the visitor to Clerk's hosted
+    // Account Portal on accounts.pentra.dev, which carries no Pentra
+    // branding. signInUrl on ClerkProvider cannot fix this: that provider is
+    // a client component and middleware never sees it.
+    const signIn = new URL("/sign-in", request.url);
+    signIn.searchParams.set("redirect_url", request.url);
+    await auth.protect({ unauthenticatedUrl: signIn.toString() });
   }
 });
 

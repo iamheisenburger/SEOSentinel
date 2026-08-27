@@ -18,6 +18,10 @@ const layout = readFileSync(
   new URL("../src/app/layout.tsx", import.meta.url),
   "utf8",
 );
+const middleware = readFileSync(
+  new URL("../src/middleware.ts", import.meta.url),
+  "utf8",
+);
 
 test("Clerk redirects to Pentra's own sign-in, never the hosted portal", () => {
   assert.match(layout, /signInUrl=["']\/sign-in["']/);
@@ -36,4 +40,12 @@ test("the branded auth pages exist and carry Pentra context", () => {
     assert.match(page, /Pentra/, `${route} must name the product`);
     assert.match(page, heading);
   }
+});
+
+test("middleware sends unauthenticated visitors to the branded page", () => {
+  // ClerkProvider is a client component; middleware never sees its signInUrl,
+  // so auth.protect() must be told explicitly or it falls back to the hosted
+  // Account Portal.
+  assert.match(middleware, /auth\.protect\(\{\s*unauthenticatedUrl/);
+  assert.match(middleware, /new URL\(["']\/sign-in["']/);
 });
