@@ -256,6 +256,7 @@ export function Sidebar() {
         <div className="border-t border-white/[0.04] px-4 py-3.5">
           <div className="flex items-center gap-3">
             <UserButton
+              userProfileMode="modal"
               appearance={{
                 elements: {
                   avatarBox: "h-8 w-8",

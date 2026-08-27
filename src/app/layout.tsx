@@ -59,15 +59,28 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0B1120] text-[#F1F5F9]`}
       >
         <ClerkProvider
-          // Without these, auth.protect() redirects to Clerk's hosted Account
-          // Portal on accounts.pentra.dev, which carries no Pentra branding.
-          // The branded pages already exist at /sign-in and /sign-up.
           signInUrl="/sign-in"
           signUpUrl="/sign-up"
+          signInFallbackRedirectUrl="/dashboard"
+          signUpFallbackRedirectUrl="/dashboard"
+          afterSignOutUrl="/"
           appearance={{
             theme: dark,
+            variables: {
+              colorPrimary: "#0EA5E9",
+              colorBackground: "#111318",
+              colorInput: "#1E2130",
+              colorInputForeground: "#F1F5F9",
+              colorForeground: "#F1F5F9",
+              colorMutedForeground: "#94A3B8",
+              borderRadius: "0.75rem",
+            },
             elements: {
+              rootBox: {
+                width: "100%",
+              },
               card: {
+                width: "100%",
                 backgroundColor: "#111318",
                 border: "1px solid rgba(255,255,255,0.08)",
                 boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)",
@@ -100,7 +113,11 @@ export default function RootLayout({
                 borderColor: "rgba(255,255,255,0.1)",
                 color: "#F1F5F9",
               },
-
+              formButtonPrimary: {
+                backgroundColor: "#0EA5E9",
+                color: "#FFFFFF",
+                boxShadow: "0 10px 28px rgba(14,165,233,0.16)",
+              },
             },
           }}
         >
