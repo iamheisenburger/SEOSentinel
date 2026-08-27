@@ -84,6 +84,7 @@ export default function BacklinksPage() {
   const [tab, setTab] = useState<Tab>("opportunities");
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [showRejected, setShowRejected] = useState(false);
   const [autonomyConsentAccepted, setAutonomyConsentAccepted] = useState(false);
   const [autonomyDailyCap, setAutonomyDailyCap] = useState(5);
 
@@ -145,6 +146,20 @@ export default function BacklinksPage() {
     () => new Map((messages ?? []).map((message) => [message.opportunityId, message])),
     [messages],
   );
+  // A rejected opportunity is evidence that no longer reconfirmed on a live
+  // page. Counting it as an "opportunity" advertises a queue of work that
+  // cannot be acted on, so the badge and the default list show only what the
+  // tenant can actually pursue.
+  const actionableOpportunities = (opportunities ?? []).filter(
+    (opportunity) => opportunity.status !== "rejected",
+  );
+  const rejectedOpportunities = (opportunities ?? []).filter(
+    (opportunity) => opportunity.status === "rejected",
+  );
+  const visibleOpportunities = showRejected
+    ? [...actionableOpportunities, ...rejectedOpportunities]
+    : actionableOpportunities;
+
   const ownerApprovedCount = (messages ?? []).filter(
     (message) =>
       message.status === "approved" &&
@@ -653,7 +668,7 @@ export default function BacklinksPage() {
       <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex rounded-lg border border-white/[0.06] bg-white/[0.02] p-1">
           <TabButton active={tab === "opportunities"} onClick={() => setTab("opportunities")}>
-            Opportunities <CountBadge value={opportunities?.length ?? 0} />
+            Opportunities <CountBadge value={actionableOpportunities.length} />
           </TabButton>
           <TabButton active={tab === "outreach"} onClick={() => setTab("outreach")}>
             Outreach <CountBadge value={messages?.length ?? 0} />
@@ -703,7 +718,28 @@ export default function BacklinksPage() {
         </div>
       ) : tab === "opportunities" ? (
         <div className="flex flex-col gap-3">
-          {(opportunities ?? []).map((opportunity) => {
+          {actionableOpportunities.length === 0 && (
+            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6 text-center">
+              <p className="text-[14px] font-medium text-[#F1F5F9]">
+                No actionable opportunities right now
+              </p>
+              <p className="mt-1 text-[13px] text-[#8A8FA3]">
+                {rejectedOpportunities.length > 0
+                  ? `${rejectedOpportunities.length} previously found ${rejectedOpportunities.length === 1 ? "opportunity" : "opportunities"} no longer reconfirm on a live page, so Pentra will not pitch them. Discovery runs automatically; use Discover opportunities to search now.`
+                  : "Discovery runs automatically. Use Discover opportunities to search now."}
+              </p>
+            </div>
+          )}
+          {rejectedOpportunities.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowRejected((value) => !value)}
+              className="self-start rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] font-medium text-[#8A8FA3] transition hover:text-[#F1F5F9]"
+            >
+              {showRejected ? "Hide" : "Show"} {rejectedOpportunities.length} unconfirmed
+            </button>
+          )}
+          {visibleOpportunities.map((opportunity) => {
             const message = messageByOpportunity.get(opportunity._id);
             return (
               <article key={opportunity._id} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
