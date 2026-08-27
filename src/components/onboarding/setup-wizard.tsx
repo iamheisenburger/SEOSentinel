@@ -23,6 +23,8 @@ import {
   cadenceLabel,
   cadenceOptionsForMonthlyLimit,
   defaultCadenceForMonthlyLimit,
+  maximumWholeCadencePerWeek,
+  requiredMonthlyArticlesForCadence,
 } from "../../../convex/planLimits";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from
   "../../../convex/lib/publisherProvisioning";
@@ -157,7 +159,11 @@ export function SetupWizard({
 
   const capacity = useQuery(
     api.sites.getCadenceCapacity,
-    isLoaded && userId ? {} : "skip",
+    isLoaded && userId
+      ? existingSite
+        ? { siteId: existingSite._id }
+        : {}
+      : "skip",
   );
   const upsertSite = useMutation(api.sites.upsert);
   const saveOneSetupRequest = useMutation(api.sites.saveOneSetupRequest);
@@ -169,9 +175,18 @@ export function SetupWizard({
     ? capacity.availableMonthlyArticles
     : 0;
   const cadenceOptions = cadenceOptionsForMonthlyLimit(monthlyAllowance);
+  const maximumWholeCadence = maximumWholeCadencePerWeek(monthlyAllowance);
+  const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
+  const cadenceInputReady = Boolean(
+    capacity?.ready &&
+      cadence > 0 &&
+      cadenceFitsMonthlyAllowance(cadence, monthlyAllowance),
+  );
+  const physicalAddressLooksLikeEmail = managedPhysicalAddress.includes("@");
   const senderProfileInputReady = Boolean(
     managedSenderName.trim().length >= 2 &&
       managedPhysicalAddress.trim().length >= 15 &&
+      !physicalAddressLooksLikeEmail &&
       confirmsSenderIdentityAndAddress &&
       authorizesManagedDeliveryEventCanary &&
       confirmsSeparateAutomaticSendingConsent &&
@@ -307,8 +322,10 @@ export function SetupWizard({
       );
       return;
     }
-    if (!capacity?.ready || cadence <= 0) {
-      setError("Choose an active cadence after your plan capacity finishes loading.");
+    if (!cadenceInputReady) {
+      setError(
+        "Choose an active publishing cadence that fits the monthly article credits available to this site.",
+      );
       return;
     }
     if (automationMode === "full" && !autopublishConsentAccepted) {
@@ -643,7 +660,7 @@ export function SetupWizard({
 
         <div className="mt-5">
           <label className="mb-2 block text-[11px] font-medium text-[#8B8FA3]">
-            Publishing cadence
+            How many articles should Pentra publish?
           </label>
           <div className="flex flex-wrap gap-2">
             {cadenceOptions.filter((option) => option.value > 0).map((option) => (
@@ -661,10 +678,29 @@ export function SetupWizard({
               </button>
             ))}
           </div>
-          <p className="mt-2 text-[10px] text-[#565A6E]">
+          {maximumWholeCadence > 0 && (
+            <label className="mt-3 block max-w-[220px]">
+              <span className="mb-1.5 block text-[10px] text-[#8B8FA3]">
+                Articles per week
+              </span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={maximumWholeCadence}
+                step={1}
+                value={Number.isInteger(cadence) ? cadence : ""}
+                onChange={(event) => setCadence(Number(event.target.value))}
+                className="w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+              />
+            </label>
+          )}
+          <p className="mt-2 text-[10px] leading-relaxed text-[#73788F]">
             {capacity === undefined || !capacity.ready
               ? "Verifying your account-wide cadence capacity…"
-              : `${capacity.availableMonthlyArticles} of ${capacity.maxArticles} monthly articles are available for this website.`}
+              : cadenceInputReady
+                ? `${cadenceLabel(cadence)} reserves ${cadenceMonthlyCost} of the ${capacity.availableMonthlyArticles} monthly article credits available to this site. ${capacity.availableMonthlyArticles - cadenceMonthlyCost} will remain unallocated.`
+                : `Choose up to ${maximumWholeCadence || cadenceOptions.find((option) => option.value > 0)?.label || "the available monthly cadence"}. This site currently has ${capacity.availableMonthlyArticles} of ${capacity.maxArticles} monthly article credits available.`}
           </p>
         </div>
 
@@ -708,12 +744,13 @@ export function SetupWizard({
               <Mail className="mt-0.5 h-4 w-4 shrink-0 text-[#38BDF8]" />
               <div className="min-w-0 flex-1">
                 <p className="text-[12px] font-medium text-[#EDEEF1]">
-                  Authority sender identity
+                  Outreach sender details
                 </p>
                 <p className="mt-1 text-[10px] leading-relaxed text-[#8B8FA3]">
-                  Enter the truthful identity and physical mailing address that
-                  may appear in compliant outreach. This one receipt follows the
-                  exact Gmail, SMTP, or managed Smartlead sender you selected.
+                  Outreach emails identify the sender and show a real postal
+                  address in the footer. Enter a business address, registered
+                  office, or postal mailbox where your business can receive
+                  mail. Do not enter an email address.
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <Input
@@ -723,12 +760,16 @@ export function SetupWizard({
                     onChange={(event) => setManagedSenderName(event.target.value)}
                   />
                   <Input
-                    label="Physical mailing address"
-                    placeholder="Street, city, region, postal code, country"
+                    label="Postal address shown in email footers"
+                    placeholder="Street or PO Box, city, postcode, country"
+                    autoComplete="street-address"
                     value={managedPhysicalAddress}
                     onChange={(event) =>
                       setManagedPhysicalAddress(event.target.value)
                     }
+                    error={physicalAddressLooksLikeEmail
+                      ? "Enter a postal address—not an email address."
+                      : undefined}
                   />
                   {outreachMode === "managed" && (
                     <Input
@@ -851,8 +892,7 @@ export function SetupWizard({
           onClick={() => void startSetup()}
           loading={busy}
           disabled={
-            !capacity?.ready ||
-            cadence <= 0 ||
+            !cadenceInputReady ||
             !domain.trim() ||
             businessName.trim().length < 2 ||
             businessSummary.trim().length < 20 ||

@@ -12,6 +12,7 @@ import {
   managedOutreachMailboxLeaseIsCurrent,
   managedOutreachMailboxOperationalIssues,
   managedOutreachMailboxOperationallyReady,
+  managedOutreachMailboxProfileIssues,
   managedOutreachMailboxReleaseSealed,
   managedOutreachMailboxRequestFenceIssues,
   managedOutreachMailboxVerifiedDeletionSettled,
@@ -50,6 +51,16 @@ const gmailCallbackRoute = readFileSync(
   "src/app/api/outreach/gmail/callback/route.ts",
   "utf8",
 );
+
+test("an email address can never pass as a physical mailing address", () => {
+  assert.ok(
+    managedOutreachMailboxProfileIssues({
+      fromName: "Pentra",
+      physicalMailingAddress: "pentrahelp@gmail.com",
+    }).includes("physical_mailing_address_invalid"),
+  );
+  assert.match(sites, /outreachPhysicalMailingAddress\.includes\("@"\)/);
+});
 
 test("mailbox generation is stable across retries and passive dispatcher revisions", () => {
   assert.equal(nextManagedOutreachMailboxGeneration({

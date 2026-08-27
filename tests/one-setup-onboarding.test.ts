@@ -70,6 +70,17 @@ test("existing tenants have an explicit current-contract One Setup migration pat
   );
 });
 
+test("One Setup explains postal sender identity and accepts custom plan-bounded cadence", () => {
+  assert.match(wizard, /Postal address shown in email footers/);
+  assert.match(wizard, /Do not enter an email address/);
+  assert.match(wizard, /managedPhysicalAddress\.includes\("@"\)/);
+  assert.match(wizard, /maximumWholeCadencePerWeek/);
+  assert.match(wizard, /Articles per week/);
+  assert.match(wizard, /reserves.*monthly article credits available to this site/);
+  assert.match(wizard, /cadenceFitsMonthlyAllowance\(cadence, monthlyAllowance\)/);
+  assert.match(wizard, /\{ siteId: existingSite\._id \}/);
+});
+
 test("provisioning progress has deterministic fail-closed aggregation", () => {
   assert.equal(
     aggregateOneSetupRequestState([
@@ -357,12 +368,12 @@ test("one-setup UX defaults every bootstrap-v1 tenant to zero-cost SMTP/IMAP", (
     wizard,
     /existingSite\?\.approvalRequired === true \? "assisted" : "full"/,
   );
-  assert.match(wizard, /One Setup keeps provider authorization inside this guided flow/);
+  assert.match(wizard, /One Setup keeps provider authorization\s+inside this\s+guided flow/);
   assert.match(wizard, /Describe the business once, authorize each connection/);
   assert.match(wizard, /Business and target market/);
   assert.match(wizard, /targetAudienceSummary: targetAudience\.trim\(\)/);
   assert.match(wizard, /productUsage: productUsage\.trim\(\)/);
-  assert.match(wizard, /Authority sender identity/);
+  assert.match(wizard, /Outreach sender details/);
   assert.match(schema, /outreachSenderProfile: v\.optional\(v\.object/);
   assert.match(readinessUi, /connect_search_measurement/);
   assert.match(readinessUi, /connect_gmail_outreach/);
@@ -390,7 +401,7 @@ test("one-setup UX defaults every bootstrap-v1 tenant to zero-cost SMTP/IMAP", (
   assert.match(wizard, /Advanced setup options/);
   assert.match(wizard, /Advanced connection controls/);
   assert.match(wizard, /hasSelfManaged/);
-  assert.match(wizard, /One Setup keeps provider authorization inside this guided flow/);
+  assert.match(wizard, /One Setup keeps provider authorization\s+inside this\s+guided flow/);
   assert.doesNotMatch(wizard, /repoOwner|repoName|App Password|webhookSecret/);
   assert.doesNotMatch(wizard, /LeadPilot/i);
   assert.doesNotMatch(wizard, /engine is running/i);

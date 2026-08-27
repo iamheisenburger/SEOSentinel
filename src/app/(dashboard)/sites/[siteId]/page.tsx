@@ -40,8 +40,11 @@ import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { formatDistanceToNow } from "date-fns";
 import {
+  cadenceFitsMonthlyAllowance,
   cadenceLabel,
   cadenceOptionsForMonthlyLimit,
+  maximumWholeCadencePerWeek,
+  requiredMonthlyArticlesForCadence,
 } from "../../../../../convex/planLimits";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 
@@ -785,6 +788,18 @@ function SettingsTab({
     | undefined;
   onSave: () => void;
 }) {
+  const availableMonthlyArticles = cadenceCapacity?.ready
+    ? cadenceCapacity.availableMonthlyArticles
+    : 0;
+  const maximumWholeCadence = maximumWholeCadencePerWeek(
+    availableMonthlyArticles,
+  );
+  const cadenceValid = Boolean(
+    cadenceCapacity?.ready &&
+      cadenceFitsMonthlyAllowance(cadence, availableMonthlyArticles),
+  );
+  const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
+
   return (
     <div className="flex flex-col gap-5">
       {/* Save bar */}
@@ -796,6 +811,7 @@ function SettingsTab({
           size="sm"
           onClick={onSave}
           loading={saving}
+          disabled={!cadenceValid}
           icon={saved ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
         >
           {saved ? "Saved" : "Save Changes"}
@@ -856,27 +872,57 @@ function SettingsTab({
 
       {/* Publishing */}
       <SettingsSection title="Publishing" icon={Zap}>
-        <FieldRow label="Publishing cadence" description="Only cadences sustainable within the active monthly plan are available">
+        <FieldRow label="Publishing cadence" description="Choose any whole-number weekly cadence that fits this site's available monthly article credits">
           <div className="space-y-2">
-            <select
-              className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
-              value={cadence}
-              disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
-              onChange={(event) => setCadence(Number(event.target.value))}
-            >
+            <div className="flex flex-wrap gap-2">
               {cadenceOptions.map((option) => (
-                <option key={option.label} value={option.value}>
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => setCadence(option.value)}
+                  disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
+                  className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${
+                    cadence === option.value
+                      ? "bg-[#0EA5E9] text-white"
+                      : "bg-white/[0.04] text-[#8B8FA3] hover:bg-white/[0.07]"
+                  }`}
+                >
                   {option.label}
-                </option>
+                </button>
               ))}
-            </select>
+            </div>
+            {maximumWholeCadence > 0 && (
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={maximumWholeCadence}
+                step={1}
+                aria-label="Articles per week"
+                className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+                value={Number.isInteger(cadence) ? cadence : ""}
+                disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
+                onChange={(event) => setCadence(Number(event.target.value))}
+              />
+            )}
             <p className="text-[10px] leading-relaxed text-[#565A6E]">
+              {maximumWholeCadence > 0
+                ? `Enter 1–${maximumWholeCadence} articles per week.`
+                : "This plan uses a monthly cadence."}
+            </p>
+            <p className={`text-[10px] leading-relaxed ${cadenceValid ? "text-[#565A6E]" : "text-[#F87171]"}`}>
               {cadenceCapacity === undefined || !cadenceCapacity.ready
                 ? "Checking the current account-wide article allowance."
-                : cadenceCapacity.siteParked
-                  ? "This site is parked by the current site allowance. Its requested cadence is saved and will be reconsidered after an upgrade or site removal."
-                  : `${cadenceCapacity.availableMonthlyArticles} of ${cadenceCapacity.maxArticles} monthly articles are available for this site across the account.`}
+                : cadenceValid
+                  ? `${cadenceLabel(cadence)} reserves ${cadenceMonthlyCost} of ${cadenceCapacity.availableMonthlyArticles} credits available to this site; ${cadenceCapacity.availableMonthlyArticles - cadenceMonthlyCost} remain unallocated.`
+                  : `Choose a cadence that uses no more than ${cadenceCapacity.availableMonthlyArticles} monthly article credits.`}
             </p>
+            {cadenceCapacity?.siteParked && (
+              <p className="text-[10px] leading-relaxed text-[#FBBF24]">
+                This site is parked by the current site allowance. Its requested
+                cadence will be reconsidered after an upgrade or site removal.
+              </p>
+            )}
           </div>
         </FieldRow>
         <ToggleRow
