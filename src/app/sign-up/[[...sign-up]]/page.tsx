@@ -1,9 +1,9 @@
 "use client";
 
-import { SignUp } from "@clerk/nextjs";
+import { ClerkLoaded, ClerkLoading, SignUp } from "@clerk/nextjs";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthFormLoading, AuthShell } from "@/components/auth/auth-shell";
 import {
   authCounterpartUrl,
   postAuthDestination,
@@ -39,9 +39,14 @@ function SignUpForm() {
 export default function SignUpPage() {
   return (
     <AuthShell mode="sign-up">
-      <Suspense>
-        <SignUpForm />
-      </Suspense>
+      <ClerkLoading>
+        <AuthFormLoading label="Preparing secure account creation…" />
+      </ClerkLoading>
+      <ClerkLoaded>
+        <Suspense>
+          <SignUpForm />
+        </Suspense>
+      </ClerkLoaded>
     </AuthShell>
   );
 }

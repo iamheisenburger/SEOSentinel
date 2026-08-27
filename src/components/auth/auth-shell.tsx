@@ -163,3 +163,34 @@ export function AuthShell({
     </main>
   );
 }
+
+export function AuthFormLoading({ label }: { label: string }) {
+  return (
+    <div
+      aria-live="polite"
+      aria-label={label}
+      className="w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-[#111318] shadow-2xl shadow-black/40"
+    >
+      <div className="space-y-3 px-9 pb-5 pt-8 text-center">
+        <div className="mx-auto h-5 w-36 animate-pulse rounded bg-white/[0.08]" />
+        <div className="mx-auto h-3 w-52 animate-pulse rounded bg-white/[0.04]" />
+      </div>
+      <div className="space-y-5 px-9 py-7">
+        <div className="h-10 animate-pulse rounded-lg bg-white/[0.06]" />
+        <div className="flex items-center gap-4">
+          <span className="h-px flex-1 bg-white/[0.06]" />
+          <span className="h-2.5 w-5 animate-pulse rounded bg-white/[0.04]" />
+          <span className="h-px flex-1 bg-white/[0.06]" />
+        </div>
+        <div className="space-y-2">
+          <div className="h-3 w-24 animate-pulse rounded bg-white/[0.06]" />
+          <div className="h-10 animate-pulse rounded-lg bg-white/[0.06]" />
+        </div>
+        <div className="h-10 animate-pulse rounded-lg bg-[#0EA5E9]/20" />
+      </div>
+      <div className="border-t border-white/[0.05] px-8 py-5 text-center text-[11px] text-[#565A6E]">
+        {label}
+      </div>
+    </div>
+  );
+}

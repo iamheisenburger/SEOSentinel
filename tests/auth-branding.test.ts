@@ -58,6 +58,7 @@ test("the branded auth pages exist and carry Pentra context", () => {
   assert.match(shell, /Pentra/);
   assert.match(shell, /Autonomous SEO operations/);
   assert.match(shell, /Pentra growth loop/);
+  assert.match(shell, /AuthFormLoading/);
   assert.match(shell, /\/legal\/terms/);
   assert.match(shell, /\/legal\/privacy/);
 });
@@ -131,4 +132,24 @@ test("every customer auth entry stays inside branded Pentra UI", () => {
   assert.match(landingNav, /userProfileMode=["']modal["']/);
   assert.match(sidebar, /userProfileMode=["']modal["']/);
   assert.match(layout, /afterSignOutUrl=["']\/["']/);
+});
+
+test("fallback screens remain visibly inside Pentra", () => {
+  for (const route of ["not-found", "error", "global-error"] as const) {
+    const page = readFileSync(
+      new URL(`../src/app/${route}.tsx`, import.meta.url),
+      "utf8",
+    );
+    assert.match(page, /BrandedErrorState/);
+  }
+
+  const fallback = readFileSync(
+    new URL(
+      "../src/components/layout/branded-error-state.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(fallback, /Pentra/);
+  assert.match(fallback, /Back to Pentra/);
 });

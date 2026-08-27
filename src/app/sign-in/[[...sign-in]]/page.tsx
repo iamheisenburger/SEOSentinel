@@ -1,9 +1,9 @@
 "use client";
 
-import { SignIn } from "@clerk/nextjs";
+import { ClerkLoaded, ClerkLoading, SignIn } from "@clerk/nextjs";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthFormLoading, AuthShell } from "@/components/auth/auth-shell";
 import {
   authCounterpartUrl,
   postAuthDestination,
@@ -39,9 +39,14 @@ function SignInForm() {
 export default function SignInPage() {
   return (
     <AuthShell mode="sign-in">
-      <Suspense>
-        <SignInForm />
-      </Suspense>
+      <ClerkLoading>
+        <AuthFormLoading label="Preparing secure sign in…" />
+      </ClerkLoading>
+      <ClerkLoaded>
+        <Suspense>
+          <SignInForm />
+        </Suspense>
+      </ClerkLoaded>
     </AuthShell>
   );
 }
