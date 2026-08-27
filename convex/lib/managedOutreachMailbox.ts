@@ -239,7 +239,7 @@ export function managedOutreachMailboxProfileIssues(
   if (fromName.length < 2 || fromName.length > 100) {
     issues.push("sender_name_invalid");
   }
-  if (address.length < 15 || address.length > 300) {
+  if (address.length < 15 || address.length > 300 || address.includes("@")) {
     issues.push("physical_mailing_address_invalid");
   }
   if (

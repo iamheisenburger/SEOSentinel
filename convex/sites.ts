@@ -1838,6 +1838,7 @@ export const saveOneSetupRequest = mutation({
     if (
       outreachFromName.length < 2 ||
       outreachPhysicalMailingAddress.length < 15 ||
+      outreachPhysicalMailingAddress.includes("@") ||
       args.managedOutreachAttestationVersion !==
         MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION ||
       args.managedOutreachCanaryConsentVersion !==

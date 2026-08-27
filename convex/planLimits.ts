@@ -87,6 +87,22 @@ export function maximumSustainableCadencePerWeek(
   return (Math.floor(maxArticlesPerMonth) * WEEK_DAYS) / LONGEST_MONTH_DAYS;
 }
 
+/** Highest whole-number weekly cadence a customer can choose without
+ * over-allocating the 31-day monthly allowance. The runtime deliberately
+ * caps publishing at three articles per day (21/week), but does not otherwise
+ * force customers into the UI's familiar preset cadences. */
+export function maximumWholeCadencePerWeek(
+  maxArticlesPerMonth: number,
+): number {
+  return Math.max(
+    0,
+    Math.min(
+      21,
+      Math.floor(maximumSustainableCadencePerWeek(maxArticlesPerMonth) + 1e-9),
+    ),
+  );
+}
+
 export function cadenceFitsMonthlyLimit(
   cadencePerWeek: number,
   maxArticlesPerMonth: number,

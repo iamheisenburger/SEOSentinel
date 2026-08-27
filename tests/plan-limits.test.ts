@@ -10,6 +10,7 @@ import {
   cadenceOptionsForMonthlyLimit,
   defaultCadenceForMonthlyLimit,
   maximumSustainableCadencePerWeek,
+  maximumWholeCadencePerWeek,
   requiredMonthlyArticlesForCadence,
 } from "../convex/planLimits.ts";
 import { cadenceIntervalMs } from "../convex/lib/autopilotBuffer.ts";
@@ -40,6 +41,15 @@ test("every selectable cadence fits its monthly plan capacity", () => {
   assert.equal(defaultCadenceForMonthlyLimit(10), 2);
   assert.equal(defaultCadenceForMonthlyLimit(25), 4);
   assert.equal(maximumSustainableCadencePerWeek(3), 21 / 31);
+});
+
+test("customers may choose any whole cadence that fits the remaining allowance", () => {
+  assert.equal(maximumWholeCadencePerWeek(26), 5);
+  assert.equal(requiredMonthlyArticlesForCadence(5), 23);
+  assert.equal(cadenceFitsMonthlyAllowance(5, 26), true);
+  assert.equal(cadenceFitsMonthlyAllowance(6, 26), false);
+  assert.equal(maximumWholeCadencePerWeek(150), 21);
+  assert.equal(maximumWholeCadencePerWeek(3), 0);
 });
 
 test("tenant cadence writes are enforced server-side and legacy mismatches are migratable", () => {
