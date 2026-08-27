@@ -17,6 +17,7 @@ import {
   outreachComplianceIssues,
   outreachDeliverySettlementDecision,
   outreachSendDecision,
+  outreachSenderConnectionIssues,
   outreachSenderReadinessIssues,
   utcDayKey,
   warmupDailyCap,
@@ -31,6 +32,22 @@ import {
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
 const durabilitySource = readFileSync("convex/lib/outreachDurability.ts", "utf8");
+
+test("consumer Gmail may connect for a self-test but never becomes outreach-ready", () => {
+  assert.deepEqual(outreachSenderConnectionIssues({
+    siteDomain: "leadpilot.chat",
+    provider: "gmail",
+    fromEmail: "leadpilotchat@gmail.com",
+  }), []);
+  assert.match(
+    outreachSenderReadinessIssues({
+      siteDomain: "leadpilot.chat",
+      provider: "gmail",
+      fromEmail: "leadpilotchat@gmail.com",
+    }).join(" "),
+    /consumer mailbox/,
+  );
+});
 
 test("the bounded follow-up schedule stretches from verified predecessor receipts", () => {
   assert.deepEqual(FOLLOW_UP_SCHEDULE_DAYS, [4, 9]);

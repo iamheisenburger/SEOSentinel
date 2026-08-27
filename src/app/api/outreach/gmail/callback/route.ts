@@ -5,8 +5,9 @@ import { verifyOAuthState } from "@/lib/oauth-state";
 import {
   hasGmailSendScope,
   hasOnlyGmailOutboundScopes,
+  gmailConnectionIssues,
+  isConsumerGoogleMailbox,
   normalizeMailDomain,
-  secondaryGmailSenderIssues,
 } from "@/lib/outreach-gmail";
 import { verifyGoogleWorkspaceDns } from "@/lib/outreach-dns";
 import { callPentraInternal } from "@/lib/pentra-internal-api";
@@ -127,7 +128,7 @@ async function handleOutreachGmailCallback(req: NextRequest) {
     return page("Google did not verify the sending mailbox identity.", false, 403);
   }
 
-  const senderIssues = secondaryGmailSenderIssues({
+  const senderIssues = gmailConnectionIssues({
     siteDomain: site.domain,
     fromEmail: email,
   });
@@ -172,10 +173,13 @@ async function handleOutreachGmailCallback(req: NextRequest) {
       response.cookies.delete("outreach_gmail_oauth_state");
       return response;
     }
+    const consumerGoogleMailbox = isConsumerGoogleMailbox(email);
     const message = result.ready && result.inboundReady
       ? "Gmail connected. The inbox is ready in approval mode with signed inbound handling."
       : result.ready
         ? "Gmail connected in approval mode. Before any prospect message can be released, use Backlinks to send the fixed-recipient bounce-routing canary and wait for its signed hard-DSN receipt."
+      : consumerGoogleMailbox
+        ? "Gmail connected for a same-mailbox send test. Prospect outreach remains blocked because it requires a dedicated secondary-domain Google Workspace inbox with verified authentication and bounce routing."
       : `Gmail connected, but sending remains blocked. ${
           dns.issues.length > 0
             ? dns.issues.join(" ")

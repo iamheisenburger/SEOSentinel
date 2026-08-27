@@ -9,6 +9,8 @@ import {
   hasGmailSendScope,
   hasOnlyGmailOutboundScopes,
   hasOnlyGmailOutreachScopes,
+  gmailConnectionIssues,
+  isConsumerGoogleMailbox,
   normalizeMailDomain,
   secondaryGmailSenderIssues,
 } from "../src/lib/outreach-gmail.ts";
@@ -59,7 +61,7 @@ test("sender domain normalization handles URLs and common website prefixes", () 
   assert.equal(normalizeMailDomain("getleadpilot.com"), "getleadpilot.com");
 });
 
-test("primary, subdomain and consumer inboxes fail closed", () => {
+test("primary and same-organisation inboxes fail connection closed", () => {
   assert.ok(secondaryGmailSenderIssues({
     siteDomain: "https://leadpilot.chat",
     fromEmail: "hello@leadpilot.chat",
@@ -72,10 +74,16 @@ test("primary, subdomain and consumer inboxes fail closed", () => {
     siteDomain: "https://app.example.co.uk",
     fromEmail: "hello@outreach.example.co.uk",
   }).length > 0);
+  assert.deepEqual(gmailConnectionIssues({
+    siteDomain: "leadpilot.chat",
+    fromEmail: "hello@gmail.com",
+  }), []);
+  assert.equal(isConsumerGoogleMailbox("hello@gmail.com"), true);
+  assert.equal(isConsumerGoogleMailbox("hello@outreach.example.com"), false);
   assert.ok(secondaryGmailSenderIssues({
     siteDomain: "leadpilot.chat",
     fromEmail: "hello@gmail.com",
-  }).length > 0);
+  }).length > 0, "consumer Gmail remains blocked from prospect outreach");
   assert.deepEqual(secondaryGmailSenderIssues({
     siteDomain: "https://app.example.co.uk",
     fromEmail: "hello@outreach.another.co.uk",
@@ -122,6 +130,13 @@ test("Gmail connection is server-side, DNS-gated and never accepts Resend", () =
   );
 
   const delivery = readFileSync("convex/actions/outreach.ts", "utf8");
+  const selfTest = delivery.slice(
+    delivery.indexOf("export const sendGmailConnectionSelfTest"),
+    delivery.indexOf("export const sendAutomaticOutreachInternal"),
+  );
+  assert.match(selfTest, /toEmail: inbox\.fromEmail/);
+  assert.match(selfTest, /No prospect was contacted/);
+  assert.doesNotMatch(selfTest, /liveOpportunityEvidence|sendHandler/);
   const refresh = delivery.slice(
     delivery.indexOf("async function refreshGoogleAccessToken"),
     delivery.indexOf("type DeliveryOutcome"),

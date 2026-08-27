@@ -114,6 +114,9 @@ export default function BacklinksPage() {
   const prepareOutreach = useAction(api.actions.outreach.prepareOutreach);
   const sendApproved = useAction(api.actions.outreach.sendApprovedOutreach);
   const sendBounceCanary = useAction(api.actions.outreach.sendInboundRelayDsnCanary);
+  const sendGmailSelfTest = useAction(
+    api.actions.outreach.sendGmailConnectionSelfTest,
+  );
   const syncInbound = useAction(api.actions.outreach.syncInboundReplies);
   const verifyLinks = useAction(api.actions.outreach.verifyAcquiredLinks);
   const approveMessage = useMutation(api.outreach.approveMessage);
@@ -431,6 +434,23 @@ export default function BacklinksPage() {
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
+            {inbox &&
+              String(inbox.provider) === "gmail" &&
+              Boolean(inbox.credentialsPresent) &&
+              !["disconnected", "suspended"].includes(String(inbox.status)) && (
+                <Button
+                  variant="secondary"
+                  loading={pending === "gmail-self-test"}
+                  onClick={() => runOperation("gmail-self-test", async () => {
+                    if (!window.confirm("Send exactly one Pentra connection test back to this same Gmail mailbox? No prospect will be contacted and outreach readiness will not change.")) return;
+                    const result = await sendGmailSelfTest({ siteId: site._id });
+                    setNotice({ tone: "success", text: result.message });
+                  })}
+                  icon={<Send className="h-3.5 w-3.5" />}
+                >
+                  Send Gmail self-test
+                </Button>
+              )}
             {inbox &&
               Boolean(inbox.inboundRelayConfigured) &&
               !Boolean(inbox.inboundRelayDsnRoutingReady) &&

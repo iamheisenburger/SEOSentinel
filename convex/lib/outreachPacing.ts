@@ -232,7 +232,7 @@ function registrableOutreachDomain(hostname: string): string {
   return getDomain(hostname, { allowPrivateDomains: false }) ?? hostname;
 }
 
-export function outreachSenderReadinessIssues(args: {
+export function outreachSenderConnectionIssues(args: {
   siteDomain: string;
   provider: string;
   fromEmail: string;
@@ -258,9 +258,6 @@ export function outreachSenderReadinessIssues(args: {
     ) {
       issues.push("Pentra's platform outreach domain cannot be connected through owner Gmail.");
     }
-    if (CONSUMER_MAIL_DOMAINS.has(senderDomain)) {
-      issues.push("Use a business mailbox on a dedicated secondary domain, not a consumer mailbox.");
-    }
     if (
       primaryDomain &&
       registrableOutreachDomain(senderDomain) ===
@@ -268,6 +265,23 @@ export function outreachSenderReadinessIssues(args: {
     ) {
       issues.push("Cold outreach cannot use the tenant's primary or transactional domain.");
     }
+  }
+  return issues;
+}
+
+export function isConsumerMailDomain(value: string): boolean {
+  return CONSUMER_MAIL_DOMAINS.has(normalizeDomain(value));
+}
+
+export function outreachSenderReadinessIssues(args: {
+  siteDomain: string;
+  provider: string;
+  fromEmail: string;
+}): string[] {
+  const issues = outreachSenderConnectionIssues(args);
+  const senderDomain = normalizeDomain(args.fromEmail.split("@")[1] ?? "");
+  if (senderDomain && CONSUMER_MAIL_DOMAINS.has(senderDomain)) {
+    issues.push("Use a business mailbox on a dedicated secondary domain, not a consumer mailbox.");
   }
   return issues;
 }

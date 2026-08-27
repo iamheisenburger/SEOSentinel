@@ -17,6 +17,11 @@ const CONSUMER_DOMAINS = new Set([
   "icloud.com",
 ]);
 
+export function isConsumerGoogleMailbox(fromEmail: string): boolean {
+  const senderDomain = normalizeMailDomain(fromEmail.split("@")[1] ?? "");
+  return senderDomain === "gmail.com" || senderDomain === "googlemail.com";
+}
+
 export function hasGmailSendScope(scopes: string): boolean {
   return scopes.split(/\s+/).filter(Boolean).includes(GMAIL_SEND_SCOPE);
 }
@@ -68,7 +73,7 @@ function registrableMailDomain(hostname: string): string {
   return getDomain(hostname, { allowPrivateDomains: false }) ?? hostname;
 }
 
-export function secondaryGmailSenderIssues(args: {
+export function gmailConnectionIssues(args: {
   siteDomain: string;
   fromEmail: string;
 }): string[] {
@@ -81,8 +86,6 @@ export function secondaryGmailSenderIssues(args: {
   const siteDomain = normalizeMailDomain(args.siteDomain);
   if (!senderDomain) {
     issues.push("The sender domain could not be verified.");
-  } else if (CONSUMER_DOMAINS.has(senderDomain)) {
-    issues.push("Use Google Workspace on a dedicated secondary domain, not a consumer Gmail mailbox.");
   }
   if (
     senderDomain &&
@@ -90,6 +93,21 @@ export function secondaryGmailSenderIssues(args: {
     registrableMailDomain(senderDomain) === registrableMailDomain(siteDomain)
   ) {
     issues.push("Cold outreach cannot use the website's primary or transactional domain.");
+  }
+  return issues;
+}
+
+/** Prospect outreach stays fail-closed to a dedicated secondary domain, while
+ * the OAuth connection itself may use consumer Gmail for a same-mailbox
+ * self-test during onboarding and Google verification. */
+export function secondaryGmailSenderIssues(args: {
+  siteDomain: string;
+  fromEmail: string;
+}): string[] {
+  const issues = gmailConnectionIssues(args);
+  const senderDomain = normalizeMailDomain(args.fromEmail.split("@")[1] ?? "");
+  if (senderDomain && CONSUMER_DOMAINS.has(senderDomain)) {
+    issues.push("Use Google Workspace on a dedicated secondary domain, not a consumer Gmail mailbox.");
   }
   return issues;
 }

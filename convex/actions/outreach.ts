@@ -1736,6 +1736,53 @@ export const sendApprovedOutreach = action({
   },
 });
 
+/** Owner-triggered OAuth proof that sends exactly one message back to the
+ * connected mailbox. This does not contact a prospect, change readiness, or
+ * bypass the secondary-domain, DNS, inbound-relay, consent, or pacing gates
+ * used by real outreach. */
+export const sendGmailConnectionSelfTest = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    await requireOwnedSite(ctx, siteId);
+    const inbox = await ctx.runQuery(internal.outreach.getInboxInternal, {
+      siteId,
+    });
+    if (
+      !inbox ||
+      inbox.provider !== "gmail" ||
+      ["disconnected", "suspended"].includes(inbox.status)
+    ) {
+      throw new Error("A connected Gmail inbox is required");
+    }
+    if (
+      autonomousGmailCredentialIssues({
+        oauthScopes: inbox.oauthScopes,
+        hasRefreshToken: Boolean(inbox.oauthRefreshToken),
+      }).length > 0
+    ) {
+      throw new Error("Reconnect Gmail with the exact send-only permission");
+    }
+    const outcome = await deliver(inbox, {
+      toEmail: inbox.fromEmail,
+      subject: "Pentra Gmail connection test",
+      body:
+        "Pentra successfully used the Gmail send-only permission to send this owner-triggered message back to the connected mailbox. No prospect was contacted, and this test does not enable outreach delivery.",
+    });
+    if (!outcome.ok) {
+      throw new Error(
+        outcome.unverified
+          ? "Gmail did not return a conclusive self-test receipt. Do not retry immediately."
+          : "Gmail did not accept the connection self-test.",
+      );
+    }
+    return {
+      accepted: true as const,
+      message:
+        "Gmail accepted the same-mailbox connection test. Prospect outreach remains subject to Pentra's separate readiness gates.",
+    };
+  },
+});
+
 /** Fleet-only release. The atomic claim revalidates the exact tenant consent,
  * current rollout, due message, sender DNS, live source/contact evidence,
  * signed inbound relay, suppression, pacing and delivery lease. */

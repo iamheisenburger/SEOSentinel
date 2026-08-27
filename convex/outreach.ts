@@ -31,7 +31,9 @@ import {
   outreachComplianceIssues,
   outreachDeliverySettlementDecision,
   outreachSendDecision,
+  outreachSenderConnectionIssues,
   outreachSenderReadinessIssues,
+  isConsumerMailDomain,
   utcDayKey,
 } from "./lib/outreachPacing.ts";
 import {
@@ -894,12 +896,12 @@ async function installCanonicalGmailInbox(
       throw new Error("Mailbox verification evidence is invalid or stale");
     }
     const fromEmail = args.fromEmail.trim().toLowerCase();
-    const readinessIssues = outreachSenderReadinessIssues({
+    const connectionIssues = outreachSenderConnectionIssues({
       siteDomain: site.domain,
       provider: "gmail",
       fromEmail,
     });
-    if (readinessIssues.length > 0) throw new Error(readinessIssues.join(" "));
+    if (connectionIssues.length > 0) throw new Error(connectionIssues.join(" "));
     const grantedScopes = args.oauthScopes.split(/\s+/).filter(Boolean);
     const allowedScopes = new Set([
       "https://www.googleapis.com/auth/gmail.send",
@@ -1079,6 +1081,7 @@ async function installCanonicalGmailInbox(
       throw new Error("Google did not provide durable offline mailbox access");
     }
     const dnsReady = args.spfVerified && args.dkimVerified && args.dmarcVerified;
+    const consumerMailbox = isConsumerMailDomain(emailDomain);
     const existingComplianceProfile = {
       physicalMailingAddress: existingOwnerMatches
         ? existing?.physicalMailingAddress
@@ -1169,8 +1172,10 @@ async function installCanonicalGmailInbox(
         ),
       ),
       ...pacingState,
-      lastError: !dnsReady
-        ? "SPF, DKIM and DMARC must all verify before outreach can send."
+      lastError: consumerMailbox
+        ? "Consumer Gmail is connected for a same-mailbox send test only. Prospect outreach requires a dedicated secondary-domain Google Workspace inbox."
+        : !dnsReady
+          ? "SPF, DKIM and DMARC must all verify before outreach can send."
         : !complianceReady
           ? "Add the sender name and physical mailing address before outreach can send."
           : undefined,
