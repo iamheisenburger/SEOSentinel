@@ -7547,7 +7547,7 @@ export const autopilotTick = internalAction({
       return finish(
         { processed: 0 },
         "cadence_paused",
-        "Publishing is paused because this site's effective account-wide cadence allocation is zero.",
+        "Publishing is paused because this site's target cadence is zero.",
       );
     }
     if (

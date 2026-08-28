@@ -40,11 +40,11 @@ import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { formatDistanceToNow } from "date-fns";
 import {
-  cadenceFitsMonthlyAllowance,
+  cadenceFitsOperationalLimit,
   cadenceLabel,
-  cadenceOptionsForMonthlyLimit,
-  maximumWholeCadencePerWeek,
+  MAX_AUTOPILOT_CADENCE_PER_WEEK,
   requiredMonthlyArticlesForCadence,
+  targetCadenceOptions,
 } from "../../../../../convex/planLimits";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 
@@ -348,11 +348,7 @@ export default function SiteDetailPage() {
           saving={saving}
           saved={saved}
           saveError={saveError}
-          cadenceOptions={cadenceOptionsForMonthlyLimit(
-            cadenceCapacity?.ready
-              ? cadenceCapacity.availableMonthlyArticles
-              : 0,
-          )}
+          cadenceOptions={targetCadenceOptions()}
           cadenceCapacity={cadenceCapacity}
           onSave={handleSaveSettings}
         />
@@ -788,15 +784,9 @@ function SettingsTab({
     | undefined;
   onSave: () => void;
 }) {
-  const availableMonthlyArticles = cadenceCapacity?.ready
-    ? cadenceCapacity.availableMonthlyArticles
-    : 0;
-  const maximumWholeCadence = maximumWholeCadencePerWeek(
-    availableMonthlyArticles,
-  );
   const cadenceValid = Boolean(
     cadenceCapacity?.ready &&
-      cadenceFitsMonthlyAllowance(cadence, availableMonthlyArticles),
+      cadenceFitsOperationalLimit(cadence),
   );
   const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
 
@@ -872,7 +862,7 @@ function SettingsTab({
 
       {/* Publishing */}
       <SettingsSection title="Publishing" icon={Zap}>
-        <FieldRow label="Publishing cadence" description="Choose any whole-number weekly cadence that fits this site's available monthly article credits">
+        <FieldRow label="Publishing cadence" description="Choose the target publishing pace. Monthly plan credits cap total output automatically.">
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
               {cadenceOptions.map((option) => (
@@ -891,12 +881,11 @@ function SettingsTab({
                 </button>
               ))}
             </div>
-            {maximumWholeCadence > 0 && (
-              <input
+            <input
                 type="number"
                 inputMode="numeric"
                 min={1}
-                max={maximumWholeCadence}
+                max={MAX_AUTOPILOT_CADENCE_PER_WEEK}
                 step={1}
                 aria-label="Articles per week"
                 className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
@@ -904,18 +893,15 @@ function SettingsTab({
                 disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
                 onChange={(event) => setCadence(Number(event.target.value))}
               />
-            )}
             <p className="text-[10px] leading-relaxed text-[#565A6E]">
-              {maximumWholeCadence > 0
-                ? `Enter 1–${maximumWholeCadence} articles per week.`
-                : "This plan uses a monthly cadence."}
+              Enter 1–{MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week.
             </p>
             <p className={`text-[10px] leading-relaxed ${cadenceValid ? "text-[#565A6E]" : "text-[#F87171]"}`}>
               {cadenceCapacity === undefined || !cadenceCapacity.ready
                 ? "Checking the current account-wide article allowance."
                 : cadenceValid
-                  ? `${cadenceLabel(cadence)} reserves ${cadenceMonthlyCost} of ${cadenceCapacity.availableMonthlyArticles} credits available to this site; ${cadenceCapacity.availableMonthlyArticles - cadenceMonthlyCost} remain unallocated.`
-                  : `Choose a cadence that uses no more than ${cadenceCapacity.availableMonthlyArticles} monthly article credits.`}
+                  ? `${cadenceLabel(cadence)} is the target pace (up to ${cadenceMonthlyCost} in a 31-day month). ${cadenceCapacity.availableMonthlyArticles} of ${cadenceCapacity.maxArticles} account credits remain this UTC month; publishing pauses at the plan limit and resumes after renewal.`
+                  : `Choose a target cadence from 1 to ${MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week.`}
             </p>
             {cadenceCapacity?.siteParked && (
               <p className="text-[10px] leading-relaxed text-[#FBBF24]">

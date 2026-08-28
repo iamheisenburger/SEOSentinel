@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   allocateCadenceForMonthlyAllowance,
+  cadenceFitsOperationalLimit,
   cadenceFitsMonthlyAllowance,
   cadenceFitsMonthlyLimit,
   cadenceLabel,
@@ -12,6 +13,7 @@ import {
   maximumSustainableCadencePerWeek,
   maximumWholeCadencePerWeek,
   requiredMonthlyArticlesForCadence,
+  targetCadenceOptions,
 } from "../convex/planLimits.ts";
 import { cadenceIntervalMs } from "../convex/lib/autopilotBuffer.ts";
 
@@ -52,12 +54,21 @@ test("customers may choose any whole cadence that fits the remaining allowance",
   assert.equal(maximumWholeCadencePerWeek(3), 0);
 });
 
-test("tenant cadence writes are enforced server-side and legacy mismatches are migratable", () => {
+test("target cadence is operationally bounded while quota remains a runtime claim", () => {
+  assert.deepEqual(
+    targetCadenceOptions().map((option) => option.label),
+    ["1/week", "2/week", "4/week", "7/week", "14/week", "21/week"],
+  );
+  assert.equal(cadenceFitsOperationalLimit(12), true);
+  assert.equal(cadenceFitsOperationalLimit(22), false);
   const sites = readFileSync("convex/sites.ts", "utf8");
-  assert.match(sites, /function assertCadenceFitsAccountAllowance/);
-  assert.match(sites, /async function reserveAccountCadence/);
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(sites, /function assertCadenceTargetSupported/);
+  assert.doesNotMatch(sites, /async function reserveAccountCadence/);
   assert.match(sites, /export const reconcileUnsustainableCadences/);
   assert.match(sites, /applyCanonicalPlanToUserSites/);
+  assert.match(scheduler, /Monthly generation quota reached/);
+  assert.match(scheduler, /nextUtcMonthAt/);
 });
 
 test("the allocator uses remaining account capacity and pauses truthfully at zero", () => {

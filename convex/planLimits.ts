@@ -71,6 +71,44 @@ export const LONGEST_MONTH_DAYS = 31;
 export const WEEK_DAYS = 7;
 
 const STANDARD_WEEKLY_CADENCES = [1, 2, 4, 7, 14, 21] as const;
+export const MAX_AUTOPILOT_CADENCE_PER_WEEK = 21;
+
+/**
+ * Cadence is a target rate, not a reservation of the monthly article quota.
+ * The generation claim boundary enforces the purchased monthly allowance and
+ * schedules an automatic wake for the next UTC month. Keeping these concepts
+ * separate lets a customer choose the pace they want without manufacturing
+ * more paid work than their plan permits.
+ */
+export function cadenceFitsOperationalLimit(cadencePerWeek: number): boolean {
+  return (
+    Number.isFinite(cadencePerWeek) &&
+    cadencePerWeek > 0 &&
+    cadencePerWeek <= MAX_AUTOPILOT_CADENCE_PER_WEEK
+  );
+}
+
+export function targetCadenceOptions(): CadenceOption[] {
+  return STANDARD_WEEKLY_CADENCES.map((value) => ({
+    value,
+    label: `${value}/week`,
+  }));
+}
+
+export function defaultTargetCadenceForMonthlyLimit(
+  maxArticlesPerMonth: number,
+): number {
+  if (!Number.isFinite(maxArticlesPerMonth) || maxArticlesPerMonth <= 0) {
+    return 1;
+  }
+  return Math.max(
+    1,
+    Math.min(
+      4,
+      Math.floor(maximumSustainableCadencePerWeek(maxArticlesPerMonth) + 1e-9),
+    ),
+  );
+}
 
 export function requiredMonthlyArticlesForCadence(
   cadencePerWeek: number | undefined,

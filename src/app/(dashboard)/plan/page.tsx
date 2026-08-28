@@ -397,7 +397,7 @@ export default function PlanPage() {
           <Clock className="h-3 w-3" />
           <span>
             {(site.cadencePerWeek ?? 0) <= 0
-              ? "Publishing paused because this account's monthly article allowance is allocated to other sites"
+              ? "Publishing paused for this site"
               : `${cadenceLabel(site.cadencePerWeek)} · ~${Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining`}
           </span>
         </div>

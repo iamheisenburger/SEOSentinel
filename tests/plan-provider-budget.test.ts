@@ -444,7 +444,7 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
     reservation,
     /entitlement\?\.planFeatures \?\? site\.planFeatures/,
   );
-  assert.match(reservation, /cadenceFitsMonthlyLimit/);
+  assert.match(reservation, /cadenceFitsOperationalLimit/);
   assert.match(
     reservation,
     /q\.eq\(q\.field\("deletionStatus"\), undefined\)/,

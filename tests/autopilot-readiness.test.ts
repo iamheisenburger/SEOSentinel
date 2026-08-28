@@ -61,18 +61,15 @@ test("a fully connected tenant can warm and promote without operator interventio
   );
 });
 
-test("live mode rejects a subscription that cannot sustain the selected cadence", () => {
+test("live mode keeps target cadence separate from monthly quota consumption", () => {
   assert.equal(requiredMonthlyArticlesForCadence(1), 5);
   assert.equal(requiredMonthlyArticlesForCadence(4), 18);
   assert.equal(requiredMonthlyArticlesForCadence(7), 31);
   assert.deepEqual(liveAutopilotReadiness(readySite, true, 10), {
-    ready: false,
-    blockers: ["subscription_capacity_below_cadence"],
+    ready: true,
+    blockers: [],
   });
-  assert.equal(
-    describeAutopilotBlockers(["subscription_capacity_below_cadence"]),
-    "lower the cadence or upgrade to a plan with enough monthly articles",
-  );
+  assert.equal(describeAutopilotBlockers([]), "");
 });
 
 test("monthly free-plan cadence is eligible for warm and live automation", () => {
