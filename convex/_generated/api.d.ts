@@ -62,6 +62,7 @@ import type * as lib_expectedClickPortfolio from "../lib/expectedClickPortfolio.
 import type * as lib_expectedClickSkipReceipt from "../lib/expectedClickSkipReceipt.js";
 import type * as lib_expectedClickSkipReceiptStore from "../lib/expectedClickSkipReceiptStore.js";
 import type * as lib_growthLoopContracts from "../lib/growthLoopContracts.js";
+import type * as lib_growthScorecard from "../lib/growthScorecard.js";
 import type * as lib_growthSupportDelivery from "../lib/growthSupportDelivery.js";
 import type * as lib_gscSearchAnalytics from "../lib/gscSearchAnalytics.js";
 import type * as lib_internalHttpAuth from "../lib/internalHttpAuth.js";
@@ -85,6 +86,7 @@ import type * as lib_operatorSnapshot from "../lib/operatorSnapshot.js";
 import type * as lib_outcomeReceipts from "../lib/outcomeReceipts.js";
 import type * as lib_outreachAutonomy from "../lib/outreachAutonomy.js";
 import type * as lib_outreachContacts from "../lib/outreachContacts.js";
+import type * as lib_outreachControlledCanary from "../lib/outreachControlledCanary.js";
 import type * as lib_outreachCredentialEncryption from "../lib/outreachCredentialEncryption.js";
 import type * as lib_outreachDelivery from "../lib/outreachDelivery.js";
 import type * as lib_outreachDrafting from "../lib/outreachDrafting.js";
@@ -204,6 +206,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expectedClickSkipReceipt": typeof lib_expectedClickSkipReceipt;
   "lib/expectedClickSkipReceiptStore": typeof lib_expectedClickSkipReceiptStore;
   "lib/growthLoopContracts": typeof lib_growthLoopContracts;
+  "lib/growthScorecard": typeof lib_growthScorecard;
   "lib/growthSupportDelivery": typeof lib_growthSupportDelivery;
   "lib/gscSearchAnalytics": typeof lib_gscSearchAnalytics;
   "lib/internalHttpAuth": typeof lib_internalHttpAuth;
@@ -227,6 +230,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outcomeReceipts": typeof lib_outcomeReceipts;
   "lib/outreachAutonomy": typeof lib_outreachAutonomy;
   "lib/outreachContacts": typeof lib_outreachContacts;
+  "lib/outreachControlledCanary": typeof lib_outreachControlledCanary;
   "lib/outreachCredentialEncryption": typeof lib_outreachCredentialEncryption;
   "lib/outreachDelivery": typeof lib_outreachDelivery;
   "lib/outreachDrafting": typeof lib_outreachDrafting;
