@@ -8,7 +8,9 @@ import {
   decideOutreachPolicy,
   growthLoopRolloutAllowsSite,
   growthLoopRolloutBucket,
+  growthLoopOperationalSiteInScope,
   growthLoopReleaseBlockers,
+  isGrowthLoopSevereIncident,
 } from "../convex/lib/growthLoopContracts.ts";
 
 test("unfinished capability receipts cannot be silent", () => {
@@ -66,6 +68,29 @@ test("GA widening uses stable 10, 50, and 100 percent tenant cohorts", async () 
   assert.match(autopilot, /growth_loop_rollout_cohort_not_enabled/);
   assert.match(crons, /growth-loop-ga-rollout/);
   assert.match(crons, /growth-loop-ga-rollout-start/);
+});
+
+test("bootstrap operational evidence is scoped to its authorized tenant pair", () => {
+  const authorized = new Set(["pentra", "leadpilot"]);
+  assert.equal(
+    growthLoopOperationalSiteInScope("bootstrap_v1", authorized, "pentra"),
+    true,
+  );
+  assert.equal(
+    growthLoopOperationalSiteInScope("bootstrap_v1", authorized, "unrelated"),
+    false,
+  );
+  assert.equal(
+    growthLoopOperationalSiteInScope("full_managed", authorized, "unrelated"),
+    true,
+  );
+  assert.equal(isGrowthLoopSevereIncident("job_failed"), false);
+  assert.equal(isGrowthLoopSevereIncident("quality_revision_run_failed"), false);
+  assert.equal(isGrowthLoopSevereIncident("cross_tenant_receipt"), true);
+  assert.equal(
+    isGrowthLoopSevereIncident("outreach", "Suppression boundary failed"),
+    true,
+  );
 });
 
 test("opportunity admission combines evidence and does not use a global volume floor", () => {
@@ -196,6 +221,27 @@ test("the SMTP connection release proof can bind a post-deploy controlled socket
   assert.match(growthLoopSource, /controlledDelivery\.controlledCanaryKind !== "smtp_delivery"/);
   assert.match(growthLoopSource, /controlledDeliverySentAt: controlledDelivery\?\.sentAt/);
   assert.match(growthLoopSource, /controlledDelivery\?\.sentAt \?\? 0/);
+});
+
+test("measurement release evidence recognizes a later GSC re-observation", () => {
+  const growthLoopSource = readFileSync("convex/growthLoop.ts", "utf8");
+  assert.match(
+    growthLoopSource,
+    /lastObservedAt: action\.lastObservedAt[\s\S]*Math\.max\([\s\S]*action\.automatedAt[\s\S]*action\.resolvedAt[\s\S]*action\.lastObservedAt/,
+  );
+});
+
+test("durable growth deadlines have a bounded natural recovery lane", () => {
+  const schema = readFileSync("convex/schema.ts", "utf8");
+  const growth = readFileSync("convex/seoGrowth.ts", "utf8");
+  const actions = readFileSync("convex/actions/seoGrowth.ts", "utf8");
+  const crons = readFileSync("convex/crons.ts", "utf8");
+  assert.match(schema, /index\("by_next_review", \["nextReviewAt"\]\)/);
+  assert.match(growth, /export const listDueGrowthSitesInternal/);
+  assert.match(growth, /siteExecutionAuthorized\(ctx, site\)/);
+  assert.match(growth, /now \+ GROWTH_REVIEW_RECOVERY_DELAY_MS/);
+  assert.match(actions, /export const scanDueSites/);
+  assert.match(crons, /due-seo-growth-recovery/);
 });
 
 test("bootstrap release evidence binds Pentra's natural role separately from the secondary convergence canary", () => {

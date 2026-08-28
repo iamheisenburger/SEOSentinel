@@ -126,6 +126,30 @@ export const scanAllSites = internalAction({
   },
 });
 
+/** Natural deadline recovery. It does not fetch GSC itself and it never
+ * accepts an operator-supplied site; each tenant comes from a due persisted
+ * growth-action receipt and scanSite revalidates the full tenant binding. */
+export const scanDueSites = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{
+    scheduled: number;
+    readComplete: boolean;
+  }> => {
+    const due = await ctx.runQuery(
+      internal.seoGrowth.listDueGrowthSitesInternal,
+      { timestamp: Date.now() },
+    );
+    for (const [index, siteId] of due.siteIds.entries()) {
+      await ctx.scheduler.runAfter(
+        index * 250,
+        internal.actions.seoGrowth.scanSite,
+        { siteId },
+      );
+    }
+    return { scheduled: due.siteIds.length, readComplete: due.readComplete };
+  },
+});
+
 export const scanSite = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<GrowthScanResult> => {

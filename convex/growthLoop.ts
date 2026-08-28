@@ -16,7 +16,9 @@ import {
   GROWTH_LOOP_RELEASE_VERSION,
   GROWTH_LOOP_ROLLOUT_STAGES,
   GROWTH_LOOP_STAGE_KEYS,
+  growthLoopOperationalSiteInScope,
   growthLoopReleaseBlockers,
+  isGrowthLoopSevereIncident,
   type CapabilityState,
   type GrowthLoopReleaseProfile,
   type GrowthLoopStageKey,
@@ -530,7 +532,12 @@ function rolloutCanaryBlockers(
   return blockers;
 }
 
-async function rolloutOperationalBlockers(ctx: MutationCtx, timestamp: number) {
+async function rolloutOperationalBlockers(
+  ctx: MutationCtx,
+  timestamp: number,
+  profile: GrowthLoopReleaseProfile,
+  releaseTenantSiteIds: ReadonlySet<string>,
+) {
   const silentCutoff = timestamp - 15 * 60 * 1000;
   const [alerts, jobs, runs, resources, messages] = await Promise.all([
     ctx.db.query("autopilot_alerts")
@@ -553,17 +560,29 @@ async function rolloutOperationalBlockers(ctx: MutationCtx, timestamp: number) {
     alerts.length > 500 || jobs.length > 100 || runs.length > 100 ||
     resources.length > 100 || messages.length > 100
   ) throw new Error("Growth-loop rollout evidence read limit exceeded");
-  const severePattern =
-    /(duplicate_external|cross_tenant|suppression|integrity|conflict|delivery_unverified|terminal_alert)/;
-  const unresolvedSevereIncidentCount = alerts.filter((alert) =>
-    severePattern.test(`${alert.kind}:${alert.message}`.toLowerCase())
+  const inScope = (siteId: unknown) => growthLoopOperationalSiteInScope(
+    profile,
+    releaseTenantSiteIds,
+    String(siteId),
+  );
+  const scopedAlerts = alerts.filter((alert) => inScope(alert.siteId));
+  const scopedJobs = jobs.filter((job) => inScope(job.siteId));
+  const scopedRuns = runs.filter((run) => inScope(run.siteId));
+  const scopedResources = resources.filter((resource) =>
+    inScope(resource.siteId)
+  );
+  const scopedMessages = messages.filter((message) => inScope(message.siteId));
+  const unresolvedSevereIncidentCount = scopedAlerts.filter((alert) =>
+    isGrowthLoopSevereIncident(alert.kind, alert.message)
   ).length;
   const silentStateCount =
-    jobs.filter((job) => (job.heartbeatAt ?? job.updatedAt) <= silentCutoff).length +
-    runs.filter((run) => run.heartbeatAt <= silentCutoff).length +
-    resources.filter((resource) =>
+    scopedJobs.filter((job) =>
+      (job.heartbeatAt ?? job.updatedAt) <= silentCutoff
+    ).length +
+    scopedRuns.filter((run) => run.heartbeatAt <= silentCutoff).length +
+    scopedResources.filter((resource) =>
       !resource.leaseExpiresAt || resource.leaseExpiresAt <= timestamp).length +
-    messages.filter((message) =>
+    scopedMessages.filter((message) =>
       !message.deliveryLeaseExpiresAt || message.deliveryLeaseExpiresAt <= timestamp).length;
   return { unresolvedSevereIncidentCount, silentStateCount };
 }
@@ -599,8 +618,20 @@ async function startEligibleRollout(
   );
   const blockers = rolloutCanaryBlockers(eligibleCanaries, profile);
   if (blockers.length) return { control: null, blockers };
+  const releaseTenantSiteIds = new Set(eligibleCanaries
+    .filter((canary) =>
+      ["tenant_natural_loop", "tenant_terminal_convergence"].includes(
+        canary.kind,
+      ) && canary.siteId
+    )
+    .map((canary) => String(canary.siteId)));
   const timestamp = Date.now();
-  const operational = await rolloutOperationalBlockers(ctx, timestamp);
+  const operational = await rolloutOperationalBlockers(
+    ctx,
+    timestamp,
+    profile,
+    releaseTenantSiteIds,
+  );
   if (operational.unresolvedSevereIncidentCount > 0) {
     blockers.push("unresolved_severe_incident");
   }
@@ -723,7 +754,30 @@ export const advanceRolloutInternal = internalMutation({
     if (!control || control.status === "complete") {
       return { advanced: false as const, reason: "no_rollout_due" };
     }
-    const operational = await rolloutOperationalBlockers(ctx, timestamp);
+    const releaseCanaries = await ctx.db.query("growth_loop_canary_receipts")
+      .withIndex("by_release", (q) => q.eq("releaseCommit", control.releaseCommit))
+      .take(101);
+    if (releaseCanaries.length > 100) {
+      throw new Error("Growth-loop rollout canary read limit exceeded");
+    }
+    const releaseTenantSiteIds = new Set(releaseCanaries
+      .filter((canary) =>
+        canary.status === "passed" &&
+        (canary.profile ?? "full_managed") ===
+          (control.profile ?? "full_managed") &&
+        canary.deploymentReceiptHash === control.deploymentReceiptHash &&
+        canary.deployedAt === control.deployedAt &&
+        ["tenant_natural_loop", "tenant_terminal_convergence"].includes(
+          canary.kind,
+        ) && canary.siteId
+      )
+      .map((canary) => String(canary.siteId)));
+    const operational = await rolloutOperationalBlockers(
+      ctx,
+      timestamp,
+      control.profile ?? "full_managed",
+      releaseTenantSiteIds,
+    );
     if (
       operational.unresolvedSevereIncidentCount > 0 ||
       operational.silentStateCount > 0
@@ -965,10 +1019,19 @@ export const recordCanaryInternal = internalMutation({
         actionKind: action.actionKind,
         automationStatus: action.automationStatus,
         status: action.status,
+        lastObservedAt: action.lastObservedAt,
         automatedAt: action.automatedAt,
         resolvedAt: action.resolvedAt,
       }));
-      observedAt = action.automatedAt ?? action.resolvedAt ?? action.lastObservedAt;
+      // A deterministic action may execute once and be re-observed against a
+      // later GSC cohort. Bind the release to the latest of those immutable
+      // lifecycle receipts instead of incorrectly preferring an older
+      // execution timestamp over a post-deploy re-observation.
+      observedAt = Math.max(
+        action.automatedAt ?? 0,
+        action.resolvedAt ?? 0,
+        action.lastObservedAt,
+      );
     } else if (args.kind === "smtp_connection") {
       if (!args.inboxId) throw new Error("SMTP inbox evidence is required");
       const [inbox, controlledDelivery] = await Promise.all([
@@ -1388,20 +1451,6 @@ export const createReleaseReceiptInternal = internalMutation({
     ) {
       throw new Error("GA operational evidence read limit exceeded");
     }
-    const severeIncidentPattern =
-      /(failed|unverified|conflict|stale|operator_action|required|regressed|cross_tenant|duplicate_external|suppression)/;
-    const unresolvedSevereIncidentCount = activeAlerts.filter((alert) =>
-      severeIncidentPattern.test(alert.kind)
-    ).length;
-    const silentStateCount =
-      runningJobs.filter((job) => (job.heartbeatAt ?? job.updatedAt) <= silentCutoff).length +
-      runningRuns.filter((run) => run.heartbeatAt <= silentCutoff).length +
-      leasedResources.filter((resource) =>
-        !resource.leaseExpiresAt || resource.leaseExpiresAt <= timestamp
-      ).length +
-      sendingMessages.filter((message) =>
-        !message.deliveryLeaseExpiresAt || message.deliveryLeaseExpiresAt <= timestamp
-      ).length;
     const passed = canaries.filter((canary) =>
       canary.status === "passed" &&
       (canary.profile ?? "full_managed") === args.profile &&
@@ -1417,6 +1466,33 @@ export const createReleaseReceiptInternal = internalMutation({
       ...tenantCanaries.map((canary) => String(canary.siteId)),
       ...terminalTenantCanaries.map((canary) => String(canary.siteId)),
     ]);
+    const inReleaseScope = (siteId: unknown) =>
+      growthLoopOperationalSiteInScope(
+        args.profile,
+        tenantSiteIds,
+        String(siteId),
+      );
+    const unresolvedSevereIncidentCount = activeAlerts.filter((alert) =>
+      inReleaseScope(alert.siteId) &&
+      isGrowthLoopSevereIncident(alert.kind, alert.message)
+    ).length;
+    const silentStateCount =
+      runningJobs.filter((job) =>
+        inReleaseScope(job.siteId) &&
+        (job.heartbeatAt ?? job.updatedAt) <= silentCutoff
+      ).length +
+      runningRuns.filter((run) =>
+        inReleaseScope(run.siteId) && run.heartbeatAt <= silentCutoff
+      ).length +
+      leasedResources.filter((resource) =>
+        inReleaseScope(resource.siteId) &&
+        (!resource.leaseExpiresAt || resource.leaseExpiresAt <= timestamp)
+      ).length +
+      sendingMessages.filter((message) =>
+        inReleaseScope(message.siteId) &&
+        (!message.deliveryLeaseExpiresAt ||
+          message.deliveryLeaseExpiresAt <= timestamp)
+      ).length;
     const primaryNaturalCanaries = tenantCanaries.filter((canary) =>
       canary.bootstrapTenantRole === "primary_natural"
     );

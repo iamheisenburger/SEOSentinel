@@ -103,6 +103,16 @@ crons.daily(
   {},
 );
 
+// Exact nextReviewAt receipts are primary. This bounded recovery lane closes
+// missed or delayed daily classification without accepting operator-selected
+// tenants or polling Search Console more frequently.
+crons.interval(
+  "due-seo-growth-recovery",
+  { minutes: 15 },
+  internal.actions.seoGrowth.scanDueSites,
+  {},
+);
+
 // Receipt-only recovery. This never publishes or retries an external write;
 // it only resumes exact live verification for already acknowledged revisions.
 crons.interval(

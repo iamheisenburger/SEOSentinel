@@ -84,6 +84,10 @@ const MEASUREMENT_ONLY_AUTOMATION: GrowthAutomationResult = {
     "Pentra recorded this measured opportunity without changing topics or contacting an external service because SEO growth automation is not enabled for this tenant rollout.",
 };
 
+const GROWTH_REVIEW_RECOVERY_DELAY_MS = 24 * 60 * 60 * 1000;
+const GROWTH_REVIEW_RECOVERY_READ_LIMIT = 500;
+const GROWTH_REVIEW_RECOVERY_SITE_LIMIT = 50;
+
 function growthMeasurementMatchesCurrentSite(
   site: Doc<"sites">,
   action: Doc<"seo_growth_actions">,
@@ -124,6 +128,43 @@ export const getActionAttemptEligibilityInternal = internalQuery({
       isSeoGrowthActuationEligible(site) &&
       growthMeasurementMatchesCurrentSite(site, action, measurementKey),
     );
+  },
+});
+
+/** Bounded natural recovery for exact growth-action deadlines. Daily GSC
+ * classification remains the primary lane; this projection only returns
+ * tenants whose durable nextReviewAt has actually elapsed. */
+export const listDueGrowthSitesInternal = internalQuery({
+  args: { timestamp: v.number() },
+  handler: async (ctx, { timestamp }) => {
+    if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
+      throw new Error("Growth recovery timestamp is invalid");
+    }
+    const due = await ctx.db.query("seo_growth_actions")
+      .withIndex("by_next_review", (q) => q.lte("nextReviewAt", timestamp))
+      .take(GROWTH_REVIEW_RECOVERY_READ_LIMIT + 1);
+    const siteIds: Id<"sites">[] = [];
+    const seen = new Set<string>();
+    for (const action of due.slice(0, GROWTH_REVIEW_RECOVERY_READ_LIMIT)) {
+      if (
+        !ACTIVE_ACTION_STATUSES.includes(
+          action.status as typeof ACTIVE_ACTION_STATUSES[number],
+        ) || seen.has(String(action.siteId))
+      ) continue;
+      const site = await ctx.db.get(action.siteId);
+      if (
+        !site || !site.gscProperty || !site.gscDataThrough ||
+        !await siteExecutionAuthorized(ctx, site) ||
+        !growthMeasurementMatchesCurrentSite(site, action)
+      ) continue;
+      seen.add(String(action.siteId));
+      siteIds.push(action.siteId);
+      if (siteIds.length >= GROWTH_REVIEW_RECOVERY_SITE_LIMIT) break;
+    }
+    return {
+      siteIds,
+      readComplete: due.length <= GROWTH_REVIEW_RECOVERY_READ_LIMIT,
+    };
   },
 });
 
@@ -880,9 +921,18 @@ export const reconcileSite = internalMutation({
         .query("seo_growth_actions")
         .withIndex("by_fingerprint", (q) => q.eq("fingerprint", fingerprint))
         .unique();
-      const nextReviewAt = classification.nextReviewDate
+      const parsedNextReviewAt = classification.nextReviewDate
         ? Date.parse(`${classification.nextReviewDate}T12:00:00.000Z`)
         : undefined;
+      // A provider observation window can lag its calendar cohort. Once the
+      // nominal date has elapsed, persist the next bounded daily recovery
+      // wake instead of leaving a permanently overdue action that is retried
+      // by every fleet pass.
+      const nextReviewAt = parsedNextReviewAt === undefined
+        ? undefined
+        : parsedNextReviewAt > now
+          ? parsedNextReviewAt
+          : now + GROWTH_REVIEW_RECOVERY_DELAY_MS;
       if (existing) {
         // A newer measurement may inform future work, but it cannot rewrite
         // the immutable authorization attempt while an external revision CAS

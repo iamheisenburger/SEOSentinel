@@ -15,6 +15,29 @@ export const GROWTH_LOOP_ROLLOUT_STAGES = [10, 50, 100] as const;
 
 export type GrowthLoopReleaseProfile = "bootstrap_v1" | "full_managed";
 
+/** Bootstrap operations are intentionally scoped to the explicitly proven
+ * tenant pair. Unrelated enrolled tenants must neither widen nor block that
+ * release profile; full-managed GA continues to audit the whole fleet. */
+export function growthLoopOperationalSiteInScope(
+  profile: GrowthLoopReleaseProfile,
+  releaseTenantSiteIds: ReadonlySet<string>,
+  siteId: string,
+): boolean {
+  return profile === "full_managed" || releaseTenantSiteIds.has(siteId);
+}
+
+/** A content miss is an ordinary classified product outcome, not a severe
+ * safety incident. GA-stopping incidents are the boundaries that can cause a
+ * duplicate external effect, tenant exposure, suppression failure, or an
+ * unverifiable write. */
+export function isGrowthLoopSevereIncident(
+  kind: string,
+  message = "",
+): boolean {
+  return /(duplicate_external|cross_tenant|suppression|integrity|conflict|delivery_unverified|terminal_alert)/
+    .test(`${kind}:${message}`.toLowerCase());
+}
+
 export function growthLoopRolloutBucket(siteId: string): number {
   return Number.parseInt(sha256Hex(`growth-loop-rollout:${siteId}`).slice(0, 8), 16) % 100;
 }

@@ -1413,6 +1413,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_fingerprint", ["fingerprint"])
+    .index("by_next_review", ["nextReviewAt"])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_priority", ["siteId", "status", "priority"])
     .index("by_article_status", ["articleId", "status"]),
