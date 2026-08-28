@@ -337,17 +337,24 @@ async function outboundIdentityUsedByAnotherTenant(
   const normalizedDomain = normalizeDomain(senderDomain);
   if (!normalizedEmail || !normalizedDomain) return true;
   const scanLimit = 20;
+  // Consumer providers host unrelated tenants on one public domain. Reserve
+  // the exact mailbox there; reserving gmail.com/outlook.com globally would
+  // let the first tenant lock every other customer out. Private sender
+  // domains remain exclusive so reputation cannot be borrowed cross-tenant.
+  const exactMailboxOnly = isConsumerMailDomain(normalizedDomain);
   const [sameMailbox, sameDomain] = await Promise.all([
     ctx.db
       .query("outreach_inboxes")
       .withIndex("by_from_email", (q) => q.eq("fromEmail", normalizedEmail))
       .take(scanLimit),
-    ctx.db
-      .query("outreach_inboxes")
-      .withIndex("by_sender_domain", (q) =>
-        q.eq("senderDomain", normalizedDomain),
-      )
-      .take(scanLimit),
+    exactMailboxOnly
+      ? Promise.resolve([])
+      : ctx.db
+          .query("outreach_inboxes")
+          .withIndex("by_sender_domain", (q) =>
+            q.eq("senderDomain", normalizedDomain),
+          )
+          .take(scanLimit),
   ]);
   if (provider === MANAGED_SES_TRANSPORT) {
     if (normalizedDomain !== MANAGED_SES_PLATFORM_SENDER_DOMAIN) return true;

@@ -625,6 +625,8 @@ test("the release is tenant-generic, identity-isolated and logs no raw recipient
   assert.doesNotMatch(changedSurface, /leadpilot/i);
   assert.match(backend, /Exactly one outreach inbox must be connected for this tenant/);
   assert.match(backend, /async function outboundIdentityUsedByAnotherTenant/);
+  assert.match(backend, /exactMailboxOnly = isConsumerMailDomain\(normalizedDomain\)/);
+  assert.match(backend, /exactMailboxOnly[\s\S]*Promise\.resolve\(\[\]\)/);
   assert.match(schema, /\.index\("by_from_email", \["fromEmail"\]\)/);
   assert.match(schema, /\.index\("by_sender_domain", \["senderDomain"\]\)/);
   assert.ok(
