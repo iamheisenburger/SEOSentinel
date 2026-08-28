@@ -2388,6 +2388,10 @@ export default defineSchema({
       v.literal("followup"),
     )),
     controlledCanaryOperationKey: v.optional(v.string()),
+    // Binds a controlled transport proof to one exact deployed release. This
+    // permits a new immutable proof after a code release without rotating the
+    // customer's mailbox credentials or overwriting any historical canary.
+    controlledCanaryReleaseBindingHash: v.optional(v.string()),
     controlledCanarySignalAttemptedAt: v.optional(v.number()),
     controlledCanarySignalReceiptHash: v.optional(v.string()),
     controlledCanarySignalStatus: v.optional(v.union(
@@ -2419,6 +2423,12 @@ export default defineSchema({
       "siteId",
       "controlledCanaryKind",
       "inboxConfigurationVersion",
+    ])
+    .index("by_site_controlled_canary_release", [
+      "siteId",
+      "controlledCanaryKind",
+      "inboxConfigurationVersion",
+      "controlledCanaryReleaseBindingHash",
     ])
     .index("by_status_lease", ["status", "deliveryLeaseExpiresAt"])
     .index("by_site_owner_lineage_status", [

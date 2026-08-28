@@ -32,6 +32,33 @@ test("controlled canary operations are stable and tenant/configuration scoped", 
   );
 });
 
+test("controlled canary operations are isolated by immutable release binding", () => {
+  const base = {
+    siteId: "site-a",
+    inboxId: "inbox-a",
+    configurationVersion: 4,
+    kind: "smtp_delivery" as const,
+  };
+  const first = controlledSmtpImapCanaryOperationKey({
+    ...base,
+    releaseBindingHash: "a".repeat(64),
+  });
+  const retry = controlledSmtpImapCanaryOperationKey({
+    ...base,
+    releaseBindingHash: "a".repeat(64),
+  });
+  const nextRelease = controlledSmtpImapCanaryOperationKey({
+    ...base,
+    releaseBindingHash: "b".repeat(64),
+  });
+  assert.equal(first, retry);
+  assert.notEqual(first, nextRelease);
+  assert.throws(() => controlledSmtpImapCanaryOperationKey({
+    ...base,
+    releaseBindingHash: "not-a-hash",
+  }), /binding is invalid/);
+});
+
 test("the coordinator cannot target a prospect", () => {
   const operationKey = controlledSmtpImapCanaryOperationKey({
     siteId: "site-a",

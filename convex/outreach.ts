@@ -11100,12 +11100,15 @@ export const reserveControlledSmtpImapCanaryInternal = internalMutation({
     kind: controlledSmtpImapCanaryKindValidator,
     attemptId: v.string(),
     outboundMessageIdHash: v.string(),
+    releaseBindingHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
     if (
       !/^[a-z0-9-]{20,100}$/i.test(args.attemptId) ||
-      !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash)
+      !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash) ||
+      (args.releaseBindingHash !== undefined &&
+        !/^[a-f0-9]{64}$/.test(args.releaseBindingHash))
     ) throw new Error("Controlled canary identity is invalid");
     const [site, inboxes, request] = await Promise.all([
       ctx.db.get(args.siteId),
@@ -11151,10 +11154,11 @@ export const reserveControlledSmtpImapCanaryInternal = internalMutation({
     }
     const configurationVersion = inbox.configurationVersion ?? 0;
     const existing = (await ctx.db.query("outreach_messages")
-      .withIndex("by_site_controlled_canary", (q) => q
+      .withIndex("by_site_controlled_canary_release", (q) => q
         .eq("siteId", args.siteId)
         .eq("controlledCanaryKind", args.kind)
-        .eq("inboxConfigurationVersion", configurationVersion))
+        .eq("inboxConfigurationVersion", configurationVersion)
+        .eq("controlledCanaryReleaseBindingHash", args.releaseBindingHash))
       .take(10)).find((row) => row.controlledCanaryRole === "primary");
     if (existing) {
       return {
@@ -11184,6 +11188,7 @@ export const reserveControlledSmtpImapCanaryInternal = internalMutation({
       inboxId: String(inbox._id),
       configurationVersion,
       kind: args.kind,
+      releaseBindingHash: args.releaseBindingHash,
     });
     const toEmail = controlledSmtpImapCanaryTarget({
       kind: args.kind,
@@ -11250,6 +11255,7 @@ export const reserveControlledSmtpImapCanaryInternal = internalMutation({
       controlledCanaryKind: args.kind,
       controlledCanaryRole: "primary",
       controlledCanaryOperationKey: operationKey,
+      controlledCanaryReleaseBindingHash: args.releaseBindingHash,
       createdAt: now,
       updatedAt: now,
     });
@@ -11272,6 +11278,7 @@ export const reserveControlledSmtpImapCanaryInternal = internalMutation({
       controlledCanaryKind: args.kind,
       controlledCanaryRole: "followup",
       controlledCanaryOperationKey: operationKey,
+      controlledCanaryReleaseBindingHash: args.releaseBindingHash,
       createdAt: now,
       updatedAt: now,
     });

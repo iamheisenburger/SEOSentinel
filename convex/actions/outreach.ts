@@ -2439,9 +2439,16 @@ export const runControlledSmtpImapCanaryInternal = internalAction({
   args: {
     siteId: v.id("sites"),
     kind: controlledSmtpImapCanaryKindValidator,
+    releaseBindingHash: v.optional(v.string()),
   },
-  handler: async (ctx, { siteId, kind }):
+  handler: async (ctx, { siteId, kind, releaseBindingHash }):
     Promise<ControlledSmtpImapCanaryRunResult> => {
+    if (
+      releaseBindingHash !== undefined &&
+      !/^[a-f0-9]{64}$/.test(releaseBindingHash)
+    ) {
+      return { started: false as const, reason: "Release binding is invalid." };
+    }
     const inbox = await ctx.runQuery(internal.outreach.getInboxInternal, { siteId });
     if (!inbox || inbox.provider !== "smtp") {
       return { started: false as const, reason: "A verified SMTP mailbox is required." };
@@ -2462,6 +2469,7 @@ export const runControlledSmtpImapCanaryInternal = internalAction({
         kind,
         attemptId,
         outboundMessageIdHash: inboundRelayMessageIdHash(outboundRfcMessageId),
+        releaseBindingHash,
       },
     ) as ControlledSmtpImapCanaryReservation;
     if (!reservation.claimed) return { started: false as const, ...reservation };

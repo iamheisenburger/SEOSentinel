@@ -11,13 +11,16 @@ export function controlledSmtpImapCanaryOperationKey(input: {
   inboxId: string;
   configurationVersion: number;
   kind: ControlledSmtpImapCanaryKind;
+  releaseBindingHash?: string;
 }): string {
   if (
     !input.siteId || !input.inboxId ||
     !Number.isSafeInteger(input.configurationVersion) ||
-    input.configurationVersion < 0
+    input.configurationVersion < 0 ||
+    (input.releaseBindingHash !== undefined &&
+      !/^[a-f0-9]{64}$/.test(input.releaseBindingHash))
   ) throw new Error("Controlled canary binding is invalid");
-  return sha256Hex(JSON.stringify({ version: 1, ...input }));
+  return sha256Hex(JSON.stringify({ version: 2, ...input }));
 }
 
 export function controlledSmtpImapCanaryTarget(input: {
