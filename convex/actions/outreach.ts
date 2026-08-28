@@ -3342,4 +3342,44 @@ export const verifyAcquiredLinksInternal = internalAction({
   },
 });
 
+type ControlledBacklinkCanaryVerificationResult = VerifyResult & {
+  opportunityId: Id<"seo_authority_opportunities">;
+  verified: boolean;
+  acquiredAt?: number;
+  acquiredLinkUrl?: string;
+};
+
+/**
+ * Controlled release coordinator. Reservation proves both domains belong to
+ * the same Pentra account; acquisition is then decided exclusively by the
+ * ordinary exact-href verifier used for every customer opportunity.
+ */
+export const verifyControlledBacklinkCanaryInternal = internalAction({
+  args: {
+    targetSiteId: v.id("sites"),
+    sourceSiteId: v.id("sites"),
+  },
+  handler: async (ctx, { targetSiteId, sourceSiteId }):
+    Promise<ControlledBacklinkCanaryVerificationResult> => {
+    const opportunity = await ctx.runMutation(
+      internal.seoAuthority.reserveControlledBacklinkCanaryInternal,
+      { targetSiteId, sourceSiteId },
+    ) as Doc<"seo_authority_opportunities"> | null;
+    if (!opportunity) throw new Error("Controlled backlink reservation failed");
+    const result = await verifyHandler(ctx, targetSiteId, 50);
+    const acquired = await ctx.runQuery(
+      internal.seoAuthority.listByStatusInternal,
+      { siteId: targetSiteId, status: "acquired", limit: 200 },
+    ) as Doc<"seo_authority_opportunities">[];
+    const settled = acquired.find((row) => row._id === opportunity._id);
+    return {
+      ...result,
+      opportunityId: opportunity._id,
+      verified: Boolean(settled),
+      acquiredAt: settled?.acquiredAt,
+      acquiredLinkUrl: settled?.acquiredLinkUrl,
+    };
+  },
+});
+
 export type { InboundSyncResult, PrepareResult, SendResult, VerifyResult };

@@ -150,6 +150,9 @@ export const getStatus = query({
       .withIndex("by_site_evaluated", (q) => q.eq("siteId", siteId))
       .order("desc")
       .first();
+    const customerAcquiredOpportunities = opportunities.filter(
+      (opportunity) => opportunity.type !== "controlled_backlink_canary",
+    );
     const published = articles.filter((article) =>
       article.status === "published" && article.publicationReceipt &&
       article.publicUrlStatus === "verified" && article.publicUrlVerifiedAt
@@ -344,10 +347,10 @@ export const getStatus = query({
       },
       {
         key: "backlink_verification",
-        state: opportunities.length > 0 ? "ready" : "waiting_provider",
-        blockerCode: opportunities.length > 0 ? undefined : "no_acquired_backlink_receipt",
-        nextEligibleAt: opportunities.length > 0 ? undefined : backlinkWake,
-        automaticWakeAt: opportunities.length > 0 ? undefined : backlinkWake,
+        state: customerAcquiredOpportunities.length > 0 ? "ready" : "waiting_provider",
+        blockerCode: customerAcquiredOpportunities.length > 0 ? undefined : "no_acquired_backlink_receipt",
+        nextEligibleAt: customerAcquiredOpportunities.length > 0 ? undefined : backlinkWake,
+        automaticWakeAt: customerAcquiredOpportunities.length > 0 ? undefined : backlinkWake,
       },
     ];
     const stages = Object.fromEntries(specs.map((spec) => [
@@ -380,7 +383,7 @@ export const getStatus = query({
       verifiedOutcomes: {
         publishedUrls: published.length,
         measuredConversions,
-        acquiredBacklinks: opportunities.length,
+        acquiredBacklinks: customerAcquiredOpportunities.length,
       },
       activity: {
         topics: topics.length,

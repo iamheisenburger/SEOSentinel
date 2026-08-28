@@ -27,6 +27,7 @@ import {
   siteGscConnectionRevision,
   siteUsesLegacyDomainReceipts,
 } from "./lib/siteDomainBinding";
+import { sha256Hex } from "./lib/publicationArtifact";
 
 async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
   const [site, identity] = await Promise.all([
@@ -590,6 +591,7 @@ export const listForSite = query({
     );
     return batches
       .flat()
+      .filter((row) => row.type !== "controlled_backlink_canary")
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, take);
   },
@@ -643,6 +645,81 @@ async function messageBelongsToAuthorityOpportunity(
   const inbox = await ctx.db.get(message.inboxId);
   return Boolean(inbox && inbox.siteId === siteId);
 }
+
+/**
+ * Reserve a release-only backlink observation between two sites owned by the
+ * same account. The source and target URLs are derived from canonical site
+ * records, so an operator cannot use this boundary to claim an arbitrary
+ * third-party link. Acquisition still requires the ordinary live-page
+ * verifier below; this mutation records no success claim.
+ */
+export const reserveControlledBacklinkCanaryInternal = internalMutation({
+  args: {
+    targetSiteId: v.id("sites"),
+    sourceSiteId: v.id("sites"),
+  },
+  handler: async (ctx, { targetSiteId, sourceSiteId }) => {
+    const [targetSite, sourceSite] = await Promise.all([
+      ctx.db.get(targetSiteId),
+      ctx.db.get(sourceSiteId),
+    ]);
+    if (
+      targetSiteId === sourceSiteId ||
+      !siteExecutionActive(targetSite) || !siteExecutionActive(sourceSite) ||
+      !targetSite?.userId || targetSite.userId !== sourceSite?.userId
+    ) {
+      throw new Error("Controlled backlink canary requires two active sites owned by one account");
+    }
+    const targetDomain = siteCanonicalDomain(targetSite);
+    const sourceDomain = siteCanonicalDomain(sourceSite);
+    if (!targetDomain || !sourceDomain) {
+      throw new Error("Controlled backlink canary lacks canonical domains");
+    }
+    const sourceUrl = `https://${sourceDomain}/pentra-growth-verification`;
+    const targetUrl = `https://${targetDomain}/`;
+    const fingerprint = sha256Hex(JSON.stringify({
+      version: 1,
+      kind: "controlled_backlink_canary",
+      targetSiteId: String(targetSiteId),
+      sourceSiteId: String(sourceSiteId),
+      sourceUrl,
+      targetUrl,
+    }));
+    const existing = await ctx.db.query("seo_authority_opportunities")
+      .withIndex("by_fingerprint", (q) => q.eq("fingerprint", fingerprint))
+      .unique();
+    if (existing) {
+      if (
+        existing.siteId !== targetSiteId ||
+        existing.type !== "controlled_backlink_canary" ||
+        existing.sourceUrl !== sourceUrl || existing.targetUrl !== targetUrl ||
+        !authorityOpportunityMatchesCurrentDomain(targetSite, existing)
+      ) throw new Error("Controlled backlink canary identity is ambiguous");
+      return existing;
+    }
+    const now = Date.now();
+    const opportunityId = await ctx.db.insert("seo_authority_opportunities", {
+      siteId: targetSiteId,
+      canonicalDomain: targetDomain,
+      domainRevision: siteCanonicalDomainRevision(targetSite),
+      fingerprint,
+      type: "controlled_backlink_canary",
+      sourceDomain,
+      sourceUrl,
+      targetUrl,
+      context:
+        "Owner-controlled release verification; excluded from customer growth metrics.",
+      status: "contacted",
+      evidenceHash: fingerprint,
+      verifiedAt: now,
+      lastCheckedAt: now,
+      contactedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return ctx.db.get(opportunityId);
+  },
+});
 
 /**
  * A link is only acquired once the exact live link has been observed on the
