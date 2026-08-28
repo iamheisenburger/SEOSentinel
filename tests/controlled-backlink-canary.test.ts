@@ -39,6 +39,13 @@ test("controlled backlink acquisition uses the ordinary exact-href verifier", ()
   assert.match(actionSource, /internal\.seoAuthority\.markAcquired/);
 });
 
+test("a still-live acquired link advances its exact recheck receipt", () => {
+  assert.match(
+    actionSource,
+    /for \(const opportunity of alreadyAcquired\)[\s\S]*receipt\.found && receipt\.receiptUrl[\s\S]*internal\.seoAuthority\.markAcquired/,
+  );
+});
+
 test("controlled backlink receipts stay out of customer growth metrics", () => {
   assert.match(
     authoritySource,

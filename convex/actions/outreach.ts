@@ -3312,7 +3312,16 @@ async function verifyHandler(
         opportunity.sourceUrl,
         opportunity.targetUrl,
       );
-      if (!receipt.found) {
+      if (receipt.found && receipt.receiptUrl) {
+        // Re-observation is itself release evidence. Reuse the idempotent
+        // acquired settlement so lastCheckedAt advances only after the exact
+        // href is seen again on the exact source page.
+        await ctx.runMutation(internal.seoAuthority.markAcquired, {
+          siteId,
+          opportunityId: opportunity._id,
+          acquiredLinkUrl: receipt.receiptUrl,
+        });
+      } else {
         await ctx.runMutation(internal.seoAuthority.markAcquiredLinkLost, {
           siteId,
           opportunityId: opportunity._id,
