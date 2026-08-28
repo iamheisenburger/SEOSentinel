@@ -164,6 +164,7 @@ import { planCheckpointTopicExecutionLocked } from
   "./lib/planCandidateCheckpoint.ts";
 import {
   expectedPublisherDestinationReceipt,
+  publisherDestinationReceiptExactlyMatches,
   publisherAutopublishConsentCurrent,
   publisherAutopublishConsentReceipt,
   publisherStandingAutopublishConsentCurrent,
@@ -3014,7 +3015,7 @@ export const recordPublisherDestinationReceiptInternal = internalMutation({
       !Number.isFinite(args.receipt.verifiedAt) ||
       args.receipt.verifiedAt <= 0 ||
       args.receipt.verifiedAt > timestamp + 5 * 60 * 1000 ||
-      JSON.stringify(args.receipt) !== JSON.stringify(expected)
+      !publisherDestinationReceiptExactlyMatches(args.receipt, expected)
     ) {
       throw new Error("Publishing destination changed during verification");
     }

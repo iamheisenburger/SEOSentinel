@@ -36,6 +36,24 @@ export type PublisherDestinationReceipt = {
   revokedAt?: number;
 };
 
+export function publisherDestinationReceiptExactlyMatches(
+  actual: PublisherDestinationReceipt,
+  expected: PublisherDestinationReceipt,
+): boolean {
+  return actual.version === expected.version &&
+    actual.status === expected.status &&
+    actual.method === expected.method &&
+    actual.destinationId === expected.destinationId &&
+    actual.ownerAccountKey === expected.ownerAccountKey &&
+    actual.canonicalDomain === expected.canonicalDomain &&
+    actual.domainRevision === expected.domainRevision &&
+    actual.configHash === expected.configHash &&
+    actual.connectionGeneration === expected.connectionGeneration &&
+    actual.adapterVersion === expected.adapterVersion &&
+    actual.verifiedAt === expected.verifiedAt &&
+    actual.revokedAt === expected.revokedAt;
+}
+
 export type PublisherAutopublishConsent = {
   version: number;
   policyHash: string;

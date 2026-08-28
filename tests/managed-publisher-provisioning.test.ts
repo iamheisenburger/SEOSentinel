@@ -12,6 +12,7 @@ import {
   publisherAutopublishConsentCurrent,
   publisherAutopublishConsentReceipt,
   publisherConnectionComplete,
+  publisherDestinationReceiptExactlyMatches,
   publisherDestinationReceiptVerified,
   publisherStandingAutopublishConsentCurrent,
   PUBLISHER_AUTOPUBLISH_CONSENT_POLICY_HASH,
@@ -44,6 +45,43 @@ function githubSite(
     ...overrides,
   };
 }
+
+test("publisher destination receipt equality is field-based and fail closed", () => {
+  const receipt = expectedPublisherDestinationReceipt({
+    site: githubSite(),
+    ownerAccountKey,
+    verifiedAt: timestamp,
+  });
+  assert.ok(receipt);
+  const reordered = {
+    verifiedAt: receipt.verifiedAt,
+    adapterVersion: receipt.adapterVersion,
+    connectionGeneration: receipt.connectionGeneration,
+    configHash: receipt.configHash,
+    domainRevision: receipt.domainRevision,
+    canonicalDomain: receipt.canonicalDomain,
+    ownerAccountKey: receipt.ownerAccountKey,
+    destinationId: receipt.destinationId,
+    method: receipt.method,
+    status: receipt.status,
+    version: receipt.version,
+  };
+  assert.equal(
+    JSON.stringify(reordered) === JSON.stringify(receipt),
+    false,
+  );
+  assert.equal(
+    publisherDestinationReceiptExactlyMatches(reordered, receipt),
+    true,
+  );
+  assert.equal(
+    publisherDestinationReceiptExactlyMatches(
+      { ...reordered, connectionGeneration: receipt.connectionGeneration + 1 },
+      receipt,
+    ),
+    false,
+  );
+});
 
 function exactReceipt(site = githubSite()) {
   const receipt = expectedPublisherDestinationReceipt({
@@ -301,6 +339,14 @@ test("post-provider receipt CAS and generic owner UX expose no credential", () =
   );
   assert.match(sites, /recordPublisherDestinationReceiptInternal/);
   assert.match(sites, /expectedPublisherDestinationReceipt/);
+  assert.match(sites, /publisherDestinationReceiptExactlyMatches/);
+  assert.doesNotMatch(
+    sites.slice(
+      sites.indexOf("export const recordPublisherDestinationReceiptInternal"),
+      sites.indexOf("export const patchInternal"),
+    ),
+    /JSON\.stringify\(args\.receipt\)/,
+  );
   assert.match(sites, /Publishing destination changed during verification/);
   assert.match(sites, /publisherConnectionGeneration/);
   assert.match(security, /"publisherDestinationReceipt"/);
