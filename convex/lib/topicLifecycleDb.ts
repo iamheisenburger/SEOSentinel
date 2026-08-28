@@ -81,6 +81,7 @@ export async function reconcileTopicLifecycle(
   const nextStatus = reconciledTopicStatus({
     currentStatus: previousStatus,
     businessFitEligible: topic.businessFitEligible,
+    contentFeasibilityStatus: topic.contentFeasibilityStatus,
     checkpointExecutionLocked: planCheckpointTopicExecutionLocked(topic),
     hasLinkedArticles: linkedArticles.length > 0,
     hasReservingArticle: reservingArticles.length > 0,

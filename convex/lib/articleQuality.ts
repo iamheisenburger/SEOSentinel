@@ -522,6 +522,8 @@ const INCOMPLETE_META_PHRASE_END_PATTERN =
 const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
   /\b(?:captures?|compares?|covers?|delivers?|explains?|includes?|offers?|provides?|reveals?|requires?|shows?)$/i;
 
+export const STRICT_PUBLICATION_MIN_WORDS = 1200;
+
 export function articleWordCeiling(articleType?: string): number {
   switch (articleType) {
     case "checklist":
@@ -905,7 +907,7 @@ export function evaluatePublicationQuality(
   // a measured step: the format ceiling in articleWordCeiling() still bounds the
   // top end, so short formats stay publishable while genuine guides must be
   // substantive.
-  const minimumWordCount = mode === "strict" ? 1200 : 500;
+  const minimumWordCount = mode === "strict" ? STRICT_PUBLICATION_MIN_WORDS : 500;
   if (measuredWordCount < minimumWordCount) {
     issues.push(
       `Article is too thin (${measuredWordCount} words; minimum ${minimumWordCount}).`,

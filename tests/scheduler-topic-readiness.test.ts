@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  evaluateSchedulerReadyTopicInventory,
+  opportunityEvidenceVersionFromInputHash,
   schedulerReadyTopic,
 } from "../convex/lib/schedulerTopicReadiness.ts";
 
@@ -74,6 +76,70 @@ test("workflow residue can never make setup or runtime topic-ready", () => {
     }),
     false,
   );
+});
+
+test("immutable opportunity receipts advance when decision evidence changes", () => {
+  const site = {
+    domain: "leadpilot.example",
+    siteName: "LeadPilot",
+    niche: "AI sales and lead qualification software",
+    siteSummary: "Qualifies website visitors and routes sales-ready leads.",
+    targetAudienceSummary: "B2B sales and marketing teams",
+    productUsage: "Automated website lead qualification",
+    painPoints: ["slow lead response", "manual qualification"],
+  };
+  const planned = evaluateSchedulerReadyTopicInventory({
+    site,
+    topics: [baseTopic],
+    monthlyOrganicClickGoal: 100,
+    currentLocationCode: 2840,
+    currentLanguageCode: "en",
+  }).opportunityDecisions[0];
+  const consumed = evaluateSchedulerReadyTopicInventory({
+    site,
+    topics: [{ ...baseTopic, status: "used" }],
+    monthlyOrganicClickGoal: 100,
+    currentLocationCode: 2840,
+    currentLanguageCode: "en",
+  }).opportunityDecisions[0];
+
+  assert.notEqual(planned.inputHash, consumed.inputHash);
+  assert.notEqual(planned.evidenceVersion, consumed.evidenceVersion);
+  assert.equal(consumed.classification, "coverage_conflict");
+  assert.equal(Number.isSafeInteger(planned.evidenceVersion), true);
+  assert.equal(Number.isSafeInteger(consumed.evidenceVersion), true);
+  assert.equal(
+    opportunityEvidenceVersionFromInputHash(planned.inputHash),
+    planned.evidenceVersion,
+  );
+});
+
+test("opportunity evidence versions reject malformed fingerprints", () => {
+  assert.throws(
+    () => opportunityEvidenceVersionFromInputHash("not-a-sha256"),
+    /input hash is invalid/,
+  );
+});
+
+test("terminal content feasibility is reported as too thin, never coverage", () => {
+  const site = {
+    domain: "leadpilot.example",
+    siteName: "LeadPilot",
+    niche: "AI sales and lead qualification software",
+  };
+  const decision = evaluateSchedulerReadyTopicInventory({
+    site,
+    topics: [{
+      ...baseTopic,
+      status: "disqualified",
+      contentFeasibilityStatus: "too_thin",
+    }],
+    monthlyOrganicClickGoal: 100,
+    currentLocationCode: 2840,
+    currentLanguageCode: "en",
+  }).opportunityDecisions[0];
+  assert.equal(decision.classification, "too_thin");
+  assert.equal(decision.admitted, false);
 });
 
 test("setup readiness and automatic runtime consume the same projection", () => {

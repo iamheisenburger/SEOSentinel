@@ -10,6 +10,7 @@ export type TopicReservationArticle = {
 export type TopicLifecycleInput = {
   currentStatus?: string;
   businessFitEligible?: boolean;
+  contentFeasibilityStatus?: string;
   checkpointExecutionLocked?: boolean;
   hasLinkedArticles: boolean;
   hasReservingArticle: boolean;
@@ -20,7 +21,76 @@ export type ExistingTopicIntent = {
   id: string;
   primaryKeyword: string;
   updatedAt?: number;
+  contentFeasibilityStatus?: string;
 };
+
+export const CONTENT_FEASIBILITY_VERSION = 1;
+
+export function terminalContentFeasibility(status?: string): boolean {
+  return status === "too_thin" || status === "quality_exhausted";
+}
+
+export function terminalTopicQualitySettlement(args: {
+  gateStatus: string;
+  issues: string[];
+  qualityRevisionCount: number;
+  maximumRevisions: number;
+  article: {
+    siteId: string;
+    status?: string;
+    topicId?: string | null;
+  };
+  topic: {
+    _id: string;
+    siteId: string;
+    status?: string;
+    contentFeasibilityStatus?: string;
+    planCheckpointTerminalFailureCode?: string;
+  } | null | undefined;
+  checkedAt: number;
+}): {
+  topicId: string;
+  topicPatch: {
+    status: "disqualified";
+    contentFeasibilityStatus: "too_thin" | "quality_exhausted";
+    contentFeasibilityVersion: number;
+    contentFeasibilityIssues: string[];
+    contentFeasibilityCheckedAt: number;
+    disqualifiedReason: string;
+    updatedAt: number;
+  };
+} | null {
+  if (args.gateStatus !== "blocked") return null;
+  if (args.qualityRevisionCount < args.maximumRevisions) return null;
+  if (args.issues.length === 0) return null;
+  const topic = args.topic;
+  if (!topic || !args.article.topicId) return null;
+  if (String(args.article.topicId) !== String(topic._id)) return null;
+  if (args.article.siteId !== topic.siteId) return null;
+  if (args.article.status === "published") return null;
+  if (
+    topic.status === "plan_checkpoint" ||
+    Boolean(topic.planCheckpointTerminalFailureCode)
+  ) return null;
+  if (terminalContentFeasibility(topic.contentFeasibilityStatus)) return null;
+
+  const status = args.issues.some((issue) => /article is too thin/i.test(issue))
+    ? "too_thin" as const
+    : "quality_exhausted" as const;
+  const issues = args.issues.slice(0, 20);
+  return {
+    topicId: String(topic._id),
+    topicPatch: {
+      status: "disqualified",
+      contentFeasibilityStatus: status,
+      contentFeasibilityVersion: CONTENT_FEASIBILITY_VERSION,
+      contentFeasibilityIssues: issues,
+      contentFeasibilityCheckedAt: args.checkedAt,
+      disqualifiedReason: `content_feasibility:${status}: ${issues.join("; ")}`,
+      updatedAt: args.checkedAt,
+    },
+  };
+}
 
 export type TopicUpsertDecision =
   | { kind: "blocked"; blockingKeyword: string }
@@ -61,7 +131,10 @@ export function decideTopicUpsert(input: {
   );
   const durableCoverage = [
     ...input.existingTopics
-      .filter((topic) => input.reservingTopicIds.has(topic.id))
+      .filter((topic) =>
+        input.reservingTopicIds.has(topic.id) ||
+        terminalContentFeasibility(topic.contentFeasibilityStatus)
+      )
       .map((topic) => topic.primaryKeyword),
     ...(input.additionalReservingKeywords ?? []),
   ];
@@ -182,6 +255,9 @@ export function reconciledTopicStatus(
 ): string {
   if (input.checkpointExecutionLocked) {
     return input.currentStatus ?? "planned";
+  }
+  if (terminalContentFeasibility(input.contentFeasibilityStatus)) {
+    return "disqualified";
   }
   if (input.hasReservingArticle) return "used";
   if (input.hasActiveArticleJob) return "queued";

@@ -10,6 +10,7 @@ import {
   dormantTopicRevivalPatch,
   normalizeTopicIntentKeyword,
   reconciledTopicStatus,
+  terminalTopicQualitySettlement,
 } from "../convex/lib/topicLifecycle.ts";
 
 test("only externally published or current sealed-ready artifacts reserve intent", () => {
@@ -66,6 +67,48 @@ test("failed linked drafts re-enter revalidation instead of poisoning intent", (
     hasReservingArticle: true,
     hasActiveArticleJob: false,
   }), "used");
+});
+
+test("bounded topic quality exhaustion is terminal across fresh draft generations", () => {
+  const args = {
+    gateStatus: "blocked",
+    issues: ["Article is too thin (1042 words; minimum 1200)."],
+    maximumRevisions: 2,
+    article: {
+      siteId: "site-a",
+      status: "review",
+      topicId: "topic-a",
+    },
+    topic: {
+      _id: "topic-a",
+      siteId: "site-a",
+      status: "queued",
+    },
+    checkedAt: 1_787_270_002_000,
+  };
+  const settlement = terminalTopicQualitySettlement({
+    ...args,
+    qualityRevisionCount: 2,
+  });
+  assert.ok(settlement);
+  assert.equal(settlement.topicPatch.status, "disqualified");
+  assert.equal(settlement.topicPatch.contentFeasibilityStatus, "too_thin");
+  assert.match(
+    settlement.topicPatch.disqualifiedReason,
+    /^content_feasibility:too_thin:/,
+  );
+  assert.equal(terminalTopicQualitySettlement({
+    ...args,
+    qualityRevisionCount: 1,
+  }), null);
+
+  assert.equal(reconciledTopicStatus({
+    currentStatus: "queued",
+    contentFeasibilityStatus: "too_thin",
+    hasLinkedArticles: true,
+    hasReservingArticle: false,
+    hasActiveArticleJob: true,
+  }), "disqualified");
 });
 
 test("a stale used topic backed only by a rejected draft is not coverage", () => {
@@ -143,6 +186,7 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   assert.match(jobs, /export const markDone[\s\S]*reconcileJobTopicLifecycle/);
   assert.match(jobs, /export const markFailed[\s\S]*reconcileJobTopicLifecycle/);
   assert.match(jobs, /export const markRetryableFailure[\s\S]*reconcileJobTopicLifecycle/);
+  assert.match(articles, /terminalTopicQualitySettlement/);
 });
 
 test("published and current sealed-ready coverage block exact or similar intent", () => {
@@ -199,6 +243,18 @@ test("failed and quarantined exact rows revive instead of duplicating", () => {
       reservingTopicIds,
     }), { kind: "revive", topicId: "dormant" });
   }
+});
+
+test("terminal content infeasibility blocks new rows for the same intent", () => {
+  assert.deepEqual(decideTopicUpsert({
+    candidateKeyword: "intent detection dataset",
+    existingTopics: [{
+      id: "exhausted",
+      primaryKeyword: "Intent Detection Dataset",
+      contentFeasibilityStatus: "quality_exhausted",
+    }],
+    reservingTopicIds: new Set(),
+  }), { kind: "blocked", blockingKeyword: "Intent Detection Dataset" });
 });
 
 test("non-exact dormant rows do not poison lexical dedupe", () => {

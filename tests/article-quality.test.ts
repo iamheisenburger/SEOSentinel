@@ -18,6 +18,7 @@ import {
   removeUnsupportedClaimSentences,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
+  STRICT_PUBLICATION_MIN_WORDS,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../convex/lib/articleQuality.ts";
@@ -47,6 +48,33 @@ const body = Array.from(
   { length: 950 },
   (_, index) => `useful${index}`,
 ).join(" ");
+
+test("strict generation and publication share one minimum depth contract", () => {
+  const belowMinimum = Array.from(
+    { length: STRICT_PUBLICATION_MIN_WORDS - 1 },
+    (_, index) => `useful${index}`,
+  ).join(" ");
+  const atMinimum = `${belowMinimum} useful${STRICT_PUBLICATION_MIN_WORDS}`;
+
+  const below = evaluatePublicationQuality(
+    { title: "Depth contract", markdown: belowMinimum },
+    "strict",
+  );
+  const exact = evaluatePublicationQuality(
+    { title: "Depth contract", markdown: atMinimum },
+    "strict",
+  );
+  assert.ok(
+    below.issues.includes(
+      `Article is too thin (${STRICT_PUBLICATION_MIN_WORDS - 1} words; minimum ${STRICT_PUBLICATION_MIN_WORDS}).`,
+    ),
+  );
+  assert.equal(exact.issues.some((issue) => issue.includes("Article is too thin")), false);
+
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /const minimumWords = STRICT_PUBLICATION_MIN_WORDS/);
+  assert.doesNotMatch(pipeline, /wordCount < 900|between 900 words|\/900-\$\{maxWords\}/);
+});
 
 test("removes only audit-identified unsupported prose claims", () => {
   const markdown = [

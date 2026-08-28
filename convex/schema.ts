@@ -726,6 +726,15 @@ export default defineSchema({
     businessFitCheckedAt: v.optional(v.number()),
     disqualifiedReason: v.optional(v.string()),
 
+    // A topic that exhausts the bounded article-quality recovery contract is
+    // terminal for this exact evidence generation. Without this receipt the
+    // article-level revision counter resets on a fresh draft and cadence can
+    // spend forever regenerating the same infeasible intent.
+    contentFeasibilityStatus: v.optional(v.string()), // too_thin | quality_exhausted
+    contentFeasibilityVersion: v.optional(v.number()),
+    contentFeasibilityIssues: v.optional(v.array(v.string())),
+    contentFeasibilityCheckedAt: v.optional(v.number()),
+
     // A one-shot, evidence-backed rescue for an empty cadence buffer. The
     // source job remains the audit authority; these fields only bind the exact
     // staged topic so a finalizer cannot touch ordinary tenant inventory.

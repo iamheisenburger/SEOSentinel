@@ -47,12 +47,16 @@ import {
   evaluatePublicationQuality,
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
-import { needsDeterministicMechanicalRepair } from "./lib/autopilotCadence";
+import {
+  MAX_QUALITY_REVISIONS,
+  needsDeterministicMechanicalRepair,
+} from "./lib/autopilotCadence";
 import {
   publishedArticlePublicUrl,
   selectVerifiedAuthorityTargets,
 } from "./lib/publicationLive";
 import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
+import { terminalTopicQualitySettlement } from "./lib/topicLifecycle";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import {
   executionLeasePredatesPlanTransition,
@@ -1100,6 +1104,31 @@ export const recordPublicationCheck = internalMutation({
       });
       if (settlement && topic) {
         await ctx.db.patch(topic._id, settlement.topicPatch);
+      }
+      const qualitySettlement = terminalTopicQualitySettlement({
+        gateStatus: status,
+        issues,
+        qualityRevisionCount: article.qualityRevisionCount ?? 0,
+        maximumRevisions: MAX_QUALITY_REVISIONS,
+        article: {
+          siteId: String(article.siteId),
+          status: article.status,
+          topicId: article.topicId ? String(article.topicId) : null,
+        },
+        topic: topic
+          ? {
+            _id: String(topic._id),
+            siteId: String(topic.siteId),
+            status: topic.status,
+            contentFeasibilityStatus: topic.contentFeasibilityStatus,
+            planCheckpointTerminalFailureCode:
+              topic.planCheckpointTerminalFailureCode,
+          }
+          : null,
+        checkedAt,
+      });
+      if (qualitySettlement && topic) {
+        await ctx.db.patch(topic._id, qualitySettlement.topicPatch);
       }
     }
 

@@ -129,6 +129,7 @@ export type OpportunityDecisionInput = {
   serpAttainable?: boolean;
   commercialRelevance?: number;
   contentDepthScore?: number;
+  contentFeasibilityFailed?: boolean;
   evidenceFresh?: boolean;
   coverageConflict?: boolean;
   cooldownUntil?: number;
@@ -164,6 +165,15 @@ export function decideOpportunity(
       score: 0,
       reasons: ["The exact opportunity is inside its durable cooldown."],
       nextEligibleAt: input.cooldownUntil,
+      version: OPPORTUNITY_DECISION_VERSION,
+    };
+  }
+  if (input.contentFeasibilityFailed) {
+    return {
+      classification: "too_thin",
+      admitted: false,
+      score: 0,
+      reasons: ["Bounded generation and quality recovery could not produce a truthful article at the required depth."],
       version: OPPORTUNITY_DECISION_VERSION,
     };
   }

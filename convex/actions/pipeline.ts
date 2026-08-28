@@ -30,6 +30,7 @@ import {
   removeUnsupportedClaimSentences,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
+  STRICT_PUBLICATION_MIN_WORDS,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
@@ -1595,6 +1596,7 @@ async function editorialReviewArticle(args: {
   productEvidence: string;
   researchEvidence: string;
   sources: { url: string; title?: string }[];
+  minWords: number;
   maxWords: number;
 }): Promise<{ markdown: string; score: number; notes: string[] }> {
   return callClaudeStructured({
@@ -1610,7 +1612,7 @@ async function editorialReviewArticle(args: {
       `ARTICLE TYPE: ${args.articleType}`,
       `PRIMARY KEYWORD: ${args.primaryKeyword}`,
       `PRODUCT: ${args.productName}`,
-      `LENGTH CONTRACT: Use only the space needed to answer the intent, with a hard maximum of ${args.maxWords} measured prose words. Never pad toward a target.`,
+      `LENGTH CONTRACT: Return between ${args.minWords} and ${args.maxWords} measured prose words. Reach the minimum only with useful, evidence-grounded explanation; never pad. If the supplied evidence cannot support the minimum truthfully, preserve accuracy and make that limitation explicit in the editorial notes.`,
       "",
       "BINDING EDITORIAL RULES:",
       "- Answer the reader's main question near the beginning and keep every section necessary to that intent.",
@@ -1796,6 +1798,7 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
   productEvidence: string;
   researchEvidence: string;
   sources: { url: string; title?: string }[];
+  minWords: number;
   maxWords: number;
 }): Promise<{
   markdown: string;
@@ -1836,7 +1839,7 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
     }
     if (pruned === markdown) break;
     const stats = calculateArticleStats(pruned);
-    if (stats.wordCount < 900 || stats.wordCount > args.maxWords) break;
+    if (stats.wordCount < args.minWords || stats.wordCount > args.maxWords) break;
     markdown = pruned;
     audit = await auditFinalArticle({ ...args, markdown });
     deterministicPruningApplied = true;
@@ -1857,6 +1860,7 @@ async function remediateFinalArticle(args: {
   productEvidence: string;
   researchEvidence: string;
   sources: { url: string; title?: string }[];
+  minWords: number;
   maxWords: number;
   auditNotes: string[];
 }): Promise<{ markdown: string; notes: string[] }> {
@@ -1891,7 +1895,7 @@ async function remediateFinalArticle(args: {
         ? "- The source array is empty: remove every numbered inline citation and every non-structural number, numeric scenario, benchmark, duration, threshold, volume, score, percentage, price, and quantified outcome. First-party product evidence is unnumbered and must never be labelled [1]."
         : "- Every numbered citation must map to the exact supplied source array; first-party product evidence remains unnumbered.",
       "- Preserve the reader's core answer, useful framework, internal links, restrained CTA, and valid Markdown.",
-      "- Keep the complete revision between 900 words and the hard maximum.",
+      `- Keep the complete revision between ${args.minWords} words and the hard maximum. Add no filler; every retained or added sentence must be supported and useful.`,
       `- Do not use an earlier year as a present or future hypothetical. Historical years require explicit historical context; otherwise use ${currentYear} or no year.`,
       "- Before returning, scan every digit and currency symbol in the complete article. Apart from step labels and citation markers, each factual number must have direct supplied evidence and a matching citation or be removed.",
       "",
@@ -4022,6 +4026,7 @@ async function handleArticle(
   // Autonomous publication uses one universal, versioned quality policy.
   // Tenant hostnames must never decide whether weak content may publish.
   const isStrictPublication = true;
+  const minimumWords = STRICT_PUBLICATION_MIN_WORDS;
   const mediaQualityNotes: string[] = [];
   const researchQualityNotes: string[] = [];
 
@@ -4403,7 +4408,7 @@ async function handleArticle(
     `</search_intent>`,
     ``,
     `GLOBAL RULES:`,
-    `- LENGTH: There is no target word count. Use at least 1200 useful words only when the topic warrants a full article, stop when the intent is answered, and never exceed ${articleWordCeiling(effectiveArticleType)} measured prose words. Thin pages lose to comprehensive ones on the same query, but padding to reach a number is worse than stopping early.`,
+    `- LENGTH: This strict publication contract requires ${minimumWords}-${articleWordCeiling(effectiveArticleType)} measured prose words. Reach the minimum only with evidence-grounded explanation, concrete decision support, and actionable detail; never pad or invent evidence. If the topic cannot support a truthful article at this depth, fail closed instead of submitting a thin draft.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
     `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
     researchSources.length === 0
@@ -4792,10 +4797,11 @@ async function handleArticle(
       productEvidence,
       researchEvidence: researchContext,
       sources: finalSources,
+      minWords: minimumWords,
       maxWords: articleWordCeiling(effectiveArticleType),
     });
     const editorialStats = calculateArticleStats(editorial.markdown);
-    if (editorialStats.wordCount < 900) {
+    if (editorialStats.wordCount < minimumWords) {
       throw new Error(`Editorial rewrite became too thin (${editorialStats.wordCount} words)`);
     }
     finalMarkdown = editorial.markdown;
@@ -4819,7 +4825,7 @@ async function handleArticle(
           `Compression missed the hard ceiling (${compressedStats.wordCount}/${maxWords} words)`,
         );
       }
-      if (compressedStats.wordCount < 900) {
+      if (compressedStats.wordCount < minimumWords) {
         throw new Error(`Compression became too thin (${compressedStats.wordCount} words)`);
       }
       finalMarkdown = compressed.markdown;
@@ -4878,6 +4884,7 @@ async function handleArticle(
         productEvidence,
         researchEvidence: researchContext,
         sources: finalSources,
+        minWords: minimumWords,
         maxWords,
       };
       const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval(auditArgs);
@@ -4950,9 +4957,9 @@ async function handleArticle(
             auditNotes: [...finalAudit.notes, ...deterministicAuditNotes],
           });
           const remediatedStats = calculateArticleStats(remediated.markdown);
-          if (remediatedStats.wordCount < 900 || remediatedStats.wordCount > maxWords) {
+          if (remediatedStats.wordCount < minimumWords || remediatedStats.wordCount > maxWords) {
             throw new Error(
-              `Remediation missed the length contract (${remediatedStats.wordCount}/900-${maxWords} words)`,
+              `Remediation missed the length contract (${remediatedStats.wordCount}/${minimumWords}-${maxWords} words)`,
             );
           }
 
@@ -4965,9 +4972,9 @@ async function handleArticle(
             researchContext,
           );
           const reviewedStats = calculateArticleStats(reviewed.markdown);
-          if (reviewedStats.wordCount < 900 || reviewedStats.wordCount > maxWords) {
+          if (reviewedStats.wordCount < minimumWords || reviewedStats.wordCount > maxWords) {
             throw new Error(
-              `Post-remediation fact check missed the length contract (${reviewedStats.wordCount}/900-${maxWords} words)`,
+              `Post-remediation fact check missed the length contract (${reviewedStats.wordCount}/${minimumWords}-${maxWords} words)`,
             );
           }
           if (reviewed.confidenceScore === undefined) {
@@ -6579,6 +6586,7 @@ async function reviewExistingArticleHandler(
     const productName = site.siteName ?? site.domain;
     const sources = article.sources ?? [];
     const maxWords = articleWordCeiling(article.articleType);
+    const minimumWords = STRICT_PUBLICATION_MIN_WORDS;
     let siteData = { pricing: "", features: "", homepage: "" };
     try {
       siteData = await crawlSiteData(site.domain);
@@ -6639,6 +6647,7 @@ async function reviewExistingArticleHandler(
         productEvidence,
         researchEvidence,
         sources,
+        minWords: minimumWords,
         maxWords,
         auditNotes: storedDefects.slice(0, 20),
       });
@@ -6664,6 +6673,7 @@ async function reviewExistingArticleHandler(
       productEvidence,
       researchEvidence,
       sources,
+      minWords: minimumWords,
       maxWords,
     });
     const exactReviewedMarkdown = repairDanglingStructuredIntroductions(
@@ -6671,9 +6681,9 @@ async function reviewExistingArticleHandler(
     );
     const audit = exactAudit.audit;
     const stats = calculateArticleStats(exactReviewedMarkdown);
-    if (stats.wordCount < 900 || stats.wordCount > maxWords) {
+    if (stats.wordCount < minimumWords || stats.wordCount > maxWords) {
       throw new Error(
-        `Reviewed draft missed the length contract (${stats.wordCount}/900-${maxWords} words)`,
+        `Reviewed draft missed the length contract (${stats.wordCount}/${minimumWords}-${maxWords} words)`,
       );
     }
 

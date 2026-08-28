@@ -13,6 +13,7 @@ import {
   decideTopicUpsert,
   dormantTopicRevivalPatch,
   normalizeTopicIntentKeyword,
+  terminalContentFeasibility,
 } from "./lib/topicLifecycle";
 import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
 import {
@@ -713,6 +714,7 @@ export const upsertMany = internalMutation({
           id: String(existingTopic._id),
           primaryKeyword: existingTopic.primaryKeyword,
           updatedAt: existingTopic.updatedAt,
+          contentFeasibilityStatus: existingTopic.contentFeasibilityStatus,
         })),
         reservingTopicIds,
         additionalReservingKeywords: [
@@ -1078,6 +1080,7 @@ export const recordBusinessFitAuditsInternal = internalMutation({
       const topic = await ctx.db.get(audit.topicId);
       if (!topic || topic.siteId !== siteId) continue;
       if (planCheckpointTopicExecutionLocked(topic)) continue;
+      if (terminalContentFeasibility(topic.contentFeasibilityStatus)) continue;
       if (["used", "queued", "cannibalizing"].includes(topic.status ?? "")) {
         continue;
       }

@@ -18,6 +18,7 @@ import {
   type OpportunityDecision,
 } from "./growthLoopContracts.ts";
 import { sha256Hex } from "./publicationArtifact.ts";
+import { terminalContentFeasibility } from "./topicLifecycle.ts";
 
 export const SCHEDULER_TOPIC_INVENTORY_READ_LIMIT = 2_000;
 
@@ -49,6 +50,7 @@ export type SchedulerReadyTopic = {
   }>;
   planCheckpointId?: unknown;
   planCheckpointTerminalFailureCode?: string;
+  contentFeasibilityStatus?: string;
 };
 
 export type SchedulerReadySite = TenantTopicSignalSource & {
@@ -63,6 +65,28 @@ export type SchedulerReadySite = TenantTopicSignalSource & {
 };
 
 const SCHEDULABLE_TOPIC_STATUSES = new Set(["planned", "pending"]);
+
+/**
+ * Bind the numeric receipt version to the complete deterministic evidence
+ * fingerprint. Policy versions alone are not evidence identities: a topic can
+ * move from planned to used (or receive new demand/SERP measurements) while
+ * the OpportunityDecision policy remains v1. Reusing that policy number made
+ * the immutable receipt writer treat the truthful new decision as a conflict
+ * and crash every later cadence run.
+ *
+ * Thirteen hexadecimal digits fit exactly inside JavaScript's safe-integer
+ * range. The full hash remains stored beside the version and is compared by
+ * the writer, so a conflicting fingerprint still fails closed.
+ */
+export function opportunityEvidenceVersionFromInputHash(
+  inputHash: string,
+): number {
+  if (!/^[0-9a-f]{64}$/i.test(inputHash)) {
+    throw new Error("Opportunity evidence input hash is invalid");
+  }
+  const version = Number.parseInt(inputHash.slice(0, 13), 16);
+  return version === 0 ? 1 : version;
+}
 
 /**
  * One fail-closed topic decision shared by setup readiness and every automatic
@@ -182,30 +206,44 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       // pre-generation depth evidence. Publication still enforces full source,
       // factual, media, metadata and rendering gates before sealing.
       contentDepthScore: Math.min(1, (topic.serpTopUrls?.length ?? 0) / 8),
+      contentFeasibilityFailed: terminalContentFeasibility(
+        topic.contentFeasibilityStatus,
+      ),
       evidenceFresh: estimate?.status === "eligible" &&
         Number.isFinite(topic.keywordDifficulty) &&
         topic.keywordDifficultyMeasured === true &&
         Boolean(topic.serpIntent?.trim()),
-      coverageConflict: !SCHEDULABLE_TOPIC_STATUSES.has(status),
+      coverageConflict:
+        !terminalContentFeasibility(topic.contentFeasibilityStatus) &&
+        !SCHEDULABLE_TOPIC_STATUSES.has(status),
       remainingCandidateCount: forwardCandidateCount,
     }, Date.now());
     const topicId = String(topic._id);
+    const inputHash = sha256Hex(JSON.stringify({
+      topicId,
+      status,
+      fitScore: fit.score,
+      fitEligible: fit.eligible,
+      serpIntentAligned: serpIntent.aligned,
+      attainable,
+      expectedClickEvidenceVersion: estimate?.version,
+      expectedClickStatus: estimate?.status,
+      expectedClicksMonthly: estimate?.expectedClicksMonthly,
+      searchVolume: topic.searchVolume,
+      keywordDifficulty: topic.keywordDifficulty,
+      keywordDifficultyMeasured: topic.keywordDifficultyMeasured,
+      serpIntent: topic.serpIntent,
+      serpResultCount: topic.serpTopUrls?.length ?? 0,
+      contentFeasibilityStatus: topic.contentFeasibilityStatus,
+      remainingCandidateCount: forwardCandidateCount,
+      decisionVersion: decision.version,
+    }));
     return {
       ...decision,
       topicId,
       opportunityKey: topicId,
-      evidenceVersion: estimate?.version ?? decision.version,
-      inputHash: sha256Hex(JSON.stringify({
-        topicId,
-        status,
-        fitScore: fit.score,
-        serpIntentAligned: serpIntent.aligned,
-        attainable,
-        expectedClickStatus: estimate?.status,
-        expectedClicksMonthly: estimate?.expectedClicksMonthly,
-        searchVolume: topic.searchVolume,
-        serpResultCount: topic.serpTopUrls?.length ?? 0,
-      })),
+      evidenceVersion: opportunityEvidenceVersionFromInputHash(inputHash),
+      inputHash,
     };
   });
   const decisionByTopicId = new Map(
