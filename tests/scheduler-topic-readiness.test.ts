@@ -142,6 +142,32 @@ test("terminal content feasibility is reported as too thin, never coverage", () 
   assert.equal(decision.admitted, false);
 });
 
+test("zero forward inventory emits one durable site-level exhaustion receipt", () => {
+  const site = {
+    domain: "leadpilot.example",
+    siteName: "LeadPilot",
+    niche: "AI sales and lead qualification software",
+  };
+  const decisions = evaluateSchedulerReadyTopicInventory({
+    site,
+    topics: [{
+      ...baseTopic,
+      status: "disqualified",
+      contentFeasibilityStatus: "too_thin",
+    }],
+    monthlyOrganicClickGoal: 100,
+    currentLocationCode: 2840,
+    currentLanguageCode: "en",
+  }).opportunityDecisions;
+  const exhausted = decisions.find((decision) =>
+    decision.classification === "opportunity_space_exhausted"
+  );
+  assert.ok(exhausted);
+  assert.equal(exhausted.topicId, undefined);
+  assert.equal(exhausted.opportunityKey, "__forward_opportunity_space__");
+  assert.ok((exhausted.nextEligibleAt ?? 0) > Date.now());
+});
+
 test("setup readiness and automatic runtime consume the same projection", () => {
   const sites = readFileSync("convex/sites.ts", "utf8");
   const topics = readFileSync("convex/topics.ts", "utf8");

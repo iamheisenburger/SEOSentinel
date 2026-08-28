@@ -1862,7 +1862,7 @@ export const recordOpportunityDecisionBatch = internalMutation({
     expectedDomainRevision: v.number(),
     evaluatedAt: v.number(),
     decisions: v.array(v.object({
-      topicId: v.id("topic_clusters"),
+      topicId: v.optional(v.id("topic_clusters")),
       opportunityKey: v.string(),
       evidenceVersion: v.number(),
       classification: v.union(
@@ -1892,8 +1892,10 @@ export const recordOpportunityDecisionBatch = internalMutation({
     ) throw new Error("Site not found");
     let inserted = 0;
     for (const decision of args.decisions) {
-      const topic = await ctx.db.get(decision.topicId);
-      if (!topic || topic.siteId !== args.siteId) continue;
+      if (decision.topicId) {
+        const topic = await ctx.db.get(decision.topicId);
+        if (!topic || topic.siteId !== args.siteId) continue;
+      }
       const existing = await ctx.db.query("opportunity_decision_receipts")
         .withIndex("by_site_opportunity_version", (q) =>
           q.eq("siteId", args.siteId)

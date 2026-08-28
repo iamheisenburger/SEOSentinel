@@ -168,6 +168,8 @@ export type OpportunityDecision = {
   version: number;
 };
 
+const OPPORTUNITY_EXHAUSTION_RECHECK_MS = 24 * 60 * 60 * 1000;
+
 function unit(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -233,6 +235,7 @@ export function decideOpportunity(
         admitted: false,
         score: 0,
         reasons: ["No unconsumed candidate remains; continue measurement and authority work."],
+        nextEligibleAt: now + OPPORTUNITY_EXHAUSTION_RECHECK_MS,
         version: OPPORTUNITY_DECISION_VERSION,
       };
     }

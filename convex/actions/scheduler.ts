@@ -498,7 +498,7 @@ export const scheduleCadence = internalAction({
       expectedClickPortfolio: ExpectedClickPortfolioEvaluation;
       schedulerReadyTopicIds: string[];
       opportunityDecisions: Array<{
-        topicId: string;
+        topicId?: string;
         opportunityKey: string;
         evidenceVersion: number;
         classification: "eligible" | "needs_evidence" | "too_thin" |
@@ -545,10 +545,14 @@ export const scheduleCadence = internalAction({
         expectedCanonicalDomain: siteCanonicalDomain(site)!,
         expectedDomainRevision: siteCanonicalDomainRevision(site),
         evaluatedAt: now,
-        decisions: inventoryAudit.opportunityDecisions.slice(offset, offset + 50).map((decision) => ({
-          ...decision,
-          topicId: decision.topicId as Id<"topic_clusters">,
-        })),
+        decisions: inventoryAudit.opportunityDecisions.slice(offset, offset + 50)
+          .map((decision) => {
+            const { topicId, ...rest } = decision;
+            return {
+              ...rest,
+              ...(topicId ? { topicId: topicId as Id<"topic_clusters"> } : {}),
+            };
+          }),
       });
     }
     const portfolioAlertKind = portfolio.status === "below_goal"

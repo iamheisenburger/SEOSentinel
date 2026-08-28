@@ -171,10 +171,19 @@ export const listPendingMeasurementRecoverySitesInternal = internalQuery({
         !site || !site.gscProperty || !site.gscDataThrough ||
         !await siteExecutionAuthorized(ctx, site)
       ) continue;
-      const needsPostDeployObservation = actions.some((action) =>
+      const measuredActions = actions.filter((action) =>
         Boolean(action.measurementKey) &&
         Boolean(action.measurementGscDataThrough) &&
-        (action.automationStatus === "executed" || action.status === "resolved") &&
+        (action.automationStatus === "executed" || action.status === "resolved")
+      );
+      const needsPostDeployObservation = measuredActions.length > 0 &&
+        !measuredActions.some((action) =>
+          Math.max(
+            action.automatedAt ?? 0,
+            action.resolvedAt ?? 0,
+            action.lastObservedAt,
+          ) >= latest.deployedAt!
+        ) && measuredActions.some((action) =>
         Math.max(
           action.automatedAt ?? 0,
           action.resolvedAt ?? 0,

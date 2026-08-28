@@ -128,7 +128,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
   portfolio: ExpectedClickPortfolioEvaluation;
   schedulerReadyTopicIds: string[];
   opportunityDecisions: Array<OpportunityDecision & {
-    topicId: string;
+    topicId?: string;
     opportunityKey: string;
     evidenceVersion: number;
     inputHash: string;
@@ -177,7 +177,13 @@ export function evaluateSchedulerReadyTopicInventory(args: {
     .replace(/^www\./i, "")
     .split("/")[0];
   const forwardCandidateCount = portfolioTopics.length;
-  const opportunityDecisions = args.topics.map((topic) => {
+  const evaluatedAt = Date.now();
+  const opportunityDecisions: Array<OpportunityDecision & {
+    topicId?: string;
+    opportunityKey: string;
+    evidenceVersion: number;
+    inputHash: string;
+  }> = args.topics.map((topic) => {
     const fit = evaluateTopicBusinessFit({
       keyword: topic.primaryKeyword,
       label: topic.label,
@@ -217,7 +223,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
         !terminalContentFeasibility(topic.contentFeasibilityStatus) &&
         !SCHEDULABLE_TOPIC_STATUSES.has(status),
       remainingCandidateCount: forwardCandidateCount,
-    }, Date.now());
+    }, evaluatedAt);
     const topicId = String(topic._id);
     const inputHash = sha256Hex(JSON.stringify({
       topicId,
@@ -246,8 +252,33 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       inputHash,
     };
   });
+  if (forwardCandidateCount === 0) {
+    const decision = decideOpportunity(
+      { remainingCandidateCount: 0 },
+      evaluatedAt,
+    );
+    const inputHash = sha256Hex(JSON.stringify({
+      opportunityKey: "__forward_opportunity_space__",
+      recheckDay: Math.floor(evaluatedAt / (24 * 60 * 60 * 1000)),
+      forwardCandidateCount,
+      topicStates: args.topics.map((topic) => ({
+        topicId: String(topic._id),
+        status: topic.status ?? "planned",
+        terminalFailure: topic.planCheckpointTerminalFailureCode,
+        contentFeasibilityStatus: topic.contentFeasibilityStatus,
+      })).sort((left, right) => left.topicId.localeCompare(right.topicId)),
+      decisionVersion: decision.version,
+    }));
+    opportunityDecisions.push({
+      ...decision,
+      opportunityKey: "__forward_opportunity_space__",
+      evidenceVersion: opportunityEvidenceVersionFromInputHash(inputHash),
+      inputHash,
+    });
+  }
   const decisionByTopicId = new Map(
-    opportunityDecisions.map((decision) => [decision.topicId, decision]),
+    opportunityDecisions.flatMap((decision) =>
+      decision.topicId ? [[decision.topicId, decision] as const] : []),
   );
   const schedulerReadyTopicIds = args.topics.flatMap((topic) => {
     const decision = decisionByTopicId.get(String(topic._id));

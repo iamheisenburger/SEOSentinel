@@ -107,7 +107,9 @@ test("opportunity admission combines evidence and does not use a global volume f
   assert.equal(decision.classification, "eligible");
   assert.equal(decision.admitted, true);
   assert.equal(decideOpportunity({ coverageConflict: true }, 1).classification, "coverage_conflict");
-  assert.equal(decideOpportunity({ remainingCandidateCount: 0 }, 1).classification, "opportunity_space_exhausted");
+  const exhausted = decideOpportunity({ remainingCandidateCount: 0 }, 1);
+  assert.equal(exhausted.classification, "opportunity_space_exhausted");
+  assert.ok((exhausted.nextEligibleAt ?? 0) > 1);
 });
 
 test("outreach policy is globally usable but automatic sending is fail closed", () => {
