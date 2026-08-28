@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  inboundMonitoringCapability,
   outboundIdentityReservationActive,
   reconnectPacingState,
   sanitizeInboxForClient,
@@ -14,6 +15,46 @@ import {
 
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;
+
+test("one fail-closed inbound capability drives SMTP/IMAP owner and fleet readiness", () => {
+  const ready = {
+    provider: "smtp",
+    status: "warming",
+    credentialCiphertext: "ciphertext",
+    credentialKeyId: "key-v1",
+    credentialEncryptionVersion: 1,
+    credentialBindingHash: "binding",
+    imapVerifiedAt: NOW,
+    imapHost: "imap.gmail.com",
+    imapPort: 993,
+    imapUsername: "sender@example.com",
+  };
+  assert.deepEqual(inboundMonitoringCapability(ready), {
+    ready: true,
+    mode: "imap",
+    imapReady: true,
+    legacyGmailReadReady: false,
+  });
+  for (const invalid of [
+    { ...ready, credentialCiphertext: undefined },
+    { ...ready, credentialKeyId: undefined },
+    { ...ready, credentialEncryptionVersion: undefined },
+    { ...ready, credentialBindingHash: undefined },
+    { ...ready, smtpPassword: "legacy-plaintext" },
+    { ...ready, imapVerifiedAt: undefined },
+    { ...ready, imapHost: undefined },
+    { ...ready, imapPort: 143 },
+    { ...ready, imapUsername: "" },
+    { ...ready, status: "suspended" },
+  ]) {
+    assert.equal(inboundMonitoringCapability(invalid).ready, false);
+    assert.equal(inboundMonitoringCapability(invalid).mode, "unavailable");
+  }
+  assert.equal(
+    sanitizeInboxForClient(ready, NOW)?.inboundMonitoringMode,
+    "imap",
+  );
+});
 
 test("mailbox and sender-domain pacing have separate reconnect semantics", () => {
   const sameDomainNewMailbox = reconnectPacingState({

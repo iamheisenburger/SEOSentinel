@@ -2389,6 +2389,206 @@ export const sendInboundRelayDsnCanary = action({
   },
 });
 
+const controlledSmtpImapCanaryKindValidator = v.union(
+  v.literal("smtp_delivery"),
+  v.literal("imap_reply"),
+  v.literal("imap_bounce"),
+  v.literal("imap_stop"),
+);
+
+type ControlledSmtpImapCanaryRunResult = {
+  started: boolean;
+  reason?: string;
+  status?: string;
+  nextEligibleAt?: number;
+  accepted?: boolean;
+  ambiguous?: boolean;
+  signalAccepted?: boolean;
+  awaitingInbound?: boolean;
+  messageId?: Id<"outreach_messages">;
+};
+
+type ControlledSmtpImapCanaryReservation =
+  | {
+      claimed: false;
+      reason: string;
+      status?: string;
+      nextEligibleAt?: number;
+      messageId?: Id<"outreach_messages">;
+    }
+  | {
+      claimed: true;
+      inbox: Doc<"outreach_inboxes">;
+      messageId: Id<"outreach_messages">;
+      followupMessageId: Id<"outreach_messages">;
+      attemptId: string;
+      operationKey: string;
+      toEmail: string;
+      subject: string;
+      body: string;
+      leaseExpiresAt: number;
+    };
+
+/**
+ * Execute one explicitly consented bootstrap-v1 transport canary. Targets are
+ * derived in the serializable reservation mutation: the connected mailbox for
+ * delivery/reply/STOP, or example.invalid for bounce. No caller can supply a
+ * recipient and no prospect delivery is possible through this action.
+ */
+export const runControlledSmtpImapCanaryInternal = internalAction({
+  args: {
+    siteId: v.id("sites"),
+    kind: controlledSmtpImapCanaryKindValidator,
+  },
+  handler: async (ctx, { siteId, kind }):
+    Promise<ControlledSmtpImapCanaryRunResult> => {
+    const inbox = await ctx.runQuery(internal.outreach.getInboxInternal, { siteId });
+    if (!inbox || inbox.provider !== "smtp") {
+      return { started: false as const, reason: "A verified SMTP mailbox is required." };
+    }
+    const attemptId = randomUUID();
+    const senderDomain = normalizeDomain(
+      inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+    );
+    if (!senderDomain) {
+      return { started: false as const, reason: "Sender domain is invalid." };
+    }
+    const outboundRfcMessageId =
+      `<${randomBytes(24).toString("hex")}@${senderDomain}>`;
+    const reservation = await ctx.runMutation(
+      internal.outreach.reserveControlledSmtpImapCanaryInternal,
+      {
+        siteId,
+        kind,
+        attemptId,
+        outboundMessageIdHash: inboundRelayMessageIdHash(outboundRfcMessageId),
+      },
+    ) as ControlledSmtpImapCanaryReservation;
+    if (!reservation.claimed) return { started: false as const, ...reservation };
+
+    let secrets: { smtpPassword: string; imapPassword: string };
+    try {
+      secrets = await decryptedMailboxSecrets(siteId, reservation.inbox);
+    } catch {
+      await ctx.runMutation(internal.outreach.failDeliveryAttempt, {
+        siteId,
+        messageId: reservation.messageId,
+        attemptId,
+        reason: "controlled_canary_credential_unavailable",
+      });
+      return { started: true as const, accepted: false as const };
+    }
+    let outcome: DeliveryOutcome;
+    try {
+      outcome = await deliver({
+        ...reservation.inbox,
+        smtpPassword: secrets.smtpPassword,
+      }, {
+        toEmail: reservation.toEmail,
+        subject: reservation.subject,
+        body: reservation.body,
+        outboundRfcMessageId,
+      });
+    } catch {
+      outcome = {
+        ok: false,
+        error: "controlled_canary_delivery_unverified",
+        unverified: true,
+      };
+    }
+    if (!outcome.ok) {
+      await ctx.runMutation(internal.outreach.failDeliveryAttempt, {
+        siteId,
+        messageId: reservation.messageId,
+        attemptId,
+        reason: outcome.error ?? "controlled_canary_delivery_failed",
+        bounced: outcome.bounced,
+        unverified: outcome.unverified,
+      });
+      return {
+        started: true as const,
+        accepted: false as const,
+        ambiguous: Boolean(outcome.unverified),
+      };
+    }
+    const completed = await ctx.runMutation(
+      internal.outreach.completeDeliveryAttempt,
+      {
+        siteId,
+        messageId: reservation.messageId,
+        attemptId,
+        providerMessageId: outcome.providerMessageId,
+        outboundRfcMessageId,
+      },
+    );
+    if (!completed.recorded) {
+      return { started: true as const, accepted: false as const, ambiguous: true };
+    }
+
+    if (kind !== "imap_reply" && kind !== "imap_stop") {
+      return {
+        started: true as const,
+        accepted: true as const,
+        messageId: reservation.messageId,
+        awaitingInbound: kind === "imap_bounce",
+      };
+    }
+    const signal = await ctx.runMutation(
+      internal.outreach.claimControlledSmtpImapSignalInternal,
+      {
+        siteId,
+        messageId: reservation.messageId,
+        operationKey: reservation.operationKey,
+      },
+    );
+    if (!signal.claimed) {
+      return { started: true as const, accepted: true as const, signalAccepted: false };
+    }
+    const signalMessageId = `<${randomBytes(24).toString("hex")}@${senderDomain}>`;
+    let signalOutcome: DeliveryOutcome;
+    try {
+      signalOutcome = await deliver({
+        ...reservation.inbox,
+        smtpPassword: secrets.smtpPassword,
+      }, {
+        toEmail: reservation.inbox.fromEmail,
+        subject: `Re: ${reservation.subject}`,
+        body: kind === "imap_stop"
+          ? "STOP"
+          : "Pentra controlled reply canary. No response is required.",
+        outboundRfcMessageId: signalMessageId,
+        inReplyToRfcMessageId: outboundRfcMessageId,
+      });
+    } catch {
+      signalOutcome = {
+        ok: false,
+        error: "controlled_canary_signal_unverified",
+        unverified: true,
+      };
+    }
+    await ctx.runMutation(
+      internal.outreach.settleControlledSmtpImapSignalInternal,
+      {
+        siteId,
+        messageId: reservation.messageId,
+        operationKey: reservation.operationKey,
+        accepted: signalOutcome.ok,
+        receiptHash: signalOutcome.ok
+          ? signalOutcome.providerMessageId
+          : undefined,
+        ambiguous: Boolean(!signalOutcome.ok && signalOutcome.unverified),
+      },
+    );
+    return {
+      started: true as const,
+      accepted: true as const,
+      signalAccepted: signalOutcome.ok,
+      messageId: reservation.messageId,
+      awaitingInbound: signalOutcome.ok,
+    };
+  },
+});
+
 // ── Inbound reply, bounce and opt-out monitoring ──
 
 type GmailHeader = { name?: string; value?: string };

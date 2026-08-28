@@ -6,6 +6,10 @@ import { accountDeletionKey } from "./lib/accountDeletion";
 import { oneSetupOutreachMailboxReceiptVerified } from
   "./lib/oneSetupCanonical";
 import { inboundRelayDsnRoutingReady } from "./lib/outreachInboundRelay";
+import { inboundMonitoringCapability } from "./lib/outreachSecurity";
+import { takeCurrentGscPageRows } from "./lib/currentGscRows";
+import { addSearchConsoleDays } from "./lib/searchPerformance";
+import { buildGrowthScorecard } from "./lib/growthScorecard";
 import {
   capabilityReceipt,
   GROWTH_LOOP_CONTRACT_VERSION,
@@ -121,7 +125,13 @@ export const getStatus = query({
       throw new Error("Site not found");
     }
     const timestamp = Date.now();
-    const [request, health, topics, articles, actions, inboxes, resources, opportunities, rollups] =
+    const gscWindow = site.gscDataThrough
+      ? {
+          startDate: addSearchConsoleDays(site.gscDataThrough, -111),
+          endDate: site.gscDataThrough,
+        }
+      : undefined;
+    const [request, health, topics, articles, actions, inboxes, resources, opportunities, rollups, gscRead] =
       await Promise.all([
         ctx.db.query("managed_provisioning_requests").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
         ctx.db.query("autopilot_health").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
@@ -132,6 +142,7 @@ export const getStatus = query({
         ctx.db.query("managed_outreach_mailbox_resources").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(20),
         ctx.db.query("seo_authority_opportunities").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "acquired")).take(100),
         ctx.db.query("outcome_daily_rollups").withIndex("by_site_date", (q) => q.eq("siteId", siteId)).take(500),
+        takeCurrentGscPageRows(ctx, site, 5_000, gscWindow),
       ]);
 
     const latestOpportunity = await ctx.db
@@ -175,40 +186,39 @@ export const getStatus = query({
         activeManagedResource.unsubscribeCanaryReceipt &&
         activeManagedResource.cancellationCanaryReceipt
     );
+    const relayReady = Boolean(
+      currentInbox && currentInbox.provider !== "smtp" &&
+      inboundRelayDsnRoutingReady({
+        inbox: currentInbox,
+        now: timestamp,
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        runtimeConfig: {
+          domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
+          secrets: [
+            process.env.OUTREACH_INBOUND_RELAY_SECRET,
+            process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
+          ],
+          dsnTargetSecret:
+            process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
+          adapterVersion:
+            process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
+          retentionPolicyHash:
+            process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
+          retentionAudited:
+            process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
+        },
+      })
+    );
+    const inboundCapability = inboundMonitoringCapability(currentInbox, {
+      relayReady,
+    });
     const customerManagedReady = Boolean(
       currentInbox && !smartleadInbox &&
       oneSetupOutreachMailboxReceiptVerified({
         inboxes,
         ownerAccountKey: accountDeletionKey(site.userId),
       }) &&
-      (currentInbox.provider === "smtp"
-        ? Boolean(
-            currentInbox.imapVerifiedAt &&
-              currentInbox.credentialCiphertext &&
-              currentInbox.credentialKeyId &&
-              currentInbox.credentialBindingHash &&
-              currentInbox.smtpPassword === undefined,
-          )
-        : inboundRelayDsnRoutingReady({
-            inbox: currentInbox,
-            now: timestamp,
-            rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-            runtimeConfig: {
-              domain: process.env.OUTREACH_INBOUND_RELAY_DOMAIN,
-              secrets: [
-                process.env.OUTREACH_INBOUND_RELAY_SECRET,
-                process.env.OUTREACH_INBOUND_RELAY_SECRET_NEXT,
-              ],
-              dsnTargetSecret:
-                process.env.OUTREACH_INBOUND_RELAY_DSN_TARGET_SECRET,
-              adapterVersion:
-                process.env.OUTREACH_INBOUND_RELAY_ADAPTER_VERSION,
-              retentionPolicyHash:
-                process.env.OUTREACH_INBOUND_RELAY_RETENTION_POLICY_HASH,
-              retentionAudited:
-                process.env.OUTREACH_INBOUND_RELAY_RETENTION_AUDITED,
-            },
-          }))
+      inboundCapability.ready
     );
     const outreachReady = smartleadInbox
       ? smartleadCanariesReady
@@ -354,6 +364,13 @@ export const getStatus = query({
     ])) as Record<GrowthLoopStageKey, ReturnType<typeof capabilityReceipt>>;
     const unfinishedTimes = Object.values(stages)
       .flatMap((stage) => stage.nextEligibleAt === undefined ? [] : [stage.nextEligibleAt]);
+    const scorecard = buildGrowthScorecard({
+      dataThrough: site.gscDataThrough,
+      receiptDates: (site.gscDateEpochs ?? []).map((receipt) => receipt.date),
+      rows: gscRead.rows,
+    });
+    const latestGrowthAction = [...actions]
+      .sort((left, right) => right.lastObservedAt - left.lastObservedAt)[0];
     return {
       siteId: String(siteId),
       stages,
@@ -375,6 +392,22 @@ export const getStatus = query({
         goalMonthly: health?.portfolioGoalMonthly,
         evidenceMissing: health?.portfolioEvidenceMissing,
       },
+      searchPerformance: {
+        dataThrough: site.gscDataThrough,
+        evidenceReadComplete: !gscRead.exhausted,
+        windows: scorecard,
+      },
+      latestGrowthAction: latestGrowthAction
+        ? {
+            actionKind: latestGrowthAction.actionKind,
+            status: latestGrowthAction.status,
+            reason: latestGrowthAction.reason,
+            automationStatus: latestGrowthAction.automationStatus,
+            lastObservedAt: latestGrowthAction.lastObservedAt,
+            nextReviewAt: latestGrowthAction.nextReviewAt,
+            resolvedAt: latestGrowthAction.resolvedAt,
+          }
+        : null,
       evaluatedAt: timestamp,
       version: GROWTH_LOOP_CONTRACT_VERSION,
       setupResponsible,
@@ -936,11 +969,10 @@ export const recordCanaryInternal = internalMutation({
     } else if (args.kind === "smtp_connection") {
       if (!args.inboxId) throw new Error("SMTP inbox evidence is required");
       const inbox = await ctx.db.get(args.inboxId);
+      const capability = inboundMonitoringCapability(inbox);
       if (
         !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
-        !inbox.verifiedAt || !inbox.imapVerifiedAt ||
-        !inbox.credentialCiphertext || !inbox.credentialKeyId ||
-        inbox.smtpPassword !== undefined ||
+        !inbox.verifiedAt || !capability.imapReady ||
         !["connected", "warming", "active"].includes(inbox.status)
       ) {
         throw new Error(
@@ -957,7 +989,7 @@ export const recordCanaryInternal = internalMutation({
         verifiedAt: inbox.verifiedAt,
         imapVerifiedAt: inbox.imapVerifiedAt,
       }));
-      observedAt = Math.max(inbox.verifiedAt, inbox.imapVerifiedAt);
+      observedAt = Math.max(inbox.verifiedAt, inbox.imapVerifiedAt ?? 0);
     } else if (args.kind === "smtp_delivery") {
       if (!args.inboxId || !args.messageId) {
         throw new Error("SMTP delivery evidence is required");
@@ -970,6 +1002,9 @@ export const recordCanaryInternal = internalMutation({
         !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
         !message || message.siteId !== args.siteId ||
         message.inboxId !== inbox._id || message.deliveryTransport !== "smtp" ||
+        message.controlledCanaryKind !== "smtp_delivery" ||
+        message.controlledCanaryRole !== "primary" ||
+        !message.controlledCanaryOperationKey ||
         !message.sentAt || !message.deliveryAttemptId ||
         !["sent", "delivery_reviewed_sent", "replied", "bounced"].includes(
           message.status,
@@ -1004,6 +1039,9 @@ export const recordCanaryInternal = internalMutation({
         !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
         !message || message.siteId !== args.siteId ||
         message.inboxId !== inbox._id ||
+        message.controlledCanaryKind !== args.kind ||
+        message.controlledCanaryRole !== "primary" ||
+        !message.controlledCanaryOperationKey ||
         message.inboundReceiptTransport !== "imap" ||
         message.inboundReceiptKind !== expectedKind ||
         !message.inboundReceiptHash || !message.inboundReceiptAt
@@ -1024,6 +1062,8 @@ export const recordCanaryInternal = internalMutation({
       const message = await ctx.db.get(args.messageId);
       if (
         !message || message.siteId !== args.siteId ||
+        !message.controlledCanaryKind ||
+        message.controlledCanaryRole !== "primary" ||
         message.inboundReceiptTransport !== "imap" ||
         !["reply", "bounce", "unsubscribe"].includes(
           message.inboundReceiptKind ?? "",

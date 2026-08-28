@@ -17,6 +17,7 @@ import {
 } from "./planLimits";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import { sanitizeSiteForClient } from "./lib/siteSecurity";
+import { inboundMonitoringCapability } from "./lib/outreachSecurity.ts";
 import {
   shouldCancelForEpochTransition,
 } from "./lib/jobRollout";
@@ -6316,24 +6317,9 @@ async function outreachFleetState(
           runtimeConfig: relayRuntimeConfig,
         })),
   );
-  const legacyGmailReadReady = Boolean(
-    inbox &&
-    inboxOwnerCurrent &&
-    inbox.provider === "gmail" &&
-    inbox.oauthScopes?.split(/\s+/).includes(
-      "https://www.googleapis.com/auth/gmail.readonly",
-    ) &&
-    (inbox.oauthRefreshToken || inbox.oauthAccessToken) &&
-    !["disconnected", "suspended"].includes(inbox.status),
-  );
-  const inboundMonitoringMode:
-    | "signed_relay"
-    | "legacy_gmail"
-    | "unavailable" = signedRelayReady
-      ? "signed_relay"
-      : legacyGmailReadReady
-        ? "legacy_gmail"
-        : "unavailable";
+  const inboundCapability = inboxOwnerCurrent
+    ? inboundMonitoringCapability(inbox, { relayReady: signedRelayReady })
+    : inboundMonitoringCapability(null);
   return {
     siteId,
     autopilotEnabled: site.autopilotEnabled === true,
@@ -6360,15 +6346,18 @@ async function outreachFleetState(
     hasApprovedMessages: Boolean(approvedMessage),
     hasDueAutomaticMessages: Boolean(dueAutomaticMessage),
     hasLinksToVerify: Boolean(contactedOpportunity || acquiredOpportunity),
-    inboundMonitoringReady: signedRelayReady || legacyGmailReadReady,
-    inboundMonitoringMode,
+    inboundMonitoringReady: inboundCapability.ready,
+    inboundMonitoringMode: inboundCapability.mode,
     hasMessagesToMonitor: [sentMessage, reviewedSentMessage, repliedMessage]
       .some((message) => Boolean(
         message &&
-        (inbox?.provider === MANAGED_SES_TRANSPORT
-          ? message.inboundRelayAliasHash &&
+        (inboundCapability.mode === "imap"
+          ? message.deliveryTransport === "smtp" &&
             message.inboundRelayOutboundMessageIdHash
-          : message.providerMessageId || message.providerThreadId),
+          : inbox?.provider === MANAGED_SES_TRANSPORT
+            ? message.inboundRelayAliasHash &&
+              message.inboundRelayOutboundMessageIdHash
+            : message.providerMessageId || message.providerThreadId),
       )),
   };
 }

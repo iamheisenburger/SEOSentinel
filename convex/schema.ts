@@ -1625,6 +1625,15 @@ export default defineSchema({
     acquiredAt: v.optional(v.number()),
     acquiredLinkUrl: v.optional(v.string()),
     rejectedAt: v.optional(v.number()),
+    // Release canaries reuse the ordinary SMTP/IMAP settlement path without
+    // appearing as prospect opportunities. The kind is a finite, sanitized
+    // marker; no controlled recipient or message content is stored here.
+    controlledCanaryKind: v.optional(v.union(
+      v.literal("smtp_delivery"),
+      v.literal("imap_reply"),
+      v.literal("imap_bounce"),
+      v.literal("imap_stop"),
+    )),
     updatedAt: v.number(),
     createdAt: v.number(),
   })
@@ -2365,6 +2374,30 @@ export default defineSchema({
     )),
     inboundReceiptAt: v.optional(v.number()),
     inboundReceiptFrom: v.optional(v.string()),
+    // Controlled bootstrap-v1 canaries are isolated from customer queues and
+    // never authorize prospect delivery. These fields are operation receipts,
+    // not provider payloads or inbound bodies.
+    controlledCanaryKind: v.optional(v.union(
+      v.literal("smtp_delivery"),
+      v.literal("imap_reply"),
+      v.literal("imap_bounce"),
+      v.literal("imap_stop"),
+    )),
+    controlledCanaryRole: v.optional(v.union(
+      v.literal("primary"),
+      v.literal("followup"),
+    )),
+    controlledCanaryOperationKey: v.optional(v.string()),
+    controlledCanarySignalAttemptedAt: v.optional(v.number()),
+    controlledCanarySignalReceiptHash: v.optional(v.string()),
+    controlledCanarySignalStatus: v.optional(v.union(
+      v.literal("claimed"),
+      v.literal("accepted"),
+      v.literal("delivery_unverified"),
+      v.literal("failed"),
+    )),
+    controlledCanarySignalFailure: v.optional(v.string()),
+    controlledCanaryNextEligibleAt: v.optional(v.number()),
     // Receiving-only relay binding. The random alias itself is never stored;
     // only its digest and immutable delivery fences survive the send.
     inboundRelayAliasHash: v.optional(v.string()),
@@ -2382,6 +2415,11 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_status", ["siteId", "status"])
+    .index("by_site_controlled_canary", [
+      "siteId",
+      "controlledCanaryKind",
+      "inboxConfigurationVersion",
+    ])
     .index("by_status_lease", ["status", "deliveryLeaseExpiresAt"])
     .index("by_site_owner_lineage_status", [
       "siteId",

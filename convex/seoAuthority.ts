@@ -532,10 +532,11 @@ async function listAuthorityByCurrentDomainStatus(
       .order("desc")
       .take(limit);
     return rows.filter((row) =>
+      !row.controlledCanaryKind &&
       authorityOpportunityMatchesCurrentDomain(site, row)
     );
   }
-  return ctx.db
+  const rows = await ctx.db
     .query("seo_authority_opportunities")
     .withIndex("by_site_domain_revision_status", (q) =>
       q
@@ -546,6 +547,7 @@ async function listAuthorityByCurrentDomainStatus(
     )
     .order("desc")
     .take(limit);
+  return rows.filter((row) => !row.controlledCanaryKind);
 }
 
 export const listVerified = query({

@@ -16,6 +16,78 @@ import { autonomousOutreachConsentActive } from "./outreachAutonomy.ts";
 
 export type StoredInbox = Record<string, unknown> | null | undefined;
 
+export type InboundMonitoringMode =
+  | "imap"
+  | "signed_relay"
+  | "legacy_gmail"
+  | "unavailable";
+
+/**
+ * One fail-closed decision shared by the owner projection and both outreach
+ * fleets. In particular, a verified SMTP inbox is not IMAP-ready unless its
+ * encrypted credential envelope and exact TLS endpoint are still present.
+ */
+export function inboundMonitoringCapability(
+  inbox: StoredInbox,
+  options: {
+    relayReady?: boolean;
+    legacyDrainRequired?: boolean;
+  } = {},
+): {
+  ready: boolean;
+  mode: InboundMonitoringMode;
+  imapReady: boolean;
+  legacyGmailReadReady: boolean;
+} {
+  const active = Boolean(
+    inbox && !["disconnected", "suspended"].includes(
+      String(inbox.status ?? ""),
+    ),
+  );
+  const encryptedSmtpCredentialReady = Boolean(
+    inbox?.credentialCiphertext &&
+      inbox.credentialKeyId &&
+      inbox.credentialEncryptionVersion &&
+      inbox.credentialBindingHash &&
+      inbox.smtpPassword === undefined,
+  );
+  const imapReady = Boolean(
+    active &&
+      inbox?.provider === "smtp" &&
+      encryptedSmtpCredentialReady &&
+      inbox.imapVerifiedAt &&
+      typeof inbox.imapHost === "string" &&
+      inbox.imapHost.trim() &&
+      inbox.imapPort === 993 &&
+      typeof inbox.imapUsername === "string" &&
+      inbox.imapUsername.trim(),
+  );
+  const legacyGmailReadReady = Boolean(
+    active &&
+      inbox?.provider === "gmail" &&
+      String(inbox.oauthScopes ?? "")
+        .split(/\s+/)
+        .includes("https://www.googleapis.com/auth/gmail.readonly") &&
+      (inbox.oauthRefreshToken || inbox.oauthAccessToken),
+  );
+  const relayReady = active && options.relayReady === true;
+  const mode: InboundMonitoringMode = imapReady
+    ? "imap"
+    : options.legacyDrainRequired && legacyGmailReadReady
+      ? "legacy_gmail"
+      : relayReady
+        ? "signed_relay"
+        : legacyGmailReadReady
+          ? "legacy_gmail"
+          : "unavailable";
+  return {
+    ready: imapReady || relayReady || legacyGmailReadReady,
+    mode,
+    imapReady,
+    legacyGmailReadReady,
+  };
+}
+
 /** A disconnected identity is reusable only after its tenant is fully live
  * and has no unresolved external delivery boundary. Deletion keeps the
  * identity reserved until the inbox row itself is purged. */
@@ -115,24 +187,16 @@ export function sanitizeInboxForClient(
     inbox.oauthAccessToken || inbox.oauthRefreshToken || inbox.smtpPassword ||
       inbox.credentialCiphertext || inbox.apiKey,
   );
-  const imapReady = Boolean(
-    inbox.provider === "smtp" && inbox.imapVerifiedAt &&
-      !["disconnected", "suspended"].includes(String(inbox.status ?? "")),
-  );
-  const legacyGmailReadReady = Boolean(
-    inbox.provider === "gmail" &&
-    credentialsPresent &&
-    !["disconnected", "suspended"].includes(String(inbox.status ?? "")) &&
-    oauthScopes
-      .split(/\s+/)
-      .includes("https://www.googleapis.com/auth/gmail.readonly"),
-  );
   const relayReady = Boolean(
     relayConfigured &&
     relayDsnRoutingReady &&
     ["gmail", "smtp"].includes(String(inbox.provider ?? "")) &&
     !["disconnected", "suspended"].includes(String(inbox.status ?? "")),
   );
+  const inboundCapability = inboundMonitoringCapability(inbox, {
+    relayReady,
+    legacyDrainRequired,
+  });
   const safeDsnRoutingTarget = Boolean(
     ["gmail", "smtp"].includes(String(inbox.provider ?? "")) &&
     credentialsPresent &&
@@ -142,7 +206,7 @@ export function sanitizeInboxForClient(
   )
     ? relayDsnRoutingTargetAddress!.toLowerCase()
     : undefined;
-  const inboundMonitoringReady = imapReady || relayReady || legacyGmailReadReady;
+  const inboundMonitoringReady = inboundCapability.ready;
   const storedAutonomyConsentActive = autonomousOutreachConsentActive(
     inbox,
     autonomousConsentOwnerId,
@@ -205,15 +269,7 @@ export function sanitizeInboxForClient(
     ),
     inboundRelayDsnRoutingVerifiedAt:
       inbox.inboundRelayDsnRoutingVerifiedAt,
-    inboundMonitoringMode: imapReady
-      ? "imap"
-      : legacyDrainRequired && legacyGmailReadReady
-      ? "legacy_gmail"
-      : relayReady
-      ? "signed_relay"
-      : legacyGmailReadReady
-        ? "legacy_gmail"
-        : "unavailable",
+    inboundMonitoringMode: inboundCapability.mode,
     inboundLastScannedAt: inbox.inboundLastScannedAt,
     inboundLastCompletedAt: inbox.inboundLastCompletedAt,
     inboundLastError: inbox.inboundLastError,

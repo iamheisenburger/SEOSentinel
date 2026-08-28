@@ -115,6 +115,10 @@ export default function BacklinksPage() {
     api.sites.getOneSetupReadiness,
     site?._id ? { siteId: site._id } : "skip",
   );
+  const controlledCanaries = useQuery(
+    api.outreach.getControlledSmtpImapCanaryStatus,
+    site?._id ? { siteId: site._id } : "skip",
+  );
   const autonomyConsentConfigurationKey = [
     String(site?._id ?? ""),
     String(inbox?._id ?? ""),
@@ -519,6 +523,7 @@ export default function BacklinksPage() {
                 </Button>
               )}
             {inbox &&
+              !isSmtpInbox &&
               Boolean(inbox.inboundRelayConfigured) &&
               !Boolean(inbox.inboundRelayDsnRoutingReady) &&
               String(inbox.inboundMonitoringMode) !== "legacy_gmail" && (
@@ -786,6 +791,36 @@ export default function BacklinksPage() {
               approve, and trigger each message. Reply, bounce, and exact STOP
               evidence cancels pending follow-ups before another approval.
             </p>
+          </div>
+        )}
+        {isSmtpInbox && controlledCanaries?.ready && (
+          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+            <p className="text-[11px] font-semibold text-[#EDEEF1]">
+              Controlled transport verification
+            </p>
+            <p className="mt-1 text-[10px] leading-relaxed text-[#707589]">
+              These release checks use only this mailbox and a reserved
+              non-deliverable address. They never appear in prospect queues or
+              customer growth metrics.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {controlledCanaries.canaries.map((canary) => (
+                <span
+                  key={canary.kind}
+                  className={`rounded-full border px-2 py-1 text-[9px] font-medium uppercase tracking-wide ${
+                    canary.inboundReceiptKind || canary.status === "sent"
+                      ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
+                      : canary.status === "not_started"
+                        ? "border-white/[0.08] bg-white/[0.03] text-[#707589]"
+                        : "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]"
+                  }`}
+                >
+                  {labelStatus(canary.kind)} · {labelStatus(
+                    canary.inboundReceiptKind ?? canary.status,
+                  )}
+                </span>
+              ))}
+            </div>
           </div>
         )}
       </section>

@@ -205,6 +205,6 @@ test("bootstrap release evidence binds Pentra's natural role separately from the
   );
   assert.match(
     release,
-    /currentInbox\.provider === "smtp"[\s\S]*currentInbox\.imapVerifiedAt[\s\S]*currentInbox\.credentialCiphertext/,
+    /inboundMonitoringCapability\(currentInbox[\s\S]*inboundCapability\.ready/,
   );
 });

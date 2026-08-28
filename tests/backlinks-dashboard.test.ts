@@ -62,6 +62,10 @@ test("Backlinks workflow keeps approval, send, verification and blocked evidence
   assert.match(dashboard, /discarded after transient parsing, and Pentra stores only evidence digests/);
   assert.match(dashboard, /api\.actions\.outreach\.sendInboundRelayDsnCanary/);
   assert.match(dashboard, /Verify bounce routing/);
+  assert.match(
+    dashboard,
+    /\{inbox &&\s*!isSmtpInbox &&\s*Boolean\(inbox\.inboundRelayConfigured\)/,
+  );
   assert.match(dashboard, /inboundRelayDsnRoutingTargetAddress/);
   assert.match(dashboard, /Workspace delivery-status route/);
   assert.match(dashboard, /api\.outreach\.rotateInboundRelayDsnRoutingTarget/);

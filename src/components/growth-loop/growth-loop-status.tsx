@@ -37,6 +37,13 @@ function humanize(code: string | undefined): string {
   return code.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
+function metricDelta(value: { absolute: number; percent: number | null }): string {
+  const absolute = value.absolute > 0 ? `+${value.absolute}` : String(value.absolute);
+  if (value.percent === null) return `${absolute} · no prior baseline`;
+  const percent = value.percent > 0 ? `+${value.percent}%` : `${value.percent}%`;
+  return `${absolute} · ${percent}`;
+}
+
 function stageTone(state: string): string {
   if (state === "ready") return "border-[#22C55E]/20 bg-[#22C55E]/[0.05] text-[#4ADE80]";
   if (state === "waiting_owner" || state === "degraded" || state === "terminal") {
@@ -133,6 +140,59 @@ export function GrowthLoopStatus({ siteId }: { siteId: Id<"sites"> }) {
           </div>
         </div>
       </div>
+
+      {status.searchPerformance.windows && (
+        <div className="mt-4 rounded-lg border border-white/[0.05] bg-white/[0.02] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-[#565A6E]">
+              Verified Search Console outcomes
+            </p>
+            <p className="text-[9px] text-[#565A6E]">
+              Data through {status.searchPerformance.dataThrough ?? "unavailable"}
+            </p>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-3">
+            {(["7", "28", "56"] as const).map((key) => {
+              const window = status.searchPerformance.windows![key];
+              return (
+                <div key={key} className="rounded-md border border-white/[0.05] bg-[#0F1117] p-3">
+                  <p className="text-[10px] font-semibold text-[#EDEEF1]">{key}-day cohort</p>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-[#8B8FA3]">
+                    <span>Clicks <b className="text-[#EDEEF1]">{window.current.clicks}</b></span>
+                    <span>Impressions <b className="text-[#EDEEF1]">{window.current.impressions}</b></span>
+                    <span>CTR <b className="text-[#EDEEF1]">{window.current.ctr}%</b></span>
+                    <span>Position <b className="text-[#EDEEF1]">{window.current.averagePosition || "—"}</b></span>
+                  </div>
+                  <p className="mt-2 text-[9px] text-[#565A6E]">
+                    Click change: {window.comparisonStatus === "unavailable"
+                      ? "comparison unavailable"
+                      : metricDelta(window.change.clicks)}
+                    {window.comparisonStatus === "partial" ? " · partial baseline" : ""}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+          {status.latestGrowthAction && (
+            <div className="mt-3 rounded-md border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] p-3">
+              <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-[#38BDF8]">
+                Latest evidence-backed action
+              </p>
+              <p className="mt-1 text-[11px] font-semibold text-[#EDEEF1]">
+                {humanize(status.latestGrowthAction.actionKind)} · {humanize(status.latestGrowthAction.automationStatus ?? status.latestGrowthAction.status)}
+              </p>
+              <p className="mt-1 text-[10px] leading-4 text-[#8B8FA3]">
+                {status.latestGrowthAction.reason}
+              </p>
+              {status.latestGrowthAction.nextReviewAt && (
+                <p className="mt-1 text-[9px] text-[#565A6E]">
+                  Automatic review {new Date(status.latestGrowthAction.nextReviewAt).toLocaleString()}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

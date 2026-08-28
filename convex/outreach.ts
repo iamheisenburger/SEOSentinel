@@ -54,6 +54,7 @@ import {
 } from "./lib/outreachAutonomy.ts";
 import {
   outboundIdentityReservationActive,
+  inboundMonitoringCapability,
   reconnectPacingState,
   resolveGmailReconnectProfile,
   sanitizeInboxForClient,
@@ -151,6 +152,8 @@ import {
   siteUsesLegacyDomainReceipts,
 } from "./lib/siteDomainBinding.ts";
 import {
+  MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION,
+  MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION,
   managedOutreachMailboxLeaseIsCurrent,
   managedOutreachMailboxProfileIssues,
   managedOutreachMailboxRequestFenceIssues,
@@ -178,6 +181,11 @@ import {
   imapConfigIssues,
   smtpConfigIssues,
 } from "./lib/outreachSmtp.ts";
+import {
+  controlledCanaryMaySuppressDomain,
+  controlledSmtpImapCanaryOperationKey,
+  controlledSmtpImapCanaryTarget,
+} from "./lib/outreachControlledCanary.ts";
 import {
   encryptOutreachCredentials,
   outreachCredentialBinding,
@@ -723,7 +731,8 @@ export const getInbox = query({
       !["disconnected", "suspended"].includes(inbox.status) &&
       Boolean(
         inbox.provider === "smtp"
-          ? inbox.smtpPassword
+          ? inbox.credentialCiphertext && inbox.credentialKeyId &&
+            inbox.credentialEncryptionVersion && inbox.credentialBindingHash
           : inbox.oauthRefreshToken || inbox.oauthAccessToken,
       ) &&
       executionAuthorized
@@ -5064,18 +5073,9 @@ export const listLegacyInboundFleetPage = internalQuery({
       hasMessagesToMonitor: boolean;
     }> = [];
     for (const inbox of result.page) {
-      const gmailReady = Boolean(
-        inbox.provider === "gmail" &&
-        inbox.oauthScopes?.split(/\s+/).includes(
-          "https://www.googleapis.com/auth/gmail.readonly",
-        ) &&
-        (inbox.oauthRefreshToken || inbox.oauthAccessToken),
-      );
-      const imapReady = Boolean(
-        inbox.provider === "smtp" && inbox.imapVerifiedAt &&
-        inbox.credentialCiphertext && inbox.credentialKeyId &&
-        inbox.imapHost && inbox.imapPort === 993 && inbox.imapUsername,
-      );
+      const inboundCapability = inboundMonitoringCapability(inbox);
+      const gmailReady = inboundCapability.legacyGmailReadReady;
+      const imapReady = inboundCapability.imapReady;
       if (
         (!gmailReady && !imapReady) ||
         ["disconnected", "suspended"].includes(inbox.status)
@@ -5156,17 +5156,9 @@ export const getLegacyInboundFleetState = internalQuery({
         "The Gmail credential belongs to a previous site owner; reconnect it before approval",
       );
     }
-    const gmailReady = Boolean(
-      inbox.provider === "gmail" &&
-      inbox.oauthScopes?.split(/\s+/).includes(
-        "https://www.googleapis.com/auth/gmail.readonly",
-      ) && (inbox.oauthRefreshToken || inbox.oauthAccessToken),
-    );
-    const imapReady = Boolean(
-      inbox.provider === "smtp" && inbox.imapVerifiedAt &&
-      inbox.credentialCiphertext && inbox.credentialKeyId &&
-      inbox.imapHost && inbox.imapPort === 993 && inbox.imapUsername,
-    );
+    const inboundCapability = inboundMonitoringCapability(inbox);
+    const gmailReady = inboundCapability.legacyGmailReadReady;
+    const imapReady = inboundCapability.imapReady;
     if (
       (!gmailReady && !imapReady) ||
       ["disconnected", "suspended"].includes(inbox.status)
@@ -5340,7 +5332,9 @@ export const listMessages = query({
         .take(take);
     };
     if (status) {
-      return currentStatusBatch(status);
+      return (await currentStatusBatch(status))
+        .filter((message) => !message.controlledCanaryKind)
+        .slice(0, take);
     }
     const statuses = [
       "draft",
@@ -5360,8 +5354,74 @@ export const listMessages = query({
     );
     return batches
       .flat()
+      .filter((message) => !message.controlledCanaryKind)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, take);
+  },
+});
+
+async function controlledSmtpImapCanaryStatus(
+  ctx: QueryCtx,
+  siteId: Id<"sites">,
+) {
+    const inboxes = await ctx.db.query("outreach_inboxes")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId)).take(2);
+    if (inboxes.length !== 1) return { ready: false, canaries: [] };
+    const inbox = inboxes[0];
+    const configurationVersion = inbox.configurationVersion ?? 0;
+    const kinds = [
+      "smtp_delivery", "imap_reply", "imap_bounce", "imap_stop",
+    ] as const;
+    const rows = await Promise.all(kinds.map((kind) =>
+      ctx.db.query("outreach_messages")
+        .withIndex("by_site_controlled_canary", (q) => q
+          .eq("siteId", siteId)
+          .eq("controlledCanaryKind", kind)
+          .eq("inboxConfigurationVersion", configurationVersion))
+        .take(10)
+    ));
+    return {
+      ready: inboundMonitoringCapability(inbox).imapReady,
+      inboxConfigurationVersion: configurationVersion,
+      canaries: kinds.map((kind, index) => {
+        const primary = rows[index].find((row) =>
+          row.controlledCanaryRole === "primary"
+        );
+        const followup = rows[index].find((row) =>
+          row.controlledCanaryRole === "followup"
+        );
+        return {
+          kind,
+          status: primary?.status ?? "not_started",
+          inboundReceiptKind: primary?.inboundReceiptKind,
+          inboundReceiptAt: primary?.inboundReceiptAt,
+          signalStatus: primary?.controlledCanarySignalStatus,
+          followupStatus: followup?.status,
+          nextEligibleAt: primary?.controlledCanaryNextEligibleAt,
+          updatedAt: primary?.updatedAt,
+        };
+      }),
+    };
+}
+
+/** Sanitized owner projection for bootstrap-v1 SMTP/IMAP verification. */
+export const getControlledSmtpImapCanaryStatus = query({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    await requireSiteOwner(ctx, siteId);
+    return controlledSmtpImapCanaryStatus(ctx, siteId);
+  },
+});
+
+/** Operator-safe projection used to verify release canaries without secrets. */
+export const getControlledSmtpImapCanaryStatusInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) {
+      return { ready: false, canaries: [] };
+    }
+    return controlledSmtpImapCanaryStatus(ctx, siteId);
   },
 });
 
@@ -8615,6 +8675,11 @@ async function settleAcceptedDeliveryCounter(
       settlementAccountKey === accountDeletionKey(site.userId) &&
       inbox.credentialOwnerAccountKey === settlementAccountKey,
   );
+  // Controlled release canaries prove the adapter without consuming a
+  // customer's prospect pacing, domain cooldown, or growth counters.
+  if (message.controlledCanaryKind) {
+    return { accountKey: settlementAccountKey, ownsCurrentSite };
+  }
   const deliveredDay = utcDayKey(deliveredAt);
   const existingDay = inbox.sentTodayDay ?? "";
   const sameDay = existingDay === deliveredDay;
@@ -9413,6 +9478,10 @@ export const completeDeliveryAttempt = internalMutation({
       providerThreadId: safeProviderThreadId || undefined,
       updatedAt: now,
     });
+
+    if (message.controlledCanaryKind) {
+      return { recorded: true, followUpQueued: false, controlledCanary: true };
+    }
 
     const opportunity = await ctx.db.get(message.opportunityId);
     const settlementLifecycle = outreachDeliverySettlementDecision({
@@ -11012,6 +11081,290 @@ const imapReceiptKindValidator = v.union(
   v.literal("ignored"),
 );
 
+const controlledSmtpImapCanaryKindValidator = v.union(
+  v.literal("smtp_delivery"),
+  v.literal("imap_reply"),
+  v.literal("imap_bounce"),
+  v.literal("imap_stop"),
+);
+
+/**
+ * Reserve one no-replay SMTP/IMAP release canary. This is deliberately an
+ * internal boundary: the targets are derived from the verified mailbox (or
+ * the reserved .invalid namespace), never accepted from a caller, and the
+ * owner's versioned One Setup consent is re-read in the same transaction.
+ */
+export const reserveControlledSmtpImapCanaryInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    kind: controlledSmtpImapCanaryKindValidator,
+    attemptId: v.string(),
+    outboundMessageIdHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    if (
+      !/^[a-z0-9-]{20,100}$/i.test(args.attemptId) ||
+      !/^[a-f0-9]{64}$/.test(args.outboundMessageIdHash)
+    ) throw new Error("Controlled canary identity is invalid");
+    const [site, inboxes, request] = await Promise.all([
+      ctx.db.get(args.siteId),
+      ctx.db.query("outreach_inboxes")
+        .withIndex("by_site", (q) => q.eq("siteId", args.siteId)).take(2),
+      ctx.db.query("managed_provisioning_requests")
+        .withIndex("by_site", (q) => q.eq("siteId", args.siteId)).unique(),
+    ]);
+    if (!siteExecutionActive(site) || !site?.userId || inboxes.length !== 1) {
+      return { claimed: false as const, reason: "Tenant or mailbox is unavailable." };
+    }
+    const inbox = inboxes[0];
+    const ownerAccountKey = accountDeletionKey(site.userId);
+    const profile = request?.outreachSenderProfile;
+    const domain = siteCanonicalDomain(site);
+    const revision = siteCanonicalDomainRevision(site);
+    if (!domain) {
+      return { claimed: false as const, reason: "Tenant domain is unavailable." };
+    }
+    const consentCurrent = Boolean(
+      request && request.ownerAccountKey === ownerAccountKey &&
+      request.domainSnapshot === domain &&
+      request.domainRevisionSnapshot === revision &&
+      request.outreachTransport === "smtp" && profile &&
+      profile.attestationVersion ===
+        MANAGED_OUTREACH_MAILBOX_PROFILE_ATTESTATION_VERSION &&
+      profile.canaryConsentVersion ===
+        MANAGED_OUTREACH_MAILBOX_CANARY_CONSENT_VERSION &&
+      profile.deliveryEventCanaryAuthorizedAt > 0 &&
+      profile.senderIdentityAndAddressAttestedAt > 0 &&
+      profile.fromName === inbox.fromName &&
+      profile.physicalMailingAddress === inbox.physicalMailingAddress,
+    );
+    const capability = inboundMonitoringCapability(inbox);
+    if (
+      !consentCurrent || !capability.imapReady || inbox.provider !== "smtp" ||
+      inbox.credentialOwnerAccountKey !== ownerAccountKey || !inbox.verifiedAt
+    ) {
+      return {
+        claimed: false as const,
+        reason: "The current SMTP/IMAP mailbox and controlled-canary consent are not ready.",
+      };
+    }
+    const configurationVersion = inbox.configurationVersion ?? 0;
+    const existing = (await ctx.db.query("outreach_messages")
+      .withIndex("by_site_controlled_canary", (q) => q
+        .eq("siteId", args.siteId)
+        .eq("controlledCanaryKind", args.kind)
+        .eq("inboxConfigurationVersion", configurationVersion))
+      .take(10)).find((row) => row.controlledCanaryRole === "primary");
+    if (existing) {
+      return {
+        claimed: false as const,
+        reason: "This mailbox generation already has a controlled canary operation.",
+        messageId: existing._id,
+        status: existing.status,
+        nextEligibleAt: existing.controlledCanaryNextEligibleAt,
+      };
+    }
+    const concurrent = await ctx.db.query("outreach_messages")
+      .withIndex("by_site_owner_lineage_status", (q) => q
+        .eq("siteId", args.siteId)
+        .eq("ownerAccountKey", ownerAccountKey)
+        .eq("ownerLineageUnresolvedAt", undefined)
+        .eq("status", "sending"))
+      .first();
+    if (concurrent) {
+      return {
+        claimed: false as const,
+        reason: "Another SMTP delivery operation is already in flight.",
+        nextEligibleAt: concurrent.deliveryLeaseExpiresAt,
+      };
+    }
+    const operationKey = controlledSmtpImapCanaryOperationKey({
+      siteId: String(args.siteId),
+      inboxId: String(inbox._id),
+      configurationVersion,
+      kind: args.kind,
+    });
+    const toEmail = controlledSmtpImapCanaryTarget({
+      kind: args.kind,
+      mailboxEmail: inbox.fromEmail,
+      operationKey,
+    });
+    const toDomain = toEmail.split("@")[1] ?? "example.invalid";
+    const threadKey = `controlled-canary:${operationKey}`;
+    const sourceUrl = `https://${domain}/`;
+    const opportunityId = await ctx.db.insert("seo_authority_opportunities", {
+      siteId: args.siteId,
+      canonicalDomain: domain,
+      domainRevision: revision,
+      fingerprint: `controlled-canary:${operationKey}`,
+      type: "controlled_canary",
+      sourceDomain: domain,
+      sourceUrl,
+      targetUrl: sourceUrl,
+      context: "Pentra bootstrap-v1 controlled transport verification.",
+      status: "outreach_prepared",
+      evidenceHash: operationKey,
+      verifiedAt: now,
+      lastCheckedAt: now,
+      outreachPreparedAt: now,
+      controlledCanaryKind: args.kind,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const body = [
+      "Pentra controlled transport verification.",
+      "This message is addressed only to a user-owned mailbox or a reserved non-deliverable address.",
+      "It is not prospect outreach and must not be counted as customer growth.",
+    ].join("\n\n");
+    const leaseExpiresAt = now + OUTREACH_DELIVERY_LEASE_MS;
+    const messageId = await ctx.db.insert("outreach_messages", {
+      siteId: args.siteId,
+      canonicalDomain: domain,
+      domainRevision: revision,
+      ownerAccountKey,
+      inboxId: inbox._id,
+      opportunityId,
+      toEmail,
+      toDomain,
+      subject: `Pentra controlled ${args.kind.replaceAll("_", " ")} canary`,
+      body,
+      status: "sending",
+      sequenceStep: 0,
+      threadKey,
+      inboxConfigurationVersion: configurationVersion,
+      approvedInboxId: inbox._id,
+      approvedInboxConfigurationVersion: configurationVersion,
+      deliveryOwnerAccountKey: ownerAccountKey,
+      deliveryAttemptId: args.attemptId,
+      deliveryClaimedAt: now,
+      deliveryLeaseExpiresAt: leaseExpiresAt,
+      deliveryBoundaryVersion: 1,
+      deliveryExternalAttemptedAt: now,
+      deliveryTransport: "smtp",
+      inboundRelayOutboundMessageIdHash: args.outboundMessageIdHash,
+      inboundRelayInboxConfigurationVersion: configurationVersion,
+      inboundRelaySenderDomain: normalizeDomain(
+        inbox.senderDomain ?? inbox.fromEmail.split("@")[1] ?? "",
+      ) ?? undefined,
+      controlledCanaryKind: args.kind,
+      controlledCanaryRole: "primary",
+      controlledCanaryOperationKey: operationKey,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const followupMessageId = await ctx.db.insert("outreach_messages", {
+      siteId: args.siteId,
+      canonicalDomain: domain,
+      domainRevision: revision,
+      ownerAccountKey,
+      inboxId: inbox._id,
+      opportunityId,
+      toEmail,
+      toDomain,
+      subject: "Pentra controlled follow-up cancellation canary",
+      body,
+      status: "draft",
+      sequenceStep: 1,
+      threadKey,
+      parentMessageId: messageId,
+      inboxConfigurationVersion: configurationVersion,
+      controlledCanaryKind: args.kind,
+      controlledCanaryRole: "followup",
+      controlledCanaryOperationKey: operationKey,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAt(
+      leaseExpiresAt + 1_000,
+      internal.outreach.recoverApprovedDeliveryBoundaryLease,
+      { siteId: args.siteId, messageId, attemptId: args.attemptId },
+    );
+    return {
+      claimed: true as const,
+      inbox,
+      messageId,
+      followupMessageId,
+      attemptId: args.attemptId,
+      operationKey,
+      toEmail,
+      subject: `Pentra controlled ${args.kind.replaceAll("_", " ")} canary`,
+      body,
+      leaseExpiresAt,
+    };
+  },
+});
+
+export const claimControlledSmtpImapSignalInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    const now = Date.now();
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.controlledCanaryRole !== "primary" ||
+      !["imap_reply", "imap_stop"].includes(
+        message.controlledCanaryKind ?? "",
+      ) || message.controlledCanaryOperationKey !== args.operationKey ||
+      message.status !== "sent" ||
+      message.controlledCanarySignalAttemptedAt ||
+      !message.inboundRelayOutboundMessageIdHash
+    ) return { claimed: false as const };
+    await ctx.db.patch(message._id, {
+      controlledCanarySignalAttemptedAt: now,
+      controlledCanarySignalStatus: "claimed",
+      controlledCanaryNextEligibleAt: now + OUTREACH_IMAP_POLL_INTERVAL_MS,
+      updatedAt: now,
+    });
+    return { claimed: true as const };
+  },
+});
+
+export const settleControlledSmtpImapSignalInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    messageId: v.id("outreach_messages"),
+    operationKey: v.string(),
+    accepted: v.boolean(),
+    receiptHash: v.optional(v.string()),
+    ambiguous: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (
+      !message || message.siteId !== args.siteId ||
+      message.controlledCanaryOperationKey !== args.operationKey ||
+      message.controlledCanarySignalStatus !== "claimed" ||
+      (args.receiptHash !== undefined && !/^[a-f0-9]{64}$/.test(args.receiptHash))
+    ) return { recorded: false as const };
+    const now = Date.now();
+    await ctx.db.patch(message._id, {
+      controlledCanarySignalStatus: args.accepted
+        ? "accepted"
+        : args.ambiguous
+          ? "delivery_unverified"
+          : "failed",
+      controlledCanarySignalReceiptHash: args.accepted
+        ? args.receiptHash
+        : undefined,
+      controlledCanarySignalFailure: args.accepted
+        ? undefined
+        : args.ambiguous
+          ? "signal_delivery_unverified"
+          : "signal_delivery_failed",
+      controlledCanaryNextEligibleAt: args.accepted
+        ? now + OUTREACH_IMAP_POLL_INTERVAL_MS
+        : undefined,
+      updatedAt: now,
+    });
+    return { recorded: true as const };
+  },
+});
+
 export const claimImapPollInternal = internalMutation({
   args: { siteId: v.id("sites"), attemptId: v.string() },
   handler: async (ctx, { siteId, attemptId }) => {
@@ -11029,12 +11382,9 @@ export const claimImapPollInternal = internalMutation({
       return { claimed: false as const, reason: "Exactly one outreach inbox is required." };
     }
     const inbox = inboxes[0];
+    const inboundCapability = inboundMonitoringCapability(inbox);
     if (
-      inbox.provider !== "smtp" || !inbox.imapHost || inbox.imapPort !== 993 ||
-      !inbox.imapUsername || !inbox.imapVerifiedAt ||
-      !inbox.credentialCiphertext || !inbox.credentialKeyId ||
-      !inbox.credentialEncryptionVersion || !inbox.credentialBindingHash ||
-      inbox.smtpPassword !== undefined ||
+      inbox.provider !== "smtp" || !inboundCapability.imapReady ||
       inbox.credentialOwnerAccountKey !== accountDeletionKey(site.userId) ||
       ["disconnected", "suspended"].includes(inbox.status)
     ) return { claimed: false as const, reason: "SMTP/IMAP monitoring is not ready." };
@@ -11192,7 +11542,12 @@ export const recordImapReceiptInternal = internalMutation({
       nextAt: args.receivedAt,
     });
     if (args.kind === "unsubscribe") {
-      await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+      // A self-addressed controlled STOP canary proves account-wide exact
+      // address suppression without suppressing every tenant recipient on a
+      // shared consumer-mail domain such as gmail.com.
+      if (controlledCanaryMaySuppressDomain(message.controlledCanaryKind)) {
+        await addSuppression(ctx, args.siteId, "domain", message.toDomain, "unsubscribe");
+      }
       await addSuppression(ctx, args.siteId, "email", message.toEmail, "unsubscribe");
     } else if (args.kind === "bounce") {
       await addSuppression(ctx, args.siteId, "email", message.toEmail, "bounce");
