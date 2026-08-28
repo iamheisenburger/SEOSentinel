@@ -119,6 +119,40 @@ test("IMAP classifies exact replies and STOP while rejecting unbound mail", () =
   }), null);
 });
 
+test("only an exact controlled canary may classify authenticated self-mail", () => {
+  const mailboxEmail = "sender@gmail.com";
+  const selfEvidence = evidence({
+    fromEmail: mailboxEmail,
+    authenticationResults:
+      "mx.google; dmarc=pass header.from=gmail.com; dkim=pass header.i=@gmail.com",
+  });
+  const selfCandidate = {
+    ...CANDIDATE,
+    toEmail: mailboxEmail,
+    toDomain: "gmail.com",
+  };
+  assert.equal(classifyImapEvidence({
+    evidence: selfEvidence,
+    candidates: [selfCandidate],
+    mailboxEmail,
+  }), null);
+  assert.equal(classifyImapEvidence({
+    evidence: { ...selfEvidence, authenticationResults: "" },
+    candidates: [{ ...selfCandidate, controlledCanaryKind: "imap_reply" }],
+    mailboxEmail,
+  })?.kind, "reply");
+  assert.equal(classifyImapEvidence({
+    evidence: { ...selfEvidence, bodyText: "STOP" },
+    candidates: [{ ...selfCandidate, controlledCanaryKind: "imap_stop" }],
+    mailboxEmail,
+  })?.kind, "unsubscribe");
+  assert.equal(classifyImapEvidence({
+    evidence: selfEvidence,
+    candidates: [{ ...selfCandidate, controlledCanaryKind: "imap_stop" }],
+    mailboxEmail,
+  }), null);
+});
+
 test("hard bounces require both the random message binding and exact failed recipient", () => {
   const bounce = evidence({
     fromEmail: "mailer-daemon@example.com",

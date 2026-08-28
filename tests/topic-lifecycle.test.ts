@@ -11,6 +11,7 @@ import {
   normalizeTopicIntentKeyword,
   reconciledTopicStatus,
   terminalTopicQualitySettlement,
+  terminalTopicWorkerFailureSettlement,
 } from "../convex/lib/topicLifecycle.ts";
 
 test("only externally published or current sealed-ready artifacts reserve intent", () => {
@@ -111,6 +112,63 @@ test("bounded topic quality exhaustion is terminal across fresh draft generation
   }), "disqualified");
 });
 
+test("an exhausted deterministic worker length failure quarantines the exact linked topic", () => {
+  const settlement = terminalTopicWorkerFailureSettlement({
+    error: "Reviewed draft missed the length contract (1031/1200-3000 words)",
+    attempts: 4,
+    maximumAttempts: 4,
+    article: {
+      siteId: "site-a",
+      status: "review",
+      topicId: "topic-a",
+    },
+    topic: {
+      _id: "topic-a",
+      siteId: "site-a",
+      status: "planned",
+    },
+    checkedAt: 1_787_930_324_881,
+  });
+  assert.ok(settlement);
+  assert.equal(settlement.topicPatch.status, "disqualified");
+  assert.equal(settlement.topicPatch.contentFeasibilityStatus, "too_thin");
+  assert.deepEqual(settlement.topicPatch.contentFeasibilityIssues, [
+    "Article is too thin (1031 words; minimum 1200).",
+  ]);
+});
+
+test("worker exhaustion never condemns a topic for transient or unexhausted failures", () => {
+  const base = {
+    attempts: 4,
+    maximumAttempts: 4,
+    article: {
+      siteId: "site-a",
+      status: "review",
+      topicId: "topic-a",
+    },
+    topic: {
+      _id: "topic-a",
+      siteId: "site-a",
+      status: "planned",
+    },
+    checkedAt: 1_787_930_324_881,
+  };
+  assert.equal(terminalTopicWorkerFailureSettlement({
+    ...base,
+    error: "Provider connection timed out",
+  }), null);
+  assert.equal(terminalTopicWorkerFailureSettlement({
+    ...base,
+    attempts: 3,
+    error: "Reviewed draft missed the length contract (1031/1200-3000 words)",
+  }), null);
+  assert.equal(terminalTopicWorkerFailureSettlement({
+    ...base,
+    article: { ...base.article, siteId: "site-b" },
+    error: "Reviewed draft missed the length contract (1031/1200-3000 words)",
+  }), null);
+});
+
 test("a stale used topic backed only by a rejected draft is not coverage", () => {
   const covered = coveredIntentTopics(
     [{
@@ -186,7 +244,25 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   assert.match(jobs, /export const markDone[\s\S]*reconcileJobTopicLifecycle/);
   assert.match(jobs, /export const markFailed[\s\S]*reconcileJobTopicLifecycle/);
   assert.match(jobs, /export const markRetryableFailure[\s\S]*reconcileJobTopicLifecycle/);
+  assert.match(jobs, /export const markRetryableFailure[\s\S]*terminalTopicWorkerFailureSettlement/);
+  assert.match(
+    jobs,
+    /settleExhaustedArticleQualityFailuresForSiteInternal[\s\S]*by_site_type_created[\s\S]*terminalTopicWorkerFailureSettlement/,
+  );
   assert.match(articles, /terminalTopicQualitySettlement/);
+});
+
+test("the natural cadence heals pre-fix exhausted quality jobs without replay", () => {
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  const schedule = scheduler.slice(
+    scheduler.indexOf("export const scheduleCadence"),
+    scheduler.indexOf("export const", scheduler.indexOf("export const scheduleCadence") + 20),
+  );
+  assert.match(
+    schedule,
+    /settleExhaustedArticleQualityFailuresForSiteInternal/,
+  );
+  assert.doesNotMatch(schedule, /runControlledSmtpImapCanaryInternal/);
 });
 
 test("published and current sealed-ready coverage block exact or similar intent", () => {

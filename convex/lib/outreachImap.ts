@@ -14,6 +14,7 @@ export type ImapCandidate = {
   toDomain: string;
   sentAt: number;
   outboundMessageIdHash: string;
+  controlledCanaryKind?: "imap_reply" | "imap_stop";
 };
 
 export type ImapEvidence = {
@@ -87,6 +88,12 @@ export function classifyImapEvidence(args: {
   if (!candidate) return null;
 
   const fromEmail = normalizedEmail(evidence.fromEmail);
+  const mailboxEmail = normalizedEmail(args.mailboxEmail);
+  const controlledSelfSignal = Boolean(
+    candidate.controlledCanaryKind &&
+      fromEmail === mailboxEmail &&
+      normalizedEmail(candidate.toEmail) === mailboxEmail,
+  );
   const failedRecipients = new Set(
     evidence.failedRecipients.map(normalizedEmail).filter(Boolean),
   );
@@ -103,14 +110,34 @@ export function classifyImapEvidence(args: {
     );
   if (bounceSignal) return { candidate, kind: "bounce" };
 
-  if (!fromEmail || fromEmail === normalizedEmail(args.mailboxEmail)) return null;
+  if (!fromEmail || (fromEmail === mailboxEmail && !controlledSelfSignal)) {
+    return null;
+  }
   const exactRecipient = fromEmail === normalizedEmail(candidate.toEmail);
   const sameDomain = emailDomain(fromEmail) === normalizedEmail(candidate.toDomain);
-  if ((!exactRecipient && !sameDomain) || automaticReply(evidence)) return null;
-  if (!authenticatedSender(evidence.authenticationResults, fromEmail)) return null;
+  if (
+    (!exactRecipient && !sameDomain) ||
+    (candidate.controlledCanaryKind && !exactRecipient) ||
+    automaticReply(evidence)
+  ) return null;
+  // The controlled signal is injected through the already-verified SMTP
+  // account, is addressed back to that exact mailbox, and is bound to a
+  // random outbound Message-ID. Gmail does not consistently add an
+  // Authentication-Results header to self-delivered mail, so that header is
+  // required for every real recipient but is not part of this internal-only
+  // proof.
+  if (
+    !controlledSelfSignal &&
+    !authenticatedSender(evidence.authenticationResults, fromEmail)
+  ) return null;
+  const optedOut = requestsOutreachOptOut(evidence.bodyText);
+  if (
+    (candidate.controlledCanaryKind === "imap_stop" && !optedOut) ||
+    (candidate.controlledCanaryKind === "imap_reply" && optedOut)
+  ) return null;
   return {
     candidate,
-    kind: exactRecipient && requestsOutreachOptOut(evidence.bodyText)
+    kind: exactRecipient && optedOut
       ? "unsubscribe"
       : "reply",
   };

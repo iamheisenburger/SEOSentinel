@@ -11407,7 +11407,7 @@ export const claimImapPollInternal = internalMutation({
       return { claimed: false as const, reason: "IMAP monitoring is already running." };
     }
     const candidateRows = (await Promise.all([
-      "sent", "delivery_reviewed_sent", "replied",
+      "sent", "delivery_reviewed_sent", "replied", "bounced",
     ].map((status) => ctx.db.query("outreach_messages")
       .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", status))
       .order("desc").take(100)))).flat();
@@ -11426,6 +11426,14 @@ export const claimImapPollInternal = internalMutation({
         toDomain: message.toDomain,
         sentAt: message.sentAt!,
         outboundMessageIdHash: message.inboundRelayOutboundMessageIdHash!,
+        ...(["imap_reply", "imap_stop"].includes(
+            message.controlledCanaryKind ?? "",
+          )
+          ? {
+              controlledCanaryKind: message.controlledCanaryKind as
+                "imap_reply" | "imap_stop",
+            }
+          : {}),
       }));
     if (candidates.length === 0) {
       await ctx.db.patch(inbox._id, {

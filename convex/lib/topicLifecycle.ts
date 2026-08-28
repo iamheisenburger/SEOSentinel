@@ -92,6 +92,65 @@ export function terminalTopicQualitySettlement(args: {
   };
 }
 
+/**
+ * Convert only deterministic, bounded worker-quality failures into the same
+ * terminal topic settlement used by the publication audit. Provider/network
+ * failures deliberately return null: exhausting an operational retry budget
+ * is not evidence that the measured topic itself is infeasible.
+ */
+export function terminalTopicWorkerFailureSettlement(args: {
+  error: string;
+  attempts: number;
+  maximumAttempts: number;
+  article: {
+    siteId: string;
+    status?: string;
+    topicId?: string | null;
+  };
+  topic: {
+    _id: string;
+    siteId: string;
+    status?: string;
+    contentFeasibilityStatus?: string;
+    planCheckpointTerminalFailureCode?: string;
+  } | null | undefined;
+  checkedAt: number;
+}): ReturnType<typeof terminalTopicQualitySettlement> {
+  if (args.attempts < args.maximumAttempts) return null;
+
+  const lengthContract = args.error.match(
+    /(?:reviewed draft|remediation|post-remediation fact check) missed the length contract \((\d+)\/(\d+)-(\d+) words\)/i,
+  );
+  const becameTooThin = args.error.match(
+    /(?:editorial rewrite|compression) became too thin \((\d+) words\)/i,
+  );
+  let issue: string | undefined;
+  if (lengthContract) {
+    const actual = Number(lengthContract[1]);
+    const minimum = Number(lengthContract[2]);
+    const maximum = Number(lengthContract[3]);
+    if (actual < minimum) {
+      issue = `Article is too thin (${actual} words; minimum ${minimum}).`;
+    } else if (actual > maximum) {
+      issue = `Article remains too long (${actual} words; maximum ${maximum}).`;
+    }
+  } else if (becameTooThin) {
+    issue =
+      `Article is too thin (${Number(becameTooThin[1])} words; minimum required length not met).`;
+  }
+  if (!issue) return null;
+
+  return terminalTopicQualitySettlement({
+    gateStatus: "blocked",
+    issues: [issue],
+    qualityRevisionCount: args.maximumAttempts,
+    maximumRevisions: args.maximumAttempts,
+    article: args.article,
+    topic: args.topic,
+    checkedAt: args.checkedAt,
+  });
+}
+
 export type TopicUpsertDecision =
   | { kind: "blocked"; blockingKeyword: string }
   | { kind: "revive"; topicId: string }

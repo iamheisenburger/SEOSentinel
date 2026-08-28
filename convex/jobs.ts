@@ -18,6 +18,8 @@ import {
   reconcileJobTopicLifecycle,
   reconcileTopicLifecycle,
 } from "./lib/topicLifecycleDb";
+import { terminalTopicWorkerFailureSettlement } from
+  "./lib/topicLifecycle";
 import {
   AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES,
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
@@ -3869,6 +3871,38 @@ export const markRetryableFailure = internalMutation({
       await activateTerminalPlanCheckpoints(ctx, jobId, currentTime);
       await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
     }
+    if (!willRetry && job.type === "article" && job.siteId && job.articleId) {
+      const article = await ctx.db.get(job.articleId);
+      const topic = article?.topicId
+        ? await ctx.db.get(article.topicId)
+        : null;
+      const settlement = article?.siteId === job.siteId
+        ? terminalTopicWorkerFailureSettlement({
+            error,
+            attempts,
+            maximumAttempts: MAX_JOB_ATTEMPTS + 1,
+            article: {
+              siteId: String(article.siteId),
+              status: article.status,
+              topicId: article.topicId ? String(article.topicId) : null,
+            },
+            topic: topic
+              ? {
+                  _id: String(topic._id),
+                  siteId: String(topic.siteId),
+                  status: topic.status,
+                  contentFeasibilityStatus: topic.contentFeasibilityStatus,
+                  planCheckpointTerminalFailureCode:
+                    topic.planCheckpointTerminalFailureCode,
+                }
+              : null,
+            checkedAt: currentTime,
+          })
+        : null;
+      if (settlement && topic) {
+        await ctx.db.patch(topic._id, settlement.topicPatch);
+      }
+    }
     await reconcileJobTopicLifecycle(ctx, job);
     if (!willRetry && job.siteId) {
       await raiseJobAlert(
@@ -3882,6 +3916,68 @@ export const markRetryableFailure = internalMutation({
     return { updated: true, willRetry, attempts, nextAttemptAt };
   },
 });
+
+/**
+ * Natural cadence repair for deterministic article-quality failures that
+ * exhausted before terminal topic settlement was introduced. This is bounded,
+ * tenant-scoped, provider-free, and idempotent. It never retries or queues
+ * work; it only prevents a proven-infeasible intent from being purchased
+ * again.
+ */
+export const settleExhaustedArticleQualityFailuresForSiteInternal =
+  internalMutation({
+    args: { siteId: v.id("sites") },
+    handler: async (ctx, { siteId }) => {
+      const site = await ctx.db.get(siteId);
+      if (!site) return { inspected: 0, settled: 0 };
+      const jobs = await ctx.db.query("jobs")
+        .withIndex("by_site_type_created", (q) =>
+          q.eq("siteId", siteId).eq("type", "article")
+        )
+        .order("desc")
+        .take(100);
+      let inspected = 0;
+      let settled = 0;
+      for (const job of jobs) {
+        if (
+          job.status !== "failed" || !job.articleId || !job.error ||
+          (job.workerAttempts ?? 0) < MAX_JOB_ATTEMPTS + 1
+        ) continue;
+        inspected += 1;
+        const article = await ctx.db.get(job.articleId);
+        if (
+          !article || article.siteId !== siteId ||
+          !articleMatchesCurrentDomain(site, article) || !article.topicId
+        ) continue;
+        const topic = await ctx.db.get(article.topicId);
+        const settlement = terminalTopicWorkerFailureSettlement({
+          error: job.error,
+          attempts: job.workerAttempts ?? 0,
+          maximumAttempts: MAX_JOB_ATTEMPTS + 1,
+          article: {
+            siteId: String(article.siteId),
+            status: article.status,
+            topicId: String(article.topicId),
+          },
+          topic: topic
+            ? {
+                _id: String(topic._id),
+                siteId: String(topic.siteId),
+                status: topic.status,
+                contentFeasibilityStatus: topic.contentFeasibilityStatus,
+                planCheckpointTerminalFailureCode:
+                  topic.planCheckpointTerminalFailureCode,
+              }
+            : null,
+          checkedAt: Date.now(),
+        });
+        if (!settlement || !topic) continue;
+        await ctx.db.patch(topic._id, settlement.topicPatch);
+        settled += 1;
+      }
+      return { inspected, settled };
+    },
+  });
 
 // Preserve the generated article when only delivery failed. The retry worker
 // can publish this exact approved draft instead of generating another article

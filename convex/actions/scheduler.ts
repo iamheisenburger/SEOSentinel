@@ -278,6 +278,14 @@ export const scheduleCadence = internalAction({
       return { scheduled: 0, mode: "cadence_paused" };
     }
 
+    // Provider-free, bounded repair for pre-fix article jobs that exhausted a
+    // deterministic quality contract. It runs only on the ordinary cadence
+    // path and never queues, retries, or calls a provider.
+    await ctx.runMutation(
+      internal.jobs.settleExhaustedArticleQualityFailuresForSiteInternal,
+      { siteId },
+    );
+
     const rolloutMode = site.autopilotRolloutMode ?? "observe";
     if (rolloutMode === "observe") {
       // Truthful readiness is exactly what observe mode exists to report, and
