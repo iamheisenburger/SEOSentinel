@@ -70,14 +70,17 @@ test("existing tenants have an explicit current-contract One Setup migration pat
   );
 });
 
-test("One Setup explains postal sender identity and accepts custom plan-bounded cadence", () => {
+test("One Setup exposes exact blockers and treats cadence as a target rate", () => {
   assert.match(wizard, /Postal address shown in email footers/);
   assert.match(wizard, /Do not enter an email address/);
-  assert.match(wizard, /managedPhysicalAddress\.includes\("@"\)/);
-  assert.match(wizard, /maximumWholeCadencePerWeek/);
+  assert.match(wizard, /postalAddressError\(managedPhysicalAddress\)/);
+  assert.match(wizard, /oneSetupFormBlockers/);
+  assert.match(wizard, /Complete \{setupBlockers\.length\} required/);
   assert.match(wizard, /Articles per week/);
-  assert.match(wizard, /reserves.*monthly article credits available to this site/);
-  assert.match(wizard, /cadenceFitsMonthlyAllowance\(cadence, monthlyAllowance\)/);
+  assert.match(wizard, /target pace/);
+  assert.match(wizard, /pauses automatically when the allowance is used/);
+  assert.match(wizard, /cadenceFitsOperationalLimit\(cadence\)/);
+  assert.doesNotMatch(wizard, /reserves.*monthly article credits/);
   assert.match(wizard, /\{ siteId: existingSite\._id \}/);
 });
 
@@ -243,7 +246,7 @@ test("aggregate readiness trusts canonical publishing, GSC, mailbox, and plan re
   assert.match(canonicalSetup, /inbox\.complianceConfirmedAt/);
   assert.match(canonicalSetup, /autonomousOutreachTransportIssues/);
   assert.match(readiness, /accountCadenceSnapshot/);
-  assert.match(readiness, /cadenceFitsMonthlyAllowance/);
+  assert.match(readiness, /cadenceFitsOperationalLimit/);
   assert.match(readiness, /Automation mode authorized/);
   assert.match(readiness, /aggregateOneSetupReadiness/);
 });

@@ -10,9 +10,8 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import {
   ALL_FEATURE_KEYS,
-  allocateCadenceForMonthlyAllowance,
-  cadenceFitsMonthlyAllowance,
-  defaultCadenceForMonthlyLimit,
+  cadenceFitsOperationalLimit,
+  defaultTargetCadenceForMonthlyLimit,
   getLimitsFromFeatures,
   requiredMonthlyArticlesForCadence,
 } from "./planLimits";
@@ -190,7 +189,7 @@ function inboundRelayRuntimeConfig() {
 }
 
 const now = () => Date.now();
-const CADENCE_ALLOCATION_VERSION = 1;
+const CADENCE_ALLOCATION_VERSION = 2;
 const ONE_SETUP_MODE_VALIDATOR = v.union(
   v.literal("connect_existing"),
   v.literal("managed"),
@@ -617,15 +616,10 @@ async function syncOrganicClickGoal(
   });
 }
 
-function assertCadenceFitsAccountAllowance(
-  cadencePerWeek: number,
-  availableArticles: number,
-  maxArticles: number,
-) {
-  if (!cadenceFitsMonthlyAllowance(cadencePerWeek, availableArticles)) {
-    const requested = requiredMonthlyArticlesForCadence(cadencePerWeek);
+function assertCadenceTargetSupported(cadencePerWeek: number) {
+  if (!cadenceFitsOperationalLimit(cadencePerWeek)) {
     throw new Error(
-      `This cadence requires ${requested} articles in a 31-day month, but the account has ${availableArticles} of ${maxArticles} monthly articles available for this site. Reduce another site's cadence or upgrade first.`,
+      "Choose a target cadence from 1 to 21 articles per week. The monthly plan allowance is enforced separately at generation time.",
     );
   }
 }
@@ -658,9 +652,10 @@ async function accountCadenceSnapshot(
     : 0;
 
   if (entitlement) {
-    const ready = entitlement.status === "completed" &&
-      entitlement.cadenceAllocationVersion === CADENCE_ALLOCATION_VERSION &&
-      entitlement.allocatedMonthlyArticles !== undefined;
+    // Cadence target selection depends only on an authoritative completed
+    // entitlement. Legacy allocation metadata is ignored and migrates during
+    // the next canonical plan reconciliation.
+    const ready = entitlement.status === "completed";
     const allocatedArticles = ready
       ? Math.max(0, Math.floor(entitlement.allocatedMonthlyArticles ?? 0))
       : maxArticles;
@@ -713,38 +708,6 @@ async function accountCadenceSnapshot(
     ),
     ready: true,
   };
-}
-
-async function reserveAccountCadence(
-  ctx: MutationCtx,
-  snapshot: AccountCadenceSnapshot,
-  nextCadencePerWeek: number,
-) {
-  const nextArticles = requiredMonthlyArticlesForCadence(nextCadencePerWeek);
-  const nextAllocated =
-    snapshot.allocatedArticles - snapshot.currentSiteArticles + nextArticles;
-  if (nextAllocated > snapshot.maxArticles) {
-    throw new Error("Account cadence allocation exceeded the active plan");
-  }
-  if (snapshot.entitlement) {
-    await ctx.db.patch(snapshot.entitlement._id, {
-      allocatedMonthlyArticles: Math.max(0, nextAllocated),
-      updatedAt: now(),
-    });
-  }
-}
-
-async function rebalanceAccountCadencesAfterRequest(
-  ctx: MutationCtx,
-  snapshot: AccountCadenceSnapshot,
-) {
-  if (!snapshot.entitlement) return;
-  await applyCanonicalPlanToUserSites(
-    ctx,
-    snapshot.entitlement.userId,
-    snapshot.entitlement.planFeatures,
-    { forceReconcile: true },
-  );
 }
 
 function deliveryConfigChanged(
@@ -1267,6 +1230,9 @@ async function reconcileCanonicalPlanSitePage(
   remainingAllowance: number,
   remainingArticleAllowance: number,
 ) {
+  // Kept in the cursor contract for in-flight v1 reconciliations. Target
+  // cadence v2 no longer consumes this legacy reservation value.
+  void remainingArticleAllowance;
   const entitlement = await ctx.db.get(entitlementId);
   if (
     !entitlement ||
@@ -1294,30 +1260,22 @@ async function reconcileCanonicalPlanSitePage(
   const timestamp = now();
   let activated = 0;
   let parked = 0;
-  let nextRemainingArticleAllowance = Math.max(
-    0,
-    Math.floor(remainingArticleAllowance),
-  );
+  const nextRemainingArticleAllowance = entitlement.maxArticles;
   for (const site of page.page) {
     await schedulePublicationReceiptRecovery(ctx, site);
-    const requestedCadence = site.cadenceRequestedPerWeek ??
+    const requestedCadenceCandidate = site.cadenceRequestedPerWeek ??
       site.cadencePerWeek ??
-      defaultCadenceForMonthlyLimit(entitlement.maxArticles);
+      defaultTargetCadenceForMonthlyLimit(entitlement.maxArticles);
+    const requestedCadence = cadenceFitsOperationalLimit(
+        requestedCadenceCandidate,
+      )
+      ? requestedCadenceCandidate
+      : defaultTargetCadenceForMonthlyLimit(entitlement.maxArticles);
     const shouldPark = !site.deletionStatus &&
       !entitledSiteIds.has(String(site._id));
     const cadencePerWeek = shouldPark || Boolean(site.deletionStatus)
       ? site.cadencePerWeek ?? requestedCadence
-      : allocateCadenceForMonthlyAllowance(
-          requestedCadence,
-          nextRemainingArticleAllowance,
-        );
-    if (!shouldPark && !site.deletionStatus) {
-      nextRemainingArticleAllowance = Math.max(
-        0,
-        nextRemainingArticleAllowance -
-          requiredMonthlyArticlesForCadence(cadencePerWeek),
-      );
-    }
+      : requestedCadence;
     const parkingChanged = shouldPark !== Boolean(site.planParkedAt);
     const cadenceChanged = cadencePerWeek !== (site.cadencePerWeek ?? 0);
     // Plan reconciliation must complete even when an older external write has
@@ -1334,7 +1292,7 @@ async function reconcileCanonicalPlanSitePage(
         ctx,
         site._id,
         cadenceChanged
-          ? "account-wide article cadence allocation changed"
+          ? "target publishing cadence changed"
           : "site moved outside the current plan allowance",
         true,
       );
@@ -1392,8 +1350,10 @@ async function reconcileCanonicalPlanSitePage(
       cursor: undefined,
       remainingAllowance: nextRemainingAllowance,
       remainingArticleAllowance: nextRemainingArticleAllowance,
-      allocatedMonthlyArticles:
-        entitlement.maxArticles - nextRemainingArticleAllowance,
+      // Legacy allocation fields remain for schema compatibility. Target
+      // cadence no longer reserves quota; immutable usage claims enforce the
+      // purchased monthly allowance at generation time.
+      allocatedMonthlyArticles: 0,
       cadenceAllocationVersion: CADENCE_ALLOCATION_VERSION,
       updatedAt: timestamp,
     });
@@ -1423,8 +1383,7 @@ async function reconcileCanonicalPlanSitePage(
     activated,
     parked,
     maxSites: entitlement.maxSites,
-    allocatedMonthlyArticles:
-      entitlement.maxArticles - nextRemainingArticleAllowance,
+    allocatedMonthlyArticles: 0,
   };
 }
 
@@ -1593,15 +1552,36 @@ export const getCadenceCapacity = query({
       site,
       site?.planFeatures ?? [],
     );
+    const timestamp = now();
+    const date = new Date(timestamp);
+    const monthStart = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+    const usageRows = await ctx.db
+      .query("usage_log")
+      .withIndex("by_user_type_created", (q) =>
+        q
+          .eq("userId", identity.subject)
+          .eq("type", "article_generated")
+          .gte("createdAt", monthStart)
+      )
+      .take(snapshot.maxArticles + 1);
+    const articlesUsedThisMonth = usageRows.filter(
+      (row) =>
+        row.state !== "reserved" || (row.expiresAt ?? Infinity) > timestamp,
+    ).length;
+    const remainingMonthlyArticles = Math.max(
+      0,
+      snapshot.maxArticles - articlesUsedThisMonth,
+    );
     return {
       ready: snapshot.ready,
       maxArticles: snapshot.maxArticles,
-      allocatedOtherArticles: Math.max(
-        0,
-        snapshot.allocatedArticles - snapshot.currentSiteArticles,
-      ),
-      availableMonthlyArticles: snapshot.availableArticles,
-      currentMonthlyArticles: snapshot.currentSiteArticles,
+      // Compatibility fields now expose consumption rather than a fictional
+      // cadence reservation. New clients should use the explicit names.
+      allocatedOtherArticles: 0,
+      availableMonthlyArticles: remainingMonthlyArticles,
+      currentMonthlyArticles: articlesUsedThisMonth,
+      articlesUsedThisMonth,
+      remainingMonthlyArticles,
       siteParked: Boolean(site?.planParkedAt),
     };
   },
@@ -2634,10 +2614,7 @@ export const getOneSetupReadiness = query({
       cadenceSnapshot.ready &&
         requestedCadence > 0 &&
         site.cadencePerWeek === requestedCadence &&
-        cadenceFitsMonthlyAllowance(
-          requestedCadence,
-          cadenceSnapshot.availableArticles,
-        ) &&
+        cadenceFitsOperationalLimit(requestedCadence) &&
         !site.planParkedAt &&
         !site.domainOwnershipConflictAt
         ? "ready"
@@ -3350,29 +3327,17 @@ export const upsert = mutation({
 
     const requestedCadence = isNewSite
       ? args.cadencePerWeek ??
-        defaultCadenceForMonthlyLimit(cadenceSnapshot.maxArticles)
+        defaultTargetCadenceForMonthlyLimit(cadenceSnapshot.maxArticles)
       : args.cadencePerWeek;
     let effectiveCadence: number | undefined;
-    let reserveCadence = false;
     if (requestedCadence !== undefined) {
-      if (isNewSite && args.cadencePerWeek === undefined) {
-        effectiveCadence = allocateCadenceForMonthlyAllowance(
-          requestedCadence,
-          cadenceSnapshot.availableArticles,
-        );
-        reserveCadence = true;
-      } else if (cadenceSite?.planParkedAt) {
+      if (cadenceSite?.planParkedAt) {
         // A parked tenant retains customer intent but receives no paid article
-        // allocation until a trusted plan reconciliation reactivates it.
+        // execution until a trusted plan reconciliation reactivates it.
         effectiveCadence = undefined;
       } else {
-        assertCadenceFitsAccountAllowance(
-          requestedCadence,
-          cadenceSnapshot.availableArticles,
-          cadenceSnapshot.maxArticles,
-        );
+        assertCadenceTargetSupported(requestedCadence);
         effectiveCadence = requestedCadence;
-        reserveCadence = true;
       }
     }
 
@@ -3479,9 +3444,6 @@ export const upsert = mutation({
       if (authorityDomainChanged) {
         await scheduleRetiredGscEpochPruning(ctx, currentSite!);
       }
-      if (reserveCadence && effectiveCadence !== undefined) {
-        await reserveAccountCadence(ctx, cadenceSnapshot, effectiveCadence);
-      }
       await ctx.db.patch(args.id, {
         ...definedData,
         domainOwnershipConflictAt: undefined,
@@ -3515,9 +3477,6 @@ export const upsert = mutation({
       }
       if (authorityDomainChanged) {
         await invalidateDomainCadenceState(ctx, args.id);
-      }
-      if (requestedCadence !== undefined) {
-        await rebalanceAccountCadencesAfterRequest(ctx, cadenceSnapshot);
       }
       await syncOrganicClickGoal(ctx, args.id, args.organicClickGoalMonthly);
       return args.id;
@@ -3575,9 +3534,6 @@ export const upsert = mutation({
       if (authorityDomainChanged) {
         await scheduleRetiredGscEpochPruning(ctx, existing);
       }
-      if (reserveCadence && effectiveCadence !== undefined) {
-        await reserveAccountCadence(ctx, cadenceSnapshot, effectiveCadence);
-      }
       await ctx.db.patch(existing._id, {
         ...merged,
         domainOwnershipConflictAt: undefined,
@@ -3612,15 +3568,12 @@ export const upsert = mutation({
       if (authorityDomainChanged) {
         await invalidateDomainCadenceState(ctx, existing._id);
       }
-      if (requestedCadence !== undefined) {
-        await rebalanceAccountCadencesAfterRequest(ctx, cadenceSnapshot);
-      }
       await syncOrganicClickGoal(ctx, existing._id, args.organicClickGoalMonthly);
       return existing._id;
     }
 
     if (effectiveCadence === undefined) {
-      throw new Error("A new site requires an account cadence allocation");
+      throw new Error("A new site requires an active target cadence");
     }
     const initialAutopilotEnabled = args.autopilotEnabled ?? true;
     const initialApprovalRequired = args.approvalRequired ?? false;
@@ -3628,7 +3581,6 @@ export const upsert = mutation({
       autopilotEnabled: initialAutopilotEnabled,
       approvalRequired: initialApprovalRequired,
     });
-    await reserveAccountCadence(ctx, cadenceSnapshot, effectiveCadence);
     const siteId = await ctx.db.insert("sites", {
       ...data,
       userId,
@@ -3744,11 +3696,7 @@ export const updateSite = mutation({
         );
       }
       if (!site.planParkedAt) {
-        assertCadenceFitsAccountAllowance(
-          fields.cadencePerWeek,
-          cadenceSnapshot.availableArticles,
-          cadenceSnapshot.maxArticles,
-        );
+        assertCadenceTargetSupported(fields.cadencePerWeek);
       }
     }
     const requestedCadence = fields.cadencePerWeek;
@@ -3771,11 +3719,6 @@ export const updateSite = mutation({
       !site.planParkedAt &&
       cadenceSnapshot
     ) {
-      await reserveAccountCadence(
-        ctx,
-        cadenceSnapshot,
-        requestedCadence,
-      );
       patch.cadencePerWeek = requestedCadence;
       patch.cadenceRequestedPerWeek = requestedCadence;
     }
@@ -3811,9 +3754,6 @@ export const updateSite = mutation({
     });
     if (publisherConnectionInvalidated) {
       await scheduleManagedPublisherResume(ctx, siteId, true);
-    }
-    if (requestedCadence !== undefined && cadenceSnapshot) {
-      await rebalanceAccountCadencesAfterRequest(ctx, cadenceSnapshot);
     }
     await syncOrganicClickGoal(ctx, siteId, fields.organicClickGoalMonthly);
   },

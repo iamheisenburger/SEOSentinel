@@ -1,4 +1,3 @@
-import { requiredMonthlyArticlesForCadence } from "../planLimits.ts";
 import { publicationAdapterConfigHash } from "./publicationArtifact.ts";
 import { PUBLICATION_ADAPTER_VERSION } from "./publicationReceipts.ts";
 import {
@@ -62,8 +61,6 @@ const BLOCKER_COPY: Record<string, string> = {
   unsupported_publication_method: "choose a supported publishing method",
   manual_approval_requested: "turn off manual approval for hands-off publishing",
   search_console_not_connected: "connect Google Search Console",
-  subscription_capacity_below_cadence:
-    "lower the cadence or upgrade to a plan with enough monthly articles",
   sealed_buffer_incomplete: "let Pentra finish the strict-quality article buffer",
   one_setup_request_stale:
     "resubmit setup because the saved owner or domain binding changed",
@@ -79,11 +76,7 @@ export function describeAutopilotBlockers(blockers: string[]): string {
   return blockers.map((blocker) => BLOCKER_COPY[blocker] ?? blocker).join("; ");
 }
 
-/**
- * A calendar-month quota must survive the longest month to make a weekly
- * cadence an honest unattended promise. Shorter months merely leave spare
- * capacity; they never cause an avoidable mid-month stall.
- */
+/** Kept as a public projection helper for cadence/usage explanations. */
 export { requiredMonthlyArticlesForCadence } from "../planLimits.ts";
 
 function configured(value: string | undefined): boolean {
@@ -170,22 +163,15 @@ export function liveAutopilotReadiness(
   hasCrawledPage: boolean,
   maxArticlesPerMonth?: number,
 ): AutopilotReadiness {
+  // The argument remains for API compatibility. Quota is enforced by the
+  // immutable generation claim, not as a readiness reservation.
+  void maxArticlesPerMonth;
   const blockers = [
     ...warmAutopilotReadiness(site, hasCrawledPage).blockers,
   ];
   if (site.approvalRequired) blockers.push("manual_approval_requested");
   if (!gscConnectionMatchesCurrentDomain(site)) {
     blockers.push("search_console_not_connected");
-  }
-  const requiredMonthly = requiredMonthlyArticlesForCadence(
-    site.cadencePerWeek,
-  );
-  if (
-    maxArticlesPerMonth !== undefined &&
-    Number.isFinite(maxArticlesPerMonth) &&
-    maxArticlesPerMonth < requiredMonthly
-  ) {
-    blockers.push("subscription_capacity_below_cadence");
   }
   return { ready: blockers.length === 0, blockers };
 }

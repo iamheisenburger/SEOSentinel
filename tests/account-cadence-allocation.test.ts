@@ -3,8 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 
 import {
-  allocateCadenceForMonthlyAllowance,
-  requiredMonthlyArticlesForCadence,
+  cadenceFitsOperationalLimit,
+  targetCadenceOptions,
 } from "../convex/planLimits.ts";
 
 function source(path: string): string {
@@ -18,50 +18,17 @@ function exportedBlock(text: string, name: string): string {
   return text.slice(start, end < 0 ? text.length : end);
 }
 
-function allocate(requested: number[], allowance: number): number[] {
-  let remaining = allowance;
-  return requested.map((cadence) => {
-    const effective = allocateCadenceForMonthlyAllowance(cadence, remaining);
-    remaining -= requiredMonthlyArticlesForCadence(effective);
-    return effective;
-  });
-}
-
-function monthlyTotal(cadences: number[]): number {
-  return cadences.reduce(
-    (total, cadence) =>
-      total + requiredMonthlyArticlesForCadence(cadence),
-    0,
+test("target cadence is independent of the monthly consumption quota", () => {
+  assert.deepEqual(
+    targetCadenceOptions().map((option) => option.value),
+    [1, 2, 4, 7, 14, 21],
   );
-}
-
-test("Pro, Scale, and Enterprise allocations never exceed account article quota", () => {
-  const pro = allocate([4, 4, 4], 25);
-  assert.ok(monthlyTotal(pro) <= 25);
-  assert.equal(pro[0], 4);
-  assert.ok(pro[2] < 4);
-
-  const scale = allocate(Array(10).fill(4), 60);
-  assert.ok(monthlyTotal(scale) <= 60);
-  assert.ok(scale.some((cadence) => cadence === 0));
-
-  const enterprise = allocate(Array(40).fill(4), 150);
-  assert.ok(monthlyTotal(enterprise) <= 150);
-  assert.ok(enterprise.some((cadence) => cadence === 0));
+  assert.equal(cadenceFitsOperationalLimit(12), true);
+  assert.equal(cadenceFitsOperationalLimit(21), true);
+  assert.equal(cadenceFitsOperationalLimit(22), false);
 });
 
-test("downgrade and upgrade recompute deterministically from preserved intent", () => {
-  const requested = [4, 4, 2];
-  const pro = allocate(requested, 25);
-  const starter = allocate(requested, 10);
-  const restored = allocate(requested, 25);
-
-  assert.deepEqual(restored, pro);
-  assert.ok(monthlyTotal(starter) <= 10);
-  assert.ok(starter[1] <= pro[1]);
-});
-
-test("cadence writes reserve one authoritative account ledger serializably", () => {
+test("cadence writes preserve target intent without reserving monthly credits", () => {
   const sites = source("convex/sites.ts");
   const schema = source("convex/schema.ts");
 
@@ -69,13 +36,13 @@ test("cadence writes reserve one authoritative account ledger serializably", () 
   assert.match(schema, /cadenceAllocationVersion: v\.optional\(v\.number\(\)\)/);
   assert.match(sites, /async function accountCadenceSnapshot/);
   assert.match(sites, /entitlement\.status === "completed"/);
-  assert.match(sites, /async function reserveAccountCadence/);
-  assert.match(sites, /ctx\.db\.patch\(snapshot\.entitlement\._id/);
+  assert.doesNotMatch(sites, /async function reserveAccountCadence/);
+  assert.match(sites, /assertCadenceTargetSupported/);
   assert.match(sites, /cadenceRequestedPerWeek: requestedCadence/);
-  assert.match(sites, /allocateCadenceForMonthlyAllowance/);
+  assert.doesNotMatch(sites, /allocateCadenceForMonthlyAllowance/);
 });
 
-test("plan reconciliation and UI use account-wide remaining capacity", () => {
+test("plan reconciliation and UI use immutable monthly consumption", () => {
   const sites = source("convex/sites.ts");
   const onboarding = source("src/components/onboarding/setup-wizard.tsx");
   const settings = source("src/app/(dashboard)/sites/[siteId]/page.tsx");
@@ -83,6 +50,8 @@ test("plan reconciliation and UI use account-wide remaining capacity", () => {
   assert.match(sites, /remainingArticleAllowance/);
   assert.match(sites, /allocatedMonthlyArticles/);
   assert.match(sites, /export const getCadenceCapacity/);
+  assert.match(sites, /by_user_type_created/);
+  assert.match(sites, /remainingMonthlyArticles/);
   assert.match(onboarding, /api\.sites\.getCadenceCapacity/);
   assert.match(onboarding, /availableMonthlyArticles/);
   assert.match(settings, /api\.sites\.getCadenceCapacity/);
@@ -134,29 +103,21 @@ test("zero allocation is a stable paused state, never a failing cadence run", ()
   assert.match(planPage, /Publishing paused/);
 });
 
-test("a lower requested cadence triggers deterministic account rebalancing", () => {
+test("a target cadence change does not rebalance other tenants", () => {
   const sites = source("convex/sites.ts");
-  assert.match(sites, /async function rebalanceAccountCadencesAfterRequest/);
-  assert.match(
-    sites,
-    /rebalanceAccountCadencesAfterRequest\(ctx, cadenceSnapshot\)/,
-  );
-  assert.match(
-    sites,
-    /applyCanonicalPlanToUserSites\([\s\S]*forceReconcile: true/,
-  );
+  const scheduler = source("convex/actions/scheduler.ts");
+  const jobs = source("convex/jobs.ts");
+  assert.doesNotMatch(sites, /rebalanceAccountCadencesAfterRequest/);
   assert.match(sites, /cadenceRequestedPerWeek: requestedCadence/);
+  assert.match(scheduler, /articlesThisMonth >= limits\.maxArticles/);
+  assert.match(scheduler, /generation_quota_deadline/);
+  assert.match(jobs, /usage_log/);
+  assert.match(jobs, /Article limit reached/);
 });
 
-test("legacy truncated account reads fail closed without blocking reductions", () => {
+test("legacy allocation metadata cannot reduce the selectable target cadence", () => {
   const sites = source("convex/sites.ts");
-  const start = sites.indexOf("async function accountCadenceSnapshot");
-  const end = sites.indexOf("async function reserveAccountCadence", start);
-  const snapshot = sites.slice(start, end);
-  assert.match(snapshot, /if \(sites\.length === bound\)/);
-  assert.match(
-    snapshot,
-    /allocatedArticles = Math\.max\(maxArticles, allocatedArticles\)/,
-  );
-  assert.match(snapshot, /\+ currentSiteArticles/);
+  assert.match(sites, /const cadencePerWeek = shouldPark[\s\S]*: requestedCadence/);
+  assert.match(sites, /allocatedMonthlyArticles: 0/);
+  assert.match(sites, /cadenceFitsOperationalLimit\(requestedCadence\)/);
 });

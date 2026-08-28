@@ -1,7 +1,7 @@
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import {
-  cadenceFitsMonthlyLimit,
+  cadenceFitsOperationalLimit,
   getLimitsFromFeatures,
 } from "../planLimits";
 import {
@@ -143,7 +143,7 @@ export async function reservePlanProviderBudget(
   const limits = getLimitsFromFeatures(
     entitlement?.planFeatures ?? site.planFeatures ?? [],
   );
-  if (!cadenceFitsMonthlyLimit(site.cadencePerWeek ?? 0, limits.maxArticles)) {
+  if (!cadenceFitsOperationalLimit(site.cadencePerWeek ?? 0)) {
     return { ok: false, reason: "plan_entitlement_missing" };
   }
   const userSites = limits.maxSites >= 9999

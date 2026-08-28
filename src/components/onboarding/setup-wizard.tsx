@@ -4,6 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
 import {
   ArrowRight,
+  AlertCircle,
   BarChart3,
   Check,
   ChevronDown,
@@ -19,12 +20,12 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
-  cadenceFitsMonthlyAllowance,
+  cadenceFitsOperationalLimit,
   cadenceLabel,
-  cadenceOptionsForMonthlyLimit,
-  defaultCadenceForMonthlyLimit,
-  maximumWholeCadencePerWeek,
+  defaultTargetCadenceForMonthlyLimit,
+  MAX_AUTOPILOT_CADENCE_PER_WEEK,
   requiredMonthlyArticlesForCadence,
+  targetCadenceOptions,
 } from "../../../convex/planLimits";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from
   "../../../convex/lib/publisherProvisioning";
@@ -40,6 +41,10 @@ import {
   type OutreachTransport,
   type PublisherKind,
 } from "@/components/onboarding/one-setup-adapter-choices";
+import {
+  oneSetupFormBlockers,
+  postalAddressError,
+} from "@/lib/one-setup-form";
 
 type SetupMode = "connect_existing" | "managed";
 type AutomationMode = "assisted" | "full";
@@ -171,40 +176,45 @@ export function SetupWizard({
     api.actions.pipeline.resumeOneSetupExecution,
   );
 
-  const monthlyAllowance = capacity?.ready
-    ? capacity.availableMonthlyArticles
-    : 0;
-  const cadenceOptions = cadenceOptionsForMonthlyLimit(monthlyAllowance);
-  const maximumWholeCadence = maximumWholeCadencePerWeek(monthlyAllowance);
+  const cadenceOptions = targetCadenceOptions();
   const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
   const cadenceInputReady = Boolean(
     capacity?.ready &&
-      cadence > 0 &&
-      cadenceFitsMonthlyAllowance(cadence, monthlyAllowance),
+      cadenceFitsOperationalLimit(cadence),
   );
-  const physicalAddressLooksLikeEmail = managedPhysicalAddress.includes("@");
-  const senderProfileInputReady = Boolean(
-    managedSenderName.trim().length >= 2 &&
-      managedPhysicalAddress.trim().length >= 15 &&
-      !physicalAddressLooksLikeEmail &&
-      confirmsSenderIdentityAndAddress &&
-      authorizesManagedDeliveryEventCanary &&
-      confirmsSeparateAutomaticSendingConsent &&
-      (outreachMode !== "managed" ||
-        (managedSenderDomain.trim().length >= 4 &&
-          confirmsDedicatedManagedSenderIdentity)),
-  );
+  const physicalAddressError = postalAddressError(managedPhysicalAddress);
+  const setupBlockers = oneSetupFormBlockers({
+    capacityReady: Boolean(capacity?.ready),
+    domain,
+    businessName,
+    businessSummary,
+    targetCountry,
+    targetAudience,
+    productUsage,
+    cadence,
+    fullAutopilot: automationMode === "full",
+    autopublishConsentAccepted,
+    senderName: managedSenderName,
+    postalAddress: managedPhysicalAddress,
+    confirmsSenderIdentityAndAddress,
+    authorizesDeliveryEventCanary: authorizesManagedDeliveryEventCanary,
+    confirmsSeparateAutomaticSendingConsent,
+    managedOutreach: outreachMode === "managed",
+    managedSenderDomain,
+    confirmsDedicatedManagedSenderIdentity,
+  });
 
   useEffect(() => {
-    const next = defaultCadenceForMonthlyLimit(monthlyAllowance);
+    if (!capacity?.ready) return;
+    const next = defaultTargetCadenceForMonthlyLimit(capacity.maxArticles);
     setCadence((current) =>
       current === automaticCadence.current ||
-        !cadenceFitsMonthlyAllowance(current, monthlyAllowance)
+        !cadenceFitsOperationalLimit(current)
         ? next
         : current,
     );
     automaticCadence.current = next;
-  }, [monthlyAllowance]);
+  }, [capacity?.maxArticles, capacity?.ready]);
 
   async function finishSetup(
     createdSiteId: Id<"sites">,
@@ -306,35 +316,9 @@ export function SetupWizard({
       setError("Authentication is still loading. Try again in a moment.");
       return;
     }
-    if (!domain.trim()) {
-      setError("Enter your website URL.");
-      return;
-    }
-    if (
-      businessName.trim().length < 2 ||
-      businessSummary.trim().length < 20 ||
-      targetCountry.trim().length < 2 ||
-      targetAudience.trim().length < 10 ||
-      productUsage.trim().length < 10
-    ) {
+    if (setupBlockers.length > 0) {
       setError(
-        "Complete the business profile and target market so Pentra can make tenant-specific opportunity decisions.",
-      );
-      return;
-    }
-    if (!cadenceInputReady) {
-      setError(
-        "Choose an active publishing cadence that fits the monthly article credits available to this site.",
-      );
-      return;
-    }
-    if (automationMode === "full" && !autopublishConsentAccepted) {
-      setError("Authorize automatic publishing, or choose Assisted review.");
-      return;
-    }
-    if (!senderProfileInputReady) {
-      setError(
-        "Complete the sender profile and every mailbox attestation.",
+        `Complete ${setupBlockers.length} required ${setupBlockers.length === 1 ? "item" : "items"}: ${setupBlockers.map((blocker) => blocker.message).join(" ")}`,
       );
       return;
     }
@@ -678,8 +662,7 @@ export function SetupWizard({
               </button>
             ))}
           </div>
-          {maximumWholeCadence > 0 && (
-            <label className="mt-3 block max-w-[220px]">
+          <label className="mt-3 block max-w-[220px]">
               <span className="mb-1.5 block text-[10px] text-[#8B8FA3]">
                 Articles per week
               </span>
@@ -687,20 +670,19 @@ export function SetupWizard({
                 type="number"
                 inputMode="numeric"
                 min={1}
-                max={maximumWholeCadence}
+                max={MAX_AUTOPILOT_CADENCE_PER_WEEK}
                 step={1}
                 value={Number.isInteger(cadence) ? cadence : ""}
                 onChange={(event) => setCadence(Number(event.target.value))}
                 className="w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
               />
             </label>
-          )}
           <p className="mt-2 text-[10px] leading-relaxed text-[#73788F]">
             {capacity === undefined || !capacity.ready
-              ? "Verifying your account-wide cadence capacity…"
+              ? "Verifying your plan and monthly article allowance…"
               : cadenceInputReady
-                ? `${cadenceLabel(cadence)} reserves ${cadenceMonthlyCost} of the ${capacity.availableMonthlyArticles} monthly article credits available to this site. ${capacity.availableMonthlyArticles - cadenceMonthlyCost} will remain unallocated.`
-                : `Choose up to ${maximumWholeCadence || cadenceOptions.find((option) => option.value > 0)?.label || "the available monthly cadence"}. This site currently has ${capacity.availableMonthlyArticles} of ${capacity.maxArticles} monthly article credits available.`}
+                ? `${cadenceLabel(cadence)} is the target pace (up to ${cadenceMonthlyCost} articles in a 31-day month). ${capacity.availableMonthlyArticles} of ${capacity.maxArticles} account credits remain this UTC month. Pentra pauses automatically when the allowance is used and resumes after it renews.`
+                : `Choose 1–${MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week. Cadence controls pace; your ${capacity.maxArticles}-article monthly plan controls total usage.`}
           </p>
         </div>
 
@@ -767,8 +749,8 @@ export function SetupWizard({
                     onChange={(event) =>
                       setManagedPhysicalAddress(event.target.value)
                     }
-                    error={physicalAddressLooksLikeEmail
-                      ? "Enter a postal address—not an email address."
+                    error={managedPhysicalAddress.trim()
+                      ? physicalAddressError
                       : undefined}
                   />
                   {outreachMode === "managed" && (
@@ -887,21 +869,34 @@ export function SetupWizard({
           </div>
         </details>
 
+        {setupBlockers.length > 0 && (
+          <div
+            id="one-setup-blockers"
+            role="alert"
+            className="mt-4 rounded-xl border border-[#F59E0B]/25 bg-[#F59E0B]/[0.06] p-4"
+          >
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#FBBF24]" />
+              <div>
+                <p className="text-[11px] font-medium text-[#FBBF24]">
+                  Complete {setupBlockers.length} required {setupBlockers.length === 1 ? "item" : "items"} to continue
+                </p>
+                <ul className="mt-2 space-y-1 text-[10px] leading-relaxed text-[#A3A7B8]">
+                  {setupBlockers.map((blocker) => (
+                    <li key={blocker.key}>• {blocker.message}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
         <Button
           className="mt-5 w-full"
           onClick={() => void startSetup()}
           loading={busy}
-          disabled={
-            !cadenceInputReady ||
-            !domain.trim() ||
-            businessName.trim().length < 2 ||
-            businessSummary.trim().length < 20 ||
-            targetCountry.trim().length < 2 ||
-            targetAudience.trim().length < 10 ||
-            productUsage.trim().length < 10 ||
-            (automationMode === "full" && !autopublishConsentAccepted) ||
-            !senderProfileInputReady
-          }
+          disabled={setupBlockers.length > 0}
+          aria-describedby={setupBlockers.length > 0 ? "one-setup-blockers" : undefined}
           icon={<Globe className="h-3.5 w-3.5" />}
         >
           {busy
