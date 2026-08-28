@@ -1,6 +1,12 @@
 import { v } from "convex/values";
 
-import { internalMutation, query, type MutationCtx } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { sha256Hex } from "./lib/publicationArtifact";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { oneSetupOutreachMailboxReceiptVerified } from
@@ -8,6 +14,7 @@ import { oneSetupOutreachMailboxReceiptVerified } from
 import { inboundRelayDsnRoutingReady } from "./lib/outreachInboundRelay";
 import { inboundMonitoringCapability } from "./lib/outreachSecurity";
 import { takeCurrentGscPageRows } from "./lib/currentGscRows";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { addSearchConsoleDays } from "./lib/searchPerformance";
 import { buildGrowthScorecard } from "./lib/growthScorecard";
 import {
@@ -74,6 +81,9 @@ const BOOTSTRAP_V1_CANARY_KINDS = new Set([
   "acquired_backlink",
 ]);
 
+const RELEASE_MEASUREMENT_RECOVERY_READ_LIMIT = 100;
+const RELEASE_MEASUREMENT_RECOVERY_SITE_LIMIT = 2;
+
 function releaseProfileAllowsCanary(
   profile: GrowthLoopReleaseProfile,
   kind: string,
@@ -90,6 +100,97 @@ function releaseProfileAllowsCanary(
     "controlled_conversion",
   ].includes(kind);
 }
+
+/**
+ * Release-bound natural recovery for an already executed GSC decision.
+ *
+ * A deployment can land seconds after the ordinary daily/due growth scan.
+ * Without this bounded projection, a valid release would wait until the next
+ * daily cohort merely to prove that the deployed classifier can still
+ * re-observe its own durable action. The 15-minute natural recovery cron calls
+ * this query; it returns only explicitly evidenced release tenants, never an
+ * operator-selected site, and becomes empty as soon as a post-deploy
+ * observation or measurement canary exists.
+ */
+export const listPendingMeasurementRecoverySitesInternal = internalQuery({
+  args: { timestamp: v.number() },
+  handler: async (ctx, { timestamp }) => {
+    if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
+      throw new Error("Release measurement recovery timestamp is invalid");
+    }
+    const recent = await ctx.db.query("growth_loop_canary_receipts")
+      .order("desc")
+      .take(RELEASE_MEASUREMENT_RECOVERY_READ_LIMIT + 1);
+    const latest = recent.find((row) =>
+      (row.profile ?? "full_managed") === "bootstrap_v1" &&
+      Boolean(row.deploymentReceiptHash) && Boolean(row.deployedAt) &&
+      row.deployedAt! <= timestamp
+    );
+    if (!latest?.deploymentReceiptHash || !latest.deployedAt) {
+      return {
+        siteIds: [] as Id<"sites">[],
+        readComplete: recent.length <= RELEASE_MEASUREMENT_RECOVERY_READ_LIMIT,
+      };
+    }
+    const releaseRows = recent.filter((row) =>
+      row.releaseCommit === latest.releaseCommit &&
+      (row.profile ?? "full_managed") === "bootstrap_v1" &&
+      row.deploymentReceiptHash === latest.deploymentReceiptHash &&
+      row.deployedAt === latest.deployedAt
+    );
+    if (releaseRows.some((row) =>
+      row.kind === "measurement_decision" && row.status === "passed"
+    )) {
+      return {
+        siteIds: [] as Id<"sites">[],
+        readComplete: recent.length <= RELEASE_MEASUREMENT_RECOVERY_READ_LIMIT,
+      };
+    }
+    const releaseReceipt = await ctx.db.query("growth_loop_release_receipts")
+      .withIndex("by_release_commit", (q) =>
+        q.eq("releaseCommit", latest.releaseCommit))
+      .unique();
+    if (releaseReceipt) {
+      return {
+        siteIds: [] as Id<"sites">[],
+        readComplete: recent.length <= RELEASE_MEASUREMENT_RECOVERY_READ_LIMIT,
+      };
+    }
+    const siteIds: Id<"sites">[] = [];
+    const seen = new Set<string>();
+    for (const row of releaseRows) {
+      if (!row.siteId || seen.has(String(row.siteId))) continue;
+      seen.add(String(row.siteId));
+      const [site, actions] = await Promise.all([
+        ctx.db.get(row.siteId),
+        ctx.db.query("seo_growth_actions")
+          .withIndex("by_site_priority", (q) => q.eq("siteId", row.siteId!))
+          .take(500),
+      ]);
+      if (
+        !site || !site.gscProperty || !site.gscDataThrough ||
+        !await siteExecutionAuthorized(ctx, site)
+      ) continue;
+      const needsPostDeployObservation = actions.some((action) =>
+        Boolean(action.measurementKey) &&
+        Boolean(action.measurementGscDataThrough) &&
+        (action.automationStatus === "executed" || action.status === "resolved") &&
+        Math.max(
+          action.automatedAt ?? 0,
+          action.resolvedAt ?? 0,
+          action.lastObservedAt,
+        ) < latest.deployedAt!
+      );
+      if (!needsPostDeployObservation) continue;
+      siteIds.push(row.siteId);
+      if (siteIds.length >= RELEASE_MEASUREMENT_RECOVERY_SITE_LIMIT) break;
+    }
+    return {
+      siteIds,
+      readComplete: recent.length <= RELEASE_MEASUREMENT_RECOVERY_READ_LIMIT,
+    };
+  },
+});
 
 function stateForSetupProgress(state: string | undefined): CapabilityState {
   switch (state) {

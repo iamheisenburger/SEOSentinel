@@ -135,18 +135,32 @@ export const scanDueSites = internalAction({
     scheduled: number;
     readComplete: boolean;
   }> => {
-    const due = await ctx.runQuery(
-      internal.seoGrowth.listDueGrowthSitesInternal,
-      { timestamp: Date.now() },
-    );
-    for (const [index, siteId] of due.siteIds.entries()) {
+    const timestamp = Date.now();
+    const [due, releaseMeasurement] = await Promise.all([
+      ctx.runQuery(
+        internal.seoGrowth.listDueGrowthSitesInternal,
+        { timestamp },
+      ),
+      ctx.runQuery(
+        internal.growthLoop.listPendingMeasurementRecoverySitesInternal,
+        { timestamp },
+      ),
+    ]);
+    const siteIds = [...new Set([
+      ...due.siteIds,
+      ...releaseMeasurement.siteIds,
+    ])];
+    for (const [index, siteId] of siteIds.entries()) {
       await ctx.scheduler.runAfter(
         index * 250,
         internal.actions.seoGrowth.scanSite,
         { siteId },
       );
     }
-    return { scheduled: due.siteIds.length, readComplete: due.readComplete };
+    return {
+      scheduled: siteIds.length,
+      readComplete: due.readComplete && releaseMeasurement.readComplete,
+    };
   },
 });
 

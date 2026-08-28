@@ -231,6 +231,27 @@ test("measurement release evidence recognizes a later GSC re-observation", () =>
   );
 });
 
+test("a partial bootstrap release gets one bounded natural post-deploy GSC re-observation", () => {
+  const growthLoopSource = readFileSync("convex/growthLoop.ts", "utf8");
+  const actions = readFileSync("convex/actions/seoGrowth.ts", "utf8");
+  assert.match(
+    growthLoopSource,
+    /export const listPendingMeasurementRecoverySitesInternal/,
+  );
+  assert.match(
+    growthLoopSource,
+    /row\.kind === "measurement_decision" && row\.status === "passed"/,
+  );
+  assert.match(
+    growthLoopSource,
+    /action\.lastObservedAt[\s\S]*< latest\.deployedAt/,
+  );
+  assert.match(
+    actions,
+    /internal\.growthLoop\.listPendingMeasurementRecoverySitesInternal/,
+  );
+});
+
 test("durable growth deadlines have a bounded natural recovery lane", () => {
   const schema = readFileSync("convex/schema.ts", "utf8");
   const growth = readFileSync("convex/seoGrowth.ts", "utf8");
