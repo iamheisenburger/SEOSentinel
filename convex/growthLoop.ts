@@ -971,7 +971,10 @@ export const recordCanaryInternal = internalMutation({
       observedAt = action.automatedAt ?? action.resolvedAt ?? action.lastObservedAt;
     } else if (args.kind === "smtp_connection") {
       if (!args.inboxId) throw new Error("SMTP inbox evidence is required");
-      const inbox = await ctx.db.get(args.inboxId);
+      const [inbox, controlledDelivery] = await Promise.all([
+        ctx.db.get(args.inboxId),
+        args.messageId ? ctx.db.get(args.messageId) : Promise.resolve(null),
+      ]);
       const capability = inboundMonitoringCapability(inbox);
       if (
         !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
@@ -982,7 +985,21 @@ export const recordCanaryInternal = internalMutation({
           "SMTP/IMAP connection lacks encrypted credentials and verified sockets",
         );
       }
+      if (
+        controlledDelivery &&
+        (controlledDelivery.siteId !== args.siteId ||
+          controlledDelivery.inboxId !== inbox._id ||
+          controlledDelivery.deliveryTransport !== "smtp" ||
+          controlledDelivery.controlledCanaryKind !== "smtp_delivery" ||
+          controlledDelivery.controlledCanaryRole !== "primary" ||
+          !controlledDelivery.sentAt)
+      ) {
+        throw new Error("SMTP connection proof is not bound to a controlled delivery");
+      }
       sourceIds.inboxId = String(inbox._id);
+      sourceIds.messageId = controlledDelivery
+        ? String(controlledDelivery._id)
+        : undefined;
       receiptHash = sha256Hex(JSON.stringify({
         kind: args.kind,
         siteId: String(args.siteId),
@@ -991,8 +1008,16 @@ export const recordCanaryInternal = internalMutation({
         credentialKeyId: inbox.credentialKeyId,
         verifiedAt: inbox.verifiedAt,
         imapVerifiedAt: inbox.imapVerifiedAt,
+        controlledDeliveryMessageId: controlledDelivery
+          ? String(controlledDelivery._id)
+          : undefined,
+        controlledDeliverySentAt: controlledDelivery?.sentAt,
       }));
-      observedAt = Math.max(inbox.verifiedAt, inbox.imapVerifiedAt ?? 0);
+      observedAt = Math.max(
+        inbox.verifiedAt,
+        inbox.imapVerifiedAt ?? 0,
+        controlledDelivery?.sentAt ?? 0,
+      );
     } else if (args.kind === "smtp_delivery") {
       if (!args.inboxId || !args.messageId) {
         throw new Error("SMTP delivery evidence is required");

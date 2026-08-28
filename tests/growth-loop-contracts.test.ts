@@ -191,6 +191,13 @@ test("the controlled conversion proves ingestion without entering customer metri
   assert.doesNotMatch(block, /outcome_daily_rollups/);
 });
 
+test("the SMTP connection release proof can bind a post-deploy controlled socket receipt", () => {
+  const growthLoopSource = readFileSync("convex/growthLoop.ts", "utf8");
+  assert.match(growthLoopSource, /controlledDelivery\.controlledCanaryKind !== "smtp_delivery"/);
+  assert.match(growthLoopSource, /controlledDeliverySentAt: controlledDelivery\?\.sentAt/);
+  assert.match(growthLoopSource, /controlledDelivery\?\.sentAt \?\? 0/);
+});
+
 test("bootstrap release evidence binds Pentra's natural role separately from the secondary convergence canary", () => {
   const release = readFileSync("convex/growthLoop.ts", "utf8");
   assert.match(release, /primary_natural/);
