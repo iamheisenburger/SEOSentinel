@@ -5378,6 +5378,7 @@ async function controlledSmtpImapCanaryStatus(
           .eq("siteId", siteId)
           .eq("controlledCanaryKind", kind)
           .eq("inboxConfigurationVersion", configurationVersion))
+        .order("desc")
         .take(10)
     ));
     return {
