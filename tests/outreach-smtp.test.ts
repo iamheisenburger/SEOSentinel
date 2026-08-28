@@ -12,6 +12,7 @@ import {
   smtpTransportOptions,
 } from "../convex/lib/outreachSmtp.ts";
 import { sanitizeInboxForClient } from "../convex/lib/outreachSecurity.ts";
+import { senderClaimIssues } from "../convex/lib/outreachDelivery.ts";
 
 const OUTREACH_MUTATIONS = readFileSync(
   new URL("../convex/outreach.ts", import.meta.url),
@@ -42,6 +43,21 @@ const VALID = {
 
 test("a complete configuration is accepted", () => {
   assert.deepEqual(smtpConfigIssues(VALID), []);
+});
+
+test("an encrypted SMTP credential satisfies the provider-neutral delivery claim", () => {
+  assert.deepEqual(senderClaimIssues({
+    siteDomain: "pentra.dev",
+    provider: "smtp",
+    status: "active",
+    fromEmail: "sender@mail.pentra-outreach.example",
+    fromName: "Pentra",
+    physicalMailingAddress: "1 Example Street, Berlin 10115, Germany",
+    complianceConfirmedAt: 1,
+    verifiedAt: 1,
+    hasCredential: true,
+    senderDomain: "mail.pentra-outreach.example",
+  }), []);
 });
 
 test("every missing field is reported at once, not one per failed save", () => {

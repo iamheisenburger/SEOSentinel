@@ -238,8 +238,10 @@ export function outreachSenderConnectionIssues(args: {
   fromEmail: string;
 }): string[] {
   const issues: string[] = [];
-  if (!["gmail", MANAGED_SES_TRANSPORT].includes(args.provider)) {
-    issues.push("Cold outreach supports secondary-domain Gmail or Pentra's managed sender only.");
+  if (!["gmail", "smtp", MANAGED_SES_TRANSPORT].includes(args.provider)) {
+    issues.push(
+      "Cold outreach supports customer-managed Gmail or SMTP and Pentra's managed sender only.",
+    );
   }
   const senderDomain = normalizeDomain(args.fromEmail.split("@")[1] ?? "");
   const primaryDomain = normalizeDomain(args.siteDomain);

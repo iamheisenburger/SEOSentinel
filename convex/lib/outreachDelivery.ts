@@ -409,15 +409,16 @@ export function senderClaimIssues(args: {
   if (!args.complianceConfirmedAt) {
     issues.push("The current sender compliance profile has not been confirmed.");
   }
-  if (
-    args.provider !== MANAGED_SES_TRANSPORT &&
-    args.provider !== "smartlead" &&
-    (!args.oauthScopes
+  if (args.provider === "gmail" && (
+    !args.oauthScopes
       ?.split(/\s+/)
       .includes("https://www.googleapis.com/auth/gmail.send") ||
-      !args.hasCredential)
-  ) {
+    !args.hasCredential
+  )) {
     issues.push("The current Gmail authorization cannot send mail.");
+  }
+  if (args.provider === "smtp" && !args.hasCredential) {
+    issues.push("The current SMTP authorization cannot send mail.");
   }
   return issues;
 }

@@ -47,6 +47,19 @@ test("consumer Gmail may connect for a self-test but never becomes outreach-read
     }).join(" "),
     /consumer mailbox/,
   );
+  assert.deepEqual(outreachSenderConnectionIssues({
+    siteDomain: "pentra.dev",
+    provider: "smtp",
+    fromEmail: "pentrahelp@gmail.com",
+  }), []);
+  assert.match(
+    outreachSenderReadinessIssues({
+      siteDomain: "pentra.dev",
+      provider: "smtp",
+      fromEmail: "pentrahelp@gmail.com",
+    }).join(" "),
+    /consumer mailbox/,
+  );
 });
 
 test("the bounded follow-up schedule stretches from verified predecessor receipts", () => {
@@ -329,7 +342,7 @@ test("outreach sender must use secondary-domain Gmail or the exact managed platf
     siteDomain: "leadpilot.chat",
     provider: "resend",
     fromEmail: "outreach@getleadpilot.com",
-  }).some((issue) => /Gmail or Pentra's managed sender/.test(issue)));
+  }).some((issue) => /Gmail or SMTP and Pentra's managed sender/.test(issue)));
   assert.ok(outreachSenderReadinessIssues({
     siteDomain: "https://app.example.co.uk",
     provider: "gmail",
@@ -338,6 +351,11 @@ test("outreach sender must use secondary-domain Gmail or the exact managed platf
   assert.deepEqual(outreachSenderReadinessIssues({
     siteDomain: "https://app.example.co.uk",
     provider: "gmail",
+    fromEmail: "outreach@mailer.another.co.uk",
+  }), []);
+  assert.deepEqual(outreachSenderReadinessIssues({
+    siteDomain: "https://app.example.co.uk",
+    provider: "smtp",
     fromEmail: "outreach@mailer.another.co.uk",
   }), []);
   assert.deepEqual(outreachSenderReadinessIssues({
