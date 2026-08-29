@@ -23,6 +23,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   evaluatePublicationQuality,
+  insertReviewedProductImage,
   issuesBlockingPreLinkReview,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
@@ -6708,6 +6709,11 @@ async function reviewExistingArticleHandler(
     let finalReviewMarkdown = exactReviewedMarkdown;
     let featuredImage = article.featuredImage;
     const reviewedMedia = new Set(article.reviewedMediaUrls ?? []);
+    const preservedReviewedProductImage = selectReviewedProductImage(
+      article.markdown,
+      productName,
+      reviewedMedia,
+    );
     const mediaQualityNotes = [...(article.mediaQualityNotes ?? [])];
     const productHeadingPattern = new RegExp(
       `^##\\s+.*(?:${productName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|how\\s+.*helps?).*$`,
@@ -6861,6 +6867,33 @@ async function reviewExistingArticleHandler(
       mediaQualityNotes.push(
         "Reviewed first-party product screenshot promoted to the hero fallback after generated artwork failed visual review.",
       );
+    }
+
+    // Prose remediation is allowed to rewrite section text, but it must not
+    // erase already-reviewed first-party evidence. Restore only the exact URL
+    // that was previously present in this article's product section and is
+    // still bound to its reviewed-media ledger. This is provider-free and
+    // cannot turn generated artwork into product evidence.
+    if (!reviewedProductImage && preservedReviewedProductImage) {
+      const restored = insertReviewedProductImage(
+        finalReviewMarkdown,
+        productName,
+        preservedReviewedProductImage,
+      );
+      if (restored.inserted) {
+        finalReviewMarkdown = restored.markdown;
+        mediaQualityNotes.push(
+          "Preserved reviewed first-party product evidence was restored after prose remediation.",
+        );
+      }
+      reviewedProductImage = selectReviewedProductImage(
+        finalReviewMarkdown,
+        productName,
+        reviewedMedia,
+      );
+      if (!featuredImage && reviewedProductImage) {
+        featuredImage = reviewedProductImage;
+      }
     }
 
     const metadata = await generateFinalMetadata({

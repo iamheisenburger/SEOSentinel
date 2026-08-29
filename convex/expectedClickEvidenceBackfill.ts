@@ -1059,7 +1059,7 @@ export async function expectedClickEvidenceFleetReadiness(
       })),
     ).map(selectedWithoutTransientFields);
     const candidateCount = selected.length;
-    if (pendingDemandCount > 0) {
+    if (pendingDemandCount > 0 && candidateCount === 0) {
       return {
         ready: false as const,
         reason: todayDemandJob?.status === "provider_balance_unavailable"
@@ -1434,6 +1434,12 @@ async function reserveEvidenceOutcome(
         ? inventory.artifactPendingDemand
         : inventory.plannedPendingDemand;
     const candidateCounts = inventory.candidateCounts;
+    const selectedTopics = selectExpectedClickBackfillCandidates(
+      candidates.map((candidate) => ({
+        ...candidate,
+        createdAt: candidate.topicCreatedAt,
+      })),
+    ).map(selectedWithoutTransientFields);
     const phaseDecision = planEvidencePhaseReservation({
       origin,
       todayDemandJob: todayDemandJob
@@ -1444,6 +1450,7 @@ async function reserveEvidenceOutcome(
           }
         : undefined,
       pendingDemandCandidates: pendingDemandCount,
+      readyEvidenceCandidates: selectedTopics.length,
       unresolvedDemandJobs: unresolvedDemand.jobs.length,
       unresolvedEvidenceJobs: unresolvedEvidence.jobs.length,
       unresolvedReadLimitExhausted:
@@ -1456,12 +1463,6 @@ async function reserveEvidenceOutcome(
         pendingDemandCount,
       };
     }
-    const selectedTopics = selectExpectedClickBackfillCandidates(
-      candidates.map((candidate) => ({
-        ...candidate,
-        createdAt: candidate.topicCreatedAt,
-      })),
-    ).map(selectedWithoutTransientFields);
     if (selectedTopics.length === 0) {
       return {
         queued: false as const,

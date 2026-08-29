@@ -8,6 +8,7 @@ import {
   clampMetaTitle,
   containsExecutableMdx,
   evaluatePublicationQuality,
+  insertReviewedProductImage,
   inlineCitationNumbers,
   issuesBlockingPreLinkReview,
   PENDING_INTERNAL_LINK_ISSUE,
@@ -640,6 +641,46 @@ test("uses only a reviewed image from the exact product section as a hero fallba
       "https://cdn.example/decorative.png",
     ]),
     undefined,
+  );
+});
+
+test("restores preserved first-party evidence removed by prose remediation", () => {
+  const reviewedProduct = "https://cdn.example/product.png";
+  const remediated = [
+    "# Guide",
+    "",
+    "## How LeadPilot Helps",
+    "",
+    "LeadPilot supports the workflow described here.",
+    "",
+    "## Conclusion",
+    "",
+    "Useful conclusion.",
+  ].join("\n");
+
+  const restored = insertReviewedProductImage(
+    remediated,
+    "LeadPilot",
+    reviewedProduct,
+  );
+  assert.equal(restored.inserted, true);
+  assert.equal(
+    selectReviewedProductImage(
+      restored.markdown,
+      "LeadPilot",
+      [reviewedProduct],
+    ),
+    reviewedProduct,
+  );
+  assert.equal(
+    insertReviewedProductImage(restored.markdown, "LeadPilot", reviewedProduct)
+      .inserted,
+    false,
+  );
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(
+    pipeline,
+    /preservedReviewedProductImage[\s\S]*insertReviewedProductImage/,
   );
 });
 

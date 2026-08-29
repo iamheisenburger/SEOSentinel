@@ -86,6 +86,7 @@ export function planEvidencePhaseReservation(args: {
   origin: "operator_canary" | "autonomous_fleet";
   todayDemandJob?: EvidenceDemandPrerequisite;
   pendingDemandCandidates: number;
+  readyEvidenceCandidates?: number;
   unresolvedDemandJobs: number;
   unresolvedEvidenceJobs: number;
   unresolvedReadLimitExhausted: boolean;
@@ -106,7 +107,16 @@ export function planEvidencePhaseReservation(args: {
   ) {
     return { allowed: false, reason: "demand_phase_origin_mismatch" };
   }
-  if (args.pendingDemandCandidates > 0) {
+  // Demand and evidence are bounded independently. Once today's demand job is
+  // complete, evidence already measured by that job must be allowed to
+  // advance even when later demand batches remain. Blocking the entire
+  // evidence phase until the whole inventory is measured turns a ten-topic
+  // daily ceiling into a multi-day phase barrier and leaves the cadence with
+  // no scheduler-ready topics despite fresh receipts being available.
+  if (
+    args.pendingDemandCandidates > 0 &&
+    (args.readyEvidenceCandidates ?? 0) === 0
+  ) {
     return { allowed: false, reason: "demand_candidates_remaining" };
   }
   if (!args.todayDemandJob) {

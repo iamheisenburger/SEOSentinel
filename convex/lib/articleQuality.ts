@@ -792,6 +792,60 @@ export function selectReviewedProductImage(
     .find((url) => reviewed.has(url));
 }
 
+/**
+ * Restore an exact reviewed first-party image when a prose-only remediation
+ * rewrites the product section and drops its Markdown image. The caller owns
+ * provenance: `imageUrl` must already be present in the article's reviewed
+ * media ledger and must have been selected from the pre-remediation product
+ * section. This helper performs no URL substitution and is idempotent.
+ */
+export function insertReviewedProductImage(
+  markdown: string,
+  productName: string,
+  imageUrl: string,
+): { markdown: string; inserted: boolean } {
+  const escapedProductName = productName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const productHeading = new RegExp(
+    `^##\\s+.*(?:${escapedProductName}|how\\s+.*helps?).*$`,
+    "im",
+  ).exec(markdown);
+  if (productHeading?.index === undefined || !/^https:\/\//i.test(imageUrl)) {
+    return { markdown, inserted: false };
+  }
+  const remainder = markdown.slice(
+    productHeading.index + productHeading[0].length,
+  );
+  const nextHeading = remainder.search(/^##\s+/m);
+  const section = nextHeading >= 0 ? remainder.slice(0, nextHeading) : remainder;
+  if ([...section.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)]
+    .some((match) => match[1] === imageUrl)) {
+    return { markdown, inserted: false };
+  }
+
+  const lines = markdown.split("\n");
+  const headingLine = markdown.slice(0, productHeading.index).split("\n").length - 1;
+  let insertionLine = headingLine + 1;
+  while (insertionLine < lines.length && lines[insertionLine].trim() === "") {
+    insertionLine++;
+  }
+  while (
+    insertionLine < lines.length &&
+    lines[insertionLine].trim() !== "" &&
+    !/^##\s+/.test(lines[insertionLine])
+  ) {
+    insertionLine++;
+  }
+  lines.splice(
+    insertionLine,
+    0,
+    "",
+    `![${productName} product workflow](${imageUrl})`,
+    `*A reviewed first-party view of ${productName}'s current product experience.*`,
+    "",
+  );
+  return { markdown: lines.join("\n"), inserted: true };
+}
+
 function quantifiedOutcomeParagraphs(markdown: string): string[] {
   return markdown
     .replace(/```[\s\S]*?```/g, "")

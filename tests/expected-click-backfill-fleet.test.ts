@@ -234,6 +234,23 @@ test("atomic phase plans reject concurrent demand and evidence reservations", ()
       status: "completed",
       origin: "autonomous_fleet",
     },
+    pendingDemandCandidates: 58,
+    readyEvidenceCandidates: 10,
+    unresolvedDemandJobs: 0,
+    unresolvedEvidenceJobs: 0,
+    unresolvedReadLimitExhausted: false,
+  }), {
+    allowed: true,
+    prerequisiteMode: "completed_fleet_demand",
+    prerequisiteJobId: "fleet-demand",
+  });
+  assert.deepEqual(planEvidencePhaseReservation({
+    origin: "autonomous_fleet",
+    todayDemandJob: {
+      id: "fleet-demand",
+      status: "completed",
+      origin: "autonomous_fleet",
+    },
     pendingDemandCandidates: 0,
     unresolvedDemandJobs: 0,
     unresolvedEvidenceJobs: 0,
