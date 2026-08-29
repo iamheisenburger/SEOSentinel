@@ -45,6 +45,7 @@ import {
 import {
   evaluateCadenceWindow,
   MAX_QUALITY_REVISIONS,
+  QUALITY_RECOVERY_VERSION,
 } from "../lib/autopilotCadence";
 import {
   cadenceIntervalMs,
@@ -7029,6 +7030,7 @@ async function reviewExistingArticleHandler(
         ? deliveryConfig
         : undefined,
       qualityRevisionCount,
+      qualityRecoveryVersion: QUALITY_RECOVERY_VERSION,
     });
 
     await ctx.runMutation(internal.articles.recordPublicationCheck, {

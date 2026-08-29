@@ -19,6 +19,7 @@ import {
   hasRecoverableQualityWork,
   MAX_QUALITY_REVISIONS,
   needsDeterministicMechanicalRepair,
+  needsVersionedQualityRecovery,
 } from "../lib/autopilotCadence";
 import {
   TARGET_APPROVED_BUFFER,
@@ -68,6 +69,7 @@ type ArticleSummary = {
   publicUrlStatus?: "pending" | "verified" | "failed";
   publicUrlCheckError?: string;
   qualityRevisionCount?: number;
+  qualityRecoveryVersion?: number;
   deterministicInternalLinkRepairVersion?: number;
   metaKeywords?: string[];
 };
@@ -731,7 +733,8 @@ export const scheduleCadence = internalAction({
           article.status === "review" &&
           article.publicationGateStatus === "blocked" &&
           !hasTerminalTargetAlignmentFailure(article) &&
-          (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS,
+          ((article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS ||
+            needsVersionedQualityRecovery(article)),
       )
       .sort(
         (a: ArticleSummary, b: ArticleSummary) => b.createdAt - a.createdAt,

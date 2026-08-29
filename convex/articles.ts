@@ -149,6 +149,7 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     publicationAmbiguityDispositionDetail:
       article.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: article.qualityRevisionCount,
+    qualityRecoveryVersion: article.qualityRecoveryVersion,
     deterministicInternalLinkRepairVersion:
       article.deterministicInternalLinkRepairVersion,
     entityCoverage: article.entityCoverage,
@@ -275,6 +276,7 @@ function summaryListItem(summary: ArticleSummaryFields) {
     publicationAmbiguityDispositionDetail:
       summary.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: summary.qualityRevisionCount,
+    qualityRecoveryVersion: summary.qualityRecoveryVersion,
     entityCoverage: summary.entityCoverage,
     topicCompleteness: summary.topicCompleteness,
     serpDifficulty: summary.serpDifficulty,
@@ -2286,6 +2288,7 @@ export const applyQualityReview = internalMutation({
       }),
     ),
     qualityRevisionCount: v.number(),
+    qualityRecoveryVersion: v.number(),
   },
   handler: async (ctx, args) => {
     const article = await ctx.db.get(args.articleId);
@@ -2316,6 +2319,7 @@ export const applyQualityReview = internalMutation({
       claimEvidence: args.claimEvidence,
       claimEvidenceStatus: args.claimEvidenceStatus,
       qualityRevisionCount: args.qualityRevisionCount,
+      qualityRecoveryVersion: args.qualityRecoveryVersion,
       status: "review",
       publicationGateStatus: undefined,
       publicationGateIssues: undefined,

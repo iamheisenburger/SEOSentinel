@@ -420,8 +420,8 @@ export const getStatus = query({
         key: "buffer",
         state: readyBuffer >= bufferMinimum ? "ready" : "waiting_pentra",
         blockerCode: readyBuffer >= bufferMinimum ? undefined : "sealed_buffer_below_minimum",
-        nextEligibleAt: readyBuffer >= bufferMinimum ? undefined : nextIntervalAt(timestamp, 15),
-        automaticWakeAt: readyBuffer >= bufferMinimum ? undefined : nextIntervalAt(timestamp, 15),
+        nextEligibleAt: readyBuffer >= bufferMinimum ? undefined : nextIntervalAt(timestamp, 180),
+        automaticWakeAt: readyBuffer >= bufferMinimum ? undefined : nextIntervalAt(timestamp, 180),
       },
       {
         key: "publication",

@@ -927,6 +927,7 @@ export default defineSchema({
     publicationAmbiguityDispositionBy: v.optional(v.string()),
     publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
+    qualityRecoveryVersion: v.optional(v.number()),
     deterministicInternalLinkRepairVersion: v.optional(v.number()),
 
     // ── Content SEO Score (computed after generation) ──
@@ -1044,6 +1045,7 @@ export default defineSchema({
     publicationAmbiguityDispositionAt: v.optional(v.number()),
     publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
+    qualityRecoveryVersion: v.optional(v.number()),
     deterministicInternalLinkRepairVersion: v.optional(v.number()),
     entityCoverage: v.optional(v.number()),
     topicCompleteness: v.optional(v.number()),

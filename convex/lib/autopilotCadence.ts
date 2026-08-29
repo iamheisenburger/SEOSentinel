@@ -13,6 +13,7 @@ export type CadenceArticle = {
   publicationGateStatus?: string;
   publicationGateIssues?: string[];
   qualityRevisionCount?: number;
+  qualityRecoveryVersion?: number;
 };
 
 export type CadenceWindow = {
@@ -25,6 +26,13 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
+export const QUALITY_RECOVERY_VERSION = 1;
+
+const VERSIONED_MEDIA_RECOVERY_ISSUES = new Set([
+  "Strict publication requires a completed media-quality review.",
+  "Strict publication requires a reviewed HTTPS hero image.",
+  "A product-specific section requires validated first-party visual evidence.",
+]);
 
 const DETERMINISTIC_METADATA_ISSUES = new Set([
   "Meta description must end as a complete sentence.",
@@ -51,6 +59,25 @@ export function needsDeterministicMechanicalRepair(
 }
 
 /**
+ * A bounded quality budget must not strand drafts that exhausted their retries
+ * under an older recovery algorithm. One pass is admitted for a known media
+ * defect after the recovery version changes; recording the current version on
+ * every new review makes the allowance one-shot and prevents retry loops.
+ */
+export function needsVersionedQualityRecovery(
+  article: CadenceArticle,
+): boolean {
+  const issues = article.publicationGateIssues ?? [];
+  return (
+    article.status === "review" &&
+    article.publicationGateStatus === "blocked" &&
+    (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
+    (article.qualityRecoveryVersion ?? 0) < QUALITY_RECOVERY_VERSION &&
+    issues.some((issue) => VERSIONED_MEDIA_RECOVERY_ISSUES.has(issue))
+  );
+}
+
+/**
  * Return whether the scheduler has quality recovery work that must take
  * priority over new article generation. Keep admission paths that can create
  * new work on this shared predicate so they cannot race or spend ahead of a
@@ -65,7 +92,8 @@ export function hasRecoverableQualityWork(
       article.status === "review" &&
       article.publicationGateStatus === "blocked" &&
       !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
-      (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
+      ((article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS ||
+        needsVersionedQualityRecovery(article))) ||
     needsDeterministicMechanicalRepair(article)
   );
 }
@@ -84,7 +112,8 @@ export function findRecoverableQualityArticle(
         now - article.createdAt < windowMs &&
         article.status === "review" &&
         article.publicationGateStatus === "blocked" &&
-        (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS,
+        ((article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS ||
+          needsVersionedQualityRecovery(article)),
     )
     .sort((a, b) => b.createdAt - a.createdAt)[0];
 }

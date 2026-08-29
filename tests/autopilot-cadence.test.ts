@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   evaluateCadenceWindow,
   needsDeterministicMechanicalRepair,
+  needsVersionedQualityRecovery,
+  QUALITY_RECOVERY_VERSION,
 } from "../convex/lib/autopilotCadence.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
@@ -148,6 +150,48 @@ test("a max-revision draft gets deterministic repair only for mechanical defects
       qualityRevisionCount: 2,
     }),
     true,
+  );
+});
+
+test("a pre-fix media failure gets exactly one pass under the current recovery algorithm", () => {
+  const legacy = {
+    _id: "article-legacy-media",
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Editorial quality score is 84; strict minimum is 85.",
+      "Strict publication requires a completed media-quality review.",
+      "A product-specific section requires validated first-party visual evidence.",
+    ],
+    qualityRevisionCount: 2,
+  };
+  assert.equal(needsVersionedQualityRecovery(legacy), true);
+
+  const window = evaluateCadenceWindow({
+    articles: [legacy],
+    now: NOW,
+    hoursPerArticle: 24,
+    maxAttempts: 2,
+  });
+  assert.equal(window.recoveryArticleId, "article-legacy-media");
+  assert.equal(window.canGenerate, false);
+
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...legacy,
+      qualityRecoveryVersion: QUALITY_RECOVERY_VERSION,
+    }),
+    false,
+  );
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...legacy,
+      publicationGateIssues: [
+        "Editorial quality score is 84; strict minimum is 85.",
+      ],
+    }),
+    false,
   );
 });
 
