@@ -150,6 +150,7 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
       article.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: article.qualityRevisionCount,
     qualityRecoveryVersion: article.qualityRecoveryVersion,
+    qualityRecoveryAttemptVersion: article.qualityRecoveryAttemptVersion,
     deterministicInternalLinkRepairVersion:
       article.deterministicInternalLinkRepairVersion,
     entityCoverage: article.entityCoverage,
@@ -277,6 +278,7 @@ function summaryListItem(summary: ArticleSummaryFields) {
       summary.publicationAmbiguityDispositionDetail,
     qualityRevisionCount: summary.qualityRevisionCount,
     qualityRecoveryVersion: summary.qualityRecoveryVersion,
+    qualityRecoveryAttemptVersion: summary.qualityRecoveryAttemptVersion,
     entityCoverage: summary.entityCoverage,
     topicCompleteness: summary.topicCompleteness,
     serpDifficulty: summary.serpDifficulty,
@@ -2320,6 +2322,7 @@ export const applyQualityReview = internalMutation({
       claimEvidenceStatus: args.claimEvidenceStatus,
       qualityRevisionCount: args.qualityRevisionCount,
       qualityRecoveryVersion: args.qualityRecoveryVersion,
+      qualityRecoveryAttemptVersion: args.qualityRecoveryVersion,
       status: "review",
       publicationGateStatus: undefined,
       publicationGateIssues: undefined,

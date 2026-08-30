@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   evaluateCadenceWindow,
   findRecoverableQualityArticle,
+  hasAttemptedVersionedQualityRecovery,
   hasRecoverableQualityWork,
   needsDeterministicMechanicalRepair,
   needsVersionedQualityRecovery,
   QUALITY_RECOVERY_VERSION,
+  QUALITY_RECOVERY_VERSION_INTRODUCED_AT,
 } from "../convex/lib/autopilotCadence.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
@@ -189,10 +191,69 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
   assert.equal(
     needsVersionedQualityRecovery({
       ...legacy,
+      qualityRecoveryAttemptVersion: QUALITY_RECOVERY_VERSION,
+    }),
+    false,
+  );
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...legacy,
       publicationGateIssues: [
         "Editorial quality score is 84; strict minimum is 85.",
       ],
     }),
+    false,
+  );
+});
+
+test("a failed versioned recovery is durably recognized without provider replay", () => {
+  const articleId = "article-legacy-media";
+  assert.equal(
+    hasAttemptedVersionedQualityRecovery(
+      [{
+        createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT,
+        payload: { articleId, qualityRetry: true, bufferFill: true },
+      }],
+      articleId,
+    ),
+    true,
+  );
+  assert.equal(
+    hasAttemptedVersionedQualityRecovery(
+      [{
+        createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT - 1,
+        payload: { articleId, qualityRetry: true, bufferFill: true },
+      }],
+      articleId,
+    ),
+    false,
+  );
+  assert.equal(
+    hasAttemptedVersionedQualityRecovery(
+      [{
+        createdAt: 1,
+        payload: {
+          articleId,
+          qualityRetry: true,
+          qualityRecoveryVersion: QUALITY_RECOVERY_VERSION,
+        },
+      }],
+      articleId,
+    ),
+    true,
+  );
+  assert.equal(
+    hasAttemptedVersionedQualityRecovery(
+      [{
+        createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT,
+        payload: {
+          articleId,
+          qualityRetry: true,
+          deterministicRepair: true,
+        },
+      }],
+      articleId,
+    ),
     false,
   );
 });

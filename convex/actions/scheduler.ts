@@ -70,6 +70,7 @@ type ArticleSummary = {
   publicUrlCheckError?: string;
   qualityRevisionCount?: number;
   qualityRecoveryVersion?: number;
+  qualityRecoveryAttemptVersion?: number;
   deterministicInternalLinkRepairVersion?: number;
   metaKeywords?: string[];
 };

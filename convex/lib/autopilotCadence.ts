@@ -14,6 +14,7 @@ export type CadenceArticle = {
   publicationGateIssues?: string[];
   qualityRevisionCount?: number;
   qualityRecoveryVersion?: number;
+  qualityRecoveryAttemptVersion?: number;
 };
 
 export type CadenceWindow = {
@@ -27,6 +28,54 @@ export type CadenceWindow = {
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
 export const QUALITY_RECOVERY_VERSION = 1;
+// Immutable deployment boundary for the first recovery algorithm. Jobs queued
+// by that release did not yet carry an explicit recovery version, so this lets
+// the durable queue settle those attempts without replaying provider work.
+export const QUALITY_RECOVERY_VERSION_INTRODUCED_AT = 1_788_048_939_388;
+
+export type QualityRecoveryAttemptJob = {
+  createdAt: number;
+  payload?: unknown;
+};
+
+export function qualityRecoveryAttemptVersionFromJob(
+  job: QualityRecoveryAttemptJob,
+): number {
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown>
+    : {};
+  if (
+    payload.qualityRetry !== true ||
+    payload.metadataOnlyRepair === true ||
+    payload.deterministicRepair === true
+  ) {
+    return 0;
+  }
+  if (
+    typeof payload.qualityRecoveryVersion === "number" &&
+    Number.isInteger(payload.qualityRecoveryVersion) &&
+    payload.qualityRecoveryVersion > 0
+  ) {
+    return payload.qualityRecoveryVersion;
+  }
+  return job.createdAt >= QUALITY_RECOVERY_VERSION_INTRODUCED_AT ? 1 : 0;
+}
+
+export function hasAttemptedVersionedQualityRecovery(
+  jobs: QualityRecoveryAttemptJob[],
+  articleId: string,
+  version = QUALITY_RECOVERY_VERSION,
+): boolean {
+  return jobs.some((job) => {
+    const payload = job.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    return (
+      payload.articleId === articleId &&
+      qualityRecoveryAttemptVersionFromJob(job) >= version
+    );
+  });
+}
 
 const VERSIONED_MEDIA_RECOVERY_ISSUES = new Set([
   "Strict publication requires a completed media-quality review.",
@@ -73,6 +122,7 @@ export function needsVersionedQualityRecovery(
     article.publicationGateStatus === "blocked" &&
     (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
     (article.qualityRecoveryVersion ?? 0) < QUALITY_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) < QUALITY_RECOVERY_VERSION &&
     issues.some((issue) => VERSIONED_MEDIA_RECOVERY_ISSUES.has(issue))
   );
 }

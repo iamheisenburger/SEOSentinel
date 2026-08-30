@@ -6,8 +6,10 @@ import { v } from "convex/values";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import {
+  hasAttemptedVersionedQualityRecovery,
   MAX_QUALITY_REVISIONS,
   needsVersionedQualityRecovery,
+  QUALITY_RECOVERY_VERSION,
 } from "./lib/autopilotCadence";
 import {
   MAX_PUBLICATION_ATTEMPTS,
@@ -1232,15 +1234,30 @@ export const queueQualityRetryIfAbsent = internalMutation({
     ) {
       throw new Error("Article is not eligible for quality recovery");
     }
+    const markVersionedRecoveryAttempt = async () => {
+      await ctx.db.patch(articleId, {
+        qualityRecoveryAttemptVersion: QUALITY_RECOVERY_VERSION,
+      });
+      const summary = await ctx.db
+        .query("article_summaries")
+        .withIndex("by_article", (q) => q.eq("articleId", articleId))
+        .first();
+      if (summary) {
+        await ctx.db.patch(summary._id, {
+          qualityRecoveryAttemptVersion: QUALITY_RECOVERY_VERSION,
+        });
+      }
+    };
     if (
       article.auditedContentHash &&
       article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION
     ) {
       return { queued: false, reason: "already_audited" as const };
     }
+    const versionedQualityRecovery = needsVersionedQualityRecovery(article);
     if (
       (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
-      !needsVersionedQualityRecovery(article)
+      !versionedQualityRecovery
     ) {
       return { queued: false, reason: "revision_limit" as const };
     }
@@ -1252,7 +1269,7 @@ export const queueQualityRetryIfAbsent = internalMutation({
       return payload.qualityRetry === true && payload.articleId === articleId;
     });
     if (duplicate) return { queued: false, jobId: duplicate._id };
-    if (metadataOnlyRepair || deterministicRepair) {
+    if (metadataOnlyRepair || deterministicRepair || versionedQualityRecovery) {
       const priorAttempts = await ctx.db
         .query("jobs")
         .withIndex("by_site_type_created", (q) =>
@@ -1260,7 +1277,7 @@ export const queueQualityRetryIfAbsent = internalMutation({
         )
         .order("desc")
         .take(100);
-      const alreadyAttempted = priorAttempts.some((job) => {
+      const alreadyAttemptedMechanicalRepair = priorAttempts.some((job) => {
         const payload = job.payload && typeof job.payload === "object"
           ? (job.payload as Record<string, unknown>)
           : {};
@@ -1270,11 +1287,22 @@ export const queueQualityRetryIfAbsent = internalMutation({
           payload.articleId === articleId
         );
       });
-      if (alreadyAttempted) {
+      const alreadyAttemptedVersionedRecovery = versionedQualityRecovery &&
+        hasAttemptedVersionedQualityRecovery(
+          priorAttempts,
+          String(articleId),
+        );
+      if (alreadyAttemptedMechanicalRepair || alreadyAttemptedVersionedRecovery) {
+        if (alreadyAttemptedVersionedRecovery) {
+          await markVersionedRecoveryAttempt();
+        }
         return { queued: false, reason: "already_attempted" as const };
       }
     }
     const timestamp = now();
+    if (versionedQualityRecovery) {
+      await markVersionedRecoveryAttempt();
+    }
     const jobId = await ctx.db.insert("jobs", {
       siteId,
       type: "article",
@@ -1285,6 +1313,9 @@ export const queueQualityRetryIfAbsent = internalMutation({
         bufferFill,
         ...(metadataOnlyRepair ? { metadataOnlyRepair: true } : {}),
         ...(deterministicRepair ? { deterministicRepair: true } : {}),
+        ...(versionedQualityRecovery
+          ? { qualityRecoveryVersion: QUALITY_RECOVERY_VERSION }
+          : {}),
       },
       articleId,
       ...rolloutFields(site),
