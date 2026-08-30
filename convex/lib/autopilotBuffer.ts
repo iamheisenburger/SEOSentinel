@@ -1295,6 +1295,46 @@ export function terminalTopicFitSettlement(args: {
   };
 }
 
+/**
+ * Modifiers that turn a buyer problem into a practitioner or research query.
+ *
+ * A tenant's product vocabulary matches the head term, so "intent detection
+ * dataset" cleared product fit purely because "intent detection" is one of
+ * LeadPilot's features. But the search intent is academic: it wants CLINC150
+ * sample counts and F1 scores, not a way to qualify website visitors.
+ *
+ * LeadPilot proved the cost in production. Three articles were generated on
+ * that keyword and the editorial reviewer rejected every one for the same
+ * reason — "a research abstraction distant from LeadPilot's operational use
+ * case", "could run under any domain", "factual accuracy on academic content
+ * cannot offset zero product utility". The generator's prose was sound; one
+ * draft was called ready for publication with strong educational value. It
+ * still failed, because the only way to add product grounding to a dataset
+ * survey is to assert something the first-party evidence cannot support, and
+ * the claim audit correctly refuses that.
+ *
+ * Rejecting these at selection is cheaper and more honest than generating an
+ * article that can only pass by inventing a product claim.
+ */
+const PRACTITIONER_INTENT_MODIFIERS = new Set([
+  "dataset", "datasets", "corpus", "corpora", "benchmark", "benchmarks",
+  "arxiv", "paper", "papers", "citation", "preprint", "thesis",
+  "python", "pytorch", "tensorflow", "huggingface", "sklearn", "numpy",
+  "github", "repo", "repository", "notebook", "colab",
+  "algorithm", "architecture", "neural", "transformer", "embedding",
+  "annotation", "labelled", "labeled", "training",
+]);
+
+/**
+ * True when a keyword reads as a research or implementation query rather than
+ * a buyer problem the tenant can honestly answer.
+ */
+export function hasPractitionerIntent(keyword: string): boolean {
+  return relevanceTokens(keyword).some((word) =>
+    PRACTITIONER_INTENT_MODIFIERS.has(word)
+  );
+}
+
 export function evaluateTopicBusinessFit(args: {
   keyword: string;
   label?: string;
@@ -1351,13 +1391,19 @@ export function evaluateTopicBusinessFit(args: {
   if (!anchorAligned) {
     reasons.push("keyword is not anchored to a specific tenant product or buyer problem");
   }
+  const practitionerIntent = hasPractitionerIntent(args.keyword);
+  if (practitionerIntent) {
+    reasons.push(
+      "keyword targets research or implementation intent rather than a buyer problem",
+    );
+  }
   if (!modelAligned) reasons.push("search intent targets a different business model");
   if (!titleAligned) reasons.push("article title does not preserve the measured keyword intent");
   if (!growthAligned) reasons.push("support topic is not adjacent to its measured parent query");
   return {
     eligible:
       core.eligible && anchorAligned && modelAligned && titleAligned &&
-      growthAligned,
+      growthAligned && !practitionerIntent,
     score: core.score,
     reasons,
     version: TOPIC_BUSINESS_FIT_VERSION,
