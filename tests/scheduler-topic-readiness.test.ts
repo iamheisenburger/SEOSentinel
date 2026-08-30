@@ -168,6 +168,36 @@ test("zero forward inventory emits one durable site-level exhaustion receipt", (
   assert.ok((exhausted.nextEligibleAt ?? 0) > Date.now());
 });
 
+test("terminally refused forward inventory also converges to exhaustion", () => {
+  const site = {
+    domain: "leadpilot.example",
+    siteName: "LeadPilot",
+    niche: "AI sales and lead qualification software",
+  };
+  const decisions = evaluateSchedulerReadyTopicInventory({
+    site,
+    topics: [{
+      ...baseTopic,
+      status: "planned",
+      contentFeasibilityStatus: "too_thin",
+    }],
+    monthlyOrganicClickGoal: 100,
+    currentLocationCode: 2840,
+    currentLanguageCode: "en",
+  }).opportunityDecisions;
+  assert.equal(
+    decisions.find((decision) => decision.topicId === baseTopic._id)
+      ?.classification,
+    "too_thin",
+  );
+  const exhausted = decisions.find((decision) =>
+    decision.classification === "opportunity_space_exhausted"
+  );
+  assert.ok(exhausted);
+  assert.equal(exhausted.opportunityKey, "__forward_opportunity_space__");
+  assert.ok((exhausted.nextEligibleAt ?? 0) > Date.now());
+});
+
 test("setup readiness and automatic runtime consume the same projection", () => {
   const sites = readFileSync("convex/sites.ts", "utf8");
   const topics = readFileSync("convex/topics.ts", "utf8");

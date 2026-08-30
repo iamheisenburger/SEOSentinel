@@ -252,7 +252,29 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       inputHash,
     };
   });
-  if (forwardCandidateCount === 0) {
+  const forwardTopicIds = new Set(portfolioTopics.map((topic) =>
+    String(topic._id)
+  ));
+  const forwardDecisions = opportunityDecisions.filter((decision) =>
+    decision.topicId && forwardTopicIds.has(decision.topicId)
+  );
+  const terminalForwardClassifications = new Set([
+    "too_thin",
+    "coverage_conflict",
+    "business_fit_failed",
+  ]);
+  // A non-empty table is not usable inventory when every remaining row has
+  // already received a terminal refusal. Treating those rows as perpetual
+  // forward opportunity made the scheduler repeatedly report
+  // `work_in_progress` even though no topic could ever be admitted. Preserve
+  // needs-evidence and cooldown rows as recoverable; only a fully terminal set
+  // converges to the site-level exhaustion receipt.
+  const forwardOpportunitySpaceExhausted = forwardCandidateCount === 0 ||
+    (forwardDecisions.length === forwardCandidateCount &&
+      forwardDecisions.every((decision) =>
+        terminalForwardClassifications.has(decision.classification)
+      ));
+  if (forwardOpportunitySpaceExhausted) {
     const decision = decideOpportunity(
       { remainingCandidateCount: 0 },
       evaluatedAt,
@@ -261,6 +283,13 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       opportunityKey: "__forward_opportunity_space__",
       recheckDay: Math.floor(evaluatedAt / (24 * 60 * 60 * 1000)),
       forwardCandidateCount,
+      forwardDecisions: forwardDecisions.map((decision) => ({
+        topicId: decision.topicId,
+        classification: decision.classification,
+        inputHash: decision.inputHash,
+      })).sort((left, right) =>
+        String(left.topicId).localeCompare(String(right.topicId))
+      ),
       topicStates: args.topics.map((topic) => ({
         topicId: String(topic._id),
         status: topic.status ?? "planned",
