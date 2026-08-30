@@ -5,7 +5,10 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
-import { MAX_QUALITY_REVISIONS } from "./lib/autopilotCadence";
+import {
+  MAX_QUALITY_REVISIONS,
+  needsVersionedQualityRecovery,
+} from "./lib/autopilotCadence";
 import {
   MAX_PUBLICATION_ATTEMPTS,
   nextPublicationRetry,
@@ -1235,7 +1238,10 @@ export const queueQualityRetryIfAbsent = internalMutation({
     ) {
       return { queued: false, reason: "already_audited" as const };
     }
-    if ((article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS) {
+    if (
+      (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
+      !needsVersionedQualityRecovery(article)
+    ) {
       return { queued: false, reason: "revision_limit" as const };
     }
     const active = await activeJobsForSite(ctx, siteId);
