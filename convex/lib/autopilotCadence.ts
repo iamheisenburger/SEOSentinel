@@ -88,11 +88,11 @@ export function hasRecoverableQualityWork(
   candidateWindowStart: number,
 ): boolean {
   return articles.some((article) =>
-    (article.createdAt >= candidateWindowStart &&
-      article.status === "review" &&
+    (article.status === "review" &&
       article.publicationGateStatus === "blocked" &&
       !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
-      ((article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS ||
+      ((article.createdAt >= candidateWindowStart &&
+        (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
         needsVersionedQualityRecovery(article))) ||
     needsDeterministicMechanicalRepair(article)
   );
@@ -109,10 +109,10 @@ export function findRecoverableQualityArticle(
       (article) =>
         article._id &&
         article.createdAt <= now &&
-        now - article.createdAt < windowMs &&
         article.status === "review" &&
         article.publicationGateStatus === "blocked" &&
-        ((article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS ||
+        ((now - article.createdAt < windowMs &&
+          (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
           needsVersionedQualityRecovery(article)),
     )
     .sort((a, b) => b.createdAt - a.createdAt)[0];

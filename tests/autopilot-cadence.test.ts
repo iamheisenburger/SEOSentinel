@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   evaluateCadenceWindow,
+  findRecoverableQualityArticle,
+  hasRecoverableQualityWork,
   needsDeterministicMechanicalRepair,
   needsVersionedQualityRecovery,
   QUALITY_RECOVERY_VERSION,
@@ -192,6 +194,36 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
       ],
     }),
     false,
+  );
+});
+
+test("versioned recovery cannot expire before a repair release reaches its next cadence", () => {
+  const legacy = {
+    _id: "article-legacy-media-outside-window",
+    createdAt: NOW - 72 * HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Strict publication requires a completed media-quality review.",
+    ],
+    qualityRevisionCount: 2,
+  };
+
+  assert.equal(
+    hasRecoverableQualityWork([legacy], NOW - 24 * HOUR),
+    true,
+  );
+  assert.equal(
+    findRecoverableQualityArticle([legacy], NOW, 24)?._id,
+    "article-legacy-media-outside-window",
+  );
+  assert.equal(
+    findRecoverableQualityArticle(
+      [{ ...legacy, qualityRecoveryVersion: QUALITY_RECOVERY_VERSION }],
+      NOW,
+      24,
+    ),
+    undefined,
   );
 });
 

@@ -729,11 +729,11 @@ export const scheduleCadence = internalAction({
     const recoverable = (state.review as ArticleSummary[])
       .filter(
         (article: ArticleSummary) =>
-          article.createdAt >= candidateWindowStart &&
           article.status === "review" &&
           article.publicationGateStatus === "blocked" &&
           !hasTerminalTargetAlignmentFailure(article) &&
-          ((article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS ||
+          ((article.createdAt >= candidateWindowStart &&
+            (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
             needsVersionedQualityRecovery(article)),
       )
       .sort(
