@@ -9,12 +9,12 @@
  * console lists it under sensitive scopes with no restricted scopes present,
  * so this project's verification does not automatically require a CASA
  * security assessment. An earlier version of this comment claimed otherwise
- * and was wrong. Gmail OAuth remains the primary customer path and Pentra's
- * verification is under review; until it completes, only approved accounts can
- * connect.
+ * and was wrong. Gmail OAuth is an optional consented-recipient channel and
+ * Pentra's verification is under review; until it completes, only approved
+ * accounts can connect. Public discovery and owner approval never qualify as
+ * recipient opt-in.
  *
- * Gmail OAuth remains an optional convenience path while its verification is
- * under review. Managed Smartlead belongs to the separate full-managed beta
+ * Managed Smartlead belongs to the separate full-managed beta
  * profile and is never implied by an SMTP/IMAP connection.
  *
  * Pure and deterministic so credential and pacing decisions are provable

@@ -14,7 +14,7 @@ const PUBLISHERS = [
 
 const SENDERS = [
   ["smtp", "SMTP + IMAP", "Default: encrypted customer-managed mailbox; approval only", false],
-  ["gmail_oauth", "Gmail OAuth", "Optional customer-managed send permission", false],
+  ["gmail_oauth", "Gmail OAuth", "Optional; only recipients with recorded affirmative opt-in", false],
   ["smartlead_managed", "Managed sender", "Beta — not included in bootstrap v1 GA", true],
 ] as const;
 

@@ -9,7 +9,7 @@ import { sha256Hex } from "./publicationArtifact.ts";
 
 export const GROWTH_LOOP_CONTRACT_VERSION = 1;
 export const OPPORTUNITY_DECISION_VERSION = 1;
-export const OUTREACH_POLICY_VERSION = 1;
+export const OUTREACH_POLICY_VERSION = 2;
 export const GROWTH_LOOP_RELEASE_VERSION = 2;
 export const GROWTH_LOOP_ROLLOUT_STAGES = [10, 50, 100] as const;
 
@@ -312,6 +312,10 @@ export type OutreachPolicyInput = {
   tenantConsentVersion?: number;
   suppressed: boolean;
   legalRuleEnabled: boolean;
+  transport?: OutreachTransport | LegacyOutreachTransport;
+  gmailRecipientConsentVerified?: boolean;
+  gmailRecipientConsentEvidence?: string;
+  gmailRecipientConsentRecordedAt?: number;
 };
 
 /** Fail closed: general availability is not permission to send everywhere. */
@@ -323,6 +327,20 @@ export function decideOutreachPolicy(
   }
   if (input.recipientClass === "personal") {
     return { decision: "blocked", reasons: ["Personal or consumer addresses are not eligible for automatic outreach."], version: OUTREACH_POLICY_VERSION };
+  }
+  if (
+    input.transport === "gmail_oauth" &&
+    (!input.gmailRecipientConsentVerified ||
+      !input.gmailRecipientConsentEvidence ||
+      !input.gmailRecipientConsentRecordedAt)
+  ) {
+    return {
+      decision: "needs_evidence",
+      reasons: [
+        "Gmail OAuth requires current recipient-level opt-in evidence; a public contact listing or tenant approval is not consent.",
+      ],
+      version: OUTREACH_POLICY_VERSION,
+    };
   }
   const missing = [
     input.recipientClass,

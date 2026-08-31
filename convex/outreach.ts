@@ -168,6 +168,11 @@ import {
   OUTREACH_POLICY_VERSION,
 } from "./lib/growthLoopContracts.ts";
 import {
+  GMAIL_RECIPIENT_CONSENT_POLICY_VERSION,
+  gmailRecipientConsentCurrent,
+  gmailRecipientConsentMatchesReceipt,
+} from "./lib/outreachRecipientConsent.ts";
+import {
   SMARTLEAD_ADAPTER_VERSION,
   SMARTLEAD_MANAGED_TRANSPORT,
   SMARTLEAD_MAX_SEQUENCE_STEP,
@@ -5302,6 +5307,36 @@ export const listMessages = query({
     const ownerAccountKey = accountDeletionKey(site.userId!);
     const canonicalDomain = siteCanonicalDomain(site);
     const take = Math.max(1, Math.min(limit ?? 50, 200));
+    const withRecipientConsent = async (
+      rows: Doc<"outreach_messages">[],
+    ) => {
+      const now = Date.now();
+      const contacts = new Map<string, Doc<"outreach_contacts"> | null>();
+      await Promise.all([...new Set(rows.map((row) => row.toEmail))].map(
+        async (email) => {
+          const contact = await ctx.db
+            .query("outreach_contacts")
+            .withIndex("by_site_email", (q) =>
+              q.eq("siteId", siteId).eq("email", email)
+            )
+            .unique();
+          contacts.set(email, contact);
+        },
+      ));
+      return rows.map((row) => {
+        const contact = contacts.get(row.toEmail);
+        return {
+          ...row,
+          gmailRecipientConsentCurrent:
+            gmailRecipientConsentCurrent(contact, now),
+          gmailRecipientConsentSource: contact?.recipientConsentSource,
+          gmailRecipientConsentRecordedAt:
+            contact?.recipientConsentRecordedAt,
+          gmailRecipientConsentExpiresAt:
+            contact?.recipientConsentExpiresAt,
+        };
+      });
+    };
     const currentStatusBatch = (messageStatus: string) => {
       if (siteUsesLegacyDomainReceipts(site)) {
         return ctx.db
@@ -5332,9 +5367,9 @@ export const listMessages = query({
         .take(take);
     };
     if (status) {
-      return (await currentStatusBatch(status))
+      return withRecipientConsent((await currentStatusBatch(status))
         .filter((message) => !message.controlledCanaryKind)
-        .slice(0, take);
+        .slice(0, take));
     }
     const statuses = [
       "draft",
@@ -5352,11 +5387,11 @@ export const listMessages = query({
     const batches = await Promise.all(
       statuses.map(currentStatusBatch),
     );
-    return batches
+    return withRecipientConsent(batches
       .flat()
       .filter((message) => !message.controlledCanaryKind)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, take);
+      .slice(0, take));
   },
 });
 
@@ -5556,44 +5591,17 @@ export const insertDraft = internalMutation({
     const liveForOpportunity = sameOpportunity.find((m) =>
       LIVE.includes(m.status) && outreachMessageMatchesCurrentDomain(site, m)
     );
-    if (liveForOpportunity) {
-      const refreshesStaleDraft =
-        liveForOpportunity.status === "draft" &&
-        (liveForOpportunity.inboxConfigurationVersion !==
-          args.inboxConfigurationVersion ||
-          liveForOpportunity.opportunityEvidenceHash !==
-            args.opportunityEvidenceHash ||
-          liveForOpportunity.opportunitySourceUrl !==
-            args.opportunitySourceUrl ||
-          liveForOpportunity.opportunityTargetUrl !==
-            args.opportunityTargetUrl);
-      if (refreshesStaleDraft) {
-        await ctx.db.patch(liveForOpportunity._id, {
-          ...args,
-          canonicalDomain,
-          domainRevision: siteCanonicalDomainRevision(site),
-          ownerAccountKey,
-          ownerLineageUnresolvedAt: undefined,
-          approvedAt: undefined,
-          approvedInboxId: undefined,
-          approvedInboxConfigurationVersion: undefined,
-          approvalKind: undefined,
-          approvalConsentVersion: undefined,
-          approvalConsentPolicyHash: undefined,
-          approvalConsentAcceptedAt: undefined,
-          scheduledAt: undefined,
-          updatedAt: now,
-        });
-        await ctx.db.patch(opportunity._id, {
-          status: "outreach_prepared",
-          updatedAt: now,
-        });
-        return {
-          messageId: liveForOpportunity._id,
-          status: args.status,
-          alreadyExisted: true,
-        };
-      }
+    const refreshableDraft = liveForOpportunity?.status === "draft" &&
+      (liveForOpportunity.inboxConfigurationVersion !==
+        args.inboxConfigurationVersion ||
+        liveForOpportunity.opportunityEvidenceHash !==
+          args.opportunityEvidenceHash ||
+        liveForOpportunity.opportunitySourceUrl !==
+          args.opportunitySourceUrl ||
+        liveForOpportunity.opportunityTargetUrl !==
+          args.opportunityTargetUrl ||
+        liveForOpportunity.outreachPolicyVersion !== OUTREACH_POLICY_VERSION);
+    if (liveForOpportunity && !refreshableDraft) {
       return {
         messageId: liveForOpportunity._id,
         status: liveForOpportunity.status,
@@ -5612,6 +5620,17 @@ export const insertDraft = internalMutation({
     const recipientDomain = args.toEmail.trim().toLowerCase().split("@")[1] ?? "";
     const recipientClass = contact?.recipientClass ??
       (isConsumerMailDomain(recipientDomain) ? "personal" : "corporate");
+    const policyTransport = draftInbox?.provider === "gmail"
+      ? "gmail_oauth" as const
+      : draftInbox?.provider === "smtp"
+        ? "smtp" as const
+        : draftInbox?.provider === MANAGED_SES_TRANSPORT
+          ? MANAGED_SES_TRANSPORT
+          : draftInbox?.provider === "smartlead"
+            ? SMARTLEAD_MANAGED_TRANSPORT
+            : undefined;
+    const gmailConsentVerified = policyTransport === "gmail_oauth" &&
+      gmailRecipientConsentCurrent(contact, now);
     const enabledJurisdictions = new Set(
       String(process.env.OUTREACH_AUTO_JURISDICTIONS ?? "")
         .split(",")
@@ -5632,6 +5651,10 @@ export const insertDraft = internalMutation({
       ),
       tenantConsentVersion: draftInbox?.autonomyConsentVersion,
       suppressed: false,
+      transport: policyTransport,
+      gmailRecipientConsentVerified: gmailConsentVerified,
+      gmailRecipientConsentEvidence: contact?.recipientConsentEvidenceHash,
+      gmailRecipientConsentRecordedAt: contact?.recipientConsentRecordedAt,
       legalRuleEnabled: Boolean(
         contact?.jurisdiction &&
         enabledJurisdictions.has(contact.jurisdiction.toUpperCase()),
@@ -5651,6 +5674,14 @@ export const insertDraft = internalMutation({
       contactSource: contact?.discoveredFromUrl,
       disclosuresPresent: (args.complianceIssues ?? []).length === 0,
       tenantConsentVersion: draftInbox?.autonomyConsentVersion,
+      transport: policyTransport,
+      recipientConsentStatus: contact?.recipientConsentStatus,
+      recipientConsentSource: contact?.recipientConsentSource,
+      recipientConsentEvidenceHash: contact?.recipientConsentEvidenceHash,
+      recipientConsentPurpose: contact?.recipientConsentPurpose,
+      recipientConsentRecordedAt: contact?.recipientConsentRecordedAt,
+      recipientConsentExpiresAt: contact?.recipientConsentExpiresAt,
+      recipientConsentPolicyVersion: contact?.recipientConsentPolicyVersion,
       decision: policy.decision,
     }));
     const priorPolicyRows = await ctx.db.query("outreach_policy_decisions")
@@ -5677,6 +5708,14 @@ export const insertDraft = internalMutation({
           ? sha256Hex(contact.discoveredFromUrl)
           : undefined,
         lawfulBasisClass: contact?.lawfulBasisClass,
+        transport: policyTransport,
+        recipientConsentStatus: contact?.recipientConsentStatus,
+        recipientConsentSource: contact?.recipientConsentSource,
+        recipientConsentEvidenceHash: contact?.recipientConsentEvidenceHash,
+        recipientConsentPurpose: contact?.recipientConsentPurpose,
+        recipientConsentRecordedAt: contact?.recipientConsentRecordedAt,
+        recipientConsentExpiresAt: contact?.recipientConsentExpiresAt,
+        recipientConsentPolicyVersion: contact?.recipientConsentPolicyVersion,
         requiredDisclosures: (args.complianceIssues ?? []).length === 0
           ? ["sender_identity", "physical_address", "one_click_unsubscribe"]
           : [],
@@ -5756,6 +5795,38 @@ export const insertDraft = internalMutation({
         : {}),
     };
 
+    if (refreshableDraft && liveForOpportunity) {
+      await ctx.db.patch(liveForOpportunity._id, {
+        ...record,
+        approvedAt: authorizeRecord ? now : undefined,
+        approvedInboxId: authorizeRecord ? draftInbox!._id : undefined,
+        approvedInboxConfigurationVersion: authorizeRecord
+          ? draftInbox!.configurationVersion ?? 0
+          : undefined,
+        approvalKind: authorizeRecord ? "account_autopilot" : undefined,
+        approvalConsentVersion: authorizeRecord
+          ? draftInbox!.autonomyConsentVersion
+          : undefined,
+        approvalConsentPolicyHash: authorizeRecord
+          ? draftInbox!.autonomyConsentPolicyHash
+          : undefined,
+        approvalConsentAcceptedAt: authorizeRecord
+          ? draftInbox!.autonomyConsentAcceptedAt
+          : undefined,
+        scheduledAt: authorizeRecord ? now : undefined,
+        updatedAt: now,
+      });
+      await ctx.db.patch(opportunity._id, {
+        status: "outreach_prepared",
+        updatedAt: now,
+      });
+      return {
+        messageId: liveForOpportunity._id,
+        status: record.status,
+        alreadyExisted: true,
+      };
+    }
+
     // A previously blocked message is refreshed in place. That is what lets a
     // tenant connect an inbox, re-run, and see the same message become
     // sendable instead of accumulating a second blocked row per attempt.
@@ -5820,6 +5891,7 @@ export const approveMessage = mutation({
     if (
       !policyReceipt || policyReceipt.siteId !== siteId ||
       policyReceipt.decision !== message.outreachPolicyDecision ||
+      policyReceipt.policyVersion !== OUTREACH_POLICY_VERSION ||
       policyReceipt.policyVersion !== message.outreachPolicyVersion ||
       policyReceipt.configurationHash !== message.outreachPolicyConfigurationHash
     ) throw new Error("The outreach policy receipt is missing or stale");
@@ -5852,6 +5924,26 @@ export const approveMessage = mutation({
       message.inboxConfigurationVersion !== configurationVersion
     ) {
       throw new Error("The draft uses a stale sender profile; regenerate it before approval");
+    }
+    if (inbox.provider === "gmail") {
+      const contact = await ctx.db
+        .query("outreach_contacts")
+        .withIndex("by_site_email", (q) =>
+          q.eq("siteId", siteId).eq("email", message.toEmail)
+        )
+        .unique();
+      if (
+        policyReceipt.transport !== "gmail_oauth" ||
+        !gmailRecipientConsentMatchesReceipt(
+          contact,
+          policyReceipt,
+          Date.now(),
+        )
+      ) {
+        throw new Error(
+          "Gmail approval requires current recipient opt-in evidence bound to this exact policy receipt.",
+        );
+      }
     }
     const complianceIssues = outreachComplianceIssues({
       body: message.body,
@@ -7298,16 +7390,39 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
       externalAttempted: true as const,
     };
   }
-  const [site, inbox, opportunity] = await Promise.all([
+  const [site, inbox, opportunity, contact, policyReceipt] = await Promise.all([
     ctx.db.get(args.siteId),
     message.inboxId ? ctx.db.get(message.inboxId) : null,
     ctx.db.get(message.opportunityId),
+    ctx.db
+      .query("outreach_contacts")
+      .withIndex("by_site_email", (q) =>
+        q.eq("siteId", args.siteId).eq("email", message.toEmail)
+      )
+      .unique(),
+    message.outreachPolicyDecisionId
+      ? ctx.db.get(message.outreachPolicyDecisionId)
+      : null,
   ]);
   const ownerAccountKey = site?.userId
     ? accountDeletionKey(site.userId)
     : undefined;
   const managedSes = expectedTransport === MANAGED_SES_TRANSPORT;
   const smartleadManaged = expectedTransport === SMARTLEAD_MANAGED_TRANSPORT;
+  // Fixed-recipient connection canaries target only the connected owner's
+  // mailbox and are never prospect or commercial outreach.
+  const gmailRecipientConsentAuthorized = expectedTransport !== "gmail" ||
+    Boolean(message.controlledCanaryKind) ||
+    Boolean(
+      inbox?.provider === "gmail" &&
+      policyReceipt?.siteId === args.siteId &&
+      policyReceipt.transport === "gmail_oauth" &&
+      policyReceipt.policyVersion === OUTREACH_POLICY_VERSION &&
+      policyReceipt.policyVersion === message.outreachPolicyVersion &&
+      policyReceipt.configurationHash ===
+        message.outreachPolicyConfigurationHash &&
+      gmailRecipientConsentMatchesReceipt(contact, policyReceipt, timestamp),
+    );
   const releaseAuthorized = Boolean(
     site?.userId &&
       inbox &&
@@ -7348,6 +7463,7 @@ async function authorizeClaimedDeliveryAtExternalBoundary(
       inbox.siteId === site._id &&
       inbox.credentialOwnerAccountKey === ownerAccountKey &&
       !["disconnected", "suspended"].includes(inbox.status) &&
+      gmailRecipientConsentAuthorized &&
       approvalMatchesInbox({
         messageInboxId: message.inboxId,
         approvedInboxId: message.approvedInboxId,
@@ -8499,6 +8615,19 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
           .order("asc")
           .first();
     if (!message) return null;
+    const permanentlyInvalid = (
+      reason:
+        | "source_changed"
+        | "target_missing"
+        | "contact_changed"
+        | "recipient_consent_changed"
+        | "policy_changed",
+    ) => ({
+      permanentInvalidReason: reason,
+      messageId: message._id,
+      opportunityId: message.opportunityId,
+      evidenceHash: message.opportunityEvidenceHash ?? "",
+    });
     const policyReceipt = message.outreachPolicyDecisionId
       ? await ctx.db.get(message.outreachPolicyDecisionId)
       : null;
@@ -8513,16 +8642,8 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
       policyReceipt.policyVersion !== OUTREACH_POLICY_VERSION ||
       policyReceipt.policyVersion !== message.outreachPolicyVersion ||
       policyReceipt.configurationHash !== message.outreachPolicyConfigurationHash
-    ) return null;
+    ) return permanentlyInvalid("policy_changed");
     const opportunity = await ctx.db.get(message.opportunityId);
-    const permanentlyInvalid = (
-      reason: "source_changed" | "target_missing" | "contact_changed",
-    ) => ({
-      permanentInvalidReason: reason,
-      messageId: message._id,
-      opportunityId: message.opportunityId,
-      evidenceHash: message.opportunityEvidenceHash ?? "",
-    });
     if (
       !opportunity ||
       opportunity.siteId !== siteId ||
@@ -8566,6 +8687,13 @@ export const getApprovedDeliveryEvidenceInternal = internalQuery({
     ) {
       return permanentlyInvalid("contact_changed");
     }
+    if (
+      inbox.provider === "gmail" &&
+      (policyReceipt.transport !== "gmail_oauth" ||
+        !gmailRecipientConsentMatchesReceipt(contact, policyReceipt, now))
+    ) {
+      return permanentlyInvalid("recipient_consent_changed");
+    }
     return {
       messageId: message._id,
       opportunityId: opportunity._id,
@@ -8596,6 +8724,8 @@ export const retireInvalidApprovedDeliveryEvidenceInternal = internalMutation({
       v.literal("source_changed"),
       v.literal("target_missing"),
       v.literal("contact_changed"),
+      v.literal("recipient_consent_changed"),
+      v.literal("policy_changed"),
     ),
   },
   handler: async (ctx, args) => {
@@ -8622,7 +8752,18 @@ export const retireInvalidApprovedDeliveryEvidenceInternal = internalMutation({
       return { retired: false as const };
     }
     const timestamp = Date.now();
-    await ctx.db.patch(message._id, message.sequenceStep === 0
+    const policyOrConsentChanged = [
+      "policy_changed",
+      "recipient_consent_changed",
+    ].includes(args.reason);
+    await ctx.db.patch(message._id, policyOrConsentChanged
+      ? {
+          status: "skipped",
+          blockedReason:
+            "The outreach policy or recipient consent changed; regenerate before delivery.",
+          updatedAt: timestamp,
+        }
+      : message.sequenceStep === 0
       ? {
           status: "failed",
           failureReason:
@@ -8643,7 +8784,7 @@ export const retireInvalidApprovedDeliveryEvidenceInternal = internalMutation({
       opportunity.status === "outreach_prepared"
     ) {
       await ctx.db.patch(opportunity._id, {
-        status: "rejected",
+        status: policyOrConsentChanged ? "verified" : "rejected",
         updatedAt: timestamp,
       });
     }
@@ -13481,6 +13622,176 @@ async function addSuppression(
   }
 }
 
+/** Bind Gmail OAuth delivery to a recipient's affirmative, auditable opt-in.
+ * The raw evidence reference is deliberately not retained in the outreach
+ * ledger; only its one-way receipt is persisted. A public address listing is
+ * never accepted as consent. Existing drafts are invalidated so they must be
+ * regenerated against the new versioned policy receipt. */
+export const recordGmailRecipientConsent = mutation({
+  args: {
+    siteId: v.id("sites"),
+    email: v.string(),
+    source: v.union(
+      v.literal("web_form"),
+      v.literal("customer_request"),
+      v.literal("contract"),
+      v.literal("event_registration"),
+      v.literal("documented_relationship"),
+    ),
+    evidenceReference: v.string(),
+    consentRecordedAt: v.number(),
+    expiresAt: v.optional(v.number()),
+    confirmsRecipientOptIn: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const site = await requireSiteOwner(ctx, args.siteId);
+    if (!args.confirmsRecipientOptIn) {
+      throw new Error(
+        "Recipient consent can be recorded only after affirmative opt-in is confirmed.",
+      );
+    }
+    const now = Date.now();
+    const email = args.email.trim().toLowerCase();
+    const evidenceReference = args.evidenceReference.trim();
+    if (!email || !email.includes("@")) {
+      throw new Error("A valid recipient email is required");
+    }
+    if (evidenceReference.length < 8 || evidenceReference.length > 500) {
+      throw new Error(
+        "Provide an 8-500 character form, request, contract, event, or relationship evidence reference.",
+      );
+    }
+    if (
+      !Number.isFinite(args.consentRecordedAt) ||
+      args.consentRecordedAt <= 0 ||
+      args.consentRecordedAt > now + 5 * 60 * 1000
+    ) {
+      throw new Error("The consent timestamp is invalid or in the future");
+    }
+    if (args.expiresAt !== undefined && args.expiresAt <= now) {
+      throw new Error("Consent expiration must be in the future");
+    }
+    const contact = await ctx.db
+      .query("outreach_contacts")
+      .withIndex("by_site_email", (q) =>
+        q.eq("siteId", args.siteId).eq("email", email)
+      )
+      .unique();
+    const ownerAccountKey = site.userId
+      ? accountDeletionKey(site.userId)
+      : undefined;
+    if (
+      !contact ||
+      !ownerAccountKey ||
+      contact.ownerAccountKey !== ownerAccountKey
+    ) {
+      throw new Error("Recipient contact not found for the current site owner");
+    }
+    if (
+      evidenceReference.toLowerCase() ===
+        contact.discoveredFromUrl.trim().toLowerCase()
+    ) {
+      throw new Error(
+        "A public contact page proves discovery, not recipient consent. Provide the separate opt-in record.",
+      );
+    }
+    const evidenceHash = sha256Hex(JSON.stringify({
+      policyVersion: GMAIL_RECIPIENT_CONSENT_POLICY_VERSION,
+      siteId: String(args.siteId),
+      email,
+      source: args.source,
+      evidenceReference,
+      purpose: "commercial_email",
+      consentRecordedAt: args.consentRecordedAt,
+      expiresAt: args.expiresAt,
+    }));
+    await ctx.db.patch(contact._id, {
+      recipientConsentStatus: "verified",
+      recipientConsentSource: args.source,
+      recipientConsentEvidenceHash: evidenceHash,
+      recipientConsentPurpose: "commercial_email",
+      recipientConsentRecordedAt: args.consentRecordedAt,
+      recipientConsentExpiresAt: args.expiresAt,
+      recipientConsentRevokedAt: undefined,
+      recipientConsentPolicyVersion:
+        GMAIL_RECIPIENT_CONSENT_POLICY_VERSION,
+      updatedAt: now,
+    });
+
+    const existingMessages = await ctx.db
+      .query("outreach_messages")
+      .withIndex("by_site_email", (q) =>
+        q.eq("siteId", args.siteId).eq("toEmail", email)
+      )
+      .take(200);
+    let invalidated = 0;
+    for (const message of existingMessages) {
+      if (
+        !outreachMessageOwnerMatches(message, ownerAccountKey) ||
+        !["draft", "blocked", "approved"].includes(message.status)
+      ) continue;
+      await ctx.db.patch(message._id, {
+        status: "skipped",
+        blockedReason:
+          "Recipient consent changed; regenerate against the current Gmail consent receipt.",
+        approvedAt: undefined,
+        approvedInboxId: undefined,
+        approvedInboxConfigurationVersion: undefined,
+        approvalKind: undefined,
+        scheduledAt: undefined,
+        updatedAt: now,
+      });
+      invalidated++;
+      if (message.sequenceStep === 0) {
+        const opportunity = await ctx.db.get(message.opportunityId);
+        if (
+          opportunity?.siteId === args.siteId &&
+          opportunity.status === "outreach_prepared"
+        ) {
+          await ctx.db.patch(opportunity._id, {
+            status: "verified",
+            updatedAt: now,
+          });
+        }
+      }
+    }
+    return {
+      recorded: true as const,
+      invalidated,
+      policyVersion: GMAIL_RECIPIENT_CONSENT_POLICY_VERSION,
+    };
+  },
+});
+
+export const revokeGmailRecipientConsent = mutation({
+  args: { siteId: v.id("sites"), email: v.string() },
+  handler: async (ctx, { siteId, email: rawEmail }) => {
+    const site = await requireSiteOwner(ctx, siteId);
+    const email = rawEmail.trim().toLowerCase();
+    const contact = await ctx.db
+      .query("outreach_contacts")
+      .withIndex("by_site_email", (q) =>
+        q.eq("siteId", siteId).eq("email", email)
+      )
+      .unique();
+    if (
+      !contact ||
+      !site.userId ||
+      contact.ownerAccountKey !== accountDeletionKey(site.userId)
+    ) {
+      throw new Error("Recipient contact not found for the current site owner");
+    }
+    const now = Date.now();
+    await ctx.db.patch(contact._id, {
+      recipientConsentStatus: "revoked",
+      recipientConsentRevokedAt: now,
+      updatedAt: now,
+    });
+    await addSuppression(ctx, siteId, "email", email, "consent_revoked");
+    return { revoked: true as const };
+  },
+});
+
 export const suppress = mutation({
   args: {
     siteId: v.id("sites"),
@@ -13664,6 +13975,14 @@ export const upsertContact = internalMutation({
           discoveredFromUrl: args.discoveredFromUrl,
           discoveryMethod: args.discoveryMethod,
           verifiedAt: now,
+          recipientConsentStatus: undefined,
+          recipientConsentSource: undefined,
+          recipientConsentEvidenceHash: undefined,
+          recipientConsentPurpose: undefined,
+          recipientConsentRecordedAt: undefined,
+          recipientConsentExpiresAt: undefined,
+          recipientConsentRevokedAt: undefined,
+          recipientConsentPolicyVersion: undefined,
           lastContactedAt: undefined,
           createdAt: now,
           updatedAt: now,

@@ -1033,7 +1033,12 @@ async function liveOpportunityEvidence(
   messageId: Id<"outreach_messages">;
   opportunityId: Id<"seo_authority_opportunities">;
   evidenceHash: string;
-  reason: "source_changed" | "target_missing" | "contact_changed";
+  reason:
+    | "source_changed"
+    | "target_missing"
+    | "contact_changed"
+    | "recipient_consent_changed"
+    | "policy_changed";
 } | null> {
   const pending = await ctx.runQuery(
     internal.outreach.getApprovedDeliveryEvidenceInternal,
@@ -1050,7 +1055,12 @@ async function liveOpportunityEvidence(
     };
   }
   const permanentInvalid = (
-    reason: "source_changed" | "target_missing" | "contact_changed",
+    reason:
+      | "source_changed"
+      | "target_missing"
+      | "contact_changed"
+      | "recipient_consent_changed"
+      | "policy_changed",
   ) => ({
     status: "permanent_invalid" as const,
     messageId: pending.messageId,

@@ -144,6 +144,37 @@ test("outreach policy is globally usable but automatic sending is fail closed", 
     suppressed: false,
     legalRuleEnabled: true,
   }).decision, "blocked");
+  assert.equal(decideOutreachPolicy({
+    recipientClass: "corporate",
+    jurisdiction: "US",
+    jurisdictionEvidence: "business-address-country",
+    businessRoleEvidence: "customer",
+    businessRelevance: "requested product update",
+    contactSource: "customer record",
+    lawfulBasisClass: "recipient-opt-in",
+    requiredDisclosuresPresent: true,
+    tenantConsentVersion: 1,
+    suppressed: false,
+    legalRuleEnabled: false,
+    transport: "gmail_oauth",
+  }).decision, "needs_evidence");
+  assert.equal(decideOutreachPolicy({
+    recipientClass: "corporate",
+    jurisdiction: "US",
+    jurisdictionEvidence: "business-address-country",
+    businessRoleEvidence: "customer",
+    businessRelevance: "requested product update",
+    contactSource: "customer record",
+    lawfulBasisClass: "recipient-opt-in",
+    requiredDisclosuresPresent: true,
+    tenantConsentVersion: 1,
+    suppressed: false,
+    legalRuleEnabled: false,
+    transport: "gmail_oauth",
+    gmailRecipientConsentVerified: true,
+    gmailRecipientConsentEvidence: "a".repeat(64),
+    gmailRecipientConsentRecordedAt: 1,
+  }).decision, "approval_only");
 });
 
 test("GA cannot be stamped without every real adapter and outcome canary", () => {

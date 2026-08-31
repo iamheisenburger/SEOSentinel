@@ -91,6 +91,10 @@ export default function BacklinksPage() {
   const [autonomyDailyCap, setAutonomyDailyCap] = useState(5);
   const [showSmtpForm, setShowSmtpForm] = useState(false);
   const [smtpPreset, setSmtpPreset] = useState("gmail");
+  const [consentMessageId, setConsentMessageId] = useState<string | null>(null);
+  const [consentSource, setConsentSource] = useState("web_form");
+  const [consentEvidenceReference, setConsentEvidenceReference] = useState("");
+  const [recipientConsentConfirmed, setRecipientConsentConfirmed] = useState(false);
 
   useEffect(() => {
     const requestedTransport = new URLSearchParams(window.location.search).get(
@@ -152,6 +156,9 @@ export default function BacklinksPage() {
     api.outreach.rotateInboundRelayDsnRoutingTarget,
   );
   const suppressRecipient = useMutation(api.outreach.suppress);
+  const recordGmailRecipientConsent = useMutation(
+    api.outreach.recordGmailRecipientConsent,
+  );
   const resolveUnverified = useMutation(api.outreach.resolveUnverifiedDelivery);
 
   const counts = useMemo(() => {
@@ -396,7 +403,7 @@ export default function BacklinksPage() {
                   ? "Managed outreach remains blocked until the isolated sender is authenticated, warmed, and all controlled delivery-event canaries have passed."
                   : isSmtpInbox
                     ? "SMTP sends only messages you approve. Bounded IMAP monitoring classifies replies, hard bounces, and STOP requests; bodies and attachments are discarded after transient parsing, and Pentra stores only evidence digests."
-                    : "Gmail OAuth is optional. Before any prospect message can be released, its inbound compliance lane must be verified."}
+                    : "Gmail OAuth is optional and consented-recipient only. Each recipient needs separate affirmative opt-in evidence, and the inbound reply, STOP, and bounce lane must be verified before release."}
               </p>
               {dsnRoutingAddress && (
                 <div className="mt-3 rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.05] p-3">
@@ -1010,6 +1017,10 @@ export default function BacklinksPage() {
             const suppressKey = `suppress:${message._id}`;
             const reviewSentKey = `review-sent:${message._id}`;
             const reviewNotSentKey = `review-not-sent:${message._id}`;
+            const consentKey = `consent:${message._id}`;
+            const needsGmailConsent = Boolean(
+              isGmailInbox && !message.gmailRecipientConsentCurrent,
+            );
             return (
               <article key={message._id} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1036,17 +1047,33 @@ export default function BacklinksPage() {
                       >
                         Discard
                       </Button>
-                      <Button
-                        size="sm"
-                        loading={pending === approveKey}
-                        onClick={() => runOperation(approveKey, async () => {
-                          await approveMessage({ siteId: site._id, messageId: message._id });
-                          setNotice({ tone: "success", text: "Draft approved. It has not been sent yet." });
-                        })}
-                        icon={<Check className="h-3.5 w-3.5" />}
-                      >
-                        Approve
-                      </Button>
+                      {needsGmailConsent ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setConsentMessageId(String(message._id));
+                            setConsentSource("web_form");
+                            setConsentEvidenceReference("");
+                            setRecipientConsentConfirmed(false);
+                          }}
+                          icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                        >
+                          Add opt-in proof
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          loading={pending === approveKey}
+                          onClick={() => runOperation(approveKey, async () => {
+                            await approveMessage({ siteId: site._id, messageId: message._id });
+                            setNotice({ tone: "success", text: "Draft approved. It has not been sent yet." });
+                          })}
+                          icon={<Check className="h-3.5 w-3.5" />}
+                        >
+                          Approve
+                        </Button>
+                      )}
                     </div>
                   )}
                   {["sent", "replied", "delivery_unverified", "delivery_reviewed_sent"].includes(message.status) && (
@@ -1115,6 +1142,86 @@ export default function BacklinksPage() {
                     </div>
                   )}
                 </div>
+                {message.status === "draft" && needsGmailConsent && (
+                  <div className="mt-4 rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.06] p-3">
+                    <p className="text-[11px] font-medium text-[#FBBF24]">
+                      Gmail OAuth is consented-recipient only
+                    </p>
+                    <p className="mt-1 text-[10px] leading-relaxed text-[#8F93A5]">
+                      A public listing, discovered address, or your approval is not recipient consent. Pentra will not let Gmail send until an affirmative opt-in record is bound to this recipient.
+                    </p>
+                    {consentMessageId === String(message._id) && (
+                      <div className="mt-3 grid gap-3 sm:grid-cols-[180px_1fr_auto] sm:items-end">
+                        <label className="grid gap-1 text-[10px] text-[#A9ADBA]">
+                          Consent source
+                          <select
+                            value={consentSource}
+                            onChange={(event) => setConsentSource(event.target.value)}
+                            className="h-9 rounded-md border border-white/[0.08] bg-[#0B0D12] px-3 text-[11px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/60"
+                          >
+                            <option value="web_form">Opt-in web form</option>
+                            <option value="customer_request">Customer request</option>
+                            <option value="contract">Contract</option>
+                            <option value="event_registration">Event registration</option>
+                            <option value="documented_relationship">Documented relationship</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-[10px] text-[#A9ADBA]">
+                          Evidence reference
+                          <input
+                            value={consentEvidenceReference}
+                            onChange={(event) => setConsentEvidenceReference(event.target.value)}
+                            placeholder="Form submission URL or internal consent record ID"
+                            className="h-9 rounded-md border border-white/[0.08] bg-[#0B0D12] px-3 text-[11px] text-[#EDEEF1] outline-none placeholder:text-[#565A6E] focus:border-[#0EA5E9]/60"
+                          />
+                        </label>
+                        <Button
+                          size="sm"
+                          loading={pending === consentKey}
+                          disabled={
+                            consentEvidenceReference.trim().length < 8 ||
+                            !recipientConsentConfirmed
+                          }
+                          onClick={() => runOperation(consentKey, async () => {
+                            const result = await recordGmailRecipientConsent({
+                              siteId: site._id,
+                              email: message.toEmail,
+                              source: consentSource as
+                                | "web_form"
+                                | "customer_request"
+                                | "contract"
+                                | "event_registration"
+                                | "documented_relationship",
+                              evidenceReference: consentEvidenceReference,
+                              consentRecordedAt: Date.now(),
+                              confirmsRecipientOptIn: true,
+                            });
+                            await prepareOutreach({ siteId: site._id, limit: 25 });
+                            setConsentMessageId(null);
+                            setConsentEvidenceReference("");
+                            setRecipientConsentConfirmed(false);
+                            setNotice({
+                              tone: "success",
+                              text: `Recipient opt-in recorded and policy-bound draft regenerated. ${result.invalidated} stale draft${result.invalidated === 1 ? "" : "s"} retired. Nothing was sent.`,
+                            });
+                          })}
+                          icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                        >
+                          Record proof
+                        </Button>
+                        <label className="flex items-start gap-2 text-[10px] leading-relaxed text-[#8F93A5] sm:col-span-3">
+                          <input
+                            type="checkbox"
+                            checked={recipientConsentConfirmed}
+                            onChange={(event) => setRecipientConsentConfirmed(event.target.checked)}
+                            className="mt-0.5"
+                          />
+                          I confirm this recipient affirmatively consented to receive this category of commercial email. Public discovery alone does not qualify.
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {reasons.length > 0 && (
                   <div className="mt-4 rounded-lg border border-[#EF4444]/20 bg-[#EF4444]/[0.05] px-3 py-2.5">
