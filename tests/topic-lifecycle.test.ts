@@ -8,10 +8,12 @@ import {
   articleReservesTopicIntent,
   decideTopicUpsert,
   dormantTopicRevivalPatch,
+  isRecoverableWorkerQualityIssue,
   normalizeTopicIntentKeyword,
+  recoverableWorkerQualityFailure,
   reconciledTopicStatus,
   terminalTopicQualitySettlement,
-  terminalTopicWorkerFailureSettlement,
+  topicMatchesLegacyWorkerFailureSettlement,
 } from "../convex/lib/topicLifecycle.ts";
 
 test("only externally published or current sealed-ready artifacts reserve intent", () => {
@@ -112,61 +114,74 @@ test("bounded topic quality exhaustion is terminal across fresh draft generation
   }), "disqualified");
 });
 
-test("an exhausted deterministic worker length failure quarantines the exact linked topic", () => {
-  const settlement = terminalTopicWorkerFailureSettlement({
+test("an exhausted deterministic worker length failure becomes an article recovery issue", () => {
+  const failure = recoverableWorkerQualityFailure({
     error: "Reviewed draft missed the length contract (1031/1200-3000 words)",
     attempts: 4,
     maximumAttempts: 4,
-    article: {
-      siteId: "site-a",
-      status: "review",
-      topicId: "topic-a",
-    },
-    topic: {
-      _id: "topic-a",
-      siteId: "site-a",
-      status: "planned",
-    },
-    checkedAt: 1_787_930_324_881,
   });
-  assert.ok(settlement);
-  assert.equal(settlement.topicPatch.status, "disqualified");
-  assert.equal(settlement.topicPatch.contentFeasibilityStatus, "too_thin");
-  assert.deepEqual(settlement.topicPatch.contentFeasibilityIssues, [
-    "Article is too thin (1031 words; minimum 1200).",
-  ]);
+  assert.ok(failure);
+  assert.equal(failure.legacyFeasibilityStatus, "too_thin");
+  assert.equal(
+    failure.recoveryIssue,
+    "Quality-review algorithm exhausted the strict length contract (1031/1200-3000 words).",
+  );
+  assert.equal(isRecoverableWorkerQualityIssue(failure.recoveryIssue), true);
 });
 
-test("worker exhaustion never condemns a topic for transient or unexhausted failures", () => {
+test("worker recovery classification excludes transient and unexhausted failures", () => {
   const base = {
     attempts: 4,
     maximumAttempts: 4,
-    article: {
-      siteId: "site-a",
-      status: "review",
-      topicId: "topic-a",
-    },
-    topic: {
-      _id: "topic-a",
-      siteId: "site-a",
-      status: "planned",
-    },
-    checkedAt: 1_787_930_324_881,
   };
-  assert.equal(terminalTopicWorkerFailureSettlement({
+  assert.equal(recoverableWorkerQualityFailure({
     ...base,
     error: "Provider connection timed out",
   }), null);
-  assert.equal(terminalTopicWorkerFailureSettlement({
+  assert.equal(recoverableWorkerQualityFailure({
+    ...base,
+    error:
+      "Provider said: Reviewed draft missed the length contract (1031/1200-3000 words)",
+  }), null);
+  assert.equal(recoverableWorkerQualityFailure({
     ...base,
     attempts: 3,
     error: "Reviewed draft missed the length contract (1031/1200-3000 words)",
   }), null);
-  assert.equal(terminalTopicWorkerFailureSettlement({
-    ...base,
-    article: { ...base.article, siteId: "site-b" },
-    error: "Reviewed draft missed the length contract (1031/1200-3000 words)",
-  }), null);
+  assert.equal(isRecoverableWorkerQualityIssue(
+    "Customer mentioned Quality-review algorithm exhausted the strict length contract (1031/1200-3000 words).",
+  ), false);
+});
+
+test("legacy worker disqualification reversal requires an exact durable receipt", () => {
+  const failure = recoverableWorkerQualityFailure({
+    error: "Worker failure exhausted after 4 attempts: Reviewed draft missed the length contract (1031/1200-3000 words)",
+    attempts: 4,
+    maximumAttempts: 4,
+  });
+  assert.ok(failure);
+  const exact = {
+    status: "disqualified",
+    contentFeasibilityStatus: "too_thin",
+    contentFeasibilityVersion: 1,
+    contentFeasibilityIssues: [
+      "Article is too thin (1031 words; minimum 1200).",
+    ],
+    disqualifiedReason:
+      "content_feasibility:too_thin: Article is too thin (1031 words; minimum 1200).",
+  };
+  assert.equal(topicMatchesLegacyWorkerFailureSettlement(exact, failure), true);
+  assert.equal(topicMatchesLegacyWorkerFailureSettlement({
+    ...exact,
+    contentFeasibilityIssues: [
+      "Article is too thin (1031 words; minimum 1200).",
+      "Independent publication audit failed.",
+    ],
+  }, failure), false);
+  assert.equal(topicMatchesLegacyWorkerFailureSettlement({
+    ...exact,
+    disqualifiedReason: "owner_disqualified",
+  }, failure), false);
 });
 
 test("a stale used topic backed only by a rejected draft is not coverage", () => {
@@ -244,15 +259,27 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   assert.match(jobs, /export const markDone[\s\S]*reconcileJobTopicLifecycle/);
   assert.match(jobs, /export const markFailed[\s\S]*reconcileJobTopicLifecycle/);
   assert.match(jobs, /export const markRetryableFailure[\s\S]*reconcileJobTopicLifecycle/);
-  assert.match(jobs, /export const markRetryableFailure[\s\S]*terminalTopicWorkerFailureSettlement/);
+  assert.match(jobs, /export const markRetryableFailure[\s\S]*recoverableWorkerQualityFailure/);
   assert.match(
     jobs,
-    /settleExhaustedArticleQualityFailuresForSiteInternal[\s\S]*by_site_type_created[\s\S]*terminalTopicWorkerFailureSettlement/,
+    /settleExhaustedArticleQualityFailuresForSiteInternal[\s\S]*by_site_type_created[\s\S]*recoverableWorkerQualityFailure[\s\S]*topicMatchesLegacyWorkerFailureSettlement/,
   );
   assert.match(articles, /terminalTopicQualitySettlement/);
 });
 
-test("the natural cadence heals pre-fix exhausted quality jobs without replay", () => {
+test("the natural cadence migrates only exact pre-fix quality jobs into versioned recovery", () => {
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const migration = jobs.slice(
+    jobs.indexOf("export const settleExhaustedArticleQualityFailuresForSiteInternal"),
+    jobs.indexOf("export const markPublishFailed"),
+  );
+  assert.match(migration, /payload\.qualityRetry !== true/);
+  assert.match(migration, /qualityRecoveryAttemptVersionFromJob\(job\)/);
+  assert.match(migration, /articleMatchesCurrentDomain\(site, article\)/);
+  assert.match(migration, /new Set<string>\(\)/);
+  assert.match(migration, /topicMatchesLegacyWorkerFailureSettlement/);
+  assert.doesNotMatch(migration, /ctx\.scheduler|processNextJob/);
+
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   const schedule = scheduler.slice(
     scheduler.indexOf("export const scheduleCadence"),

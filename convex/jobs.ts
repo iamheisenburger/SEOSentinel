@@ -8,8 +8,9 @@ import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import {
   hasAttemptedVersionedQualityRecovery,
   MAX_QUALITY_REVISIONS,
-  needsVersionedQualityRecovery,
-  QUALITY_RECOVERY_VERSION,
+  qualityRecoveryAttemptVersionFromJob,
+  qualityRecoveryTargetVersion,
+  WORKER_LENGTH_RECOVERY_VERSION,
 } from "./lib/autopilotCadence";
 import {
   MAX_PUBLICATION_ATTEMPTS,
@@ -23,8 +24,10 @@ import {
   reconcileJobTopicLifecycle,
   reconcileTopicLifecycle,
 } from "./lib/topicLifecycleDb";
-import { terminalTopicWorkerFailureSettlement } from
-  "./lib/topicLifecycle";
+import {
+  recoverableWorkerQualityFailure,
+  topicMatchesLegacyWorkerFailureSettlement,
+} from "./lib/topicLifecycle";
 import {
   AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES,
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
@@ -1234,9 +1237,9 @@ export const queueQualityRetryIfAbsent = internalMutation({
     ) {
       throw new Error("Article is not eligible for quality recovery");
     }
-    const markVersionedRecoveryAttempt = async () => {
+    const markVersionedRecoveryAttempt = async (version: number) => {
       await ctx.db.patch(articleId, {
-        qualityRecoveryAttemptVersion: QUALITY_RECOVERY_VERSION,
+        qualityRecoveryAttemptVersion: version,
       });
       const summary = await ctx.db
         .query("article_summaries")
@@ -1244,7 +1247,7 @@ export const queueQualityRetryIfAbsent = internalMutation({
         .first();
       if (summary) {
         await ctx.db.patch(summary._id, {
-          qualityRecoveryAttemptVersion: QUALITY_RECOVERY_VERSION,
+          qualityRecoveryAttemptVersion: version,
         });
       }
     };
@@ -1254,7 +1257,11 @@ export const queueQualityRetryIfAbsent = internalMutation({
     ) {
       return { queued: false, reason: "already_audited" as const };
     }
-    const versionedQualityRecovery = needsVersionedQualityRecovery(article);
+    const versionedQualityRecoveryVersion = qualityRecoveryTargetVersion(
+      article,
+    );
+    const versionedQualityRecovery =
+      versionedQualityRecoveryVersion !== undefined;
     if (
       (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
       !versionedQualityRecovery
@@ -1291,17 +1298,18 @@ export const queueQualityRetryIfAbsent = internalMutation({
         hasAttemptedVersionedQualityRecovery(
           priorAttempts,
           String(articleId),
+          versionedQualityRecoveryVersion,
         );
       if (alreadyAttemptedMechanicalRepair || alreadyAttemptedVersionedRecovery) {
         if (alreadyAttemptedVersionedRecovery) {
-          await markVersionedRecoveryAttempt();
+          await markVersionedRecoveryAttempt(versionedQualityRecoveryVersion);
         }
         return { queued: false, reason: "already_attempted" as const };
       }
     }
     const timestamp = now();
     if (versionedQualityRecovery) {
-      await markVersionedRecoveryAttempt();
+      await markVersionedRecoveryAttempt(versionedQualityRecoveryVersion);
     }
     const jobId = await ctx.db.insert("jobs", {
       siteId,
@@ -1314,7 +1322,7 @@ export const queueQualityRetryIfAbsent = internalMutation({
         ...(metadataOnlyRepair ? { metadataOnlyRepair: true } : {}),
         ...(deterministicRepair ? { deterministicRepair: true } : {}),
         ...(versionedQualityRecovery
-          ? { qualityRecoveryVersion: QUALITY_RECOVERY_VERSION }
+          ? { qualityRecoveryVersion: versionedQualityRecoveryVersion }
           : {}),
       },
       articleId,
@@ -3910,34 +3918,61 @@ export const markRetryableFailure = internalMutation({
     }
     if (!willRetry && job.type === "article" && job.siteId && job.articleId) {
       const article = await ctx.db.get(job.articleId);
-      const topic = article?.topicId
-        ? await ctx.db.get(article.topicId)
-        : null;
-      const settlement = article?.siteId === job.siteId
-        ? terminalTopicWorkerFailureSettlement({
+      const failure = article?.siteId === job.siteId
+        ? recoverableWorkerQualityFailure({
             error,
             attempts,
             maximumAttempts: MAX_JOB_ATTEMPTS + 1,
-            article: {
-              siteId: String(article.siteId),
-              status: article.status,
-              topicId: article.topicId ? String(article.topicId) : null,
-            },
-            topic: topic
-              ? {
-                  _id: String(topic._id),
-                  siteId: String(topic.siteId),
-                  status: topic.status,
-                  contentFeasibilityStatus: topic.contentFeasibilityStatus,
-                  planCheckpointTerminalFailureCode:
-                    topic.planCheckpointTerminalFailureCode,
-                }
-              : null,
-            checkedAt: currentTime,
           })
         : null;
-      if (settlement && topic) {
-        await ctx.db.patch(topic._id, settlement.topicPatch);
+      if (article && failure && article.status === "review") {
+        const publicationGateIssues = [
+          ...(article.publicationGateIssues ?? []),
+          failure.recoveryIssue,
+        ].filter((issue, index, issues) => issues.indexOf(issue) === index);
+        const qualityRevisionCount = Math.max(
+          article.qualityRevisionCount ?? 0,
+          MAX_QUALITY_REVISIONS,
+        );
+        const qualityRecoveryAttemptVersion = Math.max(
+          article.qualityRecoveryAttemptVersion ?? 0,
+          WORKER_LENGTH_RECOVERY_VERSION,
+        );
+        await ctx.db.patch(article._id, {
+          publicationGateStatus: "blocked",
+          publicationGateIssues,
+          publicationCheckedAt: currentTime,
+          qualityRevisionCount,
+          qualityRecoveryAttemptVersion,
+        });
+        const summary = await ctx.db
+          .query("article_summaries")
+          .withIndex("by_article", (q) => q.eq("articleId", article._id))
+          .first();
+        if (summary) {
+          await ctx.db.patch(summary._id, {
+            publicationGateStatus: "blocked",
+            publicationGateIssues,
+            publicationCheckedAt: currentTime,
+            qualityRevisionCount,
+            qualityRecoveryAttemptVersion,
+            articleUpdatedAt: currentTime,
+          });
+        }
+        const topic = article.topicId
+          ? await ctx.db.get(article.topicId)
+          : null;
+        if (topic && topicMatchesLegacyWorkerFailureSettlement(topic, failure)) {
+          await ctx.db.patch(topic._id, {
+            status: "planned",
+            contentFeasibilityStatus: undefined,
+            contentFeasibilityVersion: undefined,
+            contentFeasibilityIssues: undefined,
+            contentFeasibilityCheckedAt: undefined,
+            disqualifiedReason: undefined,
+            updatedAt: currentTime,
+          });
+        }
       }
     }
     await reconcileJobTopicLifecycle(ctx, job);
@@ -3955,18 +3990,19 @@ export const markRetryableFailure = internalMutation({
 });
 
 /**
- * Natural cadence repair for deterministic article-quality failures that
- * exhausted before terminal topic settlement was introduced. This is bounded,
- * tenant-scoped, provider-free, and idempotent. It never retries or queues
- * work; it only prevents a proven-infeasible intent from being purchased
- * again.
+ * Natural cadence migration for deterministic article-quality failures that
+ * exhausted under an older editing algorithm. This is bounded,
+ * tenant-scoped, provider-free, and idempotent. It marks only the exact draft
+ * from an exact quality-retry job and reverses a topic disqualification only
+ * when every field matches the legacy worker-generated settlement. Queueing
+ * remains a separate durable versioned boundary.
  */
 export const settleExhaustedArticleQualityFailuresForSiteInternal =
   internalMutation({
     args: { siteId: v.id("sites") },
     handler: async (ctx, { siteId }) => {
       const site = await ctx.db.get(siteId);
-      if (!site) return { inspected: 0, settled: 0 };
+      if (!site) return { inspected: 0, settled: 0, revived: 0 };
       const jobs = await ctx.db.query("jobs")
         .withIndex("by_site_type_created", (q) =>
           q.eq("siteId", siteId).eq("type", "article")
@@ -3975,44 +4011,101 @@ export const settleExhaustedArticleQualityFailuresForSiteInternal =
         .take(100);
       let inspected = 0;
       let settled = 0;
+      let revived = 0;
+      const migratedArticleIds = new Set<string>();
       for (const job of jobs) {
         if (
           job.status !== "failed" || !job.articleId || !job.error ||
           (job.workerAttempts ?? 0) < MAX_JOB_ATTEMPTS + 1
         ) continue;
         inspected += 1;
-        const article = await ctx.db.get(job.articleId);
+        const payload = job.payload && typeof job.payload === "object"
+          ? job.payload as Record<string, unknown>
+          : {};
         if (
-          !article || article.siteId !== siteId ||
-          !articleMatchesCurrentDomain(site, article) || !article.topicId
+          payload.qualityRetry !== true ||
+          payload.metadataOnlyRepair === true ||
+          payload.deterministicRepair === true ||
+          String(payload.articleId ?? "") !== String(job.articleId) ||
+          qualityRecoveryAttemptVersionFromJob(job) >=
+            WORKER_LENGTH_RECOVERY_VERSION
         ) continue;
-        const topic = await ctx.db.get(article.topicId);
-        const settlement = terminalTopicWorkerFailureSettlement({
+        const failure = recoverableWorkerQualityFailure({
           error: job.error,
           attempts: job.workerAttempts ?? 0,
           maximumAttempts: MAX_JOB_ATTEMPTS + 1,
-          article: {
-            siteId: String(article.siteId),
-            status: article.status,
-            topicId: String(article.topicId),
-          },
-          topic: topic
-            ? {
-                _id: String(topic._id),
-                siteId: String(topic.siteId),
-                status: topic.status,
-                contentFeasibilityStatus: topic.contentFeasibilityStatus,
-                planCheckpointTerminalFailureCode:
-                  topic.planCheckpointTerminalFailureCode,
-              }
-            : null,
-          checkedAt: Date.now(),
         });
-        if (!settlement || !topic) continue;
-        await ctx.db.patch(topic._id, settlement.topicPatch);
-        settled += 1;
+        if (!failure) continue;
+        const article = await ctx.db.get(job.articleId);
+        if (
+          !article || article.siteId !== siteId ||
+          !articleMatchesCurrentDomain(site, article) ||
+          article.status !== "review" ||
+          (article.qualityRecoveryVersion ?? 0) >=
+            WORKER_LENGTH_RECOVERY_VERSION ||
+          (article.qualityRecoveryAttemptVersion ?? 0) >=
+            WORKER_LENGTH_RECOVERY_VERSION
+        ) continue;
+        const migratedAt = Date.now();
+        const articleKey = String(article._id);
+        if (!migratedArticleIds.has(articleKey)) {
+          migratedArticleIds.add(articleKey);
+          const publicationGateIssues = [
+            ...(article.publicationGateIssues ?? []),
+            failure.recoveryIssue,
+          ].filter((issue, index, issues) => issues.indexOf(issue) === index);
+          const qualityRevisionCount = Math.max(
+            article.qualityRevisionCount ?? 0,
+            MAX_QUALITY_REVISIONS,
+          );
+          const articleChanged =
+            article.publicationGateStatus !== "blocked" ||
+            article.publicationGateIssues?.length !==
+              publicationGateIssues.length ||
+            article.publicationGateIssues?.some(
+              (issue, index) => issue !== publicationGateIssues[index],
+            ) ||
+            article.qualityRevisionCount !== qualityRevisionCount;
+          if (articleChanged) {
+            await ctx.db.patch(article._id, {
+              publicationGateStatus: "blocked",
+              publicationGateIssues,
+              publicationCheckedAt: migratedAt,
+              qualityRevisionCount,
+            });
+            const summary = await ctx.db
+              .query("article_summaries")
+              .withIndex("by_article", (q) => q.eq("articleId", article._id))
+              .first();
+            if (summary) {
+              await ctx.db.patch(summary._id, {
+                publicationGateStatus: "blocked",
+                publicationGateIssues,
+                publicationCheckedAt: migratedAt,
+                qualityRevisionCount,
+                articleUpdatedAt: migratedAt,
+              });
+            }
+            settled += 1;
+          }
+        }
+        const topic = article.topicId
+          ? await ctx.db.get(article.topicId)
+          : null;
+        if (topic && topicMatchesLegacyWorkerFailureSettlement(topic, failure)) {
+          await ctx.db.patch(topic._id, {
+            status: "planned",
+            contentFeasibilityStatus: undefined,
+            contentFeasibilityVersion: undefined,
+            contentFeasibilityIssues: undefined,
+            contentFeasibilityCheckedAt: undefined,
+            disqualifiedReason: undefined,
+            updatedAt: migratedAt,
+          });
+          revived += 1;
+        }
       }
-      return { inspected, settled };
+      return { inspected, settled, revived };
     },
   });
 

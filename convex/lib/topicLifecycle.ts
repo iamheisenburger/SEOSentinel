@@ -92,63 +92,110 @@ export function terminalTopicQualitySettlement(args: {
   };
 }
 
+export type RecoverableWorkerQualityFailure = {
+  actualWords: number;
+  minimumWords?: number;
+  maximumWords?: number;
+  recoveryIssue: string;
+  legacyFeasibilityStatus: "too_thin" | "quality_exhausted";
+  legacyIssue: string;
+};
+
 /**
- * Convert only deterministic, bounded worker-quality failures into the same
- * terminal topic settlement used by the publication audit. Provider/network
- * failures deliberately return null: exhausting an operational retry budget
- * is not evidence that the measured topic itself is infeasible.
+ * Recognize only an exhausted, deterministic prose-length failure. This is an
+ * editing-algorithm defect, not evidence that the tenant's measured topic is
+ * infeasible. The returned issue is deliberately stable so a later recovery
+ * algorithm can migrate the exact article once without matching arbitrary
+ * provider errors or customer prose.
  */
-export function terminalTopicWorkerFailureSettlement(args: {
+export function recoverableWorkerQualityFailure(args: {
   error: string;
   attempts: number;
   maximumAttempts: number;
-  article: {
-    siteId: string;
-    status?: string;
-    topicId?: string | null;
-  };
-  topic: {
-    _id: string;
-    siteId: string;
-    status?: string;
-    contentFeasibilityStatus?: string;
-    planCheckpointTerminalFailureCode?: string;
-  } | null | undefined;
-  checkedAt: number;
-}): ReturnType<typeof terminalTopicQualitySettlement> {
+}): RecoverableWorkerQualityFailure | null {
   if (args.attempts < args.maximumAttempts) return null;
 
-  const lengthContract = args.error.match(
-    /(?:reviewed draft|remediation|post-remediation fact check) missed the length contract \((\d+)\/(\d+)-(\d+) words\)/i,
+  const exactWorkerError = args.error.replace(
+    /^Worker failure exhausted after \d+ attempts:\s*/,
+    "",
   );
-  const becameTooThin = args.error.match(
-    /(?:editorial rewrite|compression) became too thin \((\d+) words\)/i,
+  const lengthContract = exactWorkerError.match(
+    /^(?:reviewed draft|remediation|post-remediation fact check) missed the length contract \((\d+)\/(\d+)-(\d+) words\)$/i,
   );
-  let issue: string | undefined;
+  const becameTooThin = exactWorkerError.match(
+    /^(?:editorial rewrite|compression) became too thin \((\d+) words\)$/i,
+  );
+  let actualWords: number | undefined;
+  let minimumWords: number | undefined;
+  let maximumWords: number | undefined;
+  let legacyFeasibilityStatus: "too_thin" | "quality_exhausted" | undefined;
+  let legacyIssue: string | undefined;
   if (lengthContract) {
-    const actual = Number(lengthContract[1]);
-    const minimum = Number(lengthContract[2]);
-    const maximum = Number(lengthContract[3]);
-    if (actual < minimum) {
-      issue = `Article is too thin (${actual} words; minimum ${minimum}).`;
-    } else if (actual > maximum) {
-      issue = `Article remains too long (${actual} words; maximum ${maximum}).`;
+    actualWords = Number(lengthContract[1]);
+    minimumWords = Number(lengthContract[2]);
+    maximumWords = Number(lengthContract[3]);
+    if (actualWords < minimumWords) {
+      legacyFeasibilityStatus = "too_thin";
+      legacyIssue =
+        `Article is too thin (${actualWords} words; minimum ${minimumWords}).`;
+    } else if (actualWords > maximumWords) {
+      legacyFeasibilityStatus = "quality_exhausted";
+      legacyIssue =
+        `Article remains too long (${actualWords} words; maximum ${maximumWords}).`;
     }
   } else if (becameTooThin) {
-    issue =
-      `Article is too thin (${Number(becameTooThin[1])} words; minimum required length not met).`;
+    actualWords = Number(becameTooThin[1]);
+    legacyFeasibilityStatus = "too_thin";
+    legacyIssue =
+      `Article is too thin (${actualWords} words; minimum required length not met).`;
   }
-  if (!issue) return null;
+  if (
+    actualWords === undefined || !legacyFeasibilityStatus || !legacyIssue
+  ) return null;
 
-  return terminalTopicQualitySettlement({
-    gateStatus: "blocked",
-    issues: [issue],
-    qualityRevisionCount: args.maximumAttempts,
-    maximumRevisions: args.maximumAttempts,
-    article: args.article,
-    topic: args.topic,
-    checkedAt: args.checkedAt,
-  });
+  return {
+    actualWords,
+    minimumWords,
+    maximumWords,
+    recoveryIssue: minimumWords !== undefined && maximumWords !== undefined
+      ? `Quality-review algorithm exhausted the strict length contract (${actualWords}/${minimumWords}-${maximumWords} words).`
+      : `Quality-review algorithm exhausted below the strict length minimum (${actualWords} words).`,
+    legacyFeasibilityStatus,
+    legacyIssue,
+  };
+}
+
+export function isRecoverableWorkerQualityIssue(issue: string): boolean {
+  return /^Quality-review algorithm exhausted (?:the strict length contract \(\d+\/\d+-\d+ words\)|below the strict length minimum \(\d+ words\))\.$/.test(
+    issue,
+  );
+}
+
+/**
+ * Reverse only the historical topic settlement produced by the old worker
+ * classifier. Exact equality across every durable receipt prevents this
+ * migration from reviving a topic disqualified by a real publication audit or
+ * by an owner/business-fit decision.
+ */
+export function topicMatchesLegacyWorkerFailureSettlement(
+  topic: {
+    status?: string;
+    contentFeasibilityStatus?: string;
+    contentFeasibilityVersion?: number;
+    contentFeasibilityIssues?: string[];
+    disqualifiedReason?: string;
+  },
+  failure: RecoverableWorkerQualityFailure,
+): boolean {
+  return (
+    topic.status === "disqualified" &&
+    topic.contentFeasibilityStatus === failure.legacyFeasibilityStatus &&
+    topic.contentFeasibilityVersion === CONTENT_FEASIBILITY_VERSION &&
+    topic.contentFeasibilityIssues?.length === 1 &&
+    topic.contentFeasibilityIssues[0] === failure.legacyIssue &&
+    topic.disqualifiedReason ===
+      `content_feasibility:${failure.legacyFeasibilityStatus}: ${failure.legacyIssue}`
+  );
 }
 
 export type TopicUpsertDecision =

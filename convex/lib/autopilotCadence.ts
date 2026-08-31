@@ -2,6 +2,7 @@ import {
   effectivePublishedAt,
   hasTerminalTopicFitFailure,
 } from "./autopilotBuffer.ts";
+import { isRecoverableWorkerQualityIssue } from "./topicLifecycle.ts";
 
 export type CadenceArticle = {
   _id?: string;
@@ -27,7 +28,9 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 1;
+export const QUALITY_RECOVERY_VERSION = 2;
+const MEDIA_QUALITY_RECOVERY_VERSION = 1;
+export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
 // the durable queue settle those attempts without replaying provider work.
@@ -116,15 +119,41 @@ export function needsDeterministicMechanicalRepair(
 export function needsVersionedQualityRecovery(
   article: CadenceArticle,
 ): boolean {
+  return qualityRecoveryTargetVersion(article) !== undefined;
+}
+
+/**
+ * Return the exact algorithm version that may process this draft. Recovery is
+ * defect-specific: incrementing the fleet version must not reopen every draft
+ * handled by an older, unrelated algorithm.
+ */
+export function qualityRecoveryTargetVersion(
+  article: CadenceArticle,
+): number | undefined {
   const issues = article.publicationGateIssues ?? [];
-  return (
+  const eligible =
     article.status === "review" &&
     article.publicationGateStatus === "blocked" &&
-    (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS &&
-    (article.qualityRecoveryVersion ?? 0) < QUALITY_RECOVERY_VERSION &&
-    (article.qualityRecoveryAttemptVersion ?? 0) < QUALITY_RECOVERY_VERSION &&
+    (article.qualityRevisionCount ?? 0) >= MAX_QUALITY_REVISIONS;
+  if (!eligible) return undefined;
+
+  if (
+    (article.qualityRecoveryVersion ?? 0) < WORKER_LENGTH_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      WORKER_LENGTH_RECOVERY_VERSION &&
+    issues.some(isRecoverableWorkerQualityIssue)
+  ) {
+    return WORKER_LENGTH_RECOVERY_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) < MEDIA_QUALITY_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      MEDIA_QUALITY_RECOVERY_VERSION &&
     issues.some((issue) => VERSIONED_MEDIA_RECOVERY_ISSUES.has(issue))
-  );
+  ) {
+    return MEDIA_QUALITY_RECOVERY_VERSION;
+  }
+  return undefined;
 }
 
 /**

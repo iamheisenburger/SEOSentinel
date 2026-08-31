@@ -8,6 +8,7 @@ import {
   hasRecoverableQualityWork,
   needsDeterministicMechanicalRepair,
   needsVersionedQualityRecovery,
+  qualityRecoveryTargetVersion,
   QUALITY_RECOVERY_VERSION,
   QUALITY_RECOVERY_VERSION_INTRODUCED_AT,
 } from "../convex/lib/autopilotCadence.ts";
@@ -171,6 +172,7 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
     qualityRevisionCount: 2,
   };
   assert.equal(needsVersionedQualityRecovery(legacy), true);
+  assert.equal(qualityRecoveryTargetVersion(legacy), 1);
 
   const window = evaluateCadenceWindow({
     articles: [legacy],
@@ -184,14 +186,14 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
   assert.equal(
     needsVersionedQualityRecovery({
       ...legacy,
-      qualityRecoveryVersion: QUALITY_RECOVERY_VERSION,
+      qualityRecoveryVersion: 1,
     }),
     false,
   );
   assert.equal(
     needsVersionedQualityRecovery({
       ...legacy,
-      qualityRecoveryAttemptVersion: QUALITY_RECOVERY_VERSION,
+      qualityRecoveryAttemptVersion: 1,
     }),
     false,
   );
@@ -215,6 +217,17 @@ test("a failed versioned recovery is durably recognized without provider replay"
         payload: { articleId, qualityRetry: true, bufferFill: true },
       }],
       articleId,
+    ),
+    false,
+  );
+  assert.equal(
+    hasAttemptedVersionedQualityRecovery(
+      [{
+        createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT,
+        payload: { articleId, qualityRetry: true, bufferFill: true },
+      }],
+      articleId,
+      1,
     ),
     true,
   );
@@ -286,6 +299,63 @@ test("versioned recovery cannot expire before a repair release reaches its next 
     ),
     undefined,
   );
+});
+
+test("worker-length recovery is version 2 and does not replay unrelated version 1 media work", () => {
+  const workerFailure = {
+    _id: "article-worker-length",
+    createdAt: NOW - 72 * HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Quality-review algorithm exhausted the strict length contract (1031/1200-3000 words).",
+    ],
+    qualityRevisionCount: 2,
+    qualityRecoveryVersion: 1,
+    qualityRecoveryAttemptVersion: 1,
+  };
+  assert.equal(QUALITY_RECOVERY_VERSION, 2);
+  assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
+  assert.equal(needsVersionedQualityRecovery(workerFailure), true);
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...workerFailure,
+      qualityRecoveryAttemptVersion: 2,
+    }),
+    false,
+  );
+
+  const completedMediaRecovery = {
+    ...workerFailure,
+    publicationGateIssues: [
+      "Strict publication requires a completed media-quality review.",
+    ],
+    qualityRecoveryVersion: 1,
+    qualityRecoveryAttemptVersion: 1,
+  };
+  assert.equal(qualityRecoveryTargetVersion(completedMediaRecovery), undefined);
+  assert.equal(needsVersionedQualityRecovery(completedMediaRecovery), false);
+});
+
+test("version 2 recovery matches only the durable algorithm issue contract", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    qualityRevisionCount: 2,
+  };
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Quality-review algorithm exhausted below the strict length minimum (899 words).",
+    ],
+  }), 2);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Customer says the quality-review algorithm exhausted below the strict length minimum.",
+    ],
+  }), undefined);
 });
 
 test("publication time, not old draft creation time, closes the cadence window", () => {
