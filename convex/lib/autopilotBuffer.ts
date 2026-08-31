@@ -415,6 +415,10 @@ export function autopilotHealthStatus(args: {
     "quota_reached",
     "site_limit_reached",
     "topic_replenishment_exhausted",
+    "opportunity_space_exhausted",
+    "planning_blocked",
+    "topic_admission_blocked",
+    "scheduler_state_conflict",
     "job_lease_exhausted",
     "rollout_observe",
     "rollout_conflict",
@@ -449,6 +453,9 @@ export function currentHealthOutcome(args: {
     "quality_quarantined",
     "quality_budget_exhausted",
     "topic_replenishment_exhausted",
+    "planning_blocked",
+    "topic_admission_blocked",
+    "scheduler_state_conflict",
   ]);
   if (
     contentFailures.has(args.lastOutcome) &&

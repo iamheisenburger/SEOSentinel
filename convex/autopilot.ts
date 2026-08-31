@@ -2776,6 +2776,7 @@ export const getOperatorSnapshot = internalQuery({
       running,
       donePlanJobs,
       failedPlanJobs,
+      latestTerminalOpportunity,
     ] =
       await Promise.all([
       ctx.db
@@ -2815,6 +2816,17 @@ export const getOperatorSnapshot = internalQuery({
         )
         .order("desc")
         .take(OPERATOR_PLAN_RECEIPT_LIMIT),
+      ctx.db
+        .query("opportunity_decision_receipts")
+        .withIndex("by_site_evaluated", (q) => q.eq("siteId", siteId))
+        .filter((q) =>
+          q.eq(
+            q.field("opportunityKey"),
+            "__forward_opportunity_space__",
+          )
+        )
+        .order("desc")
+        .first(),
     ]);
     const planJobs = latestTerminalPlanJobs(donePlanJobs, failedPlanJobs);
     const planReceipts = await Promise.all(planJobs.map(async (job) => {
@@ -2875,6 +2887,17 @@ export const getOperatorSnapshot = internalQuery({
         operatorArticleReceipt(article, isSealedReady(article))
       ),
       activeJobs: [...pending, ...running].map(operatorActiveJobReceipt),
+      terminalOpportunity: latestTerminalOpportunity
+        ? {
+            receiptId: latestTerminalOpportunity._id,
+            classification: latestTerminalOpportunity.classification,
+            admitted: latestTerminalOpportunity.admitted,
+            evidenceVersion: latestTerminalOpportunity.evidenceVersion,
+            inputHash: latestTerminalOpportunity.inputHash,
+            evaluatedAt: latestTerminalOpportunity.evaluatedAt,
+            automaticWakeAt: latestTerminalOpportunity.automaticWakeAt,
+          }
+        : null,
       // Why the natural backfill dispatchers last did or did not reserve work.
       // Demand and evidence are separate diagnoses so one stage can never
       // erase the other's reason.

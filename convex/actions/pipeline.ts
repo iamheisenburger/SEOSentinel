@@ -64,8 +64,10 @@ import {
   topicDiscoverySeedWindow,
 } from "../lib/autopilotBuffer";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
-import type { SchedulerRunOutcome } from
-  "../lib/autopilotRunOutcome.ts";
+import {
+  schedulerWorkIsBound,
+  type SchedulerRunOutcome,
+} from "../lib/autopilotRunOutcome.ts";
 import { evaluateSerpBusinessIntent } from "../lib/serpAttainability";
 import {
   DATAFORSEO_DEMAND_SOURCE,
@@ -7539,6 +7541,13 @@ export const autopilotTick = internalAction({
       internal.actions.scheduler.scheduleCadence,
       { siteId },
     );
+    if (!schedulerWorkIsBound(cadenceSchedule)) {
+      return finish(
+        { processed: 0 },
+        "scheduler_state_conflict",
+        "The scheduler reported work in progress without an exact active job receipt.",
+      );
+    }
     const bindCooldownPlan = async (jobId: Id<"jobs">): Promise<boolean> => {
       if (!topicPlanCooldown || !runId) return false;
       const armArgs = {
@@ -7764,6 +7773,16 @@ export const autopilotTick = internalAction({
       quota_reached: "The monthly generation quota is reached.",
       site_limit_reached: "The tenant exceeds its active site limit.",
       topic_replenishment_exhausted: "Topic recovery is cooling down and will retry automatically.",
+      opportunity_space_exhausted:
+        "No unconsumed eligible opportunity remains; a durable automatic recheck is scheduled.",
+      planning_blocked: rolloutBlockers.length > 0
+        ? `Planning was denied without creating a job: ${describeAutopilotBlockers(rolloutBlockers)}.`
+        : "Planning was denied without creating a job.",
+      topic_admission_blocked: rolloutBlockers.length > 0
+        ? `Topic admission was denied without creating a job: ${describeAutopilotBlockers(rolloutBlockers)}.`
+        : "Topic admission was denied without creating a job.",
+      scheduler_state_conflict:
+        "The scheduler reported work without an exact active job receipt.",
       cadence_failure_cooldown: cadenceSchedule.eligibleAt
         ? `Cadence recovery is blocked until ${new Date(cadenceSchedule.eligibleAt).toISOString()}.`
         : "Cadence recovery is blocked by an exact durable eligibility receipt.",

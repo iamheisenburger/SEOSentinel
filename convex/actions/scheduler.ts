@@ -558,6 +558,13 @@ export const scheduleCadence = internalAction({
           }),
       });
     }
+    const terminalOpportunity = inventoryAudit.opportunityDecisions.find(
+      (decision) =>
+        decision.opportunityKey === "__forward_opportunity_space__" &&
+        decision.classification === "opportunity_space_exhausted" &&
+        decision.admitted === false &&
+        decision.nextEligibleAt !== undefined,
+    );
     const portfolioAlertKind = portfolio.status === "below_goal"
       ? "topic_portfolio_below_goal"
       : "topic_portfolio_evidence_missing";
@@ -677,6 +684,7 @@ export const scheduleCadence = internalAction({
         scheduled: 0,
         mode: "work_in_progress",
         bufferCount: buffer.length,
+        activeJobId: contentBlockingJobs[0]._id,
         ...(activePlanJob ? { planJobId: activePlanJob._id } : {}),
       };
     }
@@ -746,11 +754,24 @@ export const scheduleCadence = internalAction({
         articleId: recoverable._id,
         bufferFill: autonomousDelivery || rolloutMode === "warm",
       });
-      return {
-        scheduled: recovery.queued ? 1 : 0,
-        mode: recovery.queued ? "quality_revision" : "work_in_progress",
-        bufferCount: buffer.length,
-      };
+      if (recovery.queued) {
+        return {
+          scheduled: 1,
+          mode: "quality_revision",
+          bufferCount: buffer.length,
+        };
+      }
+      if (recovery.jobId) {
+        return {
+          scheduled: 0,
+          mode: "work_in_progress",
+          bufferCount: buffer.length,
+          activeJobId: recovery.jobId,
+        };
+      }
+      // A one-shot recovery that is already attempted, audited, or over its
+      // revision limit is settled work. Continue to fresh inventory instead
+      // of stopping the cadence behind a job that does not exist.
     }
 
     // A candidate that cleared prose, evidence, and media can still be blocked
@@ -780,6 +801,26 @@ export const scheduleCadence = internalAction({
           bufferCount: buffer.length,
         };
       }
+      if (recovery.jobId) {
+        return {
+          scheduled: 0,
+          mode: "work_in_progress",
+          bufferCount: buffer.length,
+          activeJobId: recovery.jobId,
+        };
+      }
+    }
+
+    // A durable site-level refusal is a successful terminal convergence, not
+    // evidence of an imaginary worker. Quality recovery above gets first
+    // priority; once it is settled there is no generation candidate to queue.
+    if (terminalOpportunity) {
+      return {
+        scheduled: 0,
+        mode: "opportunity_space_exhausted",
+        bufferCount: buffer.length,
+        eligibleAt: terminalOpportunity.nextEligibleAt,
+      };
     }
 
     // Warm mode serially builds the initial safety buffer. Live canary mode
@@ -1108,12 +1149,24 @@ export const scheduleCadence = internalAction({
         };
       }
       if (!replenishment.queued) {
+        if (replenishment.jobId) {
+          return {
+            scheduled: 0,
+            mode: "work_in_progress",
+            bufferCount: buffer.length,
+            planJobId: replenishment.jobId,
+            activeJobId: replenishment.jobId,
+          };
+        }
         return {
           scheduled: 0,
-          mode: "work_in_progress",
+          mode: "planning_blocked",
           bufferCount: buffer.length,
-          ...(replenishment.jobId
-            ? { planJobId: replenishment.jobId }
+          blockers: [
+            replenishment.reason ?? "unclassified_plan_queue_denial",
+          ],
+          ...(replenishment.eligibleAt
+            ? { eligibleAt: replenishment.eligibleAt }
             : {}),
         };
       }
@@ -1184,12 +1237,28 @@ export const scheduleCadence = internalAction({
       }
     }
 
+    if (queued.queued) {
+      return {
+        scheduled: 1,
+        mode: autonomousDelivery || rolloutMode === "warm"
+          ? "buffer_fill"
+          : "cadence_generation",
+        bufferCount: buffer.length,
+      };
+    }
+    if (queued.jobId) {
+      return {
+        scheduled: 0,
+        mode: "work_in_progress",
+        bufferCount: buffer.length,
+        activeJobId: queued.jobId,
+      };
+    }
     return {
-      scheduled: queued.queued ? 1 : 0,
-      mode: queued.queued
-        ? autonomousDelivery || rolloutMode === "warm" ? "buffer_fill" : "cadence_generation"
-        : "work_in_progress",
+      scheduled: 0,
+      mode: "topic_admission_blocked",
       bufferCount: buffer.length,
+      blockers: [queued.reason ?? "unclassified_topic_queue_denial"],
     };
   },
 });

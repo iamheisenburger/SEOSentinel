@@ -13,6 +13,10 @@ export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   quota_reached: "blocked",
   site_limit_reached: "blocked",
   topic_replenishment_exhausted: "blocked",
+  opportunity_space_exhausted: "blocked",
+  planning_blocked: "blocked",
+  topic_admission_blocked: "blocked",
+  scheduler_state_conflict: "blocked",
   cadence_failure_cooldown: "blocked",
   public_url_pending: "waiting",
   automatic_live_promotion: "waiting",
@@ -45,7 +49,17 @@ export type CadenceScheduleResult = {
   // Exact automatic-plan receipt observed/created by the scheduler. Cooldown
   // runs use it only to bind a terminal observer; it is not queue authority.
   planJobId?: Id<"jobs">;
+  // `work_in_progress` is truthful only when it is bound to an exact active
+  // job. The pipeline enforces this field at runtime so a rejected queue
+  // request can never masquerade as leased work.
+  activeJobId?: Id<"jobs">;
 };
+
+export function schedulerWorkIsBound(
+  result: Pick<CadenceScheduleResult, "mode" | "activeJobId">,
+): boolean {
+  return result.mode !== "work_in_progress" || result.activeJobId !== undefined;
+}
 
 const JOB_RUN_OUTCOME_HEALTH = {
   claim_lost: "waiting",

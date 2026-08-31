@@ -881,6 +881,8 @@ export function operatorArticleReceipt(
     publicationAuditVersion: article.publicationAuditVersion,
     sealed,
     qualityRevisionCount: article.qualityRevisionCount,
+    qualityRecoveryVersion: article.qualityRecoveryVersion,
+    qualityRecoveryAttemptVersion: article.qualityRecoveryAttemptVersion,
     createdAt: article.articleCreatedAt,
     updatedAt: article.articleUpdatedAt,
   };
