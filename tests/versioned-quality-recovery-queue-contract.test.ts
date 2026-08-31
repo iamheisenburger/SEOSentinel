@@ -16,6 +16,11 @@ test("the durable quality queue admits the scheduler's one-shot versioned recove
   assert.match(queue, /qualityRecoveryTargetVersion\([\s\S]*article/);
   assert.match(queue, /reason: "revision_limit"/);
   assert.match(queue, /hasAttemptedVersionedQualityRecovery/);
+  assert.match(queue, /withIndex\("by_article_created"/);
+  assert.match(queue, /q\.eq\("articleId", articleId\)/);
+  assert.match(queue, /\.collect\(\)/);
+  assert.doesNotMatch(queue, /withIndex\("by_site_type_created"/);
+  assert.doesNotMatch(queue, /\.take\(\d+\)/);
   assert.match(queue, /qualityRecoveryAttemptVersion: version/);
   assert.match(queue, /qualityRecoveryVersion: versionedQualityRecoveryVersion/);
   assert.match(queue, /reason: "already_attempted"/);

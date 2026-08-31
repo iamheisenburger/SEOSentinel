@@ -1188,6 +1188,12 @@ export default defineSchema({
       "status",
       "createdAt",
     ])
+    .index("by_article_created", ["articleId", "createdAt"])
+    .index("by_article_status_created", [
+      "articleId",
+      "status",
+      "createdAt",
+    ])
     .index("by_status", ["status"]),
 
   // One immutable pre-SERP manifest per automatic plan execution. Candidate

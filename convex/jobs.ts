@@ -105,6 +105,7 @@ import {
   siteCanonicalDomainRevision,
   siteUsesLegacyDomainReceipts,
   takeCurrentDomainArticleSummaries,
+  takeCurrentDomainArticleSummariesByStatus,
   takeCurrentDomainTopics,
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
@@ -1279,11 +1280,11 @@ export const queueQualityRetryIfAbsent = internalMutation({
     if (metadataOnlyRepair || deterministicRepair || versionedQualityRecovery) {
       const priorAttempts = await ctx.db
         .query("jobs")
-        .withIndex("by_site_type_created", (q) =>
-          q.eq("siteId", siteId).eq("type", "article"),
+        .withIndex("by_article_created", (q) =>
+          q.eq("articleId", articleId),
         )
         .order("desc")
-        .take(100);
+        .collect();
       const alreadyAttemptedMechanicalRepair = priorAttempts.some((job) => {
         const payload = job.payload && typeof job.payload === "object"
           ? (job.payload as Record<string, unknown>)
@@ -4003,40 +4004,70 @@ export const settleExhaustedArticleQualityFailuresForSiteInternal =
     handler: async (ctx, { siteId }) => {
       const site = await ctx.db.get(siteId);
       if (!site) return { inspected: 0, settled: 0, revived: 0 };
-      const jobs = await ctx.db.query("jobs")
-        .withIndex("by_site_type_created", (q) =>
-          q.eq("siteId", siteId).eq("type", "article")
-        )
-        .order("desc")
-        .take(100);
+      // Start from the same bounded current-domain review inventory consumed
+      // by the scheduler, then join each candidate to its own failed-job
+      // history. A fleet-wide "latest N jobs" window strands an older draft
+      // as soon as an active tenant creates enough unrelated work; an
+      // article-bound index makes admission independent of tenant volume.
+      const reviewArticles = await takeCurrentDomainArticleSummariesByStatus(
+        ctx,
+        site,
+        "review",
+        25,
+      );
       let inspected = 0;
       let settled = 0;
       let revived = 0;
-      const migratedArticleIds = new Set<string>();
-      for (const job of jobs) {
+      for (const summary of reviewArticles) {
         if (
-          job.status !== "failed" || !job.articleId || !job.error ||
-          (job.workerAttempts ?? 0) < MAX_JOB_ATTEMPTS + 1
-        ) continue;
-        inspected += 1;
-        const payload = job.payload && typeof job.payload === "object"
-          ? job.payload as Record<string, unknown>
-          : {};
-        if (
-          payload.qualityRetry !== true ||
-          payload.metadataOnlyRepair === true ||
-          payload.deterministicRepair === true ||
-          String(payload.articleId ?? "") !== String(job.articleId) ||
-          qualityRecoveryAttemptVersionFromJob(job) >=
+          (summary.qualityRecoveryVersion ?? 0) >=
+            WORKER_LENGTH_RECOVERY_VERSION ||
+          (summary.qualityRecoveryAttemptVersion ?? 0) >=
             WORKER_LENGTH_RECOVERY_VERSION
         ) continue;
-        const failure = recoverableWorkerQualityFailure({
-          error: job.error,
-          attempts: job.workerAttempts ?? 0,
-          maximumAttempts: MAX_JOB_ATTEMPTS + 1,
-        });
-        if (!failure) continue;
-        const article = await ctx.db.get(job.articleId);
+        const failedJobs = await ctx.db.query("jobs")
+          .withIndex("by_article_status_created", (q) =>
+            q.eq("articleId", summary.articleId).eq("status", "failed")
+          )
+          .order("desc")
+          .collect();
+        inspected += failedJobs.length;
+        if (
+          hasAttemptedVersionedQualityRecovery(
+            failedJobs,
+            String(summary.articleId),
+            WORKER_LENGTH_RECOVERY_VERSION,
+          )
+        ) continue;
+        const failedQualityRecovery = failedJobs
+          .map((job) => {
+            if (
+              job.siteId !== siteId || job.type !== "article" ||
+              job.articleId !== summary.articleId || !job.error ||
+              (job.workerAttempts ?? 0) < MAX_JOB_ATTEMPTS + 1
+            ) return null;
+            const payload = job.payload && typeof job.payload === "object"
+              ? job.payload as Record<string, unknown>
+              : {};
+            if (
+              payload.qualityRetry !== true ||
+              payload.metadataOnlyRepair === true ||
+              payload.deterministicRepair === true ||
+              String(payload.articleId ?? "") !== String(summary.articleId) ||
+              qualityRecoveryAttemptVersionFromJob(job) >=
+                WORKER_LENGTH_RECOVERY_VERSION
+            ) return null;
+            const failure = recoverableWorkerQualityFailure({
+              error: job.error,
+              attempts: job.workerAttempts ?? 0,
+              maximumAttempts: MAX_JOB_ATTEMPTS + 1,
+            });
+            return failure;
+          })
+          .find((candidate) => candidate !== null);
+        if (!failedQualityRecovery) continue;
+        const failure = failedQualityRecovery;
+        const article = await ctx.db.get(summary.articleId);
         if (
           !article || article.siteId !== siteId ||
           !articleMatchesCurrentDomain(site, article) ||
@@ -4047,47 +4078,37 @@ export const settleExhaustedArticleQualityFailuresForSiteInternal =
             WORKER_LENGTH_RECOVERY_VERSION
         ) continue;
         const migratedAt = Date.now();
-        const articleKey = String(article._id);
-        if (!migratedArticleIds.has(articleKey)) {
-          migratedArticleIds.add(articleKey);
-          const publicationGateIssues = [
-            ...(article.publicationGateIssues ?? []),
-            failure.recoveryIssue,
-          ].filter((issue, index, issues) => issues.indexOf(issue) === index);
-          const qualityRevisionCount = Math.max(
-            article.qualityRevisionCount ?? 0,
-            MAX_QUALITY_REVISIONS,
-          );
-          const articleChanged =
-            article.publicationGateStatus !== "blocked" ||
-            article.publicationGateIssues?.length !==
-              publicationGateIssues.length ||
-            article.publicationGateIssues?.some(
-              (issue, index) => issue !== publicationGateIssues[index],
-            ) ||
-            article.qualityRevisionCount !== qualityRevisionCount;
-          if (articleChanged) {
-            await ctx.db.patch(article._id, {
-              publicationGateStatus: "blocked",
-              publicationGateIssues,
-              publicationCheckedAt: migratedAt,
-              qualityRevisionCount,
-            });
-            const summary = await ctx.db
-              .query("article_summaries")
-              .withIndex("by_article", (q) => q.eq("articleId", article._id))
-              .first();
-            if (summary) {
-              await ctx.db.patch(summary._id, {
-                publicationGateStatus: "blocked",
-                publicationGateIssues,
-                publicationCheckedAt: migratedAt,
-                qualityRevisionCount,
-                articleUpdatedAt: migratedAt,
-              });
-            }
-            settled += 1;
-          }
+        const publicationGateIssues = [
+          ...(article.publicationGateIssues ?? []),
+          failure.recoveryIssue,
+        ].filter((issue, index, issues) => issues.indexOf(issue) === index);
+        const qualityRevisionCount = Math.max(
+          article.qualityRevisionCount ?? 0,
+          MAX_QUALITY_REVISIONS,
+        );
+        const articleChanged =
+          article.publicationGateStatus !== "blocked" ||
+          article.publicationGateIssues?.length !==
+            publicationGateIssues.length ||
+          article.publicationGateIssues?.some(
+            (issue, index) => issue !== publicationGateIssues[index],
+          ) ||
+          article.qualityRevisionCount !== qualityRevisionCount;
+        if (articleChanged) {
+          await ctx.db.patch(article._id, {
+            publicationGateStatus: "blocked",
+            publicationGateIssues,
+            publicationCheckedAt: migratedAt,
+            qualityRevisionCount,
+          });
+          await ctx.db.patch(summary._id, {
+            publicationGateStatus: "blocked",
+            publicationGateIssues,
+            publicationCheckedAt: migratedAt,
+            qualityRevisionCount,
+            articleUpdatedAt: migratedAt,
+          });
+          settled += 1;
         }
         const topic = article.topicId
           ? await ctx.db.get(article.topicId)

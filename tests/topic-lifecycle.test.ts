@@ -262,22 +262,35 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   assert.match(jobs, /export const markRetryableFailure[\s\S]*recoverableWorkerQualityFailure/);
   assert.match(
     jobs,
-    /settleExhaustedArticleQualityFailuresForSiteInternal[\s\S]*by_site_type_created[\s\S]*recoverableWorkerQualityFailure[\s\S]*topicMatchesLegacyWorkerFailureSettlement/,
+    /settleExhaustedArticleQualityFailuresForSiteInternal[\s\S]*by_article_status_created[\s\S]*recoverableWorkerQualityFailure[\s\S]*topicMatchesLegacyWorkerFailureSettlement/,
   );
   assert.match(articles, /terminalTopicQualitySettlement/);
 });
 
-test("the natural cadence migrates only exact pre-fix quality jobs into versioned recovery", () => {
+test("the natural cadence joins exact review articles to their own failed jobs", () => {
   const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const schema = readFileSync("convex/schema.ts", "utf8");
   const migration = jobs.slice(
     jobs.indexOf("export const settleExhaustedArticleQualityFailuresForSiteInternal"),
     jobs.indexOf("export const markPublishFailed"),
   );
+  assert.match(migration, /takeCurrentDomainArticleSummariesByStatus/);
+  assert.match(migration, /withIndex\("by_article_status_created"/);
+  assert.match(
+    schema,
+    /\.index\("by_article_created", \["articleId", "createdAt"\]\)/,
+  );
+  assert.match(
+    schema,
+    /\.index\("by_article_status_created", \[\s*"articleId",\s*"status",\s*"createdAt",\s*\]\)/,
+  );
+  assert.match(migration, /q\.eq\("articleId", summary\.articleId\)\.eq\("status", "failed"\)/);
   assert.match(migration, /payload\.qualityRetry !== true/);
   assert.match(migration, /qualityRecoveryAttemptVersionFromJob\(job\)/);
   assert.match(migration, /articleMatchesCurrentDomain\(site, article\)/);
-  assert.match(migration, /new Set<string>\(\)/);
   assert.match(migration, /topicMatchesLegacyWorkerFailureSettlement/);
+  assert.doesNotMatch(migration, /withIndex\("by_site_type_created"/);
+  assert.doesNotMatch(migration, /\.take\(\d+\)/);
   assert.doesNotMatch(migration, /ctx\.scheduler|processNextJob/);
 
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
