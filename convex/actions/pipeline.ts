@@ -6658,7 +6658,7 @@ async function reviewExistingArticleHandler(
       reviewMarkdown = remediated.markdown;
     }
 
-    const reviewed = await factCheckArticle(
+    let reviewed = await factCheckArticle(
       reviewMarkdown,
       sources,
       bannedNames,
@@ -6669,6 +6669,7 @@ async function reviewExistingArticleHandler(
     if (reviewed.confidenceScore === undefined) {
       throw new Error("Draft fact check returned no confidence score");
     }
+    let reviewedConfidenceScore = reviewed.confidenceScore;
     const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
       markdown: reviewed.markdown,
       articleType: article.articleType ?? "standard",
@@ -6680,11 +6681,64 @@ async function reviewExistingArticleHandler(
       minWords: minimumWords,
       maxWords,
     });
-    const exactReviewedMarkdown = repairDanglingStructuredIntroductions(
+    let exactReviewedMarkdown = repairDanglingStructuredIntroductions(
       exactAudit.markdown,
     );
-    const audit = exactAudit.audit;
-    const stats = calculateArticleStats(exactReviewedMarkdown);
+    let audit = exactAudit.audit;
+    let stats = calculateArticleStats(exactReviewedMarkdown);
+
+    // Unsupported-claim removal is intentionally destructive: it may prune
+    // prose that the earlier editor counted toward the minimum. Retrying the
+    // same fact-check/audit sequence cannot restore that lost coverage and was
+    // exhausting every worker attempt on an identical sub-minimum artifact.
+    // Give the exact audited draft one bounded, evidence-constrained expansion
+    // inside the already-reserved quality-review attempt, then fact-check and
+    // deterministically audit the expanded artifact again before it can pass.
+    if (stats.wordCount < minimumWords) {
+      const lengthRecovered = await remediateFinalArticle({
+        markdown: exactReviewedMarkdown,
+        articleType: article.articleType ?? "standard",
+        primaryKeyword: topic?.primaryKeyword ?? article.title,
+        productName,
+        productEvidence,
+        researchEvidence,
+        sources,
+        minWords: minimumWords,
+        maxWords,
+        auditNotes: [
+          `The exact evidence audit reduced this draft to ${stats.wordCount} words. Restore useful, non-repetitive coverage to at least ${minimumWords} words using only the supplied product and research evidence. Do not add statistics, benchmarks, named claims, or citations that are absent from that evidence.`,
+        ],
+      });
+      const lengthFactChecked = await factCheckArticle(
+        lengthRecovered.markdown,
+        sources,
+        bannedNames,
+        productName,
+        productEvidence,
+        researchEvidence,
+      );
+      if (lengthFactChecked.confidenceScore === undefined) {
+        throw new Error("Length recovery fact check returned no confidence score");
+      }
+      const lengthAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
+        markdown: lengthFactChecked.markdown,
+        articleType: article.articleType ?? "standard",
+        primaryKeyword: topic?.primaryKeyword ?? article.title,
+        productName,
+        productEvidence,
+        researchEvidence,
+        sources,
+        minWords: minimumWords,
+        maxWords,
+      });
+      exactReviewedMarkdown = repairDanglingStructuredIntroductions(
+        lengthAudit.markdown,
+      );
+      reviewed = lengthFactChecked;
+      reviewedConfidenceScore = lengthFactChecked.confidenceScore;
+      audit = lengthAudit.audit;
+      stats = calculateArticleStats(exactReviewedMarkdown);
+    }
     if (stats.wordCount < minimumWords || stats.wordCount > maxWords) {
       throw new Error(
         `Reviewed draft missed the length contract (${stats.wordCount}/${minimumWords}-${maxWords} words)`,
@@ -6729,7 +6783,7 @@ async function reviewExistingArticleHandler(
     // assets; otherwise every initially quarantined article is permanently
     // blocked by its missing hero/product evidence even after the prose passes.
     const proseReadyForMedia =
-      reviewed.confidenceScore >= 85 &&
+      reviewedConfidenceScore >= 85 &&
       editorialQualityScore >= 85 &&
       evidenceDefects.length === 0 &&
       unsupportedClaims.length === 0 &&
@@ -6936,7 +6990,7 @@ async function reviewExistingArticleHandler(
       metaDescription: nextMetaDescription,
       wordCount: finalStats.wordCount,
       readingTime: finalStats.readingTime,
-      factCheckScore: reviewed.confidenceScore,
+      factCheckScore: reviewedConfidenceScore,
       editorialQualityScore,
       claimEvidence: audit.claimEvidence,
       claimEvidenceStatus:
@@ -6983,7 +7037,7 @@ async function reviewExistingArticleHandler(
       metaDescription: nextMetaDescription,
       wordCount: finalStats.wordCount,
       readingTime: finalStats.readingTime,
-      factCheckScore: reviewed.confidenceScore,
+      factCheckScore: reviewedConfidenceScore,
       factCheckNotes: [
         reviewed.notes,
         evidenceDefects.length > 0
@@ -7044,7 +7098,7 @@ async function reviewExistingArticleHandler(
 
     return {
       articleId,
-      factCheckScore: reviewed.confidenceScore,
+      factCheckScore: reviewedConfidenceScore,
       editorialQualityScore,
       evidenceDefectCount: evidenceDefects.length,
       wordCount: finalStats.wordCount,
