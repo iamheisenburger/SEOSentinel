@@ -251,6 +251,26 @@ test("the controlled conversion proves ingestion without entering customer metri
 
 test("the SMTP connection release proof can bind a post-deploy controlled socket receipt", () => {
   const growthLoopSource = readFileSync("convex/growthLoop.ts", "utf8");
+  assert.match(
+    growthLoopSource,
+    /const evidenceInboxId = controlledDelivery\?\.inboxId \?\? args\.inboxId/,
+  );
+  assert.match(
+    growthLoopSource,
+    /SMTP connection evidence names conflicting inboxes/,
+  );
+  assert.match(
+    growthLoopSource,
+    /const evidenceInboxId = message\?\.inboxId \?\? args\.inboxId/,
+  );
+  assert.match(
+    growthLoopSource,
+    /SMTP delivery evidence names conflicting inboxes/,
+  );
+  assert.match(
+    growthLoopSource,
+    /IMAP settlement evidence names conflicting inboxes/,
+  );
   assert.match(growthLoopSource, /controlledDelivery\.controlledCanaryKind !== "smtp_delivery"/);
   assert.match(growthLoopSource, /controlledDeliverySentAt: controlledDelivery\?\.sentAt/);
   assert.match(growthLoopSource, /controlledDelivery\?\.sentAt \?\? 0/);

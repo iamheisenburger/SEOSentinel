@@ -1143,11 +1143,19 @@ export const recordCanaryInternal = internalMutation({
         action.lastObservedAt,
       );
     } else if (args.kind === "smtp_connection") {
-      if (!args.inboxId) throw new Error("SMTP inbox evidence is required");
-      const [inbox, controlledDelivery] = await Promise.all([
-        ctx.db.get(args.inboxId),
-        args.messageId ? ctx.db.get(args.messageId) : Promise.resolve(null),
-      ]);
+      const controlledDelivery = args.messageId
+        ? await ctx.db.get(args.messageId)
+        : null;
+      // A controlled message is the authoritative tenant-bound relationship.
+      // Derive its inbox inside the transaction so a credential-safe operator
+      // never has to obtain or repeat the hidden inbox identifier.
+      const evidenceInboxId = controlledDelivery?.inboxId ?? args.inboxId;
+      if (!evidenceInboxId) throw new Error("SMTP inbox evidence is required");
+      if (
+        args.inboxId && controlledDelivery?.inboxId &&
+        args.inboxId !== controlledDelivery.inboxId
+      ) throw new Error("SMTP connection evidence names conflicting inboxes");
+      const inbox = await ctx.db.get(evidenceInboxId);
       const capability = inboundMonitoringCapability(inbox);
       if (
         !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
@@ -1192,13 +1200,14 @@ export const recordCanaryInternal = internalMutation({
         controlledDelivery?.sentAt ?? 0,
       );
     } else if (args.kind === "smtp_delivery") {
-      if (!args.inboxId || !args.messageId) {
-        throw new Error("SMTP delivery evidence is required");
-      }
-      const [inbox, message] = await Promise.all([
-        ctx.db.get(args.inboxId),
-        ctx.db.get(args.messageId),
-      ]);
+      if (!args.messageId) throw new Error("SMTP delivery evidence is required");
+      const message = await ctx.db.get(args.messageId);
+      const evidenceInboxId = message?.inboxId ?? args.inboxId;
+      if (!evidenceInboxId) throw new Error("SMTP delivery evidence is required");
+      if (
+        args.inboxId && message?.inboxId && args.inboxId !== message.inboxId
+      ) throw new Error("SMTP delivery evidence names conflicting inboxes");
+      const inbox = await ctx.db.get(evidenceInboxId);
       if (
         !inbox || inbox.siteId !== args.siteId || inbox.provider !== "smtp" ||
         !message || message.siteId !== args.siteId ||
@@ -1224,13 +1233,14 @@ export const recordCanaryInternal = internalMutation({
       }));
       observedAt = message.sentAt;
     } else if (["imap_reply", "imap_bounce", "imap_stop"].includes(args.kind)) {
-      if (!args.inboxId || !args.messageId) {
-        throw new Error("IMAP settlement evidence is required");
-      }
-      const [inbox, message] = await Promise.all([
-        ctx.db.get(args.inboxId),
-        ctx.db.get(args.messageId),
-      ]);
+      if (!args.messageId) throw new Error("IMAP settlement evidence is required");
+      const message = await ctx.db.get(args.messageId);
+      const evidenceInboxId = message?.inboxId ?? args.inboxId;
+      if (!evidenceInboxId) throw new Error("IMAP settlement evidence is required");
+      if (
+        args.inboxId && message?.inboxId && args.inboxId !== message.inboxId
+      ) throw new Error("IMAP settlement evidence names conflicting inboxes");
+      const inbox = await ctx.db.get(evidenceInboxId);
       const expectedKind = args.kind === "imap_reply"
         ? "reply"
         : args.kind === "imap_bounce"
