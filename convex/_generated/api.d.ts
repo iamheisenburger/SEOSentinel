@@ -96,6 +96,7 @@ import type * as lib_outreachInbound from "../lib/outreachInbound.js";
 import type * as lib_outreachInboundRelay from "../lib/outreachInboundRelay.js";
 import type * as lib_outreachPacing from "../lib/outreachPacing.js";
 import type * as lib_outreachPreparationBudget from "../lib/outreachPreparationBudget.js";
+import type * as lib_outreachRecipientConsent from "../lib/outreachRecipientConsent.js";
 import type * as lib_outreachSecurity from "../lib/outreachSecurity.js";
 import type * as lib_outreachSequence from "../lib/outreachSequence.js";
 import type * as lib_outreachSmtp from "../lib/outreachSmtp.js";
@@ -240,6 +241,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outreachInboundRelay": typeof lib_outreachInboundRelay;
   "lib/outreachPacing": typeof lib_outreachPacing;
   "lib/outreachPreparationBudget": typeof lib_outreachPreparationBudget;
+  "lib/outreachRecipientConsent": typeof lib_outreachRecipientConsent;
   "lib/outreachSecurity": typeof lib_outreachSecurity;
   "lib/outreachSequence": typeof lib_outreachSequence;
   "lib/outreachSmtp": typeof lib_outreachSmtp;

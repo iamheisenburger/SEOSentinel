@@ -20,7 +20,7 @@ import {
 import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import {
   DEFAULT_DAILY_SEND_CAP,
   DOMAIN_CONTACT_COOLDOWN_DAYS,
@@ -339,6 +339,34 @@ async function scheduleAutonomousSequenceCancellation(
  * serialized against the same indexed reads, so two tenants cannot claim it
  * concurrently.
  */
+/**
+ * Human-readable owner of a conflicting outreach mailbox.
+ *
+ * Returns a site the same owner controls, so the operator can go and free the
+ * mailbox. A mailbox held by a different account is never named: that would
+ * disclose another customer's configuration.
+ */
+async function outboundIdentityConflictLabel(
+  ctx: QueryCtx,
+  siteId: Id<"sites">,
+  fromEmail: string,
+  ownerUserId: string,
+): Promise<string | null> {
+  const holders = await ctx.db
+    .query("outreach_inboxes")
+    .withIndex("by_from_email", (q) =>
+      q.eq("fromEmail", fromEmail.trim().toLowerCase()),
+    )
+    .take(20);
+  for (const holder of holders) {
+    if (holder.siteId === siteId) continue;
+    const holderSite = await ctx.db.get(holder.siteId);
+    if (!holderSite || holderSite.userId !== ownerUserId) continue;
+    return holderSite.siteName?.trim() || holderSite.domain;
+  }
+  return null;
+}
+
 async function outboundIdentityUsedByAnotherTenant(
   ctx: QueryCtx,
   siteId: Id<"sites">,
@@ -808,7 +836,7 @@ export const configureSmtpInbox = mutation({
   handler: async (ctx, args) => {
     const site = await requireSiteOwner(ctx, args.siteId);
     if (!(await siteExecutionAuthorized(ctx, site))) {
-      throw new Error("This site is not eligible to configure outreach");
+      throw new ConvexError("This site is not eligible to configure outreach.");
     }
     const request = await ctx.db.query("managed_provisioning_requests")
       .withIndex("by_site", (q) => q.eq("siteId", args.siteId))
@@ -818,7 +846,7 @@ export const configureSmtpInbox = mutation({
       (request.outreachTransport !== "smtp" ||
         request.outreachMailbox.mode !== "connect_existing")
     ) {
-      throw new Error("Select SMTP in One Setup before saving SMTP credentials");
+      throw new ConvexError("Select SMTP in One Setup before saving SMTP credentials.");
     }
     if (
       request?.outreachSenderProfile &&
@@ -826,8 +854,8 @@ export const configureSmtpInbox = mutation({
         request.outreachSenderProfile.physicalMailingAddress !==
           args.physicalMailingAddress.trim())
     ) {
-      throw new Error(
-        "The SMTP sender identity must match the exact profile authorized in One Setup",
+      throw new ConvexError(
+        "The sender name and mailing address must match the profile authorised in One Setup.",
       );
     }
     const issues = smtpConfigIssues({
@@ -838,7 +866,7 @@ export const configureSmtpInbox = mutation({
       fromEmail: args.fromEmail,
     });
     if (issues.length) {
-      throw new Error(issues.map(describeSmtpIssue).join(" "));
+      throw new ConvexError(issues.map(describeSmtpIssue).join(" "));
     }
     const imapPassword = args.imapPassword?.trim() || args.password;
     const imapIssues = imapConfigIssues({
@@ -848,7 +876,7 @@ export const configureSmtpInbox = mutation({
       password: imapPassword,
     });
     if (imapIssues.length) {
-      throw new Error(
+      throw new ConvexError(
         "Enter a valid TLS IMAP server on port 993, username, and app password.",
       );
     }
@@ -859,14 +887,16 @@ export const configureSmtpInbox = mutation({
       args.physicalMailingAddress.trim().length < 15 ||
       !/^[a-z0-9_-]{1,63}$/i.test(args.dkimSelector.trim())
     ) {
-      throw new Error("Sender identity, mailing address, or DKIM selector is incomplete");
+      throw new ConvexError(
+        "Sender name, postal address, or DKIM selector is incomplete. The postal address must be at least 15 characters.",
+      );
     }
     const connectionIssues = outreachSenderConnectionIssues({
       siteDomain: site.domain,
       provider: "smtp",
       fromEmail,
     });
-    if (connectionIssues.length) throw new Error(connectionIssues.join(" "));
+    if (connectionIssues.length) throw new ConvexError(connectionIssues.join(" "));
     if (
       await outboundIdentityUsedByAnotherTenant(
         ctx,
@@ -876,7 +906,20 @@ export const configureSmtpInbox = mutation({
         "smtp",
       )
     ) {
-      throw new Error("This SMTP mailbox or sender domain belongs to another tenant");
+      // Naming the holder is the difference between an operator fixing this in
+      // seconds and guessing. Only the owner's own sites are named; a mailbox
+      // held by a different account stays anonymous.
+      const conflict = await outboundIdentityConflictLabel(
+        ctx,
+        args.siteId,
+        fromEmail,
+        site.userId!,
+      );
+      throw new ConvexError(
+        conflict
+          ? `${fromEmail} is already the outreach mailbox for ${conflict}. Disconnect it there first, or configure outreach on that site instead.`
+          : `${fromEmail} is already connected as an outreach mailbox on another account. One mailbox cannot send for two tenants.`,
+      );
     }
     const existing = await inboxForSite(ctx, args.siteId);
     if (
@@ -900,7 +943,7 @@ export const configureSmtpInbox = mutation({
     if (
       existing?.credentialOwnerAccountKey &&
       existing.credentialOwnerAccountKey !== ownerAccountKey
-    ) throw new Error("This mailbox belongs to another account");
+    ) throw new ConvexError("This mailbox belongs to another account.");
     if (existing && !existing.credentialOwnerAccountKey) {
       await quarantineLegacyUnownedDeliveryBeforeReconnect(
         ctx,
