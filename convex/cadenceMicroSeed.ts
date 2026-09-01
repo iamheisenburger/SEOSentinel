@@ -9,6 +9,7 @@ import {
 import { v } from "convex/values";
 import {
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
 import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
@@ -31,6 +32,7 @@ import {
   cadenceMicroSeedProviderPurpose,
   cadenceMicroSeedProviderReceiptValid,
   cadenceMicroSeedProviderTrigger,
+  cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedSourcePlanExecutionExhausted,
   cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedZeroResultReceiptValid,
@@ -41,6 +43,7 @@ import {
   type CadenceMicroSeedAttemptKind,
   type CadenceMicroSeedMetric,
 } from "./lib/cadenceMicroSeed";
+import { operatorTerminalPlanReceipt } from "./lib/operatorSnapshot";
 import {
   autopilotCandidateWindowStart,
   cadenceIntervalMs,
@@ -148,8 +151,9 @@ function maximumDifficultyForAuthority(
 function sourcePlanFingerprint(
   job: Doc<"jobs">,
   reservation: Doc<"provider_spend_reservations">,
+  checkpoints: readonly Doc<"plan_candidate_checkpoints">[],
 ): string {
-  return JSON.stringify({
+  const receipt = {
     contract: "cadence-micro-seed-source-plan-v1",
     jobId: String(job._id),
     siteId: job.siteId ? String(job.siteId) : null,
@@ -175,6 +179,42 @@ function sourcePlanFingerprint(
       releasedAt: reservation.releasedAt,
       createdAt: reservation.createdAt,
     },
+  };
+  // Preserve the v1 fingerprint byte-for-byte for already-admitted legacy
+  // continuation jobs. Checkpoints were never part of that contract. A
+  // checkpoint-qualified source is a newly admitted shape and binds its exact
+  // immutable partition in addition to the original v1 fields.
+  if (checkpoints.length === 0) return JSON.stringify(receipt);
+  return JSON.stringify({
+    ...receipt,
+    checkpoints: checkpoints.map((checkpoint) => ({
+      id: String(checkpoint._id),
+      siteId: String(checkpoint.siteId),
+      userId: checkpoint.userId,
+      planJobId: String(checkpoint.planJobId),
+      providerSpendReservationId: String(checkpoint.providerSpendReservationId),
+      providerCostCeilingMicroUsd: checkpoint.providerCostCeilingMicroUsd,
+      providerCostReservedMicroUsd: checkpoint.providerCostReservedMicroUsd,
+      reservationDay: checkpoint.reservationDay,
+      rolloutEpoch: checkpoint.rolloutEpoch,
+      policyVersion: checkpoint.policyVersion,
+      status: checkpoint.status,
+      workerExecution: checkpoint.workerExecution,
+      requiredVerifiedYield: checkpoint.requiredVerifiedYield,
+      candidateCapacity: checkpoint.candidateCapacity,
+      candidateTopicIds: checkpoint.candidateTopicIds.map(String),
+      candidateFingerprints: checkpoint.candidateFingerprints,
+      inlineCompletedTopicIds: checkpoint.inlineCompletedTopicIds?.map(String),
+      activatedTopicIds: checkpoint.activatedTopicIds?.map(String),
+      terminallyExcludedTopicIds:
+        checkpoint.terminallyExcludedTopicIds?.map(String),
+      inlineSuccessCommitNonce: checkpoint.inlineSuccessCommitNonce,
+      activationScheduledAt: checkpoint.activationScheduledAt,
+      activatedAt: checkpoint.activatedAt,
+      completedAt: checkpoint.completedAt,
+      createdAt: checkpoint.createdAt,
+      updatedAt: checkpoint.updatedAt,
+    })),
   });
 }
 
@@ -340,14 +380,10 @@ function validExhaustedSourcePlan(args: {
   site: Doc<"sites">;
   job: Doc<"jobs">;
   reservation: Doc<"provider_spend_reservations"> | null;
+  checkpoints: readonly Doc<"plan_candidate_checkpoints">[];
   timestamp: number;
-}): args is {
-  site: Doc<"sites">;
-  job: Doc<"jobs">;
-  reservation: Doc<"provider_spend_reservations">;
-  timestamp: number;
-} {
-  const { site, job, reservation, timestamp } = args;
+}): boolean {
+  const { site, job, reservation, checkpoints, timestamp } = args;
   const payload = job.payload && typeof job.payload === "object"
     ? job.payload as Record<string, unknown>
     : {};
@@ -362,23 +398,50 @@ function validExhaustedSourcePlan(args: {
       typeof result.providerBudget === "object"
     ? result.providerBudget as Record<string, unknown>
     : {};
+  const terminal = reservation && ["done", "failed"].includes(job.status)
+    ? operatorTerminalPlanReceipt({
+        siteId: site._id,
+        siteUserId: site.userId,
+        job,
+        domainBinding: "current",
+        expectedReservationTrigger:
+          topicPlanProviderReservationTriggerFromPayload(job.payload),
+        checkpoints,
+        reservation,
+      })
+    : null;
+  const legacyExecutionExhausted = isUnderfilledPlanContinuationPayload(
+      job.payload,
+    ) && cadenceMicroSeedSourcePlanExecutionExhausted({
+      status: job.status,
+      workerAttempts: job.workerAttempts,
+      workerToken: job.workerToken,
+      heartbeatAt: job.heartbeatAt,
+      leaseExpiresAt: job.leaseExpiresAt,
+      nextAttemptAt: job.nextAttemptAt,
+      jobCreatedAt: job.createdAt,
+      reservationDay: job.providerCostReservationDay,
+      marker,
+      result,
+    });
+  const checkpointExecutionExhausted = Boolean(
+    terminal?.checkpoint && cadenceMicroSeedCheckpointSourcePlanExhausted({
+      status: terminal.status,
+      checkpointState: terminal.checkpointState,
+      providerReservationState: terminal.providerReservationState,
+      persistedTopicCountState: terminal.persistedTopicCountState,
+      requiredVerifiedYield: terminal.checkpoint.requiredVerifiedYield,
+      usableTopicCount: terminal.checkpoint.usableTopicCount,
+    }),
+  );
   return Boolean(
     site.userId &&
       job.siteId === site._id &&
       job.type === "plan" &&
-      isUnderfilledPlanContinuationPayload(job.payload) &&
-      cadenceMicroSeedSourcePlanExecutionExhausted({
-        status: job.status,
-        workerAttempts: job.workerAttempts,
-        workerToken: job.workerToken,
-        heartbeatAt: job.heartbeatAt,
-        leaseExpiresAt: job.leaseExpiresAt,
-        nextAttemptAt: job.nextAttemptAt,
-        jobCreatedAt: job.createdAt,
-        reservationDay: job.providerCostReservationDay,
-        marker,
-        result,
-      }) &&
+      job.canonicalDomain === siteCanonicalDomain(site) &&
+      job.domainRevision === siteCanonicalDomainRevision(site) &&
+      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
+      (legacyExecutionExhausted || checkpointExecutionExhausted) &&
       providerBudget.workerExecution === 1 &&
       providerBudget.reservedMicroUsd ===
         AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
@@ -728,20 +791,40 @@ async function inspectReadiness(
     .order("desc")
     .take(50);
   let source:
-    | { job: Doc<"jobs">; reservation: Doc<"provider_spend_reservations"> }
+    | {
+        job: Doc<"jobs">;
+        reservation: Doc<"provider_spend_reservations">;
+        checkpoints: Doc<"plan_candidate_checkpoints">[];
+      }
     | undefined;
   for (const job of sourcePlans) {
-    const reservation = job.providerSpendReservationId
-      ? await ctx.db.get(job.providerSpendReservationId)
-      : null;
-    if (validExhaustedSourcePlan({ site, job, reservation, timestamp })) {
+    const [reservation, checkpoints] = await Promise.all([
+      job.providerSpendReservationId
+        ? ctx.db.get(job.providerSpendReservationId)
+        : Promise.resolve(null),
+      ctx.db.query("plan_candidate_checkpoints")
+        .withIndex("by_plan_job", (q) => q.eq("planJobId", job._id))
+        .order("desc")
+        .take(2),
+    ]);
+    if (validExhaustedSourcePlan({
+      site,
+      job,
+      reservation,
+      checkpoints,
+      timestamp,
+    })) {
       if (!reservation) continue;
-      source = { job, reservation };
+      source = { job, reservation, checkpoints };
       break;
     }
   }
   if (!source) return { ready: false, reason: "source_plan_not_exhausted" };
-  const sourceFingerprint = sourcePlanFingerprint(source.job, source.reservation);
+  const sourceFingerprint = sourcePlanFingerprint(
+    source.job,
+    source.reservation,
+    source.checkpoints,
+  );
   const sourceJobs = await ctx.db.query("cadence_micro_seed_jobs")
     .withIndex("by_site_source_plan", (q) =>
       q.eq("siteId", siteId).eq("sourcePlanId", source!.job._id)
@@ -1251,10 +1334,15 @@ export const beginProviderAttempt = internalMutation({
     ) {
       return { allowed: false as const, reason: "execution_fence_changed" as const };
     }
-    const [reservation, sourceReservation, sourcePlan] = await Promise.all([
+    const [reservation, sourceReservation, sourcePlan, sourceCheckpoints] =
+      await Promise.all([
       ctx.db.get(job.providerSpendReservationId),
       ctx.db.get(job.sourcePlanReservationId),
       ctx.db.get(job.sourcePlanId),
+      ctx.db.query("plan_candidate_checkpoints")
+        .withIndex("by_plan_job", (q) => q.eq("planJobId", job.sourcePlanId))
+        .order("desc")
+        .take(2),
     ]);
     const timestamp = Date.now();
     const providerCostCeilingMicroUsd =
@@ -1276,10 +1364,15 @@ export const beginProviderAttempt = internalMutation({
         site,
         job: sourcePlan,
         reservation: sourceReservation,
+        checkpoints: sourceCheckpoints,
         timestamp,
       }) ||
       !sourceReservation ||
-      sourcePlanFingerprint(sourcePlan, sourceReservation) !==
+      sourcePlanFingerprint(
+        sourcePlan,
+        sourceReservation,
+        sourceCheckpoints,
+      ) !==
         job.sourcePlanFingerprint
     ) throw new Error("Cadence micro-seed reservation is stale");
     const providerRequestTag = jobKind === "fallback"

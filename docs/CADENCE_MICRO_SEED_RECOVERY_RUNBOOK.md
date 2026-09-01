@@ -14,6 +14,13 @@ gate is re-read before the micro-seed receives a new current-day reservation.
 This prevents a midnight boundary from stranding a missed cadence without
 turning old historical plans into reusable spend authority.
 
+The source may be either the exhausted legacy two-execution continuation or an
+exact terminal single-execution candidate checkpoint whose immutable partition
+proves a retained no-replay reservation and fewer usable topics than its
+required verified yield. Checkpoint identity, candidate partition, persistence
+commit, reservation, current domain, and rollout epoch are fingerprinted and
+re-read at the provider boundary; a merely underfilled result cannot qualify.
+
 The recovery is automatic for every eligible warm/live autopilot tenant. The
 15-minute fleet pass is provider-free for ineligible sites and isolates each
 tenant. Current plan entitlement, site allowance, article quota, rollout

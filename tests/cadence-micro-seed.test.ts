@@ -11,6 +11,7 @@ import {
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   cadenceMicroSeedAnchors,
+  cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedProviderCeilingMicroUsd,
   cadenceMicroSeedProviderPurpose,
@@ -497,6 +498,41 @@ test("an exact terminal source plan survives UTC rollover only within the bounde
   assert.doesNotMatch(
     model,
     /providerCostReservationDay === utcDay\(timestamp\)/,
+  );
+});
+
+test("an exact retained checkpoint underfill can seed recovery without replaying its plan", () => {
+  assert.equal(cadenceMicroSeedCheckpointSourcePlanExhausted({
+    status: "done",
+    checkpointState: "single",
+    providerReservationState: "retained_no_replay",
+    persistedTopicCountState: "recorded",
+    requiredVerifiedYield: 7,
+    usableTopicCount: 1,
+  }), true);
+  assert.equal(cadenceMicroSeedCheckpointSourcePlanExhausted({
+    status: "done",
+    checkpointState: "single",
+    providerReservationState: "retained_no_replay",
+    persistedTopicCountState: "recorded",
+    requiredVerifiedYield: 7,
+    usableTopicCount: 7,
+  }), false);
+  assert.equal(cadenceMicroSeedCheckpointSourcePlanExhausted({
+    status: "done",
+    checkpointState: "multiple_or_invalid",
+    providerReservationState: "retained_no_replay",
+    persistedTopicCountState: "recorded",
+    requiredVerifiedYield: 7,
+    usableTopicCount: 1,
+  }), false);
+  assert.match(
+    model,
+    /operatorTerminalPlanReceipt[\s\S]*checkpointExecutionExhausted/,
+  );
+  assert.match(
+    model,
+    /sourcePlanFingerprint[\s\S]*checkpoints:/,
   );
 });
 

@@ -137,6 +137,28 @@ export function cadenceMicroSeedSourcePlanFresh(args: {
   );
 }
 
+export function cadenceMicroSeedCheckpointSourcePlanExhausted(args: {
+  status?: string;
+  checkpointState?: string;
+  providerReservationState?: string;
+  persistedTopicCountState?: string;
+  requiredVerifiedYield?: number;
+  usableTopicCount?: number;
+}): boolean {
+  return Boolean(
+    args.status === "done" &&
+      args.checkpointState === "single" &&
+      args.providerReservationState === "retained_no_replay" &&
+      args.persistedTopicCountState === "recorded" &&
+      Number.isSafeInteger(args.requiredVerifiedYield) &&
+      (args.requiredVerifiedYield ?? 0) > 0 &&
+      Number.isSafeInteger(args.usableTopicCount) &&
+      (args.usableTopicCount ?? -1) >= 0 &&
+      (args.usableTopicCount ?? Infinity) <
+        (args.requiredVerifiedYield ?? -Infinity)
+  );
+}
+
 export type CadenceMicroSeedMetric = {
   keyword: string;
   searchVolume: number;
