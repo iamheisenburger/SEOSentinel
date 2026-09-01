@@ -18,6 +18,7 @@ import {
   CADENCE_MICRO_SEED_MAX_FINALIZE_ATTEMPTS,
   CADENCE_MICRO_SEED_MAX_JOB_AGE_MS,
   CADENCE_MICRO_SEED_MAX_SCHEDULE_ATTEMPTS,
+  CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_MAX_WATCHDOG_RECOVERIES,
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_READ_LIMIT,
@@ -31,6 +32,7 @@ import {
   cadenceMicroSeedProviderReceiptValid,
   cadenceMicroSeedProviderTrigger,
   cadenceMicroSeedSourcePlanExecutionExhausted,
+  cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedZeroResultReceiptValid,
   normalizeCadenceMicroSeedText,
   selectCadenceMicroSeedAnchor,
@@ -387,7 +389,11 @@ function validExhaustedSourcePlan(args: {
         AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
       job.providerCostReservedMicroUsd ===
         AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      job.providerCostReservationDay === utcDay(timestamp) &&
+      cadenceMicroSeedSourcePlanFresh({
+        jobCreatedAt: job.createdAt,
+        reservationDay: job.providerCostReservationDay,
+        timestamp,
+      }) &&
       job.providerReservationReleasedAt === undefined &&
       reservation &&
       reservation.siteId === site._id &&
@@ -716,7 +722,7 @@ async function inspectReadiness(
     .withIndex("by_site_type_created", (q) =>
       q.eq("siteId", siteId).eq("type", "plan").gte(
         "createdAt",
-        utcDayStart(timestamp),
+        timestamp - CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
       )
     )
     .order("desc")

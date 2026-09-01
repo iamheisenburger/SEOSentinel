@@ -7,6 +7,7 @@ import { discoverCadenceMicroSeedFromDataForSEO } from
 import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD,
+  CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   cadenceMicroSeedAnchors,
@@ -16,6 +17,7 @@ import {
   cadenceMicroSeedProviderReceiptValid,
   cadenceMicroSeedProviderTrigger,
   cadenceMicroSeedSourcePlanExecutionExhausted,
+  cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedZeroResultReceiptValid,
   selectCadenceMicroSeedAnchor,
   selectCadenceMicroSeedCandidate,
@@ -463,6 +465,38 @@ test("a terminal underfill continuation proves execution two without granting th
   assert.match(
     model,
     /isUnderfilledPlanContinuationPayload[\s\S]*cadenceMicroSeedSourcePlanExecutionExhausted[\s\S]*providerBudget\.workerExecution === 1/,
+  );
+});
+
+test("an exact terminal source plan survives UTC rollover only within the bounded cadence window", () => {
+  const createdAt = Date.UTC(2026, 7, 29, 23, 59, 0);
+  assert.equal(cadenceMicroSeedSourcePlanFresh({
+    jobCreatedAt: createdAt,
+    reservationDay: "2026-08-29",
+    timestamp: Date.UTC(2026, 8, 1, 13, 45, 0),
+  }), true);
+  assert.equal(cadenceMicroSeedSourcePlanFresh({
+    jobCreatedAt: createdAt,
+    reservationDay: "2026-08-29",
+    timestamp: createdAt + CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS + 1,
+  }), false);
+  assert.equal(cadenceMicroSeedSourcePlanFresh({
+    jobCreatedAt: createdAt,
+    reservationDay: "2026-08-30",
+    timestamp: createdAt + 1,
+  }), false);
+  assert.equal(cadenceMicroSeedSourcePlanFresh({
+    jobCreatedAt: createdAt,
+    reservationDay: "2026-08-29",
+    timestamp: createdAt - 1,
+  }), false);
+  assert.match(
+    model,
+    /createdAt[\s\S]*CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS/,
+  );
+  assert.doesNotMatch(
+    model,
+    /providerCostReservationDay === utcDay\(timestamp\)/,
   );
 });
 

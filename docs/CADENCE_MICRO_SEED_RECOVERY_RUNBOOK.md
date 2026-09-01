@@ -6,6 +6,14 @@ evidence work after the ordinary two-execution topic plan is terminal. It does
 not reopen that plan or release, replace, or discount its immutable $2
 reservation.
 
+The exact terminal plan remains admissible for at most seven days, including
+across UTC-day rollover. Its recorded reservation day must still match its own
+creation day, its immutable source fingerprint must remain unchanged, and each
+current tenant, domain, rollout, authority, coverage, quota, and provider-ledger
+gate is re-read before the micro-seed receives a new current-day reservation.
+This prevents a midnight boundary from stranding a missed cadence without
+turning old historical plans into reusable spend authority.
+
 The recovery is automatic for every eligible warm/live autopilot tenant. The
 15-minute fleet pass is provider-free for ineligible sites and isolates each
 tenant. Current plan entitlement, site allowance, article quota, rollout

@@ -22,6 +22,14 @@ export const CADENCE_MICRO_SEED_LEASE_MS = 2 * 60 * 1000;
 export const CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS = 5 * 60 * 1000;
 export const CADENCE_MICRO_SEED_MAX_WATCHDOG_RECOVERIES = 12;
 export const CADENCE_MICRO_SEED_MAX_JOB_AGE_MS = 2 * 60 * 60 * 1000;
+// A terminal ordinary plan remains valid recovery evidence across a UTC-day
+// rollover. The micro-seed owns a fresh daily reservation and rechecks current
+// tenant/domain/evidence state; the source plan is only an immutable proof that
+// the larger discovery lane already exhausted its bounded executions. Seven
+// days covers the slowest supported weekly cadence without admitting stale
+// historical plans indefinitely.
+export const CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS =
+  7 * 24 * 60 * 60 * 1000;
 export const CADENCE_MICRO_SEED_FINALIZE_DELAY_MS = 2 * 60 * 1000;
 export const CADENCE_MICRO_SEED_MAX_FINALIZE_ATTEMPTS = 3;
 export const CADENCE_MICRO_SEED_MAX_SCHEDULE_ATTEMPTS = 3;
@@ -106,6 +114,26 @@ export function cadenceMicroSeedSourcePlanExecutionExhausted(args: {
       args.result.continuationStatus === "queued" &&
       args.result.continuationWorkerExecution === 2 &&
       args.result.remainingTopicCapacity === remainingTopicCapacity
+  );
+}
+
+export function cadenceMicroSeedSourcePlanFresh(args: {
+  jobCreatedAt: number;
+  reservationDay?: string;
+  timestamp: number;
+  maximumAgeMs?: number;
+}): boolean {
+  const maximumAgeMs = args.maximumAgeMs ??
+    CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS;
+  return Boolean(
+    Number.isSafeInteger(args.jobCreatedAt) &&
+      Number.isSafeInteger(args.timestamp) &&
+      Number.isSafeInteger(maximumAgeMs) &&
+      maximumAgeMs > 0 &&
+      args.jobCreatedAt <= args.timestamp &&
+      args.timestamp - args.jobCreatedAt <= maximumAgeMs &&
+      new Date(args.jobCreatedAt).toISOString().slice(0, 10) ===
+        args.reservationDay
   );
 }
 
