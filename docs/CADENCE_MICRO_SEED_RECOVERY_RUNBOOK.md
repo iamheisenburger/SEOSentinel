@@ -61,6 +61,13 @@ plan fingerprint, attempt kind, optional parent job/fingerprint, tenant seed,
 dynamic discovery ceiling, and `inspectionKey`. Inspection creates no provider
 reservation and makes no provider request.
 
+A completed natural demand batch may leave additional historical artifacts for
+later demand days. That clean backlog does not block an imminent empty-buffer
+micro-seed. After materialization, the exact micro topic already has current
+demand and may advance to its guarded evidence job ahead of those demand-only
+rows. Any evidence-ready artifact still has priority, and an incomplete,
+ambiguous, active, or non-natural demand receipt remains a hard stop.
+
 ## Reviewed apply
 
 Copy the inspection values without editing them:

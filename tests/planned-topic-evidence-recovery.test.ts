@@ -7,6 +7,7 @@ import {
 } from "../convex/lib/expectedClickDemandBackfill.ts";
 import {
   EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+  prioritizeEvidenceReadyCandidates,
 } from "../convex/lib/expectedClickEvidenceBackfill.ts";
 import {
   PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION,
@@ -432,10 +433,30 @@ test("guarded recovery and micro admission share the exact executable phase sele
     ready: false,
     actionable: false,
     reason: "daily_batch_exists",
+    continueToEvidence: true,
   }, {
     ready: false,
     actionable: false,
     reason: "demand_candidates_remaining",
+  }), null);
+  assert.equal(cadenceMicroSeedRecoveryBlockReason({
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+    continueToEvidence: false,
+  }, {
+    ready: false,
+    actionable: false,
+    reason: "demand_candidates_remaining",
+  }), "expected_click_recovery_unresolved");
+  assert.equal(cadenceMicroSeedRecoveryBlockReason({
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+  }, {
+    ready: false,
+    actionable: false,
+    reason: "demand_phase_incomplete",
   }), "expected_click_recovery_unresolved");
   assert.match(operatorRecovery, /selectPlannedRecoveryPhase/);
 });
@@ -531,7 +552,7 @@ test("phase fingerprint binds keyword observations, locale, domain, and tenant p
   for (const variant of variants) assert.notEqual(variant, base);
 });
 
-test("planned targets are fallback-only and cannot starve covered artifacts", () => {
+test("planned evidence cannot starve ready artifacts or be starved by demand-only artifacts", () => {
   const legacyCoverage = coveredIntentTopics([], [{
     slug: "legacy-lead-scoring-guide",
     status: "published",
@@ -548,18 +569,33 @@ test("planned targets are fallback-only and cannot starve covered artifacts", ()
     ["preferred", "distinct"],
   );
   for (const model of [demand, evidence]) {
-    assert.match(
-      model,
-      /const candidates = artifactCandidates\.length > 0[\s\S]*plannedCandidates/,
-    );
     assert.match(model, /filterNonCannibalizingIntentTopics\(/);
     assert.match(model, /artifactEligible/);
     assert.match(model, /plannedUnmaterialized/);
     assert.match(model, /coveredIntentTopics\(/);
     assert.match(model, /uniqueExactPlannedTargets\(/);
   }
+  assert.match(
+    demand,
+    /const candidates = artifactCandidates\.length > 0[\s\S]*plannedCandidates/,
+  );
   assert.match(demand, /artifactEvidencePending > 0[\s\S]*\[\]/);
-  assert.match(evidence, /artifactPendingDemand > 0[\s\S]*\[\]/);
+  assert.deepEqual(
+    prioritizeEvidenceReadyCandidates(["ready-artifact"], ["ready-planned"]),
+    ["ready-artifact"],
+  );
+  assert.deepEqual(
+    prioritizeEvidenceReadyCandidates([], ["ready-planned"]),
+    ["ready-planned"],
+  );
+  assert.match(
+    evidence,
+    /Demand-only historical[\s\S]*prioritizeEvidenceReadyCandidates\([\s\S]*artifactCandidates,[\s\S]*plannedCandidates/,
+  );
+  assert.match(
+    evidence,
+    /plannedRecoveryGuard[\s\S]*inventory\.artifactCandidates\.length === 0[\s\S]*inventory\.plannedCandidates/,
+  );
 });
 
 test("plan, quota, job, article, authority, locale and epoch gates repeat at paid boundaries", () => {

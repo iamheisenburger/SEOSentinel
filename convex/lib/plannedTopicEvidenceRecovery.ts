@@ -149,6 +149,7 @@ type PlannedRecoveryReadiness = null | {
   ready?: boolean;
   actionable?: boolean;
   reason?: string;
+  continueToEvidence?: boolean;
   reservationDay?: string;
   rolloutEpoch?: number;
   candidateCounts?: { artifactEligible?: number };
@@ -195,7 +196,9 @@ export function selectPlannedRecoveryPhase(
 
 /** Decide whether cadence discovery may proceed after both ordinary recovery
  * phases were inspected from the same snapshot. Actionable uncertainty is a
- * hard stop; only a clean, non-actionable absence permits micro discovery. */
+ * hard stop. A clean demand backlog is also admissible: the micro topic is
+ * materialized with current demand, and the evidence phase is allowed to
+ * advance evidence-ready planned work ahead of unrelated demand-only rows. */
 export function cadenceMicroSeedRecoveryBlockReason(
   demand: PlannedRecoveryReadiness,
   evidence: PlannedRecoveryReadiness,
@@ -212,11 +215,18 @@ export function cadenceMicroSeedRecoveryBlockReason(
     return "expected_click_recovery_unresolved";
   }
   // A micro topic must buy a new same-day evidence job immediately after
-  // materialization. `no_current_demand_candidates` is the only clean empty
-  // evidence inventory state that proves the guarded handoff can become
-  // selectable. A terminal batch, pending demand, or any unknown state would
-  // make discovery spend end in a guaranteed cadence miss.
-  if (evidence?.reason !== "no_current_demand_candidates") {
+  // materialization. Both admitted states prove there is no evidence-ready
+  // work now. `demand_candidates_remaining` is safe because the new micro
+  // topic carries current demand and becomes the exact guarded evidence
+  // selection; unresolved jobs, an existing evidence batch, and unknown
+  // states still fail closed above or here.
+  const cleanDemandBacklog =
+    evidence?.reason === "demand_candidates_remaining" &&
+    demand?.continueToEvidence === true;
+  if (
+    evidence?.reason !== "no_current_demand_candidates" &&
+    !cleanDemandBacklog
+  ) {
     return "expected_click_recovery_unresolved";
   }
   return null;

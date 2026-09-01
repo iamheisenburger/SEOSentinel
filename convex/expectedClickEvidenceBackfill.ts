@@ -20,6 +20,7 @@ import {
   expectedClickBackfillSelectionScore,
   hasCurrentExpectedClickDemand,
   needsExpectedClickEvidenceBackfill,
+  prioritizeEvidenceReadyCandidates,
   selectExpectedClickBackfillCandidates,
   utcBackfillDay,
 } from "./lib/expectedClickEvidenceBackfill";
@@ -568,11 +569,15 @@ function evidenceCandidateInventory(args: {
   ).length;
   candidateCounts.artifactEligible = artifactCandidates.length;
   candidateCounts.plannedUnmaterialized = plannedCandidates.length;
-  const candidates = artifactCandidates.length > 0
-    ? artifactCandidates
-    : artifactPendingDemand > 0
-      ? []
-      : plannedCandidates;
+  // Evidence-ready covered artifacts retain priority. Demand-only historical
+  // artifacts do not block evidence-ready planned topics: the phase planner
+  // independently binds the completed demand batch and permits ready evidence
+  // to advance while later demand candidates remain. Without this distinction
+  // an empty cadence buffer can be starved behind days of legacy measurement.
+  const candidates = prioritizeEvidenceReadyCandidates(
+    artifactCandidates,
+    plannedCandidates,
+  );
   candidateCounts.eligible = candidates.length;
   return {
     candidates,
@@ -1419,8 +1424,7 @@ async function reserveEvidenceOutcome(
       plannedAuthorityFresh: true,
     });
     const candidates = plannedRecoveryGuard
-      ? inventory.artifactCandidates.length === 0 &&
-          inventory.artifactPendingDemand === 0
+      ? inventory.artifactCandidates.length === 0
         ? inventory.plannedCandidates
         : []
       : plannedTargetsAllowedForQueue(origin, false)

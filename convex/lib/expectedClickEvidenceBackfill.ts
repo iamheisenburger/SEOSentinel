@@ -182,6 +182,20 @@ export function selectExpectedClickBackfillCandidates<
     .slice(0, boundedLimit);
 }
 
+/**
+ * Covered artifacts with complete demand are the first evidence priority.
+ * Artifacts that still need a separate demand call are not evidence-ready and
+ * therefore cannot starve a planned topic whose demand is already current.
+ */
+export function prioritizeEvidenceReadyCandidates<Candidate>(
+  artifactCandidates: readonly Candidate[],
+  plannedCandidates: readonly Candidate[],
+): Candidate[] {
+  return artifactCandidates.length > 0
+    ? [...artifactCandidates]
+    : [...plannedCandidates];
+}
+
 export function expectedClickBackfillRemainingCostMicroUsd(args: {
   selectedTopics: number;
   serpSnapshots: number;
