@@ -72,6 +72,14 @@ export function planOutreachFleetSite(
   if (phase === "maintenance") {
     const bootstrapDurability =
       state.autonomyDurabilityMigrationPending === true;
+    // Draft creation is a local, approval-only operation and deliberately
+    // supports tenants that have not connected a sender yet. If an inbox does
+    // exist, its identity must still be current and connected. Delivery keeps
+    // the stronger transport, inbound, consent, and due-message gates below.
+    const preparationInboxReady = !state.hasInbox || Boolean(
+      inboxOwnerCurrent &&
+        CONNECTED_INBOX_STATUSES.has(state.inboxStatus ?? ""),
+    );
     return {
       prepare:
         !bootstrapDurability &&
@@ -79,9 +87,7 @@ export function planOutreachFleetSite(
         ["warm", "live"].includes(state.autopilotRolloutMode ?? "observe") &&
         (state.hasVerifiedOpportunities ||
           state.autonomyReconciliationPending === true) &&
-        state.hasInbox &&
-        inboxOwnerCurrent &&
-        CONNECTED_INBOX_STATUSES.has(state.inboxStatus ?? ""),
+        preparationInboxReady,
       deliver: false,
       // Link receipts remain truthful even if the tenant later disconnects
       // its sending inbox.

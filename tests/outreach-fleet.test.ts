@@ -111,6 +111,51 @@ test("maintenance prepares existing evidence and verifies links without discover
   assert.doesNotMatch(source, /analyzeBacklinksInternal|actions\.backlinks/);
 });
 
+test("approval-only drafts are prepared before a sender is connected", () => {
+  const plan = planOutreachFleetSite(state({
+    hasInbox: false,
+    inboxProvider: undefined,
+    inboxStatus: undefined,
+    inboxMode: undefined,
+    inboxVerified: false,
+    inboxOwnerCurrent: undefined,
+    outboundTransportReady: false,
+    inboundMonitoringReady: false,
+    inboundMonitoringMode: "unavailable",
+    hasVerifiedOpportunities: true,
+  }), "maintenance");
+  assert.equal(plan.prepare, true);
+  assert.equal(plan.deliver, false);
+
+  const delivery = planOutreachFleetSite(state({
+    hasInbox: false,
+    inboxProvider: undefined,
+    inboxStatus: undefined,
+    inboxMode: undefined,
+    inboxVerified: false,
+    inboxOwnerCurrent: undefined,
+    outboundTransportReady: false,
+    inboundMonitoringReady: false,
+    inboundMonitoringMode: "unavailable",
+    hasVerifiedOpportunities: true,
+  }), "delivery");
+  assert.equal(delivery.deliver, false);
+});
+
+test("a stale existing sender blocks preparation instead of falling through", () => {
+  for (const overrides of [
+    { inboxOwnerCurrent: false },
+    { inboxOwnerCurrent: undefined },
+    { inboxStatus: "disconnected" },
+  ]) {
+    const plan = planOutreachFleetSite(state({
+      hasVerifiedOpportunities: true,
+      ...overrides,
+    }), "maintenance");
+    assert.equal(plan.prepare, false);
+  }
+});
+
 test("duplicate inbox configuration fails closed for every fleet phase", () => {
   for (const phase of ["maintenance", "delivery"] as const) {
     const plan = planOutreachFleetSite(state({

@@ -61,7 +61,7 @@ export function schedulerWorkIsBound(
   return result.mode !== "work_in_progress" || result.activeJobId !== undefined;
 }
 
-const JOB_RUN_OUTCOME_HEALTH = {
+export const JOB_RUN_OUTCOME_HEALTH = {
   claim_lost: "waiting",
   retry_scheduled: "waiting",
   plan_continuation_queued: "waiting",
@@ -74,6 +74,65 @@ const JOB_RUN_OUTCOME_HEALTH = {
   job_failed: "blocked",
   site_parked: "blocked",
 } as const;
+
+/**
+ * Outcomes written outside the scheduler/job classifiers (for example by
+ * onboarding, cooldown wake, or domain-epoch invalidation paths). Keeping the
+ * complete operator projection beside the runtime classifier prevents a
+ * legitimate stored receipt from being silently rewritten to `unclassified`
+ * by a second, stale allowlist.
+ */
+const SYSTEM_RUN_OUTCOMES = [
+  "failed",
+  "domain_epoch_invalidated",
+  "cadence_held",
+  "onboarding_in_progress",
+  "onboarding_cooling_down",
+  "onboarding_budget_blocked",
+  "onboarding_failed",
+  "onboarding_cache_invalid",
+  "wake_receipt_incompatible",
+  "autopilot_or_entitlement_ineligible",
+  "rollout_epoch_changed",
+  "plan_cooldown_fence_changed",
+  "plan_history_overflow",
+  "newer_topic_plan_exists",
+  "continuation_before_claim",
+  "active_job",
+] as const;
+
+export const AUTOPILOT_OPERATOR_RUN_OUTCOMES: ReadonlySet<string> = new Set([
+  ...Object.keys(SCHEDULER_RUN_OUTCOME_HEALTH),
+  ...Object.keys(JOB_RUN_OUTCOME_HEALTH),
+  ...SYSTEM_RUN_OUTCOMES,
+]);
+
+const SCHEDULER_BLOCKED_HEALTH_STATUSES = Object.entries(
+  SCHEDULER_RUN_OUTCOME_HEALTH,
+).filter(([, kind]) => kind === "blocked").map(([outcome]) => outcome);
+
+/** Every health status that can be persisted or derived by runtime audits. */
+export const AUTOPILOT_OPERATOR_HEALTH_STATUSES: ReadonlySet<string> = new Set([
+  ...SCHEDULER_BLOCKED_HEALTH_STATUSES,
+  "recovering",
+  "readiness_blocked",
+  "run_failed",
+  "run_outcome_unclassified",
+  "healthy",
+  "buffer_empty",
+  "buffer_low",
+  "scheduler_stale",
+  "missed",
+  "quality_budget_exhausted",
+  "job_lease_exhausted",
+  "rollout_conflict",
+  "rollout_buffer_ready",
+  "topic_portfolio_below_goal",
+  "topic_portfolio_evidence_missing",
+  ...Object.entries(JOB_RUN_OUTCOME_HEALTH)
+    .filter(([, kind]) => kind === "blocked")
+    .map(([outcome]) => outcome),
+]);
 
 export type AutopilotRunHealthClassification = {
   status: string;

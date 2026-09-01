@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  AUTOPILOT_OPERATOR_HEALTH_STATUSES,
+  AUTOPILOT_OPERATOR_RUN_OUTCOMES,
   classifyAutopilotRunOutcome,
+  JOB_RUN_OUTCOME_HEALTH,
   SCHEDULER_RUN_OUTCOME_HEALTH,
 } from "../convex/lib/autopilotRunOutcome.ts";
 
@@ -16,6 +19,36 @@ test("every declared scheduler outcome has an explicit health decision", () => {
       `${outcome} must be classified`,
     );
   }
+});
+
+test("runtime and operator projections share one exhaustive outcome contract", () => {
+  for (const outcome of [
+    ...Object.keys(SCHEDULER_RUN_OUTCOME_HEALTH),
+    ...Object.keys(JOB_RUN_OUTCOME_HEALTH),
+  ]) {
+    assert.equal(
+      AUTOPILOT_OPERATOR_RUN_OUTCOMES.has(outcome),
+      true,
+      `${outcome} must remain visible to operators`,
+    );
+    for (const approvedBufferCount of [0, 1, 2]) {
+      const classification = classifyAutopilotRunOutcome({
+        outcome,
+        approvedBufferCount,
+      });
+      assert.equal(classification.recognized, true);
+      assert.equal(
+        AUTOPILOT_OPERATOR_HEALTH_STATUSES.has(classification.status),
+        true,
+        `${classification.status} must remain visible to operators`,
+      );
+    }
+  }
+  const operator = readFileSync("convex/lib/operatorSnapshot.ts", "utf8");
+  assert.match(operator, /AUTOPILOT_OPERATOR_RUN_OUTCOMES/);
+  assert.match(operator, /AUTOPILOT_OPERATOR_HEALTH_STATUSES/);
+  assert.doesNotMatch(operator, /const RUN_OUTCOMES =/);
+  assert.doesNotMatch(operator, /const HEALTH_STATUSES =/);
 });
 
 test("cooldown and unknown nonprogress can never report healthy at zero buffer", () => {

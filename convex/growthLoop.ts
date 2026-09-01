@@ -18,6 +18,15 @@ import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { addSearchConsoleDays } from "./lib/searchPerformance";
 import { buildGrowthScorecard } from "./lib/growthScorecard";
 import {
+  dataForSeoLanguageCode,
+  dataForSeoLocationCode,
+} from "./lib/dataForSeoLocale";
+import { DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL } from "./lib/seoGrowth";
+import {
+  evaluateSchedulerReadyTopicInventory,
+  SCHEDULER_TOPIC_INVENTORY_READ_LIMIT,
+} from "./lib/schedulerTopicReadiness";
+import {
   capabilityReceipt,
   GROWTH_LOOP_CONTRACT_VERSION,
   GROWTH_LOOP_RELEASE_VERSION,
@@ -243,11 +252,12 @@ export const getStatus = query({
           endDate: site.gscDataThrough,
         }
       : undefined;
-    const [request, health, topics, articles, actions, inboxes, resources, opportunities, rollups, gscRead] =
+    const [request, health, growthGoal, topics, articles, actions, inboxes, resources, opportunities, rollups, gscRead] =
       await Promise.all([
         ctx.db.query("managed_provisioning_requests").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
         ctx.db.query("autopilot_health").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
-        ctx.db.query("topic_clusters").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(500),
+        ctx.db.query("seo_growth_goals").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
+        ctx.db.query("topic_clusters").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SCHEDULER_TOPIC_INVENTORY_READ_LIMIT + 1),
         ctx.db.query("articles").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(500),
         ctx.db.query("seo_growth_actions").withIndex("by_site_priority", (q) => q.eq("siteId", siteId)).take(500),
         ctx.db.query("outreach_inboxes").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(10),
@@ -262,6 +272,31 @@ export const getStatus = query({
       .withIndex("by_site_evaluated", (q) => q.eq("siteId", siteId))
       .order("desc")
       .first();
+    // Customer-visible planning readiness must use the exact evidence and
+    // admission decision used by the scheduler. A stale `planned` label is not
+    // proof that a safe article can be produced.
+    const schedulerReadiness =
+      topics.length <= SCHEDULER_TOPIC_INVENTORY_READ_LIMIT
+        ? evaluateSchedulerReadyTopicInventory({
+            site,
+            topics,
+            monthlyOrganicClickGoal:
+              growthGoal?.monthlyOrganicClicksGoal ??
+              DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
+            currentLocationCode: dataForSeoLocationCode(site.targetCountry),
+            currentLanguageCode: dataForSeoLanguageCode(site.language),
+          })
+        : null;
+    const planningReady =
+      (schedulerReadiness?.schedulerReadyTopicIds.length ?? 0) > 0;
+    const planningBlocker = planningReady
+      ? undefined
+      : schedulerReadiness === null
+        ? "planning_snapshot_read_limit"
+        : latestOpportunity?.classification ??
+          (health?.portfolioStatus === "below_goal"
+            ? "opportunity_space_exhausted"
+            : "opportunity_decision_pending");
     const customerAcquiredOpportunities = opportunities.filter(
       (opportunity) => opportunity.type !== "controlled_backlink_canary",
     );
@@ -400,21 +435,14 @@ export const getStatus = query({
       },
       {
         key: "planning",
-        state: latestOpportunity?.classification === "eligible" || topics.some((topic) => topic.status === "planned")
+        state: planningReady
           ? "ready"
           : latestOpportunity?.classification === "opportunity_space_exhausted"
             ? "degraded"
             : "waiting_pentra",
-        blockerCode: latestOpportunity?.classification === "eligible" || topics.some((topic) => topic.status === "planned")
-          ? undefined
-          : latestOpportunity?.classification ??
-            (health?.portfolioStatus === "below_goal"
-              ? "opportunity_space_exhausted"
-              : "opportunity_decision_pending"),
-        nextEligibleAt: latestOpportunity?.classification === "eligible" || topics.some((topic) => topic.status === "planned")
-          ? undefined : planningWake,
-        automaticWakeAt: latestOpportunity?.classification === "eligible" || topics.some((topic) => topic.status === "planned")
-          ? undefined : planningWake,
+        blockerCode: planningBlocker,
+        nextEligibleAt: planningReady ? undefined : planningWake,
+        automaticWakeAt: planningReady ? undefined : planningWake,
       },
       {
         key: "buffer",
