@@ -7,6 +7,7 @@ import { discoverCadenceMicroSeedFromDataForSEO } from
 import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD,
+  CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS,
   CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
@@ -19,7 +20,7 @@ import {
   cadenceMicroSeedProviderTrigger,
   cadenceMicroSeedSourcePlanExecutionExhausted,
   cadenceMicroSeedSourcePlanFresh,
-  cadenceMicroSeedZeroResultReceiptValid,
+  cadenceMicroSeedTerminalMissReceiptValid,
   selectCadenceMicroSeedAnchor,
   selectCadenceMicroSeedCandidate,
   selectCadenceMicroSeedFallbackAnchor,
@@ -178,7 +179,7 @@ test("paid seeds come only from explicit product anchors and rotate deterministi
   ), null);
 });
 
-test("fallback is a distinct $0.05 receipt after only an exact zero-row primary", () => {
+test("fallback is a distinct $0.05 receipt after an exact terminal primary miss", () => {
   assert.equal(cadenceMicroSeedAttemptKind(undefined), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("primary"), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("fallback"), "fallback");
@@ -251,8 +252,44 @@ test("fallback is a distinct $0.05 receipt after only an exact zero-row primary"
     hasEvidenceOrCadenceReceipt: false,
     finalizeAttempts: 0,
     cadenceScheduleAttempts: 0,
-  } satisfies Parameters<typeof cadenceMicroSeedZeroResultReceiptValid>[0];
-  assert.equal(cadenceMicroSeedZeroResultReceiptValid(receipt), true);
+  } satisfies Parameters<typeof cadenceMicroSeedTerminalMissReceiptValid>[0];
+  assert.equal(cadenceMicroSeedTerminalMissReceiptValid(receipt), true);
+
+  const strictlyRejected = {
+    ...receipt,
+    candidateReceiptCount: 4,
+    candidateAudit: {
+      ...receipt.candidateAudit,
+      received: 4,
+      difficulty: 4,
+    },
+  };
+  assert.equal(
+    cadenceMicroSeedTerminalMissReceiptValid(strictlyRejected),
+    true,
+  );
+  assert.equal(cadenceMicroSeedTerminalMissReceiptValid({
+    ...strictlyRejected,
+    expectedReservationDay: "2026-08-24",
+    now: Date.UTC(2026, 7, 24, 0, 0, 30),
+  }), true);
+  assert.equal(cadenceMicroSeedTerminalMissReceiptValid({
+    ...strictlyRejected,
+    expectedReservationDay: "2026-08-24",
+    now: createdAt + CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS + 1,
+  }), false);
+  for (const invalid of [
+    { candidateReceiptCount: 3 },
+    { candidateAudit: { ...strictlyRejected.candidateAudit, accepted: 1 } },
+    { candidateAudit: { ...strictlyRejected.candidateAudit, difficulty: 3 } },
+    { candidateAudit: { ...strictlyRejected.candidateAudit, overlap: -1 } },
+    { candidateAudit: { ...strictlyRejected.candidateAudit, brand: 0.5 } },
+  ]) {
+    assert.equal(cadenceMicroSeedTerminalMissReceiptValid({
+      ...strictlyRejected,
+      ...invalid,
+    }), false);
+  }
   for (const invalid of [
     { attemptKind: "fallback" },
     { hasParent: true },
@@ -271,7 +308,7 @@ test("fallback is a distinct $0.05 receipt after only an exact zero-row primary"
     { errorCode: "no_strict_candidate_after_rejections" },
     { completedAt: Date.UTC(2026, 7, 24, 0, 0, 0) },
   ]) {
-    assert.equal(cadenceMicroSeedZeroResultReceiptValid({
+    assert.equal(cadenceMicroSeedTerminalMissReceiptValid({
       ...receipt,
       ...invalid,
     }), false);
@@ -673,7 +710,7 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(model, /providerCallAttempted: true[\s\S]*providerRequestTag/);
   assert.match(
     model,
-    /validPrimaryZeroResultReceipt[\s\S]*selectCadenceMicroSeedFallbackAnchor/,
+    /validPrimaryFallbackReceipt[\s\S]*selectCadenceMicroSeedFallbackAnchor/,
   );
   assert.match(
     model,

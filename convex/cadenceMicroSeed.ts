@@ -35,7 +35,7 @@ import {
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedSourcePlanExecutionExhausted,
   cadenceMicroSeedSourcePlanFresh,
-  cadenceMicroSeedZeroResultReceiptValid,
+  cadenceMicroSeedTerminalMissReceiptValid,
   normalizeCadenceMicroSeedText,
   selectCadenceMicroSeedAnchor,
   selectCadenceMicroSeedCandidate,
@@ -218,12 +218,20 @@ function sourcePlanFingerprint(
   });
 }
 
-function primaryZeroResultReceiptFingerprint(
+function primaryFallbackReceiptFingerprint(
   job: Doc<"cadence_micro_seed_jobs">,
   reservation: Doc<"provider_spend_reservations">,
 ): string {
+  // Preserve the original zero-row fingerprint byte-for-byte for already
+  // admitted fallback children. A fully rejected non-empty response uses a
+  // distinct contract so the expanded authority cannot be confused with the
+  // earlier zero-result-only policy.
+  const zeroResult = job.candidateAudit?.received === 0 &&
+    job.candidateReceipts.length === 0;
   return JSON.stringify({
-    contract: "cadence-micro-seed-zero-result-parent-v1",
+    contract: zeroResult
+      ? "cadence-micro-seed-zero-result-parent-v1"
+      : "cadence-micro-seed-terminal-miss-parent-v1",
     job: {
       id: String(job._id),
       siteId: String(job.siteId),
@@ -276,7 +284,7 @@ function primaryZeroResultReceiptFingerprint(
   });
 }
 
-function validPrimaryZeroResultReceipt(args: {
+function validPrimaryFallbackReceipt(args: {
   site: Doc<"sites">;
   job: Doc<"cadence_micro_seed_jobs">;
   reservation: Doc<"provider_spend_reservations"> | null;
@@ -316,7 +324,7 @@ function validPrimaryZeroResultReceipt(args: {
       job.sourcePlanFingerprint === args.sourcePlanFingerprint &&
       job.parentMicroSeedJobId === undefined &&
       job.parentMicroSeedReceiptFingerprint === undefined &&
-      cadenceMicroSeedZeroResultReceiptValid({
+      cadenceMicroSeedTerminalMissReceiptValid({
         attemptKind: job.attemptKind,
         hasParent: Boolean(
           job.parentMicroSeedJobId || job.parentMicroSeedReceiptFingerprint,
@@ -890,7 +898,7 @@ async function inspectReadiness(
         parent._id === currentJob._id ||
         parentChildren.length !== 1 ||
         parentChildren[0]?._id !== currentJob._id ||
-        !validPrimaryZeroResultReceipt({
+        !validPrimaryFallbackReceipt({
           site,
           job: parent,
           reservation: parentReservation,
@@ -908,7 +916,7 @@ async function inspectReadiness(
       if (!parentReservation) {
         return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
       }
-      const parentFingerprint = primaryZeroResultReceiptFingerprint(
+      const parentFingerprint = primaryFallbackReceiptFingerprint(
         parent,
         parentReservation,
       );
@@ -937,7 +945,7 @@ async function inspectReadiness(
         )
         .take(1),
     ]);
-    if (parentChildren.length > 0 || !validPrimaryZeroResultReceipt({
+    if (parentChildren.length > 0 || !validPrimaryFallbackReceipt({
       site,
       job: parent,
       reservation: parentReservation,
@@ -965,7 +973,7 @@ async function inspectReadiness(
     attemptKind = "fallback";
     seed = fallbackSeed;
     parentMicroSeedJobId = parent._id;
-    parentMicroSeedReceiptFingerprint = primaryZeroResultReceiptFingerprint(
+    parentMicroSeedReceiptFingerprint = primaryFallbackReceiptFingerprint(
       parent,
       parentReservation,
     );

@@ -1999,7 +1999,8 @@ export default defineSchema({
 
   // One-call-per-job Labs recovery for an imminent empty-buffer cadence gap
   // after an automatic plan consumed its second and final execution. A sole
-  // zero-row primary may authorize one separately receipted fallback child.
+  // terminal primary miss may authorize one separately receipted fallback
+  // child only when every provider row has an exact strict-gate audit.
   // Provider candidates remain inside their job; at most one strictly admitted
   // topic is materialized, and strict scheduling still requires separate live
   // SERP and authority evidence before any article can be queued.

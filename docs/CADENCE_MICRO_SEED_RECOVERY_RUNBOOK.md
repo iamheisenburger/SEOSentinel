@@ -39,12 +39,20 @@ fleet ledgers are recomputed before any reservation or provider call.
   demand, measured organic keyword difficulty, provider intent, current v5
   product fit, authority-compatible difficulty, no blocked brand, no exact
   reuse in any topic state, and no lexical/canonical overlap.
-- If, and only if, that paid task durably completed with zero returned rows,
+- If, and only if, that paid task durably completed with no usable candidate,
   Pentra may create one distinct fallback child and one distinct shared-ledger
   reservation capped at $0.05. The child uses the deterministic next current
   `anchorKeywords`/`keyFeatures` phrase; it never replays the original seed.
-  A response with rows that failed fit, difficulty, brand, or overlap gates is
-  not a zero-row receipt and cannot authorize the fallback.
+  The parent receipt must prove either zero rows or a complete one-to-one audit
+  where every returned row was rejected by exactly one strict metric, intent,
+  difficulty, brand, business-fit, duplicate, or overlap gate. Accepted,
+  partially accounted, malformed, ambiguous, or already-materialized results
+  cannot authorize the fallback. The fallback applies the same gates and does
+  not weaken content quality to manufacture an opportunity.
+- The terminal primary receipt remains eligible for at most 24 hours, including
+  across UTC rollover. Its own reservation and every provider timestamp must
+  remain bound to its creation day; the fallback receives a new current-day
+  reservation after all tenant, ledger, profile, and source fences are re-read.
 - The fallback remains one-shot even if its free wallet preflight releases its
   own reservation. A timeout after its durable attempt is terminal, and there
   is no third anchor attempt.

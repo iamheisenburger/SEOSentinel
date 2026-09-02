@@ -22,6 +22,10 @@ export const CADENCE_MICRO_SEED_LEASE_MS = 2 * 60 * 1000;
 export const CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS = 5 * 60 * 1000;
 export const CADENCE_MICRO_SEED_MAX_WATCHDOG_RECOVERIES = 12;
 export const CADENCE_MICRO_SEED_MAX_JOB_AGE_MS = 2 * 60 * 60 * 1000;
+// A terminal primary may authorize its one distinct fallback after midnight,
+// but never as an indefinitely reusable historical spend receipt.
+export const CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS =
+  24 * 60 * 60 * 1000;
 // A terminal ordinary plan remains valid recovery evidence across a UTC-day
 // rollover. The micro-seed owns a fresh daily reservation and rechecks current
 // tenant/domain/evidence state; the source plan is only an immutable proof that
@@ -233,7 +237,7 @@ export function selectCadenceMicroSeedFallbackAnchor(
   return alternate && alternate !== primary ? alternate : null;
 }
 
-export type CadenceMicroSeedZeroResultAudit = {
+export type CadenceMicroSeedTerminalMissAudit = {
   received: number;
   accepted: number;
   invalidMetric: number;
@@ -246,10 +250,12 @@ export type CadenceMicroSeedZeroResultAudit = {
 };
 
 /**
- * Pure proof that the first paid task returned zero rows. A non-empty provider
- * response whose rows were rejected is deliberately not a fallback receipt.
+ * Pure proof that the first paid task completed without a usable candidate.
+ * Every returned row must be accounted for by exactly one strict rejection
+ * gate. This authorizes only the existing one-shot alternate product anchor;
+ * it never relaxes candidate quality or permits replay of the original seed.
  */
-export function cadenceMicroSeedZeroResultReceiptValid(args: {
+export function cadenceMicroSeedTerminalMissReceiptValid(args: {
   attemptKind?: string;
   hasParent: boolean;
   status: string;
@@ -282,7 +288,7 @@ export function cadenceMicroSeedZeroResultReceiptValid(args: {
   expectedProviderRequestTag: string;
   providerTaskCostUsd?: number;
   candidateReceiptCount: number;
-  candidateAudit?: CadenceMicroSeedZeroResultAudit;
+  candidateAudit?: CadenceMicroSeedTerminalMissAudit;
   errorCode?: string;
   workerToken?: string;
   leaseExpiresAt?: number;
@@ -290,11 +296,27 @@ export function cadenceMicroSeedZeroResultReceiptValid(args: {
   hasEvidenceOrCadenceReceipt: boolean;
   finalizeAttempts: number;
   cadenceScheduleAttempts: number;
+  maximumParentAgeMs?: number;
 }): boolean {
   const attemptedAt = args.providerAttemptedAt;
   const providerCompletedAt = args.providerCompletedAt;
   const completedAt = args.completedAt;
   const audit = args.candidateAudit;
+  const maximumParentAgeMs = args.maximumParentAgeMs ??
+    CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS;
+  const rejectionCount = audit
+    ? audit.invalidMetric + audit.intentUnavailable + audit.difficulty +
+      audit.brand + audit.businessFit + audit.duplicate + audit.overlap
+    : -1;
+  const candidateAuditValid = Boolean(
+    audit &&
+      Object.values(audit).every((value) =>
+        Number.isSafeInteger(value) && value >= 0
+      ) &&
+      audit.accepted === 0 &&
+      audit.received === args.candidateReceiptCount &&
+      rejectionCount === audit.received
+  );
   const maximumTimestamp = 8_640_000_000_000_000;
   return Boolean(
     cadenceMicroSeedAttemptKind(args.attemptKind) === "primary" &&
@@ -302,7 +324,6 @@ export function cadenceMicroSeedZeroResultReceiptValid(args: {
       args.status === "missed" &&
       args.policyVersion === args.expectedPolicyVersion &&
       args.rolloutEpoch === args.expectedRolloutEpoch &&
-      args.reservationDay === args.expectedReservationDay &&
       Number.isFinite(args.createdAt) &&
       args.createdAt >= 0 &&
       args.createdAt <= maximumTimestamp &&
@@ -310,8 +331,13 @@ export function cadenceMicroSeedZeroResultReceiptValid(args: {
       args.now >= args.createdAt &&
       args.now <= maximumTimestamp &&
       args.createdAt <= args.now &&
-      new Date(args.createdAt).toISOString().slice(0, 10) ===
+      Number.isSafeInteger(maximumParentAgeMs) &&
+      maximumParentAgeMs > 0 &&
+      args.now - args.createdAt <= maximumParentAgeMs &&
+      new Date(args.now).toISOString().slice(0, 10) ===
         args.expectedReservationDay &&
+      new Date(args.createdAt).toISOString().slice(0, 10) ===
+        args.reservationDay &&
       normalizeCadenceMicroSeedText(args.seed) ===
         normalizeCadenceMicroSeedText(args.expectedSeed) &&
       args.locationCode === args.expectedLocationCode &&
@@ -338,20 +364,18 @@ export function cadenceMicroSeedZeroResultReceiptValid(args: {
       (completedAt as number) <= maximumTimestamp &&
       (completedAt as number) <= args.now &&
       new Date(attemptedAt as number).toISOString().slice(0, 10) ===
-        args.expectedReservationDay &&
+        args.reservationDay &&
       new Date(providerCompletedAt as number).toISOString().slice(0, 10) ===
-        args.expectedReservationDay &&
+        args.reservationDay &&
       new Date(completedAt as number).toISOString().slice(0, 10) ===
-        args.expectedReservationDay &&
+        args.reservationDay &&
       args.providerRequestTag === args.expectedProviderRequestTag &&
       typeof args.providerTaskCostUsd === "number" &&
       Number.isFinite(args.providerTaskCostUsd) &&
       args.providerTaskCostUsd >= 0 &&
       args.providerTaskCostUsd <=
         CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + Number.EPSILON &&
-      args.candidateReceiptCount === 0 &&
-      audit !== undefined &&
-      Object.values(audit).every((value) => value === 0) &&
+      candidateAuditValid &&
       args.errorCode === "no_strict_candidate" &&
       args.workerToken === undefined &&
       args.leaseExpiresAt === undefined &&
