@@ -316,7 +316,7 @@ test("versioned recovery cannot expire before a repair release reaches its next 
   );
 });
 
-test("worker-length recovery stays version 2 while provider-safe media recovery advances to version 4", () => {
+test("worker, media, and claim-ledger defects retain isolated recovery versions", () => {
   const workerFailure = {
     _id: "article-worker-length",
     createdAt: NOW - 72 * HOUR,
@@ -329,7 +329,7 @@ test("worker-length recovery stays version 2 while provider-safe media recovery 
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 4);
+  assert.equal(QUALITY_RECOVERY_VERSION, 5);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -370,6 +370,44 @@ test("worker-length recovery stays version 2 while provider-safe media recovery 
       qualityRecoveryAttemptVersion: 4,
     }),
     false,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...completedMediaRecovery,
+      qualityRecoveryVersion: 4,
+      qualityRecoveryAttemptVersion: 4,
+    }),
+    undefined,
+  );
+
+  const completedClaimLedgerRecovery = {
+    ...workerFailure,
+    publicationGateIssues: [
+      "Editorial quality score is 78; strict minimum is 85.",
+      "Strict publication requires a completed claim-to-evidence audit.",
+    ],
+    qualityRecoveryVersion: 4,
+    qualityRecoveryAttemptVersion: 4,
+  };
+  assert.equal(
+    qualityRecoveryTargetVersion(completedClaimLedgerRecovery),
+    5,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...completedClaimLedgerRecovery,
+      qualityRecoveryAttemptVersion: 5,
+    }),
+    undefined,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...completedClaimLedgerRecovery,
+      publicationGateIssues: [
+        "Editorial quality score is 78; strict minimum is 85.",
+      ],
+    }),
+    undefined,
   );
 });
 

@@ -129,7 +129,7 @@ export function countDifferentiationSignals(
 }
 
 const FACTUAL_CLAIM_PATTERN =
-  /\b(?:according to|research|stud(?:y|ies)|survey|dataset|evidence|findings?|average|majority)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
+  /\b(?:according to|stud(?:y|ies)|survey|dataset|evidence|findings?|average|majority)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
 
 /**
  * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately

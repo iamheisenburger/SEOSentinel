@@ -30,9 +30,10 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 4;
+export const QUALITY_RECOVERY_VERSION = 5;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
+const CLAIM_LEDGER_RECOVERY_VERSION = 5;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -109,6 +110,9 @@ const VERSIONED_MEDIA_RECOVERY_ISSUES = new Set([
   "A product-specific section requires validated first-party visual evidence.",
   "A product-specific section requires validated first-party product evidence.",
 ]);
+const VERSIONED_CLAIM_LEDGER_RECOVERY_ISSUES = new Set([
+  "Strict publication requires a completed claim-to-evidence audit.",
+]);
 
 const DETERMINISTIC_METADATA_ISSUES = new Set([
   "Meta description must end as a complete sentence.",
@@ -136,9 +140,10 @@ export function needsDeterministicMechanicalRepair(
 
 /**
  * A bounded quality budget must not strand drafts that exhausted their retries
- * under an older recovery algorithm. One pass is admitted for a known media
- * defect after the recovery version changes; recording the current version on
- * every new review makes the allowance one-shot and prevents retry loops.
+ * under an older recovery algorithm. One pass is admitted only for a known,
+ * version-bound defect after its recovery changes; recording the target
+ * version on every new review makes the allowance one-shot and prevents retry
+ * loops.
  */
 export function needsVersionedQualityRecovery(
   article: CadenceArticle,
@@ -190,6 +195,21 @@ export function qualityRecoveryTargetVersion(
     // attempted-but-never-applied drafts for the guarded same-attempt
     // failover; a successfully applied v3 review is never replayed.
     return PROVIDER_FAILOVER_RECOVERY_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) < CLAIM_LEDGER_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      CLAIM_LEDGER_RECOVERY_VERSION &&
+    issues.some((issue) =>
+      VERSIONED_CLAIM_LEDGER_RECOVERY_ISSUES.has(issue)
+    )
+  ) {
+    // Version 4 could successfully finish media recovery but strand the exact
+    // prose when the deterministic claim audit treated a topical use of the
+    // word "research" as evidence attribution and then rejected safe pruning
+    // below the temporary length floor. Reopen only that persisted contract;
+    // unrelated editorial failures remain terminal and cannot replay spend.
+    return CLAIM_LEDGER_RECOVERY_VERSION;
   }
   return undefined;
 }

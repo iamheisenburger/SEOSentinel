@@ -348,6 +348,44 @@ test("ordinary advice mentioning data does not become a sourced research claim",
   assert.deepEqual(result.issues, []);
 });
 
+test("a topical use of research is not mistaken for evidence attribution", () => {
+  const productEvidence =
+    "Name: Pentra\nDomain: pentra.dev\nPentra creates structured content briefs.";
+  const result = validateClaimEvidenceLedger({
+    markdown:
+      "Use a research question generator to organize a content brief around the questions your team chooses to answer.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim: "Pentra creates structured content briefs.",
+        citationNumbers: [],
+        supported: true,
+        reason: "The hashed first-party product snapshot states this capability.",
+      },
+    ],
+  });
+
+  assert.equal(result.requiredClaimCount, 0);
+  assert.deepEqual(result.issues, []);
+});
+
+test("an actual research attribution still requires exact evidence", () => {
+  const result = validateClaimEvidenceLedger({
+    markdown:
+      "Research supports the claim that automated briefs improve organic performance.",
+    sources: [],
+    researchEvidence: "",
+    productEvidence: "",
+    claimEvidence: [],
+  });
+
+  assert.equal(result.requiredClaimCount, 1);
+  assert.match(result.issues.join(" "), /absent from the claim ledger/i);
+});
+
 test("reader-supplied ROI measurement instructions do not require external evidence", () => {
   const productEvidence =
     "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot learns website content, captures visitor contact details, and preserves conversation context.";

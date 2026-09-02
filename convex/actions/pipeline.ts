@@ -46,6 +46,7 @@ import {
 import {
   evaluateCadenceWindow,
   MAX_QUALITY_REVISIONS,
+  qualityRecoveryAttemptVersionFromJob,
   QUALITY_RECOVERY_VERSION,
 } from "../lib/autopilotCadence";
 import {
@@ -1954,10 +1955,15 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
     }
     if (pruned === markdown) break;
     const stats = calculateArticleStats(pruned);
-    if (stats.wordCount < args.minWords || stats.wordCount > args.maxWords) break;
+    if (stats.wordCount > args.maxWords) break;
     markdown = pruned;
-    audit = await auditFinalArticle({ ...args, markdown });
     deterministicPruningApplied = true;
+    // Preserve the safe pruning even when it temporarily drops below the
+    // publication floor. The caller has an evidence-constrained expansion
+    // lane for exactly this state. Returning the original unsupported prose
+    // here made every later retry reproduce the same claim-ledger failure.
+    if (stats.wordCount < args.minWords) break;
+    audit = await auditFinalArticle({ ...args, markdown });
   }
 
   return {
@@ -6696,10 +6702,12 @@ async function reviewExistingArticleHandler(
     siteId,
     articleId,
     incrementRevision,
+    qualityRecoveryVersion,
   }: {
     siteId: Id<"sites">;
     articleId: Id<"articles">;
     incrementRevision: boolean;
+    qualityRecoveryVersion?: number;
   },
 ): Promise<{
   articleId: Id<"articles">;
@@ -6833,7 +6841,16 @@ async function reviewExistingArticleHandler(
     // Give the exact audited draft one bounded, evidence-constrained expansion
     // inside the already-reserved quality-review attempt, then fact-check and
     // deterministically audit the expanded artifact again before it can pass.
-    if (stats.wordCount < minimumWords) {
+    // Deterministic evidence pruning can legitimately reduce a draft below
+    // the depth floor. Give the already-bounded review attempt up to three
+    // fixed-point passes: expand only from supplied evidence, fact-check, then
+    // audit and prune the exact result again. This converges or fails closed;
+    // it never restores the unsupported prose that pruning removed.
+    for (
+      let lengthRecoveryPass = 1;
+      stats.wordCount < minimumWords && lengthRecoveryPass <= 3;
+      lengthRecoveryPass++
+    ) {
       const lengthRecovered = await remediateFinalArticle({
         markdown: exactReviewedMarkdown,
         articleType: article.articleType ?? "standard",
@@ -6845,7 +6862,7 @@ async function reviewExistingArticleHandler(
         minWords: minimumWords,
         maxWords,
         auditNotes: [
-          `The exact evidence audit reduced this draft to ${stats.wordCount} words. Restore useful, non-repetitive coverage to at least ${minimumWords} words using only the supplied product and research evidence. Do not add statistics, benchmarks, named claims, or citations that are absent from that evidence.`,
+          `Evidence-safe length recovery pass ${lengthRecoveryPass}: the exact audit reduced this draft to ${stats.wordCount} words. Restore useful, non-repetitive coverage to at least ${minimumWords} words using only the supplied product and research evidence. Frame evidence-free material as reader-verifiable instructions or conditional diagnostics. Do not add statistics, benchmarks, named claims, causal outcomes, or citations that are absent from that evidence.`,
         ],
       });
       const lengthFactChecked = await factCheckArticle(
@@ -7176,6 +7193,12 @@ async function reviewExistingArticleHandler(
       : undefined;
     const qualityRevisionCount =
       (article.qualityRevisionCount ?? 0) + (incrementRevision ? 1 : 0);
+    const appliedQualityRecoveryVersion = incrementRevision &&
+        Number.isInteger(qualityRecoveryVersion) &&
+        qualityRecoveryVersion! > 0 &&
+        qualityRecoveryVersion! <= QUALITY_RECOVERY_VERSION
+      ? qualityRecoveryVersion!
+      : QUALITY_RECOVERY_VERSION;
 
     await ctx.runMutation(internal.articles.applyQualityReview, {
       articleId,
@@ -7234,7 +7257,7 @@ async function reviewExistingArticleHandler(
         ? deliveryConfig
         : undefined,
       qualityRevisionCount,
-      qualityRecoveryVersion: QUALITY_RECOVERY_VERSION,
+      qualityRecoveryVersion: appliedQualityRecoveryVersion,
     });
 
     await ctx.runMutation(internal.articles.recordPublicationCheck, {
@@ -8453,6 +8476,8 @@ export const processNextJob = internalAction({
               siteId: args.siteId,
               articleId: payload.articleId,
               incrementRevision: true,
+              qualityRecoveryVersion:
+                qualityRecoveryAttemptVersionFromJob(job),
             });
         if (review.readyForPublication && review.contentHash) {
           let linked: Awaited<ReturnType<typeof handleLinks>>;
