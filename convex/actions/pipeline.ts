@@ -25,6 +25,7 @@ import {
   evaluatePublicationQuality,
   insertReviewedProductImage,
   issuesBlockingPreLinkReview,
+  publicationMediaQualityStatus,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnledgeredEvidenceParagraphs,
@@ -98,7 +99,10 @@ import {
   isDataForSeoBalancePreflightError,
   type DataForSeoBalancePreflightError,
 } from "../lib/dataForSeoAccountBalance";
-import { normalizeTopicIntentKeyword } from "../lib/topicLifecycle";
+import {
+  normalizeTopicIntentKeyword,
+  terminalContentFeasibility,
+} from "../lib/topicLifecycle";
 import {
   planSeedBatchManifestHash,
 } from "../lib/planCandidateCheckpoint";
@@ -3250,6 +3254,27 @@ async function handlePlan(
         .slice(0, 5);
     }
 
+    // Failed article quality is upstream planning evidence. Exclude adjacent
+    // intents before the first SERP request so a recovery plan cannot spend on
+    // another wording of a topic whose complete article shape already failed.
+    // The terminal row is not treated as published coverage; it is a bounded
+    // no-repeat fence that forces the planner to explore a different intent.
+    const failedContentIntentTopics = existingTopics
+      .filter((topic: { contentFeasibilityStatus?: string }) =>
+        terminalContentFeasibility(topic.contentFeasibilityStatus)
+      )
+      .map((topic: { primaryKeyword: string; serpTopUrls?: string[] }) => ({
+        primaryKeyword: topic.primaryKeyword,
+        serpTopUrls: topic.serpTopUrls,
+      }));
+    enrichedPlan = filterNonCannibalizingIntentTopics(
+      enrichedPlan,
+      failedContentIntentTopics,
+      0.4,
+      0.35,
+      10,
+    );
+
     // Freeze the exact v5-fit measured candidates before the first live SERP
     // request. The checkpoint rows are intentionally non-schedulable while
     // this plan owns its lease.
@@ -3539,7 +3564,7 @@ async function handlePlan(
     );
     enrichedPlan = filterNonCannibalizingIntentTopics(
       enrichedPlan,
-      intentReservedTopics,
+      [...intentReservedTopics, ...failedContentIntentTopics],
       0.4,
       0.35,
       10,
@@ -5309,21 +5334,30 @@ async function handleArticle(
   const productEvidenceStatus =
     productHeading < 0
       ? "not_applicable"
-      : productScreenshotInserted
+      : productEvidence && productEvidenceHash
         ? "passed"
         : "failed";
-  const mediaQualityStatus =
-    enableImages && featuredImage && productEvidenceStatus !== "failed"
-      ? "passed"
-      : "failed";
+  const reviewedMediaUrls = [featuredImage, ...reviewedInlineMediaUrls].filter(
+    (url): url is string => Boolean(url),
+  );
+  const mediaQualityStatus = publicationMediaQualityStatus({
+    markdown: finalMarkdown,
+    featuredImage,
+    reviewedMediaUrls,
+    productEvidenceStatus,
+  });
   if (!featuredImage) {
     mediaQualityNotes.push(
-      "Media review failed: a reviewed HTTPS hero image is required for autonomous publication.",
+      "No suitable reviewed hero was available; the evidence-complete text-first artifact remains eligible.",
     );
   }
   if (productEvidenceStatus === "failed") {
     mediaQualityNotes.push(
-      "Product evidence review failed: a product section requires a validated first-party screenshot.",
+      "Product evidence review failed: a product section requires a validated first-party product snapshot.",
+    );
+  } else if (productHeading >= 0 && !productScreenshotInserted) {
+    mediaQualityNotes.push(
+      "Product claims were grounded in the sealed first-party snapshot; an optional screenshot was unavailable.",
     );
   }
 
@@ -5356,9 +5390,7 @@ async function handleArticle(
     researchEvidenceSummary: preservedResearchEvidence || undefined,
     language: site.language,
     featuredImage,
-    reviewedMediaUrls: [featuredImage, ...reviewedInlineMediaUrls].filter(
-      (url): url is string => Boolean(url),
-    ),
+    reviewedMediaUrls,
     readingTime,
     wordCount,
     factCheckScore,
@@ -6963,23 +6995,32 @@ async function reviewExistingArticleHandler(
     const nextMetaTitle = clampMetaTitle(metadata.metaTitle);
     const nextMetaDescription = clampMetaDescription(metadata.metaDescription);
     const finalStats = calculateArticleStats(finalReviewMarkdown);
-    const imageMatches = [
-      ...finalReviewMarkdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
-    ];
-    const allInlineMediaReviewed = imageMatches.every((match) =>
-      reviewedMedia.has(match[1]),
-    );
     let productEvidenceStatus = "not_applicable";
     if (productHeadingMatch?.index !== undefined) {
-      productEvidenceStatus = reviewedProductImage ? "passed" : "failed";
-    }
-    const mediaQualityStatus =
-      !!featuredImage &&
-      reviewedMedia.has(featuredImage) &&
-      allInlineMediaReviewed &&
-      productEvidenceStatus !== "failed"
+      productEvidenceStatus = productEvidence && productEvidenceHash
         ? "passed"
         : "failed";
+    }
+    const mediaQualityStatus = publicationMediaQualityStatus({
+      markdown: finalReviewMarkdown,
+      featuredImage,
+      reviewedMediaUrls: [...reviewedMedia],
+      productEvidenceStatus,
+    });
+    if (!featuredImage) {
+      mediaQualityNotes.push(
+        "No suitable reviewed hero was available; the evidence-complete text-first artifact remains eligible.",
+      );
+    }
+    if (
+      productHeadingMatch?.index !== undefined &&
+      !reviewedProductImage &&
+      productEvidenceStatus === "passed"
+    ) {
+      mediaQualityNotes.push(
+        "Product claims were grounded in the sealed first-party snapshot; an optional screenshot was unavailable.",
+      );
+    }
     const deliveryConfig = publicationDeliveryConfig(site);
     const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
     const qualityCandidate: Doc<"articles"> = {

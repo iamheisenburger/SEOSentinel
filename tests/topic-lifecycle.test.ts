@@ -267,6 +267,24 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   assert.match(articles, /terminalTopicQualitySettlement/);
 });
 
+test("every paid topic path treats terminal quality misses as upstream feedback", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /const failedContentIntentTopics = existingTopics/);
+  assert.match(pipeline, /terminalContentFeasibility/);
+  assert.match(
+    pipeline,
+    /filterNonCannibalizingIntentTopics\(\s*enrichedPlan,\s*failedContentIntentTopics,/,
+  );
+  assert.match(
+    pipeline,
+    /\[\.\.\.intentReservedTopics, \.\.\.failedContentIntentTopics\]/,
+  );
+
+  const microSeed = readFileSync("convex/cadenceMicroSeed.ts", "utf8");
+  assert.match(microSeed, /const failedContentCoverage = topics/);
+  assert.match(microSeed, /terminalContentFeasibility/);
+});
+
 test("the natural cadence joins exact review articles to their own failed jobs", () => {
   const jobs = readFileSync("convex/jobs.ts", "utf8");
   const schema = readFileSync("convex/schema.ts", "utf8");

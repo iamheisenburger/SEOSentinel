@@ -16,6 +16,7 @@ import {
   type ExpectedClickPortfolioEvaluation,
 } from "../lib/expectedClickPortfolio";
 import {
+  compareQualityRecoveryCandidates,
   hasRecoverableQualityWork,
   MAX_QUALITY_REVISIONS,
   needsDeterministicMechanicalRepair,
@@ -63,6 +64,8 @@ type ArticleSummary = {
   publishedAt?: number;
   publicationGateStatus?: string;
   publicationGateIssues?: string[];
+  factCheckScore?: number;
+  editorialQualityScore?: number;
   publicationAuditVersion?: number;
   auditedContentHash?: string;
   publicUrl?: string;
@@ -745,9 +748,7 @@ export const scheduleCadence = internalAction({
             (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
             needsVersionedQualityRecovery(article)),
       )
-      .sort(
-        (a: ArticleSummary, b: ArticleSummary) => b.createdAt - a.createdAt,
-      )[0];
+      .sort(compareQualityRecoveryCandidates)[0];
     if (recoverable) {
       const recovery = await ctx.runMutation(internal.jobs.queueQualityRetryIfAbsent, {
         siteId,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  compareQualityRecoveryCandidates,
   evaluateCadenceWindow,
   findRecoverableQualityArticle,
   hasAttemptedVersionedQualityRecovery,
@@ -172,7 +173,7 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
     qualityRevisionCount: 2,
   };
   assert.equal(needsVersionedQualityRecovery(legacy), true);
-  assert.equal(qualityRecoveryTargetVersion(legacy), 1);
+  assert.equal(qualityRecoveryTargetVersion(legacy), 3);
 
   const window = evaluateCadenceWindow({
     articles: [legacy],
@@ -186,14 +187,14 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
   assert.equal(
     needsVersionedQualityRecovery({
       ...legacy,
-      qualityRecoveryVersion: 1,
+      qualityRecoveryVersion: 3,
     }),
     false,
   );
   assert.equal(
     needsVersionedQualityRecovery({
       ...legacy,
-      qualityRecoveryAttemptVersion: 1,
+      qualityRecoveryAttemptVersion: 3,
     }),
     false,
   );
@@ -301,7 +302,7 @@ test("versioned recovery cannot expire before a repair release reaches its next 
   );
 });
 
-test("worker-length recovery is version 2 and does not replay unrelated version 1 media work", () => {
+test("worker-length recovery stays version 2 while media recovery advances to version 3", () => {
   const workerFailure = {
     _id: "article-worker-length",
     createdAt: NOW - 72 * HOUR,
@@ -314,7 +315,7 @@ test("worker-length recovery is version 2 and does not replay unrelated version 
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 2);
+  assert.equal(QUALITY_RECOVERY_VERSION, 3);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -333,8 +334,78 @@ test("worker-length recovery is version 2 and does not replay unrelated version 
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(qualityRecoveryTargetVersion(completedMediaRecovery), undefined);
-  assert.equal(needsVersionedQualityRecovery(completedMediaRecovery), false);
+  assert.equal(qualityRecoveryTargetVersion(completedMediaRecovery), 3);
+  assert.equal(needsVersionedQualityRecovery(completedMediaRecovery), true);
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...completedMediaRecovery,
+      qualityRecoveryAttemptVersion: 3,
+    }),
+    false,
+  );
+});
+
+test("version 3 media recovery recognizes both sides of the migrated contract", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    qualityRevisionCount: 2,
+    qualityRecoveryVersion: 2,
+    qualityRecoveryAttemptVersion: 2,
+  };
+  for (const issue of [
+    "Strict publication requires a reviewed HTTPS hero image.",
+    "A product-specific section requires validated first-party visual evidence.",
+    "A product-specific section requires validated first-party product evidence.",
+  ]) {
+    assert.equal(
+      qualityRecoveryTargetVersion({
+        ...base,
+        publicationGateIssues: [issue],
+      }),
+      3,
+    );
+  }
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...base,
+      publicationGateIssues: [
+        "A product-specific section has an unrelated editorial issue.",
+      ],
+    }),
+    undefined,
+  );
+});
+
+test("recovery fills the buffer from the strongest candidate without bypassing gates", () => {
+  const candidates = [
+    {
+      _id: "new-low-score",
+      createdAt: NOW - HOUR,
+      factCheckScore: 95,
+      editorialQualityScore: 42,
+      publicationGateIssues: ["one"],
+    },
+    {
+      _id: "older-near-pass",
+      createdAt: NOW - 2 * HOUR,
+      factCheckScore: 92,
+      editorialQualityScore: 84,
+      publicationGateIssues: ["one", "two"],
+    },
+    {
+      _id: "oldest-near-pass",
+      createdAt: NOW - 3 * HOUR,
+      factCheckScore: 90,
+      editorialQualityScore: 84,
+      publicationGateIssues: ["one"],
+    },
+  ].sort(compareQualityRecoveryCandidates);
+  assert.deepEqual(
+    candidates.map((candidate) => candidate._id),
+    ["older-near-pass", "oldest-near-pass", "new-low-score"],
+  );
 });
 
 test("version 2 recovery matches only the durable algorithm issue contract", () => {

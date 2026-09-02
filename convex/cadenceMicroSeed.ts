@@ -98,6 +98,7 @@ import {
 import {
   resolvePlanFromFeatures,
 } from "./planLimits";
+import { terminalContentFeasibility } from "./lib/topicLifecycle";
 import {
   siteExecutionActive,
   siteExecutionAuthorized,
@@ -1592,6 +1593,19 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
         primaryKeyword: topic.primaryKeyword,
         serpTopUrls: topic.serpTopUrls,
       }));
+    // A terminal quality miss is feedback to choose a materially different
+    // intent, not permission to buy a near-duplicate keyword and repeat the
+    // same failed article shape. Preserve its exact SERP fingerprint when
+    // available so the normal lexical/SERP overlap gate steers recovery
+    // upstream without treating the failed draft as published coverage.
+    const failedContentCoverage = topics
+      .filter((topic) =>
+        terminalContentFeasibility(topic.contentFeasibilityStatus)
+      )
+      .map((topic) => ({
+        primaryKeyword: topic.primaryKeyword,
+        serpTopUrls: topic.serpTopUrls,
+      }));
     const businessSignals = tenantTopicBusinessSignals(site);
     const authority = tenantAuthorityFromStoredEvidence({
       domain: site.seoAuthorityDomain,
@@ -1608,7 +1622,11 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       metrics: args.candidates as CadenceMicroSeedMetric[],
       maximumDifficulty: maximumDifficultyForAuthority(authority),
       existingExactKeywords: exactKeywords,
-      coveredTopics: [...reservedCoverage, ...activeInventoryCoverage],
+      coveredTopics: [
+        ...reservedCoverage,
+        ...activeInventoryCoverage,
+        ...failedContentCoverage,
+      ],
       siteName: site.siteName,
       competitors: site.competitors,
       businessFitEligible: (candidate) => evaluateTopicBusinessFit({

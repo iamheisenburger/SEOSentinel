@@ -13,6 +13,8 @@ export type CadenceArticle = {
   status?: string;
   publicationGateStatus?: string;
   publicationGateIssues?: string[];
+  factCheckScore?: number;
+  editorialQualityScore?: number;
   qualityRevisionCount?: number;
   qualityRecoveryVersion?: number;
   qualityRecoveryAttemptVersion?: number;
@@ -28,13 +30,33 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 2;
-const MEDIA_QUALITY_RECOVERY_VERSION = 1;
+export const QUALITY_RECOVERY_VERSION = 3;
+const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
 // the durable queue settle those attempts without replaying provider work.
 export const QUALITY_RECOVERY_VERSION_INTRODUCED_AT = 1_788_048_939_388;
+
+/**
+ * Fill the buffer from the most publication-ready recoverable draft first.
+ * FIFO alone can strand a near-passing article behind a later low-score draft
+ * for multiple cadence windows. Scores are only ordering signals: the full
+ * fail-closed publication contract is still re-run before anything can seal.
+ */
+export function compareQualityRecoveryCandidates(
+  left: CadenceArticle,
+  right: CadenceArticle,
+): number {
+  return (
+    (right.editorialQualityScore ?? -1) -
+      (left.editorialQualityScore ?? -1) ||
+    (right.factCheckScore ?? -1) - (left.factCheckScore ?? -1) ||
+    (left.publicationGateIssues?.length ?? Number.MAX_SAFE_INTEGER) -
+      (right.publicationGateIssues?.length ?? Number.MAX_SAFE_INTEGER) ||
+    right.createdAt - left.createdAt
+  );
+}
 
 export type QualityRecoveryAttemptJob = {
   createdAt: number;
@@ -84,6 +106,7 @@ const VERSIONED_MEDIA_RECOVERY_ISSUES = new Set([
   "Strict publication requires a completed media-quality review.",
   "Strict publication requires a reviewed HTTPS hero image.",
   "A product-specific section requires validated first-party visual evidence.",
+  "A product-specific section requires validated first-party product evidence.",
 ]);
 
 const DETERMINISTIC_METADATA_ISSUES = new Set([

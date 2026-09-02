@@ -366,6 +366,15 @@ test("candidate selection fails closed on metrics, brands, fit, exact reuse, and
   assert.equal(overlap.rejected.overlap, 1);
 });
 
+test("materialization treats terminal content misses as upstream topic feedback", () => {
+  assert.match(model, /terminalContentFeasibility/);
+  assert.match(model, /const failedContentCoverage = topics/);
+  assert.match(
+    model,
+    /coveredTopics:\s*\[\s*\.\.\.reservedCoverage,\s*\.\.\.activeInventoryCoverage,\s*\.\.\.failedContentCoverage,/,
+  );
+});
+
 test("receipt envelope is exactly one bounded Labs task", () => {
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD, 100_000);
   assert.equal(CADENCE_MICRO_SEED_RESULT_LIMIT, 100);

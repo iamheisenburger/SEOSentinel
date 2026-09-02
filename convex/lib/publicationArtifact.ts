@@ -3,9 +3,11 @@ import {
   PUBLISHER_RENDERER_VERSION,
 } from "./publicationReceipts.ts";
 
-// Version 5 adds a final tenant-topic product-fit check. Bumping the seal
-// invalidates artifacts approved under the older, weaker relevance contract.
-export const PUBLICATION_AUDIT_VERSION = 5;
+// Version 6 separates evidence-complete text-first publication from optional
+// decorative media while keeping every present asset fail-closed against the
+// persisted reviewed-media ledger. The bump forces older artifacts to reseal
+// under that exact contract.
+export const PUBLICATION_AUDIT_VERSION = 6;
 
 // Convex mutations run in the default V8 runtime, where Node's `crypto`
 // module is unavailable.  Keep the digest synchronous because the exact same

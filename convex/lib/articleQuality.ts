@@ -576,6 +576,41 @@ function safeHttpsUrl(value: string): URL | null {
   }
 }
 
+/**
+ * Media is additive to a useful article, not a substitute for evidence. A
+ * text-first article may publish without decorative media, while every asset
+ * that is present must still be an exact reviewed HTTPS URL. Product claims
+ * remain fail-closed through the product snapshot and claim-evidence ledger;
+ * a screenshot is optional unless one is actually embedded in the artifact.
+ */
+export function publicationMediaQualityStatus(
+  article: Pick<
+    PublicationArticle,
+    "markdown" | "featuredImage" | "reviewedMediaUrls" | "productEvidenceStatus"
+  >,
+): "passed" | "failed" {
+  if (article.productEvidenceStatus === "failed") return "failed";
+  const reviewedMedia = new Set(article.reviewedMediaUrls ?? []);
+  const inlineMedia = [
+    ...article.markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g),
+  ].map((match) => match[1]);
+  if (
+    inlineMedia.some(
+      (url) => !safeHttpsUrl(url) || !reviewedMedia.has(url),
+    )
+  ) {
+    return "failed";
+  }
+  if (
+    article.featuredImage &&
+    (!safeHttpsUrl(article.featuredImage) ||
+      !reviewedMedia.has(article.featuredImage))
+  ) {
+    return "failed";
+  }
+  return "passed";
+}
+
 export function normalizeSiteOrigin(domain: string): string {
   const trimmed = domain.trim().replace(/\/+$/, "");
   const candidate = /^https?:\/\//i.test(trimmed)
@@ -1162,12 +1197,9 @@ export function evaluatePublicationQuality(
     if (article.mediaQualityStatus !== "passed") {
       issues.push("Strict publication requires a completed media-quality review.");
     }
-    if (!article.featuredImage) {
-      issues.push("Strict publication requires a reviewed HTTPS hero image.");
-    }
     if (article.productEvidenceStatus === "failed") {
       issues.push(
-        "A product-specific section requires validated first-party visual evidence.",
+        "A product-specific section requires validated first-party product evidence.",
       );
     }
     if (article.claimEvidenceStatus !== "passed") {

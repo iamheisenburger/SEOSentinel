@@ -12,6 +12,7 @@ import {
   inlineCitationNumbers,
   issuesBlockingPreLinkReview,
   PENDING_INTERNAL_LINK_ISSUE,
+  publicationMediaQualityStatus,
   normalizeSiteOrigin,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
@@ -827,6 +828,75 @@ test("accepts a grounded strict article", () => {
   );
 
   assert.equal(result.passed, true, result.issues.join("\n"));
+});
+
+test("accepts an evidence-complete text-first strict article without optional media", () => {
+  const clusterDepth = Array.from(
+    { length: 300 },
+    (_, index) => `context${index}`,
+  ).join(" ");
+  const markdown =
+    `${body}\n\n${clusterDepth}\n\n` +
+    "Related reading: [qualification routing](/blog/qualification-routing).";
+  const result = evaluatePublicationQuality(
+    {
+      title: "A practical website lead qualification workflow",
+      metaTitle: "A practical website lead qualification workflow",
+      metaDescription:
+        "Use this practical workflow to answer buyer questions, assess genuine interest, and route useful sales context to the right next step.",
+      markdown,
+      factCheckScore: 91,
+      editorialQualityScore: 92,
+      mediaQualityStatus: publicationMediaQualityStatus({
+        markdown,
+        productEvidenceStatus: "not_applicable",
+      }),
+      productEvidenceStatus: "not_applicable",
+      claimEvidenceStatus: "passed",
+      sources: [
+        { url: "https://www.nber.org/papers/w12345", title: "Research" },
+        { url: "https://developers.google.com/search/docs", title: "Method" },
+      ],
+    },
+    "strict",
+  );
+
+  assert.equal(result.passed, true, result.issues.join("\n"));
+  assert.ok(result.warnings.some((warning) => warning.includes("No featured image")));
+});
+
+test("media review remains fail-closed for every asset that is present", () => {
+  assert.equal(
+    publicationMediaQualityStatus({
+      markdown: "![Reviewed diagram](https://example.com/diagram.webp)",
+      productEvidenceStatus: "not_applicable",
+      reviewedMediaUrls: [],
+    }),
+    "failed",
+  );
+  assert.equal(
+    publicationMediaQualityStatus({
+      markdown: "Text-first article.",
+      featuredImage: "https://example.com/hero.webp",
+      productEvidenceStatus: "not_applicable",
+      reviewedMediaUrls: [],
+    }),
+    "failed",
+  );
+  assert.equal(
+    publicationMediaQualityStatus({
+      markdown: "Text-first product article.",
+      productEvidenceStatus: "failed",
+    }),
+    "failed",
+  );
+  assert.equal(
+    publicationMediaQualityStatus({
+      markdown: "Text-first product article.",
+      productEvidenceStatus: "passed",
+    }),
+    "passed",
+  );
 });
 
 test("rejects unsupported marketing outcomes in strict metadata and body", () => {
