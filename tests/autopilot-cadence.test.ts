@@ -196,6 +196,20 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
       ...legacy,
       qualityRecoveryAttemptVersion: 3,
     }),
+    true,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...legacy,
+      qualityRecoveryAttemptVersion: 3,
+    }),
+    4,
+  );
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...legacy,
+      qualityRecoveryAttemptVersion: 4,
+    }),
     false,
   );
   assert.equal(
@@ -302,7 +316,7 @@ test("versioned recovery cannot expire before a repair release reaches its next 
   );
 });
 
-test("worker-length recovery stays version 2 while media recovery advances to version 3", () => {
+test("worker-length recovery stays version 2 while provider-safe media recovery advances to version 4", () => {
   const workerFailure = {
     _id: "article-worker-length",
     createdAt: NOW - 72 * HOUR,
@@ -315,7 +329,7 @@ test("worker-length recovery stays version 2 while media recovery advances to ve
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 3);
+  assert.equal(QUALITY_RECOVERY_VERSION, 4);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -341,11 +355,25 @@ test("worker-length recovery stays version 2 while media recovery advances to ve
       ...completedMediaRecovery,
       qualityRecoveryAttemptVersion: 3,
     }),
+    true,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...completedMediaRecovery,
+      qualityRecoveryAttemptVersion: 3,
+    }),
+    4,
+  );
+  assert.equal(
+    needsVersionedQualityRecovery({
+      ...completedMediaRecovery,
+      qualityRecoveryAttemptVersion: 4,
+    }),
     false,
   );
 });
 
-test("version 3 media recovery recognizes both sides of the migrated contract", () => {
+test("version 3 media recovery recognizes both sides of the migrated contract before failover", () => {
   const base = {
     createdAt: NOW - HOUR,
     status: "review",

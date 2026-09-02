@@ -104,6 +104,10 @@ import {
   terminalContentFeasibility,
 } from "../lib/topicLifecycle";
 import {
+  classifyArticleProviderFailure,
+  type ArticleProviderFailure,
+} from "../lib/articleProviderFailure";
+import {
   planSeedBatchManifestHash,
 } from "../lib/planCandidateCheckpoint";
 import {
@@ -227,6 +231,18 @@ class ArticleProviderAdmissionError extends Error {
   ) {
     super(`Article provider work is unavailable (${reason})`);
     this.name = "ArticleProviderAdmissionError";
+  }
+}
+
+class ArticleProviderExecutionError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(failure: ArticleProviderFailure) {
+    super(failure.safeMessage);
+    this.name = "ArticleProviderExecutionError";
+    this.code = failure.code;
+    this.retryable = failure.retryable;
   }
 }
 
@@ -1127,16 +1143,45 @@ async function callClaude(
   userMessage: string,
   maxTokens = 8192,
 ): Promise<string> {
-  const client = anthropicClient();
-  const response = await client.messages.create({
-    model: defaultModel,
-    max_tokens: maxTokens,
-    system,
-    messages: [{ role: "user", content: userMessage }],
-  });
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type from Claude");
-  return block.text;
+  try {
+    const client = anthropicClient();
+    const response = await client.messages.create({
+      model: defaultModel,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: userMessage }],
+    });
+    const block = response.content[0];
+    if (block.type !== "text") {
+      throw new Error("Unexpected response type from Claude");
+    }
+    return block.text;
+  } catch (error) {
+    const failure = classifyArticleProviderFailure(error);
+    if (!failure.fallbackEligible) {
+      throw new ArticleProviderExecutionError(failure);
+    }
+    console.log(
+      `Primary article provider unavailable (${failure.code}); using the configured fallback within the same reserved execution.`,
+    );
+    try {
+      const response = await openaiClient().responses.create({
+        model: "gpt-4o-mini",
+        max_output_tokens: maxTokens,
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: userMessage },
+        ],
+      });
+      const text = response.output_text.trim();
+      if (!text) throw new Error("Fallback provider returned no text output");
+      return text;
+    } catch (fallbackError) {
+      throw new ArticleProviderExecutionError(
+        classifyArticleProviderFailure(fallbackError),
+      );
+    }
+  }
 }
 
 type ObjectJsonSchema = {
@@ -1160,68 +1205,130 @@ async function callClaudeStructured<T>(args: {
   outputSchema: z.ZodType<T>;
   maxTokens?: number;
 }): Promise<T> {
-  const client = anthropicClient();
-  let correction = "";
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await client.messages.create({
-      model: defaultModel,
-      max_tokens: args.maxTokens ?? 8192,
-      system: args.system,
-      messages: [{
-        role: "user",
-        content: `${args.userMessage}${correction}`,
-      }],
-      tools: [
-        {
+  try {
+    const client = anthropicClient();
+    let correction = "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await client.messages.create({
+        model: defaultModel,
+        max_tokens: args.maxTokens ?? 8192,
+        system: args.system,
+        messages: [{
+          role: "user",
+          content: `${args.userMessage}${correction}`,
+        }],
+        tools: [
+          {
+            name: args.toolName,
+            description: args.toolDescription,
+            input_schema: args.inputSchema,
+            strict: true,
+          },
+        ],
+        tool_choice: {
+          type: "tool",
           name: args.toolName,
-          description: args.toolDescription,
-          input_schema: args.inputSchema,
-          strict: true,
+          disable_parallel_tool_use: true,
         },
-      ],
-      tool_choice: {
-        type: "tool",
-        name: args.toolName,
-        disable_parallel_tool_use: true,
-      },
-    });
+      });
 
-    const toolUse = response.content.find(
-      (block) => block.type === "tool_use" && block.name === args.toolName,
-    );
-    if (!toolUse || toolUse.type !== "tool_use") {
+      const toolUse = response.content.find(
+        (block) => block.type === "tool_use" && block.name === args.toolName,
+      );
+      if (!toolUse || toolUse.type !== "tool_use") {
+        if (attempt === 0) {
+          console.log(
+            `Structured output for ${args.toolName} was missing; retrying once.`,
+          );
+          correction =
+            `\n\nCORRECTION: Your previous response did not call ${args.toolName}. ` +
+            "Call the required tool exactly once and obey its field types.";
+          continue;
+        }
+        throw new Error(
+          `Claude did not submit the required ${args.toolName} tool output`,
+        );
+      }
+
+      const parsed = args.outputSchema.safeParse(toolUse.input);
+      if (parsed.success) return parsed.data;
       if (attempt === 0) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+        }));
         console.log(
-          `Structured output for ${args.toolName} was missing; retrying once.`,
+          `Structured output for ${args.toolName} failed schema validation; retrying once.`,
         );
         correction =
-          `\n\nCORRECTION: Your previous response did not call ${args.toolName}. ` +
-          "Call the required tool exactly once and obey its field types.";
+          "\n\nCORRECTION: Your previous tool input failed validation. " +
+          `Correct these field/type errors and resubmit the complete output: ${JSON.stringify(issues)}`;
         continue;
       }
+      throw parsed.error;
+    }
+    throw new Error(`Structured output retry exhausted for ${args.toolName}`);
+  } catch (error) {
+    const failure = classifyArticleProviderFailure(error);
+    if (!failure.fallbackEligible) {
+      throw error instanceof ArticleProviderExecutionError
+        ? error
+        : new ArticleProviderExecutionError(failure);
+    }
+    console.log(
+      `Primary article provider unavailable (${failure.code}); using the configured structured-output fallback within the same reserved execution.`,
+    );
+    try {
+      let correction = "";
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await openaiClient().responses.create({
+          model: "gpt-4o-mini",
+          max_output_tokens: args.maxTokens ?? 8192,
+          input: [
+            { role: "system", content: args.system },
+            {
+              role: "user",
+              content: `${args.userMessage}${correction}`,
+            },
+          ],
+          text: {
+            format: {
+              type: "json_schema",
+              name: args.toolName,
+              description: args.toolDescription,
+              schema: args.inputSchema,
+              // Anthropic tool schemas contain genuine optional fields. Keep
+              // OpenAI's schema guidance non-strict and enforce the exact
+              // contract with the same Zod parser below.
+              strict: false,
+            },
+          },
+        });
+        const parsed = args.outputSchema.safeParse(
+          JSON.parse(response.output_text),
+        );
+        if (parsed.success) return parsed.data;
+        if (attempt === 0) {
+          const issues = parsed.error.issues.slice(0, 5).map((issue) => ({
+            path: issue.path.join("."),
+            message: issue.message,
+          }));
+          correction =
+            "\n\nCORRECTION: Your previous JSON failed validation. " +
+            `Correct these field/type errors and return the complete object: ${JSON.stringify(issues)}`;
+          continue;
+        }
+        throw parsed.error;
+      }
       throw new Error(
-        `Claude did not submit the required ${args.toolName} tool output`,
+        `Structured fallback retry exhausted for ${args.toolName}`,
+      );
+    } catch (fallbackError) {
+      throw new ArticleProviderExecutionError(
+        classifyArticleProviderFailure(fallbackError),
       );
     }
-
-    const parsed = args.outputSchema.safeParse(toolUse.input);
-    if (parsed.success) return parsed.data;
-    if (attempt === 0) {
-      const issues = parsed.error.issues.slice(0, 5).map((issue) => ({
-        path: issue.path.join("."),
-        message: issue.message,
-      }));
-      console.log(
-        `Structured output for ${args.toolName} failed schema validation; retrying once.`,
-      );
-      correction =
-        "\n\nCORRECTION: Your previous tool input failed validation. " +
-        `Correct these field/type errors and resubmit the complete output: ${JSON.stringify(issues)}`;
-      continue;
-    }
-    throw parsed.error;
   }
-  throw new Error(`Structured output retry exhausted for ${args.toolName}`);
 }
 
 async function fetchHtml(domain: string) {
@@ -8832,6 +8939,23 @@ export const processNextJob = internalAction({
           jobId: job._id,
           workerToken,
           error: `Terminal article provider admission outcome: ${error.reason}`,
+        });
+        return {
+          processed: failed.updated,
+          jobId: job._id,
+          articleId: job.articleId,
+          error: message,
+          failureKind: "job_failed",
+        };
+      }
+      if (
+        error instanceof ArticleProviderExecutionError &&
+        !error.retryable
+      ) {
+        const failed = await ctx.runMutation(internal.jobs.markFailed, {
+          jobId: job._id,
+          workerToken,
+          error: `Terminal article provider outcome (${error.code}): ${error.message}`,
         });
         return {
           processed: failed.updated,

@@ -30,8 +30,9 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 3;
+export const QUALITY_RECOVERY_VERSION = 4;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
+const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -175,6 +176,20 @@ export function qualityRecoveryTargetVersion(
     issues.some((issue) => VERSIONED_MEDIA_RECOVERY_ISSUES.has(issue))
   ) {
     return MEDIA_QUALITY_RECOVERY_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) < MEDIA_QUALITY_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) >=
+      MEDIA_QUALITY_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      PROVIDER_FAILOVER_RECOVERY_VERSION &&
+    issues.some((issue) => VERSIONED_MEDIA_RECOVERY_ISSUES.has(issue))
+  ) {
+    // Version 3 was admitted durably before its editor could run when the
+    // primary provider had no funded capacity. Version 4 reopens only those
+    // attempted-but-never-applied drafts for the guarded same-attempt
+    // failover; a successfully applied v3 review is never replayed.
+    return PROVIDER_FAILOVER_RECOVERY_VERSION;
   }
   return undefined;
 }
