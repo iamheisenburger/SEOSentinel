@@ -328,6 +328,16 @@ test("cadence rescue binds a saturated terminal demand receipt without disabling
   assert.doesNotMatch(model, /expected_click_demand_jobs[\s\S]{0,300}(patch|delete)\(/);
 });
 
+test("cadence rescue remains eligible until the shared launch buffer minimum is met", () => {
+  assert.match(
+    model,
+    /sealedBuffer\.length >= MIN_APPROVED_BUFFER[\s\S]*buffer_minimum_met/,
+  );
+  assert.doesNotMatch(model, /sealedBuffer\.length > 0/);
+  assert.match(runbook, /sealed buffer below the two-item launch minimum/);
+  assert.match(crons, /Below-minimum-buffer rescue is tenant-generic/);
+});
+
 test("candidate selection fails closed on metrics, brands, fit, exact reuse, and overlap", () => {
   const selected = selectCadenceMicroSeedCandidate({
     metrics: [

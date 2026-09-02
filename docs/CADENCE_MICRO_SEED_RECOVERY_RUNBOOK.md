@@ -1,10 +1,10 @@
 # Cadence micro-seed recovery
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
-with no sealed buffer, no scheduler-ready topic, and no active content or
-evidence work after the ordinary two-execution topic plan is terminal. It does
-not reopen that plan or release, replace, or discount its immutable $2
-reservation.
+with a sealed buffer below the two-item launch minimum, no scheduler-ready
+topic, and no active content or evidence work after the ordinary two-execution
+topic plan is terminal. It does not reopen that plan or release, replace, or
+discount its immutable $2 reservation.
 
 The exact terminal plan remains admissible for at most seven days, including
 across UTC-day rollover. Its recorded reservation day must still match its own
@@ -85,7 +85,7 @@ dynamic discovery ceiling, and `inspectionKey`. Inspection creates no provider
 reservation and makes no provider request.
 
 A completed natural demand batch may leave additional historical artifacts for
-later demand days. That backlog does not block an imminent empty-buffer
+later demand days. That backlog does not block an imminent below-minimum-buffer
 micro-seed only when the latest autonomous receipt proves a full ten-topic
 artifact batch, one completed exact-metric call, zero metric receipts, ten
 one-to-one `exact_metric_missing` failures, zero persistence/skips, the current

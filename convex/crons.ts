@@ -72,8 +72,8 @@ crons.interval(
   {},
 );
 
-// Empty-buffer rescue is tenant-generic and entitlement-gated. The fleet pass
-// is provider-free unless an exact site has exhausted its ordinary two-step
+// Below-minimum-buffer rescue is tenant-generic and entitlement-gated. The
+// fleet pass is provider-free unless an exact site has exhausted its ordinary two-step
 // plan, has no usable inventory or active work, and can atomically reserve the
 // two bounded $0.10 phases. Per-site mutations retain the one-shot authority.
 crons.interval(

@@ -53,6 +53,7 @@ import {
   filterNonCannibalizingIntentTopics,
   isSealedReady,
   isUnderfilledPlanContinuationPayload,
+  MIN_APPROVED_BUFFER,
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
 import {
@@ -642,8 +643,8 @@ async function inspectReadiness(
   }
 
   const sealedBuffer = articles.filter(isSealedReady);
-  if (sealedBuffer.length > 0) {
-    return { ready: false, reason: "buffer_not_empty" };
+  if (sealedBuffer.length >= MIN_APPROVED_BUFFER) {
+    return { ready: false, reason: "buffer_minimum_met" };
   }
   const published = articles.filter((article) => article.status === "published");
   const latestPublished = published.slice().sort((left, right) =>
