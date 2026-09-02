@@ -43,9 +43,12 @@ test("a settled one-shot recovery falls through to fresh inventory", () => {
   );
 });
 
-test("terminal inventory settles before candidate or paid planning gates", () => {
+test("terminal inventory settles live tenants but cannot strand warm bootstrap", () => {
   const terminalDecision = scheduler.indexOf(
     "const terminalOpportunity = inventoryAudit.opportunityDecisions.find",
+  );
+  const bootstrapDecision = scheduler.indexOf(
+    "const terminalOpportunityNeedsBootstrap",
   );
   const terminalOutcome = scheduler.indexOf(
     'mode: "opportunity_space_exhausted"',
@@ -56,9 +59,19 @@ test("terminal inventory settles before candidate or paid planning gates", () =>
     candidateBudget,
   );
   assert.ok(terminalDecision >= 0);
+  assert.ok(bootstrapDecision > terminalDecision);
   assert.ok(terminalOutcome > terminalDecision);
   assert.ok(terminalOutcome < candidateBudget);
   assert.ok(terminalOutcome < queuePlan);
+  const terminalBlock = scheduler.slice(bootstrapDecision, terminalOutcome);
+  assert.match(
+    terminalBlock,
+    /terminalOpportunityNeedsLaunchReplenishment\([\s\S]*rolloutMode[\s\S]*sealedBufferCount: buffer\.length/,
+  );
+  assert.match(
+    terminalBlock,
+    /terminalOpportunity && !terminalOpportunityNeedsBootstrap/,
+  );
 });
 
 test("queue denials without jobs are explicit blockers, never fake work", () => {

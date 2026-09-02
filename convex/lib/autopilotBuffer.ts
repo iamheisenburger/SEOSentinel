@@ -38,6 +38,20 @@ export function topicReplenishmentBudget(cadencePerWeek: number): number {
 }
 
 /**
+ * A warm tenant has not completed autonomous launch until the shared sealed
+ * buffer minimum exists. Current inventory exhaustion may settle an already
+ * live tenant, but it cannot terminate bootstrap before the bounded planning
+ * lane has had a chance to replenish that minimum.
+ */
+export function terminalOpportunityNeedsLaunchReplenishment(args: {
+  rolloutMode: string;
+  sealedBufferCount: number;
+}): boolean {
+  return args.rolloutMode === "warm" &&
+    args.sealedBufferCount < MIN_APPROVED_BUFFER;
+}
+
+/**
  * The same authority ceiling must be used before and after strategist
  * selection. Otherwise low-volume keywords that can never pass the final gate
  * consume scarce strategist/SERP slots and make a healthy inventory look

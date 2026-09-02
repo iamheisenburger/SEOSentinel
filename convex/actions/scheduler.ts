@@ -42,6 +42,7 @@ import {
   needsDeterministicInternalLinkRepair,
   needsPublicationAuditRefresh,
   tenantTopicBusinessSignals,
+  terminalOpportunityNeedsLaunchReplenishment,
   topicReplenishmentBudget,
 } from "../lib/autopilotBuffer";
 import { nextUtcMonthAt } from "../lib/cadenceLiveness";
@@ -568,6 +569,11 @@ export const scheduleCadence = internalAction({
         decision.admitted === false &&
         decision.nextEligibleAt !== undefined,
     );
+    const terminalOpportunityNeedsBootstrap = Boolean(terminalOpportunity) &&
+      terminalOpportunityNeedsLaunchReplenishment({
+        rolloutMode,
+        sealedBufferCount: buffer.length,
+      });
     const portfolioAlertKind = portfolio.status === "below_goal"
       ? "topic_portfolio_below_goal"
       : "topic_portfolio_evidence_missing";
@@ -812,10 +818,12 @@ export const scheduleCadence = internalAction({
       }
     }
 
-    // A durable site-level refusal is a successful terminal convergence, not
-    // evidence of an imaginary worker. Quality recovery above gets first
-    // priority; once it is settled there is no generation candidate to queue.
-    if (terminalOpportunity) {
+    // A durable site-level refusal is successful convergence for a tenant
+    // that has already left bootstrap. Warm tenants below the universal
+    // launch minimum continue through quota, candidate-budget, and bounded
+    // planning gates; otherwise an exhausted initial plan can strand every
+    // new tenant before autonomous delivery has ever become possible.
+    if (terminalOpportunity && !terminalOpportunityNeedsBootstrap) {
       return {
         scheduled: 0,
         mode: "opportunity_space_exhausted",

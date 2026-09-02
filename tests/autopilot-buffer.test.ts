@@ -36,6 +36,7 @@ import {
   topicDiscoverySeedWindow,
   tenantDiscoveryAnchors,
   tenantTopicBusinessSignals,
+  terminalOpportunityNeedsLaunchReplenishment,
   topicReplenishmentBudget,
 } from "../convex/lib/autopilotBuffer.ts";
 import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
@@ -57,6 +58,44 @@ test("topic recovery capacity scales with tenant cadence but stays bounded", () 
   const jobs = readFileSync("convex/jobs.ts", "utf8");
   assert.match(jobs, /args\.reason\?\.startsWith\("topic_"\)/);
   assert.match(jobs, /payloadReason\.startsWith\("topic_"\)/);
+});
+
+test("terminal inventory cannot strand a warm tenant below launch minimum", () => {
+  assert.equal(
+    terminalOpportunityNeedsLaunchReplenishment({
+      rolloutMode: "warm",
+      sealedBufferCount: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    terminalOpportunityNeedsLaunchReplenishment({
+      rolloutMode: "warm",
+      sealedBufferCount: MIN_APPROVED_BUFFER - 1,
+    }),
+    true,
+  );
+  assert.equal(
+    terminalOpportunityNeedsLaunchReplenishment({
+      rolloutMode: "warm",
+      sealedBufferCount: MIN_APPROVED_BUFFER,
+    }),
+    false,
+  );
+  assert.equal(
+    terminalOpportunityNeedsLaunchReplenishment({
+      rolloutMode: "live",
+      sealedBufferCount: 0,
+    }),
+    false,
+  );
+  assert.equal(
+    terminalOpportunityNeedsLaunchReplenishment({
+      rolloutMode: "observe",
+      sealedBufferCount: 0,
+    }),
+    false,
+  );
 });
 
 test("tenant profile sentences become bounded traceable discovery anchors", () => {
