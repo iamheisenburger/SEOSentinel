@@ -1985,14 +1985,21 @@ async function remediateFinalArticle(args: {
   minWords: number;
   maxWords: number;
   auditNotes: string[];
+  purpose?: "audit_remediation" | "evidence_safe_length_recovery";
 }): Promise<{ markdown: string; notes: string[] }> {
   const currentYear = new Date().getUTCFullYear();
+  const lengthRecovery = args.purpose === "evidence_safe_length_recovery";
   return callClaudeStructured({
     system: [
       UNTRUSTED_EVIDENCE_INSTRUCTION,
-      "You are a senior editor performing one bounded remediation pass on an audited article.",
+      lengthRecovery
+        ? "You are a senior editor reconstructing useful article depth after an exact evidence audit removed unsafe prose."
+        : "You are a senior editor performing one bounded remediation pass on an audited article.",
       "Fix only the material defects identified by the independent audit and return the complete revised article.",
-      "Do not restart the article, add new sources, invent evidence, or optimize for a higher score through extra length.",
+      lengthRecovery
+        ? "The stated minimum is a binding output contract. Add substantive evidence-safe guidance until the complete article meets it; do not return a short draft."
+        : "Do not optimize for a higher score through extra length.",
+      "Do not restart the article, add new sources, or invent evidence.",
       "Submit the complete article and concise change notes through the remediate_final_article tool.",
     ].join(" "),
     userMessage: [
@@ -2013,6 +2020,9 @@ async function remediateFinalArticle(args: {
       "- When the unsupported proposition contained useful advice, preserve only a conditional diagnostic the reader can verify (for example, 'If your analytics show X, test Y'). Do not claim that the condition is common, that one approach converts better, or that user behaviour has a known cause without supplied evidence.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
+      lengthRecovery
+        ? "- Rebuild depth by expanding underdeveloped sections with reader-run procedures, input checklists, decision questions, implementation steps, and explicitly conditional diagnostics. Keep added guidance product-agnostic unless the supplied first-party evidence states the exact product mechanic. Do not pad the introduction, repeat conclusions, or paraphrase the same advice."
+        : "",
       args.sources.length === 0
         ? "- The source array is empty: remove every numbered inline citation and every non-structural number, numeric scenario, benchmark, duration, threshold, volume, score, percentage, price, and quantified outcome. First-party product evidence is unnumbered and must never be labelled [1]."
         : "- Every numbered citation must map to the exact supplied source array; first-party product evidence remains unnumbered.",
@@ -6867,6 +6877,7 @@ async function reviewExistingArticleHandler(
         sources,
         minWords: recoveryTargetWords,
         maxWords,
+        purpose: "evidence_safe_length_recovery",
         auditNotes: [
           `Evidence-safe length recovery pass ${lengthRecoveryPass}: the exact audit reduced this draft to ${stats.wordCount} words. Produce at least ${recoveryTargetWords} useful, non-repetitive pre-audit words so deterministic evidence pruning can still leave the final artifact above ${minimumWords} words. Expand with concrete reader-run checklists, decision questions, implementation steps, and conditional diagnostics that require no unsupported factual premise. Use product or research claims only when the supplied evidence states the exact proposition. Do not add statistics, benchmarks, named claims, causal outcomes, or citations that are absent from that evidence.`,
         ],

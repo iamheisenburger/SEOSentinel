@@ -30,11 +30,11 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 6;
+export const QUALITY_RECOVERY_VERSION = 7;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
-const POST_AUDIT_LENGTH_TARGET_RECOVERY_VERSION = 6;
+const POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION = 7;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -214,7 +214,7 @@ export function qualityRecoveryTargetVersion(
   }
   if (
     (article.qualityRecoveryAttemptVersion ?? 0) <
-      POST_AUDIT_LENGTH_TARGET_RECOVERY_VERSION &&
+      POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION &&
     ((
       (article.qualityRecoveryVersion ?? 0) < MEDIA_QUALITY_RECOVERY_VERSION &&
       (article.qualityRecoveryAttemptVersion ?? 0) >=
@@ -229,11 +229,11 @@ export function qualityRecoveryTargetVersion(
       )
     ))
   ) {
-    // Versions 4 and 5 could reach the exact unsupported-claim audit but ask
-    // the editor to stop at the same minimum that subsequent deterministic
-    // pruning had to preserve. Reopen only those durably attempted, unapplied
-    // recovery paths for the bounded pre-audit reserve introduced in v6.
-    return POST_AUDIT_LENGTH_TARGET_RECOVERY_VERSION;
+    // Versions 4 through 6 could reach the exact unsupported-claim audit but
+    // route depth recovery through a contradictory generic edit prompt. Reopen
+    // only those durably attempted, unapplied paths for the dedicated bounded
+    // evidence-safe depth reconstruction introduced in v7.
+    return POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION;
   }
   return undefined;
 }

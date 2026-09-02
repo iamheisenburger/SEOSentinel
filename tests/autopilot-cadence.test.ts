@@ -217,7 +217,7 @@ test("a pre-fix media failure advances only through defect-bound recovery algori
       ...legacy,
       qualityRecoveryAttemptVersion: 4,
     }),
-    6,
+    7,
   );
   assert.equal(
     needsVersionedQualityRecovery({
@@ -336,7 +336,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 6);
+  assert.equal(QUALITY_RECOVERY_VERSION, 7);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -383,7 +383,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
       ...completedMediaRecovery,
       qualityRecoveryAttemptVersion: 4,
     }),
-    6,
+    7,
   );
   assert.equal(
     qualityRecoveryTargetVersion({
@@ -412,7 +412,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
       ...completedClaimLedgerRecovery,
       qualityRecoveryAttemptVersion: 5,
     }),
-    6,
+    7,
   );
   assert.equal(
     qualityRecoveryTargetVersion({
@@ -425,7 +425,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
   );
 });
 
-test("version 6 reopens only post-audit length-target failures", () => {
+test("version 7 reopens only post-audit depth-reconstruction failures", () => {
   const base = {
     createdAt: NOW - HOUR,
     status: "review",
@@ -438,7 +438,7 @@ test("version 6 reopens only post-audit length-target failures", () => {
       "Strict publication requires a completed media-quality review.",
     ],
     qualityRecoveryAttemptVersion: 4,
-  }), 6);
+  }), 7);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
     publicationGateIssues: [
@@ -446,13 +446,20 @@ test("version 6 reopens only post-audit length-target failures", () => {
     ],
     qualityRecoveryVersion: 4,
     qualityRecoveryAttemptVersion: 5,
-  }), 6);
+  }), 7);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
     publicationGateIssues: [
       "Strict publication requires a completed media-quality review.",
     ],
     qualityRecoveryAttemptVersion: 6,
+  }), 7);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Strict publication requires a completed media-quality review.",
+    ],
+    qualityRecoveryAttemptVersion: 7,
   }), undefined);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
