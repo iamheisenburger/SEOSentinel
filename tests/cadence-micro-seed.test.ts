@@ -38,6 +38,10 @@ import {
 } from "../convex/lib/autopilotCadence.ts";
 
 const model = readFileSync("convex/cadenceMicroSeed.ts", "utf8");
+const demandBackfill = readFileSync(
+  "convex/expectedClickDemandBackfill.ts",
+  "utf8",
+);
 const action = readFileSync("convex/actions/cadenceMicroSeed.ts", "utf8");
 const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
 const provider = readFileSync("convex/actions/seoData.ts", "utf8");
@@ -313,6 +317,15 @@ test("fallback is a distinct $0.05 receipt after an exact terminal primary miss"
       ...invalid,
     }), false);
   }
+});
+
+test("cadence rescue binds a saturated terminal demand receipt without disabling daily recovery", () => {
+  assert.match(model, /terminalNoMetricDemandReceiptFingerprint/);
+  assert.match(model, /by_site_origin_status/);
+  assert.match(demandBackfill, /candidateArtifactEligible/);
+  assert.match(model, /terminalNoMetricDemandReceiptFingerprint/);
+  assert.match(model, /cadenceMicroSeedRecoveryBlockReason\([\s\S]*Boolean\(terminalDemandNoMetricFingerprint\)/);
+  assert.doesNotMatch(model, /expected_click_demand_jobs[\s\S]{0,300}(patch|delete)\(/);
 });
 
 test("candidate selection fails closed on metrics, brands, fit, exact reuse, and overlap", () => {

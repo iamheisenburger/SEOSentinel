@@ -14,6 +14,8 @@ export const EXPECTED_CLICK_DEMAND_BACKFILL_TOTAL_DEADLINE_MS = 45_000;
 export const EXPECTED_CLICK_DEMAND_BACKFILL_LEASE_MS = 2 * 60 * 1000;
 export const EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD =
   100_000;
+export const EXPECTED_CLICK_DEMAND_TERMINAL_NO_METRIC_MAX_AGE_MS =
+  24 * 60 * 60 * 1000;
 export const EXPECTED_CLICK_DEMAND_PROVIDER_ENDPOINT =
   "keywords_data/google_ads/search_volume/live";
 export const EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT = 2_000;
@@ -36,6 +38,189 @@ export function utcDemandBackfillDay(timestamp: number): string {
 
 export function normalizeExactDemandKeyword(keyword: string): string {
   return keyword.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+}
+
+export type ExpectedClickDemandTerminalNoMetricReceipt = {
+  jobId: string;
+  siteId: string;
+  userId: string;
+  status: string;
+  origin?: string;
+  policyVersion: number;
+  expectedPolicyVersion: number;
+  rolloutEpoch: number;
+  expectedRolloutEpoch: number;
+  reservationDay: string;
+  createdAt: number;
+  now: number;
+  providerEndpoint: string;
+  providerCostCeilingMicroUsd: number;
+  providerCostReservedMicroUsd: number;
+  providerSpendReservationId: string;
+  selectionScope?: string;
+  candidateArtifactEligible: number;
+  selectedTopics: ReadonlyArray<{ topicId: string; keyword: string }>;
+  keywordAttempts: ReadonlyArray<{
+    topicId: string;
+    keyword: string;
+    attemptedAt: number;
+  }>;
+  metricReceiptCount: number;
+  metricFailures: ReadonlyArray<{
+    topicId: string;
+    keyword: string;
+    code: string;
+    recordedAt: number;
+  }>;
+  providerCallAttempted: boolean;
+  providerCallCompleted: boolean;
+  providerAttemptedAt?: number;
+  providerCallsAttempted: number;
+  providerCallsCompleted: number;
+  persistedTopics: number;
+  missingTopics: number;
+  skippedTopics: number;
+  workerAttempts: number;
+  workerToken?: string;
+  leaseExpiresAt?: number;
+  errorCode?: string;
+  completedAt?: number;
+  reservation: {
+    id: string;
+    siteId?: string;
+    userId: string;
+    purpose: string;
+    trigger: string;
+    reservedMicroUsd: number;
+    reservationDay: string;
+    createdAt: number;
+    releasedAt?: number;
+  } | null;
+};
+
+/**
+ * A complete maximum-size fleet batch that returned no exact metric for any
+ * of its highest-priority artifact keywords is terminal for urgent cadence
+ * rescue. Remaining lower-priority legacy rows stay eligible for the next
+ * ordinary daily backfill; this receipt only prevents that backlog from
+ * suppressing the already-bounded one-shot micro seed for four more days.
+ */
+export function expectedClickDemandTerminalNoMetricReceiptFingerprint(
+  receipt: ExpectedClickDemandTerminalNoMetricReceipt,
+): string | null {
+  const completedAt = receipt.completedAt;
+  const attemptedAt = receipt.providerAttemptedAt;
+  const reservation = receipt.reservation;
+  if (
+    receipt.status !== "completed" ||
+    receipt.origin !== "autonomous_fleet" ||
+    receipt.policyVersion !== receipt.expectedPolicyVersion ||
+    receipt.rolloutEpoch !== receipt.expectedRolloutEpoch ||
+    receipt.selectionScope !== "all_eligible" ||
+    receipt.providerEndpoint !== EXPECTED_CLICK_DEMAND_PROVIDER_ENDPOINT ||
+    receipt.providerCostCeilingMicroUsd !==
+      EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD ||
+    receipt.providerCostReservedMicroUsd !==
+      EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD ||
+    receipt.candidateArtifactEligible <=
+      EXPECTED_CLICK_DEMAND_BACKFILL_TOPIC_LIMIT ||
+    receipt.selectedTopics.length !==
+      EXPECTED_CLICK_DEMAND_BACKFILL_TOPIC_LIMIT ||
+    receipt.keywordAttempts.length !== receipt.selectedTopics.length ||
+    receipt.metricReceiptCount !== 0 ||
+    receipt.metricFailures.length !== receipt.keywordAttempts.length ||
+    receipt.providerCallAttempted !== true ||
+    receipt.providerCallCompleted !== true ||
+    receipt.providerCallsAttempted !== 1 ||
+    receipt.providerCallsCompleted !== 1 ||
+    receipt.persistedTopics !== 0 ||
+    receipt.missingTopics !== receipt.keywordAttempts.length ||
+    receipt.skippedTopics !== 0 ||
+    receipt.workerAttempts !== 1 ||
+    receipt.workerToken !== undefined ||
+    receipt.leaseExpiresAt !== undefined ||
+    receipt.errorCode !== undefined ||
+    !Number.isSafeInteger(attemptedAt) ||
+    !Number.isSafeInteger(completedAt) ||
+    attemptedAt! < receipt.createdAt ||
+    completedAt! < attemptedAt! ||
+    receipt.now < completedAt! ||
+    receipt.now - completedAt! >
+      EXPECTED_CLICK_DEMAND_TERMINAL_NO_METRIC_MAX_AGE_MS ||
+    !reservation ||
+    reservation.id !== receipt.providerSpendReservationId ||
+    reservation.siteId !== receipt.siteId ||
+    reservation.userId !== receipt.userId ||
+    reservation.purpose !== "expected_click_demand_backfill" ||
+    reservation.trigger !==
+      `expected_click_demand_autonomous_fleet_v${receipt.policyVersion}` ||
+    reservation.reservedMicroUsd !==
+      EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD ||
+    reservation.reservationDay !== receipt.reservationDay ||
+    reservation.createdAt !== receipt.createdAt ||
+    reservation.releasedAt !== undefined
+  ) return null;
+
+  const selected = new Map<string, string>();
+  for (const topic of receipt.selectedTopics) {
+    const keyword = normalizeExactDemandKeyword(topic.keyword);
+    if (!topic.topicId || !keyword || selected.has(topic.topicId)) return null;
+    selected.set(topic.topicId, keyword);
+  }
+  const attempts = new Map<string, { keyword: string; attemptedAt: number }>();
+  for (const attempt of receipt.keywordAttempts) {
+    const keyword = normalizeExactDemandKeyword(attempt.keyword);
+    if (
+      !Number.isSafeInteger(attempt.attemptedAt) ||
+      attempt.attemptedAt < attemptedAt! ||
+      attempt.attemptedAt > completedAt! ||
+      selected.get(attempt.topicId) !== keyword ||
+      attempts.has(attempt.topicId)
+    ) return null;
+    attempts.set(attempt.topicId, { keyword, attemptedAt: attempt.attemptedAt });
+  }
+  const failures = new Set<string>();
+  for (const failure of receipt.metricFailures) {
+    const keyword = normalizeExactDemandKeyword(failure.keyword);
+    const attempt = attempts.get(failure.topicId);
+    if (
+      failure.code !== "exact_metric_missing" ||
+      !attempt ||
+      attempt.keyword !== keyword ||
+      !Number.isSafeInteger(failure.recordedAt) ||
+      failure.recordedAt < attempt.attemptedAt ||
+      failure.recordedAt > completedAt! ||
+      failures.has(failure.topicId)
+    ) return null;
+    failures.add(failure.topicId);
+  }
+
+  return JSON.stringify({
+    contract: "expected-click-demand-terminal-no-metric-v1",
+    jobId: receipt.jobId,
+    siteId: receipt.siteId,
+    userId: receipt.userId,
+    rolloutEpoch: receipt.rolloutEpoch,
+    reservationDay: receipt.reservationDay,
+    providerSpendReservationId: receipt.providerSpendReservationId,
+    selectedTopics: receipt.selectedTopics.map((topic) => ({
+      topicId: topic.topicId,
+      keyword: normalizeExactDemandKeyword(topic.keyword),
+    })),
+    keywordAttempts: receipt.keywordAttempts.map((attempt) => ({
+      topicId: attempt.topicId,
+      keyword: normalizeExactDemandKeyword(attempt.keyword),
+      attemptedAt: attempt.attemptedAt,
+    })),
+    metricFailures: receipt.metricFailures.map((failure) => ({
+      topicId: failure.topicId,
+      keyword: normalizeExactDemandKeyword(failure.keyword),
+      code: failure.code,
+      recordedAt: failure.recordedAt,
+    })),
+    providerAttemptedAt: attemptedAt,
+    completedAt,
+  });
 }
 
 /**

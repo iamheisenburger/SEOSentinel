@@ -18,6 +18,7 @@ import {
   EXPECTED_CLICK_DEMAND_GSC_READ_LIMIT,
   EXPECTED_CLICK_DEMAND_INVENTORY_READ_LIMIT,
   expectedClickDemandSelectionScore,
+  expectedClickDemandTerminalNoMetricReceiptFingerprint,
   normalizeExactDemandKeyword,
   reconcileExactDemandMetrics,
   selectExpectedClickDemandCandidates,
@@ -641,6 +642,78 @@ async function latestJobForSite(ctx: QueryCtx, siteId: Id<"sites">) {
     .first();
 }
 
+export async function terminalNoMetricDemandReceiptFingerprint(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+  job: Doc<"expected_click_demand_jobs"> | null,
+  timestamp: number,
+): Promise<string | null> {
+  if (!job) return null;
+  const reservation = await ctx.db.get(job.providerSpendReservationId);
+  return expectedClickDemandTerminalNoMetricReceiptFingerprint({
+    jobId: String(job._id),
+    siteId: String(job.siteId),
+    userId: job.userId,
+    status: job.status,
+    origin: job.origin,
+    policyVersion: job.policyVersion,
+    expectedPolicyVersion: EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
+    rolloutEpoch: job.rolloutEpoch,
+    expectedRolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    reservationDay: job.reservationDay,
+    createdAt: job.createdAt,
+    now: timestamp,
+    providerEndpoint: job.providerEndpoint,
+    providerCostCeilingMicroUsd: job.providerCostCeilingMicroUsd,
+    providerCostReservedMicroUsd: job.providerCostReservedMicroUsd,
+    providerSpendReservationId: String(job.providerSpendReservationId),
+    selectionScope: job.selectionScope,
+    candidateArtifactEligible: job.candidateCounts.artifactEligible ?? 0,
+    selectedTopics: job.selectedTopics.map((topic) => ({
+      topicId: String(topic.topicId),
+      keyword: topic.keyword,
+    })),
+    keywordAttempts: job.keywordAttempts.map((attempt) => ({
+      topicId: String(attempt.topicId),
+      keyword: attempt.keyword,
+      attemptedAt: attempt.attemptedAt,
+    })),
+    metricReceiptCount: job.metricReceipts.length,
+    metricFailures: job.metricFailures.map((failure) => ({
+      topicId: String(failure.topicId),
+      keyword: failure.keyword,
+      code: failure.code,
+      recordedAt: failure.recordedAt,
+    })),
+    providerCallAttempted: job.providerCallAttempted,
+    providerCallCompleted: job.providerCallCompleted,
+    providerAttemptedAt: job.providerAttemptedAt,
+    providerCallsAttempted: job.providerCallsAttempted,
+    providerCallsCompleted: job.providerCallsCompleted,
+    persistedTopics: job.persistedTopics ?? 0,
+    missingTopics: job.missingTopics ?? 0,
+    skippedTopics: job.skippedTopics ?? 0,
+    workerAttempts: job.workerAttempts,
+    workerToken: job.workerToken,
+    leaseExpiresAt: job.leaseExpiresAt,
+    errorCode: job.errorCode,
+    completedAt: job.completedAt,
+    reservation: reservation
+      ? {
+        id: String(reservation._id),
+        siteId: reservation.siteId ? String(reservation.siteId) : undefined,
+        userId: reservation.userId,
+        purpose: reservation.purpose,
+        trigger: reservation.trigger,
+        reservedMicroUsd: reservation.reservedMicroUsd,
+        reservationDay: reservation.reservationDay,
+        createdAt: reservation.createdAt,
+        releasedAt: reservation.releasedAt,
+      }
+      : null,
+  });
+}
+
 async function unresolvedFleetDemandJobs(
   ctx: Pick<QueryCtx, "db">,
   siteId: Id<"sites">,
@@ -717,11 +790,20 @@ export const getStatusInternal = internalQuery({
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
     if (!siteExecutionActive(site)) return null;
+    const latest = await latestJobForSite(ctx, siteId);
     return {
       enabled: site.expectedClickSchedulingEnabled === true,
       rolloutMode: site.autopilotRolloutMode ?? "observe",
       activeRollout: activeRollout(site),
-      latest: safeJobStatus(await latestJobForSite(ctx, siteId)),
+      latest: safeJobStatus(latest),
+      terminalNoMetricReceiptValid: Boolean(
+        await terminalNoMetricDemandReceiptFingerprint(
+          ctx,
+          site,
+          latest,
+          Date.now(),
+        ),
+      ),
       // Why the last natural evaluation did or did not reserve work.
       // Without this a correct idle and a silent stall look identical.
       reservationReceipt: sanitizeSkipReceiptForOperator(

@@ -202,12 +202,21 @@ export function selectPlannedRecoveryPhase(
 export function cadenceMicroSeedRecoveryBlockReason(
   demand: PlannedRecoveryReadiness,
   evidence: PlannedRecoveryReadiness,
+  terminalNoMetricDemandReceipt = false,
 ): null | "planned_topic_recovery_available" |
   "expected_click_recovery_available" |
   "expected_click_recovery_unresolved" {
   if (selectPlannedRecoveryPhase(demand, evidence)) {
     return "planned_topic_recovery_available";
   }
+  if (
+    terminalNoMetricDemandReceipt &&
+    demand?.ready === true &&
+    (demand.candidateCounts?.artifactEligible ?? 0) > 0 &&
+    evidence?.ready !== true &&
+    evidence?.actionable !== true &&
+    evidence?.reason === "demand_candidates_remaining"
+  ) return null;
   if (demand?.ready === true || evidence?.ready === true) {
     return "expected_click_recovery_available";
   }

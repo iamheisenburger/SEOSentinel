@@ -71,6 +71,7 @@ import {
 } from "./lib/expectedClickEvidenceBackfill";
 import {
   expectedClickDemandFleetReadiness,
+  terminalNoMetricDemandReceiptFingerprint,
 } from "./expectedClickDemandBackfill";
 import {
   expectedClickEvidenceFleetReadiness,
@@ -769,7 +770,8 @@ async function inspectReadiness(
     plannedGate: siteGate,
     plannedAuthorityFresh: true,
   };
-  const [demandReadiness, evidenceReadiness] = await Promise.all([
+  const [demandReadiness, evidenceReadiness, terminalDemandJobs] =
+    await Promise.all([
     expectedClickDemandFleetReadiness(
       ctx,
       siteId,
@@ -782,10 +784,29 @@ async function inspectReadiness(
       timestamp,
       recoverySnapshot,
     ),
+    ctx.db.query("expected_click_demand_jobs")
+      .withIndex("by_site_origin_status", (q) =>
+        q.eq("siteId", siteId).eq("origin", "autonomous_fleet").eq(
+          "status",
+          "completed",
+        )
+      )
+      .order("desc")
+      .take(1),
   ]);
+  const terminalDemandJob = terminalDemandJobs[0];
+  const terminalDemandNoMetricFingerprint = terminalDemandJob
+    ? await terminalNoMetricDemandReceiptFingerprint(
+      ctx,
+      site,
+      terminalDemandJob,
+      timestamp,
+    )
+    : null;
   const recoveryBlockReason = cadenceMicroSeedRecoveryBlockReason(
     demandReadiness,
     evidenceReadiness,
+    Boolean(terminalDemandNoMetricFingerprint),
   );
   if (recoveryBlockReason) return { ready: false, reason: recoveryBlockReason };
 
@@ -1056,6 +1077,8 @@ async function inspectReadiness(
     activeEvidenceCount: 0,
     providerCostCeilingMicroUsd,
     evidenceHeadroomMicroUsd,
+    terminalNoMetricDemandReceiptFingerprint:
+      terminalDemandNoMetricFingerprint ?? null,
   };
   return {
     ready: true,

@@ -85,11 +85,19 @@ dynamic discovery ceiling, and `inspectionKey`. Inspection creates no provider
 reservation and makes no provider request.
 
 A completed natural demand batch may leave additional historical artifacts for
-later demand days. That clean backlog does not block an imminent empty-buffer
-micro-seed. After materialization, the exact micro topic already has current
-demand and may advance to its guarded evidence job ahead of those demand-only
-rows. Any evidence-ready artifact still has priority, and an incomplete,
-ambiguous, active, or non-natural demand receipt remains a hard stop.
+later demand days. That backlog does not block an imminent empty-buffer
+micro-seed only when the latest autonomous receipt proves a full ten-topic
+artifact batch, one completed exact-metric call, zero metric receipts, ten
+one-to-one `exact_metric_missing` failures, zero persistence/skips, the current
+rollout epoch, and an unreleased matching shared-ledger reservation. The exact
+receipt is bound into the micro inspection and expires after 24 hours. Ordinary
+daily recovery remains enabled for the lower-priority artifacts; this merely
+prevents one saturated negative batch from suppressing cadence rescue for four
+days. After materialization, the exact micro topic already has current demand
+and may advance to its guarded evidence job ahead of those demand-only rows.
+Any evidence-ready or planned-recovery topic still has priority, and an
+incomplete, ambiguous, active, stale, partially matched, or non-natural demand
+receipt remains a hard stop.
 
 ## Reviewed apply
 

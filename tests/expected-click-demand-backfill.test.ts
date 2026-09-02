@@ -11,6 +11,7 @@ import {
   ExpectedClickDemandRuntimeError,
   consumeExpectedClickDemandProviderCall,
   createExpectedClickDemandRuntime,
+  expectedClickDemandTerminalNoMetricReceiptFingerprint,
   normalizeExactDemandKeyword,
   reconcileExactDemandMetrics,
   selectExpectedClickDemandCandidates,
@@ -55,6 +56,117 @@ function candidate(index: number, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+function terminalNoMetricReceipt() {
+  const createdAt = Date.UTC(2026, 8, 1, 13, 15, 0);
+  const attemptedAt = createdAt + 1_000;
+  const completedAt = attemptedAt + 2_000;
+  const selectedTopics = Array.from({ length: 10 }, (_, index) => ({
+    topicId: `topic-${index + 1}`,
+    keyword: `keyword ${index + 1}`,
+  }));
+  const keywordAttempts = selectedTopics.map((topic, index) => ({
+    ...topic,
+    attemptedAt: attemptedAt + index,
+  }));
+  return {
+    jobId: "demand-job",
+    siteId: "site-1",
+    userId: "user-1",
+    status: "completed",
+    origin: "autonomous_fleet",
+    policyVersion: 1,
+    expectedPolicyVersion: 1,
+    rolloutEpoch: 5,
+    expectedRolloutEpoch: 5,
+    reservationDay: "2026-09-01",
+    createdAt,
+    now: completedAt + 1_000,
+    providerEndpoint: EXPECTED_CLICK_DEMAND_PROVIDER_ENDPOINT,
+    providerCostCeilingMicroUsd:
+      EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+    providerSpendReservationId: "reservation-1",
+    selectionScope: "all_eligible",
+    candidateArtifactEligible: 38,
+    selectedTopics,
+    keywordAttempts,
+    metricReceiptCount: 0,
+    metricFailures: keywordAttempts.map((attempt) => ({
+      topicId: attempt.topicId,
+      keyword: attempt.keyword,
+      code: "exact_metric_missing",
+      recordedAt: completedAt - 1,
+    })),
+    providerCallAttempted: true,
+    providerCallCompleted: true,
+    providerAttemptedAt: attemptedAt,
+    providerCallsAttempted: 1,
+    providerCallsCompleted: 1,
+    persistedTopics: 0,
+    missingTopics: 10,
+    skippedTopics: 0,
+    workerAttempts: 1,
+    completedAt,
+    reservation: {
+      id: "reservation-1",
+      siteId: "site-1",
+      userId: "user-1",
+      purpose: "expected_click_demand_backfill",
+      trigger: "expected_click_demand_autonomous_fleet_v1",
+      reservedMicroUsd:
+        EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+      reservationDay: "2026-09-01",
+      createdAt,
+    },
+  };
+}
+
+test("a saturated exact no-metric fleet batch is a fail-closed cadence receipt", () => {
+  const receipt = terminalNoMetricReceipt();
+  const fingerprint = expectedClickDemandTerminalNoMetricReceiptFingerprint(
+    receipt,
+  );
+  assert.match(fingerprint ?? "", /expected-click-demand-terminal-no-metric-v1/);
+  assert.equal(
+    expectedClickDemandTerminalNoMetricReceiptFingerprint({
+      ...receipt,
+      metricReceiptCount: 1,
+    }),
+    null,
+  );
+  assert.equal(
+    expectedClickDemandTerminalNoMetricReceiptFingerprint({
+      ...receipt,
+      selectedTopics: receipt.selectedTopics.slice(0, 9),
+    }),
+    null,
+  );
+  assert.equal(
+    expectedClickDemandTerminalNoMetricReceiptFingerprint({
+      ...receipt,
+      metricFailures: receipt.metricFailures.map((failure, index) =>
+        index === 0 ? { ...failure, code: "provider_error" } : failure
+      ),
+    }),
+    null,
+  );
+  assert.equal(
+    expectedClickDemandTerminalNoMetricReceiptFingerprint({
+      ...receipt,
+      now: receipt.completedAt + 24 * 60 * 60 * 1000 + 1,
+    }),
+    null,
+  );
+  assert.equal(
+    expectedClickDemandTerminalNoMetricReceiptFingerprint({
+      ...receipt,
+      reservation: { ...receipt.reservation, releasedAt: receipt.completedAt },
+    }),
+    null,
+  );
+});
 
 test("selection is deterministic, unique by exact keyword, and capped at ten", () => {
   const selected = selectExpectedClickDemandCandidates([
