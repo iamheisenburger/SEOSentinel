@@ -30,10 +30,11 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 5;
+export const QUALITY_RECOVERY_VERSION = 6;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
+const POST_AUDIT_LENGTH_TARGET_RECOVERY_VERSION = 6;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -210,6 +211,29 @@ export function qualityRecoveryTargetVersion(
     // below the temporary length floor. Reopen only that persisted contract;
     // unrelated editorial failures remain terminal and cannot replay spend.
     return CLAIM_LEDGER_RECOVERY_VERSION;
+  }
+  if (
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      POST_AUDIT_LENGTH_TARGET_RECOVERY_VERSION &&
+    ((
+      (article.qualityRecoveryVersion ?? 0) < MEDIA_QUALITY_RECOVERY_VERSION &&
+      (article.qualityRecoveryAttemptVersion ?? 0) >=
+        PROVIDER_FAILOVER_RECOVERY_VERSION &&
+      issues.some((issue) => VERSIONED_MEDIA_RECOVERY_ISSUES.has(issue))
+    ) || (
+      (article.qualityRecoveryVersion ?? 0) < CLAIM_LEDGER_RECOVERY_VERSION &&
+      (article.qualityRecoveryAttemptVersion ?? 0) >=
+        CLAIM_LEDGER_RECOVERY_VERSION &&
+      issues.some((issue) =>
+        VERSIONED_CLAIM_LEDGER_RECOVERY_ISSUES.has(issue)
+      )
+    ))
+  ) {
+    // Versions 4 and 5 could reach the exact unsupported-claim audit but ask
+    // the editor to stop at the same minimum that subsequent deterministic
+    // pruning had to preserve. Reopen only those durably attempted, unapplied
+    // recovery paths for the bounded pre-audit reserve introduced in v6.
+    return POST_AUDIT_LENGTH_TARGET_RECOVERY_VERSION;
   }
   return undefined;
 }

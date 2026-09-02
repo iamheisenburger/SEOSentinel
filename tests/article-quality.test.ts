@@ -7,6 +7,7 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   containsExecutableMdx,
+  evidenceSafeLengthRecoveryTarget,
   evaluatePublicationQuality,
   insertReviewedProductImage,
   inlineCitationNumbers,
@@ -50,6 +51,34 @@ const body = Array.from(
   { length: 950 },
   (_, index) => `useful${index}`,
 ).join(" ");
+
+test("length recovery reserves bounded headroom for deterministic evidence pruning", () => {
+  assert.equal(evidenceSafeLengthRecoveryTarget({
+    currentWords: 683,
+    minimumWords: 1200,
+    maximumWords: 2600,
+  }), 2234);
+  assert.equal(evidenceSafeLengthRecoveryTarget({
+    currentWords: 702,
+    minimumWords: 1200,
+    maximumWords: 3000,
+  }), 2196);
+  assert.equal(evidenceSafeLengthRecoveryTarget({
+    currentWords: 1199,
+    minimumWords: 1200,
+    maximumWords: 3000,
+  }), 1800);
+  assert.equal(evidenceSafeLengthRecoveryTarget({
+    currentWords: 100,
+    minimumWords: 1200,
+    maximumWords: 1800,
+  }), 1800);
+  assert.equal(evidenceSafeLengthRecoveryTarget({
+    currentWords: 1300,
+    minimumWords: 1200,
+    maximumWords: 3000,
+  }), 1200);
+});
 
 test("strict generation and publication share one minimum depth contract", () => {
   const belowMinimum = Array.from(

@@ -159,7 +159,7 @@ test("a max-revision draft gets deterministic repair only for mechanical defects
   );
 });
 
-test("a pre-fix media failure gets exactly one pass under the current recovery algorithm", () => {
+test("a pre-fix media failure advances only through defect-bound recovery algorithms", () => {
   const legacy = {
     _id: "article-legacy-media",
     createdAt: NOW - HOUR,
@@ -210,7 +210,14 @@ test("a pre-fix media failure gets exactly one pass under the current recovery a
       ...legacy,
       qualityRecoveryAttemptVersion: 4,
     }),
-    false,
+    true,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...legacy,
+      qualityRecoveryAttemptVersion: 4,
+    }),
+    6,
   );
   assert.equal(
     needsVersionedQualityRecovery({
@@ -329,7 +336,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 5);
+  assert.equal(QUALITY_RECOVERY_VERSION, 6);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -369,7 +376,14 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
       ...completedMediaRecovery,
       qualityRecoveryAttemptVersion: 4,
     }),
-    false,
+    true,
+  );
+  assert.equal(
+    qualityRecoveryTargetVersion({
+      ...completedMediaRecovery,
+      qualityRecoveryAttemptVersion: 4,
+    }),
+    6,
   );
   assert.equal(
     qualityRecoveryTargetVersion({
@@ -398,7 +412,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
       ...completedClaimLedgerRecovery,
       qualityRecoveryAttemptVersion: 5,
     }),
-    undefined,
+    6,
   );
   assert.equal(
     qualityRecoveryTargetVersion({
@@ -409,6 +423,44 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     }),
     undefined,
   );
+});
+
+test("version 6 reopens only post-audit length-target failures", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    qualityRevisionCount: 2,
+  };
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Strict publication requires a completed media-quality review.",
+    ],
+    qualityRecoveryAttemptVersion: 4,
+  }), 6);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Strict publication requires a completed claim-to-evidence audit.",
+    ],
+    qualityRecoveryVersion: 4,
+    qualityRecoveryAttemptVersion: 5,
+  }), 6);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Strict publication requires a completed media-quality review.",
+    ],
+    qualityRecoveryAttemptVersion: 6,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Editorial quality score is 78; strict minimum is 85.",
+    ],
+    qualityRecoveryAttemptVersion: 5,
+  }), undefined);
 });
 
 test("version 3 media recovery recognizes both sides of the migrated contract before failover", () => {

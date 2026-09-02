@@ -16,9 +16,11 @@ test("existing-draft review performs bounded evidence-safe fixed-point recovery 
   assert.ok(recoveryStart >= 0 && terminalCheck > recoveryStart);
 
   const recovery = handler.slice(recoveryStart, terminalCheck);
+  assert.match(recovery, /evidenceSafeLengthRecoveryTarget\(\{/);
   assert.match(recovery, /remediateFinalArticle\(\{/);
   assert.match(recovery, /lengthRecoveryPass <= 3/);
-  assert.match(recovery, /using only the supplied product and research evidence/);
+  assert.match(recovery, /deterministic evidence pruning can still leave the final artifact above/);
+  assert.match(recovery, /minWords: recoveryTargetWords/);
   assert.match(recovery, /factCheckArticle\(/);
   assert.match(recovery, /auditFinalArticleWithUnsupportedClaimRemoval\(\{/);
   assert.match(recovery, /reviewed = lengthFactChecked/);

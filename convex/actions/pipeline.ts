@@ -22,6 +22,7 @@ import {
   articleWordCeiling,
   clampMetaDescription,
   clampMetaTitle,
+  evidenceSafeLengthRecoveryTarget,
   evaluatePublicationQuality,
   insertReviewedProductImage,
   issuesBlockingPreLinkReview,
@@ -6851,6 +6852,11 @@ async function reviewExistingArticleHandler(
       stats.wordCount < minimumWords && lengthRecoveryPass <= 3;
       lengthRecoveryPass++
     ) {
+      const recoveryTargetWords = evidenceSafeLengthRecoveryTarget({
+        currentWords: stats.wordCount,
+        minimumWords,
+        maximumWords: maxWords,
+      });
       const lengthRecovered = await remediateFinalArticle({
         markdown: exactReviewedMarkdown,
         articleType: article.articleType ?? "standard",
@@ -6859,10 +6865,10 @@ async function reviewExistingArticleHandler(
         productEvidence,
         researchEvidence,
         sources,
-        minWords: minimumWords,
+        minWords: recoveryTargetWords,
         maxWords,
         auditNotes: [
-          `Evidence-safe length recovery pass ${lengthRecoveryPass}: the exact audit reduced this draft to ${stats.wordCount} words. Restore useful, non-repetitive coverage to at least ${minimumWords} words using only the supplied product and research evidence. Frame evidence-free material as reader-verifiable instructions or conditional diagnostics. Do not add statistics, benchmarks, named claims, causal outcomes, or citations that are absent from that evidence.`,
+          `Evidence-safe length recovery pass ${lengthRecoveryPass}: the exact audit reduced this draft to ${stats.wordCount} words. Produce at least ${recoveryTargetWords} useful, non-repetitive pre-audit words so deterministic evidence pruning can still leave the final artifact above ${minimumWords} words. Expand with concrete reader-run checklists, decision questions, implementation steps, and conditional diagnostics that require no unsupported factual premise. Use product or research claims only when the supplied evidence states the exact proposition. Do not add statistics, benchmarks, named claims, causal outcomes, or citations that are absent from that evidence.`,
         ],
       });
       const lengthFactChecked = await factCheckArticle(

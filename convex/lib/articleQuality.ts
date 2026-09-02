@@ -75,6 +75,26 @@ export type ClaimEvidenceEntry = {
 };
 
 /**
+ * Exact claim auditing can remove a substantial part of a generated draft.
+ * Asking the editor to stop at the publication floor therefore makes the
+ * post-audit artifact predictably too short. Give recovery a bounded reserve
+ * proportional to the observed deficit while keeping the tenant's configured
+ * hard maximum authoritative.
+ */
+export function evidenceSafeLengthRecoveryTarget(args: {
+  currentWords: number;
+  minimumWords: number;
+  maximumWords: number;
+}): number {
+  const minimumWords = Math.max(0, Math.ceil(args.minimumWords));
+  const maximumWords = Math.max(minimumWords, Math.floor(args.maximumWords));
+  const currentWords = Math.max(0, Math.floor(args.currentWords));
+  const deficit = Math.max(0, minimumWords - currentWords);
+  const auditReserve = deficit > 0 ? Math.max(600, deficit * 2) : 0;
+  return Math.min(maximumWords, minimumWords + auditReserve);
+}
+
+/**
  * Topic clusters, not isolated pages, are what carry topical authority. A page
  * that links to none of its tenant's other pages is an orphan and competes on
  * its own thin authority. Counts site-relative Markdown links only, so an
