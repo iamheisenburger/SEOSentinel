@@ -291,6 +291,10 @@ export const scheduleCadence = internalAction({
       internal.jobs.settleExhaustedArticleQualityFailuresForSiteInternal,
       { siteId },
     );
+    await ctx.runMutation(
+      internal.articles.settleRecoveredTopicQualityForSiteInternal,
+      { siteId },
+    );
 
     const rolloutMode = site.autopilotRolloutMode ?? "observe";
     if (rolloutMode === "observe") {

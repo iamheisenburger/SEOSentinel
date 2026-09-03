@@ -77,6 +77,7 @@ import {
   siteCanonicalDomainRevision,
   siteUsesLegacyDomainReceipts,
   takeCurrentDomainArticles,
+  takeCurrentDomainArticleSummariesByStatus,
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
@@ -181,10 +182,10 @@ function assertNotPublishing(article: Doc<"articles">) {
   }
 }
 
-async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) {
-  const article = await ctx.db.get(articleId);
-  if (!article) return;
-
+async function settleRecoveredTopicQuality(
+  ctx: MutationCtx,
+  article: Doc<"articles">,
+): Promise<boolean> {
   if (article.topicId) {
     const topic = await ctx.db.get(article.topicId);
     const recovery = recoveredTopicQualitySettlement({
@@ -212,8 +213,17 @@ async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) 
     });
     if (recovery && topic) {
       await ctx.db.patch(topic._id, recovery.topicPatch);
+      return true;
     }
   }
+  return false;
+}
+
+async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) {
+  const article = await ctx.db.get(articleId);
+  if (!article) return;
+
+  await settleRecoveredTopicQuality(ctx, article);
 
   const existing = await ctx.db
     .query("article_summaries")
@@ -233,6 +243,45 @@ async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) 
     });
   }
 }
+
+/**
+ * Provider-free natural-cadence migration for artifacts sealed before the
+ * recovered-topic settlement existed. New seals repair atomically through
+ * syncSummary; this bounded scan converges historical current-domain rows for
+ * every tenant without inspecting or modifying another tenant.
+ */
+export const settleRecoveredTopicQualityForSiteInternal = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) return { inspected: 0, settled: 0 };
+    const [ready, published] = await Promise.all([
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "published", 25),
+    ]);
+    let inspected = 0;
+    let settled = 0;
+    for (const summary of [...ready, ...published]) {
+      const article = await ctx.db.get(summary.articleId);
+      if (
+        !article ||
+        article.siteId !== siteId ||
+        !articleMatchesCurrentDomain(site, article)
+      ) continue;
+      inspected += 1;
+      if (await settleRecoveredTopicQuality(ctx, article)) {
+        settled += 1;
+        if (article.topicId) {
+          await reconcileTopicLifecycle(ctx, {
+            siteId,
+            topicId: article.topicId,
+          });
+        }
+      }
+    }
+    return { inspected, settled };
+  },
+});
 
 async function requireArticleOwner(
   ctx: MutationCtx | QueryCtx,

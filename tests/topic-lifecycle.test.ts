@@ -311,7 +311,15 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   assert.match(articles, /async function syncSummary[\s\S]*reconcileTopicLifecycle/);
   assert.match(
     articles,
-    /async function syncSummary[\s\S]*recoveredTopicQualitySettlement/,
+    /async function settleRecoveredTopicQuality[\s\S]*recoveredTopicQualitySettlement/,
+  );
+  assert.match(
+    articles,
+    /async function syncSummary[\s\S]*settleRecoveredTopicQuality/,
+  );
+  assert.match(
+    articles,
+    /settleRecoveredTopicQualityForSiteInternal[\s\S]*takeCurrentDomainArticleSummariesByStatus[\s\S]*settleRecoveredTopicQuality/,
   );
 
   const jobs = readFileSync("convex/jobs.ts", "utf8");
@@ -324,6 +332,11 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
     /settleExhaustedArticleQualityFailuresForSiteInternal[\s\S]*by_article_status_created[\s\S]*recoverableWorkerQualityFailure[\s\S]*topicMatchesLegacyWorkerFailureSettlement/,
   );
   assert.match(articles, /terminalTopicQualitySettlement/);
+  const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+  assert.match(
+    scheduler,
+    /scheduleCadence[\s\S]*settleRecoveredTopicQualityForSiteInternal/,
+  );
 });
 
 test("every paid topic path treats terminal quality misses as upstream feedback", () => {
