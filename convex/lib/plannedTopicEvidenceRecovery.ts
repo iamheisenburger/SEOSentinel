@@ -72,6 +72,30 @@ export function isCurrentExpectedClickBatch(
     job.policyVersion === policyVersion;
 }
 
+/**
+ * Preserve the ordinary one-batch/day fence while allowing a cadence repair
+ * to measure a newly materialized planned topic. The continuation is valid
+ * only after every current batch is terminal-successful and only once for the
+ * exact inspect fingerprint. An unfinished/failed call or duplicate key stays
+ * closed, so this cannot become a paid replay path.
+ */
+export function guardedEvidenceContinuationAllowed(args: {
+  origin: string;
+  inspectionKey?: string;
+  todayJobs: ReadonlyArray<{
+    status: string;
+    plannedRecoveryInspectionKey?: string;
+  }>;
+}): boolean {
+  return args.origin === "operator_canary" &&
+    Boolean(args.inspectionKey) &&
+    args.todayJobs.length > 0 &&
+    args.todayJobs.every((job) => job.status === "completed") &&
+    !args.todayJobs.some((job) =>
+      job.plannedRecoveryInspectionKey === args.inspectionKey
+    );
+}
+
 /** Automatic planning already requires measured keyword data for every
  * enabled autopilot tenant. The legacy optional flag can only opt a paused
  * site into the same contract; an undefined value is not a tenant exclusion. */
@@ -223,6 +247,14 @@ type PlannedRecoveryReadiness = null | {
   actionable?: boolean;
   reason?: string;
   continueToEvidence?: boolean;
+  /** A completed ordinary evidence batch may be followed only by an exact,
+   * inspect-bound planned-topic recovery. Fleet callers still see `ready:
+   * false`, so this capability cannot become a second ordinary daily batch. */
+  guardedContinuationReady?: boolean;
+  /** The completed evidence batch consumed every currently eligible planned
+   * target. Cadence discovery may create one new exact target whose evidence
+   * phase is subsequently protected by `guardedContinuationReady`. */
+  continueToCadenceMicroSeed?: boolean;
   reservationDay?: string;
   rolloutEpoch?: number;
   candidateCounts?: { artifactEligible?: number };
@@ -250,7 +282,7 @@ export function selectPlannedRecoveryPhase(
   ]) {
     const value = candidate.value;
     if (
-      value?.ready === true &&
+      (value?.ready === true || value?.guardedContinuationReady === true) &&
       (value.candidateCounts?.artifactEligible ?? 0) === 0 &&
       (value.plannedSelection?.length ?? 0) > 0 &&
       typeof value.reservationDay === "string" &&
@@ -296,6 +328,10 @@ export function cadenceMicroSeedRecoveryBlockReason(
   if (demand?.actionable === true || evidence?.actionable === true) {
     return "expected_click_recovery_unresolved";
   }
+  if (
+    demand?.continueToEvidence === true &&
+    evidence?.continueToCadenceMicroSeed === true
+  ) return null;
   // A micro topic must buy a new same-day evidence job immediately after
   // materialization. Both admitted states prove there is no evidence-ready
   // work now. `demand_candidates_remaining` is safe because the new micro

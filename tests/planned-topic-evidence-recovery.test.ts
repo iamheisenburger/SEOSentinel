@@ -15,6 +15,7 @@ import {
   exactPlannedRecoverySelectionMatches,
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
+  guardedEvidenceContinuationAllowed,
   hasExactPlannedEvidenceAttempt,
   isCurrentExpectedClickBatch,
   partitionPlannedTopicRecoveryCoverage,
@@ -485,6 +486,32 @@ test("guarded recovery and micro admission share the exact executable phase sele
   }, {
     ready: false,
     actionable: false,
+    reason: "daily_batch_exists",
+    continueToCadenceMicroSeed: true,
+  }), null);
+  assert.equal(cadenceMicroSeedRecoveryBlockReason({
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+    continueToEvidence: true,
+  }, {
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+    guardedContinuationReady: true,
+    candidateCounts: { artifactEligible: 0 },
+    plannedSelection,
+    reservationDay: "2026-08-23",
+    rolloutEpoch: 4,
+  }), "planned_topic_recovery_available");
+  assert.equal(cadenceMicroSeedRecoveryBlockReason({
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+    continueToEvidence: true,
+  }, {
+    ready: false,
+    actionable: false,
     reason: "demand_candidates_remaining",
   }), null);
   assert.equal(cadenceMicroSeedRecoveryBlockReason({
@@ -507,6 +534,38 @@ test("guarded recovery and micro admission share the exact executable phase sele
     reason: "demand_phase_incomplete",
   }), "expected_click_recovery_unresolved");
   assert.match(operatorRecovery, /selectPlannedRecoveryPhase/);
+});
+
+test("same-day evidence continuation is exact, terminal, and non-replayable", () => {
+  const completed = [{
+    status: "completed",
+    plannedRecoveryInspectionKey: "prior-key",
+  }];
+  assert.equal(guardedEvidenceContinuationAllowed({
+    origin: "operator_canary",
+    inspectionKey: "new-key",
+    todayJobs: completed,
+  }), true);
+  assert.equal(guardedEvidenceContinuationAllowed({
+    origin: "autonomous_fleet",
+    inspectionKey: "new-key",
+    todayJobs: completed,
+  }), false);
+  assert.equal(guardedEvidenceContinuationAllowed({
+    origin: "operator_canary",
+    inspectionKey: "prior-key",
+    todayJobs: completed,
+  }), false);
+  assert.equal(guardedEvidenceContinuationAllowed({
+    origin: "operator_canary",
+    inspectionKey: "new-key",
+    todayJobs: [...completed, { status: "running" }],
+  }), false);
+  assert.equal(guardedEvidenceContinuationAllowed({
+    origin: "operator_canary",
+    inspectionKey: "new-key",
+    todayJobs: [],
+  }), false);
 });
 
 test("planned recovery terminally separates covered intent without classifying valid overflow", () => {

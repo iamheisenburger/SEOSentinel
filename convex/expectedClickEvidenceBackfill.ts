@@ -72,6 +72,7 @@ import {
   exactPlannedRecoverySelectionMatches,
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
+  guardedEvidenceContinuationAllowed,
   hasExactPlannedEvidenceAttempt,
   isCurrentExpectedClickBatch,
   plannedTargetsAllowedForQueue,
@@ -1014,7 +1015,7 @@ export async function expectedClickEvidenceFleetReadiness(
         .collect(),
     ]);
     const currentRolloutEpoch = site.autopilotRolloutEpoch ?? 0;
-    const todayEvidenceJob = todayEvidenceRows.find((job) =>
+    const todayEvidenceJobs = todayEvidenceRows.filter((job) =>
       isCurrentExpectedClickBatch(
         job,
         currentRolloutEpoch,
@@ -1028,7 +1029,13 @@ export async function expectedClickEvidenceFleetReadiness(
         EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
       )
     );
-    if (todayEvidenceJob) {
+    const completedEvidenceBatchAllowsGuardedContinuation =
+      todayEvidenceJobs.length > 0 &&
+      todayEvidenceJobs.every((job) => job.status === "completed");
+    if (
+      todayEvidenceJobs.length > 0 &&
+      !completedEvidenceBatchAllowsGuardedContinuation
+    ) {
       return {
         ready: false as const,
         reason: "daily_batch_exists" as const,
@@ -1131,10 +1138,14 @@ export async function expectedClickEvidenceFleetReadiness(
     if (candidateCount === 0) {
       return {
         ready: false as const,
-        reason: "no_current_demand_candidates" as const,
+        reason: completedEvidenceBatchAllowsGuardedContinuation
+          ? "daily_batch_exists" as const
+          : "no_current_demand_candidates" as const,
         actionable: false,
         candidateCount: 0,
         candidateCounts: inventory.candidateCounts,
+        continueToCadenceMicroSeed:
+          completedEvidenceBatchAllowsGuardedContinuation,
       };
     }
     if (!plannedAuthorityFresh) {
@@ -1146,14 +1157,18 @@ export async function expectedClickEvidenceFleetReadiness(
       };
     }
     return {
-      ready: true as const,
-      reason: "eligible" as const,
+      ready: !completedEvidenceBatchAllowsGuardedContinuation,
+      reason: completedEvidenceBatchAllowsGuardedContinuation
+        ? "daily_batch_exists" as const
+        : "eligible" as const,
       actionable: false,
       candidateCount,
       candidateCounts: inventory.candidateCounts,
       plannedSelection: selectedPlannedDescriptors(selected),
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       reservationDay,
+      guardedContinuationReady:
+        completedEvidenceBatchAllowsGuardedContinuation,
     };
 }
 
@@ -1389,19 +1404,33 @@ async function reserveEvidenceOutcome(
         EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
       )
     );
-    // A provider-balance race can release the shared reservation, but it must
-    // not create a loophole around the tenant's one-new-job-per-UTC-day fence.
-    // The operator can try again on the next UTC day; paid work is never
-    // multiplied by repeatedly queueing fresh rows after an aborted worker.
+    // Ordinary fleet/operator work remains one batch per policy/day. A
+    // completed batch may be followed only by a uniquely fingerprinted,
+    // inspect-bound planned recovery. This is the cadence micro-seed handoff:
+    // it cannot select artifacts, replay the same topic, overlap an unfinished
+    // provider attempt, or bypass the shared provider budget.
+    const duplicateGuardedJob = plannedRecoveryGuard
+      ? todayJobs.find((job) =>
+          job.plannedRecoveryInspectionKey ===
+            plannedRecoveryGuard.inspectionKey
+        )
+      : undefined;
+    const unfinishedJob = todayJobs.find((job) => job.status !== "completed");
+    const guardedContinuation = guardedEvidenceContinuationAllowed({
+      origin,
+      inspectionKey: plannedRecoveryGuard?.inspectionKey,
+      todayJobs,
+    });
     const existing = todayJobs[0];
-    if (existing) {
+    const refusalJob = unfinishedJob ?? duplicateGuardedJob ?? existing;
+    if (refusalJob && !guardedContinuation) {
       return {
         queued: false as const,
-        reason: existing.status === "partial"
+        reason: refusalJob.status === "partial"
           ? "resume_required" as const
           : "daily_batch_exists" as const,
-        jobId: existing._id,
-        status: existing.status,
+        jobId: refusalJob._id,
+        status: refusalJob.status,
       };
     }
     const todayDemandJob = todayDemandJobs[0];
