@@ -75,6 +75,32 @@ export type ClaimEvidenceEntry = {
 };
 
 /**
+ * Keep the provider's factual confidence internally consistent with its own
+ * audited claim counts.  A model occasionally returned a sub-85 score while
+ * simultaneously reporting that every identified claim was verified.  The
+ * independent claim ledger still owns publication safety; this helper only
+ * prevents contradictory review metadata from quarantining the same valid
+ * artifact forever.
+ */
+export function normalizedFactCheckConfidence(args: {
+  confidenceScore?: number;
+  claimCount?: number;
+  verifiedCount?: number;
+}): number | undefined {
+  const { confidenceScore, claimCount, verifiedCount } = args;
+  if (
+    Number.isInteger(claimCount) &&
+    Number.isInteger(verifiedCount) &&
+    (claimCount ?? 0) > 0 &&
+    (verifiedCount ?? -1) >= 0 &&
+    (verifiedCount ?? 0) <= (claimCount ?? 0)
+  ) {
+    return Math.round(((verifiedCount ?? 0) / (claimCount ?? 1)) * 100);
+  }
+  return confidenceScore;
+}
+
+/**
  * Exact claim auditing can remove a substantial part of a generated draft.
  * Asking the editor to stop at the publication floor therefore makes the
  * post-audit artifact predictably too short. Give recovery a bounded reserve
@@ -228,7 +254,9 @@ function namedEntities(value: string): string[] {
     "before",
     "if",
     "once",
+    "per",
     "the",
+    "try",
     "using",
     "when",
     "where",
@@ -310,7 +338,7 @@ function isReaderMeasurementInstruction(paragraph: string): boolean {
     .replace(/^\*\*([^*]+)\*\*\s*/i, "$1 ")
     .trim();
   if (
-    /^(?:measure(?:\s+it)?|track|current state|post-deployment|the key measurement|multiply|calculate|record|document|write|fill in|assign|estimate|compare)\b/i.test(
+    /^(?:measure(?:\s+it)?|track|current state|post-deployment|the key measurement|multiply|calculate|record|document|write|fill in|assign|estimate|compare|here is what to check)\b/i.test(
       plain,
     ) ||
     /^Q:\s*/i.test(plain) ||
@@ -339,6 +367,55 @@ function isReaderMeasurementInstruction(paragraph: string): boolean {
   });
 }
 
+function isExplicitAuthorFramework(paragraph: string): boolean {
+  if (
+    INLINE_CITATION_PATTERN.test(paragraph) ||
+    EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
+    HYPE_PATTERN.test(paragraph) ||
+    QUANTIFIED_OUTCOME_PATTERN.test(paragraph)
+  ) return false;
+  return (
+    /\b(?:proposed by (?:this|the) (?:guide|article|author)|author-proposed|reader-run)\b/i.test(
+      paragraph,
+    ) &&
+    /\bnot (?:an? )?(?:external|industry-standard|universal|validated)\b/i.test(
+      paragraph,
+    )
+  );
+}
+
+function isReaderRunProcedure(paragraph: string): boolean {
+  if (
+    INLINE_CITATION_PATTERN.test(paragraph) ||
+    EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
+    HYPE_PATTERN.test(paragraph) ||
+    QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
+    /\b(?:according to|stud(?:y|ies)|survey|research (?:shows?|found|finds?|reports?|supports?|confirms?))\b/i.test(
+      paragraph,
+    )
+  ) return false;
+  const steps = paragraph.match(/^\s*\d+[.)]\s+\*\*([^*]+)\*\*/gm) ?? [];
+  if (steps.length < 2) return false;
+  return steps.every((step) => {
+    const heading = step
+      .replace(/^\s*\d+[.)]\s+\*\*/, "")
+      .replace(/\*\*$/, "")
+      .trim();
+    return (
+      heading.endsWith("?") ||
+      /^(?:name|check|look|test|confirm|measure|track|record|compare|calculate|write|document|ask|decide|verify)\b/i.test(
+        heading,
+      )
+    );
+  });
+}
+
+function isStandaloneCallToActionLink(paragraph: string): boolean {
+  return /^\s*(?:\*\*|__)?\[[^\]]+\]\(https:\/\/[^)]+\)(?:\*\*|__)?[.!]?\s*$/i.test(
+    paragraph,
+  );
+}
+
 function referencesNamedProduct(value: string, productEvidence: string): boolean {
   const identities = [
     ...productEvidence.matchAll(/^(?:Name|Domain):\s*([^\n]+)/gim),
@@ -358,6 +435,12 @@ function referencesNamedProduct(value: string, productEvidence: string): boolean
 }
 
 function requiresClaimEvidence(value: string, productEvidence: string): boolean {
+  if (
+    isReaderMeasurementInstruction(value) ||
+    isExplicitAuthorFramework(value) ||
+    isReaderRunProcedure(value) ||
+    isStandaloneCallToActionLink(value)
+  ) return false;
   return (
     INLINE_CITATION_PATTERN.test(value) ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||

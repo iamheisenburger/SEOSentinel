@@ -2324,8 +2324,14 @@ export const applyQualityReview = internalMutation({
       claimEvidence: args.claimEvidence,
       claimEvidenceStatus: args.claimEvidenceStatus,
       qualityRevisionCount: args.qualityRevisionCount,
-      qualityRecoveryVersion: args.qualityRecoveryVersion,
-      qualityRecoveryAttemptVersion: args.qualityRecoveryVersion,
+      qualityRecoveryVersion: Math.max(
+        article.qualityRecoveryVersion ?? 0,
+        args.qualityRecoveryVersion,
+      ),
+      qualityRecoveryAttemptVersion: Math.max(
+        article.qualityRecoveryAttemptVersion ?? 0,
+        args.qualityRecoveryVersion,
+      ),
       status: "review",
       publicationGateStatus: undefined,
       publicationGateIssues: undefined,

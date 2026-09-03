@@ -25,6 +25,7 @@ import {
   evidenceSafeLengthRecoveryTarget,
   evidenceRequiredParagraphs,
   initialArticleDepthTarget,
+  normalizedFactCheckConfidence,
   evaluatePublicationQuality,
   insertReviewedProductImage,
   issuesBlockingPreLinkReview,
@@ -1696,6 +1697,7 @@ async function factCheckArticle(
   );
   return {
     ...reviewed,
+    confidenceScore: normalizedFactCheckConfidence(reviewed),
     markdown:
       (sources?.length ?? 0) === 0
         ? removeUncitedQuantifiedSentences(citationSafeMarkdown)

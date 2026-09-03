@@ -17,6 +17,7 @@ import {
   PENDING_INTERNAL_LINK_ISSUE,
   publicationMediaQualityStatus,
   normalizeSiteOrigin,
+  normalizedFactCheckConfidence,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnledgeredEvidenceParagraphs,
@@ -102,6 +103,25 @@ test("new drafts carry a bounded depth reserve without padding to the ceiling", 
     maximumWords: 2600,
     requestedWords: 900,
   }), 1500);
+});
+
+test("fact-check confidence follows the provider's audited claim counts", () => {
+  assert.equal(normalizedFactCheckConfidence({
+    confidenceScore: 78,
+    claimCount: 12,
+    verifiedCount: 12,
+  }), 100);
+  assert.equal(normalizedFactCheckConfidence({
+    confidenceScore: 96,
+    claimCount: 10,
+    verifiedCount: 8,
+  }), 80);
+  assert.equal(normalizedFactCheckConfidence({ confidenceScore: 88 }), 88);
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(
+    pipeline,
+    /confidenceScore:\s*normalizedFactCheckConfidence\(reviewed\)/,
+  );
 });
 
 test("the auditor receives the same deterministic claim units the gate validates", () => {
@@ -517,6 +537,65 @@ test("ROI question framing, FAQ prompts, and input checklists are not factual cl
 
   assert.equal(result.requiredClaimCount, 0);
   assert.deepEqual(result.issues, ["Claim-to-evidence ledger is empty."]);
+});
+
+test("explicit author frameworks, reader-run procedures, and standalone CTAs are not evidence claims", () => {
+  const productEvidence =
+    "Name: Pentra\nDomain: pentra.dev\nPentra publishes through a GitHub adapter and verifies the live page.";
+  const markdown = [
+    "This evaluation is proposed by this guide — not an external or industry-standard checklist — and can be applied to any platform, including Pentra.",
+    [
+      "1. **Name the bottleneck.** Write down the problem your own analytics show.",
+      "2. **Check the output.** Verify the resulting page in your own environment.",
+      "3. **Confirm the audit trail.** Treat an unverified status as inconclusive.",
+    ].join("\n"),
+    "Here is what to check directly on Pentra's product pages before deciding.",
+    "[Try Pentra](https://pentra.dev/sign-up)",
+  ].join("\n\n");
+  assert.deepEqual(evidenceRequiredParagraphs(markdown, productEvidence), []);
+  const result = validateClaimEvidenceLedger({
+    markdown,
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [
+      {
+        claim: markdown.split("\n\n")[0],
+        citationNumbers: [],
+        supported: true,
+        reason: "This is explicitly identified as an author-proposed framework.",
+      },
+      {
+        claim: "[Try Pentra](https://pentra.dev/sign-up)",
+        citationNumbers: [],
+        supported: true,
+        reason: "This is a standalone call-to-action link, not a factual claim.",
+      },
+    ],
+  });
+  assert.deepEqual(result.issues, []);
+});
+
+test("first-party sentence lead-ins do not become phantom named entities", () => {
+  const productEvidence =
+    "Name: Pentra\nDomain: pentra.dev\nPentra connects to Google Search Console and tracks clicks and impressions.";
+  const claim =
+    "Per Pentra's product pages, Pentra connects to Google Search Console and tracks clicks and impressions.";
+  const result = validateClaimEvidenceLedger({
+    markdown: claim,
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{
+      claim,
+      citationNumbers: [],
+      supported: true,
+      reason: "The exact hashed first-party snapshot states this capability.",
+    }],
+  });
+  assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
 test("short factual bullet claims still require evidence", () => {

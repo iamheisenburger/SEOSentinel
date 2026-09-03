@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -336,7 +337,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 12);
+  assert.equal(QUALITY_RECOVERY_VERSION, 13);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -505,6 +506,56 @@ test("version 8 reopens only claim-audit truncation and its false length failure
       "Editorial quality score is 78; strict minimum is 85.",
     ],
   }), undefined);
+});
+
+test("version 13 reopens only the current claim-classification defect and its v1 marker regression", () => {
+  const base = {
+    createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT + 1,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Strict publication requires a completed claim-to-evidence audit.",
+    ],
+    qualityRevisionCount: 2,
+  };
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 12,
+    qualityRecoveryAttemptVersion: 12,
+  }), 13);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 1,
+    qualityRecoveryAttemptVersion: 1,
+  }), 13);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 7,
+    qualityRecoveryAttemptVersion: 8,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Editorial quality score is 84; strict minimum is 85.",
+    ],
+    qualityRecoveryVersion: 12,
+    qualityRecoveryAttemptVersion: 12,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 13,
+    qualityRecoveryAttemptVersion: 13,
+  }), undefined);
+
+  const articles = readFileSync("convex/articles.ts", "utf8");
+  assert.match(
+    articles,
+    /qualityRecoveryVersion:\s*Math\.max\([\s\S]*?article\.qualityRecoveryVersion \?\? 0,[\s\S]*?args\.qualityRecoveryVersion/,
+  );
+  assert.match(
+    articles,
+    /qualityRecoveryAttemptVersion:\s*Math\.max\([\s\S]*?article\.qualityRecoveryAttemptVersion \?\? 0,[\s\S]*?args\.qualityRecoveryVersion/,
+  );
 });
 
 test("version 9 reopens only a version-8 exact editorial audit that can now be remediated", () => {
