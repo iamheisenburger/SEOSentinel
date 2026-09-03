@@ -2841,6 +2841,41 @@ export const getFull = internalQuery({
   },
 });
 
+/**
+ * Resolve one explicitly named production tenant for credential-free operator
+ * projections. This intentionally does not enumerate the fleet or return the
+ * site document: incident tooling receives only the active tenant identity it
+ * asked for, so unrelated tenants cannot be inspected by accident.
+ */
+export const getOperatorIdentityByDomainInternal = internalQuery({
+  args: { domain: v.string() },
+  handler: async (ctx, { domain }) => {
+    const canonicalDomain = normalizeCanonicalDomain(domain);
+    if (!canonicalDomain) throw new Error("A valid canonical domain is required");
+    const candidates = [
+      canonicalDomain,
+      `www.${canonicalDomain}`,
+      `https://${canonicalDomain}`,
+      `https://${canonicalDomain}/`,
+      `http://${canonicalDomain}`,
+      `http://${canonicalDomain}/`,
+    ];
+    for (const candidate of candidates) {
+      const site = await ctx.db
+        .query("sites")
+        .withIndex("by_domain", (q) => q.eq("domain", candidate))
+        .first();
+      if (
+        siteExecutionActive(site) &&
+        siteCanonicalDomain(site) === canonicalDomain
+      ) {
+        return { siteId: site._id, domain: canonicalDomain };
+      }
+    }
+    return null;
+  },
+});
+
 /** Narrow recovery projection for a delivery whose durable lease may predate
  * a plan/domain-conflict transition. Callers still need the atomic
  * executionLeasePredatesPlanTransition receipt before settling and may never
