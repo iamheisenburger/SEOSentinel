@@ -2022,12 +2022,14 @@ export const markRunFinished = internalMutation({
       ctx,
       runSite,
       "ready",
-      10,
+      25,
     );
     const approvedBufferCount = currentReady.filter(isSealedReady).length;
+    const bufferPolicy = approvedBufferPolicy(runSite.cadencePerWeek ?? 4);
     const runClassification = classifyAutopilotRunOutcome({
       outcome: args.outcome,
       approvedBufferCount,
+      bufferMinimum: bufferPolicy.minimum,
     });
     let completionStatus = runClassification.status;
     let completionDetail =
@@ -2068,7 +2070,6 @@ export const markRunFinished = internalMutation({
           auditedContentHash: article.auditedContentHash,
         });
         const cadence = site.cadencePerWeek ?? 4;
-        const bufferPolicy = approvedBufferPolicy(cadence);
         if (cadence > 0) {
           const cadenceMs = cadenceIntervalMs(cadence);
           nextPublicationDueAt = lastPublishedAt + cadenceMs;
@@ -2115,6 +2116,7 @@ export const markRunFinished = internalMutation({
           !!currentHealth?.nextPublicationDueAt &&
           now > currentHealth.nextPublicationDueAt,
         bufferCount: approvedBufferCount,
+        bufferMinimum: bufferPolicy.minimum,
         lastOutcome: args.outcome,
       });
       if (completionStatus === "healthy") {
@@ -2407,7 +2409,7 @@ export const auditSla = internalMutation({
         ctx,
         site,
         "ready",
-        10,
+        25,
       );
 
       const approvedBufferCount = readySummaries.filter(isSealedReady).length;
@@ -2799,7 +2801,7 @@ export const getOperatorSnapshot = internalQuery({
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .order("desc")
         .take(8),
-      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 10),
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
       takeCurrentDomainArticleSummariesByStatus(ctx, site, "review", 8),
       ctx.db
         .query("jobs")
@@ -2955,7 +2957,7 @@ export const getFleetReadiness = internalQuery({
           .query("autopilot_health")
           .withIndex("by_site", (q) => q.eq("siteId", site._id))
           .first(),
-        takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 10),
+        takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
       ]);
       const warm = warmAutopilotReadiness(site, hasCrawledPage);
       const limits = getLimitsFromFeatures(site.planFeatures ?? []);

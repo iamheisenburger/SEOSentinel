@@ -567,7 +567,10 @@ export const getAutopilotState = internalQuery({
       await Promise.all([
         latestCurrentModernPublishedSummary(ctx, site),
         latestCurrentPublishedByCreationSummary(ctx, site),
-        takeCurrentSummariesByStatus(ctx, site, "ready", 10),
+        // The highest supported cadence targets twelve sealed articles. Keep
+        // this scheduler projection above that ceiling so a genuinely full
+        // buffer is never undercounted and needlessly regenerated.
+        takeCurrentSummariesByStatus(ctx, site, "ready", 25),
         takeCurrentSummariesByStatus(ctx, site, "review", 25),
         takeCurrentRecentSummaries(ctx, site, since, 10),
         takeCurrentSummariesByStatus(ctx, site, "published", 50),

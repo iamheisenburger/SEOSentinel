@@ -39,6 +39,7 @@ import {
   liveAutopilotReadiness,
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
+import { approvedBufferPolicy } from "./lib/autopilotBuffer.ts";
 import {
   autonomousOutreachTransportIssues,
   outreachDeletionGate,
@@ -6466,7 +6467,7 @@ export const setAutopilotRollout = internalMutation({
         ctx,
         site,
         "ready",
-        10,
+        25,
       );
       const sealed = ready.filter(
         (article) =>
@@ -6474,9 +6475,12 @@ export const setAutopilotRollout = internalMutation({
           article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION &&
           !!article.auditedContentHash,
       );
-      if (sealed.length < 2) {
+      const bufferMinimum = approvedBufferPolicy(
+        site.cadencePerWeek ?? 4,
+      ).minimum;
+      if (sealed.length < bufferMinimum) {
         throw new Error(
-          `Live rollout requires at least two sealed articles; found ${sealed.length}`,
+          `Live rollout requires at least ${bufferMinimum} sealed articles; found ${sealed.length}`,
         );
       }
     }

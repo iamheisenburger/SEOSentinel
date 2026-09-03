@@ -88,6 +88,25 @@ test("a nominal buffer-full outcome still derives health from the real buffer", 
   );
 });
 
+test("run health honors the cadence-specific buffer minimum", () => {
+  assert.equal(
+    classifyAutopilotRunOutcome({
+      outcome: "buffer_full",
+      approvedBufferCount: 8,
+      bufferMinimum: 9,
+    }).status,
+    "buffer_low",
+  );
+  assert.equal(
+    classifyAutopilotRunOutcome({
+      outcome: "buffer_ready",
+      approvedBufferCount: 9,
+      bufferMinimum: 9,
+    }).status,
+    "healthy",
+  );
+});
+
 test("runtime uses the exhaustive classifier and alerts on future unknown modes", () => {
   const autopilot = readFileSync("convex/autopilot.ts", "utf8");
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");

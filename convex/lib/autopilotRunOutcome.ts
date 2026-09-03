@@ -147,7 +147,12 @@ export type AutopilotRunHealthClassification = {
 export function classifyAutopilotRunOutcome(args: {
   outcome: string;
   approvedBufferCount: number;
+  bufferMinimum?: number;
 }): AutopilotRunHealthClassification {
+  const bufferMinimum = Math.max(
+    1,
+    Math.floor(args.bufferMinimum ?? MIN_APPROVED_BUFFER),
+  );
   const schedulerKind = Object.prototype.hasOwnProperty.call(
       SCHEDULER_RUN_OUTCOME_HEALTH,
       args.outcome,
@@ -182,14 +187,14 @@ export function classifyAutopilotRunOutcome(args: {
     return {
       status: args.approvedBufferCount === 0
         ? "buffer_empty"
-        : args.approvedBufferCount < MIN_APPROVED_BUFFER
+        : args.approvedBufferCount < bufferMinimum
           ? "buffer_low"
           : "healthy",
       recognized: true,
     };
   }
   return {
-    status: args.approvedBufferCount >= MIN_APPROVED_BUFFER
+    status: args.approvedBufferCount >= bufferMinimum
       ? "healthy"
       : args.approvedBufferCount === 0
         ? "buffer_empty"

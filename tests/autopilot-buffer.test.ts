@@ -73,6 +73,16 @@ test("sealed inventory scales to cover a bounded provider outage at every cadenc
   }
 });
 
+test("every runtime buffer projection can observe the highest cadence target", () => {
+  const articles = readFileSync("convex/articles.ts", "utf8");
+  const autopilot = readFileSync("convex/autopilot.ts", "utf8");
+  const sites = readFileSync("convex/sites.ts", "utf8");
+  assert.doesNotMatch(articles, /"ready", 10/);
+  assert.doesNotMatch(autopilot, /"ready", 10/);
+  assert.doesNotMatch(sites, /"ready",\s*10/);
+  assert.match(sites, /approvedBufferPolicy\([\s\S]*?\)\.minimum/);
+});
+
 test("topic recovery capacity scales with tenant cadence but stays bounded", () => {
   assert.equal(topicReplenishmentBudget(1), 3);
   assert.equal(topicReplenishmentBudget(7), 3);
