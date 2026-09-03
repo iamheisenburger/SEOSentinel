@@ -64,17 +64,18 @@ export function topicReplenishmentBudget(cadencePerWeek: number): number {
 }
 
 /**
- * A warm tenant has not completed autonomous launch until the shared sealed
- * buffer minimum exists. Current inventory exhaustion may settle an already
- * live tenant, but it cannot terminate bootstrap before the bounded planning
- * lane has had a chance to replenish that minimum.
+ * Neither a warm nor live tenant is cadence-safe until the shared sealed
+ * buffer minimum exists. Current inventory exhaustion describes only the
+ * already-measured topic set; it must not terminate bounded fresh planning
+ * while an active tenant lacks the outage buffer required to meet cadence.
+ * Observe-mode tenants remain provider-free and fail closed.
  */
-export function terminalOpportunityNeedsLaunchReplenishment(args: {
+export function terminalOpportunityNeedsCadenceReplenishment(args: {
   rolloutMode: string;
   sealedBufferCount: number;
   minimumApprovedBuffer?: number;
 }): boolean {
-  return args.rolloutMode === "warm" &&
+  return ["warm", "live"].includes(args.rolloutMode) &&
     args.sealedBufferCount <
       (args.minimumApprovedBuffer ?? MIN_APPROVED_BUFFER);
 }

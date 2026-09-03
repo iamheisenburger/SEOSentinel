@@ -43,12 +43,12 @@ test("a settled one-shot recovery falls through to fresh inventory", () => {
   );
 });
 
-test("terminal inventory settles live tenants but cannot strand warm bootstrap", () => {
+test("terminal inventory cannot strand warm or live tenants below their buffer", () => {
   const terminalDecision = scheduler.indexOf(
     "const terminalOpportunity = inventoryAudit.opportunityDecisions.find",
   );
   const bootstrapDecision = scheduler.indexOf(
-    "const terminalOpportunityNeedsBootstrap",
+    "const terminalOpportunityNeedsReplenishment",
   );
   const terminalOutcome = scheduler.indexOf(
     'mode: "opportunity_space_exhausted"',
@@ -66,11 +66,11 @@ test("terminal inventory settles live tenants but cannot strand warm bootstrap",
   const terminalBlock = scheduler.slice(bootstrapDecision, terminalOutcome);
   assert.match(
     terminalBlock,
-    /terminalOpportunityNeedsLaunchReplenishment\([\s\S]*rolloutMode[\s\S]*sealedBufferCount: buffer\.length/,
+    /terminalOpportunityNeedsCadenceReplenishment\([\s\S]*rolloutMode[\s\S]*sealedBufferCount: buffer\.length/,
   );
   assert.match(
     terminalBlock,
-    /terminalOpportunity && !terminalOpportunityNeedsBootstrap/,
+    /terminalOpportunity && !terminalOpportunityNeedsReplenishment/,
   );
 });
 

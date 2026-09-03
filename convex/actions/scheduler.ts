@@ -41,7 +41,7 @@ import {
   needsDeterministicInternalLinkRepair,
   needsPublicationAuditRefresh,
   tenantTopicBusinessSignals,
-  terminalOpportunityNeedsLaunchReplenishment,
+  terminalOpportunityNeedsCadenceReplenishment,
   topicReplenishmentBudget,
 } from "../lib/autopilotBuffer";
 import { nextUtcMonthAt } from "../lib/cadenceLiveness";
@@ -573,8 +573,8 @@ export const scheduleCadence = internalAction({
         decision.admitted === false &&
         decision.nextEligibleAt !== undefined,
     );
-    const terminalOpportunityNeedsBootstrap = Boolean(terminalOpportunity) &&
-      terminalOpportunityNeedsLaunchReplenishment({
+    const terminalOpportunityNeedsReplenishment = Boolean(terminalOpportunity) &&
+      terminalOpportunityNeedsCadenceReplenishment({
         rolloutMode,
         sealedBufferCount: buffer.length,
         minimumApprovedBuffer: bufferPolicy.minimum,
@@ -831,7 +831,7 @@ export const scheduleCadence = internalAction({
     // launch minimum continue through quota, candidate-budget, and bounded
     // planning gates; otherwise an exhausted initial plan can strand every
     // new tenant before autonomous delivery has ever become possible.
-    if (terminalOpportunity && !terminalOpportunityNeedsBootstrap) {
+    if (terminalOpportunity && !terminalOpportunityNeedsReplenishment) {
       return {
         scheduled: 0,
         mode: "opportunity_space_exhausted",
