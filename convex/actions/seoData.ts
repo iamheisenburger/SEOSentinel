@@ -259,8 +259,9 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     tag: requestTag,
     filters: ["keyword_info.search_volume", ">=", 10],
     order_by: [
-      "keyword_properties.keyword_difficulty,asc",
+      "relevance,desc",
       "keyword_info.search_volume,desc",
+      "keyword_properties.keyword_difficulty,asc",
     ],
     limit,
   }]);
@@ -293,8 +294,9 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     JSON.stringify(taskData.filters) !==
       JSON.stringify(["keyword_info.search_volume", ">=", 10]) ||
     JSON.stringify(taskData.order_by) !== JSON.stringify([
-      "keyword_properties.keyword_difficulty,asc",
+      "relevance,desc",
       "keyword_info.search_volume,desc",
+      "keyword_properties.keyword_difficulty,asc",
     ])
   ) {
     throw new Error("Cadence micro-seed provider request echo is incompatible");

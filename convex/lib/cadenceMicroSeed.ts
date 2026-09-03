@@ -11,7 +11,7 @@ import {
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-export const CADENCE_MICRO_SEED_VERSION = 4;
+export const CADENCE_MICRO_SEED_VERSION = 5;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =

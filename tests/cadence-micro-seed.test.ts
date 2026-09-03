@@ -103,8 +103,9 @@ function providerFixture() {
         tag,
         filters: ["keyword_info.search_volume", ">=", 10],
         order_by: [
-          "keyword_properties.keyword_difficulty,asc",
+          "relevance,desc",
           "keyword_info.search_volume,desc",
+          "keyword_properties.keyword_difficulty,asc",
         ],
         limit: 100,
       },
@@ -707,8 +708,9 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
     tag: fixture.tag,
     filters: ["keyword_info.search_volume", ">=", 10],
     order_by: [
-      "keyword_properties.keyword_difficulty,asc",
+      "relevance,desc",
       "keyword_info.search_volume,desc",
+      "keyword_properties.keyword_difficulty,asc",
     ],
     limit: 100,
   }]);
