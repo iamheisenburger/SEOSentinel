@@ -21,7 +21,7 @@ auto-chain.
 - One new batch per site, policy version, and UTC day. A partial job resumes the same immutable
   reservation and snapshots; it does not create a second batch.
 - The complete provider envelope is capped at 100,000 microUSD ($0.10) and is
-  reserved through the shared $2.80/day, $35/month provider ledger.
+  reserved through the shared $2.95/day, $35/month provider ledger.
 - The free DataForSEO balance endpoint is checked before reservation and again
   immediately before paid work.
 - A provider balance failure before any paid call releases capacity but retains

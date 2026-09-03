@@ -20,17 +20,19 @@ import {
  * may append release metadata; the receipt itself is never deleted.
  */
 // Conservative fleet guard: one complete $2 topic-plan reservation, the full
-// bounded cadence-recovery chain ($0.35), one $0.20 policy-upgrade recovery,
+// bounded cadence-recovery chain ($0.35), one $0.20 evidence-policy upgrade,
+// one $0.15 micro-seed-policy upgrade,
 // and a $0.25 reserve for another account must all fit in the same UTC day.
 // The ordinary recovery chain is primary
 // micro-seed ($0.10), fallback micro-seed ($0.05), exact demand ($0.10), and
 // SERP/authority evidence ($0.10). A lower ceiling lets an independent demand
 // worker consume the evidence headroom observed by the micro-seed inspector,
 // deterministically stranding cadence after every paid step has succeeded.
-// The versioned recovery permits exactly one repaired demand/evidence batch in
-// a day that already contains immutable receipts from an older algorithm. The
-// monthly $35 fleet circuit breaker remains unchanged.
-export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 2_800_000;
+// The versioned recoveries permit exactly one repaired demand/evidence batch
+// and one repaired micro-seed pair in a day that already contains immutable
+// receipts from older algorithms. The monthly $35 fleet circuit breaker
+// remains unchanged.
+export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 2_950_000;
 export const SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -42,6 +44,7 @@ export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
  */
 // No single account may reserve the entire fleet envelope. One complete topic
 // plan plus every bounded cadence-recovery phase and one version migration
+// for both evidence and micro-seed discovery
 // fits, while one full $0.25 authority/onboarding envelope remains admissible
 // for another customer.
 // This is admission fairness only and does not alter the monthly fleet cap.

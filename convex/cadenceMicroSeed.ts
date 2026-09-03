@@ -859,12 +859,21 @@ async function inspectReadiness(
     source.reservation,
     source.checkpoints,
   );
-  const sourceJobs = await ctx.db.query("cadence_micro_seed_jobs")
+  const sourceJobHistory = await ctx.db.query("cadence_micro_seed_jobs")
     .withIndex("by_site_source_plan", (q) =>
       q.eq("siteId", siteId).eq("sourcePlanId", source!.job._id)
     )
-    .order("asc")
-    .take(3);
+    .order("desc")
+    .take(17);
+  if (sourceJobHistory.length > 16) {
+    return { ready: false, reason: "micro_seed_source_history_read_exhausted" };
+  }
+  // Old policy rows are immutable no-replay evidence, not a veto on a newer
+  // recovery algorithm. The versioned provider trigger and request tag keep
+  // the new pair independently auditable.
+  const sourceJobs = sourceJobHistory
+    .filter((job) => job.policyVersion === CADENCE_MICRO_SEED_VERSION)
+    .sort((left, right) => left.createdAt - right.createdAt);
   if (sourceJobs.length > 2) {
     return { ready: false, reason: "micro_seed_source_history_exhausted" };
   }
@@ -879,6 +888,7 @@ async function inspectReadiness(
   const primarySeed = selectCadenceMicroSeedAnchor(
     anchors,
     String(source.job._id),
+    CADENCE_MICRO_SEED_VERSION - 1,
   );
   if (!primarySeed) {
     return { ready: false, reason: "tenant_product_seed_unavailable" };
@@ -950,6 +960,7 @@ async function inspectReadiness(
         anchors,
         String(source.job._id),
         parent.seed,
+        CADENCE_MICRO_SEED_VERSION - 1,
       );
       if (
         !fallbackSeed ||
@@ -992,6 +1003,7 @@ async function inspectReadiness(
       anchors,
       String(source.job._id),
       parent.seed,
+      CADENCE_MICRO_SEED_VERSION - 1,
     );
     if (!fallbackSeed) {
       return { ready: false, reason: "fallback_product_seed_unavailable" };

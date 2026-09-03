@@ -1,7 +1,11 @@
 # Cadence micro-seed recovery
 
+Current policy: v2. A policy upgrade preserves every older paid receipt and
+rotates to a new product-anchor pair; it never replays an earlier provider
+request or relaxes keyword, authority, SERP, overlap, or publication gates.
+
 This is a last-resort, tenant-generic recovery for an imminent cadence window
-with a sealed buffer below the two-item launch minimum, no scheduler-ready
+with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready
 topic, and no active content or evidence work after the ordinary two-execution
 topic plan is terminal. It does not reopen that plan or release, replace, or
 discount its immutable $2 reservation.
@@ -61,9 +65,14 @@ fleet ledgers are recomputed before any reservation or provider call.
 - The primary combined ledger requirement is $0.20. After a consumed $0.10
   primary receipt, fallback admission requires the exact remaining $0.15:
   $0.05 fallback plus $0.10 evidence. With the terminal $2 plan, the complete
-  worst-case account ledger is therefore exactly $2.25. This observes but does
-  not lock evidence capacity; a later evidence race may still stop safely and
-  report a cadence miss.
+  ordinary worst-case account ledger is therefore exactly $2.25. During the
+  bounded v2 migration, the immutable v1 primary/fallback receipts ($0.15),
+  the one-time demand/evidence policy receipts ($0.20), and the v2
+  primary/fallback/evidence receipts ($0.25) can coexist with the source plan.
+  The exact account ceiling is therefore $2.70 for this migration and still
+  leaves the fixed $0.25 other-account reserve inside the $2.95 fleet ceiling.
+  This observes but does not lock evidence capacity; a later evidence race may
+  still stop safely and report a cadence miss.
 
 No article is queued until the evidence job persists an eligible expected-click
 receipt for the exact staged topic. A timeout after a durable provider attempt

@@ -11,6 +11,7 @@ import {
   CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
+  CADENCE_MICRO_SEED_VERSION,
   cadenceMicroSeedAnchors,
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedAttemptKind,
@@ -139,13 +140,19 @@ function providerFixture() {
 test("paid seeds come only from explicit product anchors and rotate deterministically", () => {
   const anchors = cadenceMicroSeedAnchors({
     anchorKeywords: ["Lead scoring software", "lead scoring software"],
-    keyFeatures: ["Predictive lead qualification"],
+    keyFeatures: [
+      "Predictive lead qualification",
+      "Automated sales routing",
+      "Buyer intent scoring",
+    ],
     productUsage: "write generic sales advice",
     painPoints: ["sales teams need more pipeline"],
   } as Parameters<typeof cadenceMicroSeedAnchors>[0] & Record<string, unknown>);
   assert.deepEqual(anchors, [
     "lead scoring software",
     "predictive lead qualification",
+    "automated sales routing",
+    "buyer intent scoring",
   ]);
   assert.equal(
     selectCadenceMicroSeedAnchor(anchors, "source-plan-placeholder"),
@@ -181,6 +188,22 @@ test("paid seeds come only from explicit product anchors and rotate deterministi
     "source-plan-placeholder",
     "profile anchor removed",
   ), null);
+  const repairedPrimary = selectCadenceMicroSeedAnchor(
+    anchors,
+    "source-plan-placeholder",
+    1,
+  );
+  assert.ok(repairedPrimary);
+  assert.notEqual(repairedPrimary, primary);
+  assert.notEqual(
+    selectCadenceMicroSeedFallbackAnchor(
+      anchors,
+      "source-plan-placeholder",
+      repairedPrimary!,
+      1,
+    ),
+    fallback,
+  );
 });
 
 test("fallback is a distinct $0.05 receipt after an exact terminal primary miss", () => {
@@ -198,7 +221,7 @@ test("fallback is a distinct $0.05 receipt after an exact terminal primary miss"
   );
   assert.equal(
     cadenceMicroSeedProviderTrigger("fallback"),
-    "cadence_micro_seed_fallback_v1",
+    `cadence_micro_seed_fallback_v${CADENCE_MICRO_SEED_VERSION}`,
   );
 
   const createdAt = Date.UTC(2026, 7, 23, 15, 0, 0);
@@ -334,7 +357,7 @@ test("cadence rescue remains eligible until the shared launch buffer minimum is 
     /sealedBuffer\.length >=[\s\S]{0,100}approvedBufferPolicy\(site\.cadencePerWeek \?\? 4\)\.minimum[\s\S]*buffer_minimum_met/,
   );
   assert.doesNotMatch(model, /sealedBuffer\.length > 0/);
-  assert.match(runbook, /sealed buffer below the two-item launch minimum/);
+  assert.match(runbook, /sealed buffer below the cadence-derived launch minimum/);
   assert.match(crons, /Below-minimum-buffer rescue is tenant-generic/);
 });
 
@@ -410,18 +433,18 @@ test("receipt envelope is exactly one bounded Labs task", () => {
   }), false);
 });
 
-test("the terminal plan, recovery chain, and one policy upgrade fit exactly", () => {
-  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 2_550_000);
+test("the terminal plan, recovery chain, and both policy upgrades fit exactly", () => {
+  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 2_700_000);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 550_000,
+    requestedMicroUsd: 700_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 550_001,
+    requestedMicroUsd: 700_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
 });
@@ -431,25 +454,25 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 450_000,
+    requestedMicroUsd: 600_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 450_001,
+    requestedMicroUsd: 600_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 400_000,
+    requestedMicroUsd: 550_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 400_001,
+    requestedMicroUsd: 550_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
@@ -465,15 +488,15 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
     monthlyCeilingMicroUsd: 2_500_000,
   }).allowed, false);
 
-  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 2_800_000);
+  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 2_950_000);
   assert.deepEqual(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 2_550_000,
-    fleetReservedThisMonthMicroUsd: 2_550_000,
+    fleetReservedTodayMicroUsd: 2_700_000,
+    fleetReservedThisMonthMicroUsd: 2_700_000,
     requestedMicroUsd: 250_000,
   }), { allowed: true });
   assert.equal(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 2_550_000,
-    fleetReservedThisMonthMicroUsd: 2_550_000,
+    fleetReservedTodayMicroUsd: 2_700_000,
+    fleetReservedThisMonthMicroUsd: 2_700_000,
     requestedMicroUsd: 250_001,
   }).allowed, false);
   assert.deepEqual(evaluateSharedProviderCapacity({

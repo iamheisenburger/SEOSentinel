@@ -11,7 +11,7 @@ import {
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-export const CADENCE_MICRO_SEED_VERSION = 1;
+export const CADENCE_MICRO_SEED_VERSION = 2;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -199,6 +199,7 @@ export function cadenceMicroSeedAnchors(args: {
 export function selectCadenceMicroSeedAnchor(
   anchors: readonly string[],
   sourcePlanKey: string,
+  policyGeneration = 0,
 ): string | null {
   const normalized = [...new Set(
     anchors.map(normalizeCadenceMicroSeedText).filter(Boolean),
@@ -208,7 +209,13 @@ export function selectCadenceMicroSeedAnchor(
   for (const character of sourcePlanKey) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   }
-  return normalized[hash % normalized.length] ?? null;
+  // Each policy generation owns a distinct primary/fallback pair. This lets
+  // an algorithm repair try unused product anchors without replaying either
+  // paid request from the previous immutable policy.
+  const generation = Number.isSafeInteger(policyGeneration)
+    ? Math.max(0, policyGeneration)
+    : 0;
+  return normalized[(hash + generation * 2) % normalized.length] ?? null;
 }
 
 /**
@@ -220,6 +227,7 @@ export function selectCadenceMicroSeedFallbackAnchor(
   anchors: readonly string[],
   sourcePlanKey: string,
   primarySeed: string,
+  policyGeneration = 0,
 ): string | null {
   const normalized = [...new Set(
     anchors.map(normalizeCadenceMicroSeedText).filter(Boolean),
@@ -228,6 +236,7 @@ export function selectCadenceMicroSeedFallbackAnchor(
   const expectedPrimary = selectCadenceMicroSeedAnchor(
     normalized,
     sourcePlanKey,
+    policyGeneration,
   );
   const primary = normalizeCadenceMicroSeedText(primarySeed);
   if (!expectedPrimary || expectedPrimary !== primary) return null;
