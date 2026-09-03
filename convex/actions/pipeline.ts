@@ -223,8 +223,7 @@ type PublishApprovedResult =
 
 type ArticleProviderWorkKind =
   | "generation"
-  | "quality_review"
-  | "internal_links";
+  | "quality_review";
 
 class ArticleProviderAdmissionError extends Error {
   constructor(
@@ -372,13 +371,6 @@ type SupportingVisualDecision = {
   caption?: string;
   reason: string;
 };
-
-const LinkSchema = z.array(
-  z.object({
-    anchor: z.string(),
-    href: z.string(),
-  }),
-);
 
 const parseJson = <T>(schema: z.ZodTypeAny, text: string): T => {
   // Strip markdown code blocks
@@ -5590,7 +5582,6 @@ async function handleLinks(
   siteId: Id<"sites">,
   articleId: Id<"articles">,
   expectedSealedContentHash?: string,
-  beforeProviderCall?: () => Promise<void>,
 ): Promise<{
   count: number;
   readyForPublication?: boolean;
@@ -5677,63 +5668,46 @@ async function handleLinks(
     return { count: 0 };
   }
 
-  // Empty/no-destination link passes are deterministic and free. Acquire the
-  // immutable paid-attempt receipt only at the exact Claude call boundary.
-  await beforeProviderCall?.();
-  const linkText = await callClaude(
-    [
-      "Select contextual internal links for an SEO article.",
-      "Output a JSON array only: [{\"anchor\":\"exact phrase from article\",\"href\":\"/allowed-path\"}].",
-      "Every anchor must be a descriptive 2-8 word phrase that already appears verbatim in article prose.",
-      "Never use navigation labels or generic anchors such as Blog, Pricing, Features, FAQ, Home, Get Started, Sign Up, Here, or Learn More.",
-      "Use only an allowed destination exactly as supplied. Never link the article to itself.",
-      "Do not select text from headings, the table of contents, code, existing links, or the Sources section.",
-      "Prefer three to six genuinely useful links when exact contextual anchors exist. Topical authority comes from clusters, so an article that links to no sibling article is an orphan competing on its own thin authority.",
-      "Always prefer a related published article over a generic navigation page: sibling articles are what build the cluster.",
-      growthParentArticle
-        ? "One allowed destination is marked preferredGrowthTarget. This measured support article must link to it when a natural exact anchor exists."
-        : "",
-      "Do not force a quota: relevance and a natural exact anchor are mandatory, and inventing an anchor that is not in the prose is worse than returning fewer links.",
-      "Return at most 6 links. Return [] when no natural contextual match exists.",
-    ].join(" "),
-    [
-      `Article title: ${article.title}`,
-      `Article slug: ${article.slug}`,
-      `Allowed destinations: ${JSON.stringify(destinations)}`,
-      `Article markdown:\n${article.markdown.slice(0, 24000)}`,
-    ].join("\n\n"),
-    2048,
-  );
-
-  const suggestions = parseJson<z.infer<typeof LinkSchema>>(LinkSchema, linkText);
   const preferredDestination = destinations.find(
     (destination) => destination.preferredGrowthTarget,
   );
-  const deterministicPreferred = preferredDestination
-    ? preferredInternalLinkAnchorCandidates(
-        preferredDestination.title,
-        preferredDestination.keywords,
+  const rankedDestinations = selectRelatedInternalLinks({
+    currentTitle: article.title,
+    currentKeywords: article.metaKeywords,
+    destinations,
+    limit: 6,
+  })
+    .map((link) =>
+      destinations.find((destination) => destination.href === link.href)
+    )
+    .filter((destination): destination is typeof destinations[number] =>
+      Boolean(destination)
+    );
+  const deterministicDestinations = [
+    ...(preferredDestination ? [preferredDestination] : []),
+    ...rankedDestinations,
+  ].filter(
+    (destination, index, all) =>
+      all.findIndex((candidate) => candidate.href === destination.href) === index,
+  );
+  const deterministicContextual = deterministicDestinations
+    .map((destination) =>
+      preferredInternalLinkAnchorCandidates(
+        destination.title,
+        destination.keywords,
       )
-        .map((anchor) => ({ anchor, href: preferredDestination.href }))
+        .map((anchor) => ({ anchor, href: destination.href }))
         .find((link) =>
           injectInternalLinks(article.markdown, [link]).inserted.length > 0
         )
-    : undefined;
+    )
+    .filter((link): link is { anchor: string; href: string } => Boolean(link));
   const links = validateInternalLinkSuggestions(
-    [
-      ...(deterministicPreferred ? [deterministicPreferred] : []),
-      ...suggestions,
-    ],
+    deterministicContextual,
     destinations.map((destination) => destination.href),
     publishedArticleInternalHref(site.urlStructure, article.slug),
   );
   const contextualResult = injectInternalLinks(article.markdown, links);
-  const relatedFallbacks = selectRelatedInternalLinks({
-    currentTitle: article.title,
-    currentKeywords: article.metaKeywords,
-    destinations: relatedArticles,
-    limit: Math.max(0, 3 - contextualResult.inserted.length),
-  });
   const preferredFallback = preferredDestination
     ? {
         anchor: preferredInternalLinkAnchorCandidates(
@@ -5746,7 +5720,12 @@ async function handleLinks(
   const fallbackLinks = validateInternalLinkSuggestions(
     [
       ...(preferredFallback?.anchor ? [preferredFallback] : []),
-      ...relatedFallbacks,
+      ...selectRelatedInternalLinks({
+        currentTitle: article.title,
+        currentKeywords: article.metaKeywords,
+        destinations,
+        limit: Math.max(0, 3 - contextualResult.inserted.length),
+      }),
     ],
     destinations.map((destination) => destination.href),
     publishedArticleInternalHref(site.urlStructure, article.slug),
@@ -8636,7 +8615,6 @@ export const processNextJob = internalAction({
           args.siteId,
           payload.articleId,
           undefined,
-          () => reserveArticleProviderAttempt("internal_links"),
         );
         await complete({ articleId: payload.articleId });
         return {
@@ -8735,7 +8713,6 @@ export const processNextJob = internalAction({
               args.siteId,
               payload.articleId,
               review.contentHash,
-              () => reserveArticleProviderAttempt("internal_links"),
             );
           } catch (error) {
             const issues = [`Post-review internal-link sealing failed: ${
@@ -9060,7 +9037,6 @@ export const processNextJob = internalAction({
           args.siteId,
           articleId,
           finalReview.contentHash,
-          () => reserveArticleProviderAttempt("internal_links"),
         );
         if (!linked.readyForPublication) {
           const issues = linked.issues ?? ["Post-review internal-link seal failed"];

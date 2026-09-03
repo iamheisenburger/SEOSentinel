@@ -136,25 +136,23 @@ test("atomic reservation rechecks lease, tenant, rollout, and canonical plan", (
   assert.doesNotMatch(reserve, /provider_spend_reservations|reservedMicroUsd/);
 });
 
-test("all article provider calls reserve at the paid boundary but free publication does not", () => {
+test("all paid article provider calls reserve while link sealing and publication stay provider-free", () => {
   const pipeline = source("convex/actions/pipeline.ts");
   const worker = exportedBlock(pipeline, "processNextJob");
   const linkHandler = pipeline.slice(
     pipeline.indexOf("async function handleLinks"),
-    pipeline.indexOf("async function reviewExistingArticleHandler"),
+    pipeline.indexOf("async function handleAnalyzeSite"),
   );
-  const emptyLinkReturn = linkHandler.indexOf("destinations.length === 0");
-  const linkAdmission = linkHandler.indexOf("await beforeProviderCall?.()");
-  const linkProvider = linkHandler.indexOf("const linkText = await callClaude");
   const publishStart = worker.indexOf("if (payload?.publishOnly)");
   const publishEnd = worker.indexOf("const checkpointId", publishStart);
   const publishOnly = worker.slice(publishStart, publishEnd);
 
   assert.match(worker, /reserveArticleProviderAttempt\("generation"\)[\s\S]*handleArticle\(/);
   assert.match(worker, /reserveArticleProviderAttempt\("quality_review"\)[\s\S]*reviewExistingArticleHandler\(/);
-  assert.match(worker, /reserveArticleProviderAttempt\("internal_links"\)/);
-  assert.ok(emptyLinkReturn >= 0 && emptyLinkReturn < linkAdmission);
-  assert.ok(linkAdmission < linkProvider);
+  assert.doesNotMatch(worker, /reserveArticleProviderAttempt\("internal_links"\)/);
+  assert.doesNotMatch(linkHandler, /callClaude/);
+  assert.match(linkHandler, /selectRelatedInternalLinks/);
+  assert.match(linkHandler, /validateInternalLinkSuggestions/);
   assert.doesNotMatch(publishOnly, /reserveArticleProviderAttempt\(/);
 });
 

@@ -30,7 +30,7 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 10;
+export const QUALITY_RECOVERY_VERSION = 11;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
@@ -38,6 +38,7 @@ const POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION = 7;
 const COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION = 8;
 const POST_AUDIT_EDITORIAL_REMEDIATION_VERSION = 9;
 const POST_AUDIT_FIXED_POINT_RECOVERY_VERSION = 10;
+const DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION = 11;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -298,6 +299,23 @@ export function qualityRecoveryTargetVersion(
     // Version 10 admits one bounded two-pass fixed point for an applied v9
     // article; an attempted-but-unapplied job is never replayed.
     return POST_AUDIT_FIXED_POINT_RECOVERY_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) >=
+      POST_AUDIT_FIXED_POINT_RECOVERY_VERSION &&
+    (article.qualityRecoveryVersion ?? 0) <
+      DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION &&
+    issues.some((issue) =>
+      /^Post-review internal-link sealing failed:/.test(issue)
+    )
+  ) {
+    // Version 10 can produce a fully approved artifact and then strand it on
+    // the non-essential model call that used to choose same-tenant links.
+    // Version 11 admits exactly that applied quality result once; link
+    // selection is now deterministic, tenant-allowlisted, and provider-free.
+    return DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION;
   }
   return undefined;
 }

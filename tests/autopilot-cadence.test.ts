@@ -336,7 +336,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 10);
+  assert.equal(QUALITY_RECOVERY_VERSION, 11);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -563,6 +563,35 @@ test("version 10 reopens only an applied version-9 editorial result for bounded 
     ...base,
     publicationGateIssues: [
       "Strict publication requires a reviewed HTTPS hero image.",
+    ],
+  }), undefined);
+});
+
+test("version 11 reopens only an applied version-10 internal-link seal failure", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Post-review internal-link sealing failed: Article provider execution failed without a safe replay condition.",
+    ],
+    qualityRevisionCount: 7,
+    qualityRecoveryVersion: 10,
+    qualityRecoveryAttemptVersion: 10,
+  };
+  assert.equal(qualityRecoveryTargetVersion(base), 11);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryAttemptVersion: 11,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 9,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Editorial quality score is 83; strict minimum is 85.",
     ],
   }), undefined);
 });
