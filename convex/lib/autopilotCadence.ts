@@ -179,12 +179,16 @@ export function qualityRecoveryTargetVersion(
   if (
     claimLedgerBlocked &&
     article.createdAt >= QUALITY_RECOVERY_VERSION_INTRODUCED_AT &&
-    article.qualityRecoveryVersion === 1 &&
-    article.qualityRecoveryAttemptVersion === 1
+    (article.qualityRecoveryVersion ?? 0) <
+      CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION
   ) {
-    // Ordinary post-v12 retries used the legacy implicit version marker and
-    // could overwrite the current marker with v1. Skip the obsolete recovery
-    // ladder and re-audit that exact regressed state with the current logic.
+    // Ordinary current-era retries used a legacy version marker and could
+    // strand a fresh draft anywhere on an obsolete recovery rung. Skip that
+    // historical ladder and re-audit the current claim-classification defect
+    // once with the current logic. Pre-introduction drafts keep the bounded
+    // historical migration path below.
     return CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION;
   }
 

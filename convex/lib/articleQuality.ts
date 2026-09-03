@@ -101,6 +101,30 @@ export function normalizedFactCheckConfidence(args: {
 }
 
 /**
+ * Enforce the editorial auditor's published scoring contract. A sub-85 score
+ * is meaningful only when the auditor names at least one material change; an
+ * otherwise clean article must not be stranded by an unexplained numeric
+ * preference. Conversely, any declared material defect keeps the score below
+ * the publication threshold. Deterministic evidence checks remain a separate,
+ * fail-closed gate and are passed in here only to cap the score.
+ */
+export function contractConsistentEditorialScore(args: {
+  score: number;
+  materialDefects?: string[];
+  deterministicEvidenceDefectCount: number;
+}): number {
+  const score = Math.max(0, Math.min(100, args.score));
+  if (args.deterministicEvidenceDefectCount > 0) {
+    return Math.min(score, 84);
+  }
+  const materialDefects = (args.materialDefects ?? [])
+    .map((defect) => defect.trim())
+    .filter(Boolean);
+  if (materialDefects.length > 0) return Math.min(score, 84);
+  return score < 85 ? 85 : score;
+}
+
+/**
  * Exact claim auditing can remove a substantial part of a generated draft.
  * Asking the editor to stop at the publication floor therefore makes the
  * post-audit artifact predictably too short. Give recovery a bounded reserve

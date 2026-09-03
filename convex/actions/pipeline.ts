@@ -26,6 +26,7 @@ import {
   evidenceRequiredParagraphs,
   initialArticleDepthTarget,
   normalizedFactCheckConfidence,
+  contractConsistentEditorialScore,
   evaluatePublicationQuality,
   insertReviewedProductImage,
   issuesBlockingPreLinkReview,
@@ -1831,6 +1832,7 @@ async function auditFinalArticle(args: {
 }): Promise<{
   score: number;
   notes: string[];
+  materialDefects: string[];
   claimEvidence: {
     claim: string;
     citationNumbers: number[];
@@ -1859,6 +1861,7 @@ async function auditFinalArticle(args: {
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
       "Do not require an external citation for advice, decision questions, or an explicitly author-proposed framework. Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is.",
       "If every factual and evidence gate passes, a score below 85 requires a concrete material change named in the notes. Minor polish, source absence by itself, or a vague statement that advice feels common is not a sub-85 defect.",
+      "Return every concrete change required before publication in materialDefects. Return an empty array when no material editorial change is required. The numeric score and materialDefects must agree with the 85-point contract.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "The system has deterministically enumerated every paragraph that requires evidence. Return exactly one claimEvidence entry for every supplied claim unit, in the same order, and copy that unit's complete paragraph verbatim into claim. Do not omit, merge, summarize, or split a claim unit.",
       "Mark a claim unit supported only when the supplied evidence directly supports every externally verifiable proposition in it; citation presence alone is not evidence. If only part is supported, mark the whole unit unsupported and explain the unsupported proposition.",
@@ -1891,6 +1894,7 @@ async function auditFinalArticle(args: {
       properties: {
         score: { type: "number" },
         notes: { type: "array", items: { type: "string" } },
+        materialDefects: { type: "array", items: { type: "string" } },
         claimEvidence: {
           type: "array",
           items: {
@@ -1906,11 +1910,12 @@ async function auditFinalArticle(args: {
           },
         },
       },
-      required: ["score", "notes", "claimEvidence"],
+      required: ["score", "notes", "materialDefects", "claimEvidence"],
     },
     outputSchema: z.object({
       score: z.number().min(0).max(100),
       notes: z.array(z.string()).default([]),
+      materialDefects: z.array(z.string()).default([]),
       claimEvidence: z.array(
         z.object({
           claim: z.string(),
@@ -5086,9 +5091,11 @@ async function handleArticle(
         initialUncitedClaims.length +
         initialClaimAudit.issues.length +
         initialUnsupportedClaims.length;
-      const initialAuditScore = initialEvidenceDefectCount > 0
-        ? Math.min(finalAudit.score, 84)
-        : finalAudit.score;
+      const initialAuditScore = contractConsistentEditorialScore({
+        score: finalAudit.score,
+        materialDefects: finalAudit.materialDefects,
+        deterministicEvidenceDefectCount: initialEvidenceDefectCount,
+      });
       const deterministicAuditNotes = [
         ...initialUncitedClaims.map(
           (claim, index) =>
@@ -5100,6 +5107,9 @@ async function handleArticle(
         ...initialUnsupportedClaims.map(
           (claim, index) =>
             `Unsupported claim ${index + 1}: ${claim.claim} (${claim.reason})`,
+        ),
+        ...finalAudit.materialDefects.map(
+          (defect, index) => `Material editorial defect ${index + 1}: ${defect}`,
         ),
       ];
       editorialQualityScore = initialAuditScore;
@@ -5126,7 +5136,11 @@ async function handleArticle(
           console.log("Running one bounded remediation pass from the exact audit notes...");
           const remediated = await remediateFinalArticle({
             ...auditArgs,
-            auditNotes: [...finalAudit.notes, ...deterministicAuditNotes],
+            auditNotes: [
+              ...finalAudit.notes,
+              ...finalAudit.materialDefects,
+              ...deterministicAuditNotes,
+            ],
           });
           const remediatedStats = calculateArticleStats(remediated.markdown);
           if (remediatedStats.wordCount < minimumWords || remediatedStats.wordCount > maxWords) {
@@ -5177,9 +5191,11 @@ async function handleArticle(
             remainingUncitedClaims.length +
             remediationClaimAudit.issues.length +
             remainingUnsupportedClaims.length;
-          const remediationAuditScore = remainingEvidenceDefectCount > 0
-            ? Math.min(remediationAudit.score, 84)
-            : remediationAudit.score;
+          const remediationAuditScore = contractConsistentEditorialScore({
+            score: remediationAudit.score,
+            materialDefects: remediationAudit.materialDefects,
+            deterministicEvidenceDefectCount: remainingEvidenceDefectCount,
+          });
           editorialQualityNotes.push(
             ...remediated.notes.map((note) => `Remediation: ${note}`),
             ...(exactRemediationAudit.deterministicPruningApplied
@@ -5193,6 +5209,10 @@ async function handleArticle(
                 ? ` (model score ${remediationAudit.score} capped by ${remainingEvidenceDefectCount} deterministic evidence defect(s)).`
                 : "."),
             ...remediationAudit.notes,
+            ...remediationAudit.materialDefects.map(
+              (defect, index) =>
+                `Remaining material editorial defect ${index + 1}: ${defect}`,
+            ),
             ...remainingUncitedClaims.map(
               (claim, index) =>
                 `Remaining deterministic evidence defect ${index + 1}: ${claim.slice(0, 320)}`,
@@ -6939,9 +6959,11 @@ async function reviewExistingArticleHandler(
         unsupportedClaims,
         deterministicClaimAudit,
         evidenceDefectCount,
-        score: evidenceDefectCount > 0
-          ? Math.min(auditResult.score, 84)
-          : auditResult.score,
+        score: contractConsistentEditorialScore({
+          score: auditResult.score,
+          materialDefects: auditResult.materialDefects,
+          deterministicEvidenceDefectCount: evidenceDefectCount,
+        }),
       };
     };
 
@@ -6963,6 +6985,7 @@ async function reviewExistingArticleHandler(
       try {
         const exactAuditNotes = [
           ...audit.notes,
+          ...audit.materialDefects,
           ...auditState.evidenceDefects.map(
             (claim, index) =>
               `Uncited evidence defect ${index + 1}: ${claim.slice(0, 320)}`,

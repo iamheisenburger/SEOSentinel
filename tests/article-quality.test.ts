@@ -18,6 +18,7 @@ import {
   publicationMediaQualityStatus,
   normalizeSiteOrigin,
   normalizedFactCheckConfidence,
+  contractConsistentEditorialScore,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnledgeredEvidenceParagraphs,
@@ -122,6 +123,24 @@ test("fact-check confidence follows the provider's audited claim counts", () => 
     pipeline,
     /confidenceScore:\s*normalizedFactCheckConfidence\(reviewed\)/,
   );
+});
+
+test("editorial score enforces the auditor's material-defect contract", () => {
+  assert.equal(contractConsistentEditorialScore({
+    score: 84,
+    materialDefects: [],
+    deterministicEvidenceDefectCount: 0,
+  }), 85);
+  assert.equal(contractConsistentEditorialScore({
+    score: 92,
+    materialDefects: ["The comparison omits the decision criteria."],
+    deterministicEvidenceDefectCount: 0,
+  }), 84);
+  assert.equal(contractConsistentEditorialScore({
+    score: 91,
+    materialDefects: [],
+    deterministicEvidenceDefectCount: 1,
+  }), 84);
 });
 
 test("the auditor receives the same deterministic claim units the gate validates", () => {

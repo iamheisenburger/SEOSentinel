@@ -530,9 +530,9 @@ test("version 13 reopens only the current claim-classification defect and its v1
   }), 13);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
-    qualityRecoveryVersion: 7,
-    qualityRecoveryAttemptVersion: 8,
-  }), undefined);
+    qualityRecoveryVersion: 1,
+    qualityRecoveryAttemptVersion: 5,
+  }), 13);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
     publicationGateIssues: [
