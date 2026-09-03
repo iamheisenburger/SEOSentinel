@@ -63,6 +63,17 @@ test("admission reuses the exact live receipt before applying account or fleet l
   );
   assert.deepEqual(
     decideArticleProviderAdmission({
+      existingStatus: "funding_paused",
+      existingOwnedByAccount: true,
+      attemptsUsed: 170,
+      attemptAllowance: 170,
+      activeAccountAttempts: 2,
+      activeFleetAttempts: 3,
+    }),
+    { status: "reuse" },
+  );
+  assert.deepEqual(
+    decideArticleProviderAdmission({
       existingStatus: "failed",
       existingOwnedByAccount: true,
       attemptsUsed: 1,
@@ -194,10 +205,9 @@ test("funding and monthly allowance pauses preserve cadence with exact future wa
   );
   const worker = exportedBlock(pipeline, "processNextJob");
 
-  assert.ok(
-    funding.indexOf('settleArticleProviderAttempt(ctx, job, "failed"') <
-      funding.indexOf("const workerAttempts = (job.workerAttempts ?? 0) + 1"),
-  );
+  assert.match(funding, /pauseArticleProviderAttemptForFunding/);
+  assert.doesNotMatch(funding, /settleArticleProviderAttempt/);
+  assert.doesNotMatch(funding, /workerAttempts.*\+\s*1/);
   assert.match(funding, /CADENCE_BALANCE_RECHECK_MS/);
   assert.match(funding, /status: "pending"/);
   assert.match(funding, /nextAttemptAt/);

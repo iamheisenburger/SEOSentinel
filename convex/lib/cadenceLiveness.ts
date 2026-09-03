@@ -10,7 +10,11 @@
 
 export const CADENCE_LIVENESS_VERSION = 1;
 export const CADENCE_PROVIDER_RECHECK_MS = 15 * 60 * 1000;
-export const CADENCE_BALANCE_RECHECK_MS = 24 * 60 * 60 * 1000;
+// A restored fleet wallet must become useful before a high-cadence tenant's
+// next publication window. Funding probes are free, reuse one immutable
+// provider-attempt receipt, and run on the same bounded maintenance interval
+// as transient provider recovery.
+export const CADENCE_BALANCE_RECHECK_MS = CADENCE_PROVIDER_RECHECK_MS;
 
 export type CadenceFailureCategory =
   | "semantic_zero_yield"

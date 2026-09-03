@@ -6,6 +6,7 @@ import {
   adaptiveDiscoverySeeds,
   adaptiveOpportunityScore,
   CADENCE_BALANCE_RECHECK_MS,
+  CADENCE_PROVIDER_RECHECK_MS,
   cadenceProgressionDecision,
   classifyCadenceFailure,
   deriveCadenceRecoveryStrategy,
@@ -14,6 +15,11 @@ import {
 } from "../convex/lib/cadenceLiveness.ts";
 
 const NOW = Date.UTC(2026, 7, 25, 12, 0, 0);
+
+test("funding recovery shares the bounded maintenance interval", () => {
+  assert.equal(CADENCE_BALANCE_RECHECK_MS, 15 * 60 * 1000);
+  assert.equal(CADENCE_BALANCE_RECHECK_MS, CADENCE_PROVIDER_RECHECK_MS);
+});
 
 test("failure taxonomy exposes exact eligible deadlines without inventing a terminal retry", () => {
   const semantic = classifyCadenceFailure({

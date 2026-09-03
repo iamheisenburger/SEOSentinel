@@ -1253,7 +1253,7 @@ export default defineSchema({
     providerWorkKind: v.string(), // generation | quality_review | internal_links
     maxArticles: v.number(),
     attemptAllowance: v.number(),
-    status: v.string(), // reserved | completed | failed | ambiguous
+    status: v.string(), // reserved | funding_paused | completed | failed | ambiguous
     expiresAt: v.optional(v.number()),
     settledAt: v.optional(v.number()),
     articleKey: v.optional(v.string()),

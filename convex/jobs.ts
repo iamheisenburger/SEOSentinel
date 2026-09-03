@@ -529,7 +529,10 @@ async function renewArticleProviderAttempt(
 async function settleArticleProviderAttempt(
   ctx: MutationCtx,
   job: Doc<"jobs">,
-  status: Exclude<ArticleProviderAttemptStatus, "reserved">,
+  status: Exclude<
+    ArticleProviderAttemptStatus,
+    "reserved" | "funding_paused"
+  >,
   currentTime: number,
 ) {
   const attempt = await articleProviderAttemptForJob(ctx, job);
@@ -539,6 +542,21 @@ async function settleArticleProviderAttempt(
     expiresAt: undefined,
     settledAt: currentTime,
     articleKey: job.articleId ? String(job.articleId) : undefined,
+    updatedAt: currentTime,
+  });
+  return true;
+}
+
+async function pauseArticleProviderAttemptForFunding(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+  currentTime: number,
+) {
+  const attempt = await articleProviderAttemptForJob(ctx, job);
+  if (attempt?.status !== "reserved") return false;
+  await ctx.db.patch(attempt._id, {
+    status: "funding_paused",
+    expiresAt: undefined,
     updatedAt: currentTime,
   });
   return true;
@@ -2923,6 +2941,7 @@ export const reserveArticleProviderAttempt = internalMutation({
     });
     if (decision.status === "reuse" && existing) {
       await ctx.db.patch(existing._id, {
+        status: "reserved",
         expiresAt: currentTime + ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
         updatedAt: currentTime,
       });
@@ -3013,9 +3032,10 @@ export const deferArticleProviderAdmission = internalMutation({
 
 /**
  * A definitive provider-funding rejection is an operational pause, not an
- * editorial failure. Preserve the exact article job, close its immutable
- * provider-attempt receipt, advance the worker ordinal so a later execution
- * cannot reuse that settled receipt, and atomically arm the next fleet wake.
+ * editorial failure. Preserve the exact article job and its immutable
+ * provider-attempt receipt in a non-concurrent paused state, then atomically
+ * arm the next fleet wake. Repeated unfunded probes therefore cannot consume
+ * the tenant's monthly recovery allowance or create a new paid attempt.
  *
  * This deliberately does not weaken, reset, or bypass any article quality
  * state. When funding returns, the same generation/review path must still
@@ -3048,11 +3068,20 @@ export const deferArticleProviderFunding = internalMutation({
     if (cadenceFailure.category !== "provider_funding") {
       throw new Error("Funding deferral requires a provider-funding failure");
     }
-    await settleArticleProviderAttempt(ctx, job, "failed", currentTime);
+    const providerAttemptPaused = await pauseArticleProviderAttemptForFunding(
+      ctx,
+      job,
+      currentTime,
+    );
+    if (!providerAttemptPaused) {
+      throw new Error(
+        "Funding deferral lost its exact provider-attempt reservation",
+      );
+    }
     if (!job.articleId && await releaseReservedUsage(ctx, job)) {
       job.reservationId = undefined;
     }
-    const workerAttempts = (job.workerAttempts ?? 0) + 1;
+    const workerAttempts = job.workerAttempts ?? 0;
     await ctx.db.patch(jobId, {
       status: "pending",
       workerAttempts,

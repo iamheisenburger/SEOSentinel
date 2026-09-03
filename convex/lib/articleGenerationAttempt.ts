@@ -14,6 +14,7 @@ export const ARTICLE_PROVIDER_ATTEMPT_LEASE_MS = 35 * 60 * 1000;
 
 export type ArticleProviderAttemptStatus =
   | "reserved"
+  | "funding_paused"
   | "completed"
   | "failed"
   | "ambiguous";
@@ -70,7 +71,7 @@ export function decideArticleProviderAdmission(input: {
   activeFleetAttempts: number;
 }): ArticleProviderAdmissionDecision {
   if (input.existingStatus !== undefined) {
-    return input.existingStatus === "reserved" &&
+    return ["reserved", "funding_paused"].includes(input.existingStatus) &&
         input.existingOwnedByAccount === true
       ? { status: "reuse" }
       : { status: "reject", reason: "attempt_already_settled" };
