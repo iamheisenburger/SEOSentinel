@@ -1118,7 +1118,7 @@ export function businessSignalMatch(
   const ratio = matched.length / keywordRoots.size;
   const eligible = keywordRoots.size === 1
     ? matched.length === 1
-    : matched.length >= 2 || ratio > 0.5;
+    : matched.length >= 2 && ratio > 0.5;
   const score = eligible
     ? Math.min(100, 55 + matched.length * 15 + Math.round(ratio * 15))
     : Math.min(49, matched.length * 20 + Math.round(ratio * 10));
@@ -1178,7 +1178,7 @@ export function keywordMatchesBusinessModel(
   return true;
 }
 
-export const TOPIC_BUSINESS_FIT_VERSION = 5;
+export const TOPIC_BUSINESS_FIT_VERSION = 6;
 
 export type TopicBusinessFitEvaluation = {
   eligible: boolean;

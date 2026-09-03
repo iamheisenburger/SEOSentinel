@@ -212,6 +212,10 @@ test("funding and monthly allowance pauses preserve cadence with exact future wa
   );
   assert.match(resume, /job\.status === "failed"/);
   assert.match(resume, /status: "pending"/);
+  assert.ok(
+    resume.indexOf("await reconcileJobTopicLifecycle(ctx, job)") >
+      resume.indexOf('status: "pending"'),
+  );
   assert.match(resume, /article_provider_funding_restored/);
 
   assert.match(

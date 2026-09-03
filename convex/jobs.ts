@@ -3228,6 +3228,12 @@ export const resumeArticleProviderFundingJobInternal = internalMutation({
       leaseExpiresAt: undefined,
       updatedAt: currentTime,
     });
+    // A legacy terminal funding failure may already have released the topic's
+    // temporary `queued` lock. Reconcile after restoring the job so the topic
+    // and its exact pending execution become authoritative together. Without
+    // this, a newer product-fit policy can reject the job while the stale
+    // `planned` topic remains eligible to be selected again.
+    await reconcileJobTopicLifecycle(ctx, job);
     await ctx.scheduler.runAfter(
       0,
       internal.autopilot.dispatchSiteFollowup,

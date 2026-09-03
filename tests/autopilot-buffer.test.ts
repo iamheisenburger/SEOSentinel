@@ -1007,6 +1007,33 @@ test("business-fit evidence stays tenant-specific and auditable", () => {
   assert.ok(chatbot.unmatchedDistinctiveRoots.length >= 2);
 });
 
+test("two generic overlaps cannot admit a cross-industry entity", () => {
+  const pentraSignals = [
+    "AI-powered SEO automation and autonomous content marketing",
+    "keyword research and content automation",
+    "automated SEO content creation",
+  ];
+  const mismatch = businessSignalMatch(
+    "security content automation protocol",
+    pentraSignals,
+  );
+  assert.equal(mismatch.eligible, false);
+  assert.deepEqual(mismatch.matchedDistinctiveRoots.sort(), [
+    "automat",
+    "content",
+  ]);
+  assert.deepEqual(mismatch.unmatchedDistinctiveRoots.sort(), [
+    "protoco",
+    "securit",
+  ]);
+
+  const valid = businessSignalMatch(
+    "seo content automation platform",
+    pentraSignals,
+  );
+  assert.equal(valid.eligible, true);
+});
+
 test("the scheduler revalidates stale topics and the queue fails closed", () => {
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   const jobs = readFileSync("convex/jobs.ts", "utf8");
