@@ -96,9 +96,11 @@ import {
   terminallyClosePlanCheckpoints,
 } from "./planCandidateCheckpoints";
 import {
+  CADENCE_BALANCE_RECHECK_MS,
   CADENCE_PROVIDER_RECHECK_MS,
   classifyCadenceFailure,
   deriveCadenceRecoveryStrategy,
+  nextUtcMonthAt,
 } from "./lib/cadenceLiveness";
 import {
   articleMatchesCurrentDomain,
@@ -3006,6 +3008,237 @@ export const deferArticleProviderAdmission = internalMutation({
       updatedAt: currentTime,
     });
     return { deferred: true, nextAttemptAt };
+  },
+});
+
+/**
+ * A definitive provider-funding rejection is an operational pause, not an
+ * editorial failure. Preserve the exact article job, close its immutable
+ * provider-attempt receipt, advance the worker ordinal so a later execution
+ * cannot reuse that settled receipt, and atomically arm the next fleet wake.
+ *
+ * This deliberately does not weaken, reset, or bypass any article quality
+ * state. When funding returns, the same generation/review path must still
+ * satisfy the full publication contract before it can seal or publish.
+ */
+export const deferArticleProviderFunding = internalMutation({
+  args: {
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+    error: v.string(),
+  },
+  handler: async (ctx, { jobId, workerToken, error }) => {
+    const job = await ctx.db.get(jobId);
+    if (
+      !job ||
+      job.type !== "article" ||
+      !job.siteId ||
+      !ownsJob(job, workerToken)
+    ) {
+      return { deferred: false, nextAttemptAt: undefined };
+    }
+    const currentTime = now();
+    const nextAttemptAt = currentTime + CADENCE_BALANCE_RECHECK_MS;
+    const cadenceFailure = classifyCadenceFailure({
+      message: error,
+      now: currentTime,
+      retryAt: nextAttemptAt,
+      explicitCode: "article_provider_funding_unavailable",
+    });
+    if (cadenceFailure.category !== "provider_funding") {
+      throw new Error("Funding deferral requires a provider-funding failure");
+    }
+    await settleArticleProviderAttempt(ctx, job, "failed", currentTime);
+    if (!job.articleId && await releaseReservedUsage(ctx, job)) {
+      job.reservationId = undefined;
+    }
+    const workerAttempts = (job.workerAttempts ?? 0) + 1;
+    await ctx.db.patch(jobId, {
+      status: "pending",
+      workerAttempts,
+      error:
+        "Article provider funding is unavailable; the exact job is preserved " +
+        "and scheduled for an automatic funding recheck.",
+      cadenceFailure: {
+        ...cadenceFailure,
+        retryable: true,
+        terminal: false,
+        eligibleAt: nextAttemptAt,
+      },
+      nextAttemptAt,
+      reservationId: job.articleId ? job.reservationId : undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: currentTime,
+    });
+    await raiseJobAlert(
+      ctx,
+      job.siteId,
+      "article_provider_funding_unavailable",
+      "Article production is paused because neither configured article provider has funded capacity.",
+      { jobId, articleId: job.articleId, nextAttemptAt, workerAttempts },
+    );
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.autopilot.dispatchSiteFollowup,
+      {
+        siteId: job.siteId,
+        trigger: "article_provider_funding_recheck",
+        reason:
+          "Exact funding-recovery boundary for the preserved article job.",
+      },
+    );
+    return { deferred: true, nextAttemptAt, workerAttempts };
+  },
+});
+
+/** No provider request started when the account-month allowance rejected the
+ * execution. Keep the exact job pending and arm the first instant of the next
+ * UTC allowance window instead of turning the cadence into a terminal miss. */
+export const deferArticleProviderMonthlyAllowance = internalMutation({
+  args: {
+    jobId: v.id("jobs"),
+    workerToken: v.string(),
+  },
+  handler: async (ctx, { jobId, workerToken }) => {
+    const job = await ctx.db.get(jobId);
+    if (
+      !job ||
+      job.type !== "article" ||
+      !job.siteId ||
+      !ownsJob(job, workerToken)
+    ) {
+      return { deferred: false, nextAttemptAt: undefined };
+    }
+    const currentTime = now();
+    const nextAttemptAt = nextUtcMonthAt(currentTime);
+    if (nextAttemptAt === undefined) {
+      throw new Error("Unable to derive the next article allowance window");
+    }
+    if (!job.articleId && await releaseReservedUsage(ctx, job)) {
+      job.reservationId = undefined;
+    }
+    const cadenceFailure = classifyCadenceFailure({
+      message: "monthly generation quota reached",
+      now: currentTime,
+      retryAt: nextAttemptAt,
+      explicitCode: "article_provider_monthly_attempt_limit",
+    });
+    await ctx.db.patch(jobId, {
+      status: "pending",
+      error:
+        "The bounded article-provider attempt allowance is exhausted; the " +
+        "exact job is preserved for the next UTC month.",
+      cadenceFailure: {
+        ...cadenceFailure,
+        retryable: true,
+        terminal: false,
+        eligibleAt: nextAttemptAt,
+      },
+      nextAttemptAt,
+      reservationId: job.articleId ? job.reservationId : undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: currentTime,
+    });
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.autopilot.dispatchSiteFollowup,
+      {
+        siteId: job.siteId,
+        trigger: "article_provider_allowance_recheck",
+        reason:
+          "First eligible instant of the next UTC article-provider allowance window.",
+      },
+    );
+    return { deferred: true, nextAttemptAt };
+  },
+});
+
+/**
+ * Operator recovery after provider funding is restored. It also migrates the
+ * narrow legacy state created before funding failures became durable pauses:
+ * an exact terminal article job whose stable error proves no provider output
+ * was available. Repeated calls are idempotent and cannot replay a running or
+ * already-eligible job.
+ */
+export const resumeArticleProviderFundingJobInternal = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+  },
+  handler: async (ctx, { siteId, jobId }) => {
+    const [site, job] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db.get(jobId),
+    ]);
+    if (
+      !site ||
+      !job ||
+      job.siteId !== siteId ||
+      job.type !== "article" ||
+      !jobAuthorizedForExecution(site, job) ||
+      !(await jobArtifactsMatchCurrentDomain(ctx, site, job)) ||
+      !["pending", "failed"].includes(job.status)
+    ) {
+      throw new Error("Article funding recovery job is not eligible");
+    }
+    const exactFundingFailure =
+      job.cadenceFailure?.code === "article_provider_funding_unavailable" ||
+      /article_provider_funding_unavailable|no available funded capacity/i.test(
+        job.error ?? "",
+      );
+    if (!exactFundingFailure) {
+      throw new Error("Article job does not carry the funding-failure receipt");
+    }
+    const currentTime = now();
+    if (
+      job.status === "pending" &&
+      (job.nextAttemptAt === undefined || job.nextAttemptAt <= currentTime)
+    ) {
+      return {
+        resumed: false,
+        reason: "already_eligible" as const,
+        jobId,
+      };
+    }
+    const workerAttempts = job.status === "failed"
+      ? (job.workerAttempts ?? 0) + 1
+      : job.workerAttempts ?? 0;
+    await ctx.db.patch(jobId, {
+      status: "pending",
+      workerAttempts,
+      error:
+        "Provider funding recovery was acknowledged; the preserved article " +
+        "job is eligible for its next bounded attempt.",
+      cadenceFailure: {
+        version: 1,
+        category: "provider_funding",
+        code: "article_provider_funding_unavailable",
+        retryable: true,
+        terminal: false,
+        eligibleAt: currentTime,
+        recordedAt: currentTime,
+      },
+      nextAttemptAt: currentTime,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: currentTime,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.autopilot.dispatchSiteFollowup,
+      {
+        siteId,
+        trigger: "article_provider_funding_restored",
+        reason:
+          "Operator acknowledged restored funding for the exact preserved article job.",
+      },
+    );
+    return { resumed: true, jobId, workerAttempts };
   },
 });
 

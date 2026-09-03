@@ -9009,6 +9009,22 @@ export const processNextJob = internalAction({
             failureKind: "provider_capacity_deferred",
           };
         }
+        if (error.reason === "monthly_attempt_limit") {
+          const deferred = await ctx.runMutation(
+            internal.jobs.deferArticleProviderMonthlyAllowance,
+            {
+              jobId: job._id,
+              workerToken,
+            },
+          );
+          return {
+            processed: deferred.deferred,
+            jobId: job._id,
+            articleId: job.articleId,
+            error: message,
+            failureKind: "provider_capacity_deferred",
+          };
+        }
         const failed = await ctx.runMutation(internal.jobs.markFailed, {
           jobId: job._id,
           workerToken,
@@ -9026,6 +9042,24 @@ export const processNextJob = internalAction({
         error instanceof ArticleProviderExecutionError &&
         !error.retryable
       ) {
+        if (error.code === "article_provider_funding_unavailable") {
+          const deferred = await ctx.runMutation(
+            internal.jobs.deferArticleProviderFunding,
+            {
+              jobId: job._id,
+              workerToken,
+              error:
+                `Article provider outcome (${error.code}): ${error.message}`,
+            },
+          );
+          return {
+            processed: deferred.deferred,
+            jobId: job._id,
+            articleId: job.articleId,
+            error: message,
+            failureKind: "provider_capacity_deferred",
+          };
+        }
         const failed = await ctx.runMutation(internal.jobs.markFailed, {
           jobId: job._id,
           workerToken,

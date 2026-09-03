@@ -21,6 +21,7 @@ test("queued topic replenishment is progress, not an automation blocker", () => 
 
 test("a later healthy receipt supersedes recovered content failures", () => {
   for (const kind of [
+    "article_provider_funding_unavailable",
     "job_failed",
     "job_retry_exhausted",
     "operator_warmup_run_failed",

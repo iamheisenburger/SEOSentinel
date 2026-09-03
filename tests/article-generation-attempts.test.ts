@@ -176,6 +176,54 @@ test("failed, retried, and expired executions retain immutable attempt receipts"
   assert.doesNotMatch(release, /article_generation_attempts/);
 });
 
+test("funding and monthly allowance pauses preserve cadence with exact future wakes", () => {
+  const jobs = source("convex/jobs.ts");
+  const pipeline = source("convex/actions/pipeline.ts");
+  const funding = exportedBlock(jobs, "deferArticleProviderFunding");
+  const allowance = exportedBlock(
+    jobs,
+    "deferArticleProviderMonthlyAllowance",
+  );
+  const resume = exportedBlock(
+    jobs,
+    "resumeArticleProviderFundingJobInternal",
+  );
+  const worker = exportedBlock(pipeline, "processNextJob");
+
+  assert.ok(
+    funding.indexOf('settleArticleProviderAttempt(ctx, job, "failed"') <
+      funding.indexOf("const workerAttempts = (job.workerAttempts ?? 0) + 1"),
+  );
+  assert.match(funding, /CADENCE_BALANCE_RECHECK_MS/);
+  assert.match(funding, /status: "pending"/);
+  assert.match(funding, /nextAttemptAt/);
+  assert.match(funding, /internal\.autopilot\.dispatchSiteFollowup/);
+  assert.match(funding, /article_provider_funding_recheck/);
+  assert.doesNotMatch(funding, /qualityRevisionCount|publicationGateStatus/);
+
+  assert.match(allowance, /nextUtcMonthAt\(currentTime\)/);
+  assert.match(allowance, /status: "pending"/);
+  assert.match(allowance, /article_provider_allowance_recheck/);
+  assert.doesNotMatch(allowance, /settleArticleProviderAttempt/);
+
+  assert.match(
+    resume,
+    /article_provider_funding_unavailable\|no available funded capacity/,
+  );
+  assert.match(resume, /job\.status === "failed"/);
+  assert.match(resume, /status: "pending"/);
+  assert.match(resume, /article_provider_funding_restored/);
+
+  assert.match(
+    worker,
+    /error\.reason === "monthly_attempt_limit"[\s\S]*deferArticleProviderMonthlyAllowance/,
+  );
+  assert.match(
+    worker,
+    /error\.code === "article_provider_funding_unavailable"[\s\S]*deferArticleProviderFunding/,
+  );
+});
+
 test("attempt ledger survives site deletion while exact article quota semantics stay separate", () => {
   const schema = source("convex/schema.ts");
   const sites = source("convex/sites.ts");

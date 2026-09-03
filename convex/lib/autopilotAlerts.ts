@@ -18,6 +18,7 @@ const NON_BLOCKING_ALERT_KINDS = new Set([
 // active after that receipt made the customer dashboard contradict the
 // operator view and present historical failures as current blockers.
 const RECOVERED_BY_HEALTHY_RECEIPT_KINDS = new Set([
+  "article_provider_funding_unavailable",
   "buffer_empty",
   "buffer_low",
   "job_failed",

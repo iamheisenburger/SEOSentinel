@@ -85,7 +85,7 @@ export function classifyCadenceFailure(args: {
     };
   }
   if (
-    /insufficient balance|funding preflight blocked|provider_balance_insufficient/.test(
+    /insufficient balance|funding preflight blocked|provider_balance_insufficient|article_provider_funding_unavailable|no available funded capacity/.test(
       normalized,
     )
   ) {

@@ -58,7 +58,7 @@ test("only explicit transient provider failures are retryable", () => {
   }
 });
 
-test("pipeline fallback remains inside one reserved worker execution and terminal failures do not retry", () => {
+test("pipeline fallback stays in one attempt while funding pauses the exact job", () => {
   const pipeline = fs.readFileSync(
     new URL("../convex/actions/pipeline.ts", import.meta.url),
     "utf8",
@@ -82,8 +82,16 @@ test("pipeline fallback remains inside one reserved worker execution and termina
     ),
     /reserveArticleProviderAttempt/,
   );
-  assert.match(
-    pipeline,
-    /error instanceof ArticleProviderExecutionError &&\s*!error\.retryable[\s\S]*internal\.jobs\.markFailed/,
+  const terminalStart = pipeline.lastIndexOf(
+    "error instanceof ArticleProviderExecutionError",
   );
+  const terminalBranch = pipeline.slice(
+    terminalStart,
+    pipeline.indexOf("if (job.type === \"plan\")", terminalStart),
+  );
+  assert.match(
+    terminalBranch,
+    /error\.code === "article_provider_funding_unavailable"[\s\S]*internal\.jobs\.deferArticleProviderFunding/,
+  );
+  assert.match(terminalBranch, /internal\.jobs\.markFailed/);
 });

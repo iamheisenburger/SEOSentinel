@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   adaptiveDiscoverySeeds,
   adaptiveOpportunityScore,
+  CADENCE_BALANCE_RECHECK_MS,
   cadenceProgressionDecision,
   classifyCadenceFailure,
   deriveCadenceRecoveryStrategy,
@@ -44,6 +45,16 @@ test("failure taxonomy exposes exact eligible deadlines without inventing a term
   assert.equal(transient.category, "transient_provider");
   assert.equal(transient.retryable, true);
   assert.ok((transient.eligibleAt ?? 0) > NOW);
+
+  for (const message of [
+    "Article provider outcome (article_provider_funding_unavailable)",
+    "The primary article provider has no available funded capacity.",
+  ]) {
+    const funding = classifyCadenceFailure({ message, now: NOW });
+    assert.equal(funding.category, "provider_funding");
+    assert.equal(funding.code, "provider_balance_insufficient");
+    assert.equal(funding.eligibleAt, NOW + CADENCE_BALANCE_RECHECK_MS);
+  }
 
   const reservation = classifyCadenceFailure({
     message: "plan_reservation_day_expired_before_execution",
