@@ -486,6 +486,8 @@ export const processCadenceMicroSeed = internalAction({
           locationCode: receipt.locationCode,
           languageCode: receipt.languageCode,
           providerTaskCostUsd: receipt.providerTaskCostUsd,
+          providerRowsReceived: receipt.providerRowsReceived,
+          providerRowsRejected: receipt.providerRowsRejected,
           measuredAt: Date.now(),
           candidates: receipt.candidates,
         },

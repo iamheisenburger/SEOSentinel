@@ -1470,6 +1470,8 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     locationCode: v.number(),
     languageCode: v.string(),
     providerTaskCostUsd: v.number(),
+    providerRowsReceived: v.number(),
+    providerRowsRejected: v.number(),
     measuredAt: v.number(),
     candidates: v.array(candidateValidator),
   },
@@ -1495,8 +1497,13 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
         returnedSeed: args.seed,
         resultLimit: args.resultLimit,
         providerTaskCostUsd: args.providerTaskCostUsd,
-        candidateCount: args.candidates.length,
-      })
+        candidateCount: args.providerRowsReceived,
+      }) ||
+      !Number.isInteger(args.providerRowsRejected) ||
+      args.providerRowsRejected < 0 ||
+      args.providerRowsRejected > args.providerRowsReceived ||
+      args.providerRowsReceived !==
+        args.candidates.length + args.providerRowsRejected
     ) throw new Error("Cadence micro-seed receipt is incompatible");
     const seenReceiptKeywords = new Set<string>();
     for (const candidate of args.candidates) {
@@ -1653,9 +1660,11 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     });
     const timestamp = Date.now();
     const candidateAudit = {
-      received: args.candidates.length,
+      received: args.providerRowsReceived,
       accepted: selection.accepted,
       ...selection.rejected,
+      invalidMetric:
+        selection.rejected.invalidMetric + args.providerRowsRejected,
     };
     if (!selection.selected) {
       await ctx.db.patch(job._id, {

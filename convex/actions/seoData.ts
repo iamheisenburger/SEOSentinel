@@ -142,6 +142,8 @@ export interface CadenceMicroSeedDiscoveryReceipt {
   languageCode: string;
   resultLimit: number;
   providerTaskCostUsd: number;
+  providerRowsReceived: number;
+  providerRowsRejected: number;
   candidates: CadenceMicroSeedKeywordMetric[];
 }
 
@@ -343,6 +345,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   }
   const candidates: CadenceMicroSeedKeywordMetric[] = [];
   const seen = new Set<string>();
+  let providerRowsRejected = 0;
   for (const item of items) {
     const keyword = typeof item?.keyword === "string"
       ? item.keyword.trim().toLowerCase().replace(/\s+/g, " ")
@@ -382,7 +385,8 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
       (monthlySearches !== null && monthlySearches !== undefined &&
         !Array.isArray(monthlySearches))
     ) {
-      throw new Error("Cadence micro-seed provider item is incompatible");
+      providerRowsRejected += 1;
+      continue;
     }
     const cpc = typeof cpcValue === "number" && Number.isFinite(cpcValue) &&
         cpcValue >= 0
@@ -394,17 +398,24 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
       ? competitionValue
       : undefined;
     const intent = intentValue.trim().toLowerCase();
-    const trend = Array.isArray(monthlySearches)
-      ? monthlySearches.slice(0, 12).map((month: unknown) => {
-        const value = month && typeof month === "object"
-          ? (month as { search_volume?: unknown }).search_volume
-          : undefined;
-        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-          throw new Error("Cadence micro-seed trend receipt is incompatible");
-        }
-        return value;
-      })
-      : [];
+    const trend: number[] = [];
+    let trendCompatible = true;
+    for (const month of Array.isArray(monthlySearches)
+      ? monthlySearches.slice(0, 12)
+      : []) {
+      const value = month && typeof month === "object"
+        ? (month as { search_volume?: unknown }).search_volume
+        : undefined;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        trendCompatible = false;
+        break;
+      }
+      trend.push(value);
+    }
+    if (!trendCompatible) {
+      providerRowsRejected += 1;
+      continue;
+    }
     seen.add(keyword);
     candidates.push({
       keyword,
@@ -425,6 +436,8 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     languageCode,
     resultLimit: limit,
     providerTaskCostUsd,
+    providerRowsReceived: items.length,
+    providerRowsRejected,
     candidates,
   };
 }

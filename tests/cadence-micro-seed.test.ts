@@ -715,25 +715,21 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
     limit: 100,
   }]);
   assert.equal(receipt.providerTaskCostUsd, 0.024);
+  assert.equal(receipt.providerRowsReceived, 1);
+  assert.equal(receipt.providerRowsRejected, 0);
   assert.deepEqual(receipt.candidates, [metric(
     "predictive lead scoring platform",
   )]);
 });
 
-test("missing numeric proof, duplicate rows, cost drift, and locale drift fail closed", async () => {
+test("receipt drift fails closed while incomplete provider rows are rejected individually", async () => {
   const cases: Array<(data: ReturnType<typeof providerFixture>["data"]) => void> = [
-    (data) => { data.tasks[0].result[0].items[0].keyword_properties.keyword_difficulty = null as never; },
     (data) => { data.tasks[0].cost = null as never; },
     (data) => { data.cost = 0.02; },
     (data) => { data.tasks_count = 2; },
     (data) => { data.tasks_error = 1; },
     (data) => { data.tasks[0].data.se_type = "bing"; },
     (data) => { data.tasks[0].result[0].location_code = 2826; },
-    (data) => {
-      data.tasks[0].result[0].items.push(
-        structuredClone(data.tasks[0].result[0].items[0]),
-      );
-    },
   ];
   for (const mutate of cases) {
     const fixture = providerFixture();
@@ -749,6 +745,22 @@ test("missing numeric proof, duplicate rows, cost drift, and locale drift fail c
       },
     ));
   }
+  const incomplete = providerFixture();
+  incomplete.data.tasks[0].result[0].items[0].keyword_properties.keyword_difficulty =
+    null as never;
+  const skipped = await discoverCadenceMicroSeedFromDataForSEO(
+    incomplete.seed,
+    2840,
+    "en",
+    {
+      limit: 100,
+      requestTag: incomplete.tag,
+      request: async () => incomplete.data,
+    },
+  );
+  assert.equal(skipped.providerRowsReceived, 1);
+  assert.equal(skipped.providerRowsRejected, 1);
+  assert.deepEqual(skipped.candidates, []);
   const fixture = providerFixture();
   await assert.rejects(() => discoverCadenceMicroSeedFromDataForSEO(
     fixture.seed,
