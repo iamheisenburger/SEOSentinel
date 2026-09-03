@@ -89,6 +89,36 @@ export function opportunityEvidenceVersionFromInputHash(
 }
 
 /**
+ * An immutable opportunity receipt identifies both the measured inputs and
+ * the deterministic decision produced from them. A policy repair can
+ * legitimately classify the same stored evidence differently; omitting the
+ * output from the fingerprint made that repair collide with the older
+ * receipt and crash every later cadence run.
+ *
+ * `nextEligibleAt` is intentionally excluded. It is a wall-clock wake time,
+ * not part of the decision semantics, and including it would manufacture a
+ * new receipt on every evaluation.
+ */
+export function opportunityDecisionInputHash(
+  evidence: Record<string, unknown>,
+  decision: Pick<
+    OpportunityDecision,
+    "classification" | "admitted" | "score" | "reasons" | "version"
+  >,
+): string {
+  return sha256Hex(JSON.stringify({
+    ...evidence,
+    decision: {
+      classification: decision.classification,
+      admitted: decision.admitted,
+      score: decision.score,
+      reasons: decision.reasons,
+      version: decision.version,
+    },
+  }));
+}
+
+/**
  * One fail-closed topic decision shared by setup readiness and every automatic
  * cadence inventory projection. Callers supply only deterministic, freshly
  * recomputed decisions; stored display fields can never manufacture readiness.
@@ -230,7 +260,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       remainingCandidateCount: forwardCandidateCount,
     }, evaluatedAt);
     const topicId = String(topic._id);
-    const inputHash = sha256Hex(JSON.stringify({
+    const inputHash = opportunityDecisionInputHash({
       topicId,
       status,
       fitScore: fit.score,
@@ -247,8 +277,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       serpResultCount: topic.serpTopUrls?.length ?? 0,
       contentFeasibilityStatus: topic.contentFeasibilityStatus,
       remainingCandidateCount: forwardCandidateCount,
-      decisionVersion: decision.version,
-    }));
+    }, decision);
     return {
       ...decision,
       topicId,
@@ -284,7 +313,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       { remainingCandidateCount: 0 },
       evaluatedAt,
     );
-    const inputHash = sha256Hex(JSON.stringify({
+    const inputHash = opportunityDecisionInputHash({
       opportunityKey: "__forward_opportunity_space__",
       recheckDay: Math.floor(evaluatedAt / (24 * 60 * 60 * 1000)),
       forwardCandidateCount,
@@ -301,8 +330,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
         terminalFailure: topic.planCheckpointTerminalFailureCode,
         contentFeasibilityStatus: topic.contentFeasibilityStatus,
       })).sort((left, right) => left.topicId.localeCompare(right.topicId)),
-      decisionVersion: decision.version,
-    }));
+    }, decision);
     opportunityDecisions.push({
       ...decision,
       opportunityKey: "__forward_opportunity_space__",

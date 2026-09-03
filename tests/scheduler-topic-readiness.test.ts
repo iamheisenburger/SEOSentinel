@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   evaluateSchedulerReadyTopicInventory,
+  opportunityDecisionInputHash,
   opportunityEvidenceVersionFromInputHash,
   schedulerReadyTopic,
 } from "../convex/lib/schedulerTopicReadiness.ts";
@@ -149,6 +150,35 @@ test("opportunity evidence versions reject malformed fingerprints", () => {
   assert.throws(
     () => opportunityEvidenceVersionFromInputHash("not-a-sha256"),
     /input hash is invalid/,
+  );
+});
+
+test("opportunity receipt identity advances when policy changes the decision", () => {
+  const evidence = {
+    topicId: "topic-1",
+    status: "planned",
+    searchVolume: undefined,
+    serpResultCount: 0,
+  };
+  const legacy = opportunityDecisionInputHash(evidence, {
+    classification: "business_fit_failed",
+    admitted: false,
+    score: 0,
+    reasons: ["The topic is not anchored to this tenant's product or buyer problem."],
+    version: 1,
+  });
+  const repaired = opportunityDecisionInputHash(evidence, {
+    classification: "needs_evidence",
+    admitted: false,
+    score: 0,
+    reasons: ["The opportunity needs fresh demand, SERP, or authority evidence."],
+    version: 1,
+  });
+
+  assert.notEqual(legacy, repaired);
+  assert.notEqual(
+    opportunityEvidenceVersionFromInputHash(legacy),
+    opportunityEvidenceVersionFromInputHash(repaired),
   );
 });
 
