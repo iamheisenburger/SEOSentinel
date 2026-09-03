@@ -331,7 +331,7 @@ test("cadence rescue binds a saturated terminal demand receipt without disabling
 test("cadence rescue remains eligible until the shared launch buffer minimum is met", () => {
   assert.match(
     model,
-    /sealedBuffer\.length >= MIN_APPROVED_BUFFER[\s\S]*buffer_minimum_met/,
+    /sealedBuffer\.length >=[\s\S]{0,100}approvedBufferPolicy\(site\.cadencePerWeek \?\? 4\)\.minimum[\s\S]*buffer_minimum_met/,
   );
   assert.doesNotMatch(model, /sealedBuffer\.length > 0/);
   assert.match(runbook, /sealed buffer below the two-item launch minimum/);

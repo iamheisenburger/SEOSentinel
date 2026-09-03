@@ -23,9 +23,8 @@ import {
   needsVersionedQualityRecovery,
 } from "../lib/autopilotCadence";
 import {
-  TARGET_APPROVED_BUFFER,
-  MIN_APPROVED_BUFFER,
   MIN_VERIFIED_TOPIC_HORIZON,
+  approvedBufferPolicy,
   autopilotCandidateBudget,
   autopilotCandidateWindowStart,
   cadenceIntervalMs,
@@ -359,6 +358,7 @@ export const scheduleCadence = internalAction({
     }
     const cadence = site.cadencePerWeek ?? 4;
     const cadenceMs = cadenceIntervalMs(cadence);
+    const bufferPolicy = approvedBufferPolicy(cadence);
     const published = state.published as ArticleSummary[];
     const lastPublishedAt = state.latestPublished
       ? effectivePublishedAt(state.latestPublished)
@@ -442,7 +442,7 @@ export const scheduleCadence = internalAction({
     // Two sealed artifacts are the launch safety minimum. The scheduler still
     // replenishes toward three, but a strict-gate rejection must not make a
     // three-article free plan permanently incapable of going live.
-    if (rolloutMode === "warm" && buffer.length >= MIN_APPROVED_BUFFER) {
+    if (rolloutMode === "warm" && buffer.length >= bufferPolicy.minimum) {
       const promotion = await ctx.runMutation(
         internal.autopilot.promoteWarmSiteIfReady,
         { siteId },
@@ -461,7 +461,7 @@ export const scheduleCadence = internalAction({
           `The strict-quality buffer is warm, but live publication is blocked: ${describeAutopilotBlockers(promotion.blockers)}.`,
         details: {
           bufferCount: buffer.length,
-          target: TARGET_APPROVED_BUFFER,
+          target: bufferPolicy.target,
           blockers: promotion.blockers,
         },
       });
@@ -573,6 +573,7 @@ export const scheduleCadence = internalAction({
       terminalOpportunityNeedsLaunchReplenishment({
         rolloutMode,
         sealedBufferCount: buffer.length,
+        minimumApprovedBuffer: bufferPolicy.minimum,
       });
     const portfolioAlertKind = portfolio.status === "below_goal"
       ? "topic_portfolio_below_goal"
@@ -718,7 +719,10 @@ export const scheduleCadence = internalAction({
 
     // A full buffer deliberately does no generation work.  This is the main
     // protection against both deadline pressure and runaway provider spend.
-    if ((autonomousDelivery || rolloutMode === "warm") && buffer.length >= TARGET_APPROVED_BUFFER) {
+    if (
+      (autonomousDelivery || rolloutMode === "warm") &&
+      buffer.length >= bufferPolicy.target
+    ) {
       if (pendingUnderfilledPlan) {
         return {
           scheduled: 1,

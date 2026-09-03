@@ -6,8 +6,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import {
-  MIN_APPROVED_BUFFER,
-  TARGET_APPROVED_BUFFER,
+  approvedBufferPolicy,
   autopilotHealthStatus,
   cadenceIntervalMs,
   currentHealthOutcome,
@@ -890,18 +889,24 @@ export const promoteWarmSiteIfReady = internalMutation({
       ctx,
       site,
       "ready",
-      10,
+      25,
     );
     const sealedCount = ready.filter(isSealedReady).length;
+    const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
     const blockers = [...readiness.blockers];
-    if (sealedCount < MIN_APPROVED_BUFFER) blockers.push("sealed_buffer_incomplete");
+    if (sealedCount < bufferPolicy.minimum) blockers.push("sealed_buffer_incomplete");
     if (blockers.length > 0) {
       const blockerDetail = describeAutopilotBlockers(blockers);
       await setAlert(ctx, {
         siteId,
         kind: "autopilot_readiness_blocked",
         message: `Autonomous publication is blocked: ${blockerDetail}.`,
-        details: { blockers, sealedCount },
+        details: {
+          blockers,
+          sealedCount,
+          minimum: bufferPolicy.minimum,
+          target: bufferPolicy.target,
+        },
       });
       return { promoted: false, blockers, sealedCount };
     }
@@ -2063,6 +2068,7 @@ export const markRunFinished = internalMutation({
           auditedContentHash: article.auditedContentHash,
         });
         const cadence = site.cadencePerWeek ?? 4;
+        const bufferPolicy = approvedBufferPolicy(cadence);
         if (cadence > 0) {
           const cadenceMs = cadenceIntervalMs(cadence);
           nextPublicationDueAt = lastPublishedAt + cadenceMs;
@@ -2082,13 +2088,13 @@ export const markRunFinished = internalMutation({
           completionStatus =
             approvedBufferCount === 0
               ? "buffer_empty"
-              : approvedBufferCount < MIN_APPROVED_BUFFER
+              : approvedBufferCount < bufferPolicy.minimum
                 ? "buffer_low"
                 : "healthy";
           completionDetail =
             approvedBufferCount === 0
               ? "Publication succeeded; replenishing the strict-quality future buffer."
-              : approvedBufferCount < MIN_APPROVED_BUFFER
+              : approvedBufferCount < bufferPolicy.minimum
                 ? "Publication succeeded; the strict-quality future buffer is being replenished."
                 : "Publication succeeded and the strict-quality future buffer is healthy.";
         }
@@ -2409,6 +2415,7 @@ export const auditSla = internalMutation({
         !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
       const cadence = site.cadencePerWeek ?? 4;
       const cadenceMs = cadenceIntervalMs(cadence);
+      const bufferPolicy = approvedBufferPolicy(cadence);
       const lastPublishedAt = latestPublished
         ? effectivePublishedAt({
             createdAt: latestPublished.articleCreatedAt,
@@ -2469,8 +2476,8 @@ export const auditSla = internalMutation({
           message: "No strict-quality sealed future article is buffered.",
           details: {
             approvedBufferCount,
-            minimum: MIN_APPROVED_BUFFER,
-            target: TARGET_APPROVED_BUFFER,
+            minimum: bufferPolicy.minimum,
+            target: bufferPolicy.target,
           },
         });
       } else {
@@ -2479,17 +2486,17 @@ export const auditSla = internalMutation({
       if (
         autonomousDelivery &&
         approvedBufferCount > 0 &&
-        approvedBufferCount < MIN_APPROVED_BUFFER
+        approvedBufferCount < bufferPolicy.minimum
       ) {
         bufferLow++;
         await setAlert(ctx, {
           siteId: site._id,
           kind: "buffer_low",
-          message: `Approved future-article buffer is below minimum (${approvedBufferCount}/${MIN_APPROVED_BUFFER}).`,
+          message: `Approved future-article buffer is below minimum (${approvedBufferCount}/${bufferPolicy.minimum}).`,
           details: {
             approvedBufferCount,
-            minimum: MIN_APPROVED_BUFFER,
-            target: TARGET_APPROVED_BUFFER,
+            minimum: bufferPolicy.minimum,
+            target: bufferPolicy.target,
           },
         });
       } else {
@@ -2498,11 +2505,12 @@ export const auditSla = internalMutation({
 
       const effectiveBufferCount = autonomousDelivery
         ? approvedBufferCount
-        : MIN_APPROVED_BUFFER;
+        : bufferPolicy.minimum;
       let status = autopilotHealthStatus({
         schedulerStale,
         publicationMissed,
         bufferCount: effectiveBufferCount,
+        bufferMinimum: bufferPolicy.minimum,
         lastOutcome,
       });
       if (
@@ -2520,8 +2528,8 @@ export const auditSla = internalMutation({
         lastPublishedAt,
         nextPublicationDueAt,
         approvedBufferCount,
-        bufferMinimum: MIN_APPROVED_BUFFER,
-        bufferTarget: TARGET_APPROVED_BUFFER,
+        bufferMinimum: bufferPolicy.minimum,
+        bufferTarget: bufferPolicy.target,
         status,
         detail:
           status === "scheduler_stale"
@@ -2573,7 +2581,7 @@ export const refreshSiteCadenceHealth = internalMutation({
         site,
         PUBLICATION_AUDIT_VERSION,
       ),
-      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 10),
+      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
     ]);
     const [latestModernPublished, latestPublishedByCreation] = published;
     if ((site.cadencePerWeek ?? 0) <= 0) {
@@ -2616,6 +2624,7 @@ export const refreshSiteCadenceHealth = internalMutation({
       : undefined;
     const cadence = site.cadencePerWeek ?? 4;
     const cadenceMs = cadenceIntervalMs(cadence);
+    const bufferPolicy = approvedBufferPolicy(cadence);
     const nextPublicationDueAt =
       (lastPublishedAt ?? site.createdAt) + cadenceMs;
     const approvedBufferCount = ready.filter(isSealedReady).length;
@@ -2647,6 +2656,7 @@ export const refreshSiteCadenceHealth = internalMutation({
             schedulerStale,
             publicationMissed: now > nextPublicationDueAt,
             bufferCount: approvedBufferCount,
+            bufferMinimum: bufferPolicy.minimum,
             lastOutcome,
           });
     if (
@@ -2680,8 +2690,8 @@ export const refreshSiteCadenceHealth = internalMutation({
       lastPublishedAt,
       nextPublicationDueAt,
       approvedBufferCount,
-      bufferMinimum: MIN_APPROVED_BUFFER,
-      bufferTarget: TARGET_APPROVED_BUFFER,
+      bufferMinimum: bufferPolicy.minimum,
+      bufferTarget: bufferPolicy.target,
       status,
       detail,
     });
@@ -2708,13 +2718,14 @@ export const reconcileSealedBufferCount = internalMutation({
       ctx,
       site,
       "ready",
-      10,
+      25,
     );
     const approvedBufferCount = ready.filter(isSealedReady).length;
+    const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
     await upsertHealth(ctx, siteId, {
       approvedBufferCount,
-      bufferMinimum: MIN_APPROVED_BUFFER,
-      bufferTarget: TARGET_APPROVED_BUFFER,
+      bufferMinimum: bufferPolicy.minimum,
+      bufferTarget: bufferPolicy.target,
     });
     return { reconciled: true as const, approvedBufferCount };
   },

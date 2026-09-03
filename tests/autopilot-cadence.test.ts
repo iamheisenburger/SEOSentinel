@@ -336,7 +336,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 7);
+  assert.equal(QUALITY_RECOVERY_VERSION, 8);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -467,6 +467,43 @@ test("version 7 reopens only post-audit depth-reconstruction failures", () => {
       "Editorial quality score is 78; strict minimum is 85.",
     ],
     qualityRecoveryAttemptVersion: 5,
+  }), undefined);
+});
+
+test("version 8 reopens only claim-audit truncation and its false length failure", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    qualityRevisionCount: 2,
+    qualityRecoveryVersion: 7,
+    qualityRecoveryAttemptVersion: 7,
+  };
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Strict publication requires a completed claim-to-evidence audit.",
+    ],
+  }), 8);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 5,
+    publicationGateIssues: [
+      "Quality-review algorithm exhausted the strict length contract (690/1200-2600 words).",
+    ],
+  }), 8);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryAttemptVersion: 8,
+    publicationGateIssues: [
+      "Strict publication requires a completed claim-to-evidence audit.",
+    ],
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Editorial quality score is 78; strict minimum is 85.",
+    ],
   }), undefined);
 });
 

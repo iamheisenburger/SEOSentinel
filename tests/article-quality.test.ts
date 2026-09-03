@@ -7,9 +7,11 @@ import {
   clampMetaDescription,
   clampMetaTitle,
   containsExecutableMdx,
+  evidenceRequiredParagraphs,
   evidenceSafeLengthRecoveryTarget,
   evaluatePublicationQuality,
   insertReviewedProductImage,
+  initialArticleDepthTarget,
   inlineCitationNumbers,
   issuesBlockingPreLinkReview,
   PENDING_INTERNAL_LINK_ISSUE,
@@ -78,6 +80,53 @@ test("length recovery reserves bounded headroom for deterministic evidence pruni
     minimumWords: 1200,
     maximumWords: 3000,
   }), 1200);
+});
+
+test("new drafts carry a bounded depth reserve without padding to the ceiling", () => {
+  assert.equal(initialArticleDepthTarget({
+    minimumWords: 1200,
+    maximumWords: 2600,
+  }), 1500);
+  assert.equal(initialArticleDepthTarget({
+    minimumWords: 1200,
+    maximumWords: 1400,
+  }), 1400);
+  assert.equal(initialArticleDepthTarget({
+    minimumWords: 1200,
+    maximumWords: 2600,
+    requestedWords: 1800,
+  }), 1800);
+  assert.equal(initialArticleDepthTarget({
+    minimumWords: 1200,
+    maximumWords: 2600,
+    requestedWords: 900,
+  }), 1500);
+});
+
+test("the auditor receives the same deterministic claim units the gate validates", () => {
+  const productEvidence =
+    "Name: LeadPilot\nLeadPilot answers buyer questions using approved website content.";
+  const markdown = [
+    "# A useful guide",
+    "",
+    "Use this checklist to decide what your own analytics justify.",
+    "",
+    "LeadPilot answers buyer questions using the website content approved by the owner.",
+    "",
+    "A published study reports a measured response improvement [1].",
+  ].join("\n");
+  assert.deepEqual(evidenceRequiredParagraphs(markdown, productEvidence), [
+    "LeadPilot answers buyer questions using the website content approved by the owner.",
+    "A published study reports a measured response improvement [1].",
+  ]);
+
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /REQUIRED CLAIM UNITS/);
+  assert.match(pipeline, /requiredClaimUnits\.length \* 512/);
+  assert.doesNotMatch(
+    pipeline,
+    /if \(!claimAudit\.passed\) \{\s*pruned = removeUnledgeredEvidenceParagraphs/,
+  );
 });
 
 test("strict generation and publication share one minimum depth contract", () => {

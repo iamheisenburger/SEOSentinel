@@ -46,6 +46,7 @@ import {
 import { operatorTerminalPlanReceipt } from "./lib/operatorSnapshot";
 import {
   autopilotCandidateWindowStart,
+  approvedBufferPolicy,
   cadenceIntervalMs,
   coveredIntentTopics,
   effectivePublishedAt,
@@ -53,7 +54,6 @@ import {
   filterNonCannibalizingIntentTopics,
   isSealedReady,
   isUnderfilledPlanContinuationPayload,
-  MIN_APPROVED_BUFFER,
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
 import {
@@ -643,7 +643,10 @@ async function inspectReadiness(
   }
 
   const sealedBuffer = articles.filter(isSealedReady);
-  if (sealedBuffer.length >= MIN_APPROVED_BUFFER) {
+  if (
+    sealedBuffer.length >=
+      approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum
+  ) {
     return { ready: false, reason: "buffer_minimum_met" };
   }
   const published = articles.filter((article) => article.status === "published");

@@ -53,7 +53,7 @@ test("a fully connected tenant can warm and promote without operator interventio
   assert.match(scheduler, /internal\.autopilot\.promoteWarmSiteIfReady/);
   assert.match(
     scheduler,
-    /rolloutMode === "warm" && buffer\.length >= MIN_APPROVED_BUFFER/,
+    /rolloutMode === "warm" && buffer\.length >= bufferPolicy\.minimum/,
   );
   assert.match(
     readFileSync("convex/actions/pipeline.ts", "utf8"),

@@ -95,6 +95,27 @@ export function evidenceSafeLengthRecoveryTarget(args: {
 }
 
 /**
+ * Give a new draft enough useful depth to survive factual editing without
+ * teaching the writer to pad to the article-type ceiling. The publication
+ * floor remains authoritative; this is an upstream generation target only.
+ */
+export function initialArticleDepthTarget(args: {
+  minimumWords: number;
+  maximumWords: number;
+  requestedWords?: number;
+}): number {
+  const minimumWords = Math.max(0, Math.ceil(args.minimumWords));
+  const maximumWords = Math.max(minimumWords, Math.floor(args.maximumWords));
+  const reserve = Math.max(300, Math.ceil(minimumWords * 0.25));
+  const baseline = Math.min(maximumWords, minimumWords + reserve);
+  if (!Number.isFinite(args.requestedWords)) return baseline;
+  return Math.min(
+    maximumWords,
+    Math.max(baseline, Math.ceil(args.requestedWords as number)),
+  );
+}
+
+/**
  * Topic clusters, not isolated pages, are what carry topical authority. A page
  * that links to none of its tenant's other pages is an orphan and competes on
  * its own thin authority. Counts site-relative Markdown links only, so an
@@ -353,6 +374,24 @@ function requiresClaimEvidence(value: string, productEvidence: string): boolean 
  * identify claims, but it cannot certify its own empty answer or cite a source
  * that is absent from the preserved evidence snapshot.
  */
+export function evidenceRequiredParagraphs(
+  markdown: string,
+  productEvidence: string,
+): string[] {
+  return markdown
+    .replace(/```[\s\S]*?```/g, "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(
+      (paragraph) =>
+        paragraph.length >= 40 &&
+        !paragraph.startsWith("#") &&
+        !/^[-*]\s+https?:\/\//i.test(paragraph) &&
+        !isReaderMeasurementInstruction(paragraph) &&
+        requiresClaimEvidence(paragraph, productEvidence),
+    );
+}
+
 export function validateClaimEvidenceLedger(args: {
   markdown: string;
   sources: PublicationSource[];
@@ -369,18 +408,10 @@ export function validateClaimEvidenceLedger(args: {
     productSnapshotValid &&
     overlapRatio(claim, args.productEvidence) >= 0.3 &&
     exactClaimDetailsPresent(claim, args.productEvidence);
-  const paragraphs = args.markdown
-    .replace(/```[\s\S]*?```/g, "")
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .filter(
-      (paragraph) =>
-        paragraph.length >= 40 &&
-        !paragraph.startsWith("#") &&
-        !/^[-*]\s+https?:\/\//i.test(paragraph) &&
-        !isReaderMeasurementInstruction(paragraph) &&
-        requiresClaimEvidence(paragraph, args.productEvidence),
-    );
+  const paragraphs = evidenceRequiredParagraphs(
+    args.markdown,
+    args.productEvidence,
+  );
 
   if (args.claimEvidence.length === 0) {
     issues.push("Claim-to-evidence ledger is empty.");

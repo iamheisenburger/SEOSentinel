@@ -30,11 +30,12 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 7;
+export const QUALITY_RECOVERY_VERSION = 8;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
 const POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION = 7;
+const COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION = 8;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -234,6 +235,27 @@ export function qualityRecoveryTargetVersion(
     // only those durably attempted, unapplied paths for the dedicated bounded
     // evidence-safe depth reconstruction introduced in v7.
     return POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) <
+      COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION &&
+    Math.max(
+      article.qualityRecoveryVersion ?? 0,
+      article.qualityRecoveryAttemptVersion ?? 0,
+    ) >= CLAIM_LEDGER_RECOVERY_VERSION &&
+    issues.some((issue) =>
+      VERSIONED_CLAIM_LEDGER_RECOVERY_ISSUES.has(issue) ||
+      isRecoverableWorkerQualityIssue(issue)
+    )
+  ) {
+    // Version 7 exposed that a score-only output ceiling could truncate the
+    // required whole-article claim ledger. The missing entries were then
+    // mistaken for unsupported prose and deleted, causing a false length
+    // failure. Version 8 enumerates every required claim unit, budgets complete
+    // ledger output, and preserves omitted units while keeping the gate closed.
+    return COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION;
   }
   return undefined;
 }

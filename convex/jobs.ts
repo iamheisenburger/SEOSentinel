@@ -74,6 +74,7 @@ import {
 import {
   MIN_VERIFIED_TOPIC_HORIZON,
   TARGET_APPROVED_BUFFER,
+  approvedBufferPolicy,
   coveredIntentTopics,
   evaluateTopicBusinessFit,
   filterNonCannibalizingIntentTopics,
@@ -344,6 +345,7 @@ async function currentAutomaticPlanYieldTarget(
     summaries.length > PLAN_TARGET_INVENTORY_READ_LIMIT
   ) return { ready: false as const, reason: "planning_snapshot_read_limit" as const };
   const sealedBufferCount = summaries.filter(isSealedReady).length;
+  const bufferTarget = approvedBufferPolicy(site.cadencePerWeek ?? 4).target;
   const schedulerReadiness = evaluateSchedulerReadyTopicInventory({
     topics,
     site,
@@ -384,7 +386,7 @@ async function currentAutomaticPlanYieldTarget(
     target: automaticPlanYieldTarget({
       targetBufferShortfall: Math.max(
         0,
-        TARGET_APPROVED_BUFFER - sealedBufferCount,
+        bufferTarget - sealedBufferCount,
       ),
       verifiedHorizonShortfall: Math.max(
         0,
@@ -3927,10 +3929,12 @@ export const markRetryableFailure = internalMutation({
           })
         : null;
       if (article && failure && article.status === "review") {
-        const publicationGateIssues = [
-          ...(article.publicationGateIssues ?? []),
-          failure.recoveryIssue,
-        ].filter((issue, index, issues) => issues.indexOf(issue) === index);
+        // This error describes the transient candidate returned by the worker,
+        // not necessarily the persisted article. Appending it to the article
+        // made a later valid-length recovery ingest obsolete failure text and
+        // regress again. Keep the exact failure on the job/alert receipt; the
+        // article retains only gate issues measured from its stored artifact.
+        const publicationGateIssues = article.publicationGateIssues ?? [];
         const qualityRevisionCount = Math.max(
           article.qualityRevisionCount ?? 0,
           MAX_QUALITY_REVISIONS,
@@ -3957,7 +3961,7 @@ export const markRetryableFailure = internalMutation({
             publicationCheckedAt: currentTime,
             qualityRevisionCount,
             qualityRecoveryAttemptVersion,
-            articleUpdatedAt: currentTime,
+            articleUpdatedAt: article.updatedAt,
           });
         }
         const topic = article.topicId

@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  BUFFER_PROVIDER_OUTAGE_HORIZON_HOURS,
+  autopilotCandidateBudget,
   businessSignalMatch,
+  approvedBufferPolicy,
   coveredIntentTopics,
   coveredPrimaryKeywords,
   evaluateTopicBusinessFit,
@@ -48,6 +51,26 @@ test("candidate budget can still fill the target after two strict-gate rejection
     TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H,
   );
   assert.ok(MAX_NEW_CANDIDATES_PER_24H - 2 >= MIN_APPROVED_BUFFER);
+});
+
+test("sealed inventory scales to cover a bounded provider outage at every cadence", () => {
+  assert.deepEqual(approvedBufferPolicy(4), { minimum: 2, target: 3 });
+  assert.deepEqual(approvedBufferPolicy(7), { minimum: 3, target: 4 });
+  assert.deepEqual(approvedBufferPolicy(14), { minimum: 6, target: 8 });
+  assert.deepEqual(approvedBufferPolicy(21), { minimum: 9, target: 12 });
+  assert.deepEqual(approvedBufferPolicy(Number.NaN), { minimum: 2, target: 3 });
+  for (let cadence = 1; cadence <= 21; cadence += 1) {
+    const policy = approvedBufferPolicy(cadence);
+    const publicationsDuringOutage = Math.ceil(
+      cadence * BUFFER_PROVIDER_OUTAGE_HORIZON_HOURS / (7 * 24),
+    );
+    assert.ok(policy.minimum >= publicationsDuringOutage);
+    assert.ok(policy.target > policy.minimum);
+    assert.ok(
+      autopilotCandidateBudget("live", cadence) >=
+        policy.target + Math.ceil(cadence / 7),
+    );
+  }
 });
 
 test("topic recovery capacity scales with tenant cadence but stays bounded", () => {
@@ -436,7 +459,7 @@ test("a reserved underfill continuation yields to proved topics and due delivery
   );
   assert.match(
     scheduler,
-    /buffer\.length >= TARGET_APPROVED_BUFFER\) \{[\s\S]{0,180}if \(pendingUnderfilledPlan\)/,
+    /buffer\.length >= bufferPolicy\.target[\s\S]{0,180}if \(pendingUnderfilledPlan\)/,
   );
   assert.match(
     scheduler,

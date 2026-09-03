@@ -11,6 +11,7 @@ import { planCheckpointTopicExecutionLocked } from "./planCandidateCheckpoint.ts
 
 export const MIN_APPROVED_BUFFER = 2;
 export const TARGET_APPROVED_BUFFER = 3;
+export const BUFFER_PROVIDER_OUTAGE_HORIZON_HOURS = 72;
 // Keep at least one week of verified, non-overlapping topics ahead of a daily
 // tenant. Topic planning is comparatively slow and paid, so waiting until the
 // final topic is consumed makes an otherwise healthy publication buffer
@@ -23,6 +24,31 @@ export const MAX_QUALITY_REPLACEMENTS_PER_24H = 2;
 export const MAX_NEW_CANDIDATES_PER_24H =
   TARGET_APPROVED_BUFFER + MAX_QUALITY_REPLACEMENTS_PER_24H;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Protect every configured cadence from a bounded three-day provider outage.
+ * A flat three-article target protects a four-per-week tenant, but gives a
+ * three-per-day tenant only one day of inventory. Scale the minimum with the
+ * customer's own cadence and keep one additional publishing day as the fill
+ * target. This changes inventory, never the quality gate.
+ */
+export function approvedBufferPolicy(cadencePerWeek: number): {
+  minimum: number;
+  target: number;
+} {
+  const boundedCadence = Number.isFinite(cadencePerWeek) && cadencePerWeek > 0
+    ? Math.min(21, cadencePerWeek)
+    : 4;
+  const outageCoverage = Math.ceil(
+    boundedCadence * BUFFER_PROVIDER_OUTAGE_HORIZON_HOURS / (7 * 24),
+  );
+  const onePublishingDay = Math.max(1, Math.ceil(boundedCadence / 7));
+  const minimum = Math.max(MIN_APPROVED_BUFFER, outageCoverage);
+  return {
+    minimum,
+    target: Math.max(TARGET_APPROVED_BUFFER, minimum + onePublishingDay),
+  };
+}
 
 /**
  * Bound paid topic recovery to the tenant's configured publishing pressure.
@@ -46,9 +72,11 @@ export function topicReplenishmentBudget(cadencePerWeek: number): number {
 export function terminalOpportunityNeedsLaunchReplenishment(args: {
   rolloutMode: string;
   sealedBufferCount: number;
+  minimumApprovedBuffer?: number;
 }): boolean {
   return args.rolloutMode === "warm" &&
-    args.sealedBufferCount < MIN_APPROVED_BUFFER;
+    args.sealedBufferCount <
+      (args.minimumApprovedBuffer ?? MIN_APPROVED_BUFFER);
 }
 
 /**
@@ -172,13 +200,20 @@ export function autopilotCandidateBudget(
   cadencePerWeek?: number,
 ): number {
   if (!["warm", "live"].includes(rolloutMode)) return 1;
-  const perDay =
+  const cadence =
     Number.isFinite(cadencePerWeek) && (cadencePerWeek ?? 0) > 0
-      ? (cadencePerWeek as number) / 7
-      : 1;
-  // Allow two attempts per scheduled article, never fewer than the flat bound.
-  const scaled = Math.ceil(perDay * 2) + MAX_QUALITY_REPLACEMENTS_PER_24H;
-  return Math.max(MAX_NEW_CANDIDATES_PER_24H, scaled);
+      ? (cadencePerWeek as number)
+      : 4;
+  const policy = approvedBufferPolicy(cadence);
+  const dailyDemand = Math.max(1, Math.ceil(Math.min(21, cadence) / 7));
+  // One bounded window must be capable of filling the cadence-specific target
+  // even when an ordinary day's worth of candidates is quarantined. Otherwise
+  // high-cadence tenants can be mathematically unable to reach the buffer that
+  // protects their next deadline.
+  return Math.max(
+    MAX_NEW_CANDIDATES_PER_24H,
+    policy.target + Math.max(MAX_QUALITY_REPLACEMENTS_PER_24H, dailyDemand),
+  );
 }
 
 export function autopilotCandidateWindowStart(args: {
@@ -409,6 +444,7 @@ export function autopilotHealthStatus(args: {
   schedulerStale: boolean;
   publicationMissed: boolean;
   bufferCount: number;
+  bufferMinimum?: number;
   lastOutcome?: string;
 }): string {
   if (args.schedulerStale) return "scheduler_stale";
@@ -420,7 +456,7 @@ export function autopilotHealthStatus(args: {
   // stale generation outcome must not keep fleet health red.
   if (
     args.lastOutcome === "quality_budget_exhausted" &&
-    args.bufferCount < MIN_APPROVED_BUFFER
+    args.bufferCount < (args.bufferMinimum ?? MIN_APPROVED_BUFFER)
   ) {
     return "quality_budget_exhausted";
   }
@@ -446,7 +482,9 @@ export function autopilotHealthStatus(args: {
   if (args.lastOutcome === "job_failed") return "job_failed";
   if (args.lastOutcome === "quality_quarantined") return "quality_quarantined";
   if (args.bufferCount === 0) return "buffer_empty";
-  if (args.bufferCount < MIN_APPROVED_BUFFER) return "buffer_low";
+  if (args.bufferCount < (args.bufferMinimum ?? MIN_APPROVED_BUFFER)) {
+    return "buffer_low";
+  }
   return "healthy";
 }
 
