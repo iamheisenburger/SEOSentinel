@@ -11,11 +11,11 @@ import {
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-export const CADENCE_MICRO_SEED_VERSION = 2;
+export const CADENCE_MICRO_SEED_VERSION = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
-  "dataforseo_labs/google/keyword_suggestions/live";
+  "dataforseo_labs/google/keyword_ideas/live";
 export const CADENCE_MICRO_SEED_RESULT_LIMIT = 100;
 export const CADENCE_MICRO_SEED_TASK_COST_CEILING_USD = 0.024;
 export const CADENCE_MICRO_SEED_LEASE_MS = 2 * 60 * 1000;

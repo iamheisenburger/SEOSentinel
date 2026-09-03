@@ -21,7 +21,7 @@ import {
  */
 // Conservative fleet guard: one complete $2 topic-plan reservation, the full
 // bounded cadence-recovery chain ($0.35), one $0.20 evidence-policy upgrade,
-// one $0.15 micro-seed-policy upgrade,
+// two $0.15 micro-seed-policy upgrades and the final upgrade's $0.10 evidence,
 // and a $0.25 reserve for another account must all fit in the same UTC day.
 // The ordinary recovery chain is primary
 // micro-seed ($0.10), fallback micro-seed ($0.05), exact demand ($0.10), and
@@ -32,7 +32,7 @@ import {
 // and one repaired micro-seed pair in a day that already contains immutable
 // receipts from older algorithms. The monthly $35 fleet circuit breaker
 // remains unchanged.
-export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 2_950_000;
+export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 3_200_000;
 export const SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 

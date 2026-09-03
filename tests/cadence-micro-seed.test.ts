@@ -73,7 +73,7 @@ function metric(
 
 function providerFixture() {
   const seed = "lead scoring software";
-  const tag = "cadence-micro-seed-v1-job-placeholder";
+  const tag = "cadence-micro-seed-v3-job-placeholder";
   const data = {
     status_code: 20_000,
     tasks_count: 1,
@@ -86,17 +86,17 @@ function providerFixture() {
         "v3",
         "dataforseo_labs",
         "google",
-        "keyword_suggestions",
+        "keyword_ideas",
         "live",
       ],
       data: {
         api: "dataforseo_labs",
-        function: "keyword_suggestions",
+        function: "keyword_ideas",
         se_type: "google",
-        keyword: seed,
+        keywords: [seed],
         location_code: 2840,
         language_code: "en",
-        include_seed_keyword: true,
+        closely_variants: false,
         include_serp_info: false,
         include_clickstream_data: false,
         tag,
@@ -108,7 +108,7 @@ function providerFixture() {
         limit: 100,
       },
       result: [{
-        seed_keyword: seed,
+        seed_keywords: [seed],
         se_type: "google",
         location_code: 2840,
         language_code: "en",
@@ -413,7 +413,7 @@ test("receipt envelope is exactly one bounded Labs task", () => {
   assert.equal(CADENCE_MICRO_SEED_RESULT_LIMIT, 100);
   assert.equal(
     CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
-    "dataforseo_labs/google/keyword_suggestions/live",
+    "dataforseo_labs/google/keyword_ideas/live",
   );
   assert.equal(cadenceMicroSeedProviderReceiptValid({
     endpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
@@ -434,17 +434,17 @@ test("receipt envelope is exactly one bounded Labs task", () => {
 });
 
 test("the terminal plan, recovery chain, and both policy upgrades fit exactly", () => {
-  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 2_700_000);
+  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 2_950_000);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 700_000,
+    requestedMicroUsd: 950_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 700_001,
+    requestedMicroUsd: 950_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
 });
@@ -454,25 +454,25 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 600_000,
+    requestedMicroUsd: 850_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 600_001,
+    requestedMicroUsd: 850_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 550_000,
+    requestedMicroUsd: 800_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 550_001,
+    requestedMicroUsd: 800_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
@@ -488,15 +488,15 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
     monthlyCeilingMicroUsd: 2_500_000,
   }).allowed, false);
 
-  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 2_950_000);
+  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 3_200_000);
   assert.deepEqual(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 2_700_000,
-    fleetReservedThisMonthMicroUsd: 2_700_000,
+    fleetReservedTodayMicroUsd: 2_950_000,
+    fleetReservedThisMonthMicroUsd: 2_950_000,
     requestedMicroUsd: 250_000,
   }), { allowed: true });
   assert.equal(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 2_700_000,
-    fleetReservedThisMonthMicroUsd: 2_700_000,
+    fleetReservedTodayMicroUsd: 2_950_000,
+    fleetReservedThisMonthMicroUsd: 2_950_000,
     requestedMicroUsd: 250_001,
   }).allowed, false);
   assert.deepEqual(evaluateSharedProviderCapacity({
@@ -692,10 +692,10 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
   );
   assert.equal(capturedEndpoint, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT);
   assert.deepEqual(capturedBody, [{
-    keyword: fixture.seed,
+    keywords: [fixture.seed],
     location_code: 2840,
     language_code: "en",
-    include_seed_keyword: true,
+    closely_variants: false,
     include_serp_info: false,
     include_clickstream_data: false,
     tag: fixture.tag,

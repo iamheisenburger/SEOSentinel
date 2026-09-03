@@ -459,7 +459,7 @@ export const processCadenceMicroSeed = internalAction({
     try {
       if (
         begun.endpoint !==
-          "dataforseo_labs/google/keyword_suggestions/live" ||
+          "dataforseo_labs/google/keyword_ideas/live" ||
         begun.resultLimit !== CADENCE_MICRO_SEED_RESULT_LIMIT ||
         begun.includeSerpInfo !== false ||
         begun.includeClickstreamData !== false

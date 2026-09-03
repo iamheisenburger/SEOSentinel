@@ -132,7 +132,7 @@ export interface CadenceMicroSeedKeywordMetric {
 }
 
 export interface CadenceMicroSeedDiscoveryReceipt {
-  endpoint: "dataforseo_labs/google/keyword_suggestions/live";
+  endpoint: "dataforseo_labs/google/keyword_ideas/live";
   seed: string;
   requestTag: string;
   locationCode: number;
@@ -197,11 +197,14 @@ async function dataForSEORequest(
 /**
  * One deliberately tiny recovery request for an empty verified-topic buffer.
  *
- * This is not the general planner: it sends exactly one tenant-derived seed,
- * never asks for clickstream or SERP data, and accepts at most one hundred
- * DataForSEO Labs rows. The Labs response supplies both exact demand and
- * organic keyword difficulty, so no model estimate or borrowed metric can
- * make a staged candidate scheduler-eligible.
+ * This is not the general planner: it sends exactly one tenant-derived seed
+ * to the category-based Ideas endpoint, never asks for clickstream or SERP
+ * data, and accepts at most one hundred DataForSEO Labs rows. The earlier
+ * literal Suggestions endpoint legitimately returned zero rows for specific
+ * SaaS product phrases; Ideas supplies adjacent searcher language in the same
+ * provider category while preserving exact demand, organic difficulty, and
+ * intent. No model estimate or borrowed metric can make a staged candidate
+ * scheduler-eligible.
  */
 export async function discoverCadenceMicroSeedFromDataForSEO(
   seed: string,
@@ -235,14 +238,14 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   if (!requestTag || requestTag.length > 255) {
     throw new Error("Cadence micro-seed request tag is outside its contract");
   }
-  const endpoint = "dataforseo_labs/google/keyword_suggestions/live" as const;
+  const endpoint = "dataforseo_labs/google/keyword_ideas/live" as const;
   const request = options.request ?? dataForSEORequest;
   languageCode = dataForSeoLanguageCode(languageCode);
   const data = await request(endpoint, [{
-    keyword: normalizedSeed,
+    keywords: [normalizedSeed],
     location_code: locationCode,
     language_code: languageCode,
-    include_seed_keyword: true,
+    closely_variants: false,
     include_serp_info: false,
     include_clickstream_data: false,
     tag: requestTag,
@@ -269,14 +272,14 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     task?.status_code !== 20_000 ||
     !taskData ||
     taskData.api !== "dataforseo_labs" ||
-    taskData.function !== "keyword_suggestions" ||
+    taskData.function !== "keyword_ideas" ||
     taskData.se_type !== "google" ||
-    taskData.keyword !== normalizedSeed ||
+    JSON.stringify(taskData.keywords) !== JSON.stringify([normalizedSeed]) ||
     taskData.location_code !== locationCode ||
     taskData.language_code !== languageCode ||
     taskData.include_serp_info !== false ||
     taskData.include_clickstream_data !== false ||
-    taskData.include_seed_keyword !== true ||
+    taskData.closely_variants !== false ||
     taskData.tag !== requestTag ||
     taskData.limit !== limit ||
     JSON.stringify(taskData.filters) !==
@@ -294,10 +297,11 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
       "v3",
       "dataforseo_labs",
       "google",
-      "keyword_suggestions",
+      "keyword_ideas",
       "live",
     ]) ||
-    resultGroup?.seed_keyword !== normalizedSeed ||
+    JSON.stringify(resultGroup?.seed_keywords) !==
+      JSON.stringify([normalizedSeed]) ||
     (resultGroup?.location_code !== undefined &&
       resultGroup.location_code !== locationCode) ||
     (resultGroup?.language_code !== undefined &&
