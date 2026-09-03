@@ -7705,6 +7705,7 @@ type ProcessedJobResult = {
   planCompleted?: boolean;
   planContinuationQueued?: boolean;
   planContinuationSettled?: boolean;
+  checkpointContinuationScheduled?: boolean;
 };
 
 function processedJobOutcome(processed: ProcessedJobResult): string {
@@ -8981,6 +8982,33 @@ export const processNextJob = internalAction({
           workerToken,
         );
         articleId = generated.articleId;
+        const handoff = await ctx.runMutation(
+          internal.jobs.yieldGeneratedArticleForReview,
+          {
+            siteId: args.siteId,
+            jobId: job._id,
+            workerToken,
+            articleId,
+            ...(args.runId ? { runId: args.runId } : {}),
+            ...(args.runClaimNonce
+              ? { runClaimNonce: args.runClaimNonce }
+              : {}),
+            ...(args.runContinuationAttempt !== undefined
+              ? { runContinuationAttempt: args.runContinuationAttempt }
+              : {}),
+          },
+        );
+        if (!handoff.scheduled) {
+          throw new Error(
+            "Generated article checkpoint could not acquire its durable review continuation",
+          );
+        }
+        return {
+          processed: false,
+          jobId: job._id,
+          articleId,
+          checkpointContinuationScheduled: true,
+        };
       }
 
       await ctx.runMutation(internal.jobs.updateProgress, {
@@ -9327,6 +9355,9 @@ export const processNextJob = internalAction({
 
     try {
       const result = await execute();
+      if (result.checkpointContinuationScheduled) {
+        return result;
+      }
       if (args.runId) {
         // The parent tick has already returned, so this durable worker owns the
         // next bounded recovery, replenishment, or delivery step.

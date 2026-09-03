@@ -504,6 +504,30 @@ test("specific jobs schedule the durable worker without a nested action deadline
   );
 });
 
+test("generated drafts cross an atomic action-runtime checkpoint before final review", () => {
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(jobs, /export const yieldGeneratedArticleForReview = internalMutation/);
+  assert.match(
+    jobs,
+    /yieldGeneratedArticleForReview[\s\S]*ownsJob\(job, args\.workerToken\)[\s\S]*job\.articleId !== args\.articleId[\s\S]*articleMatchesCurrentDomain/,
+  );
+  assert.match(
+    jobs,
+    /reviewCheckpointVersion[\s\S]*status: "pending"[\s\S]*internal\.actions\.pipeline\.processNextJob/,
+  );
+  const generationBranch = pipeline.slice(
+    pipeline.indexOf("const generated = await handleArticle("),
+    pipeline.indexOf("await ctx.runMutation(internal.jobs.updateProgress", pipeline.indexOf("const generated = await handleArticle(")),
+  );
+  assert.match(generationBranch, /yieldGeneratedArticleForReview/);
+  assert.match(generationBranch, /checkpointContinuationScheduled: true/);
+  assert.match(
+    pipeline,
+    /if \(result\.checkpointContinuationScheduled\) \{\s*return result;\s*\}/,
+  );
+});
+
 test("a sealed autonomous buffer arms the exact cadence deadline", () => {
   const now = Date.UTC(2026, 6, 22, 18, 0, 0);
   const cadenceMs = 24 * 60 * 60 * 1000;

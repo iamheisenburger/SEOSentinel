@@ -2723,6 +2723,90 @@ export const heartbeatWorker = internalMutation({
 });
 
 /**
+ * Hand a completed draft checkpoint to a fresh action before the current
+ * action reaches Convex's hard runtime ceiling. The generated article, quota
+ * reservation, and provider-attempt receipt already belong to this exact job;
+ * only the ephemeral worker lease changes. Scheduling the continuation in the
+ * same transaction means an action response loss cannot leave a valid draft
+ * waiting for the lease watchdog or the next fleet cadence.
+ */
+export const yieldGeneratedArticleForReview = internalMutation({
+  args: {
+    jobId: v.id("jobs"),
+    siteId: v.id("sites"),
+    workerToken: v.string(),
+    articleId: v.id("articles"),
+    runId: v.optional(v.id("autopilot_runs")),
+    runClaimNonce: v.optional(v.string()),
+    runContinuationAttempt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const [job, site, article] = await Promise.all([
+      ctx.db.get(args.jobId),
+      ctx.db.get(args.siteId),
+      ctx.db.get(args.articleId),
+    ]);
+    const payload = job?.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    if (
+      !job ||
+      !site ||
+      !article ||
+      job.siteId !== args.siteId ||
+      job.type !== "article" ||
+      !ownsJob(job, args.workerToken) ||
+      job.articleId !== args.articleId ||
+      payload.articleId !== args.articleId ||
+      article.siteId !== args.siteId ||
+      !articleMatchesCurrentDomain(site, article) ||
+      !jobAuthorizedForExecution(site, job)
+    ) {
+      return { scheduled: false as const, reason: "checkpoint_fence_changed" as const };
+    }
+    const currentTime = now();
+    const reviewCheckpointVersion = 1;
+    await renewArticleProviderAttempt(ctx, job, currentTime);
+    await ctx.db.patch(job._id, {
+      status: "pending",
+      payload: {
+        ...payload,
+        articleId: args.articleId,
+        reviewCheckpointVersion,
+        reviewCheckpointScheduledAt: currentTime,
+      },
+      error: undefined,
+      cadenceFailure: undefined,
+      workerToken: undefined,
+      heartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      nextAttemptAt: undefined,
+      updatedAt: currentTime,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.pipeline.processNextJob,
+      {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        ...(args.runId ? { runId: args.runId } : {}),
+        ...(args.runClaimNonce
+          ? { runClaimNonce: args.runClaimNonce }
+          : {}),
+        ...(args.runContinuationAttempt !== undefined
+          ? { runContinuationAttempt: args.runContinuationAttempt }
+          : {}),
+      },
+    );
+    return {
+      scheduled: true as const,
+      reviewCheckpointVersion,
+      scheduledAt: currentTime,
+    };
+  },
+});
+
+/**
  * Last database fence before a plan action may cross its paid provider
  * boundary. Ordinary plans are unchanged; every one-setup plan must carry the
  * request's current, migrated stable planning generation.
