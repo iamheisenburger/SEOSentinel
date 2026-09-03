@@ -30,7 +30,7 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 13;
+export const QUALITY_RECOVERY_VERSION = 14;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
@@ -40,7 +40,7 @@ const POST_AUDIT_EDITORIAL_REMEDIATION_VERSION = 9;
 const POST_AUDIT_FIXED_POINT_RECOVERY_VERSION = 10;
 const DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION = 11;
 const DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION = 12;
-const CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION = 13;
+const CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION = 14;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets

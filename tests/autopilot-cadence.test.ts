@@ -337,7 +337,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 13);
+  assert.equal(QUALITY_RECOVERY_VERSION, 14);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -508,7 +508,7 @@ test("version 8 reopens only claim-audit truncation and its false length failure
   }), undefined);
 });
 
-test("version 13 reopens only the current claim-classification defect and its v1 marker regression", () => {
+test("the current version reopens only the current claim-classification defect and legacy marker regression", () => {
   const base = {
     createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT + 1,
     status: "review",
@@ -522,17 +522,17 @@ test("version 13 reopens only the current claim-classification defect and its v1
     ...base,
     qualityRecoveryVersion: 12,
     qualityRecoveryAttemptVersion: 12,
-  }), 13);
+  }), 14);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
-  }), 13);
+  }), 14);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 5,
-  }), 13);
+  }), 14);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
     publicationGateIssues: [
@@ -543,8 +543,8 @@ test("version 13 reopens only the current claim-classification defect and its v1
   }), undefined);
   assert.equal(qualityRecoveryTargetVersion({
     ...base,
-    qualityRecoveryVersion: 13,
-    qualityRecoveryAttemptVersion: 13,
+    qualityRecoveryVersion: 14,
+    qualityRecoveryAttemptVersion: 14,
   }), undefined);
 
   const articles = readFileSync("convex/articles.ts", "utf8");

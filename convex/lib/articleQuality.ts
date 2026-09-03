@@ -391,18 +391,25 @@ function isReaderMeasurementInstruction(paragraph: string): boolean {
   });
 }
 
-function isExplicitAuthorFramework(paragraph: string): boolean {
+function isExplicitAuthorFramework(
+  paragraph: string,
+  productEvidence: string,
+): boolean {
   if (
     INLINE_CITATION_PATTERN.test(paragraph) ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
     HYPE_PATTERN.test(paragraph) ||
-    QUANTIFIED_OUTCOME_PATTERN.test(paragraph)
+    QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
+    (referencesNamedProduct(paragraph, productEvidence) &&
+      /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?|features?)\b/i.test(
+        paragraph,
+      ))
   ) return false;
   return (
     /\b(?:proposed by (?:this|the) (?:guide|article|author)|author-proposed|reader-run)\b/i.test(
       paragraph,
     ) &&
-    /\bnot (?:an? )?(?:external|industry-standard|universal|validated)\b/i.test(
+    /\bnot (?:an? )?(?:external|industry-standard|universal|validated|ranking|citation|benchmark)\b/i.test(
       paragraph,
     )
   );
@@ -461,7 +468,7 @@ function referencesNamedProduct(value: string, productEvidence: string): boolean
 function requiresClaimEvidence(value: string, productEvidence: string): boolean {
   if (
     isReaderMeasurementInstruction(value) ||
-    isExplicitAuthorFramework(value) ||
+    isExplicitAuthorFramework(value, productEvidence) ||
     isReaderRunProcedure(value) ||
     isStandaloneCallToActionLink(value)
   ) return false;

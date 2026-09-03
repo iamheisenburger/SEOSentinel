@@ -596,6 +596,24 @@ test("explicit author frameworks, reader-run procedures, and standalone CTAs are
   assert.deepEqual(result.issues, []);
 });
 
+test("authorial ranking disclaimers are exempt but embedded product capabilities remain audited", () => {
+  const productEvidence =
+    "Name: Pentra\nDomain: pentra.dev\nPentra publishes through a GitHub adapter.";
+  const authorialContext =
+    "This guide is an author-proposed evaluation framework, not a ranking of every tool on the market and not a citation of third-party benchmark scores. The next section sets out evaluation questions this guide proposes you run yourself against any SEO platform. The guide then looks at Pentra using only what Pentra's own product pages state about it.";
+  assert.deepEqual(
+    evidenceRequiredParagraphs(authorialContext, productEvidence),
+    [],
+  );
+
+  const capabilityClaim =
+    "This guide uses an author-proposed framework, not a ranking. Pentra automatically publishes every article through GitHub.";
+  assert.deepEqual(
+    evidenceRequiredParagraphs(capabilityClaim, productEvidence),
+    [capabilityClaim],
+  );
+});
+
 test("first-party sentence lead-ins do not become phantom named entities", () => {
   const productEvidence =
     "Name: Pentra\nDomain: pentra.dev\nPentra connects to Google Search Console and tracks clicks and impressions.";
