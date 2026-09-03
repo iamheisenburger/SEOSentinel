@@ -77,8 +77,9 @@ test("existing-draft recovery closes fresh editorial feedback with one guarded r
   const guardedAcceptance = handler.indexOf("remediatedState.score >= auditState.score && improved", reAudit);
   assert.ok(audit >= 0 && remediation > audit && reAudit > remediation);
   assert.ok(guardedAcceptance > reAudit);
-  assert.match(handler, /Post-audit remediation improved the exact editorial score/);
-  assert.match(handler, /Post-audit remediation was rejected because it did not improve/);
+  assert.match(handler, /postAuditPass <= 2/);
+  assert.match(handler, /Post-audit remediation pass.*improved the exact artifact/);
+  assert.match(handler, /Post-audit remediation pass.*was rejected because it did not improve/);
   assert.match(
     source,
     /uncited category, taxonomy, or best practice is presented as settled industry fact/,
@@ -86,5 +87,9 @@ test("existing-draft recovery closes fresh editorial feedback with one guarded r
   assert.match(
     source,
     /Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is/,
+  );
+  assert.match(
+    source,
+    /topic-specific tool with explicit reader inputs, a procedure, an observable output, and a decision rule/,
   );
 });

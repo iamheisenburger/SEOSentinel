@@ -336,7 +336,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 9);
+  assert.equal(QUALITY_RECOVERY_VERSION, 10);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -534,6 +534,36 @@ test("version 9 reopens only a version-8 exact editorial audit that can now be r
     ...base,
     qualityRecoveryVersion: 7,
     qualityRecoveryAttemptVersion: 7,
+  }), undefined);
+});
+
+test("version 10 reopens only an applied version-9 editorial result for bounded fixed-point repair", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Editorial quality score is 83; strict minimum is 85.",
+    ],
+    qualityRevisionCount: 6,
+    qualityRecoveryVersion: 9,
+    qualityRecoveryAttemptVersion: 9,
+  };
+  assert.equal(qualityRecoveryTargetVersion(base), 10);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryAttemptVersion: 10,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 8,
+    qualityRecoveryAttemptVersion: 9,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: [
+      "Strict publication requires a reviewed HTTPS hero image.",
+    ],
   }), undefined);
 });
 

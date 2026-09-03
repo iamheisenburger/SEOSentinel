@@ -1864,6 +1864,7 @@ async function auditFinalArticle(args: {
       "The score measures search-intent satisfaction, usefulness, factual restraint, product grounding, clarity, structure, citation integrity, and absence of generic AI filler.",
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
       "Do not require an external citation for advice, decision questions, or an explicitly author-proposed framework. Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is.",
+      "If every factual and evidence gate passes, a score below 85 requires a concrete material change named in the notes. Minor polish, source absence by itself, or a vague statement that advice feels common is not a sub-85 defect.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "The system has deterministically enumerated every paragraph that requires evidence. Return exactly one claimEvidence entry for every supplied claim unit, in the same order, and copy that unit's complete paragraph verbatim into claim. Do not omit, merge, summarize, or split a claim unit.",
       "Mark a claim unit supported only when the supplied evidence directly supports every externally verifiable proposition in it; citation presence alone is not evidence. If only part is supported, mark the whole unit unsupported and explain the unsupported proposition.",
@@ -2036,6 +2037,7 @@ async function remediateFinalArticle(args: {
       "- When the unsupported proposition contained useful advice, preserve only a conditional diagnostic the reader can verify (for example, 'If your analytics show X, test Y'). Do not claim that the condition is common, that one approach converts better, or that user behaviour has a known cause without supplied evidence.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
       "- When an audit says an uncited category, taxonomy, or best practice is presented as settled industry fact, rewrite the heading and lead-in so it is unmistakably an author-proposed evaluation framework, reader-run test, decision question, or conditional recommendation. Do not leave the same universal claim under a different heading.",
+      "- When an audit identifies generic listicle advice or filler, remove it or turn it into a topic-specific tool with explicit reader inputs, a procedure, an observable output, and a decision rule. A renamed generic list is not a repair.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
       lengthRecovery
         ? "- Rebuild depth by expanding underdeveloped sections with reader-run procedures, input checklists, decision questions, implementation steps, and explicitly conditional diagnostics. Keep added guidance product-agnostic unless the supplied first-party evidence states the exact product mechanic. Do not pad the introduction, repeat conclusions, or paraphrase the same advice."
@@ -6992,7 +6994,12 @@ async function reviewExistingArticleHandler(
     // exact candidate. Accept it only when the score or deterministic defect
     // count improves without regression. This closes the quality loop while
     // keeping the same strict threshold, evidence contract, and spend bound.
-    if (auditState.score < 85 || auditState.evidenceDefectCount > 0) {
+    for (
+      let postAuditPass = 1;
+      postAuditPass <= 2 &&
+        (auditState.score < 85 || auditState.evidenceDefectCount > 0);
+      postAuditPass++
+    ) {
       try {
         const exactAuditNotes = [
           ...audit.notes,
@@ -7072,8 +7079,10 @@ async function reviewExistingArticleHandler(
           remediatedState.evidenceDefectCount < auditState.evidenceDefectCount;
         if (remediatedState.score >= auditState.score && improved) {
           postAuditRemediationNotes.push(
-            ...remediated.notes.map((note) => `Post-audit remediation: ${note}`),
-            `Post-audit remediation improved the exact editorial score from ${auditState.score} to ${remediatedState.score}.`,
+            ...remediated.notes.map(
+              (note) => `Post-audit remediation pass ${postAuditPass}: ${note}`,
+            ),
+            `Post-audit remediation pass ${postAuditPass} improved the exact artifact (score ${auditState.score} -> ${remediatedState.score}; evidence defects ${auditState.evidenceDefectCount} -> ${remediatedState.evidenceDefectCount}).`,
           );
           exactReviewedMarkdown = remediatedMarkdown;
           reviewed = remediatedFactCheck;
@@ -7083,15 +7092,17 @@ async function reviewExistingArticleHandler(
           stats = finalRemediatedStats;
         } else {
           postAuditRemediationNotes.push(
-            `Post-audit remediation was rejected because it did not improve the exact artifact (${auditState.score} -> ${remediatedState.score}; evidence defects ${auditState.evidenceDefectCount} -> ${remediatedState.evidenceDefectCount}).`,
+            `Post-audit remediation pass ${postAuditPass} was rejected because it did not improve the exact artifact (${auditState.score} -> ${remediatedState.score}; evidence defects ${auditState.evidenceDefectCount} -> ${remediatedState.evidenceDefectCount}).`,
           );
+          break;
         }
       } catch (error) {
         postAuditRemediationNotes.push(
-          `Post-audit remediation failed: ${
+          `Post-audit remediation pass ${postAuditPass} failed: ${
             error instanceof Error ? error.message : "unknown error"
           }`,
         );
+        break;
       }
     }
 

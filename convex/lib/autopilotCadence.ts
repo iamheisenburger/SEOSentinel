@@ -30,13 +30,14 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 9;
+export const QUALITY_RECOVERY_VERSION = 10;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
 const POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION = 7;
 const COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION = 8;
 const POST_AUDIT_EDITORIAL_REMEDIATION_VERSION = 9;
+const POST_AUDIT_FIXED_POINT_RECOVERY_VERSION = 10;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -278,6 +279,25 @@ export function qualityRecoveryTargetVersion(
     // audit. Version 9 admits one exact, bounded audit-remediation-re-audit
     // pass without reopening unrelated or already-attempted drafts.
     return POST_AUDIT_EDITORIAL_REMEDIATION_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) >=
+      POST_AUDIT_EDITORIAL_REMEDIATION_VERSION &&
+    (article.qualityRecoveryVersion ?? 0) <
+      POST_AUDIT_FIXED_POINT_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      POST_AUDIT_FIXED_POINT_RECOVERY_VERSION &&
+    issues.some((issue) =>
+      /^Editorial quality score is \d+(?:\.\d+)?; strict minimum is 85\.$/.test(
+        issue,
+      )
+    )
+  ) {
+    // Version 9 applied one fresh audit note but could expose the next
+    // material defect only after that candidate was independently re-audited.
+    // Version 10 admits one bounded two-pass fixed point for an applied v9
+    // article; an attempted-but-unapplied job is never replayed.
+    return POST_AUDIT_FIXED_POINT_RECOVERY_VERSION;
   }
   return undefined;
 }
