@@ -1075,7 +1075,20 @@ test("the scheduler revalidates stale topics and the queue fails closed", () => 
   assert.match(pipeline, /disqualifyQueuedTopicInternal/);
   assert.match(
     pipeline,
-    /if \(checkpoint\.topicId\)[\s\S]*Recovery topic failed current tenant product fit/,
+    /rejectRecoveryTopicIfIneligible[\s\S]*Recovery topic failed current tenant product fit/,
+  );
+  const qualityRetryBranch = pipeline.slice(
+    pipeline.indexOf('if (payload?.qualityRetry) {'),
+    pipeline.indexOf('if (payload?.publishOnly) {'),
+  );
+  assert.ok(
+    qualityRetryBranch.indexOf("rejectRecoveryTopicIfIneligible") >= 0,
+    "quality recovery must revalidate its topic",
+  );
+  assert.ok(
+    qualityRetryBranch.indexOf("rejectRecoveryTopicIfIneligible") <
+      qualityRetryBranch.indexOf('reserveArticleProviderAttempt("quality_review")'),
+    "quality recovery must reject tenant-topic drift before provider spend",
   );
   assert.match(pipeline, /failureKind: "topic_business_fit_failed"/);
 });

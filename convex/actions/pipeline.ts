@@ -8510,8 +8510,62 @@ export const processNextJob = internalAction({
       });
       if (!site) throw new Error("Site not found");
 
+      const rejectRecoveryTopicIfIneligible = async (
+        checkpoint: Doc<"articles">,
+      ): Promise<ProcessedJobResult | null> => {
+        if (!checkpoint.topicId) return null;
+        const topic = await ctx.runQuery(internal.topics.getInternal, {
+          topicId: checkpoint.topicId,
+        });
+        if (!topic || topic.siteId !== args.siteId) {
+          throw new Error(
+            "Recovery article topic is missing or belongs to another site",
+          );
+        }
+        const fit = evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: checkpoint.title,
+          ...tenantTopicBusinessSignals(site),
+        });
+        if (fit.eligible) return null;
+
+        await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
+          siteId: args.siteId,
+          jobId: job._id,
+          topicId: checkpoint.topicId,
+          articleId: checkpoint._id,
+          score: fit.score,
+          version: fit.version,
+          reasons: fit.reasons,
+        });
+        const error =
+          `Recovery topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
+        await ctx.runMutation(internal.jobs.markFailed, {
+          jobId: job._id,
+          workerToken,
+          error,
+        });
+        return {
+          processed: true,
+          jobId: job._id,
+          articleId: checkpoint._id,
+          error,
+          failureKind: "topic_business_fit_failed",
+        };
+      };
+
       if (payload?.qualityRetry) {
         if (!payload.articleId) throw new Error("Quality retry is missing its articleId");
+        const checkpoint = await ctx.runQuery(internal.articles.getInternal, {
+          articleId: payload.articleId,
+        });
+        if (!checkpoint || checkpoint.siteId !== args.siteId) {
+          throw new Error(
+            "Quality recovery article is missing or belongs to another site",
+          );
+        }
+        const topicRejection = await rejectRecoveryTopicIfIneligible(checkpoint);
+        if (topicRejection) return topicRejection;
         if (!payload.metadataOnlyRepair && !payload.deterministicRepair) {
           await reserveArticleProviderAttempt("quality_review");
         }
@@ -8773,44 +8827,8 @@ export const processNextJob = internalAction({
         if (!checkpoint || checkpoint.siteId !== args.siteId) {
           throw new Error("Generated article checkpoint is missing or belongs to another site");
         }
-        if (checkpoint.topicId) {
-          const topic = await ctx.runQuery(internal.topics.getInternal, {
-            topicId: checkpoint.topicId,
-          });
-          if (!topic || topic.siteId !== args.siteId) {
-            throw new Error("Recovery article topic is missing or belongs to another site");
-          }
-          const fit = evaluateTopicBusinessFit({
-            keyword: topic.primaryKeyword,
-            label: checkpoint.title,
-            ...tenantTopicBusinessSignals(site),
-          });
-          if (!fit.eligible) {
-            await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
-              siteId: args.siteId,
-              jobId: job._id,
-              topicId: checkpoint.topicId,
-              articleId: checkpoint._id,
-              score: fit.score,
-              version: fit.version,
-              reasons: fit.reasons,
-            });
-            const error =
-              `Recovery topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
-            await ctx.runMutation(internal.jobs.markFailed, {
-              jobId: job._id,
-              workerToken,
-              error,
-            });
-            return {
-              processed: true,
-              jobId: job._id,
-              articleId: checkpoint._id,
-              error,
-              failureKind: "topic_business_fit_failed",
-            };
-          }
-        }
+        const topicRejection = await rejectRecoveryTopicIfIneligible(checkpoint);
+        if (topicRejection) return topicRejection;
       } else {
         if (site.userId) {
           const reservation = await ctx.runMutation(
