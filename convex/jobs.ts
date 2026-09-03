@@ -4027,7 +4027,10 @@ export const markFailed = internalMutation({
     await ctx.db.patch(jobId, {
       status: "failed",
       error,
-      ...(cadenceFailure ? { cadenceFailure } : {}),
+      // Plan jobs may retain a classified cadence receipt. Article failures
+      // reaching this terminal path must clear any older funding pause so a
+      // failed job can never remain simultaneously marked retryable.
+      cadenceFailure,
       reservationId: job.articleId ? job.reservationId : undefined,
       workerToken: undefined,
       heartbeatAt: undefined,
@@ -4146,7 +4149,7 @@ export const markRetryableFailure = internalMutation({
       error: willRetry
         ? `Transient worker failure; retry ${attempts}/${maximumRetries}: ${error}`
         : `Worker failure exhausted after ${attempts} attempts: ${error}`,
-      ...(cadenceFailure ? { cadenceFailure } : {}),
+      cadenceFailure,
       nextAttemptAt,
       reservationId: job.articleId ? job.reservationId : undefined,
       workerToken: undefined,
@@ -4428,6 +4431,7 @@ export const markPublishFailed = internalMutation({
           `Terminal publication product-fit rejection: ${topicFit.reasons.join("; ")}`,
         publicationAttempts: attempts,
         articleId,
+        cadenceFailure: undefined,
         nextAttemptAt: undefined,
         workerToken: undefined,
         heartbeatAt: undefined,
@@ -4455,6 +4459,7 @@ export const markPublishFailed = internalMutation({
         publishOnly: true,
       },
       articleId,
+      cadenceFailure: undefined,
       nextAttemptAt: willRetry ? currentTime + retryDelayMs : undefined,
       workerToken: undefined,
       heartbeatAt: undefined,

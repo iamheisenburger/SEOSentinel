@@ -154,6 +154,7 @@ test("failed, retried, and expired executions retain immutable attempt receipts"
   const failed = exportedBlock(jobs, "markFailed");
   const retry = exportedBlock(jobs, "markRetryableFailure");
   const done = exportedBlock(jobs, "markDone");
+  const publishFailed = exportedBlock(jobs, "markPublishFailed");
   const cleanup = exportedBlock(jobs, "cleanupExpiredGenerationReservations");
   const releaseStart = jobs.indexOf("async function releaseReservedUsage");
   const releaseEnd = jobs.indexOf("async function raiseJobAlert", releaseStart);
@@ -168,8 +169,11 @@ test("failed, retried, and expired executions retain immutable attempt receipts"
       recover.indexOf("await releaseReservedUsage(ctx, job)"),
   );
   assert.match(failed, /settleArticleProviderAttempt\(ctx, job, "failed"/);
+  assert.match(failed, /cadenceFailure,/);
   assert.match(retry, /settleArticleProviderAttempt\(ctx, job, "failed"/);
+  assert.match(retry, /cadenceFailure,/);
   assert.match(done, /settleArticleProviderAttempt\(ctx, job, "completed"/);
+  assert.match(publishFailed, /cadenceFailure: undefined/);
   assert.match(cleanup, /article_generation_attempts/);
   assert.match(cleanup, /status: "ambiguous"/);
   assert.match(cleanup, /normalizeId\("jobs", attempt\.jobKey\)/);
