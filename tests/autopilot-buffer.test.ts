@@ -1041,6 +1041,7 @@ test("business fit cannot assemble an unrelated entity across separate signals",
       "AI SEO content generator",
       "article writing with web research",
       "keyword questions for content briefs",
+      "Inconsistent fact-checking and research quality in AI-generated content",
     ],
   );
   assert.equal(fragmented.eligible, false);

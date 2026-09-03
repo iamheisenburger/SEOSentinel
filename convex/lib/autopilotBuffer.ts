@@ -1054,6 +1054,36 @@ function distinctiveRelevanceRoots(words: string[]): Set<string> {
   );
 }
 
+function distinctiveRelevanceRootSequence(words: string[]): string[] {
+  return words
+    .filter((word) =>
+      !GENERIC_BUSINESS_SIGNAL_WORDS.has(word) &&
+      !BUSINESS_QUERY_MODIFIER_WORDS.has(word)
+    )
+    .map(relevanceRoot);
+}
+
+function longestSharedContiguousRootRun(
+  left: string[],
+  right: string[],
+): number {
+  let longest = 0;
+  for (let leftStart = 0; leftStart < left.length; leftStart += 1) {
+    for (let rightStart = 0; rightStart < right.length; rightStart += 1) {
+      let length = 0;
+      while (
+        leftStart + length < left.length &&
+        rightStart + length < right.length &&
+        left[leftStart + length] === right[rightStart + length]
+      ) {
+        length += 1;
+      }
+      longest = Math.max(longest, length);
+    }
+  }
+  return longest;
+}
+
 function genericOfferingAlignment(
   keywordWords: string[],
   signalWords: string[],
@@ -1117,15 +1147,18 @@ export function businessSignalMatch(
   }
 
   const ratio = matched.length / keywordRoots.size;
-  // A union across every profile sentence can synthesize a product the tenant
-  // never described. For example, one feature may mention web research while
-  // another offers a content generator; that must not authorize the unrelated
-  // entity "research question generator". Multi-concept targets therefore
-  // need at least two matched distinctive roots in one actual tenant signal.
+  // A union across a profile—or scattered words in one long sentence—can
+  // synthesize a product the tenant never described. Multi-concept targets
+  // therefore need an ordered contiguous distinctive phrase in one actual
+  // tenant signal. "Research quality in AI-generated content" cannot become
+  // the unrelated product entity "research question generator".
+  const keywordSequence = distinctiveRelevanceRootSequence(keywordWords);
   const cohesiveMatchedCount = businessSignals.reduce((highest, signal) => {
-    const roots = distinctiveRelevanceRoots(relevanceTokens(signal));
-    const count = [...keywordRoots].filter((root) => roots.has(root)).length;
-    return Math.max(highest, count);
+    const sequence = distinctiveRelevanceRootSequence(relevanceTokens(signal));
+    return Math.max(
+      highest,
+      longestSharedContiguousRootRun(keywordSequence, sequence),
+    );
   }, 0);
   const eligible = keywordRoots.size === 1
     ? matched.length === 1
@@ -1189,7 +1222,7 @@ export function keywordMatchesBusinessModel(
   return true;
 }
 
-export const TOPIC_BUSINESS_FIT_VERSION = 7;
+export const TOPIC_BUSINESS_FIT_VERSION = 8;
 
 export type TopicBusinessFitEvaluation = {
   eligible: boolean;
