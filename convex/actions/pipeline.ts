@@ -12,10 +12,10 @@ import { z } from "zod";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   appendRelatedInternalLinks,
-  injectInternalLinks,
   preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
   selectRelatedInternalLinks,
+  stripGeneratedInternalLinks,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
 import {
@@ -5671,43 +5671,6 @@ async function handleLinks(
   const preferredDestination = destinations.find(
     (destination) => destination.preferredGrowthTarget,
   );
-  const rankedDestinations = selectRelatedInternalLinks({
-    currentTitle: article.title,
-    currentKeywords: article.metaKeywords,
-    destinations,
-    limit: 6,
-  })
-    .map((link) =>
-      destinations.find((destination) => destination.href === link.href)
-    )
-    .filter((destination): destination is typeof destinations[number] =>
-      Boolean(destination)
-    );
-  const deterministicDestinations = [
-    ...(preferredDestination ? [preferredDestination] : []),
-    ...rankedDestinations,
-  ].filter(
-    (destination, index, all) =>
-      all.findIndex((candidate) => candidate.href === destination.href) === index,
-  );
-  const deterministicContextual = deterministicDestinations
-    .map((destination) =>
-      preferredInternalLinkAnchorCandidates(
-        destination.title,
-        destination.keywords,
-      )
-        .map((anchor) => ({ anchor, href: destination.href }))
-        .find((link) =>
-          injectInternalLinks(article.markdown, [link]).inserted.length > 0
-        )
-    )
-    .filter((link): link is { anchor: string; href: string } => Boolean(link));
-  const links = validateInternalLinkSuggestions(
-    deterministicContextual,
-    destinations.map((destination) => destination.href),
-    publishedArticleInternalHref(site.urlStructure, article.slug),
-  );
-  const contextualResult = injectInternalLinks(article.markdown, links);
   const preferredFallback = preferredDestination
     ? {
         anchor: preferredInternalLinkAnchorCandidates(
@@ -5717,32 +5680,48 @@ async function handleLinks(
         href: preferredDestination.href,
       }
     : undefined;
+  const siblingLinks = selectRelatedInternalLinks({
+    currentTitle: article.title,
+    currentKeywords: article.metaKeywords,
+    destinations: relatedArticles,
+    limit: 3,
+  });
+  const pageLinks = selectRelatedInternalLinks({
+    currentTitle: article.title,
+    currentKeywords: article.metaKeywords,
+    destinations: pages.map((page: {
+      slug: string;
+      title?: string;
+      summary?: string;
+      keywords?: string[];
+    }) => ({
+      href: page.slug,
+      title: page.title ?? "",
+      summary: page.summary ?? "",
+      keywords: page.keywords ?? [],
+    })),
+    limit: 3,
+  });
   const fallbackLinks = validateInternalLinkSuggestions(
     [
       ...(preferredFallback?.anchor ? [preferredFallback] : []),
-      ...selectRelatedInternalLinks({
-        currentTitle: article.title,
-        currentKeywords: article.metaKeywords,
-        destinations,
-        limit: Math.max(0, 3 - contextualResult.inserted.length),
-      }),
+      ...siblingLinks,
+      ...pageLinks,
     ],
     destinations.map((destination) => destination.href),
     publishedArticleInternalHref(site.urlStructure, article.slug),
   ).filter(
     (fallback) =>
-      !contextualResult.inserted.some((link) => link.href === fallback.href),
+      Boolean(fallback.anchor),
   );
+  const cleanMarkdown = stripGeneratedInternalLinks(article.markdown);
   const appendedResult = appendRelatedInternalLinks(
-    contextualResult.markdown,
-    fallbackLinks.slice(
-      0,
-      Math.max(0, 3 - contextualResult.inserted.length),
-    ),
+    cleanMarkdown,
+    fallbackLinks.slice(0, 3),
   );
   const result = {
     markdown: appendedResult.markdown,
-    inserted: [...contextualResult.inserted, ...appendedResult.inserted],
+    inserted: appendedResult.inserted,
   };
 
   if (

@@ -30,7 +30,7 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 11;
+export const QUALITY_RECOVERY_VERSION = 12;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
@@ -39,6 +39,7 @@ const COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION = 8;
 const POST_AUDIT_EDITORIAL_REMEDIATION_VERSION = 9;
 const POST_AUDIT_FIXED_POINT_RECOVERY_VERSION = 10;
 const DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION = 11;
+const DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION = 12;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -316,6 +317,22 @@ export function qualityRecoveryTargetVersion(
     // Version 11 admits exactly that applied quality result once; link
     // selection is now deterministic, tenant-allowlisted, and provider-free.
     return DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION;
+  }
+  if (
+    (article.qualityRecoveryVersion ?? 0) >=
+      DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION &&
+    (article.qualityRecoveryVersion ?? 0) <
+      DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION &&
+    issues.includes(
+      "Post-review internal-link sealing failed: deterministic contextual anchors did not meet the descriptive-anchor contract.",
+    )
+  ) {
+    // The first provider-free selector could accept short incidental phrases
+    // from destination titles. Version 12 rebuilds the authoritative link set
+    // as descriptive full-title related reading and removes every stale link.
+    return DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION;
   }
   return undefined;
 }

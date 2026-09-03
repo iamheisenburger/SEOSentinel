@@ -39,6 +39,7 @@ import {
   preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
   selectRelatedInternalLinks,
+  stripGeneratedInternalLinks,
   validateInternalLinkSuggestions,
 } from "../convex/lib/internalLinks.ts";
 import {
@@ -1199,6 +1200,31 @@ test("adds deterministic same-tenant related reading when exact prose has no anc
   assert.match(
     appended.markdown,
     /## Related reading[\s\S]*\/blog\/crm-workflow-automation[\s\S]*## Sources/,
+  );
+});
+
+test("rebuilding generated links removes stale internal anchors but preserves external citations", () => {
+  const markdown = [
+    "Use [tools and](/blog/old) compare this with [official guidance](https://example.com/source).",
+    "",
+    "## Related reading",
+    "",
+    "- [Old article](/blog/old)",
+    "",
+    "## Sources",
+    "",
+    "1. [Official guidance](https://example.com/source)",
+  ].join("\n");
+  assert.equal(
+    stripGeneratedInternalLinks(markdown),
+    [
+      "Use tools and compare this with [official guidance](https://example.com/source).",
+      "",
+      "## Sources",
+      "",
+      "1. [Official guidance](https://example.com/source)",
+      "",
+    ].join("\n"),
   );
 });
 

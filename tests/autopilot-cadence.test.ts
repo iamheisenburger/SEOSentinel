@@ -336,7 +336,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 11);
+  assert.equal(QUALITY_RECOVERY_VERSION, 12);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -593,6 +593,29 @@ test("version 11 reopens only an applied version-10 internal-link seal failure",
     publicationGateIssues: [
       "Editorial quality score is 83; strict minimum is 85.",
     ],
+  }), undefined);
+});
+
+test("version 12 reopens only the applied version-11 descriptive-anchor defect", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Post-review internal-link sealing failed: deterministic contextual anchors did not meet the descriptive-anchor contract.",
+    ],
+    qualityRevisionCount: 8,
+    qualityRecoveryVersion: 11,
+    qualityRecoveryAttemptVersion: 11,
+  };
+  assert.equal(qualityRecoveryTargetVersion(base), 12);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryAttemptVersion: 12,
+  }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 10,
   }), undefined);
 });
 

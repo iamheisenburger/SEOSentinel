@@ -385,6 +385,62 @@ export function injectInternalLinks(
 }
 
 /**
+ * Remove links previously inserted by Pentra before rebuilding the authoritative
+ * same-tenant link set. External citations stay intact. The generated related
+ * reading section is removed as a unit so recovery never accumulates stale or
+ * duplicate navigation across audit versions.
+ */
+export function stripGeneratedInternalLinks(markdown: string): string {
+  if (!markdown.trim()) return markdown;
+
+  const lines = markdown.split("\n");
+  const withoutRelated: string[] = [];
+  let skippingRelated = false;
+  for (const line of lines) {
+    if (/^##\s+Related reading\s*$/i.test(line.trim())) {
+      skippingRelated = true;
+      continue;
+    }
+    if (skippingRelated && /^##\s+/.test(line.trim())) {
+      skippingRelated = false;
+    }
+    if (!skippingRelated) withoutRelated.push(line);
+  }
+
+  let cleaned = withoutRelated.join("\n");
+  const tree = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .parse(cleaned) as MarkdownNode;
+  const removals: Array<{ start: number; end: number; replacement: string }> = [];
+  const visit = (node: MarkdownNode) => {
+    if (
+      node.type === "link" &&
+      node.url &&
+      normalizeInternalHref(node.url) &&
+      node.position?.start.offset !== undefined &&
+      node.position?.end.offset !== undefined
+    ) {
+      removals.push({
+        start: node.position.start.offset,
+        end: node.position.end.offset,
+        replacement: nodeText(node),
+      });
+      return;
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(tree);
+  for (const removal of removals.sort((a, b) => b.start - a.start)) {
+    cleaned =
+      cleaned.slice(0, removal.start) +
+      removal.replacement +
+      cleaned.slice(removal.end);
+  }
+  return `${cleaned.trimEnd()}\n`;
+}
+
+/**
  * Add crawlable related-reading links without rewriting approved prose.
  * Sources/references remain last, and already-linked destinations are not
  * duplicated. Callers must validate the links against the tenant allowlist

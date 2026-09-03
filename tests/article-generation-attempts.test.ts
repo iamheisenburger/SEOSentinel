@@ -152,6 +152,8 @@ test("all paid article provider calls reserve while link sealing and publication
   assert.doesNotMatch(worker, /reserveArticleProviderAttempt\("internal_links"\)/);
   assert.doesNotMatch(linkHandler, /callClaude/);
   assert.match(linkHandler, /selectRelatedInternalLinks/);
+  assert.match(linkHandler, /stripGeneratedInternalLinks/);
+  assert.doesNotMatch(linkHandler, /injectInternalLinks/);
   assert.match(linkHandler, /validateInternalLinkSuggestions/);
   assert.doesNotMatch(publishOnly, /reserveArticleProviderAttempt\(/);
 });
