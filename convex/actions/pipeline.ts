@@ -89,6 +89,8 @@ import {
   dataForSeoLanguageCode,
   dataForSeoLocationCode,
 } from "../lib/dataForSeoLocale";
+import { hasReusableExpectedClickSerpEvidence } from
+  "../lib/expectedClickEvidenceBackfill";
 import {
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
   AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD,
@@ -4210,10 +4212,14 @@ async function handleArticle(
     await reportProgress(1, "Analyzing search results...");
     try {
       // Use cached PAA questions from topic if available, otherwise run fresh analysis
-      if (
-        (topic as any).recommendedArticleType &&
-        hasReliableSerpFingerprint((topic as any).serpTopUrls)
-      ) {
+      const evidenceLocationCode = dataForSeoLocationCode(site.targetCountry);
+      const evidenceLanguageCode = dataForSeoLanguageCode(site.language);
+      if (hasReusableExpectedClickSerpEvidence({
+        evidence: topic,
+        locationCode: evidenceLocationCode,
+        languageCode: evidenceLanguageCode,
+        now: Date.now(),
+      })) {
         // SERP fingerprints and article-type recommendations can exist even
         // when the provider returned no People Also Ask block. Keep the
         // downstream prompt contract array-shaped instead of leaking an

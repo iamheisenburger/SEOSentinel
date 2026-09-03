@@ -11,6 +11,7 @@ import {
   isRecoverableWorkerQualityIssue,
   normalizeTopicIntentKeyword,
   recoverableWorkerQualityFailure,
+  recoveredTopicQualitySettlement,
   reconciledTopicStatus,
   terminalTopicQualitySettlement,
   topicMatchesLegacyWorkerFailureSettlement,
@@ -112,6 +113,60 @@ test("bounded topic quality exhaustion is terminal across fresh draft generation
     hasReservingArticle: false,
     hasActiveArticleJob: true,
   }), "disqualified");
+});
+
+test("a current strict seal clears only the exact quality-only topic quarantine", () => {
+  const article = {
+    siteId: "site-a",
+    topicId: "topic-a",
+    publicationGateStatus: "passed",
+    publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+    auditedContentHash: "sealed-content",
+  };
+  const topic = {
+    _id: "topic-a",
+    siteId: "site-a",
+    status: "disqualified",
+    businessFitEligible: true,
+    contentFeasibilityStatus: "quality_exhausted",
+    contentFeasibilityVersion: 1,
+    disqualifiedReason: "content_feasibility:quality_exhausted: old draft failed",
+  };
+  const recovery = recoveredTopicQualitySettlement({
+    article,
+    topic,
+    recoveredAt: 1_787_270_003_000,
+  });
+  assert.ok(recovery);
+  assert.equal(recovery.topicPatch.contentFeasibilityStatus, undefined);
+  assert.equal(recovery.topicPatch.disqualifiedReason, undefined);
+
+  assert.equal(recoveredTopicQualitySettlement({
+    article: { ...article, publicationGateStatus: "blocked" },
+    topic,
+    recoveredAt: 1,
+  }), null);
+  assert.equal(recoveredTopicQualitySettlement({
+    article,
+    topic: { ...topic, businessFitEligible: false },
+    recoveredAt: 1,
+  }), null);
+  assert.equal(recoveredTopicQualitySettlement({
+    article,
+    topic: {
+      ...topic,
+      disqualifiedReason: "business_fit: unrelated",
+    },
+    recoveredAt: 1,
+  }), null);
+  assert.equal(recoveredTopicQualitySettlement({
+    article,
+    topic: {
+      ...topic,
+      planCheckpointTerminalFailureCode: "not_attainable",
+    },
+    recoveredAt: 1,
+  }), null);
 });
 
 test("an exhausted deterministic worker length failure becomes an article recovery issue", () => {
@@ -254,6 +309,10 @@ test("draft and terminal job transitions invoke lifecycle reconciliation", () =>
   );
   assert.doesNotMatch(createDraft, /status:\s*"used"/);
   assert.match(articles, /async function syncSummary[\s\S]*reconcileTopicLifecycle/);
+  assert.match(
+    articles,
+    /async function syncSummary[\s\S]*recoveredTopicQualitySettlement/,
+  );
 
   const jobs = readFileSync("convex/jobs.ts", "utf8");
   assert.match(jobs, /export const markDone[\s\S]*reconcileJobTopicLifecycle/);

@@ -92,6 +92,82 @@ export function terminalTopicQualitySettlement(args: {
   };
 }
 
+/**
+ * Reverse a quality-only topic quarantine once the exact linked artifact has
+ * subsequently passed the current strict publication audit. Quality recovery
+ * is allowed to improve prose; retaining the earlier terminal marker after a
+ * successful seal makes a proven artifact and its topic contradict each
+ * other, and can block every later cadence pass.
+ *
+ * This deliberately does not revive business-fit or plan-checkpoint
+ * rejections. The content-feasibility receipt must be current, internally
+ * consistent, and attached to the exact same tenant/topic/artifact.
+ */
+export function recoveredTopicQualitySettlement(args: {
+  article: {
+    siteId: string;
+    topicId?: string | null;
+    publicationGateStatus?: string;
+    publicationAuditVersion?: number;
+    auditedContentHash?: string;
+  };
+  topic: {
+    _id: string;
+    siteId: string;
+    status?: string;
+    businessFitEligible?: boolean;
+    contentFeasibilityStatus?: string;
+    contentFeasibilityVersion?: number;
+    disqualifiedReason?: string;
+    planCheckpointTerminalFailureCode?: string;
+  } | null | undefined;
+  recoveredAt: number;
+}): {
+  topicId: string;
+  topicPatch: {
+    contentFeasibilityStatus: undefined;
+    contentFeasibilityVersion: undefined;
+    contentFeasibilityIssues: undefined;
+    contentFeasibilityCheckedAt: undefined;
+    disqualifiedReason: undefined;
+    updatedAt: number;
+  };
+} | null {
+  const topic = args.topic;
+  if (!topic || !args.article.topicId) return null;
+  if (String(args.article.topicId) !== String(topic._id)) return null;
+  if (args.article.siteId !== topic.siteId) return null;
+  if (
+    args.article.publicationGateStatus !== "passed" ||
+    args.article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
+    !args.article.auditedContentHash?.trim()
+  ) return null;
+  if (
+    topic.status === "plan_checkpoint" ||
+    Boolean(topic.planCheckpointTerminalFailureCode) ||
+    topic.businessFitEligible === false
+  ) return null;
+  if (
+    !terminalContentFeasibility(topic.contentFeasibilityStatus) ||
+    topic.contentFeasibilityVersion !== CONTENT_FEASIBILITY_VERSION ||
+    !topic.disqualifiedReason?.startsWith(
+      `content_feasibility:${topic.contentFeasibilityStatus}:`,
+    )
+  ) return null;
+
+  return {
+    topicId: String(topic._id),
+    topicPatch: {
+      contentFeasibilityStatus: undefined,
+      contentFeasibilityVersion: undefined,
+      contentFeasibilityIssues: undefined,
+      contentFeasibilityCheckedAt: undefined,
+      disqualifiedReason: undefined,
+      updatedAt: args.recoveredAt,
+    },
+  };
+}
+
 export type RecoverableWorkerQualityFailure = {
   actualWords: number;
   minimumWords?: number;

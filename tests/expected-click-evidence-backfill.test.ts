@@ -14,6 +14,7 @@ import {
   createExpectedClickBackfillRuntime,
   expectedClickBackfillRemainingCostMicroUsd,
   hasCurrentExpectedClickDemand,
+  hasReusableExpectedClickSerpEvidence,
   needsExpectedClickEvidenceBackfill,
   selectExpectedClickBackfillCandidates,
 } from "../convex/lib/expectedClickEvidenceBackfill.ts";
@@ -27,6 +28,7 @@ const action = readFileSync(
   "convex/actions/expectedClickEvidenceBackfill.ts",
   "utf8",
 );
+const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
 const seoData = readFileSync("convex/actions/seoData.ts", "utf8");
 const reservation = readFileSync(
   "convex/lib/providerSpendReservation.ts",
@@ -127,6 +129,52 @@ test("fresh complete or already backfilled evidence is not repurchased", () => {
   assert.equal(needsExpectedClickEvidenceBackfill({
     expectedClickStatus: "insufficient_evidence",
   }, now), true);
+});
+
+test("generation reuses only a fresh locale-bound audited SERP", () => {
+  const now = 1_787_270_000_000;
+  const evidence = {
+    expectedClickStatus: "eligible",
+    expectedClickAuditVersion: EXPECTED_CLICK_PORTFOLIO_VERSION,
+    expectedClickAuditedAt: now - 1_000,
+    serpTopUrls: Array.from(
+      { length: 5 },
+      (_, index) => `https://example-${index}.test/result`,
+    ),
+    serpObservedAt: now - 2_000,
+    serpLocationCode: 2840,
+    serpLanguageCode: "en",
+  };
+  assert.equal(hasReusableExpectedClickSerpEvidence({
+    evidence,
+    locationCode: 2840,
+    languageCode: "EN",
+    now,
+  }), true);
+  assert.equal(hasReusableExpectedClickSerpEvidence({
+    evidence: { ...evidence, expectedClickStatus: "insufficient_evidence" },
+    locationCode: 2840,
+    languageCode: "en",
+    now,
+  }), false);
+  assert.equal(hasReusableExpectedClickSerpEvidence({
+    evidence,
+    locationCode: 2826,
+    languageCode: "en",
+    now,
+  }), false);
+  assert.equal(hasReusableExpectedClickSerpEvidence({
+    evidence: { ...evidence, serpTopUrls: ["http://insecure.test"] },
+    locationCode: 2840,
+    languageCode: "en",
+    now,
+  }), false);
+  const articleHandler = pipeline.slice(
+    pipeline.indexOf("async function handleArticle"),
+    pipeline.indexOf("async function handleReview"),
+  );
+  assert.match(articleHandler, /hasReusableExpectedClickSerpEvidence/);
+  assert.match(articleHandler, /else \{[\s\S]*analyzeSERP/);
 });
 
 test("provider calls and remaining wallet requirement stay inside one small envelope", () => {

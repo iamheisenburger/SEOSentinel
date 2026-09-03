@@ -56,7 +56,10 @@ import {
   selectVerifiedAuthorityTargets,
 } from "./lib/publicationLive";
 import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
-import { terminalTopicQualitySettlement } from "./lib/topicLifecycle";
+import {
+  recoveredTopicQualitySettlement,
+  terminalTopicQualitySettlement,
+} from "./lib/topicLifecycle";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import {
   executionLeasePredatesPlanTransition,
@@ -181,6 +184,36 @@ function assertNotPublishing(article: Doc<"articles">) {
 async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) {
   const article = await ctx.db.get(articleId);
   if (!article) return;
+
+  if (article.topicId) {
+    const topic = await ctx.db.get(article.topicId);
+    const recovery = recoveredTopicQualitySettlement({
+      article: {
+        siteId: String(article.siteId),
+        topicId: String(article.topicId),
+        publicationGateStatus: article.publicationGateStatus,
+        publicationAuditVersion: article.publicationAuditVersion,
+        auditedContentHash: article.auditedContentHash,
+      },
+      topic: topic
+        ? {
+            _id: String(topic._id),
+            siteId: String(topic.siteId),
+            status: topic.status,
+            businessFitEligible: topic.businessFitEligible,
+            contentFeasibilityStatus: topic.contentFeasibilityStatus,
+            contentFeasibilityVersion: topic.contentFeasibilityVersion,
+            disqualifiedReason: topic.disqualifiedReason,
+            planCheckpointTerminalFailureCode:
+              topic.planCheckpointTerminalFailureCode,
+          }
+        : null,
+      recoveredAt: now(),
+    });
+    if (recovery && topic) {
+      await ctx.db.patch(topic._id, recovery.topicPatch);
+    }
+  }
 
   const existing = await ctx.db
     .query("article_summaries")

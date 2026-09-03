@@ -60,6 +60,15 @@ export type ExpectedClickBackfillAuditEvidence = {
   expectedClickBackfillVersion?: number;
 };
 
+export type ReusableExpectedClickSerpEvidence =
+  ExpectedClickBackfillAuditEvidence & {
+    expectedClickStatus?: string;
+    serpTopUrls?: string[];
+    serpObservedAt?: number;
+    serpLocationCode?: number;
+    serpLanguageCode?: string;
+  };
+
 export function utcBackfillDay(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
 }
@@ -121,6 +130,46 @@ export function needsExpectedClickEvidenceBackfill(
     evidence.expectedClickStatus === "eligible" &&
     evidence.expectedClickAuditVersion === EXPECTED_CLICK_PORTFOLIO_VERSION &&
     fresh
+  );
+}
+
+/**
+ * A generation worker may reuse the exact SERP that already funded a current
+ * expected-click audit. Re-fetching that SERP mid-generation changes the
+ * fingerprint and clears the evidence which admitted the topic, creating a
+ * self-invalidating cadence loop and an unnecessary provider charge.
+ */
+export function hasReusableExpectedClickSerpEvidence(args: {
+  evidence: ReusableExpectedClickSerpEvidence;
+  locationCode: number;
+  languageCode: string;
+  now: number;
+  maxAgeMs?: number;
+}): boolean {
+  const evidence = args.evidence;
+  const observedAt = evidence.serpObservedAt;
+  const maxAgeMs = args.maxAgeMs ?? DEFAULT_EVIDENCE_MAX_AGE_MS;
+  const languageCode = args.languageCode.trim().toLowerCase();
+  const evidenceLanguage = evidence.serpLanguageCode?.trim().toLowerCase();
+  const urls = (evidence.serpTopUrls ?? []).filter((url) => {
+    try {
+      return new URL(url).protocol === "https:";
+    } catch {
+      return false;
+    }
+  });
+  return Boolean(
+    evidence.expectedClickStatus === "eligible" &&
+      evidence.expectedClickAuditVersion === EXPECTED_CLICK_PORTFOLIO_VERSION &&
+      !needsExpectedClickEvidenceBackfill(evidence, args.now, maxAgeMs) &&
+      urls.length >= 5 &&
+      Number.isFinite(observedAt) &&
+      (observedAt ?? 0) > 0 &&
+      (observedAt ?? Infinity) <= args.now + 5 * 60 * 1000 &&
+      args.now - (observedAt ?? 0) <= maxAgeMs &&
+      evidence.serpLocationCode === args.locationCode &&
+      Boolean(languageCode) &&
+      evidenceLanguage === languageCode,
   );
 }
 
