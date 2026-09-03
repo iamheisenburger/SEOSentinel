@@ -935,6 +935,7 @@ const GENERIC_BUSINESS_SIGNAL_WORDS = new Set([
   "representative",
   "report",
   "reports",
+  "saas",
   "sales",
   "service",
   "services",
@@ -1116,9 +1117,19 @@ export function businessSignalMatch(
   }
 
   const ratio = matched.length / keywordRoots.size;
+  // A union across every profile sentence can synthesize a product the tenant
+  // never described. For example, one feature may mention web research while
+  // another offers a content generator; that must not authorize the unrelated
+  // entity "research question generator". Multi-concept targets therefore
+  // need at least two matched distinctive roots in one actual tenant signal.
+  const cohesiveMatchedCount = businessSignals.reduce((highest, signal) => {
+    const roots = distinctiveRelevanceRoots(relevanceTokens(signal));
+    const count = [...keywordRoots].filter((root) => roots.has(root)).length;
+    return Math.max(highest, count);
+  }, 0);
   const eligible = keywordRoots.size === 1
     ? matched.length === 1
-    : matched.length >= 2 && ratio > 0.5;
+    : matched.length >= 2 && ratio > 0.5 && cohesiveMatchedCount >= 2;
   const score = eligible
     ? Math.min(100, 55 + matched.length * 15 + Math.round(ratio * 15))
     : Math.min(49, matched.length * 20 + Math.round(ratio * 10));
@@ -1178,7 +1189,7 @@ export function keywordMatchesBusinessModel(
   return true;
 }
 
-export const TOPIC_BUSINESS_FIT_VERSION = 6;
+export const TOPIC_BUSINESS_FIT_VERSION = 7;
 
 export type TopicBusinessFitEvaluation = {
   eligible: boolean;

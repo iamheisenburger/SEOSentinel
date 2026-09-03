@@ -1121,14 +1121,37 @@ export const recordBusinessFitAuditsInternal = internalMutation({
 export const disqualifyQueuedTopicInternal = internalMutation({
   args: {
     siteId: v.id("sites"),
+    jobId: v.id("jobs"),
     topicId: v.id("topic_clusters"),
+    articleId: v.optional(v.id("articles")),
     score: v.number(),
     version: v.number(),
     reasons: v.array(v.string()),
   },
-  handler: async (ctx, { siteId, topicId, score, version, reasons }) => {
-    const topic = await ctx.db.get(topicId);
-    if (!topic || topic.siteId !== siteId || topic.status !== "queued") {
+  handler: async (
+    ctx,
+    { siteId, jobId, topicId, articleId, score, version, reasons },
+  ) => {
+    const [topic, job, article] = await Promise.all([
+      ctx.db.get(topicId),
+      ctx.db.get(jobId),
+      articleId ? ctx.db.get(articleId) : Promise.resolve(null),
+    ]);
+    const payload = job?.payload && typeof job.payload === "object"
+      ? job.payload as Record<string, unknown>
+      : {};
+    const directTopicJob = payload.topicId === topicId;
+    const recoveryArticleJob = Boolean(
+      articleId && article && article.siteId === siteId &&
+      article.topicId === topicId && article.status !== "published" &&
+      (job?.articleId === articleId || payload.articleId === articleId),
+    );
+    if (
+      !topic || topic.siteId !== siteId || !job || job.siteId !== siteId ||
+      job.type !== "article" || job.status !== "running" ||
+      (!directTopicJob && !recoveryArticleJob) ||
+      ["used", "cannibalizing", "plan_checkpoint"].includes(topic.status ?? "")
+    ) {
       return { updated: false };
     }
     const checkedAt = now();

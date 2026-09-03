@@ -8744,6 +8744,7 @@ export const processNextJob = internalAction({
         if (!fit.eligible) {
           await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
             siteId: args.siteId,
+            jobId: job._id,
             topicId: payload.topicId,
             score: fit.score,
             version: fit.version,
@@ -8771,6 +8772,44 @@ export const processNextJob = internalAction({
         });
         if (!checkpoint || checkpoint.siteId !== args.siteId) {
           throw new Error("Generated article checkpoint is missing or belongs to another site");
+        }
+        if (checkpoint.topicId) {
+          const topic = await ctx.runQuery(internal.topics.getInternal, {
+            topicId: checkpoint.topicId,
+          });
+          if (!topic || topic.siteId !== args.siteId) {
+            throw new Error("Recovery article topic is missing or belongs to another site");
+          }
+          const fit = evaluateTopicBusinessFit({
+            keyword: topic.primaryKeyword,
+            label: checkpoint.title,
+            ...tenantTopicBusinessSignals(site),
+          });
+          if (!fit.eligible) {
+            await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
+              siteId: args.siteId,
+              jobId: job._id,
+              topicId: checkpoint.topicId,
+              articleId: checkpoint._id,
+              score: fit.score,
+              version: fit.version,
+              reasons: fit.reasons,
+            });
+            const error =
+              `Recovery topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
+            await ctx.runMutation(internal.jobs.markFailed, {
+              jobId: job._id,
+              workerToken,
+              error,
+            });
+            return {
+              processed: true,
+              jobId: job._id,
+              articleId: checkpoint._id,
+              error,
+              failureKind: "topic_business_fit_failed",
+            };
+          }
         }
       } else {
         if (site.userId) {

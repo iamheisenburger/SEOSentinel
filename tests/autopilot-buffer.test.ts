@@ -1034,6 +1034,26 @@ test("two generic overlaps cannot admit a cross-industry entity", () => {
   assert.equal(valid.eligible, true);
 });
 
+test("business fit cannot assemble an unrelated entity across separate signals", () => {
+  const fragmented = businessSignalMatch(
+    "research question generator",
+    [
+      "AI SEO content generator",
+      "article writing with web research",
+      "keyword questions for content briefs",
+    ],
+  );
+  assert.equal(fragmented.eligible, false);
+  assert.equal(fragmented.matchedDistinctiveRoots.length, 3);
+  assert.deepEqual(fragmented.unmatchedDistinctiveRoots, []);
+
+  const cohesive = businessSignalMatch(
+    "research question generator",
+    ["research question generator for academic teams"],
+  );
+  assert.equal(cohesive.eligible, true);
+});
+
 test("the scheduler revalidates stale topics and the queue fails closed", () => {
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   const jobs = readFileSync("convex/jobs.ts", "utf8");
@@ -1052,6 +1072,10 @@ test("the scheduler revalidates stale topics and the queue fails closed", () => 
   assert.match(scheduler, /topic_business_fit_replenishment/);
   assert.match(jobs, /topic_business_fit_failed/);
   assert.match(pipeline, /disqualifyQueuedTopicInternal/);
+  assert.match(
+    pipeline,
+    /if \(checkpoint\.topicId\)[\s\S]*Recovery topic failed current tenant product fit/,
+  );
   assert.match(pipeline, /failureKind: "topic_business_fit_failed"/);
 });
 
