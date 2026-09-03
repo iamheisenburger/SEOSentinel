@@ -324,7 +324,8 @@ export function cadenceMicroSeedTerminalMissReceiptValid(args: {
         Number.isSafeInteger(value) && value >= 0
       ) &&
       audit.accepted === 0 &&
-      audit.received === args.candidateReceiptCount &&
+      args.candidateReceiptCount <= audit.received &&
+      audit.invalidMetric >= audit.received - args.candidateReceiptCount &&
       rejectionCount === audit.received
   );
   const maximumTimestamp = 8_640_000_000_000_000;

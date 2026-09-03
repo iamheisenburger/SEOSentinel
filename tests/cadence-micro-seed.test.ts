@@ -344,6 +344,66 @@ test("fallback is a distinct $0.05 receipt after an exact terminal primary miss"
   }
 });
 
+test("a terminal primary accounts for provider rows rejected before persistence", () => {
+  const timestamp = Date.UTC(2026, 8, 3, 14, 0, 0);
+  assert.equal(cadenceMicroSeedTerminalMissReceiptValid({
+    attemptKind: "primary",
+    hasParent: false,
+    status: "missed",
+    policyVersion: CADENCE_MICRO_SEED_VERSION,
+    expectedPolicyVersion: CADENCE_MICRO_SEED_VERSION,
+    rolloutEpoch: 5,
+    expectedRolloutEpoch: 5,
+    reservationDay: "2026-09-03",
+    expectedReservationDay: "2026-09-03",
+    createdAt: timestamp,
+    now: timestamp + 3_000,
+    seed: "content refresh automation",
+    expectedSeed: "content refresh automation",
+    locationCode: 2840,
+    expectedLocationCode: 2840,
+    languageCode: "en",
+    expectedLanguageCode: "en",
+    providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+    providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
+    includeSerpInfo: false,
+    includeClickstreamData: false,
+    providerCostCeilingMicroUsd:
+      CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd:
+      CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
+    providerCallAttempted: true,
+    providerCallCompleted: true,
+    providerAttemptedAt: timestamp + 500,
+    providerCompletedAt: timestamp + 1_500,
+    completedAt: timestamp + 2_000,
+    providerRequestTag:
+      `cadence-micro-seed-v${CADENCE_MICRO_SEED_VERSION}-job`,
+    expectedProviderRequestTag:
+      `cadence-micro-seed-v${CADENCE_MICRO_SEED_VERSION}-job`,
+    providerTaskCostUsd: 0.024,
+    candidateReceiptCount: 59,
+    candidateAudit: {
+      received: 100,
+      accepted: 0,
+      invalidMetric: 41,
+      intentUnavailable: 0,
+      difficulty: 27,
+      brand: 0,
+      businessFit: 32,
+      duplicate: 0,
+      overlap: 0,
+    },
+    errorCode: "no_strict_candidate",
+    workerToken: undefined,
+    leaseExpiresAt: undefined,
+    hasSelectedOrTopicReceipt: false,
+    hasEvidenceOrCadenceReceipt: false,
+    finalizeAttempts: 0,
+    cadenceScheduleAttempts: 0,
+  }), true);
+});
+
 test("cadence rescue binds a saturated terminal demand receipt without disabling daily recovery", () => {
   assert.match(model, /terminalNoMetricDemandReceiptFingerprint/);
   assert.match(model, /by_site_origin_status/);
