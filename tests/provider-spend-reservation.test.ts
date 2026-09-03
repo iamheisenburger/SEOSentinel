@@ -39,7 +39,7 @@ test("one account cannot reserve the entire daily or monthly fleet wallet", () =
   );
   assert.equal(
     PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
-    3_050_000,
+    3_750_000,
     "one account can fund a complete plan, recovery chain, and bounded policy-upgrade recoveries",
   );
   assert.equal(
@@ -63,7 +63,8 @@ test("one account can complete every bounded cadence-recovery phase after a full
     100_000 + // category-based request made ambiguous by the old timeout
     100_000 + // timeout-repaired primary micro-seed recovery
     50_000 + // timeout-repaired fallback micro-seed recovery
-    100_000; // exact evidence for the timeout-repaired recovery
+    100_000 + // exact evidence for the timeout-repaired recovery
+    700_000; // bounded immutable-receipt release-repair reserve
 
   assert.equal(
     completePlanAndRecovery,
