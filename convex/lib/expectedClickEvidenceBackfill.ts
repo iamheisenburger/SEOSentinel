@@ -27,7 +27,7 @@ export const EXPECTED_CLICK_EVIDENCE_GSC_READ_LIMIT = 5_000;
 // A regular live organic SERP currently costs materially less than this
 // reservation allowance. Keeping a conservative $0.005 task envelope plus
 // the existing bounded authority estimate makes price drift fail closed while
-// remaining tiny beside the shared $2.50/day and $35/month fleet breakers.
+// remaining tiny beside the shared $2.60/day and $35/month fleet breakers.
 export const EXPECTED_CLICK_EVIDENCE_SERP_RESERVATION_MICRO_USD = 5_000;
 export const EXPECTED_CLICK_EVIDENCE_AUTHORITY_RESERVATION_MICRO_USD = 30_000;
 export const EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD =

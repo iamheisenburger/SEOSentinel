@@ -19,11 +19,15 @@ import {
  * the shared provider account. Only a proven exit before the first paid call
  * may append release metadata; the receipt itself is never deleted.
  */
-// Conservative initial fleet guard: at most one complete $2 topic-plan
-// reservation plus two full authority scans per day, and no more than $35 of
-// worst-case provider envelopes in a UTC month. Raising either is a deliberate
-// commercial decision, not an automatic response to more tenants.
-export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 2_500_000;
+// Conservative fleet guard: one complete $2 topic-plan reservation, the full
+// bounded cadence-recovery chain ($0.35), and a $0.25 reserve for another
+// account must all fit in the same UTC day. The recovery chain is primary
+// micro-seed ($0.10), fallback micro-seed ($0.05), exact demand ($0.10), and
+// SERP/authority evidence ($0.10). A lower ceiling lets an independent demand
+// worker consume the evidence headroom observed by the micro-seed inspector,
+// deterministically stranding cadence after every paid step has succeeded.
+// The monthly $35 fleet circuit breaker remains unchanged.
+export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 2_600_000;
 export const SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -34,10 +38,9 @@ export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
  * The fleet ceilings below remain an additional final circuit breaker.
  */
 // No single account may reserve the entire fleet envelope. One complete topic
-// plan plus the bounded onboarding analysis still fits, while at least one
-// full authority scan per day and $7/month remain admissible for another
-// customer. This is admission fairness only and does not raise either fleet
-// spend ceiling.
+// plan plus every bounded cadence-recovery phase fits, while one full $0.25
+// authority/onboarding envelope remains admissible for another customer.
+// This is admission fairness only and does not alter the monthly fleet cap.
 export const PROVIDER_OTHER_ACCOUNTS_DAILY_RESERVE_MICRO_USD = 250_000;
 export const PROVIDER_OTHER_ACCOUNTS_MONTHLY_RESERVE_MICRO_USD = 7_000_000;
 export const PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD =

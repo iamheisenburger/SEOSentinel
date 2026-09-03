@@ -39,14 +39,40 @@ test("one account cannot reserve the entire daily or monthly fleet wallet", () =
   );
   assert.equal(
     PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
-    2_250_000,
-    "one account can still fund bounded onboarding plus one complete topic plan",
+    2_350_000,
+    "one account can fund one complete topic plan and the full cadence-recovery chain",
   );
   assert.equal(
     providerAccountMonthlyCeilingMicroUsd("enterprise") +
       PROVIDER_OTHER_ACCOUNTS_MONTHLY_RESERVE_MICRO_USD,
     SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
   );
+});
+
+test("one account can complete every bounded cadence-recovery phase after a full plan", () => {
+  const completePlanAndRecovery =
+    2_000_000 + // initial plan plus its one reserved retry/continuation
+    100_000 + // primary cadence micro-seed
+    50_000 + // fallback cadence micro-seed
+    100_000 + // exact demand backfill
+    100_000; // live SERP and authority evidence
+
+  assert.equal(
+    completePlanAndRecovery,
+    PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
+  );
+  assert.deepEqual(evaluateProviderAccountCapacity({
+    accountReservedTodayMicroUsd: completePlanAndRecovery - 100_000,
+    accountReservedThisMonthMicroUsd: completePlanAndRecovery - 100_000,
+    requestedMicroUsd: 100_000,
+    monthlyCeilingMicroUsd: 5_000_000,
+  }), { allowed: true });
+  assert.equal(evaluateProviderAccountCapacity({
+    accountReservedTodayMicroUsd: completePlanAndRecovery,
+    accountReservedThisMonthMicroUsd: completePlanAndRecovery,
+    requestedMicroUsd: 1,
+    monthlyCeilingMicroUsd: 5_000_000,
+  }).allowed, false);
 });
 
 test("account daily and tier monthly ceilings fail closed with stable reasons", () => {
