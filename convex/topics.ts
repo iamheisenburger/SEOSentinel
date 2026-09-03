@@ -1165,7 +1165,45 @@ export const disqualifyQueuedTopicInternal = internalMutation({
       disqualifiedReason: reasons.join("; "),
       updatedAt: checkedAt,
     });
-    return { updated: true };
+    if (recoveryArticleJob && article) {
+      const issue =
+        `Recovery article failed the current tenant product-fit gate: ${reasons.join("; ")}`;
+      await ctx.db.patch(article._id, {
+        status: "review",
+        publicationGateStatus: "blocked",
+        publicationGateIssues: [issue],
+        publicationGateWarnings: [],
+        publicationCheckedAt: checkedAt,
+        publicationAuditVersion: undefined,
+        publicationConfigHash: undefined,
+        publicationConfigSnapshot: undefined,
+        auditedContentHash: undefined,
+        auditedAt: undefined,
+        updatedAt: checkedAt,
+      });
+      const summary = await ctx.db
+        .query("article_summaries")
+        .withIndex("by_article", (q) => q.eq("articleId", article._id))
+        .first();
+      if (summary) {
+        await ctx.db.patch(summary._id, {
+          status: "review",
+          publicationGateStatus: "blocked",
+          publicationGateIssues: [issue],
+          publicationGateWarnings: [],
+          publicationCheckedAt: checkedAt,
+          publicationAuditVersion: undefined,
+          publicationConfigHash: undefined,
+          auditedContentHash: undefined,
+          auditedAt: undefined,
+          articleUpdatedAt: checkedAt,
+        });
+      }
+    }
+    return {
+      updated: true,
+      recoveryArticleQuarantined: recoveryArticleJob,
+    };
   },
 });
 

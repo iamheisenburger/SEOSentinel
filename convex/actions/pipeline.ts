@@ -8631,27 +8631,36 @@ export const processNextJob = internalAction({
         });
         if (fit.eligible) return null;
 
-        await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
-          siteId: args.siteId,
-          jobId: job._id,
-          topicId: checkpoint.topicId,
-          articleId: checkpoint._id,
-          score: fit.score,
-          version: fit.version,
-          reasons: fit.reasons,
-        });
-        const error =
+        const settlement = await ctx.runMutation(
+          internal.topics.disqualifyQueuedTopicInternal,
+          {
+            siteId: args.siteId,
+            jobId: job._id,
+            topicId: checkpoint.topicId,
+            articleId: checkpoint._id,
+            score: fit.score,
+            version: fit.version,
+            reasons: fit.reasons,
+          },
+        );
+        if (!settlement.recoveryArticleQuarantined) {
+          throw new Error(
+            "Recovery topic-fit settlement lost its exact job/article/topic fence",
+          );
+        }
+        const detail =
           `Recovery topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
-        await ctx.runMutation(internal.jobs.markFailed, {
-          jobId: job._id,
-          workerToken,
-          error,
+        await complete({
+          articleId: checkpoint._id,
+          qualityQuarantined: true,
+          terminalTopicFit: true,
+          detail,
         });
         return {
           processed: true,
           jobId: job._id,
           articleId: checkpoint._id,
-          error,
+          qualityQuarantined: true,
           failureKind: "topic_business_fit_failed",
         };
       };
@@ -8897,24 +8906,33 @@ export const processNextJob = internalAction({
           ...tenantTopicBusinessSignals(site),
         });
         if (!fit.eligible) {
-          await ctx.runMutation(internal.topics.disqualifyQueuedTopicInternal, {
-            siteId: args.siteId,
-            jobId: job._id,
+          const settlement = await ctx.runMutation(
+            internal.topics.disqualifyQueuedTopicInternal,
+            {
+              siteId: args.siteId,
+              jobId: job._id,
+              topicId: payload.topicId,
+              score: fit.score,
+              version: fit.version,
+              reasons: fit.reasons,
+            },
+          );
+          if (!settlement.updated) {
+            throw new Error(
+              "Topic-fit settlement lost its exact job/topic fence",
+            );
+          }
+          const detail = `Topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
+          await complete({
             topicId: payload.topicId,
-            score: fit.score,
-            version: fit.version,
-            reasons: fit.reasons,
-          });
-          const error = `Topic failed current tenant product fit: ${fit.reasons.join("; ")}`;
-          await ctx.runMutation(internal.jobs.markFailed, {
-            jobId: job._id,
-            workerToken,
-            error,
+            qualityQuarantined: true,
+            terminalTopicFit: true,
+            detail,
           });
           return {
             processed: true,
             jobId: job._id,
-            error,
+            qualityQuarantined: true,
             failureKind: "topic_business_fit_failed",
           };
         }

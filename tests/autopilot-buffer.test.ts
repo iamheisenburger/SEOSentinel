@@ -1077,6 +1077,18 @@ test("the scheduler revalidates stale topics and the queue fails closed", () => 
     pipeline,
     /rejectRecoveryTopicIfIneligible[\s\S]*Recovery topic failed current tenant product fit/,
   );
+  assert.match(
+    pipeline,
+    /rejectRecoveryTopicIfIneligible[\s\S]*recoveryArticleQuarantined[\s\S]*terminalTopicFit: true/,
+  );
+  assert.match(
+    pipeline,
+    /Topic failed current tenant product fit:[\s\S]*terminalTopicFit: true/,
+  );
+  assert.match(
+    readFileSync("convex/topics.ts", "utf8"),
+    /Recovery article failed the current tenant product-fit gate:[\s\S]*publicationGateIssues: \[issue\][\s\S]*article_summaries/,
+  );
   const qualityRetryBranch = pipeline.slice(
     pipeline.indexOf('if (payload?.qualityRetry) {'),
     pipeline.indexOf('if (payload?.publishOnly) {'),
