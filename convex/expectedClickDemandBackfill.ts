@@ -66,11 +66,14 @@ import {
 } from "./lib/planSiteAllowance";
 import {
   activeArticleJobTopicIds,
+  cadenceInventoryNeedsPlannedRecovery,
   expectedClickTargetKind,
+  isCurrentExpectedClickBatch,
   partitionPlannedTopicRecoveryCoverage,
   plannedTargetsAllowedForQueue,
   plannedTopicDemandAdmission,
   plannedTopicSiteGate,
+  prioritizeCadenceRecoveryCandidates,
   type PlannedRecoveryInventorySnapshot,
   uniqueExactPlannedTargets,
 } from "./lib/plannedTopicEvidenceRecovery";
@@ -322,6 +325,10 @@ function demandCandidateInventory(args: {
   };
   const artifactCandidates: CandidateWithSerp[] = [];
   const rawPlannedCandidates: CandidateWithSerp[] = [];
+  const cadenceCritical = cadenceInventoryNeedsPlannedRecovery(
+    args.site,
+    args.articles,
+  );
   let artifactEvidencePending = 0;
   for (const topic of currentTopics) {
     const linkedArticles = byTopic.get(String(topic._id)) ?? [];
@@ -450,13 +457,23 @@ function demandCandidateInventory(args: {
   const plannedCandidates = plannedCoverage.eligible;
   candidateCounts.artifactEligible = artifactCandidates.length;
   candidateCounts.plannedUnmaterialized = plannedCandidates.length;
-  // Planned rows are fallback-only. Existing covered-page measurement always
-  // wins and planned demand cannot delay its evidence phase.
-  const candidates = artifactCandidates.length > 0
-    ? artifactCandidates
+  // When the sealed buffer is under its cadence-specific minimum, a valid
+  // planned row owns this bounded batch. Measuring historical artifacts first
+  // would preserve analytics while missing the next publication deadline.
+  // Outside that state, the ordinary existing-page priority is unchanged.
+  const candidates = cadenceCritical
+    ? prioritizeCadenceRecoveryCandidates(
+        artifactCandidates,
+        plannedCandidates,
+        true,
+      )
     : artifactEvidencePending > 0
       ? []
-      : plannedCandidates;
+      : prioritizeCadenceRecoveryCandidates(
+          artifactCandidates,
+          plannedCandidates,
+          false,
+        );
   candidateCounts.eligible = candidates.length;
   return {
     candidates,
@@ -911,7 +928,11 @@ export async function expectedClickDemandFleetReadiness(
       )
       .collect();
     const todayJob = todayRows.find((job) =>
-      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+      isCurrentExpectedClickBatch(
+        job,
+        site.autopilotRolloutEpoch ?? 0,
+        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
+      )
     );
     if (todayJob) {
       const ambiguous = todayJob.providerCallAttempted === true &&
@@ -1242,10 +1263,18 @@ async function reserveDemandOutcome(
       unresolvedFleetEvidenceJobs(ctx, siteId),
     ]);
     const todayJobs = todayJobRows.filter((job) =>
-      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+      isCurrentExpectedClickBatch(
+        job,
+        site.autopilotRolloutEpoch ?? 0,
+        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
+      )
     );
     const todayEvidenceJobs = todayEvidenceJobRows.filter((job) =>
-      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+      isCurrentExpectedClickBatch(
+        job,
+        site.autopilotRolloutEpoch ?? 0,
+        EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
+      )
     );
     const phaseDecision = planDemandPhaseReservation({
       todayEvidenceJobs: todayEvidenceJobs.length,

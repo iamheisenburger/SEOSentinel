@@ -177,7 +177,7 @@ test("selection is deterministic, unique by exact keyword, and capped at ten", (
       legacySearchVolume: 1,
     }),
   ]);
-  assert.equal(EXPECTED_CLICK_DEMAND_BACKFILL_VERSION, 1);
+  assert.equal(EXPECTED_CLICK_DEMAND_BACKFILL_VERSION, 2);
   assert.equal(EXPECTED_CLICK_DEMAND_BACKFILL_TOPIC_LIMIT, 10);
   assert.equal(selected.length, 10);
   assert.equal(new Set(selected.map((item) =>

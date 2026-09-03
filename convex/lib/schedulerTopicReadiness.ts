@@ -189,7 +189,8 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       label: topic.label,
       ...businessSignals,
     });
-    const serpIntent = (topic.serpTopUrls?.length ?? 0) >= 5
+    const hasMeasuredSerp = (topic.serpTopUrls?.length ?? 0) >= 5;
+    const serpIntent = hasMeasuredSerp
       ? evaluateSerpBusinessIntent({
           results: topic.serpTopUrls!.map((url) => ({ url })),
           businessModelSignals: businessSignals.businessModelSignals,
@@ -203,7 +204,11 @@ export function evaluateSchedulerReadyTopicInventory(args: {
     const status = topic.status ?? "planned";
     const decision = decideOpportunity({
       businessFitScore: fit.score,
-      businessFitEligible: fit.eligible && serpIntent.aligned,
+      // Missing SERP evidence is recoverable `needs_evidence`, not a false
+      // terminal product-fit failure. A measured intent mismatch still fails
+      // closed before generation.
+      businessFitEligible: fit.eligible &&
+        (!hasMeasuredSerp || serpIntent.aligned),
       monthlyDemand: topic.searchVolume,
       expectedClicksMonthly: estimate?.expectedClicksMonthly,
       serpAttainable: attainable,

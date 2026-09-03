@@ -7,19 +7,21 @@ import {
 } from "../convex/lib/expectedClickDemandBackfill.ts";
 import {
   EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
-  prioritizeEvidenceReadyCandidates,
 } from "../convex/lib/expectedClickEvidenceBackfill.ts";
 import {
   PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION,
+  cadenceInventoryNeedsPlannedRecovery,
   cadenceMicroSeedRecoveryBlockReason,
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
   hasExactPlannedEvidenceAttempt,
+  isCurrentExpectedClickBatch,
   partitionPlannedTopicRecoveryCoverage,
   plannedTargetsAllowedForQueue,
   plannedTopicDemandAdmission,
   plannedTopicEvidenceAdmission,
   plannedTopicRecoveryFingerprint,
+  prioritizeCadenceRecoveryCandidates,
   selectPlannedRecoveryPhase,
   uniqueExactPlannedTargets,
   verifiedKeywordPlanningActive,
@@ -579,7 +581,7 @@ test("phase fingerprint binds keyword observations, locale, domain, and tenant p
   for (const variant of variants) assert.notEqual(variant, base);
 });
 
-test("planned evidence cannot starve ready artifacts or be starved by demand-only artifacts", () => {
+test("cadence-critical planned evidence cannot be starved by legacy artifacts", () => {
   const legacyCoverage = coveredIntentTopics([], [{
     slug: "legacy-lead-scoring-guide",
     status: "published",
@@ -602,22 +604,52 @@ test("planned evidence cannot starve ready artifacts or be starved by demand-onl
     assert.match(model, /coveredIntentTopics\(/);
     assert.match(model, /uniqueExactPlannedTargets\(/);
   }
-  assert.match(
-    demand,
-    /const candidates = artifactCandidates\.length > 0[\s\S]*plannedCandidates/,
-  );
-  assert.match(demand, /artifactEvidencePending > 0[\s\S]*\[\]/);
   assert.deepEqual(
-    prioritizeEvidenceReadyCandidates(["ready-artifact"], ["ready-planned"]),
-    ["ready-artifact"],
-  );
-  assert.deepEqual(
-    prioritizeEvidenceReadyCandidates([], ["ready-planned"]),
+    prioritizeCadenceRecoveryCandidates(
+      ["ready-artifact"],
+      ["ready-planned"],
+      true,
+    ),
     ["ready-planned"],
   );
+  assert.deepEqual(
+    prioritizeCadenceRecoveryCandidates(
+      ["ready-artifact"],
+      ["ready-planned"],
+      false,
+    ),
+    ["ready-artifact"],
+  );
+  assert.equal(cadenceInventoryNeedsPlannedRecovery(
+    { cadencePerWeek: 7 },
+    [],
+  ), true);
+  const sealed = {
+    status: "ready",
+    publicationGateStatus: "passed",
+    publicationAuditVersion: 6,
+    auditedContentHash: "sealed",
+  };
+  assert.equal(cadenceInventoryNeedsPlannedRecovery(
+    { cadencePerWeek: 7 },
+    [sealed, sealed, sealed],
+  ), false);
+  assert.equal(isCurrentExpectedClickBatch(
+    { rolloutEpoch: 5, policyVersion: 2 },
+    5,
+    2,
+  ), true);
+  assert.equal(isCurrentExpectedClickBatch(
+    { rolloutEpoch: 5, policyVersion: 1 },
+    5,
+    2,
+  ), false);
+  assert.match(demand, /cadenceInventoryNeedsPlannedRecovery/);
+  assert.match(demand, /prioritizeCadenceRecoveryCandidates/);
+  assert.match(evidence, /cadenceInventoryNeedsPlannedRecovery/);
   assert.match(
     evidence,
-    /Demand-only historical[\s\S]*prioritizeEvidenceReadyCandidates\([\s\S]*artifactCandidates,[\s\S]*plannedCandidates/,
+    /plannedPendingDemand > 0[\s\S]*prioritizeCadenceRecoveryCandidates\([\s\S]*artifactCandidates,[\s\S]*plannedCandidates/,
   );
   assert.match(
     evidence,

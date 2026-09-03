@@ -2,9 +2,11 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getLimitsFromFeatures } from "../planLimits.ts";
 import {
+  approvedBufferPolicy,
   TOPIC_BUSINESS_FIT_VERSION,
   evaluateTopicBusinessFit,
   filterNonCannibalizingIntentTopics,
+  isSealedReady,
   reliableSerpFingerprint,
   tenantTopicBusinessSignals,
   type SerpCoverageTopic,
@@ -21,6 +23,54 @@ import {
 export const PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION = 2;
 export const PLANNED_TOPIC_ACTIVE_JOB_READ_LIMIT = 250;
 export const PLANNED_TOPIC_ARTICLE_USAGE_READ_LIMIT = 1_000;
+
+/**
+ * A tenant below its cadence-specific sealed-buffer minimum cannot let
+ * measurements of already-published pages consume the only daily recovery
+ * batch ahead of a valid planned article. This changes measurement order only:
+ * every planned topic still has to pass exact demand, live SERP, business-fit,
+ * attainability, cannibalization and publication-quality gates.
+ */
+export function cadenceInventoryNeedsPlannedRecovery(
+  site: { cadencePerWeek?: number },
+  articles: ReadonlyArray<{
+    status: string;
+    publicationGateStatus?: string;
+    publicationAuditVersion?: number;
+    auditedContentHash?: string;
+  }>,
+): boolean {
+  const minimum = approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum;
+  return articles.filter(isSealedReady).length < minimum;
+}
+
+/** Planned inventory owns the bounded recovery batch only while cadence is
+ * unprotected. Once the sealed buffer is healthy, existing-page measurement
+ * resumes its ordinary priority. */
+export function prioritizeCadenceRecoveryCandidates<Candidate>(
+  artifactCandidates: readonly Candidate[],
+  plannedCandidates: readonly Candidate[],
+  cadenceCritical: boolean,
+): Candidate[] {
+  if (cadenceCritical && plannedCandidates.length > 0) {
+    return [...plannedCandidates];
+  }
+  return artifactCandidates.length > 0
+    ? [...artifactCandidates]
+    : [...plannedCandidates];
+}
+
+/** A policy upgrade gets exactly one new batch in the same UTC day. Old
+ * policy rows remain immutable evidence, but cannot force a repaired cadence
+ * algorithm to wait until midnight. */
+export function isCurrentExpectedClickBatch(
+  job: { rolloutEpoch: number; policyVersion: number },
+  rolloutEpoch: number,
+  policyVersion: number,
+): boolean {
+  return job.rolloutEpoch === rolloutEpoch &&
+    job.policyVersion === policyVersion;
+}
 
 /** Automatic planning already requires measured keyword data for every
  * enabled autopilot tenant. The legacy optional flag can only opt a paused

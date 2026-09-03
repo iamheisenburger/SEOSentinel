@@ -114,6 +114,37 @@ test("immutable opportunity receipts advance when decision evidence changes", ()
   );
 });
 
+test("missing SERP is recoverable evidence work, never a false business-fit failure", () => {
+  const site = {
+    domain: "leadpilot.example",
+    siteName: "LeadPilot",
+    niche: "AI sales and lead qualification software",
+    siteSummary: "Qualifies website visitors and routes sales-ready leads.",
+    targetAudienceSummary: "B2B sales and marketing teams",
+    productUsage: "Automated website lead qualification",
+    painPoints: ["slow lead response", "manual qualification"],
+  };
+  const decisions = evaluateSchedulerReadyTopicInventory({
+    site,
+    topics: [{
+      ...baseTopic,
+      serpIntent: undefined,
+      serpTopUrls: undefined,
+    }],
+    monthlyOrganicClickGoal: 100,
+    currentLocationCode: 2840,
+    currentLanguageCode: "en",
+  }).opportunityDecisions;
+  assert.equal(
+    decisions.find((decision) => decision.topicId === baseTopic._id)
+      ?.classification,
+    "needs_evidence",
+  );
+  assert.equal(decisions.some((decision) =>
+    decision.classification === "opportunity_space_exhausted"
+  ), false);
+});
+
 test("opportunity evidence versions reject malformed fingerprints", () => {
   assert.throws(
     () => opportunityEvidenceVersionFromInputHash("not-a-sha256"),

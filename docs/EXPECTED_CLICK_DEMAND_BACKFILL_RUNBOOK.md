@@ -17,11 +17,11 @@ commands below remain operator canaries and never auto-chain evidence.
 - The tenant must explicitly have `expectedClickSchedulingEnabled === true`,
   autopilot enabled, and rollout mode `warm` or `live`.
 - The action is internal and operator-only. No application client can queue it.
-- One new job per site per UTC day, with at most ten unique exact keywords.
+- One new job per site, policy version, and UTC day, with at most ten unique exact keywords.
 - Exactly one `keywords_data/google_ads/search_volume/live` provider task. No
   keyword-difficulty task and no AI fallback.
 - The complete batch reserves at most 100,000 microUSD ($0.10) through the
-  shared $2.60/day and $35/month provider ledger.
+  shared $2.80/day and $35/month provider ledger.
 - The free DataForSEO wallet endpoint is checked before reservation and again
   before the paid task.
 - Each exact topic/keyword attempt is persisted before HTTP. If the paid task

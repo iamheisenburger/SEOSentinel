@@ -39,8 +39,8 @@ test("one account cannot reserve the entire daily or monthly fleet wallet", () =
   );
   assert.equal(
     PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
-    2_350_000,
-    "one account can fund one complete topic plan and the full cadence-recovery chain",
+    2_550_000,
+    "one account can fund a complete plan, recovery chain, and one policy-upgrade recovery",
   );
   assert.equal(
     providerAccountMonthlyCeilingMicroUsd("enterprise") +
@@ -55,7 +55,9 @@ test("one account can complete every bounded cadence-recovery phase after a full
     100_000 + // primary cadence micro-seed
     50_000 + // fallback cadence micro-seed
     100_000 + // exact demand backfill
-    100_000; // live SERP and authority evidence
+    100_000 + // live SERP and authority evidence
+    100_000 + // versioned exact-demand recovery
+    100_000; // versioned SERP-evidence recovery
 
   assert.equal(
     completePlanAndRecovery,

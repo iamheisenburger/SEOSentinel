@@ -130,7 +130,7 @@ test("fresh complete or already backfilled evidence is not repurchased", () => {
 });
 
 test("provider calls and remaining wallet requirement stay inside one small envelope", () => {
-  assert.equal(EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION, 1);
+  assert.equal(EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION, 2);
   assert.equal(EXPECTED_CLICK_EVIDENCE_BACKFILL_SERP_CALL_LIMIT, 10);
   assert.equal(EXPECTED_CLICK_EVIDENCE_BACKFILL_AUTHORITY_CALL_LIMIT, 1);
   assert.equal(EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD, 100_000);
@@ -198,7 +198,7 @@ test("the operator canary is evidence-only, resumable, and tenant fenced", () =>
   assert.match(model, /providerCallsAttempted >= EXPECTED_CLICK_EVIDENCE_BACKFILL_TOTAL_CALL_LIMIT/);
 });
 
-test("one batch/day reserves the shared provider ledger before its durable job", () => {
+test("one batch/policy/day reserves the shared provider ledger before its durable job", () => {
   const reservationIndex = model.indexOf("reserveSharedProviderBudget(ctx");
   const insertIndex = model.indexOf(
     'db.insert("expected_click_evidence_jobs"',

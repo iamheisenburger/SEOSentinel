@@ -26,7 +26,8 @@ spend path.
   If that scheduling call fails or the action crashes, the hourly sweep
   resumes the stored page. Duplicate page execution is harmless because only
   one OCC cursor advancement wins and tenant queue mutations remain
-  one-batch/day idempotent. Completed global cursor receipts are pruned after
+  one-batch/policy/day idempotent. Completed global cursor receipts are pruned
+  after
   14 days in bounded batches; they contain no tenant credentials or provider
   response data.
 
@@ -36,7 +37,8 @@ The fleet page contains only non-deleting sites with a user, autopilot enabled,
 `expectedClickSchedulingEnabled === true`, and rollout mode `warm` or `live`.
 The site action re-reads those fields immediately before every stage. Existing
 atomic `by_site_day` checks still enforce at most one new demand job and one new
-evidence job per site per UTC day.
+evidence job per site, policy version, and UTC day. This lets a repaired policy
+recover immediately while retaining every older receipt and reservation.
 
 The queue mutations also hold the cross-phase lock: demand refuses any same-day
 evidence phase, while evidence requires no unresolved fleet job, a completed
@@ -61,11 +63,13 @@ and emit an actionable operator log rather than being replayed.
 - Evidence: at most 10 SERPs plus one bounded authority lookup, with a
   conservative reservation ceiling of **$0.10 per eligible site/day**.
 - A site that needs both phases can therefore reserve at most **$0.20/day**.
-- All tenants and provider features still share the existing **$2.60/day** and
+- All tenants and provider features still share the existing **$2.80/day** and
   **$35/month** ledgers. No fleet action bypasses them. With no other provider
-  reservations, the absolute daily envelope can fund at most twenty-five
+  reservations, the absolute daily envelope can fund at most twenty-eight
   $0.10 phase reservations; daily jitter rotates priority rather than letting
-  page order permanently starve later tenants.
+  page order permanently starve later tenants. A policy upgrade may consume
+  one additional version-bound demand/evidence pair without replaying the old
+  immutable receipts.
 - The hourly recovery sweep creates no reservation. Any remaining paid work
   is resumed only on the original reservation day; after that, recovery is
   permitted only when provider work is complete and persistence is all that

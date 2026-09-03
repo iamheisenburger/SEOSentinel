@@ -410,18 +410,18 @@ test("receipt envelope is exactly one bounded Labs task", () => {
   }), false);
 });
 
-test("the terminal $2 plan plus the complete $0.35 recovery chain fits exactly", () => {
-  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 2_350_000);
+test("the terminal plan, recovery chain, and one policy upgrade fit exactly", () => {
+  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 2_550_000);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 350_000,
+    requestedMicroUsd: 550_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 350_001,
+    requestedMicroUsd: 550_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
 });
@@ -431,26 +431,26 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 250_000,
-    monthlyCeilingMicroUsd: 2_500_000,
+    requestedMicroUsd: 450_000,
+    monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 250_001,
-    monthlyCeilingMicroUsd: 2_500_000,
+    requestedMicroUsd: 450_001,
+    monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 200_000,
-    monthlyCeilingMicroUsd: 2_500_000,
+    requestedMicroUsd: 400_000,
+    monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 200_001,
-    monthlyCeilingMicroUsd: 2_500_000,
+    requestedMicroUsd: 400_001,
+    monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 0,
@@ -465,15 +465,15 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
     monthlyCeilingMicroUsd: 2_500_000,
   }).allowed, false);
 
-  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 2_600_000);
+  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 2_800_000);
   assert.deepEqual(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 2_350_000,
-    fleetReservedThisMonthMicroUsd: 2_350_000,
+    fleetReservedTodayMicroUsd: 2_550_000,
+    fleetReservedThisMonthMicroUsd: 2_550_000,
     requestedMicroUsd: 250_000,
   }), { allowed: true });
   assert.equal(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 2_350_000,
-    fleetReservedThisMonthMicroUsd: 2_350_000,
+    fleetReservedTodayMicroUsd: 2_550_000,
+    fleetReservedThisMonthMicroUsd: 2_550_000,
     requestedMicroUsd: 250_001,
   }).allowed, false);
   assert.deepEqual(evaluateSharedProviderCapacity({

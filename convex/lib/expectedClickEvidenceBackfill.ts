@@ -13,7 +13,7 @@ import {
   EXPECTED_CLICK_PORTFOLIO_VERSION,
 } from "./expectedClickPortfolio.ts";
 
-export const EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION = 1;
+export const EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION = 2;
 export const EXPECTED_CLICK_EVIDENCE_BACKFILL_TOPIC_LIMIT = 10;
 export const EXPECTED_CLICK_EVIDENCE_BACKFILL_SERP_CALL_LIMIT = 10;
 export const EXPECTED_CLICK_EVIDENCE_BACKFILL_AUTHORITY_CALL_LIMIT = 1;
@@ -27,7 +27,7 @@ export const EXPECTED_CLICK_EVIDENCE_GSC_READ_LIMIT = 5_000;
 // A regular live organic SERP currently costs materially less than this
 // reservation allowance. Keeping a conservative $0.005 task envelope plus
 // the existing bounded authority estimate makes price drift fail closed while
-// remaining tiny beside the shared $2.60/day and $35/month fleet breakers.
+// remaining tiny beside the shared $2.80/day and $35/month fleet breakers.
 export const EXPECTED_CLICK_EVIDENCE_SERP_RESERVATION_MICRO_USD = 5_000;
 export const EXPECTED_CLICK_EVIDENCE_AUTHORITY_RESERVATION_MICRO_USD = 30_000;
 export const EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD =
@@ -180,20 +180,6 @@ export function selectExpectedClickBackfillCandidates<
       return left.topicId.localeCompare(right.topicId);
     })
     .slice(0, boundedLimit);
-}
-
-/**
- * Covered artifacts with complete demand are the first evidence priority.
- * Artifacts that still need a separate demand call are not evidence-ready and
- * therefore cannot starve a planned topic whose demand is already current.
- */
-export function prioritizeEvidenceReadyCandidates<Candidate>(
-  artifactCandidates: readonly Candidate[],
-  plannedCandidates: readonly Candidate[],
-): Candidate[] {
-  return artifactCandidates.length > 0
-    ? [...artifactCandidates]
-    : [...plannedCandidates];
 }
 
 export function expectedClickBackfillRemainingCostMicroUsd(args: {

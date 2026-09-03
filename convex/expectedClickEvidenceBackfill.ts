@@ -20,7 +20,6 @@ import {
   expectedClickBackfillSelectionScore,
   hasCurrentExpectedClickDemand,
   needsExpectedClickEvidenceBackfill,
-  prioritizeEvidenceReadyCandidates,
   selectExpectedClickBackfillCandidates,
   utcBackfillDay,
 } from "./lib/expectedClickEvidenceBackfill";
@@ -69,13 +68,16 @@ import {
 } from "./lib/planSiteAllowance";
 import {
   activeArticleJobTopicIds,
+  cadenceInventoryNeedsPlannedRecovery,
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
   hasExactPlannedEvidenceAttempt,
+  isCurrentExpectedClickBatch,
   plannedTargetsAllowedForQueue,
   plannedTopicEvidenceAdmission,
   plannedTopicSiteGate,
   PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION,
+  prioritizeCadenceRecoveryCandidates,
   type PlannedRecoveryInventorySnapshot,
   uniqueExactPlannedTargets,
 } from "./lib/plannedTopicEvidenceRecovery";
@@ -399,6 +401,10 @@ function evidenceCandidateInventory(args: {
   };
   const artifactCandidates: CandidateWithSerp[] = [];
   const rawPlannedCandidates: CandidateWithSerp[] = [];
+  const cadenceCritical = cadenceInventoryNeedsPlannedRecovery(
+    args.site,
+    args.articles,
+  );
   let artifactPendingDemand = 0;
   const rawPlannedPendingDemand: Array<{
     primaryKeyword: string;
@@ -569,15 +575,17 @@ function evidenceCandidateInventory(args: {
   ).length;
   candidateCounts.artifactEligible = artifactCandidates.length;
   candidateCounts.plannedUnmaterialized = plannedCandidates.length;
-  // Evidence-ready covered artifacts retain priority. Demand-only historical
-  // artifacts do not block evidence-ready planned topics: the phase planner
-  // independently binds the completed demand batch and permits ready evidence
-  // to advance while later demand candidates remain. Without this distinction
-  // an empty cadence buffer can be starved behind days of legacy measurement.
-  const candidates = prioritizeEvidenceReadyCandidates(
-    artifactCandidates,
-    plannedCandidates,
-  );
+  // A cadence-critical planned topic must not be starved behind measurement of
+  // a page that is already published. Once the sealed buffer reaches its
+  // minimum, the existing evidence-ready artifact priority resumes.
+  const candidates = cadenceCritical &&
+      plannedCandidates.length === 0 && plannedPendingDemand > 0
+    ? []
+    : prioritizeCadenceRecoveryCandidates(
+        artifactCandidates,
+        plannedCandidates,
+        cadenceCritical,
+      );
   candidateCounts.eligible = candidates.length;
   return {
     candidates,
@@ -585,6 +593,7 @@ function evidenceCandidateInventory(args: {
     plannedCandidates,
     artifactPendingDemand,
     plannedPendingDemand,
+    cadenceCritical,
     candidateCounts,
   };
 }
@@ -971,10 +980,18 @@ export async function expectedClickEvidenceFleetReadiness(
     ]);
     const currentRolloutEpoch = site.autopilotRolloutEpoch ?? 0;
     const todayEvidenceJob = todayEvidenceRows.find((job) =>
-      job.rolloutEpoch === currentRolloutEpoch
+      isCurrentExpectedClickBatch(
+        job,
+        currentRolloutEpoch,
+        EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
+      )
     );
     const todayDemandJob = todayDemandRows.find((job) =>
-      job.rolloutEpoch === currentRolloutEpoch
+      isCurrentExpectedClickBatch(
+        job,
+        currentRolloutEpoch,
+        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
+      )
     );
     if (todayEvidenceJob) {
       return {
@@ -1052,8 +1069,9 @@ export async function expectedClickEvidenceFleetReadiness(
       plannedSiteGateAllowed: plannedGate.allowed,
       plannedAuthorityFresh,
     });
-    const pendingDemandCount =
-      inventory.artifactCandidates.length > 0 ||
+    const pendingDemandCount = inventory.cadenceCritical
+      ? inventory.plannedPendingDemand
+      : inventory.artifactCandidates.length > 0 ||
         inventory.artifactPendingDemand > 0
         ? inventory.artifactPendingDemand
         : inventory.plannedPendingDemand;
@@ -1235,7 +1253,7 @@ export const getFleetRecoveryInternal = internalQuery({
 
 /**
  * Atomic queue after the free provider-account preflight. Every eligibility
- * gate and the one-batch/day check runs before the shared spend reservation.
+ * gate and the one-batch/policy/day check runs before shared spend reservation.
  */
 export const reserveAndQueue = internalMutation({
   args: {
@@ -1323,10 +1341,18 @@ async function reserveEvidenceOutcome(
       unresolvedFleetEvidenceJobs(ctx, siteId),
     ]);
     const todayJobs = todayJobRows.filter((job) =>
-      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+      isCurrentExpectedClickBatch(
+        job,
+        site.autopilotRolloutEpoch ?? 0,
+        EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
+      )
     );
     const todayDemandJobs = todayDemandJobRows.filter((job) =>
-      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0)
+      isCurrentExpectedClickBatch(
+        job,
+        site.autopilotRolloutEpoch ?? 0,
+        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
+      )
     );
     // A provider-balance race can release the shared reservation, but it must
     // not create a loophole around the tenant's one-new-job-per-UTC-day fence.
@@ -1432,7 +1458,9 @@ async function reserveEvidenceOutcome(
         : inventory.artifactCandidates;
     const pendingDemandCount = plannedRecoveryGuard
       ? inventory.plannedPendingDemand
-      : !plannedTargetsAllowedForQueue(origin, false) ||
+      : inventory.cadenceCritical
+        ? inventory.plannedPendingDemand
+        : !plannedTargetsAllowedForQueue(origin, false) ||
           inventory.artifactCandidates.length > 0 ||
           inventory.artifactPendingDemand > 0
         ? inventory.artifactPendingDemand
