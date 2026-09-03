@@ -401,7 +401,7 @@ function isExplicitAuthorFramework(
     HYPE_PATTERN.test(paragraph) ||
     QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
     (referencesNamedProduct(paragraph, productEvidence) &&
-      /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?|features?)\b/i.test(
+      /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?)\b/i.test(
         paragraph,
       ))
   ) return false;

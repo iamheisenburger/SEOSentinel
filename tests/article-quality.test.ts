@@ -605,6 +605,12 @@ test("authorial ranking disclaimers are exempt but embedded product capabilities
     evidenceRequiredParagraphs(authorialContext, productEvidence),
     [],
   );
+  const readerRunContext =
+    "The sequence below is a reader-run test proposed by this guide for evaluating any SEO platform, including Pentra, against your actual situation rather than a features list. It is not an industry-standard procedure; the value is in applying it to your own site's data.";
+  assert.deepEqual(
+    evidenceRequiredParagraphs(readerRunContext, productEvidence),
+    [],
+  );
 
   const capabilityClaim =
     "This guide uses an author-proposed framework, not a ranking. Pentra automatically publishes every article through GitHub.";
