@@ -19,6 +19,9 @@ import { computeAuthorityKeywordDifficultyCeiling } from
   "../lib/authorityDifficulty.ts";
 import { safeFetchPublicText } from "../lib/safeOutbound.ts";
 import {
+  CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
+} from "../lib/cadenceMicroSeed.ts";
+import {
   DATAFORSEO_AUTHORITY_SOURCE,
   MAX_AUTHORITY_DOMAINS_PER_PLAN,
 } from "../lib/expectedClickPortfolio.ts";
@@ -239,7 +242,12 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     throw new Error("Cadence micro-seed request tag is outside its contract");
   }
   const endpoint = "dataforseo_labs/google/keyword_ideas/live" as const;
-  const request = options.request ?? dataForSEORequest;
+  const request = options.request ?? ((providerEndpoint, body) =>
+    dataForSEORequest(
+      providerEndpoint,
+      body,
+      CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
+    ));
   languageCode = dataForSeoLanguageCode(languageCode);
   const data = await request(endpoint, [{
     keywords: [normalizedSeed],

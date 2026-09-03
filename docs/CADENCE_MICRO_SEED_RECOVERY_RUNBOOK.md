@@ -1,10 +1,13 @@
 # Cadence micro-seed recovery
 
-Current policy: v3. A policy upgrade preserves every older paid receipt and
+Current policy: v4. A policy upgrade preserves every older paid receipt and
 rotates to a new product-anchor pair; it never replays an earlier provider
 request or relaxes keyword, authority, SERP, overlap, or publication gates.
-Version 3 uses category-based Keyword Ideas because production proved that
+Version 4 uses category-based Keyword Ideas because production proved that
 literal Suggestions can return zero rows for valid, specific SaaS anchors.
+It gives that slower live endpoint a bounded 60-second HTTP window; the
+earlier v3 request that crossed the old 20-second boundary remains ambiguous
+and is never replayed.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready
@@ -68,11 +71,12 @@ fleet ledgers are recomputed before any reservation or provider call.
   primary receipt, fallback admission requires the exact remaining $0.15:
   $0.05 fallback plus $0.10 evidence. With the terminal $2 plan, the complete
   ordinary worst-case account ledger is therefore exactly $2.25. During the
-  bounded v3 migration, the immutable v1 and v2 primary/fallback receipts
-  ($0.30), the one-time demand/evidence policy receipts ($0.20), and the v3
-  primary/fallback/evidence receipts ($0.25) can coexist with the source plan.
-  The exact account ceiling is therefore $2.95 for this migration and still
-  leaves the fixed $0.25 other-account reserve inside the $3.20 fleet ceiling.
+  bounded v4 migration, the immutable v1 and v2 primary/fallback receipts
+  ($0.30), the one-time demand/evidence policy receipts ($0.20), the ambiguous
+  v3 primary receipt ($0.10), and the v4 primary/fallback/evidence receipts
+  ($0.25) can coexist with the source plan. The exact account ceiling is
+  therefore $3.05 for this migration and still leaves the fixed $0.25
+  other-account reserve inside the $3.30 fleet ceiling.
   This observes but does not lock evidence capacity; a later evidence race may
   still stop safely and report a cadence miss.
 
