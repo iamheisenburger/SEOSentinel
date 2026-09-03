@@ -69,6 +69,7 @@ import {
 import {
   activeArticleJobTopicIds,
   cadenceInventoryNeedsPlannedRecovery,
+  exactPlannedRecoverySelectionMatches,
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
   hasExactPlannedEvidenceAttempt,
@@ -257,8 +258,42 @@ function exactPlannedGuardMatches(
 ): boolean {
   return guard.inspectionDay === reservationDay &&
     guard.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
-    JSON.stringify(guard.selected) ===
-      JSON.stringify(selectedPlannedDescriptors(selected));
+    exactPlannedRecoverySelectionMatches(
+      guard.selected,
+      selectedPlannedDescriptors(selected),
+    );
+}
+
+function plannedGuardMismatchDetail(
+  guard: {
+    inspectionDay: string;
+    rolloutEpoch: number;
+    selected: Array<{
+      topicId: Id<"topic_clusters">;
+      keyword: string;
+      fingerprint: string;
+    }>;
+  },
+  site: Doc<"sites">,
+  reservationDay: string,
+  selected: SelectedTopic[],
+): string {
+  if (guard.inspectionDay !== reservationDay) return "inspection_day_changed";
+  if (guard.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0)) {
+    return "rollout_epoch_changed";
+  }
+  const current = selectedPlannedDescriptors(selected);
+  if (guard.selected.length !== current.length) return "selection_count_changed";
+  for (let index = 0; index < current.length; index += 1) {
+    const expected = guard.selected[index];
+    const actual = current[index];
+    if (expected.topicId !== actual.topicId) return "selection_topic_changed";
+    if (expected.keyword !== actual.keyword) return "selection_keyword_changed";
+    if (expected.fingerprint !== actual.fingerprint) {
+      return "selection_fingerprint_changed";
+    }
+  }
+  return "selection_order_changed";
 }
 
 function artifactFingerprint(article: Doc<"articles">): string | null {
@@ -1517,6 +1552,14 @@ async function reserveEvidenceOutcome(
       return {
         queued: false as const,
         reason: "planned_recovery_inspection_stale" as const,
+        detail: plannedGate.allowed
+          ? plannedGuardMismatchDetail(
+              plannedRecoveryGuard,
+              site,
+              reservationDay,
+              selectedTopics,
+            )
+          : plannedGate.reason,
       };
     }
 

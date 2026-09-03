@@ -12,6 +12,7 @@ import {
   PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION,
   cadenceInventoryNeedsPlannedRecovery,
   cadenceMicroSeedRecoveryBlockReason,
+  exactPlannedRecoverySelectionMatches,
   expectedClickTargetKind,
   filterPlannedTopicRecoveryCoverage,
   hasExactPlannedEvidenceAttempt,
@@ -122,6 +123,24 @@ const topic = {
   businessFitVersion: fit.version,
   businessFitReasons: fit.reasons,
 };
+
+test("planned recovery selection equality ignores serialized object key order", () => {
+  const expected = [{
+    topicId: "topic-1",
+    keyword: "lead scoring software",
+    fingerprint: "exact-fingerprint",
+  }];
+  const serialized = JSON.parse(JSON.stringify([{
+    fingerprint: "exact-fingerprint",
+    keyword: "lead scoring software",
+    topicId: "topic-1",
+  }])) as typeof expected;
+  assert.equal(exactPlannedRecoverySelectionMatches(expected, serialized), true);
+  assert.equal(exactPlannedRecoverySelectionMatches(expected, [{
+    ...serialized[0],
+    fingerprint: "different",
+  }]), false);
+});
 
 test("selected target kind is discriminated and malformed mixed rows fail closed", () => {
   assert.equal(expectedClickTargetKind({

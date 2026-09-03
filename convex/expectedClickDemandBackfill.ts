@@ -67,6 +67,7 @@ import {
 import {
   activeArticleJobTopicIds,
   cadenceInventoryNeedsPlannedRecovery,
+  exactPlannedRecoverySelectionMatches,
   expectedClickTargetKind,
   isCurrentExpectedClickBatch,
   partitionPlannedTopicRecoveryCoverage,
@@ -618,8 +619,10 @@ function exactPlannedGuardMatches(
 ): boolean {
   return guard.inspectionDay === reservationDay &&
     guard.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
-    JSON.stringify(guard.selected) ===
-      JSON.stringify(selectedPlannedDescriptors(selected));
+    exactPlannedRecoverySelectionMatches(
+      guard.selected,
+      selectedPlannedDescriptors(selected),
+    );
 }
 
 function safeJobStatus(job: Doc<"expected_click_demand_jobs"> | null) {

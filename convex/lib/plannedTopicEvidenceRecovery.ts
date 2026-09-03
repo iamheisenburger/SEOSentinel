@@ -195,6 +195,29 @@ export type PlannedRecoverySelectedTopic = {
   fingerprint: string;
 };
 
+/** Convex canonicalizes object key order at action/mutation boundaries. Guard
+ * equality must compare ordered rows and their values, not property insertion
+ * order inside otherwise identical objects. */
+export function exactPlannedRecoverySelectionMatches(
+  expected: ReadonlyArray<{
+    topicId: Id<"topic_clusters"> | string;
+    keyword: string;
+    fingerprint: string;
+  }>,
+  actual: ReadonlyArray<{
+    topicId: Id<"topic_clusters"> | string;
+    keyword: string;
+    fingerprint: string;
+  }>,
+): boolean {
+  return expected.length === actual.length && expected.every((item, index) => {
+    const candidate = actual[index];
+    return String(item.topicId) === String(candidate?.topicId) &&
+      item.keyword === candidate?.keyword &&
+      item.fingerprint === candidate?.fingerprint;
+  });
+}
+
 type PlannedRecoveryReadiness = null | {
   ready?: boolean;
   actionable?: boolean;
