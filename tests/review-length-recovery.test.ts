@@ -63,3 +63,28 @@ test("a recovery review persists its exact defect version instead of skipping la
     /qualityRecoveryVersion:\s*\n\s*qualityRecoveryAttemptVersionFromJob\(job\)/,
   );
 });
+
+test("existing-draft recovery closes fresh editorial feedback with one guarded re-audit", () => {
+  const source = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const start = source.indexOf("async function reviewExistingArticleHandler");
+  const end = source.indexOf("export const reviewExistingArticleInternal", start);
+  assert.ok(start >= 0 && end > start);
+  const handler = source.slice(start, end);
+
+  const audit = handler.indexOf("let auditState = assessExactAudit");
+  const remediation = handler.indexOf("const remediated = await remediateFinalArticle", audit);
+  const reAudit = handler.indexOf("const remediatedAudit = await auditFinalArticleWithUnsupportedClaimRemoval", remediation);
+  const guardedAcceptance = handler.indexOf("remediatedState.score >= auditState.score && improved", reAudit);
+  assert.ok(audit >= 0 && remediation > audit && reAudit > remediation);
+  assert.ok(guardedAcceptance > reAudit);
+  assert.match(handler, /Post-audit remediation improved the exact editorial score/);
+  assert.match(handler, /Post-audit remediation was rejected because it did not improve/);
+  assert.match(
+    source,
+    /uncited category, taxonomy, or best practice is presented as settled industry fact/,
+  );
+  assert.match(
+    source,
+    /Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is/,
+  );
+});

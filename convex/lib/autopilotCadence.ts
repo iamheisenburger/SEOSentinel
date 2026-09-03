@@ -30,12 +30,13 @@ export type CadenceWindow = {
 
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
-export const QUALITY_RECOVERY_VERSION = 8;
+export const QUALITY_RECOVERY_VERSION = 9;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
 const POST_AUDIT_DEPTH_RECONSTRUCTION_VERSION = 7;
 const COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION = 8;
+const POST_AUDIT_EDITORIAL_REMEDIATION_VERSION = 9;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -256,6 +257,27 @@ export function qualityRecoveryTargetVersion(
     // failure. Version 8 enumerates every required claim unit, budgets complete
     // ledger output, and preserves omitted units while keeping the gate closed.
     return COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION;
+  }
+  if (
+    Math.max(
+      article.qualityRecoveryVersion ?? 0,
+      article.qualityRecoveryAttemptVersion ?? 0,
+    ) >= COMPLETE_CLAIM_AUDIT_RECOVERY_VERSION &&
+    (article.qualityRecoveryVersion ?? 0) <
+      POST_AUDIT_EDITORIAL_REMEDIATION_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      POST_AUDIT_EDITORIAL_REMEDIATION_VERSION &&
+    issues.some((issue) =>
+      /^Editorial quality score is \d+(?:\.\d+)?; strict minimum is 85\.$/.test(
+        issue,
+      )
+    )
+  ) {
+    // Version 8 completed the claim ledger but exposed that existing-draft
+    // recovery never applied fresh feedback from its own final editorial
+    // audit. Version 9 admits one exact, bounded audit-remediation-re-audit
+    // pass without reopening unrelated or already-attempted drafts.
+    return POST_AUDIT_EDITORIAL_REMEDIATION_VERSION;
   }
   return undefined;
 }

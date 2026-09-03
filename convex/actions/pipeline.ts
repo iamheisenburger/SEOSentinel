@@ -1863,6 +1863,7 @@ async function auditFinalArticle(args: {
       "Assess the exact finished article without rewriting it.",
       "The score measures search-intent satisfaction, usefulness, factual restraint, product grounding, clarity, structure, citation integrity, and absence of generic AI filler.",
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
+      "Do not require an external citation for advice, decision questions, or an explicitly author-proposed framework. Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "The system has deterministically enumerated every paragraph that requires evidence. Return exactly one claimEvidence entry for every supplied claim unit, in the same order, and copy that unit's complete paragraph verbatim into claim. Do not omit, merge, summarize, or split a claim unit.",
       "Mark a claim unit supported only when the supplied evidence directly supports every externally verifiable proposition in it; citation presence alone is not evidence. If only part is supported, mark the whole unit unsupported and explain the unsupported proposition.",
@@ -2034,6 +2035,7 @@ async function remediateFinalArticle(args: {
       "- An audit note labelled Unsupported claim names a proposition the evidence does not support. Delete that proposition completely; do not preserve it through a synonym, softer wording, or an uncited causal/comparative claim.",
       "- When the unsupported proposition contained useful advice, preserve only a conditional diagnostic the reader can verify (for example, 'If your analytics show X, test Y'). Do not claim that the condition is common, that one approach converts better, or that user behaviour has a known cause without supplied evidence.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
+      "- When an audit says an uncited category, taxonomy, or best practice is presented as settled industry fact, rewrite the heading and lead-in so it is unmistakably an author-proposed evaluation framework, reader-run test, decision question, or conditional recommendation. Do not leave the same universal claim under a different heading.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
       lengthRecovery
         ? "- Rebuild depth by expanding underdeveloped sections with reader-run procedures, input checklists, decision questions, implementation steps, and explicitly conditional diagnostics. Keep added guidance product-agnostic unless the supplied first-party evidence states the exact product mechanic. Do not pad the introduction, repeat conclusions, or paraphrase the same advice."
@@ -6950,24 +6952,155 @@ async function reviewExistingArticleHandler(
       );
     }
 
-    const evidenceDefects = uncitedEvidenceRequiredParagraphs(exactReviewedMarkdown);
-    const unsupportedClaims = audit.claimEvidence.filter(
-      (claim) => !claim.supported,
-    );
-    const deterministicClaimAudit = validateClaimEvidenceLedger({
-      markdown: exactReviewedMarkdown,
-      sources,
-      researchEvidence,
-      productEvidence,
-      productEvidenceHash,
-      claimEvidence: audit.claimEvidence,
-    });
-    const editorialQualityScore =
-      evidenceDefects.length > 0 ||
-      unsupportedClaims.length > 0 ||
-      !deterministicClaimAudit.passed
-        ? Math.min(audit.score, 84)
-        : audit.score;
+    const assessExactAudit = (
+      markdown: string,
+      auditResult: Awaited<ReturnType<typeof auditFinalArticle>>,
+    ) => {
+      const evidenceDefects = uncitedEvidenceRequiredParagraphs(markdown);
+      const unsupportedClaims = auditResult.claimEvidence.filter(
+        (claim) => !claim.supported,
+      );
+      const deterministicClaimAudit = validateClaimEvidenceLedger({
+        markdown,
+        sources,
+        researchEvidence,
+        productEvidence,
+        productEvidenceHash,
+        claimEvidence: auditResult.claimEvidence,
+      });
+      const evidenceDefectCount =
+        evidenceDefects.length +
+        unsupportedClaims.length +
+        deterministicClaimAudit.issues.length;
+      return {
+        evidenceDefects,
+        unsupportedClaims,
+        deterministicClaimAudit,
+        evidenceDefectCount,
+        score: evidenceDefectCount > 0
+          ? Math.min(auditResult.score, 84)
+          : auditResult.score,
+      };
+    };
+
+    let auditState = assessExactAudit(exactReviewedMarkdown, audit);
+    const postAuditRemediationNotes: string[] = [];
+
+    // The exact auditor can identify a material editorial defect that was not
+    // present in the stored notes supplied to the first recovery edit. Apply
+    // that fresh feedback once, then fact-check and independently re-audit the
+    // exact candidate. Accept it only when the score or deterministic defect
+    // count improves without regression. This closes the quality loop while
+    // keeping the same strict threshold, evidence contract, and spend bound.
+    if (auditState.score < 85 || auditState.evidenceDefectCount > 0) {
+      try {
+        const exactAuditNotes = [
+          ...audit.notes,
+          ...auditState.evidenceDefects.map(
+            (claim, index) =>
+              `Uncited evidence defect ${index + 1}: ${claim.slice(0, 320)}`,
+          ),
+          ...auditState.deterministicClaimAudit.issues.map(
+            (issue, index) => `Claim-ledger defect ${index + 1}: ${issue}`,
+          ),
+          ...auditState.unsupportedClaims.map(
+            (claim, index) =>
+              `Unsupported claim ${index + 1}: ${claim.claim} (${claim.reason})`,
+          ),
+        ];
+        const remediated = await remediateFinalArticle({
+          markdown: exactReviewedMarkdown,
+          articleType: article.articleType ?? "standard",
+          primaryKeyword: topic?.primaryKeyword ?? article.title,
+          productName,
+          productEvidence,
+          researchEvidence,
+          sources,
+          minWords: minimumWords,
+          maxWords,
+          auditNotes: exactAuditNotes,
+        });
+        const remediatedStats = calculateArticleStats(remediated.markdown);
+        if (
+          remediatedStats.wordCount < minimumWords ||
+          remediatedStats.wordCount > maxWords
+        ) {
+          throw new Error(
+            `Post-audit remediation missed the length contract (${remediatedStats.wordCount}/${minimumWords}-${maxWords} words)`,
+          );
+        }
+        const remediatedFactCheck = await factCheckArticle(
+          remediated.markdown,
+          sources,
+          bannedNames,
+          productName,
+          productEvidence,
+          researchEvidence,
+        );
+        if (remediatedFactCheck.confidenceScore === undefined) {
+          throw new Error("Post-audit remediation returned no fact-check score");
+        }
+        const remediatedAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
+          markdown: remediatedFactCheck.markdown,
+          articleType: article.articleType ?? "standard",
+          primaryKeyword: topic?.primaryKeyword ?? article.title,
+          productName,
+          productEvidence,
+          researchEvidence,
+          sources,
+          minWords: minimumWords,
+          maxWords,
+        });
+        const remediatedMarkdown = repairDanglingStructuredIntroductions(
+          remediatedAudit.markdown,
+        );
+        const finalRemediatedStats = calculateArticleStats(remediatedMarkdown);
+        if (
+          finalRemediatedStats.wordCount < minimumWords ||
+          finalRemediatedStats.wordCount > maxWords
+        ) {
+          throw new Error(
+            `Post-audit exact review missed the length contract (${finalRemediatedStats.wordCount}/${minimumWords}-${maxWords} words)`,
+          );
+        }
+        const remediatedState = assessExactAudit(
+          remediatedMarkdown,
+          remediatedAudit.audit,
+        );
+        const improved =
+          remediatedState.score > auditState.score ||
+          remediatedState.evidenceDefectCount < auditState.evidenceDefectCount;
+        if (remediatedState.score >= auditState.score && improved) {
+          postAuditRemediationNotes.push(
+            ...remediated.notes.map((note) => `Post-audit remediation: ${note}`),
+            `Post-audit remediation improved the exact editorial score from ${auditState.score} to ${remediatedState.score}.`,
+          );
+          exactReviewedMarkdown = remediatedMarkdown;
+          reviewed = remediatedFactCheck;
+          reviewedConfidenceScore = remediatedFactCheck.confidenceScore;
+          audit = remediatedAudit.audit;
+          auditState = remediatedState;
+          stats = finalRemediatedStats;
+        } else {
+          postAuditRemediationNotes.push(
+            `Post-audit remediation was rejected because it did not improve the exact artifact (${auditState.score} -> ${remediatedState.score}; evidence defects ${auditState.evidenceDefectCount} -> ${remediatedState.evidenceDefectCount}).`,
+          );
+        }
+      } catch (error) {
+        postAuditRemediationNotes.push(
+          `Post-audit remediation failed: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
+    }
+
+    const {
+      evidenceDefects,
+      unsupportedClaims,
+      deterministicClaimAudit,
+      score: editorialQualityScore,
+    } = auditState;
     let finalReviewMarkdown = exactReviewedMarkdown;
     let featuredImage = article.featuredImage;
     const reviewedMedia = new Set(article.reviewedMediaUrls ?? []);
@@ -7269,6 +7402,7 @@ async function reviewExistingArticleHandler(
       editorialQualityScore,
       editorialQualityNotes: [
         `Existing draft exact-prose audit: ${editorialQualityScore}/100.`,
+        ...postAuditRemediationNotes,
         ...audit.notes,
         ...evidenceDefects.map(
           (claim, index) =>
