@@ -26,6 +26,7 @@ import {
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_VERSION,
   CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS,
+  cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedAnchors,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedProviderCeilingMicroUsd,
@@ -126,29 +127,6 @@ function utcMonthStart(timestamp: number): number {
 
 function utcDay(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
-}
-
-function maximumDifficultyForAuthority(
-  authority: { domainRank: number; referringDomains?: number },
-): number {
-  const rank = Math.max(0, authority.domainRank);
-  const referringDomains = Math.max(0, authority.referringDomains ?? 0);
-  const rankCeiling = rank <= 10 ? 10
-    : rank <= 20 ? 15
-    : rank <= 30 ? 20
-    : rank <= 40 ? 30
-    : rank <= 50 ? 40
-    : rank <= 65 ? 55
-    : rank <= 80 ? 70
-    : 85;
-  const referringCeiling = referringDomains < 10 ? 15
-    : referringDomains < 25 ? 20
-    : referringDomains < 50 ? 30
-    : referringDomains < 100 ? 40
-    : referringDomains < 250 ? 55
-    : referringDomains < 500 ? 70
-    : 85;
-  return Math.min(rankCeiling, referringCeiling);
 }
 
 function sourcePlanFingerprint(
@@ -1643,7 +1621,11 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     }
     const selection = selectCadenceMicroSeedCandidate({
       metrics: args.candidates as CadenceMicroSeedMetric[],
-      maximumDifficulty: maximumDifficultyForAuthority(authority),
+      // This only decides which bounded query is worth live SERP evidence.
+      // Expected-click evidence remains the strict generation boundary.
+      maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
+        authority.domainRank,
+      ),
       existingExactKeywords: exactKeywords,
       coveredTopics: [
         ...reservedCoverage,

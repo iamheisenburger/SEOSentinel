@@ -4,6 +4,7 @@ import {
   tenantDiscoveryAnchors,
   type SerpCoverageTopic,
 } from "./autopilotBuffer.ts";
+import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 
 /**
  * A last-resort, one-call topic discovery lane for an imminent empty-buffer
@@ -11,7 +12,7 @@ import {
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-export const CADENCE_MICRO_SEED_VERSION = 6;
+export const CADENCE_MICRO_SEED_VERSION = 7;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -554,6 +555,20 @@ export function selectCadenceMicroSeedCandidate<
     )
   );
   return { selected: accepted[0] ?? null, accepted: accepted.length, rejected };
+}
+
+/**
+ * Keyword difficulty is a discovery proxy, not the publication verdict. The
+ * live SERP/evidence handoff that follows this selection measures the actual
+ * page-one publishers and expected clicks, and fails closed before article
+ * generation. Keep the rescue shortlist consistent with the ordinary
+ * winnability model so a young domain can measure plausible long-tail queries
+ * instead of rejecting them at the noisier proxy stage.
+ */
+export function cadenceMicroSeedPreSerpDifficultyCeiling(
+  tenantDomainRank: number,
+): number {
+  return preSerpReachCeiling(tenantDomainRank);
 }
 
 export function cadenceMicroSeedProviderReceiptValid(args: {

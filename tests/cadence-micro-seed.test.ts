@@ -16,6 +16,7 @@ import {
   cadenceMicroSeedAnchors,
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedAttemptKind,
+  cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedProviderCeilingMicroUsd,
   cadenceMicroSeedProviderPurpose,
   cadenceMicroSeedProviderReceiptValid,
@@ -459,6 +460,17 @@ test("candidate selection fails closed on metrics, brands, fit, exact reuse, and
   });
   assert.equal(overlap.selected, null);
   assert.equal(overlap.rejected.overlap, 1);
+});
+
+test("cadence discovery uses the bounded pre-SERP reach ceiling", () => {
+  assert.equal(cadenceMicroSeedPreSerpDifficultyCeiling(0), 32);
+  assert.equal(cadenceMicroSeedPreSerpDifficultyCeiling(4), 32);
+  assert.equal(cadenceMicroSeedPreSerpDifficultyCeiling(40), 64);
+  assert.match(model, /maximumDifficulty:\s*cadenceMicroSeedPreSerpDifficultyCeiling/);
+  assert.match(
+    model,
+    /Expected-click evidence remains the strict generation boundary/,
+  );
 });
 
 test("materialization treats terminal content misses as upstream topic feedback", () => {
