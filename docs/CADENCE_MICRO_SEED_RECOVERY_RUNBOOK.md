@@ -28,6 +28,10 @@ workflow, ROI, and case-study queries—derived only from each tenant's complete
 product phrases. Long phrases receive a bounded product-concept form before a
 modifier is added. Wrapper terms never count toward the two-concept anchor
 gate, and every downstream quality boundary remains unchanged.
+Actual-cost reconciliation is paginated into small tenant-scoped transactions
+before admission. Accumulating immutable recovery history can therefore never
+overflow the mutation time budget and silently prevent a mature tenant from
+using the next valid recovery generation.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready

@@ -1638,8 +1638,11 @@ test("verified micro-seed receipts settle actual cost before future admission", 
   assert.match(model.slice(reconciliationStart), /providerCompletedAt < job\.providerAttemptedAt/);
   assert.match(model.slice(reconciliationStart), /reservation\.siteId !== siteId/);
   assert.match(model.slice(reconciliationStart), /reservation\.settledMicroUsd !== undefined/);
+  assert.match(model.slice(reconciliationStart), /\.paginate\(\{ cursor: cursor \?\? null, numItems: 16 \}\)/);
+  assert.match(recovery, /reconcileVerifiedProviderCostPages/);
+  assert.match(action, /page\.continueCursor === cursor/);
   assert.ok(
-    recovery.indexOf("api.reconcileVerifiedProviderCosts") <
+    recovery.indexOf("reconcileVerifiedProviderCostPages") <
       recovery.indexOf("api.inspectInternal"),
   );
 });

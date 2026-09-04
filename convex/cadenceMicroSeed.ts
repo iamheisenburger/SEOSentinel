@@ -2612,22 +2612,31 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
  * every tenant benefits without an operator-only bypass.
  */
 export const reconcileVerifiedProviderCosts = internalMutation({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  args: { siteId: v.id("sites"), cursor: v.optional(v.string()) },
+  handler: async (ctx, { siteId, cursor }) => {
     const site = await ctx.db.get(siteId);
     if (
       !siteExecutionActive(site) ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       !site.userId
-    ) return { examined: 0, settled: 0, reclaimedMicroUsd: 0 };
+    ) {
+      return {
+        examined: 0,
+        settled: 0,
+        reclaimedMicroUsd: 0,
+        isDone: true,
+        continueCursor: undefined,
+      };
+    }
     const monthStart = utcMonthStart(Date.now());
-    const jobs = await ctx.db
+    const page = await ctx.db
       .query("cadence_micro_seed_jobs")
       .withIndex("by_site_created", (q) =>
         q.eq("siteId", siteId).gte("createdAt", monthStart)
       )
       .order("desc")
-      .take(CADENCE_MICRO_SEED_READ_LIMIT);
+      .paginate({ cursor: cursor ?? null, numItems: 16 });
+    const jobs = page.page;
     let settled = 0;
     let reclaimedMicroUsd = 0;
     for (const job of jobs) {
@@ -2675,7 +2684,13 @@ export const reconcileVerifiedProviderCosts = internalMutation({
         reclaimedMicroUsd += reservation.reservedMicroUsd - actualMicroUsd;
       }
     }
-    return { examined: jobs.length, settled, reclaimedMicroUsd };
+    return {
+      examined: jobs.length,
+      settled,
+      reclaimedMicroUsd,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? undefined : page.continueCursor,
+    };
   },
 });
 

@@ -84,6 +84,46 @@ type MaterializedMicroSeed = {
   providerTaskCostUsd: number;
 };
 
+type ReconciledProviderCosts = {
+  examined: number;
+  settled: number;
+  reclaimedMicroUsd: number;
+};
+
+async function reconcileVerifiedProviderCostPages(
+  ctx: Pick<ActionCtx, "runMutation">,
+  siteId: Id<"sites">,
+): Promise<ReconciledProviderCosts> {
+  const aggregate: ReconciledProviderCosts = {
+    examined: 0,
+    settled: 0,
+    reclaimedMicroUsd: 0,
+  };
+  let cursor: string | undefined;
+  // The model owns a hard 2,000-row monthly read ceiling. Small transactions
+  // keep reconciliation below Convex's one-second mutation budget even after
+  // a tenant accumulates many immutable recovery generations.
+  const maximumPages = 126;
+  for (let pageNumber = 0; pageNumber < maximumPages; pageNumber += 1) {
+    const page = await ctx.runMutation(api.reconcileVerifiedProviderCosts, {
+      siteId,
+      ...(cursor ? { cursor } : {}),
+    }) as ReconciledProviderCosts & {
+      isDone: boolean;
+      continueCursor?: string;
+    };
+    aggregate.examined += page.examined;
+    aggregate.settled += page.settled;
+    aggregate.reclaimedMicroUsd += page.reclaimedMicroUsd;
+    if (page.isDone) return aggregate;
+    if (!page.continueCursor || page.continueCursor === cursor) {
+      throw new Error("provider_cost_reconciliation_cursor_invalid");
+    }
+    cursor = page.continueCursor;
+  }
+  throw new Error("provider_cost_reconciliation_read_limit");
+}
+
 function durableMaterializedMicroSeed(
   job: Doc<"cadence_micro_seed_jobs"> | null,
 ): MaterializedMicroSeed | null {
@@ -322,9 +362,9 @@ export const recoverCadenceGap = internalAction({
     providerCostCeilingMicroUsd: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<unknown> => {
-    const reconciledCosts = await ctx.runMutation(
-      api.reconcileVerifiedProviderCosts,
-      { siteId: args.siteId },
+    const reconciledCosts = await reconcileVerifiedProviderCostPages(
+      ctx,
+      args.siteId,
     );
     const inspected = await ctx.runQuery(api.inspectInternal, {
       siteId: args.siteId,
