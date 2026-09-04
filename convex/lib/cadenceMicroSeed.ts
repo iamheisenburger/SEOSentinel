@@ -13,6 +13,10 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 32 binds semantic-shortlist exhaustion to the one existing fallback
+// and uses the provider's full 200-keyword task capacity. The prior version's
+// immutable seed history makes an upgraded tenant measure only its remaining
+// exact probes; a fresh tenant receives the broader bound immediately.
 // Version 31 expands the one-task direct-metric portfolio from 32 to 128
 // tenant-derived probes. Production proved that a high-cadence tenant can
 // have its one demanded 32-probe result already covered while the broad Ideas
@@ -88,7 +92,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 31;
+export const CADENCE_MICRO_SEED_VERSION = 32;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -101,7 +105,7 @@ export const CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION = 1;
 // the reservation ledger owns capacity after the job is created.
 export const CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS = 30_000;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
-export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 128;
+export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 200;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
