@@ -12,6 +12,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 17 is the one-shot recovery generation for planner checkpoints
+// created while the planning action compared the shared v8 business-fit
+// result to a stale v5 literal. It advances to the next unused, tenant-owned
+// anchor under the existing demand, SERP, cannibalization and article-quality
+// gates, protecting the imminent cadence while the repaired full planner
+// takes over future replenishment.
 // Version 16 preserves every explicit search anchor first, then supplements
 // the recovery rotation with bounded capability and buyer-problem phrases from
 // the tenant's own profile. A mature site can therefore move beyond a
@@ -30,7 +36,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 16;
+export const CADENCE_MICRO_SEED_VERSION = 17;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;

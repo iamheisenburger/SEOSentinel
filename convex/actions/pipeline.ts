@@ -67,6 +67,7 @@ import {
   pendingJobPriority,
   tenantDiscoveryAnchors,
   tenantTopicBusinessSignals,
+  TOPIC_BUSINESS_FIT_VERSION,
   topicDiscoverySeedBatches,
   topicDiscoverySeedWindow,
 } from "../lib/autopilotBuffer";
@@ -3432,7 +3433,7 @@ async function handlePlan(
           productAnchorSignals,
           businessModelSignals,
         });
-        return fit.eligible && fit.version === 5
+        return fit.eligible && fit.version === TOPIC_BUSINESS_FIT_VERSION
           ? [{
               ...topic,
               businessFitEligible: true as const,

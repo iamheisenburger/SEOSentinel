@@ -21,6 +21,8 @@ import {
   EXPECTED_CLICK_EVIDENCE_BACKFILL_LEASE_MS,
   EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
 } from "../convex/lib/expectedClickEvidenceBackfill.ts";
+import { TOPIC_BUSINESS_FIT_VERSION } from
+  "../convex/lib/autopilotBuffer.ts";
 
 test("checkpoint execution and deletion fences are durable", () => {
   assert.equal(planCheckpointTopicExecutionLocked({
@@ -55,7 +57,7 @@ const candidate: PlanCheckpointCandidate = {
   searchDemandLanguageCode: "en",
   businessFitEligible: true,
   businessFitScore: 8,
-  businessFitVersion: 5,
+  businessFitVersion: TOPIC_BUSINESS_FIT_VERSION,
   businessFitReasons: ["product_anchor:follow up"],
 };
 
@@ -72,6 +74,15 @@ const manifest = {
     ["pipeline automation"],
   ],
 };
+
+test("checkpoint planning follows the shared business-fit policy version", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(
+    pipeline,
+    /fit\.version === TOPIC_BUSINESS_FIT_VERSION/,
+  );
+  assert.doesNotMatch(pipeline, /fit\.version === \d+/);
+});
 
 test("seed manifests are stable, ordered, execution-bound, and tenant-bound", () => {
   const fingerprint = planSeedBatchManifestHash(manifest);
