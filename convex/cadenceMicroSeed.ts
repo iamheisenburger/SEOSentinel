@@ -1893,10 +1893,14 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<CadenceCurrentPolicyReadinessResult> {
   const site = await ctx.db.get(siteId);
+  // The immediately preceding current-policy ledger transaction has already
+  // verified account authorization, and cadenceSourceReadinessPrecheck repeats
+  // that database-aware fence before any reservation can be created. Keep this
+  // middle projection to the site/rollout identity check so the two entitlement
+  // index reads do not push a mature tenant over Convex's transaction budget.
   if (
     !siteExecutionActive(site) ||
-    !site.userId ||
-    !(await siteExecutionAuthorized(ctx, site))
+    !site.userId
   ) return { ready: false, reason: "site_unavailable" };
   if (
     !site.autopilotEnabled ||
