@@ -576,6 +576,27 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
+    const fallbackParentPrecheck = currentPolicyLedger.jobIds.length === 1
+      ? await ctx.runQuery(api.inspectFallbackParentReadinessInternal, {
+          siteId: args.siteId,
+          sourcePlanId,
+          topicPrecheck,
+          sourcePlanPrecheck,
+          priorPolicyHistory,
+          currentPolicyLedger,
+          parentMicroSeedJobId: currentPolicyLedger.jobIds[0]!,
+        })
+      : undefined;
+    if (fallbackParentPrecheck && !fallbackParentPrecheck.ready) {
+      return {
+        ...fallbackParentPrecheck,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const currentPolicyPrecheck = await ctx.runQuery(
       api.inspectCurrentPolicyReadinessInternal,
       {
@@ -585,6 +606,7 @@ export const recoverCadenceGap = internalAction({
         sourcePlanPrecheck,
         priorPolicyHistory,
         currentPolicyLedger,
+        fallbackParentPrecheck,
       },
     );
     if (!currentPolicyPrecheck.ready) {
@@ -816,6 +838,36 @@ export const processCadenceMicroSeed = internalAction({
       );
       return { processed: false, reason: currentPolicyLedger.reason };
     }
+    const fallbackParentPrecheck = claimedKind === "fallback" &&
+        claimed.parentMicroSeedJobId
+      ? await ctx.runQuery(api.inspectFallbackParentReadinessInternal, {
+          siteId: args.siteId,
+          sourcePlanId: claimed.sourcePlanId,
+          topicPrecheck,
+          sourcePlanPrecheck,
+          priorPolicyHistory,
+          currentPolicyLedger,
+          parentMicroSeedJobId: claimed.parentMicroSeedJobId,
+          expectedChildJobId: args.jobId,
+        })
+      : undefined;
+    if (claimedKind === "fallback" &&
+      (!fallbackParentPrecheck || !fallbackParentPrecheck.ready)) {
+      const reason = fallbackParentPrecheck && !fallbackParentPrecheck.ready
+        ? fallbackParentPrecheck.reason
+        : "micro_seed_fallback_parent_ineligible";
+      await ctx.runMutation(api.markProviderResponseUnverified, {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        workerToken,
+        errorCode: reason,
+      });
+      await raiseMiss(ctx, args.siteId, args.jobId, reason);
+      return { processed: false, reason };
+    }
+    const verifiedFallbackParentPrecheck = fallbackParentPrecheck?.ready
+      ? fallbackParentPrecheck
+      : undefined;
     const currentPolicyPrecheck = await ctx.runQuery(
       api.inspectCurrentPolicyReadinessInternal,
       {
@@ -825,6 +877,7 @@ export const processCadenceMicroSeed = internalAction({
         sourcePlanPrecheck,
         priorPolicyHistory,
         currentPolicyLedger,
+        fallbackParentPrecheck: verifiedFallbackParentPrecheck,
         currentJobId: args.jobId,
       },
     );

@@ -1572,7 +1572,19 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   );
   assert.match(
     model,
-    /parentChildren\.length > 0[\s\S]*attemptKind = "fallback"/,
+    /childEdgeValid[\s\S]*children\.length === 0[\s\S]*attemptKind = "fallback"/,
+  );
+  assert.match(
+    model,
+    /primaryFallbackReceiptFingerprint[\s\S]*CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION[\s\S]*sha256Hex\(fingerprint\)/,
+  );
+  assert.ok(
+    recovery.indexOf("api.inspectFallbackParentReadinessInternal") <
+      recovery.indexOf("api.inspectCurrentPolicyReadinessInternal"),
+  );
+  assert.ok(
+    worker.indexOf("api.inspectFallbackParentReadinessInternal") <
+      worker.indexOf("api.inspectCurrentPolicyReadinessInternal"),
   );
   assert.match(
     model,

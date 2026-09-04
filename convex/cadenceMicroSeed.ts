@@ -239,7 +239,7 @@ function primaryFallbackReceiptFingerprint(
   // earlier zero-result-only policy.
   const zeroResult = job.candidateAudit?.received === 0 &&
     job.candidateReceipts.length === 0;
-  return JSON.stringify({
+  const fingerprint = JSON.stringify({
     contract: zeroResult
       ? "cadence-micro-seed-zero-result-parent-v1"
       : "cadence-micro-seed-terminal-miss-parent-v1",
@@ -296,6 +296,9 @@ function primaryFallbackReceiptFingerprint(
       createdAt: reservation.createdAt,
     },
   });
+  return job.policyVersion >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION
+    ? sha256Hex(fingerprint)
+    : fingerprint;
 }
 
 function validPrimaryFallbackReceipt(args: {
@@ -744,6 +747,25 @@ type CadenceCurrentPolicyLedgerResult =
   | CadenceCurrentPolicyLedgerPrecheck
   | { ready: false; reason: string };
 
+type CadenceFallbackParentPrecheck = {
+  ready: true;
+  contract: "cadence-fallback-parent-readiness-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  sourcePlanId: Id<"jobs">;
+  currentPolicyLedgerFingerprint: string;
+  parentMicroSeedJobId: Id<"cadence_micro_seed_jobs">;
+  expectedChildJobId?: Id<"cadence_micro_seed_jobs">;
+  parentMicroSeedReceiptFingerprint: string;
+};
+
+type CadenceFallbackParentResult = CadenceFallbackParentPrecheck | {
+  ready: false;
+  reason: string;
+};
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -856,6 +878,20 @@ const cadenceCurrentPolicyLedgerPrecheckValidator = v.object({
   sourcePlanId: v.id("jobs"),
   jobIds: v.array(v.id("cadence_micro_seed_jobs")),
   ledgerFingerprint: v.string(),
+});
+
+const cadenceFallbackParentPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-fallback-parent-readiness-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  sourcePlanId: v.id("jobs"),
+  currentPolicyLedgerFingerprint: v.string(),
+  parentMicroSeedJobId: v.id("cadence_micro_seed_jobs"),
+  expectedChildJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  parentMicroSeedReceiptFingerprint: v.string(),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -1626,6 +1662,155 @@ export const inspectCurrentPolicyLedgerInternal = internalQuery({
   ),
 });
 
+/** Validate the terminal primary and its child edge in a separate bounded
+ * transaction. The current-policy projection already binds the tenant and
+ * entitlement; isolating these receipt reads prevents fallback admission from
+ * exceeding the transaction budget as tenant history grows. */
+async function cadenceFallbackParentReadinessPrecheck(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  timestamp: number,
+  sourcePlanId: Id<"jobs">,
+  topicPrecheck: CadenceTopicReadinessPrecheck,
+  sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
+  priorPolicyHistory: CadencePriorPolicyHistoryAggregate,
+  currentPolicyLedger: CadenceCurrentPolicyLedgerPrecheck,
+  parentMicroSeedJobId: Id<"cadence_micro_seed_jobs">,
+  expectedChildJobId?: Id<"cadence_micro_seed_jobs">,
+): Promise<CadenceFallbackParentResult> {
+  const site = await ctx.db.get(siteId);
+  const canonicalDomain = site && siteCanonicalDomain(site);
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !canonicalDomain ||
+    topicPrecheck.siteId !== String(site._id) ||
+    topicPrecheck.canonicalDomain !== canonicalDomain ||
+    topicPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    sourcePlanPrecheck.siteId !== String(site._id) ||
+    sourcePlanPrecheck.sourcePlanId !== sourcePlanId ||
+    priorPolicyHistory.siteId !== String(site._id) ||
+    priorPolicyHistory.sourcePlanId !== sourcePlanId ||
+    currentPolicyLedger.siteId !== String(site._id) ||
+    currentPolicyLedger.sourcePlanId !== sourcePlanId ||
+    currentPolicyLedger.jobIds.length !== (expectedChildJobId ? 2 : 1) ||
+    currentPolicyLedger.currentJobId !==
+      (expectedChildJobId ? String(expectedChildJobId) : undefined) ||
+    !currentPolicyLedger.jobIds.includes(parentMicroSeedJobId) ||
+    (expectedChildJobId &&
+      !currentPolicyLedger.jobIds.includes(expectedChildJobId))
+  ) return { ready: false, reason: "fallback_parent_inspection_stale" };
+  const parent = await ctx.db.get(parentMicroSeedJobId);
+  const [reservation, children] = parent
+    ? await Promise.all([
+        ctx.db.get(parent.providerSpendReservationId),
+        ctx.db.query("cadence_micro_seed_jobs")
+          .withIndex("by_site_parent", (q) =>
+            q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
+          )
+          .take(2),
+      ])
+    : [null, []];
+  const primarySeeds = selectCadenceMicroSeedProbeBatch(
+    cadenceMicroSeedRecoveryAnchors(site),
+    String(sourcePlanId),
+    CADENCE_MICRO_SEED_VERSION - 1,
+    priorPolicyHistory.attemptedPrimarySeeds,
+    topicPrecheck.coveredKeywords,
+  );
+  const primarySeed = primarySeeds[0];
+  const childEdgeValid = expectedChildJobId
+    ? children.length === 1 && children[0]?._id === expectedChildJobId
+    : children.length === 0;
+  if (
+    !parent ||
+    !primarySeed ||
+    !childEdgeValid ||
+    !validPrimaryFallbackReceipt({
+      site,
+      job: parent,
+      reservation,
+      sourcePlanId,
+      sourcePlanReservationId: sourcePlanPrecheck.sourcePlanReservationId,
+      sourcePlanFingerprint: sourcePlanPrecheck.sourcePlanFingerprint,
+      primarySeed,
+      primarySeeds,
+      locationCode: dataForSeoLocationCode(site.targetCountry),
+      languageCode: dataForSeoLanguageCode(site.language),
+      timestamp,
+    }) ||
+    !reservation
+  ) return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
+  return {
+    ready: true,
+    contract: "cadence-fallback-parent-readiness-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    sourcePlanId,
+    currentPolicyLedgerFingerprint: currentPolicyLedger.ledgerFingerprint,
+    parentMicroSeedJobId,
+    ...(expectedChildJobId ? { expectedChildJobId } : {}),
+    parentMicroSeedReceiptFingerprint: primaryFallbackReceiptFingerprint(
+      parent,
+      reservation,
+    ),
+  };
+}
+
+export const inspectFallbackParentReadinessInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+    topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
+    priorPolicyHistory: cadencePriorPolicyHistoryAggregateValidator,
+    currentPolicyLedger: cadenceCurrentPolicyLedgerPrecheckValidator,
+    parentMicroSeedJobId: v.id("cadence_micro_seed_jobs"),
+    expectedChildJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  },
+  handler: async (ctx, args) => cadenceFallbackParentReadinessPrecheck(
+    ctx,
+    args.siteId,
+    Date.now(),
+    args.sourcePlanId,
+    args.topicPrecheck,
+    args.sourcePlanPrecheck,
+    args.priorPolicyHistory,
+    args.currentPolicyLedger,
+    args.parentMicroSeedJobId,
+    args.expectedChildJobId,
+  ),
+});
+
+function fallbackParentPrecheckMatches(args: {
+  site: Doc<"sites">;
+  sourcePlanId: Id<"jobs">;
+  currentPolicyLedger: CadenceCurrentPolicyLedgerPrecheck;
+  parentMicroSeedJobId: Id<"cadence_micro_seed_jobs">;
+  expectedChildJobId?: Id<"cadence_micro_seed_jobs">;
+  precheck?: CadenceFallbackParentPrecheck;
+}): args is typeof args & { precheck: CadenceFallbackParentPrecheck } {
+  const { site, precheck } = args;
+  const canonicalDomain = siteCanonicalDomain(site);
+  return Boolean(
+    precheck &&
+      precheck.contract === "cadence-fallback-parent-readiness-v1" &&
+      precheck.siteId === String(site._id) &&
+      precheck.canonicalDomain === canonicalDomain &&
+      precheck.domainRevision === siteCanonicalDomainRevision(site) &&
+      precheck.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
+      precheck.sourcePlanId === args.sourcePlanId &&
+      precheck.currentPolicyLedgerFingerprint ===
+        args.currentPolicyLedger.ledgerFingerprint &&
+      precheck.parentMicroSeedJobId === args.parentMicroSeedJobId &&
+      precheck.expectedChildJobId === args.expectedChildJobId &&
+      /^[a-f0-9]{64}$/.test(precheck.parentMicroSeedReceiptFingerprint)
+  );
+}
+
 /**
  * Resolve the immutable no-replay chain independently from
  * both current inventory projections. Historical recovery receipts grow with
@@ -1641,6 +1826,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
   priorPolicyHistory: CadencePriorPolicyHistoryAggregate,
   currentPolicyLedger: CadenceCurrentPolicyLedgerPrecheck,
+  fallbackParentPrecheck?: CadenceFallbackParentPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<CadenceCurrentPolicyReadinessResult> {
   const site = await ctx.db.get(siteId);
@@ -1769,44 +1955,23 @@ async function cadenceCurrentPolicyReadinessPrecheck(
       const parent = sourceJobs.find((job) =>
         job._id === currentJob.parentMicroSeedJobId
       );
-      const parentReservation = parent
-        ? await ctx.db.get(parent.providerSpendReservationId)
-        : null;
-      const parentChildren = parent
-        ? await ctx.db.query("cadence_micro_seed_jobs")
-          .withIndex("by_site_parent", (q) =>
-            q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
-          )
-          .take(2)
-        : [];
       if (
         !parent ||
         parent._id === currentJob._id ||
-        parentChildren.length !== 1 ||
-        parentChildren[0]?._id !== currentJob._id ||
-        !validPrimaryFallbackReceipt({
+        !fallbackParentPrecheck ||
+        !fallbackParentPrecheckMatches({
           site,
-          job: parent,
-          reservation: parentReservation,
           sourcePlanId,
-          sourcePlanReservationId: sourceReservationId,
-          sourcePlanFingerprint: sourceFingerprint,
-          primarySeed,
-          primarySeeds,
-          locationCode,
-          languageCode,
-          timestamp,
+          currentPolicyLedger,
+          parentMicroSeedJobId: parent._id,
+          expectedChildJobId: currentJob._id,
+          precheck: fallbackParentPrecheck,
         })
       ) {
         return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
       }
-      if (!parentReservation) {
-        return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
-      }
-      const parentFingerprint = primaryFallbackReceiptFingerprint(
-        parent,
-        parentReservation,
-      );
+      const parentFingerprint =
+        fallbackParentPrecheck.parentMicroSeedReceiptFingerprint;
       const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
         anchors,
         String(sourcePlanId),
@@ -1828,30 +1993,16 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     }
   } else if (sourceJobs.length === 1) {
     const parent = sourceJobs[0]!;
-    const [parentReservation, parentChildren] = await Promise.all([
-      ctx.db.get(parent.providerSpendReservationId),
-      ctx.db.query("cadence_micro_seed_jobs")
-        .withIndex("by_site_parent", (q) =>
-          q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
-        )
-        .take(1),
-    ]);
-    if (parentChildren.length > 0 || !validPrimaryFallbackReceipt({
-      site,
-      job: parent,
-      reservation: parentReservation,
-      sourcePlanId,
-      sourcePlanReservationId: sourceReservationId,
-      sourcePlanFingerprint: sourceFingerprint,
-      primarySeed,
-      primarySeeds,
-      locationCode,
-      languageCode,
-      timestamp,
-    })) {
-      return { ready: false, reason: "source_plan_already_recovered" };
-    }
-    if (!parentReservation) {
+    if (
+      !fallbackParentPrecheck ||
+      !fallbackParentPrecheckMatches({
+        site,
+        sourcePlanId,
+        currentPolicyLedger,
+        parentMicroSeedJobId: parent._id,
+        precheck: fallbackParentPrecheck,
+      })
+    ) {
       return { ready: false, reason: "source_plan_already_recovered" };
     }
     const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
@@ -1869,10 +2020,8 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     seed = fallbackSeed;
     providerSeeds = fallbackSeeds;
     parentMicroSeedJobId = parent._id;
-    parentMicroSeedReceiptFingerprint = primaryFallbackReceiptFingerprint(
-      parent,
-      parentReservation,
-    );
+    parentMicroSeedReceiptFingerprint =
+      fallbackParentPrecheck.parentMicroSeedReceiptFingerprint;
   } else if (sourceJobs.length === 2) {
     return { ready: false, reason: "source_plan_fallback_already_attempted" };
   }
@@ -1945,6 +2094,7 @@ export const inspectCurrentPolicyReadinessInternal = internalQuery({
     sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
     priorPolicyHistory: cadencePriorPolicyHistoryAggregateValidator,
     currentPolicyLedger: cadenceCurrentPolicyLedgerPrecheckValidator,
+    fallbackParentPrecheck: v.optional(cadenceFallbackParentPrecheckValidator),
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
   handler: async (ctx, args) => cadenceCurrentPolicyReadinessPrecheck(
@@ -1956,6 +2106,7 @@ export const inspectCurrentPolicyReadinessInternal = internalQuery({
     args.sourcePlanPrecheck,
     args.priorPolicyHistory,
     args.currentPolicyLedger,
+    args.fallbackParentPrecheck,
     args.currentJobId,
   ),
 });
