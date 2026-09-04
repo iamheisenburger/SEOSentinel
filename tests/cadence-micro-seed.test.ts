@@ -431,6 +431,31 @@ test("recovery turns verbose mature-site audiences into search-shaped probes", (
   );
 });
 
+test("recovery gives later explicit product capabilities equal probe coverage", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "AI SEO content generator",
+      "automated SEO content creation",
+      "autonomous content marketing platform",
+      "AI-powered article writer for SEO",
+      "keyword research and content automation",
+      "automated content publishing tool",
+    ],
+    keyFeatures: [
+      "Fact checking",
+      "Ranking monitoring",
+      "Content refresh automation",
+      "Backlink building automation",
+    ],
+    targetAudienceSummary: "SaaS founders and B2B marketing managers.",
+  });
+
+  assert.ok(anchors.includes("saas fact checking"));
+  assert.ok(anchors.includes("saas ranking monitoring"));
+  assert.ok(anchors.includes("saas content refresh"));
+  assert.ok(anchors.includes("saas backlink building"));
+});
+
 test("recovery never lets clipped feature prose displace mature search anchors", () => {
   const anchors = cadenceMicroSeedRecoveryAnchors({
     anchorKeywords: [
@@ -696,7 +721,7 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
-  assert.equal(CADENCE_MICRO_SEED_VERSION, 34);
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 35);
   assert.equal(CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION, 30);
   assert.ok(
     CADENCE_MICRO_SEED_VERSION >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,

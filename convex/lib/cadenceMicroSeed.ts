@@ -13,6 +13,13 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 35 round-robins every explicit product capability before expanding
+// another phrase from the same capability. Production v34 proved that short
+// audience-shaped queries returned measurable demand, but an early break let
+// the first content-writing anchors consume the product-core portfolio and
+// starve later tenant features such as refresh, monitoring, and backlinks.
+// The probe and spend ceilings are unchanged; this only balances the same
+// tenant-owned, independently gated search surface.
 // Version 34 shortens audience-qualified probes into actual search-shaped
 // product/category phrases. Production v33 proved that preserving complete
 // three-word product and audience phrases made every otherwise safe probe too
@@ -106,7 +113,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 34;
+export const CADENCE_MICRO_SEED_VERSION = 35;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -466,7 +473,7 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
       const words = value.split(" ").filter(Boolean);
       return words.length >= 2 && words.length <= 6 && !/\d/.test(value);
     })
-    .slice(0, 6);
+    .slice(0, 12);
   const exactProductAnchors = [...new Set([
     ...exactSearchAnchors,
     ...exactFeaturePhrases,
@@ -571,37 +578,48 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     seenProductCores.add(core);
     productCores.push(core);
   };
-  for (const anchor of productAnchors) {
-    const words = normalizeCadenceMicroSeedText(anchor)
+  const productWordRows = productAnchors.map((anchor) =>
+    normalizeCadenceMicroSeedText(anchor)
       .replace(/[^a-z0-9+]+/g, " ")
       .split(" ")
       .filter((word) =>
         word.length >= 2 &&
         !["and", "for", "the", "with"].includes(word)
-      );
-    for (let index = 0; index + 1 < words.length; index += 1) {
-      const pair = words.slice(index, index + 2);
+      )
+  );
+  const maximumPairOffset = Math.max(
+    0,
+    ...productWordRows.map((words) => words.length - 1),
+  );
+  for (let pairOffset = 0; pairOffset < maximumPairOffset; pairOffset += 1) {
+    for (const words of productWordRows) {
+      if (pairOffset + 1 >= words.length) continue;
+      const pair = words.slice(pairOffset, pairOffset + 2);
       appendProductCore(pair);
       if (
         ["automated", "automatic", "autonomous"].includes(pair[0]!)
       ) appendProductCore([pair[1]!, "automation"]);
+      if (productCores.length >= 32) break;
     }
-    if (productCores.length >= 16) break;
+    if (productCores.length >= 32) break;
   }
   let marketProbeCount = 0;
-  for (const productCore of productCores) {
-    for (const qualifier of marketQualifiers) {
-      const before = probes.length;
-      append(`${qualifier} ${productCore}`);
-      if (probes.length > before) marketProbeCount += 1;
-      if (marketProbeCount >= 96) break;
-      const inverseBefore = probes.length;
-      append(`${productCore} ${qualifier}`);
-      if (probes.length > inverseBefore) marketProbeCount += 1;
-      if (marketProbeCount >= 96) break;
-      const qualifiedBefore = probes.length;
-      append(`${productCore} for ${qualifier}`);
-      if (probes.length > qualifiedBefore) marketProbeCount += 1;
+  const marketForms: Array<(core: string, qualifier: string) => string> = [
+    (core, qualifier) => `${qualifier} ${core}`,
+    (core, qualifier) => `${core} for ${qualifier}`,
+  ];
+  // Qualifier first, then form, then capability: every explicit product
+  // surface receives the same buyer segment before the bounded portfolio
+  // advances to another audience. Two natural query forms leave room for at
+  // least two audience segments even at the 32-core maximum.
+  for (const qualifier of marketQualifiers) {
+    for (const form of marketForms) {
+      for (const productCore of productCores) {
+        const before = probes.length;
+        append(form(productCore, qualifier));
+        if (probes.length > before) marketProbeCount += 1;
+        if (marketProbeCount >= 96) break;
+      }
       if (marketProbeCount >= 96) break;
     }
     if (marketProbeCount >= 96) break;
