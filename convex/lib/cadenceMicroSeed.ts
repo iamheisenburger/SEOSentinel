@@ -13,6 +13,11 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 27 keeps the category-based fallback tenant-grounded at the provider
+// boundary. Keyword Ideas now uses phrase-match plus a bounded regex built
+// only from the tenant's explicit product anchors, so a broad category result
+// cannot consume the paid candidate window before the independent business-
+// fit, difficulty, SERP, expected-click, and article-quality gates run.
 // Version 25 measures a deterministic portfolio of tenant-grounded search
 // queries directly with Keyword Overview, then uses the category-based Ideas
 // graph as its separately receipted fallback. This closes the sparse-provider
@@ -59,7 +64,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 26;
+export const CADENCE_MICRO_SEED_VERSION = 27;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // A successful free balance check is bound to the reservation transaction.
 // This window fences that receipt against a stale or replayed admission action;
@@ -904,10 +909,12 @@ export type CadenceMicroSeedCandidateEvaluation<T> = {
 };
 
 const CADENCE_MICRO_SEED_ANCHOR_NOISE = new Set([
-  "and", "app", "apps", "application", "applications", "best", "for",
-  "online", "platform", "platforms", "product", "products", "service",
-  "services", "software", "solution", "solutions", "system", "systems",
-  "the", "tool", "tools", "top", "with",
+  "and", "app", "apps", "application", "applications", "best", "business",
+  "checklist", "checklists", "example", "examples", "for", "guide", "guides",
+  "how", "online", "platform", "platforms", "practice", "practices", "product",
+  "products", "service", "services", "small", "software", "solution",
+  "solutions", "system", "systems", "the", "tool", "tools", "top", "use",
+  "using", "with",
 ]);
 
 const CADENCE_MICRO_SEED_ANCHOR_ALIASES = new Map([
@@ -931,6 +938,56 @@ function cadenceMicroSeedAnchorTokens(value: string): Set<string> {
       token.length >= 3 && !CADENCE_MICRO_SEED_ANCHOR_NOISE.has(token)
     )
     .map((token) => CADENCE_MICRO_SEED_ANCHOR_ALIASES.get(token) ?? token));
+}
+
+export const CADENCE_MICRO_SEED_FALLBACK_KEYWORD_REGEX_MAX_LENGTH = 1_000;
+
+function cadenceMicroSeedRegexStem(token: string): string {
+  // Tokens are already normalized to ASCII alphanumerics. Keep short product
+  // concepts exact and stem longer concepts just enough to cover ordinary
+  // inflection (qualify/qualification, automate/automation, rank/ranking).
+  const stemLength = token.length <= 5 ? token.length : 5;
+  return `${token.slice(0, stemLength)}[a-z0-9]*`;
+}
+
+/**
+ * Build the exact provider-side relevance fence for Keyword Ideas.
+ *
+ * The regex is derived solely from current tenant-owned anchors, requires the
+ * first two meaningful product concepts from an anchor in either order, and
+ * is deterministically capped at DataForSEO's documented 1,000-character
+ * filter limit. A genuinely single-concept anchor remains usable, matching
+ * the existing downstream anchor gate, while offering words such as
+ * "software", "platform", and "best" can never authorize a row.
+ */
+export function cadenceMicroSeedFallbackKeywordRegex(
+  seeds: readonly string[],
+): string | null {
+  const clauses: string[] = [];
+  const seen = new Set<string>();
+  for (const seed of seeds) {
+    const concepts = [...cadenceMicroSeedAnchorTokens(seed)].slice(0, 2);
+    if (concepts.length === 0) continue;
+    const stems = concepts.map(cadenceMicroSeedRegexStem);
+    const clause = stems.length === 1
+      ? stems[0]!
+      : `(${stems[0]}.*${stems[1]}|${stems[1]}.*${stems[0]})`;
+    if (seen.has(clause)) continue;
+    const nextClauses = [...clauses, clause];
+    const nextExpression = nextClauses.length === 1
+      ? nextClauses[0]!
+      : `(${nextClauses.join("|")})`;
+    // Leave no ambiguity at the provider contract boundary: only complete
+    // clauses enter the alternation, never a truncated regex fragment.
+    if (
+      nextExpression.length >
+        CADENCE_MICRO_SEED_FALLBACK_KEYWORD_REGEX_MAX_LENGTH
+    ) continue;
+    seen.add(clause);
+    clauses.push(clause);
+  }
+  if (clauses.length === 0) return null;
+  return clauses.length === 1 ? clauses[0]! : `(${clauses.join("|")})`;
 }
 
 /**

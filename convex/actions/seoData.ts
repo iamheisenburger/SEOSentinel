@@ -25,6 +25,7 @@ import {
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_TASK_COST_CEILING_USD,
+  cadenceMicroSeedFallbackKeywordRegex,
 } from "../lib/cadenceMicroSeed.ts";
 import {
   DATAFORSEO_AUTHORITY_SOURCE,
@@ -291,7 +292,17 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   languageCode = dataForSeoLanguageCode(languageCode);
   const primary = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT;
   const functionName = primary ? "keyword_overview" : "keyword_ideas";
-  const filter = ["keyword_info.search_volume", ">=", 10];
+  const fallbackKeywordRegex = primary
+    ? null
+    : cadenceMicroSeedFallbackKeywordRegex(normalizedSeeds);
+  if (!primary && !fallbackKeywordRegex) {
+    throw new Error("Cadence micro-seed fallback has no product concept fence");
+  }
+  const filter = [
+    ["keyword_info.search_volume", ">=", 10],
+    "and",
+    ["keyword", "regex", fallbackKeywordRegex],
+  ];
   const orderBy = [
     "relevance,desc",
     "keyword_info.search_volume,desc",
@@ -310,7 +321,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
         keywords: normalizedSeeds,
         location_code: locationCode,
         language_code: languageCode,
-        closely_variants: false,
+        closely_variants: true,
         ignore_synonyms: false,
         include_serp_info: false,
         include_clickstream_data: false,
@@ -351,7 +362,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   const endpointEchoValid = primary
     ? taskData?.limit === undefined && taskData?.filters === undefined &&
       taskData?.order_by === undefined
-    : taskData?.closely_variants === false &&
+    : taskData?.closely_variants === true &&
       taskData?.ignore_synonyms === false && taskData?.limit === limit &&
       JSON.stringify(taskData?.filters) === JSON.stringify(filter) &&
       JSON.stringify(taskData?.order_by) === JSON.stringify(orderBy);
