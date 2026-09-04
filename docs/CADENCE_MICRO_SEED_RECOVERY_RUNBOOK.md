@@ -1,6 +1,6 @@
 # Cadence micro-seed recovery
 
-Current policy: v25. A policy upgrade preserves every older paid receipt; it
+Current policy: v26. A policy upgrade preserves every older paid receipt; it
 never replays the same endpoint/seed envelope or relaxes keyword, authority,
 SERP, overlap, article-quality, publication, or live-verification gates.
 Version 25 first measures a deterministic portfolio of tenant-grounded exact
@@ -8,6 +8,12 @@ queries with Keyword Overview. If that receipt proves no usable candidate, a
 separately receipted Keyword Ideas fallback explores the tenant's product
 categories. This replaces the sparse Suggestions/Related Keywords lottery
 that production proved can return no rows for legitimate B2B product phrases.
+Version 26 binds the successful free DataForSEO balance preflight to the same
+atomic reservation admission. The worker validates that fresh receipt instead
+of immediately repeating the remote preflight, which previously let a
+transient second check consume the one-shot fallback marker before any paid
+request. The paid no-replay boundary and every downstream SERP, article-quality,
+publication, and live-verification gate remain unchanged.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready

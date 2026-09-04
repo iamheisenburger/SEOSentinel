@@ -7,6 +7,7 @@ import { internalAction, type ActionCtx } from "../_generated/server";
 import { v } from "convex/values";
 import {
   CADENCE_MICRO_SEED_FINALIZE_DELAY_MS,
+  CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS,
   CADENCE_MICRO_SEED_MAX_FINALIZE_ATTEMPTS,
   CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
@@ -56,16 +57,6 @@ function stableFailureCode(error: unknown): string {
     return "planned_evidence_unavailable";
   }
   return "micro_seed_failed";
-}
-
-function releaseReason(error: unknown):
-  | "provider_balance_insufficient"
-  | "provider_balance_preflight_unavailable"
-  | null {
-  if (!isDataForSeoBalancePreflightError(error)) return null;
-  return error.code === "insufficient_balance"
-    ? "provider_balance_insufficient"
-    : "provider_balance_preflight_unavailable";
 }
 
 async function raiseMiss(
@@ -366,11 +357,12 @@ export const recoverCadenceGap = internalAction({
     ) {
       return { applied: false, reason: "micro_seed_inspection_stale", current: inspected };
     }
-    await assertDataForSeoAccountBalance(
+    const providerBalanceRequiredMicroUsd =
       inspected.providerCostCeilingMicroUsd +
-        EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD *
-          CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
-    );
+      EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD *
+        CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES;
+    await assertDataForSeoAccountBalance(providerBalanceRequiredMicroUsd);
+    const providerBalancePreflightAt = Date.now();
     const result = await ctx.runMutation(api.reserveAndQueue, {
       siteId: args.siteId,
       inspectionKey: inspected.inspectionKey,
@@ -383,6 +375,8 @@ export const recoverCadenceGap = internalAction({
       parentMicroSeedReceiptFingerprint:
         inspected.parentMicroSeedReceiptFingerprint,
       providerCostCeilingMicroUsd: inspected.providerCostCeilingMicroUsd,
+      providerBalancePreflightAt,
+      providerBalanceRequiredMicroUsd,
     });
     return { applied: result.queued === true, result, reconciledCosts };
   },
@@ -411,7 +405,16 @@ export const processCadenceMicroSeed = internalAction({
     if (
       claimedProviderCeiling === null ||
       claimed.providerCostCeilingMicroUsd !== claimedProviderCeiling ||
-      claimed.providerCostReservedMicroUsd !== claimedProviderCeiling
+      claimed.providerCostReservedMicroUsd !== claimedProviderCeiling ||
+      typeof claimed.providerBalancePreflightAt !== "number" ||
+      !Number.isSafeInteger(claimed.providerBalancePreflightAt) ||
+      claimed.providerBalancePreflightAt > claimed.createdAt ||
+      claimed.createdAt - claimed.providerBalancePreflightAt >
+        CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS ||
+      claimed.providerBalanceRequiredMicroUsd !==
+        claimedProviderCeiling +
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD *
+            CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES
     ) {
       await ctx.runMutation(api.markProviderResponseUnverified, {
         siteId: args.siteId,
@@ -427,23 +430,6 @@ export const processCadenceMicroSeed = internalAction({
       );
       return { processed: false, reason: "provider_cost_contract_incompatible" };
     }
-    try {
-      await assertDataForSeoAccountBalance(claimedProviderCeiling);
-    } catch (error) {
-      const reason = releaseReason(error);
-      if (reason && !claimed.providerCallAttempted) {
-        const aborted = await ctx.runMutation(api.abortForProviderBalance, {
-          siteId: args.siteId,
-          jobId: args.jobId,
-          workerToken,
-          releaseReason: reason,
-        });
-        await raiseMiss(ctx, args.siteId, args.jobId, reason);
-        return { processed: false, ...aborted };
-      }
-      throw error;
-    }
-
     const begun = await ctx.runMutation(api.beginProviderAttempt, {
       siteId: args.siteId,
       jobId: args.jobId,

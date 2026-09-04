@@ -2047,6 +2047,10 @@ export default defineSchema({
     providerCostCeilingMicroUsd: v.number(),
     providerCostReservedMicroUsd: v.number(),
     providerSpendReservationId: v.id("provider_spend_reservations"),
+    // Exact free provider-balance admission receipt. Optional only for
+    // immutable jobs created before v26.
+    providerBalancePreflightAt: v.optional(v.number()),
+    providerBalanceRequiredMicroUsd: v.optional(v.number()),
     providerCallAttempted: v.boolean(),
     providerCallCompleted: v.boolean(),
     providerAttemptedAt: v.optional(v.number()),

@@ -1492,6 +1492,10 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     action.indexOf("export const processCadenceMicroSeed"),
     action.indexOf("export const resumeCadenceEvidenceHandoff"),
   );
+  const recovery = action.slice(
+    action.indexOf("export const recoverCadenceGap"),
+    action.indexOf("export const processCadenceMicroSeed"),
+  );
   assert.ok(action.indexOf("mode: v.union") < action.indexOf("reserveAndQueue"));
   assert.ok(worker.indexOf("api.beginProviderAttempt") <
     worker.indexOf("discoverCadenceMicroSeedFromDataForSEO"));
@@ -1519,6 +1523,23 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(
     action,
     /inspected\.providerCostCeilingMicroUsd \+[\s\S]*EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD/,
+  );
+  assert.ok(
+    recovery.indexOf("assertDataForSeoAccountBalance") <
+      recovery.indexOf("api.reserveAndQueue"),
+  );
+  assert.match(
+    recovery,
+    /providerBalancePreflightAt[\s\S]*providerBalanceRequiredMicroUsd/,
+  );
+  assert.doesNotMatch(
+    worker,
+    /assertDataForSeoAccountBalance/,
+    "the paid worker consumes the atomic admission receipt instead of repeating the remote preflight",
+  );
+  assert.match(
+    model,
+    /provider_balance_receipt_incompatible[\s\S]*providerBalancePreflightAt:[\s\S]*providerBalanceRequiredMicroUsd:/,
   );
   assert.match(model, /recordEvidenceQueued[\s\S]*finalizeCadenceMicroSeed/);
   assert.match(model, /plannedEvidenceFingerprint/);

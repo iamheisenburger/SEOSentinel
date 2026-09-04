@@ -13,6 +13,7 @@ import {
 } from "./lib/planProviderBudget";
 import {
   CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
+  CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS,
   CADENCE_MICRO_SEED_FINALIZE_DELAY_MS,
   CADENCE_MICRO_SEED_LEASE_MS,
   CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS,
@@ -1292,6 +1293,8 @@ export const reserveAndQueue = internalMutation({
     parentMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
     parentMicroSeedReceiptFingerprint: v.optional(v.string()),
     providerCostCeilingMicroUsd: v.number(),
+    providerBalancePreflightAt: v.number(),
+    providerBalanceRequiredMicroUsd: v.number(),
   },
   handler: async (ctx, args) => {
     const inspected = await inspectReadiness(ctx, args.siteId, Date.now());
@@ -1321,6 +1324,22 @@ export const reserveAndQueue = internalMutation({
       return { queued: false as const, reason: "site_unavailable" as const };
     }
     const timestamp = Date.now();
+    const requiredProviderBalanceMicroUsd =
+      inspected.providerCostCeilingMicroUsd +
+      inspected.evidenceHeadroomMicroUsd *
+        CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES;
+    if (
+      !Number.isSafeInteger(args.providerBalancePreflightAt) ||
+      args.providerBalancePreflightAt > timestamp ||
+      timestamp - args.providerBalancePreflightAt >
+        CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS ||
+      args.providerBalanceRequiredMicroUsd !== requiredProviderBalanceMicroUsd
+    ) {
+      return {
+        queued: false as const,
+        reason: "provider_balance_receipt_incompatible" as const,
+      };
+    }
     const reservation = await reserveSharedProviderBudget(ctx, {
       siteId: args.siteId,
       userId: site.userId,
@@ -1366,6 +1385,9 @@ export const reserveAndQueue = internalMutation({
       providerCostCeilingMicroUsd: inspected.providerCostCeilingMicroUsd,
       providerCostReservedMicroUsd: inspected.providerCostCeilingMicroUsd,
       providerSpendReservationId: reservation.reservationId,
+      providerBalancePreflightAt: args.providerBalancePreflightAt,
+      providerBalanceRequiredMicroUsd:
+        args.providerBalanceRequiredMicroUsd,
       providerCallAttempted: false,
       providerCallCompleted: false,
       candidateReceipts: [],

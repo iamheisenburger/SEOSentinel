@@ -59,8 +59,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 25;
+export const CADENCE_MICRO_SEED_VERSION = 26;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
+// A successful free balance check is bound to the reservation transaction.
+// This window fences that receipt against a stale or replayed admission action;
+// the reservation ledger owns capacity after the job is created.
+export const CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS = 30_000;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 32;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
