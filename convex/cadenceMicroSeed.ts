@@ -1045,14 +1045,16 @@ async function inspectReadiness(
     cadenceMicroSeedProviderCeilingMicroUsd(attemptKind);
   const evidenceHeadroomMicroUsd =
     EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD;
-  // Inspect the complete remaining two-phase headroom. A new fallback needs
-  // exactly $0.05 + $0.10; its running child already owns the $0.05 receipt
-  // and must still prove the remaining $0.10 before crossing the paid call.
-  // This observes rather than locks evidence capacity, so a later race remains
-  // an honest cadence miss and never a fabricated SEO rejection.
+  // Inspect the complete bounded continuation headroom. Discovery can retain
+  // up to three strict candidates and each candidate owns a separate exact
+  // live-SERP evidence receipt. Admission must therefore prove room for every
+  // possible evidence attempt, rather than admitting a job that can be
+  // deterministically stranded after its first semantic rejection. This
+  // observes rather than locks evidence capacity, so a later cross-tenant race
+  // remains an honest budget miss and never a fabricated SEO rejection.
   const combinedHeadroom =
     (currentJobId ? 0 : providerCostCeilingMicroUsd) +
-    evidenceHeadroomMicroUsd;
+    evidenceHeadroomMicroUsd * CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES;
   const accountCapacity = evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: ledger.accountReservedTodayMicroUsd,
     accountReservedThisMonthMicroUsd: ledger.accountReservedThisMonthMicroUsd,

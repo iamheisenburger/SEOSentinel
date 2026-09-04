@@ -8,6 +8,7 @@ import { v } from "convex/values";
 import {
   CADENCE_MICRO_SEED_FINALIZE_DELAY_MS,
   CADENCE_MICRO_SEED_MAX_FINALIZE_ATTEMPTS,
+  CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_VERSION,
   cadenceMicroSeedAttemptKind,
@@ -361,7 +362,8 @@ export const recoverCadenceGap = internalAction({
     }
     await assertDataForSeoAccountBalance(
       inspected.providerCostCeilingMicroUsd +
-        EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD *
+          CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
     );
     const result = await ctx.runMutation(api.reserveAndQueue, {
       siteId: args.siteId,
