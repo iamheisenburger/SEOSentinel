@@ -1,5 +1,6 @@
 import {
   filterNonCannibalizingIntentTopics,
+  filterNonCannibalizingTopics,
   keywordDifficultyCeiling,
   tenantDiscoveryAnchors,
   type SerpCoverageTopic,
@@ -12,6 +13,11 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 18 keeps recovery on the tenant's explicit search/product surface
+// and ranks those anchors by current lexical saturation before choosing a
+// deterministic primary plus a genuinely distinct fallback. Broad audience
+// and pain-point prose may still rescue a sparse profile, but can no longer
+// displace configured product anchors on a complete profile.
 // Version 17 is the one-shot recovery generation for planner checkpoints
 // created while the planning action compared the shared v8 business-fit
 // result to a stale v5 literal. It advances to the next unused, tenant-owned
@@ -36,7 +42,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 17;
+export const CADENCE_MICRO_SEED_VERSION = 18;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
@@ -307,6 +313,27 @@ export function cadenceMicroSeedAnchors(args: {
 }
 
 /**
+ * Recovery spends on explicit search terms and product capabilities first.
+ * Pain/audience prose is useful planner context, but it is not a reliable
+ * paid seed when a tenant already supplied at least two product anchors. A
+ * sparse tenant retains the full bounded fallback so onboarding never depends
+ * on a particular profile shape.
+ */
+export function cadenceMicroSeedRecoveryAnchors(args: {
+  anchorKeywords?: string[] | null;
+  keyFeatures?: string[] | null;
+  painPoints?: string[] | null;
+  productUsage?: string | null;
+  targetAudienceSummary?: string | null;
+}): string[] {
+  const explicit = cadenceMicroSeedAnchors({
+    anchorKeywords: args.anchorKeywords,
+    keyFeatures: args.keyFeatures,
+  });
+  return explicit.length >= 2 ? explicit : cadenceMicroSeedAnchors(args);
+}
+
+/**
  * Revalidate an unpublished legacy topic against both immutable creation
  * evidence and the tenant's current explicit discovery anchors. This catches
  * historical policies that fragmented a valid user phrase before persisting
@@ -344,6 +371,7 @@ export function selectCadenceMicroSeedAnchor(
   sourcePlanKey: string,
   policyGeneration = 0,
   previouslyAttemptedSeeds: readonly string[] = [],
+  coveredKeywords: readonly string[] = [],
 ): string | null {
   const attempted = new Set(
     previouslyAttemptedSeeds.map(normalizeCadenceMicroSeedText).filter(Boolean),
@@ -352,6 +380,28 @@ export function selectCadenceMicroSeedAnchor(
     anchors.map(normalizeCadenceMicroSeedText).filter(Boolean),
   )].filter((anchor) => !attempted.has(anchor));
   if (normalized.length === 0) return null;
+  const conflicts = (anchor: string) => coveredKeywords.reduce(
+    (count, covered) => count + (
+      filterNonCannibalizingTopics(
+        [{ primaryKeyword: anchor }],
+        [covered],
+        0.35,
+        1,
+      ).length === 0 ? 1 : 0
+    ),
+    0,
+  );
+  const ranked = normalized.map((anchor, index) => ({
+    anchor,
+    index,
+    conflicts: conflicts(anchor),
+  })).sort((left, right) =>
+    left.conflicts - right.conflicts || left.index - right.index
+  );
+  const minimumConflicts = ranked[0]!.conflicts;
+  const preferred = ranked.filter((candidate) =>
+    candidate.conflicts === minimumConflicts
+  ).map((candidate) => candidate.anchor);
   let hash = 0;
   for (const character of sourcePlanKey) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
@@ -362,7 +412,22 @@ export function selectCadenceMicroSeedAnchor(
   const generation = Number.isSafeInteger(policyGeneration)
     ? Math.max(0, policyGeneration)
     : 0;
-  return normalized[(hash + generation * 2) % normalized.length] ?? null;
+  return preferred[(hash + generation * 2) % preferred.length] ?? null;
+}
+
+function cadenceMicroSeedAnchorsAreDistinct(
+  left: string,
+  right: string,
+): boolean {
+  const leftTokens = cadenceMicroSeedAnchorTokens(left);
+  const rightTokens = cadenceMicroSeedAnchorTokens(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return false;
+  let shared = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) shared += 1;
+  }
+  return shared < 2 ||
+    shared / Math.min(leftTokens.size, rightTokens.size) < 0.6;
 }
 
 /**
@@ -376,6 +441,7 @@ export function selectCadenceMicroSeedFallbackAnchor(
   primarySeed: string,
   policyGeneration = 0,
   previouslyAttemptedSeeds: readonly string[] = [],
+  coveredKeywords: readonly string[] = [],
 ): string | null {
   const attempted = new Set(
     previouslyAttemptedSeeds.map(normalizeCadenceMicroSeedText).filter(Boolean),
@@ -389,13 +455,39 @@ export function selectCadenceMicroSeedFallbackAnchor(
     sourcePlanKey,
     policyGeneration,
     previouslyAttemptedSeeds,
+    coveredKeywords,
   );
   const primary = normalizeCadenceMicroSeedText(primarySeed);
   if (!expectedPrimary || expectedPrimary !== primary) return null;
-  const primaryIndex = normalized.indexOf(primary);
+  const conflicts = (anchor: string) => coveredKeywords.reduce(
+    (count, covered) => count + (
+      filterNonCannibalizingTopics(
+        [{ primaryKeyword: anchor }],
+        [covered],
+        0.35,
+        1,
+      ).length === 0 ? 1 : 0
+    ),
+    0,
+  );
+  const ranked = normalized.map((anchor, index) => ({
+    anchor,
+    index,
+    conflicts: conflicts(anchor),
+  })).sort((left, right) =>
+    left.conflicts - right.conflicts || left.index - right.index
+  ).map((candidate) => candidate.anchor);
+  const primaryIndex = ranked.indexOf(primary);
   if (primaryIndex < 0) return null;
-  const alternate = normalized[(primaryIndex + 1) % normalized.length] ?? null;
-  return alternate && alternate !== primary ? alternate : null;
+  for (let offset = 1; offset < ranked.length; offset += 1) {
+    const alternate = ranked[(primaryIndex + offset) % ranked.length];
+    if (
+      alternate &&
+      alternate !== primary &&
+      cadenceMicroSeedAnchorsAreDistinct(primary, alternate)
+    ) return alternate;
+  }
+  return null;
 }
 
 export type CadenceMicroSeedTerminalMissAudit = {

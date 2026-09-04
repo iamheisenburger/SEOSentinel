@@ -30,6 +30,7 @@ import {
   CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedAnchors,
+  cadenceMicroSeedRecoveryAnchors,
   cadenceMicroSeedLegacyAnchorReceiptEligible,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedProviderCeilingMicroUsd,
@@ -907,12 +908,14 @@ async function inspectReadiness(
     return { ready: false, reason: "micro_seed_execution_receipt_unavailable" };
   }
 
-  const anchors = cadenceMicroSeedAnchors(site);
+  const anchors = cadenceMicroSeedRecoveryAnchors(site);
+  const coveredKeywords = coverage.map((topic) => topic.primaryKeyword);
   const primarySeed = selectCadenceMicroSeedAnchor(
     anchors,
     String(source.job._id),
     CADENCE_MICRO_SEED_VERSION - 1,
     previouslyAttemptedSeeds,
+    coveredKeywords,
   );
   if (!primarySeed) {
     return { ready: false, reason: "tenant_product_seed_unavailable" };
@@ -986,6 +989,7 @@ async function inspectReadiness(
         parent.seed,
         CADENCE_MICRO_SEED_VERSION - 1,
         previouslyAttemptedSeeds,
+        coveredKeywords,
       );
       if (
         !fallbackSeed ||
@@ -1030,6 +1034,7 @@ async function inspectReadiness(
       parent.seed,
       CADENCE_MICRO_SEED_VERSION - 1,
       previouslyAttemptedSeeds,
+      coveredKeywords,
     );
     if (!fallbackSeed) {
       return { ready: false, reason: "fallback_product_seed_unavailable" };

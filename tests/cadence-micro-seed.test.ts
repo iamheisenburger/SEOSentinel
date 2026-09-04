@@ -16,6 +16,7 @@ import {
   CADENCE_MICRO_SEED_VERSION,
   CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
   cadenceMicroSeedAnchors,
+  cadenceMicroSeedRecoveryAnchors,
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedAttemptKind,
@@ -303,6 +304,80 @@ test("paid seeds expose bounded explicit buyer problems after product anchors", 
   assert.ok(anchors.includes("manual lead qualification consuming sales team"));
   assert.ok(anchors.length <= 32);
   assert.equal(new Set(anchors).size, anchors.length);
+});
+
+test("recovery seeds keep complete profiles on explicit product anchors", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "lead qualification chatbot",
+      "website lead generation automation",
+    ],
+    keyFeatures: ["booking link integration"],
+    painPoints: ["sales teams need more pipeline"],
+    targetAudienceSummary: "small b2b businesses with websites",
+  });
+  assert.deepEqual(anchors, [
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "booking link integration",
+  ]);
+
+  const sparse = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: ["lead qualification chatbot"],
+    painPoints: ["sales teams need more pipeline"],
+  });
+  assert.ok(sparse.includes("lead qualification chatbot"));
+  assert.ok(sparse.includes("sales teams need more pipeline"));
+});
+
+test("recovery chooses the least saturated product surface and a distinct fallback", () => {
+  const anchors = [
+    "lead qualification chatbot",
+    "automated lead qualification software",
+    "booking link integration",
+  ];
+  const primary = selectCadenceMicroSeedAnchor(
+    anchors,
+    "source-plan-placeholder",
+    0,
+    [],
+    ["b2b lead qualification", "lead qualification automation"],
+  );
+  assert.equal(primary, "booking link integration");
+  const fallback = selectCadenceMicroSeedFallbackAnchor(
+    anchors,
+    "source-plan-placeholder",
+    primary!,
+    0,
+    [],
+    ["b2b lead qualification", "lead qualification automation"],
+  );
+  assert.ok(fallback);
+  const pair = new Set([primary, fallback]);
+  assert.notDeepEqual(pair, new Set([
+    "lead qualification chatbot",
+    "automated lead qualification software",
+  ]));
+});
+
+test("recovery fallback skips a near-duplicate product anchor", () => {
+  const anchors = [
+    "lead qualification chatbot",
+    "automated lead qualification software",
+    "booking link integration",
+  ];
+  const primary = selectCadenceMicroSeedAnchor(
+    anchors,
+    "c",
+    0,
+  );
+  assert.equal(primary, "lead qualification chatbot");
+  assert.equal(selectCadenceMicroSeedFallbackAnchor(
+    anchors,
+    "c",
+    primary!,
+    0,
+  ), "booking link integration");
 });
 
 test("a policy upgrade advances past every previously attempted tenant anchor", () => {

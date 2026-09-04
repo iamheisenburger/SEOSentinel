@@ -30,7 +30,8 @@ import {
 // envelope (primary discovery, fallback discovery when needed, and up to
 // three exact SERP evidence attempts), the complete $0.45 v16
 // saturated-anchor diversification envelope, the complete $0.45 v17
-// current-fit-policy recovery envelope, and a $0.25 reserve for another
+// current-fit-policy recovery envelope, a v18 product-anchor selection repair
+// drawn from the existing $0.70 release-repair reserve, and a $0.25 reserve for another
 // account must all fit in the same UTC day. The repair reserve prevents an
 // immutable ambiguous provider receipt from consuming the next corrected
 // policy version's admission headroom; the monthly cap still bounds aggregate
