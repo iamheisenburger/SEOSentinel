@@ -2078,6 +2078,33 @@ export default defineSchema({
       businessFitReasons: v.array(v.string()),
       measuredAt: v.number(),
     })),
+    // Immutable, score-ordered candidates that cleared every pre-SERP gate in
+    // the original paid receipt. Live evidence is attempted sequentially so a
+    // semantic rejection cannot silently discard the remaining valid rows.
+    candidateShortlist: v.optional(v.array(v.object({
+      keyword: v.string(),
+      label: v.string(),
+      searchVolume: v.number(),
+      difficulty: v.number(),
+      cpc: v.optional(v.number()),
+      intent: v.string(),
+      trend: v.array(v.number()),
+      businessFitScore: v.number(),
+      businessFitVersion: v.number(),
+      businessFitReasons: v.array(v.string()),
+      measuredAt: v.number(),
+    }))),
+    candidateAttemptCount: v.optional(v.number()),
+    priorCandidateAttempts: v.optional(v.array(v.object({
+      keyword: v.string(),
+      topicId: v.id("topic_clusters"),
+      topicFingerprint: v.string(),
+      plannedEvidenceFingerprint: v.string(),
+      evidenceJobId: v.id("expected_click_evidence_jobs"),
+      outcome: v.literal("semantic_failure"),
+      reason: v.string(),
+      completedAt: v.number(),
+    }))),
     topicId: v.optional(v.id("topic_clusters")),
     topicFingerprint: v.optional(v.string()),
     plannedEvidenceFingerprint: v.optional(v.string()),

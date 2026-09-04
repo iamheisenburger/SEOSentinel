@@ -720,6 +720,19 @@ export const dispatchCadenceMicroSeedFleet = internalAction({
 export const runCadenceMicroSeedFleetSite = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<unknown> => {
+    const semanticContinuation = await ctx.runMutation(
+      api.resumeLegacySemanticCandidateInternal,
+      { siteId },
+    );
+    if (semanticContinuation.advanced) {
+      return {
+        applied: true,
+        reason: "legacy_semantic_candidate_advanced",
+        semanticContinuation,
+        legacyTopicsQuarantined: 0,
+        legacyArticlesQuarantined: 0,
+      };
+    }
     const legacyRepairs = await ctx.runQuery(
       api.listLegacyAnchorMismatchRepairsInternal,
       { siteId },
@@ -847,7 +860,7 @@ export const finalizeCadenceMicroSeed = internalAction({
         outcome: eligible ? "eligible" : "semantic_failure",
         reason,
       });
-      if (!eligible) {
+      if (!eligible && !finalized.retryQueued) {
         await raiseMiss(ctx, args.siteId, args.jobId, reason);
       }
       return finalized;

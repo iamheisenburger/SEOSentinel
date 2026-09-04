@@ -19,6 +19,7 @@ import {
   CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS,
   CADENCE_MICRO_SEED_MAX_FINALIZE_ATTEMPTS,
   CADENCE_MICRO_SEED_MAX_JOB_AGE_MS,
+  CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_MAX_SCHEDULE_ATTEMPTS,
   CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_MAX_WATCHDOG_RECOVERIES,
@@ -488,6 +489,20 @@ function topicFingerprint(args: {
     keyword: normalizeCadenceMicroSeedText(args.keyword),
     measuredAt: args.measuredAt,
   });
+}
+
+/** Current jobs and the immediately preceding paid-receipt shape may finish a
+ * version-bound semantic continuation. Older policies must start over through
+ * ordinary current-policy admission. */
+function cadenceMicroSeedContinuationVersion(
+  jobVersion: number,
+  topicVersion?: number,
+): boolean {
+  return Number.isInteger(jobVersion) &&
+    Number.isInteger(topicVersion) &&
+    topicVersion === jobVersion &&
+    jobVersion >= CADENCE_MICRO_SEED_VERSION - 1 &&
+    jobVersion <= CADENCE_MICRO_SEED_VERSION;
 }
 
 type ReadinessResult =
@@ -1529,6 +1544,343 @@ const candidateValidator = v.object({
   trend: v.array(v.number()),
 });
 
+type SelectedCandidateReceipt = NonNullable<
+  Doc<"cadence_micro_seed_jobs">["selectedCandidate"]
+>;
+
+function selectedCandidateReceipt(args: {
+  site: Doc<"sites">;
+  candidate: CadenceMicroSeedMetric;
+  measuredAt: number;
+}): SelectedCandidateReceipt {
+  const fit = evaluateTopicBusinessFit({
+    keyword: args.candidate.keyword,
+    label: args.candidate.keyword,
+    ...tenantTopicBusinessSignals(args.site),
+  });
+  if (!fit.eligible) {
+    throw new Error("Cadence micro-seed business fit drifted");
+  }
+  return {
+    keyword: normalizeCadenceMicroSeedText(args.candidate.keyword),
+    label: args.candidate.keyword,
+    searchVolume: args.candidate.searchVolume,
+    difficulty: args.candidate.difficulty,
+    ...(args.candidate.cpc === undefined ? {} : { cpc: args.candidate.cpc }),
+    intent: args.candidate.intent,
+    trend: args.candidate.trend,
+    businessFitScore: fit.score,
+    businessFitVersion: fit.version,
+    businessFitReasons: fit.reasons,
+    measuredAt: args.measuredAt,
+  };
+}
+
+async function insertCadenceMicroSeedTopic(args: {
+  ctx: MutationCtx;
+  site: Doc<"sites">;
+  job: Doc<"cadence_micro_seed_jobs">;
+  selected: SelectedCandidateReceipt;
+  timestamp: number;
+}): Promise<{
+  topicId: Id<"topic_clusters">;
+  topicFingerprint: string;
+  plannedEvidenceFingerprint: string;
+}> {
+  const fingerprint = topicFingerprint({
+    jobId: args.job._id,
+    sourcePlanFingerprint: args.job.sourcePlanFingerprint,
+    site: args.site,
+    keyword: args.selected.keyword,
+    measuredAt: args.selected.measuredAt,
+  });
+  const topicId = await args.ctx.db.insert("topic_clusters", {
+    siteId: args.site._id,
+    planningCanonicalDomain: siteCanonicalDomain(args.site)!,
+    planningDomainRevision: siteCanonicalDomainRevision(args.site),
+    label: args.selected.label,
+    primaryKeyword: normalizeCadenceMicroSeedText(args.selected.keyword),
+    secondaryKeywords: [],
+    intent: args.selected.intent,
+    priority: Math.max(1, Math.min(5,
+      Math.ceil((100 - args.selected.difficulty) / 20),
+    )),
+    status: "planned",
+    notes: "Bounded cadence micro-seed; article generation remains blocked until strict expected-click evidence passes.",
+    searchVolume: args.selected.searchVolume,
+    keywordDifficulty: args.selected.difficulty,
+    keywordDifficultyMeasured: true,
+    ...(args.selected.cpc === undefined ? {} : { cpc: args.selected.cpc }),
+    serpIntent: args.selected.intent,
+    volumeTrend: args.selected.trend,
+    searchDemandSource: DATAFORSEO_DEMAND_SOURCE,
+    searchDemandMeasuredAt: args.selected.measuredAt,
+    searchDemandLocationCode: args.job.locationCode,
+    searchDemandLanguageCode: args.job.languageCode,
+    businessFitEligible: true,
+    businessFitScore: args.selected.businessFitScore,
+    businessFitVersion: args.selected.businessFitVersion,
+    businessFitReasons: args.selected.businessFitReasons,
+    businessFitCheckedAt: args.timestamp,
+    cadenceMicroSeedVersion: args.job.policyVersion,
+    cadenceMicroSeedJobId: args.job._id,
+    cadenceMicroSeedFingerprint: fingerprint,
+    cadenceMicroSeedAnchorAuditVersion:
+      CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
+    cadenceMicroSeedAnchorEligible: true,
+    createdAt: args.timestamp,
+    updatedAt: args.timestamp,
+  });
+  const insertedTopic = await args.ctx.db.get(topicId);
+  if (!insertedTopic) {
+    throw new Error("Cadence micro-seed topic receipt is unavailable");
+  }
+  return {
+    topicId,
+    topicFingerprint: fingerprint,
+    plannedEvidenceFingerprint: plannedTopicRecoveryFingerprint({
+      phase: "evidence",
+      site: args.site,
+      topic: insertedTopic,
+    }),
+  };
+}
+
+/**
+ * One-release migration for a v14 semantic miss that already paid for and
+ * admitted more than one candidate before the shortlist receipt existed.
+ * Re-evaluate the immutable provider rows against current tenant coverage,
+ * exclude the already-attempted exact keyword, and continue at most once.
+ */
+export const resumeLegacySemanticCandidateInternal = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !siteExecutionActive(site) ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      site.expectedClickSchedulingEnabled !== true ||
+      !verifiedKeywordPlanningActive(site)
+    ) return { advanced: false as const, reason: "site_unavailable" as const };
+    const timestamp = Date.now();
+    const missedJobs = await ctx.db.query("cadence_micro_seed_jobs")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "missed")
+      )
+      .order("desc")
+      .take(10);
+    const candidates = missedJobs.filter((job) =>
+      job.policyVersion === CADENCE_MICRO_SEED_VERSION - 1 &&
+      job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
+      job.reservationDay === utcDay(timestamp) &&
+      job.providerCallCompleted === true &&
+      (job.candidateAudit?.accepted ?? 0) > 1 &&
+      job.candidateShortlist === undefined &&
+      job.candidateAttemptCount === undefined &&
+      job.errorCode === "semantic_failure" &&
+      job.selectedCandidate !== undefined &&
+      job.topicId !== undefined &&
+      job.topicFingerprint !== undefined &&
+      job.plannedEvidenceFingerprint !== undefined &&
+      job.evidenceJobId !== undefined &&
+      Number.isFinite(job.completedAt) &&
+      timestamp - (job.completedAt ?? 0) <= CADENCE_MICRO_SEED_MAX_JOB_AGE_MS
+    );
+    if (candidates.length !== 1) {
+      return {
+        advanced: false as const,
+        reason: candidates.length > 1
+          ? "legacy_semantic_receipt_ambiguous" as const
+          : "legacy_semantic_candidate_unavailable" as const,
+      };
+    }
+    const job = candidates[0]!;
+    const [topic, evidence, topics, articles, activeGroups] = await Promise.all([
+      ctx.db.get(job.topicId!),
+      ctx.db.get(job.evidenceJobId!),
+      takeCurrentDomainTopics(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      takeCurrentDomainArticles(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
+        ctx.db.query("jobs").withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1)
+      )),
+    ]);
+    const failure = evidence?.serpFailures.find((receipt) =>
+      receipt.topicId === job.topicId
+    );
+    if (
+      !topic ||
+      topic.siteId !== siteId ||
+      topic.cadenceMicroSeedJobId !== job._id ||
+      topic.cadenceMicroSeedFingerprint !== job.topicFingerprint ||
+      !["disqualified", "cannibalizing"].includes(topic.status ?? "") ||
+      normalizeCadenceMicroSeedText(topic.primaryKeyword) !==
+        normalizeCadenceMicroSeedText(job.selectedCandidate!.keyword) ||
+      !evidence ||
+      evidence.siteId !== siteId ||
+      evidence.status !== "completed" ||
+      !failure ||
+      topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+      articles.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+      activeGroups.some((rows) => rows.length > CADENCE_MICRO_SEED_READ_LIMIT)
+    ) return { advanced: false as const, reason: "legacy_receipt_changed" as const };
+    const linkedArticle = articles.find((article) => article.topicId === topic._id);
+    const active = activeGroups.flat().some((candidate) => {
+      if (candidate.type !== "article") return false;
+      const payload = candidate.payload && typeof candidate.payload === "object"
+        ? candidate.payload as Record<string, unknown>
+        : {};
+      return payload.topicId === topic._id ||
+        candidate.articleId === linkedArticle?._id ||
+        payload.articleId === linkedArticle?._id;
+    });
+    if (linkedArticle || active) {
+      return { advanced: false as const, reason: "legacy_topic_in_use" as const };
+    }
+    const authority = tenantAuthorityFromStoredEvidence({
+      domain: site.seoAuthorityDomain,
+      currentDomain: site.domain,
+      domainRank: site.seoAuthorityDomainRank,
+      referringDomains: site.seoAuthorityReferringDomains,
+      source: site.seoAuthoritySource,
+      measuredAt: site.seoAuthorityMeasuredAt,
+    });
+    if (!measuredAuthorityIsFresh(authority, timestamp)) {
+      return { advanced: false as const, reason: "tenant_authority_unavailable" as const };
+    }
+    const exactKeywords = new Set(topics.map((row) =>
+      normalizeCadenceMicroSeedText(row.primaryKeyword)
+    ));
+    const reservedCoverage = coveredIntentTopics(
+      topics.map((row) => ({
+        _id: String(row._id),
+        status: row.status ?? "planned",
+        primaryKeyword: row.primaryKeyword,
+        serpTopUrls: row.serpTopUrls,
+      })),
+      articles.map((article) => ({
+        topicId: article.topicId ? String(article.topicId) : undefined,
+        slug: article.slug,
+        status: article.status,
+        publicationGateStatus: article.publicationGateStatus,
+        publicationAuditVersion: article.publicationAuditVersion,
+        auditedContentHash: article.auditedContentHash,
+      })),
+    );
+    const activeInventoryCoverage = topics
+      .filter((row) => !["used", "cannibalizing", "disqualified"].includes(
+        row.status ?? "planned",
+      ))
+      .map((row) => ({
+        primaryKeyword: row.primaryKeyword,
+        serpTopUrls: row.serpTopUrls,
+      }));
+    const failedContentCoverage = topics
+      .filter((row) => terminalContentFeasibility(row.contentFeasibilityStatus))
+      .map((row) => ({
+        primaryKeyword: row.primaryKeyword,
+        serpTopUrls: row.serpTopUrls,
+      }));
+    const metrics: CadenceMicroSeedMetric[] = job.candidateReceipts.flatMap(
+      (candidate) => candidate.difficultyMeasured === true
+        ? [{ ...candidate, difficultyMeasured: true as const }]
+        : [],
+    );
+    const selection = selectCadenceMicroSeedCandidate({
+      metrics,
+      seed: job.seed,
+      maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
+        authority.domainRank,
+      ),
+      existingExactKeywords: exactKeywords,
+      coveredTopics: [
+        ...reservedCoverage,
+        ...activeInventoryCoverage,
+        ...failedContentCoverage,
+      ],
+      siteName: site.siteName,
+      competitors: site.competitors,
+      businessFitEligible: (candidate) => evaluateTopicBusinessFit({
+        keyword: candidate.keyword,
+        label: candidate.keyword,
+        ...tenantTopicBusinessSignals(site),
+      }).eligible,
+    });
+    const remaining = selection.acceptedCandidates
+      .filter((candidate) =>
+        normalizeCadenceMicroSeedText(candidate.keyword) !==
+          normalizeCadenceMicroSeedText(job.selectedCandidate!.keyword)
+      )
+      .slice(0, CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES - 1)
+      .map((candidate) => selectedCandidateReceipt({
+        site,
+        candidate,
+        measuredAt: job.selectedCandidate!.measuredAt,
+      }));
+    const nextCandidate = remaining[0];
+    if (!nextCandidate) {
+      return { advanced: false as const, reason: "no_remaining_strict_candidate" as const };
+    }
+    const next = await insertCadenceMicroSeedTopic({
+      ctx,
+      site,
+      job,
+      selected: nextCandidate,
+      timestamp,
+    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.actions.cadenceMicroSeed.resumeCadenceEvidenceHandoff,
+      { siteId, jobId: job._id },
+    );
+    await ctx.scheduler.runAfter(
+      CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS,
+      internal.actions.cadenceMicroSeed.reconcileCadenceMicroSeed,
+      { siteId, jobId: job._id },
+    );
+    await ctx.db.patch(job._id, {
+      status: "awaiting_evidence",
+      candidateShortlist: [job.selectedCandidate!, ...remaining],
+      candidateAttemptCount: 2,
+      priorCandidateAttempts: [{
+        keyword: job.selectedCandidate!.keyword,
+        topicId: topic._id,
+        topicFingerprint: job.topicFingerprint!,
+        plannedEvidenceFingerprint: job.plannedEvidenceFingerprint!,
+        evidenceJobId: evidence._id,
+        outcome: "semantic_failure",
+        reason: failure.code.slice(0, 120),
+        completedAt: job.completedAt!,
+      }],
+      selectedCandidate: nextCandidate,
+      topicId: next.topicId,
+      topicFingerprint: next.topicFingerprint,
+      plannedEvidenceFingerprint: next.plannedEvidenceFingerprint,
+      evidenceJobId: undefined,
+      evidenceQueueReason: undefined,
+      evidenceFinalizerScheduledAt: undefined,
+      watchdogScheduledAt: timestamp,
+      cadenceScheduleRequestedAt: undefined,
+      cadenceScheduleAttempts: 0,
+      cadenceScheduleMode: undefined,
+      cadenceScheduleScheduled: undefined,
+      cadenceScheduleReceiptAt: undefined,
+      finalizeAttempts: 0,
+      errorCode: undefined,
+      completedAt: undefined,
+      updatedAt: timestamp,
+    });
+    return {
+      advanced: true as const,
+      jobId: job._id,
+      topicId: next.topicId,
+      keyword: nextCandidate.keyword,
+      priorFailure: failure.code,
+    };
+  },
+});
+
 export const recordProviderReceiptAndMaterialize = internalMutation({
   args: {
     siteId: v.id("sites"),
@@ -1758,68 +2110,26 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       });
       return { materialized: false as const, reason: "no_strict_candidate" as const };
     }
-    const selected = selection.selected;
-    // Re-evaluate once more after deterministic selection and persist the
-    // exact v5 tuple. The transaction's prior reads make a concurrent topic or
-    // profile write conflict rather than silently creating duplicate intent.
-    const fit = evaluateTopicBusinessFit({
-      keyword: selected.keyword,
-      label: selected.keyword,
-      ...tenantTopicBusinessSignals(site),
-    });
-    if (!fit.eligible) throw new Error("Cadence micro-seed business fit drifted");
-    const fingerprint = topicFingerprint({
-      jobId: job._id,
-      sourcePlanFingerprint: job.sourcePlanFingerprint,
-      site,
-      keyword: selected.keyword,
-      measuredAt: args.measuredAt,
-    });
-    const topicId = await ctx.db.insert("topic_clusters", {
-      siteId: args.siteId,
-      planningCanonicalDomain: siteCanonicalDomain(site)!,
-      planningDomainRevision: siteCanonicalDomainRevision(site),
-      label: selected.keyword,
-      primaryKeyword: normalizeCadenceMicroSeedText(selected.keyword),
-      secondaryKeywords: [],
-      intent: selected.intent,
-      priority: Math.max(1, Math.min(5,
-        Math.ceil((100 - selected.difficulty) / 20),
-      )),
-      status: "planned",
-      notes: "Bounded cadence micro-seed; article generation remains blocked until strict expected-click evidence passes.",
-      searchVolume: selected.searchVolume,
-      keywordDifficulty: selected.difficulty,
-      keywordDifficultyMeasured: true,
-      ...(selected.cpc === undefined ? {} : { cpc: selected.cpc }),
-      serpIntent: selected.intent,
-      volumeTrend: selected.trend,
-      searchDemandSource: DATAFORSEO_DEMAND_SOURCE,
-      searchDemandMeasuredAt: args.measuredAt,
-      searchDemandLocationCode: job.locationCode,
-      searchDemandLanguageCode: job.languageCode,
-      businessFitEligible: true,
-      businessFitScore: fit.score,
-      businessFitVersion: fit.version,
-      businessFitReasons: fit.reasons,
-      businessFitCheckedAt: timestamp,
-      cadenceMicroSeedVersion: CADENCE_MICRO_SEED_VERSION,
-      cadenceMicroSeedJobId: job._id,
-      cadenceMicroSeedFingerprint: fingerprint,
-      cadenceMicroSeedAnchorAuditVersion:
-        CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
-      cadenceMicroSeedAnchorEligible: true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-    const insertedTopic = await ctx.db.get(topicId);
-    if (!insertedTopic) {
-      throw new Error("Cadence micro-seed topic receipt is unavailable");
+    // Bind every pre-SERP survivor before live evidence begins. We still test
+    // one at a time, but a semantic miss can advance through this immutable
+    // paid-receipt shortlist instead of silently losing the other survivors.
+    const candidateShortlist = selection.acceptedCandidates
+      .slice(0, CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES)
+      .map((candidate) => selectedCandidateReceipt({
+        site,
+        candidate,
+        measuredAt: args.measuredAt,
+      }));
+    const selected = candidateShortlist[0];
+    if (!selected) {
+      throw new Error("Cadence micro-seed shortlist is unavailable");
     }
-    const plannedEvidenceFingerprint = plannedTopicRecoveryFingerprint({
-      phase: "evidence",
+    const materialized = await insertCadenceMicroSeedTopic({
+      ctx,
       site,
-      topic: insertedTopic,
+      job,
+      selected,
+      timestamp,
     });
     await ctx.db.patch(job._id, {
       status: "awaiting_evidence",
@@ -1828,30 +2138,21 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       providerTaskCostUsd: args.providerTaskCostUsd,
       candidateReceipts: args.candidates,
       candidateAudit,
-      selectedCandidate: {
-        keyword: normalizeCadenceMicroSeedText(selected.keyword),
-        label: selected.keyword,
-        searchVolume: selected.searchVolume,
-        difficulty: selected.difficulty,
-        ...(selected.cpc === undefined ? {} : { cpc: selected.cpc }),
-        intent: selected.intent,
-        trend: selected.trend,
-        businessFitScore: fit.score,
-        businessFitVersion: fit.version,
-        businessFitReasons: fit.reasons,
-        measuredAt: args.measuredAt,
-      },
-      topicId,
-      topicFingerprint: fingerprint,
-      plannedEvidenceFingerprint,
+      candidateShortlist,
+      candidateAttemptCount: 1,
+      priorCandidateAttempts: [],
+      selectedCandidate: selected,
+      topicId: materialized.topicId,
+      topicFingerprint: materialized.topicFingerprint,
+      plannedEvidenceFingerprint: materialized.plannedEvidenceFingerprint,
       workerToken: undefined,
       leaseExpiresAt: undefined,
       updatedAt: timestamp,
     });
     return {
       materialized: true as const,
-      topicId,
-      topicFingerprint: fingerprint,
+      topicId: materialized.topicId,
+      topicFingerprint: materialized.topicFingerprint,
       keyword: selected.keyword,
       searchVolume: selected.searchVolume,
       keywordDifficulty: selected.difficulty,
@@ -2555,7 +2856,10 @@ export const finalizeEvidence = internalMutation({
         job.plannedEvidenceFingerprint &&
       topic &&
       topic.siteId === args.siteId &&
-      topic.cadenceMicroSeedVersion === CADENCE_MICRO_SEED_VERSION &&
+      cadenceMicroSeedContinuationVersion(
+        job.policyVersion,
+        topic.cadenceMicroSeedVersion,
+      ) &&
       topic.cadenceMicroSeedJobId === job._id &&
       topic.cadenceMicroSeedFingerprint === job.topicFingerprint &&
       job.sourcePlanFingerprint &&
@@ -2724,6 +3028,85 @@ export const finalizeEvidence = internalMutation({
         .slice(0, 240),
       updatedAt: timestamp,
     });
+    const attemptedKeywords = new Set([
+      normalizeCadenceMicroSeedText(job.selectedCandidate!.keyword),
+      ...(job.priorCandidateAttempts ?? []).map((attempt) =>
+        normalizeCadenceMicroSeedText(attempt.keyword)
+      ),
+    ]);
+    const candidateAttemptCount = job.candidateAttemptCount ?? 1;
+    const nextCandidate = args.outcome === "semantic_failure" &&
+        candidateAttemptCount < CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES
+      ? (job.candidateShortlist ?? []).find((candidate) =>
+          !attemptedKeywords.has(
+            normalizeCadenceMicroSeedText(candidate.keyword),
+          )
+        )
+      : undefined;
+    if (nextCandidate) {
+      const next = await insertCadenceMicroSeedTopic({
+        ctx,
+        site: site!,
+        job,
+        selected: nextCandidate,
+        timestamp,
+      });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.actions.cadenceMicroSeed.resumeCadenceEvidenceHandoff,
+        { siteId: args.siteId, jobId: args.jobId },
+      );
+      await ctx.scheduler.runAfter(
+        CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS,
+        internal.actions.cadenceMicroSeed.reconcileCadenceMicroSeed,
+        { siteId: args.siteId, jobId: args.jobId },
+      );
+      await ctx.db.patch(job._id, {
+        status: "awaiting_evidence",
+        selectedCandidate: nextCandidate,
+        candidateAttemptCount: candidateAttemptCount + 1,
+        priorCandidateAttempts: [
+          ...(job.priorCandidateAttempts ?? []),
+          {
+            keyword: job.selectedCandidate!.keyword,
+            topicId: topic._id,
+            topicFingerprint: job.topicFingerprint!,
+            plannedEvidenceFingerprint: job.plannedEvidenceFingerprint!,
+            evidenceJobId: evidence!._id,
+            outcome: "semantic_failure" as const,
+            reason: verifiedReason.slice(0, 120),
+            completedAt: timestamp,
+          },
+        ],
+        topicId: next.topicId,
+        topicFingerprint: next.topicFingerprint,
+        plannedEvidenceFingerprint: next.plannedEvidenceFingerprint,
+        evidenceJobId: undefined,
+        evidenceQueueReason: undefined,
+        evidenceFinalizerScheduledAt: undefined,
+        watchdogScheduledAt: timestamp,
+        cadenceScheduleRequestedAt: undefined,
+        cadenceScheduleAttempts: 0,
+        cadenceScheduleMode: undefined,
+        cadenceScheduleScheduled: undefined,
+        cadenceScheduleReceiptAt: undefined,
+        // Each candidate owns a fresh bounded finalization envelope. Candidate
+        // cardinality is bounded separately by candidateAttemptCount.
+        finalizeAttempts: 0,
+        errorCode: undefined,
+        completedAt: undefined,
+        updatedAt: timestamp,
+      });
+      return {
+        finalized: true as const,
+        topicDisqualified: true,
+        cannibalizing,
+        retryQueued: true as const,
+        candidateAttemptCount: candidateAttemptCount + 1,
+        topicId: next.topicId,
+        keyword: nextCandidate.keyword,
+      };
+    }
     await ctx.db.patch(job._id, {
       status: "missed",
       finalizeAttempts: job.finalizeAttempts + 1,
@@ -2789,7 +3172,10 @@ export const recordCadenceScheduleResult = internalMutation({
       job.reservationDay !== utcDay(Date.now()) ||
       !topic ||
       topic.siteId !== args.siteId ||
-      topic.cadenceMicroSeedVersion !== CADENCE_MICRO_SEED_VERSION ||
+      !cadenceMicroSeedContinuationVersion(
+        job.policyVersion,
+        topic.cadenceMicroSeedVersion,
+      ) ||
       topic.cadenceMicroSeedJobId !== job._id ||
       topic.cadenceMicroSeedFingerprint !== job.topicFingerprint ||
       activeGroups.some((rows) => rows.length > CADENCE_MICRO_SEED_READ_LIMIT)

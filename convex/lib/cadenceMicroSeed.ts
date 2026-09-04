@@ -12,6 +12,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 15 preserves a bounded, immutable shortlist from the paid discovery
+// receipt and advances through it when live SERP evidence rejects one intent.
+// A semantic miss therefore cannot silently discard another candidate that
+// already passed every pre-SERP gate, while each candidate still has to pass
+// the unchanged live intent, attainability, cannibalization, expected-click,
+// article-quality, publication, and live-verification boundaries.
 // Version 14 also quarantines unpublished inventory created by an older
 // micro-seed whose selected keyword no longer satisfies the exact source
 // anchor. Without this provenance migration, a sealed but off-anchor legacy
@@ -19,8 +25,9 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 14;
+export const CADENCE_MICRO_SEED_VERSION = 15;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
+export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -551,6 +558,8 @@ function microSeedOpportunityScore(metric: CadenceMicroSeedMetric): number {
 
 export type CadenceMicroSeedCandidateEvaluation<T> = {
   selected: T | null;
+  /** Score-ordered candidates that passed every pre-SERP gate. */
+  acceptedCandidates: T[];
   accepted: number;
   rejected: {
     invalidMetric: number;
@@ -613,7 +622,7 @@ export function cadenceMicroSeedCandidateMatchesAnchor(
 }
 
 /**
- * Select at most one provider-returned row. Product fit is supplied by the
+ * Rank provider-returned rows and expose a bounded shortlist. Product fit is supplied by the
  * caller because it binds the current tenant profile/version; this helper
  * owns only metric, brand, exact-key and fail-closed lexical coverage gates.
  */
@@ -711,7 +720,12 @@ export function selectCadenceMicroSeedCandidate<
       normalizeCadenceMicroSeedText(right.keyword),
     )
   );
-  return { selected: accepted[0] ?? null, accepted: accepted.length, rejected };
+  return {
+    selected: accepted[0] ?? null,
+    acceptedCandidates: accepted.slice(0, CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES),
+    accepted: accepted.length,
+    rejected,
+  };
 }
 
 /**

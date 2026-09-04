@@ -8,6 +8,7 @@ import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS,
+  CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
@@ -571,6 +572,36 @@ test("candidate selection fails closed on metrics, brands, fit, exact reuse, and
   });
   assert.equal(overlap.selected, null);
   assert.equal(overlap.rejected.overlap, 1);
+});
+
+test("candidate selection preserves a bounded score-ordered SERP shortlist", () => {
+  const selected = selectCadenceMicroSeedCandidate({
+    metrics: [
+      metric("ai sales agent for websites", { searchVolume: 70, difficulty: 9 }),
+      metric("website sales agent automation", { searchVolume: 90, difficulty: 7 }),
+      metric("automated website sales agent", { searchVolume: 50, difficulty: 5 }),
+      metric("sales agent website automation", { searchVolume: 40, difficulty: 12 }),
+    ],
+    seed: "ai sales agent for websites",
+    maximumDifficulty: 20,
+    existingExactKeywords: new Set(),
+    coveredTopics: [],
+    businessFitEligible: () => true,
+  });
+  assert.equal(selected.accepted, 4);
+  assert.equal(
+    selected.acceptedCandidates.length,
+    CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
+  );
+  assert.equal(selected.selected, selected.acceptedCandidates[0]);
+  assert.deepEqual(
+    selected.acceptedCandidates.map((candidate) => candidate.keyword),
+    [
+      "website sales agent automation",
+      "automated website sales agent",
+      "ai sales agent for websites",
+    ],
+  );
 });
 
 test("cadence discovery uses the bounded pre-SERP reach ceiling", () => {
@@ -1160,4 +1191,16 @@ test("the legacy anchor migration is bounded, publication-safe, and runs before 
   assert.match(articles, /cadenceMicroSeedAnchorEligible: false/);
   assert.match(articles, /publicationAuditVersion: undefined/);
   assert.match(topics, /topic\.cadenceMicroSeedAnchorEligible === false/);
+});
+
+test("semantic evidence misses advance through immutable candidates without lowering quality", () => {
+  assert.match(schema, /candidateShortlist:\s*v\.optional/);
+  assert.match(schema, /priorCandidateAttempts:\s*v\.optional/);
+  assert.match(model, /selection\.acceptedCandidates/);
+  assert.match(model, /candidateAttemptCount:\s*1/);
+  assert.match(model, /args\.outcome === "semantic_failure"[\s\S]*nextCandidate/);
+  assert.match(model, /status:\s*"awaiting_evidence"[\s\S]*retryQueued:\s*true/);
+  assert.match(action, /!eligible && !finalized\.retryQueued/);
+  assert.match(action, /resumeLegacySemanticCandidateInternal/);
+  assert.doesNotMatch(model, /expectedClickStatus:\s*"eligible"/);
 });
