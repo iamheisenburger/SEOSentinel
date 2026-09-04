@@ -38,6 +38,7 @@ import {
   SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
 } from "../convex/lib/providerSpendReservation.ts";
 import {
+  CADENCE_QUALITY_RECOVERY_READ_LIMIT,
   DETERMINISTIC_QUALITY_REPAIR_VERSION,
   deterministicMechanicalRepairArticles,
   hasRecoverableQualityWork,
@@ -833,6 +834,15 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
     [],
   );
   assert.match(model, /hasRecoverableQualityWork\([\s\S]*candidateWindowStart/);
+  assert.equal(CADENCE_QUALITY_RECOVERY_READ_LIMIT, 25);
+  assert.match(
+    model,
+    /filter\(\(article\) => article\.status === "review"\)[\s\S]*slice\(0, CADENCE_QUALITY_RECOVERY_READ_LIMIT\)[\s\S]*candidateWindowStart/,
+  );
+  assert.match(
+    readFileSync("convex/articles.ts", "utf8"),
+    /takeCurrentSummariesByStatus\([\s\S]*"review"[\s\S]*CADENCE_QUALITY_RECOVERY_READ_LIMIT/,
+  );
   assert.match(
     scheduler,
     /qualityRecoveryAvailable = hasRecoverableQualityWork\([\s\S]*candidateWindowStart/,

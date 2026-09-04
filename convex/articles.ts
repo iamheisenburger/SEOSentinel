@@ -48,6 +48,7 @@ import {
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
 import {
+  CADENCE_QUALITY_RECOVERY_READ_LIMIT,
   MAX_QUALITY_REVISIONS,
   needsDeterministicMechanicalRepair,
 } from "./lib/autopilotCadence";
@@ -659,7 +660,12 @@ export const getAutopilotState = internalQuery({
         // this scheduler projection above that ceiling so a genuinely full
         // buffer is never undercounted and needlessly regenerated.
         takeCurrentSummariesByStatus(ctx, site, "ready", 25),
-        takeCurrentSummariesByStatus(ctx, site, "review", 25),
+        takeCurrentSummariesByStatus(
+          ctx,
+          site,
+          "review",
+          CADENCE_QUALITY_RECOVERY_READ_LIMIT,
+        ),
         takeCurrentRecentSummaries(ctx, site, since, 10),
         takeCurrentSummariesByStatus(ctx, site, "published", 50),
         ctx.db

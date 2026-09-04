@@ -12,11 +12,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-// Version 8 applies terminal product-fit feedback to an entire topic family.
-// It also gives an underfilled source plan one fresh, independently budgeted
-// attempt with the next deterministic tenant anchor; prior version receipts
-// remain immutable no-replay evidence and cannot be charged again.
-export const CADENCE_MICRO_SEED_VERSION = 8;
+// Version 9 binds micro-seed admission to the scheduler's exact bounded
+// recovery horizon. Historical review rows outside that horizon can no longer
+// veto fresh inventory that the scheduler itself cannot recover. The new
+// version grants one independently receipted attempt with a rotated tenant
+// anchor; all prior receipts remain immutable no-replay evidence.
+export const CADENCE_MICRO_SEED_VERSION = 9;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =

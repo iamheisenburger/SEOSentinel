@@ -58,6 +58,7 @@ import {
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
 import {
+  CADENCE_QUALITY_RECOVERY_READ_LIMIT,
   hasRecoverableQualityWork,
 } from "./lib/autopilotCadence";
 import {
@@ -652,7 +653,9 @@ async function inspectReadiness(
     rolloutStartedAt: site.autopilotRolloutStartedAt ?? site.updatedAt,
   });
   const reviewRecovery = hasRecoverableQualityWork(
-    articles,
+    articles
+      .filter((article) => article.status === "review")
+      .slice(0, CADENCE_QUALITY_RECOVERY_READ_LIMIT),
     candidateWindowStart,
   );
   if (reviewRecovery) {
