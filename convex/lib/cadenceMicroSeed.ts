@@ -42,7 +42,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 21;
+export const CADENCE_MICRO_SEED_VERSION = 22;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 6;
@@ -241,6 +241,23 @@ export type CadenceMicroSeedMetric = {
 
 export function normalizeCadenceMicroSeedText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Only an attempted request from the current-or-stronger discovery envelope
+ * exhausts an anchor. A historical 100-row singleton receipt cannot poison a
+ * materially expanded 300-row multi-anchor contract forever, while any v20+
+ * attempt remains a durable no-replay receipt for every seed it carried.
+ */
+export function cadenceMicroSeedAttemptExhaustsCurrentEnvelope(args: {
+  providerCallAttempted?: boolean;
+  providerEndpoint?: string;
+  providerResultLimit?: number;
+}): boolean {
+  return args.providerCallAttempted === true &&
+    args.providerEndpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT &&
+    Number.isInteger(args.providerResultLimit) &&
+    (args.providerResultLimit ?? 0) >= CADENCE_MICRO_SEED_RESULT_LIMIT;
 }
 
 /** Only explicit product/capability phrases may seed the rescue request. */

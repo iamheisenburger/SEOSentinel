@@ -17,6 +17,7 @@ import {
   CADENCE_MICRO_SEED_VERSION,
   CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
   cadenceMicroSeedAnchors,
+  cadenceMicroSeedAttemptExhaustsCurrentEnvelope,
   cadenceMicroSeedRecoveryAnchors,
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
@@ -474,6 +475,29 @@ test("recovery batches distinct exact tenant anchors without replay", () => {
     cadenceMicroSeedMatchingAnchor(first, "unrelated payroll workflow"),
     null,
   );
+});
+
+test("only current-envelope attempts durably exhaust a recovery anchor", () => {
+  assert.equal(cadenceMicroSeedAttemptExhaustsCurrentEnvelope({
+    providerCallAttempted: true,
+    providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+    providerResultLimit: 100,
+  }), false);
+  assert.equal(cadenceMicroSeedAttemptExhaustsCurrentEnvelope({
+    providerCallAttempted: true,
+    providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+    providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
+  }), true);
+  assert.equal(cadenceMicroSeedAttemptExhaustsCurrentEnvelope({
+    providerCallAttempted: false,
+    providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+    providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
+  }), false);
+  assert.equal(cadenceMicroSeedAttemptExhaustsCurrentEnvelope({
+    providerCallAttempted: true,
+    providerEndpoint: "different/provider/envelope",
+    providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
+  }), false);
 });
 
 test("a policy upgrade advances past every previously attempted tenant anchor", () => {

@@ -28,6 +28,7 @@ import {
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_VERSION,
   CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS,
+  cadenceMicroSeedAttemptExhaustsCurrentEnvelope,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedAnchors,
   cadenceMicroSeedRecoveryAnchors,
@@ -907,7 +908,7 @@ async function inspectReadiness(
   // that never reached the provider stay retryable; attempted rows are an
   // immutable exhaustion receipt, regardless of their terminal outcome.
   const previouslyAttemptedSeeds = priorPolicyJobs
-    .filter((job) => job.providerCallAttempted === true)
+    .filter((job) => cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job))
     .flatMap((job) => job.providerSeeds ?? [job.seed]);
   const currentJob = currentJobId
     ? sourceJobs.find((job) => job._id === currentJobId)
