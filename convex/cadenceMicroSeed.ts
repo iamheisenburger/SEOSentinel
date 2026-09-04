@@ -673,6 +673,20 @@ type CadencePriorPolicyHistoryResult =
   | CadencePriorPolicyHistoryPrecheck
   | { ready: false; reason: string };
 
+type CadencePriorPolicyHistoryAggregate = {
+  ready: true;
+  contract: "cadence-prior-policy-history-aggregate-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  sourcePlanId: Id<"jobs">;
+  policyVersionCount: number;
+  attemptedPrimarySeeds: string[];
+  attemptedFallbackSeeds: string[];
+  historyFingerprint: string;
+};
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -737,15 +751,15 @@ const cadenceSourcePlanReadinessPrecheckValidator = v.object({
   sourcePlanFingerprint: v.string(),
 });
 
-const cadencePriorPolicyHistoryPrecheckValidator = v.object({
+const cadencePriorPolicyHistoryAggregateValidator = v.object({
   ready: v.literal(true),
-  contract: v.literal("cadence-prior-policy-history-v1"),
+  contract: v.literal("cadence-prior-policy-history-aggregate-v1"),
   siteId: v.string(),
   canonicalDomain: v.string(),
   domainRevision: v.number(),
   rolloutEpoch: v.number(),
   sourcePlanId: v.id("jobs"),
-  policyVersion: v.number(),
+  policyVersionCount: v.number(),
   attemptedPrimarySeeds: v.array(v.string()),
   attemptedFallbackSeeds: v.array(v.string()),
   historyFingerprint: v.string(),
@@ -1454,7 +1468,7 @@ async function cadenceSourceReadinessPrecheck(
   sourcePlanId: Id<"jobs">,
   topicPrecheck: CadenceTopicReadinessPrecheck,
   sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
-  priorPolicyPrechecks: CadencePriorPolicyHistoryPrecheck[],
+  priorPolicyHistory: CadencePriorPolicyHistoryAggregate,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<CadenceSourceReadinessResult> {
   const site = await ctx.db.get(siteId);
@@ -1491,17 +1505,15 @@ async function cadenceSourceReadinessPrecheck(
     !sourcePlanPrecheck.sourcePlanFingerprint
   ) return { ready: false, reason: "source_plan_inspection_stale" };
   if (
-    priorPolicyPrechecks.length !== CADENCE_MICRO_SEED_VERSION - 1 ||
-    priorPolicyPrechecks.some((precheck, index) =>
-      precheck.contract !== "cadence-prior-policy-history-v1" ||
-      precheck.siteId !== String(site._id) ||
-      precheck.canonicalDomain !== canonicalDomain ||
-      precheck.domainRevision !== siteCanonicalDomainRevision(site) ||
-      precheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
-      precheck.sourcePlanId !== sourcePlanId ||
-      precheck.policyVersion !== index + 1 ||
-      !/^[a-f0-9]{64}$/.test(precheck.historyFingerprint)
-    )
+    priorPolicyHistory.contract !==
+      "cadence-prior-policy-history-aggregate-v1" ||
+    priorPolicyHistory.siteId !== String(site._id) ||
+    priorPolicyHistory.canonicalDomain !== canonicalDomain ||
+    priorPolicyHistory.domainRevision !== siteCanonicalDomainRevision(site) ||
+    priorPolicyHistory.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    priorPolicyHistory.sourcePlanId !== sourcePlanId ||
+    priorPolicyHistory.policyVersionCount !== CADENCE_MICRO_SEED_VERSION - 1 ||
+    !/^[a-f0-9]{64}$/.test(priorPolicyHistory.historyFingerprint)
   ) return { ready: false, reason: "micro_seed_policy_history_stale" };
   const sourceReservationId = sourcePlanPrecheck.sourcePlanReservationId;
   const sourceFingerprint = sourcePlanPrecheck.sourcePlanFingerprint;
@@ -1516,12 +1528,10 @@ async function cadenceSourceReadinessPrecheck(
   if (sourceJobs.length > 2) {
     return { ready: false, reason: "micro_seed_source_history_exhausted" };
   }
-  const previouslyAttemptedPrimarySeeds = priorPolicyPrechecks.flatMap(
-    (precheck) => precheck.attemptedPrimarySeeds,
-  );
-  const previouslyAttemptedFallbackSeeds = priorPolicyPrechecks.flatMap(
-    (precheck) => precheck.attemptedFallbackSeeds,
-  );
+  const previouslyAttemptedPrimarySeeds =
+    priorPolicyHistory.attemptedPrimarySeeds;
+  const previouslyAttemptedFallbackSeeds =
+    priorPolicyHistory.attemptedFallbackSeeds;
   const currentJob = currentJobId
     ? sourceJobs.find((job) => job._id === currentJobId)
     : undefined;
@@ -1711,12 +1721,12 @@ async function cadenceSourceReadinessPrecheck(
     sourcePlanReservationId: String(sourceReservationId),
     sourcePlanFingerprint: sourceFingerprint,
     sourceJobIds: sourceJobs.map((job) => String(job._id)),
-    priorPolicyAttemptReceipts: priorPolicyPrechecks.map((precheck) => ({
-      policyVersion: precheck.policyVersion,
-      attemptedPrimarySeeds: precheck.attemptedPrimarySeeds,
-      attemptedFallbackSeeds: precheck.attemptedFallbackSeeds,
-      historyFingerprint: precheck.historyFingerprint,
-    })),
+    priorPolicyHistory: {
+      policyVersionCount: priorPolicyHistory.policyVersionCount,
+      attemptedPrimarySeeds: priorPolicyHistory.attemptedPrimarySeeds,
+      attemptedFallbackSeeds: priorPolicyHistory.attemptedFallbackSeeds,
+      historyFingerprint: priorPolicyHistory.historyFingerprint,
+    },
     attemptKind,
     parentMicroSeedJobId: parentMicroSeedJobId
       ? String(parentMicroSeedJobId)
@@ -1767,7 +1777,7 @@ export const inspectSourceReadinessInternal = internalQuery({
     sourcePlanId: v.id("jobs"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
-    priorPolicyPrechecks: v.array(cadencePriorPolicyHistoryPrecheckValidator),
+    priorPolicyHistory: cadencePriorPolicyHistoryAggregateValidator,
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
   handler: async (ctx, args) => cadenceSourceReadinessPrecheck(
@@ -1777,7 +1787,7 @@ export const inspectSourceReadinessInternal = internalQuery({
     args.sourcePlanId,
     args.topicPrecheck,
     args.sourcePlanPrecheck,
-    args.priorPolicyPrechecks,
+    args.priorPolicyHistory,
     args.currentJobId,
   ),
 });

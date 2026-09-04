@@ -1,6 +1,6 @@
 "use node";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internalAction, type ActionCtx } from "../_generated/server";
@@ -162,7 +162,32 @@ async function inspectPriorPolicyHistory(
     if (!precheck.ready) return precheck;
     readyPrechecks.push(precheck);
   }
-  return readyPrechecks;
+  const first = readyPrechecks[0];
+  if (!first) {
+    return { ready: false as const, reason: "micro_seed_policy_history_empty" };
+  }
+  return {
+    ready: true as const,
+    contract: "cadence-prior-policy-history-aggregate-v1" as const,
+    siteId: first.siteId,
+    canonicalDomain: first.canonicalDomain,
+    domainRevision: first.domainRevision,
+    rolloutEpoch: first.rolloutEpoch,
+    sourcePlanId,
+    policyVersionCount: readyPrechecks.length,
+    attemptedPrimarySeeds: readyPrechecks.flatMap(
+      (precheck) => precheck.attemptedPrimarySeeds,
+    ),
+    attemptedFallbackSeeds: readyPrechecks.flatMap(
+      (precheck) => precheck.attemptedFallbackSeeds,
+    ),
+    historyFingerprint: createHash("sha256").update(JSON.stringify(
+      readyPrechecks.map((precheck) => ({
+        policyVersion: precheck.policyVersion,
+        historyFingerprint: precheck.historyFingerprint,
+      })),
+    )).digest("hex"),
+  };
 }
 
 async function reconcileVerifiedProviderCostPages(
@@ -522,14 +547,14 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
-    const priorPolicyPrechecks = await inspectPriorPolicyHistory(
+    const priorPolicyHistory = await inspectPriorPolicyHistory(
       ctx,
       args.siteId,
       sourcePlanId,
     );
-    if (!Array.isArray(priorPolicyPrechecks)) {
+    if (!priorPolicyHistory.ready) {
       return {
-        ...priorPolicyPrechecks,
+        ...priorPolicyHistory,
         providerCallsMade: 0,
         providerReservationsCreated: 0,
         evidenceCeilingMicroUsd:
@@ -544,7 +569,7 @@ export const recoverCadenceGap = internalAction({
         sourcePlanId,
         topicPrecheck,
         sourcePlanPrecheck,
-        priorPolicyPrechecks,
+        priorPolicyHistory,
       },
     );
     if (!sourcePrecheck.ready) {
@@ -712,25 +737,25 @@ export const processCadenceMicroSeed = internalAction({
       await raiseMiss(ctx, args.siteId, args.jobId, sourcePlanPrecheck.reason);
       return { processed: false, reason: sourcePlanPrecheck.reason };
     }
-    const priorPolicyPrechecks = await inspectPriorPolicyHistory(
+    const priorPolicyHistory = await inspectPriorPolicyHistory(
       ctx,
       args.siteId,
       claimed.sourcePlanId,
     );
-    if (!Array.isArray(priorPolicyPrechecks)) {
+    if (!priorPolicyHistory.ready) {
       await ctx.runMutation(api.markProviderResponseUnverified, {
         siteId: args.siteId,
         jobId: args.jobId,
         workerToken,
-        errorCode: priorPolicyPrechecks.reason,
+        errorCode: priorPolicyHistory.reason,
       });
       await raiseMiss(
         ctx,
         args.siteId,
         args.jobId,
-        priorPolicyPrechecks.reason,
+        priorPolicyHistory.reason,
       );
-      return { processed: false, reason: priorPolicyPrechecks.reason };
+      return { processed: false, reason: priorPolicyHistory.reason };
     }
     const sourcePrecheck = await ctx.runQuery(
       api.inspectSourceReadinessInternal,
@@ -739,7 +764,7 @@ export const processCadenceMicroSeed = internalAction({
         sourcePlanId: claimed.sourcePlanId,
         topicPrecheck,
         sourcePlanPrecheck,
-        priorPolicyPrechecks,
+        priorPolicyHistory,
         currentJobId: args.jobId,
       },
     );

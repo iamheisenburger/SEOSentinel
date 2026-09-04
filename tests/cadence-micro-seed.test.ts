@@ -1613,6 +1613,9 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(action, /api\.inspectSourceReadinessInternal/);
   assert.match(action, /api\.inspectSourcePlanReadinessInternal/);
   assert.match(action, /api\.inspectPriorPolicyHistoryInternal/);
+  assert.match(action, /policyBatchSize = 8/);
+  assert.match(action, /cadence-prior-policy-history-aggregate-v1/);
+  assert.match(action, /createHash\("sha256"\)/);
   assert.ok(
     recovery.indexOf("api.inspectTopicReadinessInternal") <
       recovery.indexOf("api.inspectInternal"),
@@ -1880,6 +1883,8 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(sourceReadiness, /eq\("policyVersion", CADENCE_MICRO_SEED_VERSION\)/);
   assert.doesNotMatch(sourceReadiness, /\.lt\("policyVersion"/);
   assert.match(sourceReadiness, /sourceInventoryFingerprint: sha256Hex/);
+  assert.match(sourceReadiness, /priorPolicyHistory\.historyFingerprint/);
+  assert.doesNotMatch(sourceReadiness, /priorPolicyPrechecks/);
   assert.doesNotMatch(sourceReadiness, /plan_candidate_checkpoints/);
   assert.match(priorPolicyReadiness, /by_site_source_policy_created/);
   assert.match(priorPolicyReadiness, /eq\("policyVersion", policyVersion\)/);
