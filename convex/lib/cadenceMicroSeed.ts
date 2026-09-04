@@ -12,15 +12,15 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-// Version 10 prioritizes explicit search-intent anchors over broad capability
-// prose. A phrase such as "keyword clustering and planning" is a legitimate
-// product feature, but the keyword-ideas provider can interpret it as an
-// academic clustering query and exhaust both recovery attempts with irrelevant
-// rows. Tenant-authored anchor keywords are already the narrow, search-facing
-// contract; use feature prose only when fewer than two anchors exist. The new
-// version grants one independently receipted pair while every earlier paid
-// receipt remains immutable no-replay evidence.
-export const CADENCE_MICRO_SEED_VERSION = 10;
+// Version 11 binds emergency discovery to the provider's phrase-match contract.
+// Version 10 proved that even a narrow, tenant-authored search anchor can drift
+// into a broad category result (for example, "sales automation chat widget"
+// became "tool sales") when `closely_variants` is false. Phrase match preserves
+// the user's search intent while every existing business-fit, evidence, claim,
+// and publication gate remains unchanged. The new version grants one
+// independently receipted pair while every earlier paid receipt remains
+// immutable no-replay evidence.
+export const CADENCE_MICRO_SEED_VERSION = 11;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =

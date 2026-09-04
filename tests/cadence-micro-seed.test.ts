@@ -106,7 +106,7 @@ function providerFixture() {
         keywords: [seed],
         location_code: 2840,
         language_code: "en",
-        closely_variants: false,
+        closely_variants: true,
         include_serp_info: false,
         include_clickstream_data: false,
         tag,
@@ -937,7 +937,7 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
     keywords: [fixture.seed],
     location_code: 2840,
     language_code: "en",
-    closely_variants: false,
+    closely_variants: true,
     include_serp_info: false,
     include_clickstream_data: false,
     tag: fixture.tag,
@@ -964,6 +964,7 @@ test("receipt drift fails closed while incomplete provider rows are rejected ind
     (data) => { data.tasks_count = 2; },
     (data) => { data.tasks_error = 1; },
     (data) => { data.tasks[0].data.se_type = "bing"; },
+    (data) => { data.tasks[0].data.closely_variants = false; },
     (data) => { data.tasks[0].result[0].location_code = 2826; },
   ];
   for (const mutate of cases) {

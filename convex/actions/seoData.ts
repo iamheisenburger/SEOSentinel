@@ -255,7 +255,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     keywords: [normalizedSeed],
     location_code: locationCode,
     language_code: languageCode,
-    closely_variants: false,
+    closely_variants: true,
     include_serp_info: false,
     include_clickstream_data: false,
     tag: requestTag,
@@ -290,7 +290,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     taskData.language_code !== languageCode ||
     taskData.include_serp_info !== false ||
     taskData.include_clickstream_data !== false ||
-    taskData.closely_variants !== false ||
+    taskData.closely_variants !== true ||
     taskData.tag !== requestTag ||
     taskData.limit !== limit ||
     JSON.stringify(taskData.filters) !==
