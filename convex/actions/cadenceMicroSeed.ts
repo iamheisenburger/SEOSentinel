@@ -454,13 +454,38 @@ export const recoverCadenceGap = internalAction({
       evidenceReadiness,
       demandStatus?.terminalNoMetricReceiptValid === true,
     );
+    if (recoveryBlockReason) {
+      return {
+        ready: false,
+        reason: recoveryBlockReason,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
+    const sourcePrecheck = await ctx.runQuery(
+      api.inspectSourceReadinessInternal,
+      { siteId: args.siteId, sourcePlanId, topicPrecheck },
+    );
+    if (!sourcePrecheck.ready) {
+      return {
+        ...sourcePrecheck,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const inspected = await ctx.runQuery(api.inspectInternal, {
       siteId: args.siteId,
       sourcePlanId,
       topicPrecheck,
       operationalPrecheck,
+      sourcePrecheck,
       recoveryPrechecked: true,
-      ...(recoveryBlockReason ? { recoveryBlockReason } : {}),
     });
     if (args.mode === "inspect" || !inspected.ready) {
       return {
@@ -500,6 +525,7 @@ export const recoverCadenceGap = internalAction({
       siteId: args.siteId,
       topicPrecheck,
       operationalPrecheck,
+      sourcePrecheck,
       inspectionKey: inspected.inspectionKey,
       reservationDay: inspected.reservationDay,
       rolloutEpoch: inspected.rolloutEpoch,
@@ -594,12 +620,32 @@ export const processCadenceMicroSeed = internalAction({
       await raiseMiss(ctx, args.siteId, args.jobId, operationalPrecheck.reason);
       return { processed: false, reason: operationalPrecheck.reason };
     }
+    const sourcePrecheck = await ctx.runQuery(
+      api.inspectSourceReadinessInternal,
+      {
+        siteId: args.siteId,
+        sourcePlanId: claimed.sourcePlanId,
+        topicPrecheck,
+        currentJobId: args.jobId,
+      },
+    );
+    if (!sourcePrecheck.ready) {
+      await ctx.runMutation(api.markProviderResponseUnverified, {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        workerToken,
+        errorCode: sourcePrecheck.reason,
+      });
+      await raiseMiss(ctx, args.siteId, args.jobId, sourcePrecheck.reason);
+      return { processed: false, reason: sourcePrecheck.reason };
+    }
     const begun = await ctx.runMutation(api.beginProviderAttempt, {
       siteId: args.siteId,
       jobId: args.jobId,
       workerToken,
       topicPrecheck,
       operationalPrecheck,
+      sourcePrecheck,
     });
     if (!begun.allowed) {
       await ctx.runMutation(api.markProviderResponseUnverified, {

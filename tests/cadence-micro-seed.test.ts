@@ -1610,6 +1610,7 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   );
   assert.match(action, /api\.inspectTopicReadinessInternal/);
   assert.match(action, /api\.inspectOperationalReadinessInternal/);
+  assert.match(action, /api\.inspectSourceReadinessInternal/);
   assert.ok(
     recovery.indexOf("api.inspectTopicReadinessInternal") <
       recovery.indexOf("api.inspectInternal"),
@@ -1619,6 +1620,11 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     recovery.indexOf("api.inspectOperationalReadinessInternal") <
       recovery.indexOf("api.inspectInternal"),
     "quota, buffer, and active-work inventory must be evaluated outside compact source history",
+  );
+  assert.ok(
+    recovery.indexOf("api.inspectSourceReadinessInternal") <
+      recovery.indexOf("api.inspectInternal"),
+    "immutable source history must be projected before compact admission",
   );
   assert.match(model, /cadence-topic-inventory-v1/);
   assert.match(model, /inventoryFingerprint: sha256Hex/);
@@ -1656,11 +1662,12 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(model, /recovery_precheck_required/);
   assert.match(
     model,
-    /args\.sourcePlanId,[\s\S]*args\.topicPrecheck,[\s\S]*args\.operationalPrecheck,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
-    "atomic reservation rechecks compact source history against both exact inventory digests",
+    /args\.sourcePlanId,[\s\S]*args\.topicPrecheck,[\s\S]*args\.operationalPrecheck,[\s\S]*args\.sourcePrecheck,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
+    "atomic reservation binds all three exact inventory digests",
   );
   assert.match(worker, /currentJobId: args\.jobId/);
   assert.match(worker, /api\.beginProviderAttempt[\s\S]*operationalPrecheck/);
+  assert.match(worker, /api\.beginProviderAttempt[\s\S]*sourcePrecheck/);
   assert.match(schema, /by_site_source_policy_created/);
   assert.match(model, /withIndex\("by_site_source_policy_created"/);
   assert.doesNotMatch(model, /micro_seed_source_history_read_exhausted/);
@@ -1837,6 +1844,10 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   const operationalReadiness = model.slice(
     model.indexOf("export const inspectOperationalReadinessInternal"),
+    model.indexOf("async function cadenceSourceReadinessPrecheck"),
+  );
+  const sourceReadiness = model.slice(
+    model.indexOf("async function cadenceSourceReadinessPrecheck"),
     model.indexOf("async function inspectReadiness"),
   );
   assert.match(topicReadiness, /cadenceMicroSeedTopicInventory/);
@@ -1845,10 +1856,15 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(operationalReadiness, /cadenceMicroSeedArticleInventory/);
   assert.match(operationalReadiness, /plannedTopicSiteGate/);
   assert.match(operationalReadiness, /operationalFingerprint: sha256Hex/);
+  assert.match(sourceReadiness, /by_site_source_policy_created/);
+  assert.match(sourceReadiness, /sourceInventoryFingerprint: sha256Hex/);
   assert.doesNotMatch(readiness, /cadenceMicroSeedArticleInventory/);
   assert.doesNotMatch(readiness, /plannedTopicSiteGate/);
+  assert.doesNotMatch(readiness, /by_site_source_policy_created/);
+  assert.doesNotMatch(readiness, /plan_candidate_checkpoints/);
   assert.match(readiness, /topicPrecheck\.inventoryFingerprint/);
   assert.match(readiness, /operationalPrecheck\.operationalFingerprint/);
+  assert.match(readiness, /sourcePrecheck\.sourceInventoryFingerprint/);
   assert.doesNotMatch(readiness, /takeCurrentDomainTopics\(/);
   assert.doesNotMatch(readiness, /takeCurrentDomainArticles\(/);
   const materialization = model.slice(

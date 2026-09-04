@@ -609,6 +609,36 @@ type CadenceOperationalReadinessResult =
   | CadenceOperationalReadinessPrecheck
   | { ready: false; reason: string };
 
+type CadenceSourceReadinessPrecheck = {
+  ready: true;
+  contract: "cadence-source-readiness-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  currentJobId?: string;
+  topicInventoryFingerprint: string;
+  sourceInventoryFingerprint: string;
+  sourcePlanId: Id<"jobs">;
+  sourcePlanReservationId: Id<"provider_spend_reservations">;
+  sourcePlanFingerprint: string;
+  attemptKind: CadenceMicroSeedAttemptKind;
+  parentMicroSeedJobId?: Id<"cadence_micro_seed_jobs">;
+  parentMicroSeedReceiptFingerprint?: string;
+  seed: string;
+  providerSeeds: string[];
+  locationCode: number;
+  languageCode: string;
+  planTier: string;
+  planFeatures: string[];
+  providerCostCeilingMicroUsd: number;
+  evidenceHeadroomMicroUsd: number;
+};
+
+type CadenceSourceReadinessResult =
+  | CadenceSourceReadinessPrecheck
+  | { ready: false; reason: string };
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -633,6 +663,32 @@ const cadenceOperationalReadinessPrecheckValidator = v.object({
   remainingArticles: v.number(),
   nextCadenceDueAt: v.number(),
   terminalNoMetricDemandReceiptFingerprint: v.optional(v.string()),
+});
+
+const cadenceSourceReadinessPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-source-readiness-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  currentJobId: v.optional(v.string()),
+  topicInventoryFingerprint: v.string(),
+  sourceInventoryFingerprint: v.string(),
+  sourcePlanId: v.id("jobs"),
+  sourcePlanReservationId: v.id("provider_spend_reservations"),
+  sourcePlanFingerprint: v.string(),
+  attemptKind: v.union(v.literal("primary"), v.literal("fallback")),
+  parentMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  parentMicroSeedReceiptFingerprint: v.optional(v.string()),
+  seed: v.string(),
+  providerSeeds: v.array(v.string()),
+  locationCode: v.number(),
+  languageCode: v.string(),
+  planTier: v.string(),
+  planFeatures: v.array(v.string()),
+  providerCostCeilingMicroUsd: v.number(),
+  evidenceHeadroomMicroUsd: v.number(),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -1156,6 +1212,368 @@ export const inspectOperationalReadinessInternal = internalQuery({
   },
 });
 
+/**
+ * Resolve the immutable exhausted-plan and no-replay chain independently from
+ * both current inventory projections. Historical recovery receipts grow with
+ * tenant age; keeping this bounded source ledger in its own transaction makes
+ * the admission cost independent of topic and article cardinality.
+ */
+async function cadenceSourceReadinessPrecheck(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  timestamp: number,
+  sourcePlanId: Id<"jobs">,
+  topicPrecheck: CadenceTopicReadinessPrecheck,
+  currentJobId?: Id<"cadence_micro_seed_jobs">,
+): Promise<CadenceSourceReadinessResult> {
+  const site = await ctx.db.get(siteId);
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !(await siteExecutionAuthorized(ctx, site))
+  ) return { ready: false, reason: "site_unavailable" };
+  if (
+    !site.autopilotEnabled ||
+    site.expectedClickSchedulingEnabled !== true ||
+    !verifiedKeywordPlanningActive(site) ||
+    !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+    (site.cadencePerWeek ?? 0) <= 0
+  ) return { ready: false, reason: "rollout_ineligible" };
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (
+    topicPrecheck.contract !== "cadence-topic-readiness-v1" ||
+    topicPrecheck.siteId !== String(site._id) ||
+    !canonicalDomain ||
+    topicPrecheck.canonicalDomain !== canonicalDomain ||
+    topicPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    !/^[a-f0-9]{64}$/.test(topicPrecheck.inventoryFingerprint)
+  ) return { ready: false, reason: "topic_inspection_stale" };
+
+  const sourceJob = await ctx.db.get(sourcePlanId);
+  if (
+    !sourceJob ||
+    sourceJob.siteId !== siteId ||
+    sourceJob.type !== "plan"
+  ) return { ready: false, reason: "source_plan_not_exhausted" };
+  const [sourceReservation, sourceCheckpoints] = await Promise.all([
+    sourceJob.providerSpendReservationId
+      ? ctx.db.get(sourceJob.providerSpendReservationId)
+      : Promise.resolve(null),
+    ctx.db.query("plan_candidate_checkpoints")
+      .withIndex("by_plan_job", (q) => q.eq("planJobId", sourceJob._id))
+      .order("desc")
+      .take(2),
+  ]);
+  if (!validExhaustedSourcePlan({
+    site,
+    job: sourceJob,
+    reservation: sourceReservation,
+    checkpoints: sourceCheckpoints,
+    timestamp,
+  }) || !sourceReservation) {
+    return { ready: false, reason: "source_plan_not_exhausted" };
+  }
+  const sourceFingerprint = sourcePlanFingerprint(
+    sourceJob,
+    sourceReservation,
+    sourceCheckpoints,
+  );
+  const [sourceJobs, priorPolicyJobs] = await Promise.all([
+    ctx.db.query("cadence_micro_seed_jobs")
+      .withIndex("by_site_source_policy_created", (q) =>
+        q.eq("siteId", siteId)
+          .eq("sourcePlanId", sourceJob._id)
+          .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
+      )
+      .order("asc")
+      .take(3),
+    ctx.db.query("cadence_micro_seed_jobs")
+      .withIndex("by_site_source_policy_created", (q) =>
+        q.eq("siteId", siteId)
+          .eq("sourcePlanId", sourceJob._id)
+          .lt("policyVersion", CADENCE_MICRO_SEED_VERSION)
+      )
+      .order("asc")
+      .take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
+  ]);
+  if (sourceJobs.length > 2) {
+    return { ready: false, reason: "micro_seed_source_history_exhausted" };
+  }
+  if (priorPolicyJobs.length > CADENCE_MICRO_SEED_READ_LIMIT) {
+    return { ready: false, reason: "micro_seed_policy_history_read_limit" };
+  }
+  const previouslyAttemptedPrimarySeeds = priorPolicyJobs
+    .filter((job) =>
+      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
+      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("primary")
+    )
+    .flatMap((job) => job.providerSeeds ?? [job.seed]);
+  const previouslyAttemptedFallbackSeeds = priorPolicyJobs
+    .filter((job) =>
+      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
+      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("fallback")
+    )
+    .flatMap((job) => job.providerSeeds ?? [job.seed]);
+  const currentJob = currentJobId
+    ? sourceJobs.find((job) => job._id === currentJobId)
+    : undefined;
+  if (currentJobId && !currentJob) {
+    return { ready: false, reason: "micro_seed_execution_receipt_unavailable" };
+  }
+
+  const anchors = cadenceMicroSeedRecoveryAnchors(site);
+  const primarySeeds = selectCadenceMicroSeedProbeBatch(
+    anchors,
+    String(sourceJob._id),
+    CADENCE_MICRO_SEED_VERSION - 1,
+    previouslyAttemptedPrimarySeeds,
+    topicPrecheck.coveredKeywords,
+  );
+  const primarySeed = primarySeeds[0];
+  if (!primarySeed) {
+    return { ready: false, reason: "tenant_product_seed_unavailable" };
+  }
+  const locationCode = dataForSeoLocationCode(site.targetCountry);
+  const languageCode = dataForSeoLanguageCode(site.language);
+  let attemptKind: CadenceMicroSeedAttemptKind = "primary";
+  let seed = primarySeed;
+  let providerSeeds = primarySeeds;
+  let parentMicroSeedJobId: Id<"cadence_micro_seed_jobs"> | undefined;
+  let parentMicroSeedReceiptFingerprint: string | undefined;
+
+  if (currentJob) {
+    const currentKind = cadenceMicroSeedAttemptKind(currentJob.attemptKind);
+    if (!currentKind) {
+      return { ready: false, reason: "micro_seed_attempt_kind_incompatible" };
+    }
+    attemptKind = currentKind;
+    if (currentKind === "primary") {
+      if (
+        sourceJobs.length !== 1 ||
+        currentJob.parentMicroSeedJobId ||
+        currentJob.parentMicroSeedReceiptFingerprint
+      ) {
+        return { ready: false, reason: "micro_seed_primary_receipt_incompatible" };
+      }
+    } else {
+      if (sourceJobs.length !== 2 || !currentJob.parentMicroSeedJobId) {
+        return { ready: false, reason: "micro_seed_fallback_receipt_incompatible" };
+      }
+      const parent = sourceJobs.find((job) =>
+        job._id === currentJob.parentMicroSeedJobId
+      );
+      const parentReservation = parent
+        ? await ctx.db.get(parent.providerSpendReservationId)
+        : null;
+      const parentChildren = parent
+        ? await ctx.db.query("cadence_micro_seed_jobs")
+          .withIndex("by_site_parent", (q) =>
+            q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
+          )
+          .take(2)
+        : [];
+      if (
+        !parent ||
+        parent._id === currentJob._id ||
+        parentChildren.length !== 1 ||
+        parentChildren[0]?._id !== currentJob._id ||
+        !validPrimaryFallbackReceipt({
+          site,
+          job: parent,
+          reservation: parentReservation,
+          sourcePlanId: sourceJob._id,
+          sourcePlanReservationId: sourceReservation._id,
+          sourcePlanFingerprint: sourceFingerprint,
+          primarySeed,
+          primarySeeds,
+          locationCode,
+          languageCode,
+          timestamp,
+        })
+      ) {
+        return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
+      }
+      if (!parentReservation) {
+        return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
+      }
+      const parentFingerprint = primaryFallbackReceiptFingerprint(
+        parent,
+        parentReservation,
+      );
+      const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
+        anchors,
+        String(sourceJob._id),
+        CADENCE_MICRO_SEED_VERSION - 1,
+        previouslyAttemptedFallbackSeeds,
+        topicPrecheck.coveredKeywords,
+      );
+      const fallbackSeed = fallbackSeeds[0];
+      if (
+        !fallbackSeed ||
+        currentJob.parentMicroSeedReceiptFingerprint !== parentFingerprint
+      ) {
+        return { ready: false, reason: "micro_seed_fallback_parent_drifted" };
+      }
+      seed = fallbackSeed;
+      providerSeeds = fallbackSeeds;
+      parentMicroSeedJobId = parent._id;
+      parentMicroSeedReceiptFingerprint = parentFingerprint;
+    }
+  } else if (sourceJobs.length === 1) {
+    const parent = sourceJobs[0]!;
+    const [parentReservation, parentChildren] = await Promise.all([
+      ctx.db.get(parent.providerSpendReservationId),
+      ctx.db.query("cadence_micro_seed_jobs")
+        .withIndex("by_site_parent", (q) =>
+          q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
+        )
+        .take(1),
+    ]);
+    if (parentChildren.length > 0 || !validPrimaryFallbackReceipt({
+      site,
+      job: parent,
+      reservation: parentReservation,
+      sourcePlanId: sourceJob._id,
+      sourcePlanReservationId: sourceReservation._id,
+      sourcePlanFingerprint: sourceFingerprint,
+      primarySeed,
+      primarySeeds,
+      locationCode,
+      languageCode,
+      timestamp,
+    })) {
+      return { ready: false, reason: "source_plan_already_recovered" };
+    }
+    if (!parentReservation) {
+      return { ready: false, reason: "source_plan_already_recovered" };
+    }
+    const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
+      anchors,
+      String(sourceJob._id),
+      CADENCE_MICRO_SEED_VERSION - 1,
+      previouslyAttemptedFallbackSeeds,
+      topicPrecheck.coveredKeywords,
+    );
+    const fallbackSeed = fallbackSeeds[0];
+    if (!fallbackSeed) {
+      return { ready: false, reason: "fallback_product_seed_unavailable" };
+    }
+    attemptKind = "fallback";
+    seed = fallbackSeed;
+    providerSeeds = fallbackSeeds;
+    parentMicroSeedJobId = parent._id;
+    parentMicroSeedReceiptFingerprint = primaryFallbackReceiptFingerprint(
+      parent,
+      parentReservation,
+    );
+  } else if (sourceJobs.length === 2) {
+    return { ready: false, reason: "source_plan_fallback_already_attempted" };
+  }
+
+  if (currentJob && normalizeCadenceMicroSeedText(currentJob.seed) !== seed) {
+    return { ready: false, reason: "micro_seed_anchor_drifted" };
+  }
+  if (
+    currentJob &&
+    JSON.stringify(currentJob.providerSeeds ?? [currentJob.seed]) !==
+      JSON.stringify(providerSeeds)
+  ) {
+    return { ready: false, reason: "micro_seed_anchor_batch_drifted" };
+  }
+  const entitlement = await ctx.db.query("account_plan_entitlements")
+    .withIndex("by_user", (q) => q.eq("userId", site.userId!))
+    .unique();
+  const planFeatures = [
+    ...(entitlement?.planFeatures ?? site.planFeatures ?? []),
+  ].sort();
+  const plan = resolvePlanFromFeatures(planFeatures);
+  const providerCostCeilingMicroUsd =
+    cadenceMicroSeedProviderCeilingMicroUsd(attemptKind);
+  const evidenceHeadroomMicroUsd =
+    EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD;
+  const receipt = {
+    contract: "cadence-source-inventory-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    currentJobId: currentJobId ? String(currentJobId) : null,
+    topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
+    sourcePlanId: String(sourceJob._id),
+    sourcePlanReservationId: String(sourceReservation._id),
+    sourcePlanFingerprint: sourceFingerprint,
+    sourceJobIds: sourceJobs.map((job) => String(job._id)),
+    priorPolicyAttemptReceipts: priorPolicyJobs.map((job) => ({
+      id: String(job._id),
+      attemptKind: cadenceMicroSeedAttemptKind(job.attemptKind),
+      providerEndpoint: job.providerEndpoint,
+      providerSeeds: job.providerSeeds ?? [job.seed],
+      providerCallAttempted: job.providerCallAttempted,
+      providerAttemptedAt: job.providerAttemptedAt ?? null,
+      providerRequestTag: job.providerRequestTag ?? null,
+    })),
+    attemptKind,
+    parentMicroSeedJobId: parentMicroSeedJobId
+      ? String(parentMicroSeedJobId)
+      : null,
+    parentMicroSeedReceiptFingerprint:
+      parentMicroSeedReceiptFingerprint ?? null,
+    seed,
+    providerSeeds,
+    locationCode,
+    languageCode,
+    planTier: plan.tier,
+    planFeatures,
+    providerCostCeilingMicroUsd,
+    evidenceHeadroomMicroUsd,
+  };
+  return {
+    ready: true,
+    contract: "cadence-source-readiness-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
+    topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
+    sourceInventoryFingerprint: sha256Hex(JSON.stringify(receipt)),
+    sourcePlanId: sourceJob._id,
+    sourcePlanReservationId: sourceReservation._id,
+    sourcePlanFingerprint: sourceFingerprint,
+    attemptKind,
+    ...(parentMicroSeedJobId ? { parentMicroSeedJobId } : {}),
+    ...(parentMicroSeedReceiptFingerprint
+      ? { parentMicroSeedReceiptFingerprint }
+      : {}),
+    seed,
+    providerSeeds,
+    locationCode,
+    languageCode,
+    planTier: plan.tier,
+    planFeatures,
+    providerCostCeilingMicroUsd,
+    evidenceHeadroomMicroUsd,
+  };
+}
+
+export const inspectSourceReadinessInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+    topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  },
+  handler: async (ctx, args) => cadenceSourceReadinessPrecheck(
+    ctx,
+    args.siteId,
+    Date.now(),
+    args.sourcePlanId,
+    args.topicPrecheck,
+    args.currentJobId,
+  ),
+});
+
 async function inspectReadiness(
   ctx: QueryCtx | MutationCtx,
   siteId: Id<"sites">,
@@ -1163,6 +1581,7 @@ async function inspectReadiness(
   sourcePlanId: Id<"jobs">,
   topicPrecheck: CadenceTopicReadinessPrecheck,
   operationalPrecheck: CadenceOperationalReadinessPrecheck,
+  sourcePrecheck: CadenceSourceReadinessPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
   recoveryPrecheck?: {
     completed: true;
@@ -1216,9 +1635,21 @@ async function inspectReadiness(
       (currentJobId ? String(currentJobId) : undefined) ||
     !/^[a-f0-9]{64}$/.test(operationalPrecheck.operationalFingerprint)
   ) return { ready: false, reason: "operational_inspection_stale" };
+  if (
+    sourcePrecheck.contract !== "cadence-source-readiness-v1" ||
+    sourcePrecheck.siteId !== String(site._id) ||
+    !canonicalDomain ||
+    sourcePrecheck.canonicalDomain !== canonicalDomain ||
+    sourcePrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    sourcePrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    sourcePrecheck.currentJobId !==
+      (currentJobId ? String(currentJobId) : undefined) ||
+    sourcePrecheck.topicInventoryFingerprint !==
+      topicPrecheck.inventoryFingerprint ||
+    sourcePrecheck.sourcePlanId !== sourcePlanId ||
+    !/^[a-f0-9]{64}$/.test(sourcePrecheck.sourceInventoryFingerprint)
+  ) return { ready: false, reason: "source_inspection_stale" };
 
-  const locationCode = dataForSeoLocationCode(site.targetCountry);
-  const languageCode = dataForSeoLanguageCode(site.language);
   const businessSignals = tenantTopicBusinessSignals(site);
   if (topicPrecheck.schedulerTopicAvailable) {
     return { ready: false, reason: "scheduler_topic_available" };
@@ -1234,300 +1665,41 @@ async function inspectReadiness(
   const recoveryBlockReason = recoveryPrecheck.blockReason ?? null;
   if (recoveryBlockReason) return { ready: false, reason: recoveryBlockReason };
 
-  const sourceJob = await ctx.db.get(sourcePlanId);
-  if (
-    !sourceJob ||
-    sourceJob.siteId !== siteId ||
-    sourceJob.type !== "plan"
-  ) return { ready: false, reason: "source_plan_not_exhausted" };
-  const [sourceReservation, sourceCheckpoints] = await Promise.all([
-    sourceJob.providerSpendReservationId
-      ? ctx.db.get(sourceJob.providerSpendReservationId)
-      : Promise.resolve(null),
-    ctx.db.query("plan_candidate_checkpoints")
-      .withIndex("by_plan_job", (q) => q.eq("planJobId", sourceJob._id))
-      .order("desc")
-      .take(2),
-  ]);
-  if (!validExhaustedSourcePlan({
-    site,
-    job: sourceJob,
-    reservation: sourceReservation,
-    checkpoints: sourceCheckpoints,
-    timestamp,
-  }) || !sourceReservation) {
-    return { ready: false, reason: "source_plan_not_exhausted" };
-  }
-  const source = {
-    job: sourceJob,
-    reservation: sourceReservation,
-    checkpoints: sourceCheckpoints,
-  };
-  const sourceFingerprint = sourcePlanFingerprint(
-    source.job,
-    source.reservation,
-    source.checkpoints,
-  );
-  // Query the exact current policy through a composite index. Historical
-  // no-replay receipts remain immutable but cannot make a new policy's own
-  // insertion cross an unrelated fixed read limit and invalidate its fence.
-  const [sourceJobs, priorPolicyJobs] = await Promise.all([
-    ctx.db.query("cadence_micro_seed_jobs")
-      .withIndex("by_site_source_policy_created", (q) =>
-        q.eq("siteId", siteId)
-          .eq("sourcePlanId", source!.job._id)
-          .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
-      )
-      .order("asc")
-      .take(3),
-    ctx.db.query("cadence_micro_seed_jobs")
-      .withIndex("by_site_source_policy_created", (q) =>
-        q.eq("siteId", siteId)
-          .eq("sourcePlanId", source!.job._id)
-          .lt("policyVersion", CADENCE_MICRO_SEED_VERSION)
-      )
-      .order("asc")
-      .take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
-  ]);
-  if (sourceJobs.length > 2) {
-    return { ready: false, reason: "micro_seed_source_history_exhausted" };
-  }
-  if (priorPolicyJobs.length > CADENCE_MICRO_SEED_READ_LIMIT) {
-    return { ready: false, reason: "micro_seed_policy_history_read_limit" };
-  }
-  // A versioned policy repair must not spend again on a tenant anchor whose
-  // provider request already ran for this exact exhausted source plan. Rows
-  // that never reached the provider stay retryable; attempted rows are an
-  // immutable exhaustion receipt, regardless of their terminal outcome.
-  const previouslyAttemptedPrimarySeeds = priorPolicyJobs
-    .filter((job) =>
-      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
-      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("primary")
-    )
-    .flatMap((job) => job.providerSeeds ?? [job.seed]);
-  const previouslyAttemptedFallbackSeeds = priorPolicyJobs
-    .filter((job) =>
-      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
-      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("fallback")
-    )
-    .flatMap((job) => job.providerSeeds ?? [job.seed]);
-  const currentJob = currentJobId
-    ? sourceJobs.find((job) => job._id === currentJobId)
-    : undefined;
-  if (currentJobId && !currentJob) {
-    return { ready: false, reason: "micro_seed_execution_receipt_unavailable" };
-  }
-
-  const anchors = cadenceMicroSeedRecoveryAnchors(site);
-  const coveredKeywords = topicPrecheck.coveredKeywords;
-  const primarySeeds = selectCadenceMicroSeedProbeBatch(
-    anchors,
-    String(source.job._id),
-    CADENCE_MICRO_SEED_VERSION - 1,
-    previouslyAttemptedPrimarySeeds,
-    coveredKeywords,
-  );
-  const primarySeed = primarySeeds[0];
-  if (!primarySeed) {
-    return { ready: false, reason: "tenant_product_seed_unavailable" };
-  }
-  let attemptKind: CadenceMicroSeedAttemptKind = "primary";
-  let seed = primarySeed;
-  let providerSeeds = primarySeeds;
-  let parentMicroSeedJobId: Id<"cadence_micro_seed_jobs"> | undefined;
-  let parentMicroSeedReceiptFingerprint: string | undefined;
-
-  if (currentJob) {
-    const currentKind = cadenceMicroSeedAttemptKind(currentJob.attemptKind);
-    if (!currentKind) {
-      return { ready: false, reason: "micro_seed_attempt_kind_incompatible" };
-    }
-    attemptKind = currentKind;
-    if (currentKind === "primary") {
-      if (
-        sourceJobs.length !== 1 ||
-        currentJob.parentMicroSeedJobId ||
-        currentJob.parentMicroSeedReceiptFingerprint
-      ) {
-        return { ready: false, reason: "micro_seed_primary_receipt_incompatible" };
-      }
-    } else {
-      if (sourceJobs.length !== 2 || !currentJob.parentMicroSeedJobId) {
-        return { ready: false, reason: "micro_seed_fallback_receipt_incompatible" };
-      }
-      const parent = sourceJobs.find((job) =>
-        job._id === currentJob.parentMicroSeedJobId
-      );
-      const parentReservation = parent
-        ? await ctx.db.get(parent.providerSpendReservationId)
-        : null;
-      const parentChildren = parent
-        ? await ctx.db.query("cadence_micro_seed_jobs")
-          .withIndex("by_site_parent", (q) =>
-            q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
-          )
-          .take(2)
-        : [];
-      if (
-        !parent ||
-        parent._id === currentJob._id ||
-        parentChildren.length !== 1 ||
-        parentChildren[0]?._id !== currentJob._id ||
-        !validPrimaryFallbackReceipt({
-          site,
-          job: parent,
-          reservation: parentReservation,
-          sourcePlanId: source.job._id,
-          sourcePlanReservationId: source.reservation._id,
-          sourcePlanFingerprint: sourceFingerprint,
-          primarySeed,
-          primarySeeds,
-          locationCode,
-          languageCode,
-          timestamp,
-        })
-      ) {
-        return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
-      }
-      if (!parentReservation) {
-        return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
-      }
-      const parentFingerprint = primaryFallbackReceiptFingerprint(
-        parent,
-        parentReservation,
-      );
-      const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
-        anchors,
-        String(source.job._id),
-        CADENCE_MICRO_SEED_VERSION - 1,
-        previouslyAttemptedFallbackSeeds,
-        coveredKeywords,
-      );
-      const fallbackSeed = fallbackSeeds[0];
-      if (
-        !fallbackSeed ||
-        currentJob.parentMicroSeedReceiptFingerprint !== parentFingerprint
-      ) {
-        return { ready: false, reason: "micro_seed_fallback_parent_drifted" };
-      }
-      seed = fallbackSeed;
-      providerSeeds = fallbackSeeds;
-      parentMicroSeedJobId = parent._id;
-      parentMicroSeedReceiptFingerprint = parentFingerprint;
-    }
-  } else if (sourceJobs.length === 1) {
-    const parent = sourceJobs[0]!;
-    const [parentReservation, parentChildren] = await Promise.all([
-      ctx.db.get(parent.providerSpendReservationId),
-      ctx.db.query("cadence_micro_seed_jobs")
-        .withIndex("by_site_parent", (q) =>
-          q.eq("siteId", siteId).eq("parentMicroSeedJobId", parent._id)
-        )
-        .take(1),
-    ]);
-    if (parentChildren.length > 0 || !validPrimaryFallbackReceipt({
-      site,
-      job: parent,
-      reservation: parentReservation,
-      sourcePlanId: source.job._id,
-      sourcePlanReservationId: source.reservation._id,
-      sourcePlanFingerprint: sourceFingerprint,
-      primarySeed,
-      primarySeeds,
-      locationCode,
-      languageCode,
-      timestamp,
-    })) {
-      return { ready: false, reason: "source_plan_already_recovered" };
-    }
-    if (!parentReservation) {
-      return { ready: false, reason: "source_plan_already_recovered" };
-    }
-    const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
-      anchors,
-      String(source.job._id),
-      CADENCE_MICRO_SEED_VERSION - 1,
-      previouslyAttemptedFallbackSeeds,
-      coveredKeywords,
-    );
-    const fallbackSeed = fallbackSeeds[0];
-    if (!fallbackSeed) {
-      return { ready: false, reason: "fallback_product_seed_unavailable" };
-    }
-    attemptKind = "fallback";
-    seed = fallbackSeed;
-    providerSeeds = fallbackSeeds;
-    parentMicroSeedJobId = parent._id;
-    parentMicroSeedReceiptFingerprint = primaryFallbackReceiptFingerprint(
-      parent,
-      parentReservation,
-    );
-  } else if (sourceJobs.length === 2) {
-    // A child row is a permanent one-shot marker even if its free balance
-    // preflight released the separate fallback reservation.
-    return { ready: false, reason: "source_plan_fallback_already_attempted" };
-  }
-
-  if (currentJob && normalizeCadenceMicroSeedText(currentJob.seed) !== seed) {
-    return { ready: false, reason: "micro_seed_anchor_drifted" };
-  }
-  if (
-    currentJob &&
-    JSON.stringify(currentJob.providerSeeds ?? [currentJob.seed]) !==
-      JSON.stringify(providerSeeds)
-  ) {
-    return { ready: false, reason: "micro_seed_anchor_batch_drifted" };
-  }
-  const entitlement = await ctx.db.query("account_plan_entitlements")
-    .withIndex("by_user", (q) => q.eq("userId", site.userId!))
-    .unique();
-  const plan = resolvePlanFromFeatures(
-    entitlement?.planFeatures ?? site.planFeatures ?? [],
-  );
-  const providerCostCeilingMicroUsd =
-    cadenceMicroSeedProviderCeilingMicroUsd(attemptKind);
-  const evidenceHeadroomMicroUsd =
-    EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD;
-  // This inspection is an eligibility fence, not a billing transaction. The
-  // exact account/fleet capacity decision remains inside reserveAndQueue's
-  // serializable reservation mutation. Keeping the historical ledger out of
-  // every eligibility recheck prevents mature tenants from timing out while
-  // preserving the same fail-closed budget boundary before any provider call.
-
   const descriptor = {
     contract: "cadence-micro-seed-inspection-v2",
     siteId: String(site._id),
     userId: site.userId,
     reservationDay: utcDay(timestamp),
     rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
-    planTier: plan.tier,
-    planFeatures: [...(entitlement?.planFeatures ?? site.planFeatures ?? [])].sort(),
+    planTier: sourcePrecheck.planTier,
+    planFeatures: sourcePrecheck.planFeatures,
     remainingArticles: operationalPrecheck.remainingArticles,
     authority,
     businessSignals,
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     operationalInventoryFingerprint:
       operationalPrecheck.operationalFingerprint,
-    sourcePlanId: String(source.job._id),
-    sourcePlanReservationId: String(source.reservation._id),
-    sourcePlanFingerprint: sourceFingerprint,
-    attemptKind,
-    parentMicroSeedJobId: parentMicroSeedJobId
-      ? String(parentMicroSeedJobId)
+    sourceInventoryFingerprint: sourcePrecheck.sourceInventoryFingerprint,
+    sourcePlanId: String(sourcePrecheck.sourcePlanId),
+    sourcePlanReservationId: String(sourcePrecheck.sourcePlanReservationId),
+    sourcePlanFingerprint: sourcePrecheck.sourcePlanFingerprint,
+    attemptKind: sourcePrecheck.attemptKind,
+    parentMicroSeedJobId: sourcePrecheck.parentMicroSeedJobId
+      ? String(sourcePrecheck.parentMicroSeedJobId)
       : null,
     parentMicroSeedReceiptFingerprint:
-      parentMicroSeedReceiptFingerprint ?? null,
-    seed,
-    providerSeeds,
-    locationCode,
-    languageCode,
+      sourcePrecheck.parentMicroSeedReceiptFingerprint ?? null,
+    seed: sourcePrecheck.seed,
+    providerSeeds: sourcePrecheck.providerSeeds,
+    locationCode: sourcePrecheck.locationCode,
+    languageCode: sourcePrecheck.languageCode,
     nextCadenceDueAt: operationalPrecheck.nextCadenceDueAt,
     bufferCount: 0,
     schedulerTopicCount: 0,
     activeContentCount: 0,
     activeEvidenceCount: 0,
-    providerCostCeilingMicroUsd,
-    evidenceHeadroomMicroUsd,
+    providerCostCeilingMicroUsd: sourcePrecheck.providerCostCeilingMicroUsd,
+    evidenceHeadroomMicroUsd: sourcePrecheck.evidenceHeadroomMicroUsd,
     terminalNoMetricDemandReceiptFingerprint:
       operationalPrecheck.terminalNoMetricDemandReceiptFingerprint ?? null,
   };
@@ -1536,22 +1708,27 @@ async function inspectReadiness(
     inspectionKey: JSON.stringify(descriptor),
     reservationDay: descriptor.reservationDay,
     rolloutEpoch: descriptor.rolloutEpoch,
-    sourcePlanId: source.job._id,
-    sourcePlanReservationId: source.reservation._id,
-    sourcePlanFingerprint: sourceFingerprint,
-    attemptKind,
-    ...(parentMicroSeedJobId ? { parentMicroSeedJobId } : {}),
-    ...(parentMicroSeedReceiptFingerprint
-      ? { parentMicroSeedReceiptFingerprint }
+    sourcePlanId: sourcePrecheck.sourcePlanId,
+    sourcePlanReservationId: sourcePrecheck.sourcePlanReservationId,
+    sourcePlanFingerprint: sourcePrecheck.sourcePlanFingerprint,
+    attemptKind: sourcePrecheck.attemptKind,
+    ...(sourcePrecheck.parentMicroSeedJobId
+      ? { parentMicroSeedJobId: sourcePrecheck.parentMicroSeedJobId }
       : {}),
-    seed,
-    providerSeeds,
-    locationCode,
-    languageCode,
-    planTier: plan.tier,
+    ...(sourcePrecheck.parentMicroSeedReceiptFingerprint
+      ? {
+          parentMicroSeedReceiptFingerprint:
+            sourcePrecheck.parentMicroSeedReceiptFingerprint,
+        }
+      : {}),
+    seed: sourcePrecheck.seed,
+    providerSeeds: sourcePrecheck.providerSeeds,
+    locationCode: sourcePrecheck.locationCode,
+    languageCode: sourcePrecheck.languageCode,
+    planTier: sourcePrecheck.planTier,
     nextCadenceDueAt: operationalPrecheck.nextCadenceDueAt,
-    providerCostCeilingMicroUsd,
-    evidenceHeadroomMicroUsd,
+    providerCostCeilingMicroUsd: sourcePrecheck.providerCostCeilingMicroUsd,
+    evidenceHeadroomMicroUsd: sourcePrecheck.evidenceHeadroomMicroUsd,
   };
 }
 
@@ -1561,6 +1738,7 @@ export const inspectInternal = internalQuery({
     sourcePlanId: v.id("jobs"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     operationalPrecheck: cadenceOperationalReadinessPrecheckValidator,
+    sourcePrecheck: cadenceSourceReadinessPrecheckValidator,
     recoveryPrechecked: v.optional(v.boolean()),
     recoveryBlockReason: v.optional(v.string()),
   },
@@ -1571,6 +1749,7 @@ export const inspectInternal = internalQuery({
       sourcePlanId,
       topicPrecheck,
       operationalPrecheck,
+      sourcePrecheck,
       recoveryPrechecked,
       recoveryBlockReason,
     },
@@ -1581,6 +1760,7 @@ export const inspectInternal = internalQuery({
     sourcePlanId,
     topicPrecheck,
     operationalPrecheck,
+    sourcePrecheck,
     undefined,
     recoveryPrechecked === true
       ? {
@@ -1754,6 +1934,7 @@ export const reserveAndQueue = internalMutation({
     siteId: v.id("sites"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     operationalPrecheck: cadenceOperationalReadinessPrecheckValidator,
+    sourcePrecheck: cadenceSourceReadinessPrecheckValidator,
     inspectionKey: v.string(),
     reservationDay: v.string(),
     rolloutEpoch: v.number(),
@@ -1774,6 +1955,7 @@ export const reserveAndQueue = internalMutation({
       args.sourcePlanId,
       args.topicPrecheck,
       args.operationalPrecheck,
+      args.sourcePrecheck,
       undefined,
       { completed: true },
     );
@@ -2009,6 +2191,7 @@ export const beginProviderAttempt = internalMutation({
     workerToken: v.string(),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     operationalPrecheck: cadenceOperationalReadinessPrecheckValidator,
+    sourcePrecheck: cadenceSourceReadinessPrecheckValidator,
   },
   handler: async (ctx, args) => {
     const { site, job } = await requireWorker(ctx, args);
@@ -2031,6 +2214,7 @@ export const beginProviderAttempt = internalMutation({
       job.sourcePlanId,
       args.topicPrecheck,
       args.operationalPrecheck,
+      args.sourcePrecheck,
       job._id,
       { completed: true },
     );
