@@ -929,6 +929,7 @@ export default defineSchema({
     qualityRevisionCount: v.optional(v.number()),
     qualityRecoveryVersion: v.optional(v.number()),
     qualityRecoveryAttemptVersion: v.optional(v.number()),
+    deterministicQualityRepairAttemptVersion: v.optional(v.number()),
     deterministicInternalLinkRepairVersion: v.optional(v.number()),
 
     // ── Content SEO Score (computed after generation) ──
@@ -1048,6 +1049,7 @@ export default defineSchema({
     qualityRevisionCount: v.optional(v.number()),
     qualityRecoveryVersion: v.optional(v.number()),
     qualityRecoveryAttemptVersion: v.optional(v.number()),
+    deterministicQualityRepairAttemptVersion: v.optional(v.number()),
     deterministicInternalLinkRepairVersion: v.optional(v.number()),
     entityCoverage: v.optional(v.number()),
     topicCompleteness: v.optional(v.number()),

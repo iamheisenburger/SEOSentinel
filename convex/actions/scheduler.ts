@@ -71,6 +71,7 @@ type ArticleSummary = {
   qualityRevisionCount?: number;
   qualityRecoveryVersion?: number;
   qualityRecoveryAttemptVersion?: number;
+  deterministicQualityRepairAttemptVersion?: number;
   deterministicInternalLinkRepairVersion?: number;
   metaKeywords?: string[];
 };
@@ -745,16 +746,19 @@ export const scheduleCadence = internalAction({
     }
 
     const recentCandidates = state.recent as ArticleSummary[];
-    const recoverable = recoverableQualityArticlesSince(
+    const recoverableCandidates = recoverableQualityArticlesSince(
       state.review as ArticleSummary[],
       candidateWindowStart,
-    )[0];
-    if (recoverable) {
-      const recovery = await ctx.runMutation(internal.jobs.queueQualityRetryIfAbsent, {
-        siteId,
-        articleId: recoverable._id,
-        bufferFill: autonomousDelivery || rolloutMode === "warm",
-      });
+    );
+    for (const recoverable of recoverableCandidates) {
+      const recovery = await ctx.runMutation(
+        internal.jobs.queueQualityRetryIfAbsent,
+        {
+          siteId,
+          articleId: recoverable._id,
+          bufferFill: autonomousDelivery || rolloutMode === "warm",
+        },
+      );
       if (recovery.queued) {
         return {
           scheduled: 1,
@@ -780,10 +784,11 @@ export const scheduleCadence = internalAction({
     // that exact draft one guarded deterministic repair without spending
     // another prose revision. The job mutation remembers the attempt so the
     // scheduler cannot create an infinite loop.
-    const mechanicallyRecoverable = deterministicMechanicalRepairArticles(
+    const mechanicallyRecoverableCandidates =
+      deterministicMechanicalRepairArticles(
       state.review as ArticleSummary[],
-    )[0];
-    if (mechanicallyRecoverable) {
+    );
+    for (const mechanicallyRecoverable of mechanicallyRecoverableCandidates) {
       const recovery = await ctx.runMutation(
         internal.jobs.queueQualityRetryIfAbsent,
         {

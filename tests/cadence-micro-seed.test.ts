@@ -38,10 +38,13 @@ import {
   SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
 } from "../convex/lib/providerSpendReservation.ts";
 import {
+  DETERMINISTIC_QUALITY_REPAIR_VERSION,
   deterministicMechanicalRepairArticles,
   hasRecoverableQualityWork,
   recoverableQualityArticlesSince,
 } from "../convex/lib/autopilotCadence.ts";
+import { PUBLICATION_AUDIT_VERSION } from
+  "../convex/lib/publicationArtifact.ts";
 
 const model = readFileSync("convex/cadenceMicroSeed.ts", "utf8");
 const demandBackfill = readFileSync(
@@ -50,6 +53,7 @@ const demandBackfill = readFileSync(
 );
 const action = readFileSync("convex/actions/cadenceMicroSeed.ts", "utf8");
 const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
+const jobs = readFileSync("convex/jobs.ts", "utf8");
 const provider = readFileSync("convex/actions/seoData.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
 const sites = readFileSync("convex/sites.ts", "utf8");
@@ -810,6 +814,24 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
     deterministicMechanicalRepairArticles([oldMechanical, terminalMechanical]),
     [oldMechanical],
   );
+  const alreadyAudited = {
+    ...ordinary,
+    auditedContentHash: "current-audit-hash",
+    publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+  };
+  assert.equal(
+    hasRecoverableQualityWork([alreadyAudited], candidateWindowStart),
+    false,
+  );
+  const attemptedMechanical = {
+    ...oldMechanical,
+    deterministicQualityRepairAttemptVersion:
+      DETERMINISTIC_QUALITY_REPAIR_VERSION,
+  };
+  assert.deepEqual(
+    deterministicMechanicalRepairArticles([attemptedMechanical]),
+    [],
+  );
   assert.match(model, /hasRecoverableQualityWork\([\s\S]*candidateWindowStart/);
   assert.match(
     scheduler,
@@ -817,12 +839,22 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
   );
   assert.match(
     scheduler,
-    /const recoverable = recoverableQualityArticlesSince\([\s\S]*candidateWindowStart/,
+    /const recoverableCandidates = recoverableQualityArticlesSince\([\s\S]*candidateWindowStart/,
+  );
+  assert.match(scheduler, /for \(const recoverable of recoverableCandidates\)/);
+  assert.match(
+    scheduler,
+    /const mechanicallyRecoverableCandidates =[\s\S]*deterministicMechanicalRepairArticles\(/,
   );
   assert.match(
     scheduler,
-    /const mechanicallyRecoverable = deterministicMechanicalRepairArticles\(/,
+    /for \(const mechanicallyRecoverable of mechanicallyRecoverableCandidates\)/,
   );
+  assert.match(
+    jobs,
+    /deterministicQualityRepairAttemptVersion:[\s\S]*DETERMINISTIC_QUALITY_REPAIR_VERSION/,
+  );
+  assert.match(schema, /deterministicQualityRepairAttemptVersion/);
 });
 
 test("provider helper binds request, locale, intent, measured KD, and both cost receipts", async () => {

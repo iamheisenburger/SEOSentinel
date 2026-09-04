@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import {
+  DETERMINISTIC_QUALITY_REPAIR_VERSION,
   hasAttemptedVersionedQualityRecovery,
   MAX_QUALITY_REVISIONS,
   qualityRecoveryAttemptVersionFromJob,
@@ -1274,6 +1275,22 @@ export const queueQualityRetryIfAbsent = internalMutation({
         });
       }
     };
+    const markDeterministicRepairAttempt = async () => {
+      await ctx.db.patch(articleId, {
+        deterministicQualityRepairAttemptVersion:
+          DETERMINISTIC_QUALITY_REPAIR_VERSION,
+      });
+      const summary = await ctx.db
+        .query("article_summaries")
+        .withIndex("by_article", (q) => q.eq("articleId", articleId))
+        .first();
+      if (summary) {
+        await ctx.db.patch(summary._id, {
+          deterministicQualityRepairAttemptVersion:
+            DETERMINISTIC_QUALITY_REPAIR_VERSION,
+        });
+      }
+    };
     if (
       article.auditedContentHash &&
       article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION
@@ -1324,6 +1341,9 @@ export const queueQualityRetryIfAbsent = internalMutation({
           versionedQualityRecoveryVersion,
         );
       if (alreadyAttemptedMechanicalRepair || alreadyAttemptedVersionedRecovery) {
+        if (alreadyAttemptedMechanicalRepair) {
+          await markDeterministicRepairAttempt();
+        }
         if (alreadyAttemptedVersionedRecovery) {
           await markVersionedRecoveryAttempt(versionedQualityRecoveryVersion);
         }
@@ -1331,6 +1351,9 @@ export const queueQualityRetryIfAbsent = internalMutation({
       }
     }
     const timestamp = now();
+    if (metadataOnlyRepair || deterministicRepair) {
+      await markDeterministicRepairAttempt();
+    }
     if (versionedQualityRecovery) {
       await markVersionedRecoveryAttempt(versionedQualityRecoveryVersion);
     }

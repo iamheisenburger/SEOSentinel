@@ -155,6 +155,8 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
     qualityRevisionCount: article.qualityRevisionCount,
     qualityRecoveryVersion: article.qualityRecoveryVersion,
     qualityRecoveryAttemptVersion: article.qualityRecoveryAttemptVersion,
+    deterministicQualityRepairAttemptVersion:
+      article.deterministicQualityRepairAttemptVersion,
     deterministicInternalLinkRepairVersion:
       article.deterministicInternalLinkRepairVersion,
     entityCoverage: article.entityCoverage,
@@ -361,6 +363,10 @@ function summaryListItem(summary: ArticleSummaryFields) {
     qualityRevisionCount: summary.qualityRevisionCount,
     qualityRecoveryVersion: summary.qualityRecoveryVersion,
     qualityRecoveryAttemptVersion: summary.qualityRecoveryAttemptVersion,
+    deterministicQualityRepairAttemptVersion:
+      summary.deterministicQualityRepairAttemptVersion,
+    deterministicInternalLinkRepairVersion:
+      summary.deterministicInternalLinkRepairVersion,
     entityCoverage: summary.entityCoverage,
     topicCompleteness: summary.topicCompleteness,
     serpDifficulty: summary.serpDifficulty,

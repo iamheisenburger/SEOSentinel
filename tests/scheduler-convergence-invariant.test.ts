@@ -32,8 +32,8 @@ test("work-in-progress requires an exact active job receipt", () => {
 
 test("a settled one-shot recovery falls through to fresh inventory", () => {
   const recovery = scheduler.slice(
-    scheduler.indexOf("if (recoverable)"),
-    scheduler.indexOf("const mechanicallyRecoverable"),
+    scheduler.indexOf("for (const recoverable of recoverableCandidates)"),
+    scheduler.indexOf("const mechanicallyRecoverableCandidates"),
   );
   assert.match(recovery, /if \(recovery\.queued\)/);
   assert.match(recovery, /if \(recovery\.jobId\)/);

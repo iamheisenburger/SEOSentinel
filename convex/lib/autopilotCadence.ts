@@ -2,6 +2,7 @@ import {
   effectivePublishedAt,
   hasTerminalTopicFitFailure,
 } from "./autopilotBuffer.ts";
+import { PUBLICATION_AUDIT_VERSION } from "./publicationArtifact.ts";
 import { isRecoverableWorkerQualityIssue } from "./topicLifecycle.ts";
 
 export type CadenceArticle = {
@@ -19,6 +20,7 @@ export type CadenceArticle = {
   qualityRevisionCount?: number;
   qualityRecoveryVersion?: number;
   qualityRecoveryAttemptVersion?: number;
+  deterministicQualityRepairAttemptVersion?: number;
 };
 
 export type CadenceWindow = {
@@ -32,6 +34,7 @@ export type CadenceWindow = {
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
 export const QUALITY_RECOVERY_VERSION = 14;
+export const DETERMINISTIC_QUALITY_REPAIR_VERSION = 1;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
 const CLAIM_LEDGER_RECOVERY_VERSION = 5;
@@ -407,7 +410,11 @@ function topicFamilyRemainsRecoverable(
   terminalTopicIds: ReadonlySet<string>,
 ): boolean {
   return !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
-    (!article.topicId || !terminalTopicIds.has(article.topicId));
+    (!article.topicId || !terminalTopicIds.has(article.topicId)) &&
+    !(
+      article.auditedContentHash &&
+      article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION
+    );
 }
 
 /** One authoritative prose/versioned-recovery selector for every cadence
@@ -439,6 +446,8 @@ export function deterministicMechanicalRepairArticles<
   return articles
     .filter((article) =>
       topicFamilyRemainsRecoverable(article, terminalTopicIds) &&
+      (article.deterministicQualityRepairAttemptVersion ?? 0) <
+        DETERMINISTIC_QUALITY_REPAIR_VERSION &&
       needsDeterministicMechanicalRepair(article)
     )
     .sort((left, right) => right.createdAt - left.createdAt);
