@@ -3,11 +3,12 @@ import {
   PUBLISHER_RENDERER_VERSION,
 } from "./publicationReceipts.ts";
 
-// Version 6 separates evidence-complete text-first publication from optional
-// decorative media while keeping every present asset fail-closed against the
-// persisted reviewed-media ledger. The bump forces older artifacts to reseal
-// under that exact contract.
-export const PUBLICATION_AUDIT_VERSION = 6;
+// Version 7 binds every not-yet-published sealed artifact to the current
+// tenant business-fit policy. The bump makes pre-v9 ready inventory pass
+// through the deterministic refresh path before it can count as buffer or be
+// delivered; an off-business draft is demoted instead of surviving a policy
+// correction behind an otherwise valid prose seal.
+export const PUBLICATION_AUDIT_VERSION = 7;
 
 // Convex mutations run in the default V8 runtime, where Node's `crypto`
 // module is unavailable.  Keep the digest synchronous because the exact same

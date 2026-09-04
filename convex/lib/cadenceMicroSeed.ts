@@ -42,7 +42,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 18;
+export const CADENCE_MICRO_SEED_VERSION = 19;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
@@ -326,11 +326,18 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
   productUsage?: string | null;
   targetAudienceSummary?: string | null;
 }): string[] {
-  const explicit = cadenceMicroSeedAnchors({
+  // Search anchors are deliberate tenant-authored keyword phrases. Feature
+  // prose is useful only as a sparse-profile fallback: clipping a sentence
+  // such as "powered by website content learning" into a paid seed can erase
+  // the actual product and drift into an unrelated market. Once a tenant has
+  // supplied two usable search anchors, keep recovery entirely on that exact
+  // surface.
+  const exactSearchAnchors = cadenceMicroSeedAnchors({
     anchorKeywords: args.anchorKeywords,
-    keyFeatures: args.keyFeatures,
   });
-  return explicit.length >= 2 ? explicit : cadenceMicroSeedAnchors(args);
+  return exactSearchAnchors.length >= 2
+    ? exactSearchAnchors
+    : cadenceMicroSeedAnchors(args);
 }
 
 /**

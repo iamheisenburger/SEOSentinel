@@ -1193,9 +1193,9 @@ const PROFESSIONAL_SERVICE_TERM =
 const PROFESSIONAL_SERVICE_QUERY =
   /(?:\b(?:hire|hiring|find|choose|best|top)\b.*\b(?:consultant|agency|firm|expert|professional services?|service provider)\b|\b(?:consulting|consultant|agency|firm|professional services?|service provider)\b\s*$|\b(?:consulting|consultant|agency|firm|professional services?|service provider)\b.*\b(?:career|careers|course|courses|definition|job|jobs|meaning|role|roles|salary|training|what)\b|\b(?:conversion rate optimization|lead generation|marketing|seo|search engine optimization|web design|software development)\s+services\b)/i;
 const EDUCATION_PROVIDER_TERM =
-  /\b(?:academy|college|course provider|education provider|school|training provider|university)\b/i;
+  /\b(?:academy|college|course provider|education provider|e[-\s]?learning|learning management systems?|instructional design|school|training provider|university)\b/i;
 const EDUCATION_QUERY =
-  /\b(?:career|careers|certificate|certification|course|courses|degree|degrees|job|jobs|salary|salaries)\b|\btraining\s+(?:academy|course|courses|program|programs|provider)\b/i;
+  /\b(?:career|careers|certificate|certification|course|courses|degree|degrees|e[-\s]?learning|instructional design|job|jobs|learning management systems?|online learning|salary|salaries)\b|\btraining\s+(?:academy|course|courses|program|programs|provider)\b/i;
 
 /**
  * A SaaS may serve consultants without being a consultancy. Keep product
@@ -1223,7 +1223,7 @@ export function keywordMatchesBusinessModel(
   return true;
 }
 
-export const TOPIC_BUSINESS_FIT_VERSION = 8;
+export const TOPIC_BUSINESS_FIT_VERSION = 9;
 
 export type TopicBusinessFitEvaluation = {
   eligible: boolean;

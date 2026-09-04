@@ -319,7 +319,6 @@ test("recovery seeds keep complete profiles on explicit product anchors", () => 
   assert.deepEqual(anchors, [
     "lead qualification chatbot",
     "website lead generation automation",
-    "booking link integration",
   ]);
 
   const sparse = cadenceMicroSeedRecoveryAnchors({
@@ -328,6 +327,26 @@ test("recovery seeds keep complete profiles on explicit product anchors", () => 
   });
   assert.ok(sparse.includes("lead qualification chatbot"));
   assert.ok(sparse.includes("sales teams need more pipeline"));
+});
+
+test("recovery never lets clipped feature prose displace mature search anchors", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "AI sales agent for websites",
+      "lead qualification chatbot",
+      "website lead generation automation",
+    ],
+    keyFeatures: [
+      "AI chat engagement powered by website content learning",
+      "booking link integration",
+    ],
+  });
+  assert.deepEqual(anchors, [
+    "ai sales agent for websites",
+    "lead qualification chatbot",
+    "website lead generation automation",
+  ]);
+  assert.equal(anchors.includes("website content learning"), false);
 });
 
 test("recovery chooses the least saturated product surface and a distinct fallback", () => {
@@ -1316,6 +1335,14 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(model, /reconcileWatchdog[\s\S]*provider_attempt_ambiguous/);
   assert.match(model, /cadence_scheduling[\s\S]*scheduleCadenceForMicroSeed/);
   assert.match(model, /recordCadenceScheduleResult[\s\S]*exactTopicScheduled/);
+  assert.match(
+    model,
+    /finalizeEvidence[\s\S]*currentTopicFit[\s\S]*business_fit_drifted[\s\S]*scheduleCadenceForMicroSeed/,
+  );
+  assert.match(
+    model,
+    /recordCadenceScheduleResult[\s\S]*currentTopicFit[\s\S]*business_fit_drifted[\s\S]*exactTopicScheduled/,
+  );
   assert.match(crons, /cadence-micro-seed-fleet/);
   assert.match(action, /dispatchCadenceMicroSeedFleet/);
   assert.match(action, /runCadenceMicroSeedFleetSite/);

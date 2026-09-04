@@ -2667,6 +2667,71 @@ export const refreshPublicationAudit = internalMutation({
       return { refreshed: false as const, reason: "domain_changed" as const };
     }
 
+    // A prose seal cannot preserve an obsolete tenant-product decision. The
+    // publication-audit version is bumped whenever this policy contract
+    // changes, forcing every unpublished ready artifact through this exact
+    // database fence before it can re-enter the buffer.
+    const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
+    const topicFit = topic && topic.siteId === article.siteId &&
+        topicMatchesCurrentDomain(site, topic)
+      ? evaluateTopicBusinessFit({
+          keyword: topic.primaryKeyword,
+          label: article.title,
+          ...tenantTopicBusinessSignals(site),
+        })
+      : null;
+    if (!topicFit?.eligible) {
+      const issue = topic
+        ? `Measured topic "${topic.primaryKeyword}" failed the current tenant product-fit gate: ${topicFit?.reasons.join("; ") ?? "topic scope changed"}`
+        : "Autonomous publication requires a current tenant-scoped measured topic.";
+      const checkedAt = now();
+      const settlement = terminalTopicFitSettlement({
+        gateStatus: "blocked",
+        issues: [issue],
+        article: {
+          siteId: String(article.siteId),
+          title: article.title,
+          status: article.status,
+          topicId: article.topicId ? String(article.topicId) : null,
+        },
+        topic: topic
+          ? {
+              _id: String(topic._id),
+              siteId: String(topic.siteId),
+              primaryKeyword: topic.primaryKeyword,
+              label: topic.label,
+              status: topic.status,
+              businessFitEligible: topic.businessFitEligible,
+              planCheckpointTerminalFailureCode:
+                topic.planCheckpointTerminalFailureCode,
+            }
+          : null,
+        siteSignals: tenantTopicBusinessSignals(site),
+        checkedAt,
+      });
+      if (settlement && topic) {
+        await ctx.db.patch(topic._id, settlement.topicPatch);
+      }
+      await ctx.db.patch(articleId, {
+        status: "review",
+        publicationGateStatus: "blocked",
+        publicationGateIssues: [issue],
+        publicationGateWarnings: [],
+        publicationCheckedAt: checkedAt,
+        publicationAuditVersion: undefined,
+        publicationConfigHash: undefined,
+        publicationConfigSnapshot: undefined,
+        auditedContentHash: undefined,
+        auditedAt: undefined,
+        updatedAt: checkedAt,
+      });
+      await syncSummary(ctx, articleId);
+      return {
+        refreshed: false as const,
+        reason: "business_fit_failed" as const,
+      };
+    }
+
     const deliveryConfig = publicationDeliveryConfig(site);
     const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
     let candidate = { ...article, publicationConfigHash: deliveryConfigHash };

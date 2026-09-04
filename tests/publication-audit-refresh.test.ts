@@ -209,3 +209,17 @@ test("re-audit is the only way stranded inventory can rejoin the buffer", () => 
     "a demoted article belongs to the quality path, not another re-audit",
   );
 });
+
+test("re-audit binds stale sealed inventory to current tenant product fit", () => {
+  const refresh = articlesSource.slice(
+    articlesSource.indexOf("export const refreshPublicationAudit"),
+    articlesSource.indexOf("export const applyDeterministicQualityRepair"),
+  );
+  const fit = refresh.indexOf("evaluateTopicBusinessFit");
+  const quality = refresh.indexOf("evaluatePublicationQuality");
+  assert.ok(fit >= 0, "refresh must re-evaluate the measured topic");
+  assert.ok(quality > fit, "topic fit must fail before prose can be resealed");
+  assert.match(refresh, /reason: "business_fit_failed"/);
+  assert.match(refresh, /terminalTopicFitSettlement/);
+  assert.match(refresh, /publicationAuditVersion: undefined/);
+});

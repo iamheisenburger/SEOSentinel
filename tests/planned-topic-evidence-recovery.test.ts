@@ -36,6 +36,8 @@ import {
   filterNonCannibalizingIntentTopics,
   tenantTopicBusinessSignals,
 } from "../convex/lib/autopilotBuffer.ts";
+import { PUBLICATION_AUDIT_VERSION } from
+  "../convex/lib/publicationArtifact.ts";
 
 const helper = readFileSync(
   "convex/lib/plannedTopicEvidenceRecovery.ts",
@@ -729,7 +731,7 @@ test("cadence-critical planned evidence cannot be starved by legacy artifacts", 
   const sealed = {
     status: "ready",
     publicationGateStatus: "passed",
-    publicationAuditVersion: 6,
+    publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
     auditedContentHash: "sealed",
   };
   assert.equal(cadenceInventoryNeedsPlannedRecovery(

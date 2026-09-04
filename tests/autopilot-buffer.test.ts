@@ -1191,6 +1191,22 @@ test("service-provider intent must match the tenant business model", () => {
     ]),
     true,
   );
+  assert.equal(
+    keywordMatchesBusinessModel("e learning content development", [
+      "AI sales agent powered by website content learning",
+      "lead qualification chatbot",
+    ]),
+    false,
+    "a one-letter semantic prefix must not disappear and turn education intent into sales-tech fit",
+  );
+  assert.equal(
+    keywordMatchesBusinessModel("e-learning content development", [
+      "e-learning course platform",
+      "learning management system",
+    ]),
+    true,
+    "education products retain their own market",
+  );
 });
 
 test("broad cost language cannot smuggle an unrelated audience into a niche plan", () => {

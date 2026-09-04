@@ -59,6 +59,7 @@ import {
   filterNonCannibalizingIntentTopics,
   isSealedReady,
   isUnderfilledPlanContinuationPayload,
+  TOPIC_BUSINESS_FIT_VERSION,
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
 import {
@@ -2908,6 +2909,64 @@ export const finalizeEvidence = internalMutation({
         : {};
       return payload.topicId === topic._id || candidate.articleId === linkedArticle?._id;
     });
+    const currentTopicFit = evaluateTopicBusinessFit({
+      keyword: topic.primaryKeyword,
+      label: topic.label,
+      ...tenantTopicBusinessSignals(site!),
+    });
+    if (
+      !currentTopicFit.eligible ||
+      currentTopicFit.version !== TOPIC_BUSINESS_FIT_VERSION
+    ) {
+      // Expected-click evidence proves search opportunity, not tenant product
+      // relevance. Re-evaluate immediately before cadence handoff so a policy
+      // correction or profile change cannot turn a previously accepted seed
+      // into paid generation. At this point the topic must still be unused;
+      // in-use work belongs to the worker/publisher's independent fences.
+      if (linkedArticle || hasActiveTopicJob || topic.status !== "planned") {
+        return { finalized: false as const, reason: "topic_in_use" as const };
+      }
+      await ctx.db.patch(topic._id, {
+        status: "disqualified",
+        businessFitEligible: false,
+        businessFitScore: currentTopicFit.score,
+        businessFitVersion: currentTopicFit.version,
+        businessFitReasons: currentTopicFit.reasons,
+        businessFitCheckedAt: timestamp,
+        disqualifiedReason:
+          `cadence_micro_seed_business_fit_drifted:${currentTopicFit.reasons.join("; ")}`
+            .slice(0, 240),
+        updatedAt: timestamp,
+      });
+      await ctx.db.patch(job._id, {
+        status: "missed",
+        finalizeAttempts: job.finalizeAttempts + 1,
+        errorCode: "business_fit_drifted",
+        completedAt: timestamp,
+        updatedAt: timestamp,
+      });
+      return {
+        finalized: true as const,
+        topicDisqualified: true as const,
+        reason: "business_fit_drifted" as const,
+      };
+    }
+    if (
+      topic.businessFitEligible !== true ||
+      topic.businessFitVersion !== TOPIC_BUSINESS_FIT_VERSION ||
+      topic.businessFitScore !== currentTopicFit.score ||
+      JSON.stringify(topic.businessFitReasons ?? []) !==
+        JSON.stringify(currentTopicFit.reasons)
+    ) {
+      await ctx.db.patch(topic._id, {
+        businessFitEligible: true,
+        businessFitScore: currentTopicFit.score,
+        businessFitVersion: currentTopicFit.version,
+        businessFitReasons: currentTopicFit.reasons,
+        businessFitCheckedAt: timestamp,
+        updatedAt: timestamp,
+      });
+    }
     const currentPortfolio = evaluateStoredExpectedClickPortfolio({
       topics: [{
         topicId: String(topic._id),
@@ -3217,6 +3276,46 @@ export const recordCadenceScheduleResult = internalMutation({
         : {};
       return payload.topicId === topic._id || candidate.articleId === linkedArticle?._id;
     });
+    const currentTopicFit = evaluateTopicBusinessFit({
+      keyword: topic.primaryKeyword,
+      label: topic.label,
+      ...tenantTopicBusinessSignals(site!),
+    });
+    if (
+      !currentTopicFit.eligible ||
+      currentTopicFit.version !== TOPIC_BUSINESS_FIT_VERSION
+    ) {
+      const timestamp = Date.now();
+      if (!["used", "cannibalizing", "plan_checkpoint"].includes(topic.status ?? "")) {
+        await ctx.db.patch(topic._id, {
+          status: "disqualified",
+          businessFitEligible: false,
+          businessFitScore: currentTopicFit.score,
+          businessFitVersion: currentTopicFit.version,
+          businessFitReasons: currentTopicFit.reasons,
+          businessFitCheckedAt: timestamp,
+          disqualifiedReason:
+            `cadence_micro_seed_business_fit_drifted:${currentTopicFit.reasons.join("; ")}`
+              .slice(0, 240),
+          updatedAt: timestamp,
+        });
+      }
+      await ctx.db.patch(job._id, {
+        status: "missed",
+        cadenceScheduleAttempts: (job.cadenceScheduleAttempts ?? 0) + 1,
+        cadenceScheduleMode: "business_fit_drifted",
+        cadenceScheduleScheduled: 0,
+        errorCode: "business_fit_drifted",
+        completedAt: timestamp,
+        updatedAt: timestamp,
+      });
+      return {
+        recorded: true as const,
+        exactTopicScheduled: false as const,
+        topicDisqualified: true as const,
+        reason: "business_fit_drifted" as const,
+      };
+    }
     const exactTopicScheduled = topic.status === "queued" ||
       topic.status === "used" || Boolean(linkedArticle) || exactActiveArticleJob;
     const timestamp = Date.now();
