@@ -1,6 +1,6 @@
 # Cadence micro-seed recovery
 
-Current policy: v27. A policy upgrade preserves every older paid receipt; it
+Current policy: v28. A policy upgrade preserves every older paid receipt; it
 never replays the same endpoint/seed envelope or relaxes keyword, authority,
 SERP, overlap, article-quality, publication, or live-verification gates.
 Version 25 first measures a deterministic portfolio of tenant-grounded exact
@@ -14,12 +14,13 @@ of immediately repeating the remote preflight, which previously let a
 transient second check consume the one-shot fallback marker before any paid
 request. The paid no-replay boundary and every downstream SERP, article-quality,
 publication, and live-verification gate remain unchanged.
-Version 27 closes the category-relevance failure observed after that repair.
-The Keyword Ideas fallback now uses phrase-match and a provider-side regex
-derived only from the tenant's explicit product concepts. Broad category rows
-cannot consume the bounded response before the unchanged tenant-fit,
+Version 28 closes the category-relevance failure observed after that repair.
+The Keyword Ideas fallback now uses DataForSEO's native phrase-match mode.
+Production rejected a redundant derived-regex variant after the live provider
+returned an upstream 5xx; phrase-match supplies the provider-side relevance
+fence without that unstable query plan. The unchanged two-concept tenant-fit,
 difficulty, SERP, expected-click, article-quality, publication, and live-
-verification gates evaluate them.
+verification gates still evaluate every returned row.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready
@@ -68,10 +69,9 @@ fleet ledgers are recomputed before any reservation or provider call.
   Pentra may create one distinct fallback child and one distinct shared-ledger
   reservation capped at $0.10. The child sends exactly one DataForSEO Labs
   `keyword_ideas/live` task with a deterministic batch of at most 32 current
-  tenant product phrases, at most 300 results, phrase-match expansion, a
-  deterministic tenant-derived product-concept regex capped at 1,000
-  characters, no SERP expansion, and no clickstream data. It never replays an
-  earlier Keyword Ideas seed envelope.
+  tenant product phrases, at most 300 results, native phrase-match expansion,
+  no SERP expansion, and no clickstream data. It never replays an earlier
+  Keyword Ideas seed envelope.
   The parent receipt must prove either zero rows or a complete one-to-one audit
   where every returned row was rejected by exactly one strict metric, intent,
   difficulty, brand, business-fit, duplicate, or overlap gate. Accepted,

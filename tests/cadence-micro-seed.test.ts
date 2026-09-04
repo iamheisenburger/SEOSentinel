@@ -8,7 +8,6 @@ import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_FALLBACK_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD,
-  CADENCE_MICRO_SEED_FALLBACK_KEYWORD_REGEX_MAX_LENGTH,
   CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS,
   CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
@@ -26,7 +25,6 @@ import {
   cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedDiscoveryEndpoint,
-  cadenceMicroSeedFallbackKeywordRegex,
   cadenceMicroSeedCandidateMatchesAnchor,
   cadenceMicroSeedMatchingAnchor,
   cadenceMicroSeedLegacyAnchorReceiptEligible,
@@ -124,7 +122,6 @@ function providerFixture(
     search_intent_info: { main_intent: "commercial" },
   }));
   const fallback = endpoint === "ideas";
-  const fallbackKeywordRegex = cadenceMicroSeedFallbackKeywordRegex(seeds);
   const data = {
     status_code: 20_000,
     tasks_count: 1,
@@ -154,11 +151,7 @@ function providerFixture(
           ? {
               closely_variants: true,
               ignore_synonyms: false,
-              filters: [
-                ["keyword_info.search_volume", ">=", 10],
-                "and",
-                ["keyword", "regex", fallbackKeywordRegex],
-              ],
+              filters: ["keyword_info.search_volume", ">=", 10],
               order_by: [
                 "relevance,desc",
                 "keyword_info.search_volume,desc",
@@ -266,38 +259,6 @@ test("paid seeds preserve search anchors and rotate deterministically", () => {
     ),
     fallback,
   );
-});
-
-test("fallback provider regex is tenant-derived, deterministic, and bounded", () => {
-  const seeds = [
-    "how to use lead qualification software",
-    "booking link integration for small business",
-    "best sales workflow automation platform",
-  ];
-  const expression = cadenceMicroSeedFallbackKeywordRegex(seeds);
-  assert.equal(expression, cadenceMicroSeedFallbackKeywordRegex(seeds));
-  assert.ok(expression);
-  assert.ok(expression.length <=
-    CADENCE_MICRO_SEED_FALLBACK_KEYWORD_REGEX_MAX_LENGTH);
-  const matcher = new RegExp(expression);
-  assert.equal(matcher.test("lead qualification process"), true);
-  assert.equal(matcher.test("qualifying inbound leads"), true);
-  assert.equal(matcher.test("booking links for calendars"), true);
-  assert.equal(matcher.test("sales workflow guide"), true);
-  assert.equal(matcher.test("best small business tools"), false);
-  assert.equal(matcher.test("free social media templates"), false);
-  assert.equal(
-    cadenceMicroSeedFallbackKeywordRegex(["best software platform"]),
-    null,
-  );
-  const oversized = cadenceMicroSeedFallbackKeywordRegex(
-    Array.from({ length: 80 }, (_, index) =>
-      `distinctconcept${index} secondconcept${index}`
-    ),
-  );
-  assert.ok(oversized);
-  assert.ok(oversized.length <=
-    CADENCE_MICRO_SEED_FALLBACK_KEYWORD_REGEX_MAX_LENGTH);
 });
 
 test("paid seeds supplement all search profiles without replacing explicit anchors", () => {
@@ -1449,15 +1410,7 @@ test("provider helper binds the fallback to the distinct keyword-ideas graph", a
           include_serp_info: false,
           include_clickstream_data: false,
           tag: fixture.tag,
-          filters: [
-            ["keyword_info.search_volume", ">=", 10],
-            "and",
-            [
-              "keyword",
-              "regex",
-              cadenceMicroSeedFallbackKeywordRegex([fixture.seed]),
-            ],
-          ],
+          filters: ["keyword_info.search_volume", ">=", 10],
           order_by: [
             "relevance,desc",
             "keyword_info.search_volume,desc",

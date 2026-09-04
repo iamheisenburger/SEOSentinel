@@ -25,7 +25,6 @@ import {
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_TASK_COST_CEILING_USD,
-  cadenceMicroSeedFallbackKeywordRegex,
 } from "../lib/cadenceMicroSeed.ts";
 import {
   DATAFORSEO_AUTHORITY_SOURCE,
@@ -292,17 +291,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   languageCode = dataForSeoLanguageCode(languageCode);
   const primary = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT;
   const functionName = primary ? "keyword_overview" : "keyword_ideas";
-  const fallbackKeywordRegex = primary
-    ? null
-    : cadenceMicroSeedFallbackKeywordRegex(normalizedSeeds);
-  if (!primary && !fallbackKeywordRegex) {
-    throw new Error("Cadence micro-seed fallback has no product concept fence");
-  }
-  const filter = [
-    ["keyword_info.search_volume", ">=", 10],
-    "and",
-    ["keyword", "regex", fallbackKeywordRegex],
-  ];
+  const filter = ["keyword_info.search_volume", ">=", 10];
   const orderBy = [
     "relevance,desc",
     "keyword_info.search_volume,desc",
