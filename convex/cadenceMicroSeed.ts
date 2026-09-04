@@ -564,23 +564,6 @@ async function activeEvidenceRows(
   return total;
 }
 
-async function activeDemandRows(
-  ctx: QueryCtx | MutationCtx,
-  siteId: Id<"sites">,
-): Promise<number> {
-  let total = 0;
-  for (const status of ACTIVE_EVIDENCE_STATUSES) {
-    const rows = await ctx.db
-      .query("expected_click_demand_jobs")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", status)
-      )
-      .take(2);
-    total += rows.length;
-  }
-  return total;
-}
-
 type CadenceTopicInventory = {
   topics: Doc<"topic_clusters">[];
   exhausted: boolean;
@@ -608,6 +591,24 @@ type CadenceTopicReadinessResult = CadenceTopicReadinessPrecheck | {
   reason: string;
 };
 
+type CadenceOperationalReadinessPrecheck = {
+  ready: true;
+  contract: "cadence-operational-readiness-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  currentJobId?: string;
+  operationalFingerprint: string;
+  remainingArticles: number;
+  nextCadenceDueAt: number;
+  terminalNoMetricDemandReceiptFingerprint?: string;
+};
+
+type CadenceOperationalReadinessResult =
+  | CadenceOperationalReadinessPrecheck
+  | { ready: false; reason: string };
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -618,6 +619,20 @@ const cadenceTopicReadinessPrecheckValidator = v.object({
   inventoryFingerprint: v.string(),
   schedulerTopicAvailable: v.boolean(),
   coveredKeywords: v.array(v.string()),
+});
+
+const cadenceOperationalReadinessPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-operational-readiness-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  currentJobId: v.optional(v.string()),
+  operationalFingerprint: v.string(),
+  remainingArticles: v.number(),
+  nextCadenceDueAt: v.number(),
+  terminalNoMetricDemandReceiptFingerprint: v.optional(v.string()),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -940,12 +955,214 @@ export const inspectTopicReadinessInternal = internalQuery({
   },
 });
 
+/**
+ * Keep quota, buffer, active-work, and cadence-horizon reads in a second
+ * bounded transaction. These checks are independent of both the tenant-sized
+ * topic graph and the immutable source-plan/no-replay history, so combining
+ * all three only made correctness depend on tenant age.
+ */
+export const inspectOperationalReadinessInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  },
+  handler: async (
+    ctx,
+    { siteId, currentJobId },
+  ): Promise<CadenceOperationalReadinessResult> => {
+    const timestamp = Date.now();
+    const site = await ctx.db.get(siteId);
+    if (
+      !siteExecutionActive(site) ||
+      !site.userId ||
+      !(await siteExecutionAuthorized(ctx, site))
+    ) return { ready: false, reason: "site_unavailable" };
+    if (
+      !site.autopilotEnabled ||
+      site.expectedClickSchedulingEnabled !== true ||
+      !verifiedKeywordPlanningActive(site) ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+      (site.cadencePerWeek ?? 0) <= 0
+    ) return { ready: false, reason: "rollout_ineligible" };
+    const siteGate = await plannedTopicSiteGate(ctx, site, timestamp);
+    if (!siteGate.allowed) return { ready: false, reason: siteGate.reason };
+    const authority = tenantAuthorityFromStoredEvidence({
+      domain: site.seoAuthorityDomain,
+      currentDomain: site.domain,
+      domainRank: site.seoAuthorityDomainRank,
+      referringDomains: site.seoAuthorityReferringDomains,
+      source: site.seoAuthoritySource,
+      measuredAt: site.seoAuthorityMeasuredAt,
+    });
+    if (!measuredAuthorityIsFresh(authority, timestamp)) {
+      return { ready: false, reason: "tenant_authority_unavailable" };
+    }
+    const [articleInventory, activeContentGroups, evidenceGroups, demandGroups,
+      liveMicroJobs, terminalDemandJobs] = await Promise.all([
+      cadenceMicroSeedArticleInventory(ctx, site),
+      Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
+        ctx.db.query("jobs").withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1)
+      )),
+      Promise.all(ACTIVE_EVIDENCE_STATUSES.map((status) =>
+        ctx.db.query("expected_click_evidence_jobs")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", status)
+          ).take(2)
+      )),
+      Promise.all(ACTIVE_EVIDENCE_STATUSES.map((status) =>
+        ctx.db.query("expected_click_demand_jobs")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", status)
+          ).take(2)
+      )),
+      Promise.all([
+        "pending",
+        "running",
+        "awaiting_evidence",
+        "evidence_running",
+        "cadence_scheduling",
+      ].map((status) =>
+        ctx.db.query("cadence_micro_seed_jobs")
+          .withIndex("by_site_status", (q) =>
+            q.eq("siteId", siteId).eq("status", status)
+          )
+          .take(2)
+      )),
+      ctx.db.query("expected_click_demand_jobs")
+        .withIndex("by_site_origin_status", (q) =>
+          q.eq("siteId", siteId).eq("origin", "autonomous_fleet").eq(
+            "status",
+            "completed",
+          )
+        )
+        .order("desc")
+        .take(1),
+    ]);
+    if (
+      articleInventory.exhausted ||
+      activeContentGroups.some((rows) =>
+        rows.length > CADENCE_MICRO_SEED_READ_LIMIT
+      )
+    ) return { ready: false, reason: "read_limit_exhausted" };
+    const activeContent = activeContentGroups.flat().filter((job) =>
+      job.type === "article" || job.type === "plan"
+    );
+    if (
+      activeContent.length > 0 ||
+      evidenceGroups.flat().length > 0 ||
+      demandGroups.flat().length > 0
+    ) return { ready: false, reason: "work_in_progress" };
+    const competingMicroJobs = liveMicroJobs.flat().filter((job) =>
+      job._id !== currentJobId
+    );
+    if (competingMicroJobs.length > 0) {
+      return { ready: false, reason: "micro_seed_in_progress" };
+    }
+    const articles = articleInventory.articles;
+    if (
+      articles.filter(isSealedReady).length >=
+        approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum
+    ) return { ready: false, reason: "buffer_minimum_met" };
+    const latestPublished = articles
+      .filter((article) => article.status === "published")
+      .slice()
+      .sort((left, right) =>
+        effectivePublishedAt(right) - effectivePublishedAt(left)
+      )[0];
+    const nextCadenceDueAt = latestPublished
+      ? effectivePublishedAt(latestPublished) +
+        cadenceIntervalMs(site.cadencePerWeek!)
+      : 0;
+    if (
+      nextCadenceDueAt - timestamp >
+        CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS
+    ) return { ready: false, reason: "cadence_not_imminent" };
+    const candidateWindowStart = autopilotCandidateWindowStart({
+      now: timestamp,
+      rolloutMode: site.autopilotRolloutMode ?? "observe",
+      rolloutStartedAt: site.autopilotRolloutStartedAt ?? site.updatedAt,
+    });
+    if (hasRecoverableQualityWork(
+      articles
+        .filter((article) => article.status === "review")
+        .slice(0, CADENCE_QUALITY_RECOVERY_READ_LIMIT),
+      candidateWindowStart,
+    )) return { ready: false, reason: "quality_recovery_available" };
+    const terminalDemandJob = terminalDemandJobs[0];
+    const terminalDemandReceiptFingerprint = terminalDemandJob
+      ? await terminalNoMetricDemandReceiptFingerprint(
+        ctx,
+        site,
+        terminalDemandJob,
+        timestamp,
+      )
+      : null;
+    const canonicalDomain = siteCanonicalDomain(site);
+    if (!canonicalDomain) return { ready: false, reason: "site_unavailable" };
+    const articleProjection = articles.map((article) => ({
+      id: String(article._id),
+      topicId: article.topicId ? String(article.topicId) : null,
+      status: article.status,
+      slug: article.slug,
+      createdAt: article.createdAt,
+      auditedAt: article.auditedAt ?? null,
+      publishedAt: article.publishedAt ?? null,
+      publicationGateStatus: article.publicationGateStatus ?? null,
+      publicationGateIssues: article.publicationGateIssues ?? [],
+      publicationAuditVersion: article.publicationAuditVersion ?? null,
+      auditedContentHash: article.auditedContentHash ?? null,
+      publishedContentHash: article.publishedContentHash ?? null,
+      factCheckScore: article.factCheckScore ?? null,
+      editorialQualityScore: article.editorialQualityScore ?? null,
+      qualityRevisionCount: article.qualityRevisionCount ?? null,
+      qualityRecoveryVersion: article.qualityRecoveryVersion ?? null,
+      qualityRecoveryAttemptVersion:
+        article.qualityRecoveryAttemptVersion ?? null,
+      deterministicQualityRepairAttemptVersion:
+        article.deterministicQualityRepairAttemptVersion ?? null,
+    })).sort((left, right) => left.id.localeCompare(right.id));
+    return {
+      ready: true,
+      contract: "cadence-operational-readiness-v1",
+      siteId: String(site._id),
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
+      rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
+      operationalFingerprint: sha256Hex(JSON.stringify({
+        contract: "cadence-operational-inventory-v1",
+        siteId: String(site._id),
+        canonicalDomain,
+        domainRevision: siteCanonicalDomainRevision(site),
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        currentJobId: currentJobId ? String(currentJobId) : null,
+        siteGate,
+        authority,
+        articles: articleProjection,
+        terminalNoMetricDemandReceiptFingerprint:
+          terminalDemandReceiptFingerprint ?? null,
+      })),
+      remainingArticles: siteGate.remainingArticles,
+      nextCadenceDueAt,
+      ...(terminalDemandReceiptFingerprint
+        ? {
+            terminalNoMetricDemandReceiptFingerprint:
+              terminalDemandReceiptFingerprint,
+          }
+        : {}),
+    };
+  },
+});
+
 async function inspectReadiness(
   ctx: QueryCtx | MutationCtx,
   siteId: Id<"sites">,
   timestamp: number,
   sourcePlanId: Id<"jobs">,
   topicPrecheck: CadenceTopicReadinessPrecheck,
+  operationalPrecheck: CadenceOperationalReadinessPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
   recoveryPrecheck?: {
     completed: true;
@@ -966,8 +1183,6 @@ async function inspectReadiness(
     (site.cadencePerWeek ?? 0) <= 0
   ) return { ready: false, reason: "rollout_ineligible" };
 
-  const siteGate = await plannedTopicSiteGate(ctx, site, timestamp);
-  if (!siteGate.allowed) return { ready: false, reason: siteGate.reason };
   const authority = tenantAuthorityFromStoredEvidence({
     domain: site.seoAuthorityDomain,
     currentDomain: site.domain,
@@ -990,81 +1205,17 @@ async function inspectReadiness(
     topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
     !/^[a-f0-9]{64}$/.test(topicPrecheck.inventoryFingerprint)
   ) return { ready: false, reason: "topic_inspection_stale" };
-
-  const [articleInventory, activeContentGroups, activeEvidence, activeDemand] =
-    await Promise.all([
-      cadenceMicroSeedArticleInventory(ctx, site),
-      Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
-        ctx.db.query("jobs").withIndex("by_site_status", (q) =>
-          q.eq("siteId", siteId).eq("status", status)
-        ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1)
-      )),
-      activeEvidenceRows(ctx, siteId),
-      activeDemandRows(ctx, siteId),
-    ]);
-  const articles = articleInventory.articles;
   if (
-    articleInventory.exhausted ||
-    activeContentGroups.some((rows) =>
-      rows.length > CADENCE_MICRO_SEED_READ_LIMIT
-    )
-  ) return { ready: false, reason: "read_limit_exhausted" };
-  const activeContent = activeContentGroups.flat().filter((job) =>
-    job.type === "article" || job.type === "plan"
-  );
-  if (activeContent.length > 0 || activeEvidence > 0 || activeDemand > 0) {
-    return { ready: false, reason: "work_in_progress" };
-  }
-
-  const liveMicroJobs = await Promise.all([
-    "pending",
-    "running",
-    "awaiting_evidence",
-    "evidence_running",
-    "cadence_scheduling",
-  ].map((status) =>
-    ctx.db.query("cadence_micro_seed_jobs")
-      .withIndex("by_site_status", (q) =>
-        q.eq("siteId", siteId).eq("status", status)
-      )
-      .take(2)
-  ));
-  if (liveMicroJobs.flat().some((job) => job._id !== currentJobId)) {
-    return { ready: false, reason: "micro_seed_in_progress" };
-  }
-
-  const sealedBuffer = articles.filter(isSealedReady);
-  if (
-    sealedBuffer.length >=
-      approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum
-  ) {
-    return { ready: false, reason: "buffer_minimum_met" };
-  }
-  const published = articles.filter((article) => article.status === "published");
-  const latestPublished = published.slice().sort((left, right) =>
-    effectivePublishedAt(right) - effectivePublishedAt(left)
-  )[0];
-  const nextCadenceDueAt = latestPublished
-    ? effectivePublishedAt(latestPublished) +
-      cadenceIntervalMs(site.cadencePerWeek!)
-    : 0;
-  if (nextCadenceDueAt - timestamp > CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS) {
-    return { ready: false, reason: "cadence_not_imminent" };
-  }
-  const candidateWindowStart = autopilotCandidateWindowStart({
-    now: timestamp,
-    rolloutMode: site.autopilotRolloutMode ?? "observe",
-    rolloutStartedAt: site.autopilotRolloutStartedAt ?? site.updatedAt,
-  });
-  const reviewRecovery = hasRecoverableQualityWork(
-    articles
-      .filter((article) => article.status === "review")
-      .slice(0, CADENCE_QUALITY_RECOVERY_READ_LIMIT),
-    candidateWindowStart,
-  );
-  if (reviewRecovery) {
-    return { ready: false, reason: "quality_recovery_available" };
-  }
+    operationalPrecheck.contract !== "cadence-operational-readiness-v1" ||
+    operationalPrecheck.siteId !== String(site._id) ||
+    !canonicalDomain ||
+    operationalPrecheck.canonicalDomain !== canonicalDomain ||
+    operationalPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    operationalPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    operationalPrecheck.currentJobId !==
+      (currentJobId ? String(currentJobId) : undefined) ||
+    !/^[a-f0-9]{64}$/.test(operationalPrecheck.operationalFingerprint)
+  ) return { ready: false, reason: "operational_inspection_stale" };
 
   const locationCode = dataForSeoLocationCode(site.targetCountry);
   const languageCode = dataForSeoLanguageCode(site.language);
@@ -1080,24 +1231,6 @@ async function inspectReadiness(
   if (!recoveryPrecheck) {
     return { ready: false, reason: "recovery_precheck_required" };
   }
-  const terminalDemandJobs = await ctx.db.query("expected_click_demand_jobs")
-      .withIndex("by_site_origin_status", (q) =>
-        q.eq("siteId", siteId).eq("origin", "autonomous_fleet").eq(
-          "status",
-          "completed",
-        )
-      )
-      .order("desc")
-      .take(1);
-  const terminalDemandJob = terminalDemandJobs[0];
-  const terminalDemandNoMetricFingerprint = terminalDemandJob
-    ? await terminalNoMetricDemandReceiptFingerprint(
-      ctx,
-      site,
-      terminalDemandJob,
-      timestamp,
-    )
-    : null;
   const recoveryBlockReason = recoveryPrecheck.blockReason ?? null;
   if (recoveryBlockReason) return { ready: false, reason: recoveryBlockReason };
 
@@ -1369,10 +1502,12 @@ async function inspectReadiness(
     rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
     planTier: plan.tier,
     planFeatures: [...(entitlement?.planFeatures ?? site.planFeatures ?? [])].sort(),
-    remainingArticles: siteGate.remainingArticles,
+    remainingArticles: operationalPrecheck.remainingArticles,
     authority,
     businessSignals,
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
+    operationalInventoryFingerprint:
+      operationalPrecheck.operationalFingerprint,
     sourcePlanId: String(source.job._id),
     sourcePlanReservationId: String(source.reservation._id),
     sourcePlanFingerprint: sourceFingerprint,
@@ -1386,7 +1521,7 @@ async function inspectReadiness(
     providerSeeds,
     locationCode,
     languageCode,
-    nextCadenceDueAt,
+    nextCadenceDueAt: operationalPrecheck.nextCadenceDueAt,
     bufferCount: 0,
     schedulerTopicCount: 0,
     activeContentCount: 0,
@@ -1394,7 +1529,7 @@ async function inspectReadiness(
     providerCostCeilingMicroUsd,
     evidenceHeadroomMicroUsd,
     terminalNoMetricDemandReceiptFingerprint:
-      terminalDemandNoMetricFingerprint ?? null,
+      operationalPrecheck.terminalNoMetricDemandReceiptFingerprint ?? null,
   };
   return {
     ready: true,
@@ -1414,7 +1549,7 @@ async function inspectReadiness(
     locationCode,
     languageCode,
     planTier: plan.tier,
-    nextCadenceDueAt,
+    nextCadenceDueAt: operationalPrecheck.nextCadenceDueAt,
     providerCostCeilingMicroUsd,
     evidenceHeadroomMicroUsd,
   };
@@ -1425,6 +1560,7 @@ export const inspectInternal = internalQuery({
     siteId: v.id("sites"),
     sourcePlanId: v.id("jobs"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    operationalPrecheck: cadenceOperationalReadinessPrecheckValidator,
     recoveryPrechecked: v.optional(v.boolean()),
     recoveryBlockReason: v.optional(v.string()),
   },
@@ -1434,6 +1570,7 @@ export const inspectInternal = internalQuery({
       siteId,
       sourcePlanId,
       topicPrecheck,
+      operationalPrecheck,
       recoveryPrechecked,
       recoveryBlockReason,
     },
@@ -1443,6 +1580,7 @@ export const inspectInternal = internalQuery({
     Date.now(),
     sourcePlanId,
     topicPrecheck,
+    operationalPrecheck,
     undefined,
     recoveryPrechecked === true
       ? {
@@ -1615,6 +1753,7 @@ export const reserveAndQueue = internalMutation({
   args: {
     siteId: v.id("sites"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    operationalPrecheck: cadenceOperationalReadinessPrecheckValidator,
     inspectionKey: v.string(),
     reservationDay: v.string(),
     rolloutEpoch: v.number(),
@@ -1634,6 +1773,7 @@ export const reserveAndQueue = internalMutation({
       Date.now(),
       args.sourcePlanId,
       args.topicPrecheck,
+      args.operationalPrecheck,
       undefined,
       { completed: true },
     );
@@ -1868,6 +2008,7 @@ export const beginProviderAttempt = internalMutation({
     jobId: v.id("cadence_micro_seed_jobs"),
     workerToken: v.string(),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    operationalPrecheck: cadenceOperationalReadinessPrecheckValidator,
   },
   handler: async (ctx, args) => {
     const { site, job } = await requireWorker(ctx, args);
@@ -1889,6 +2030,7 @@ export const beginProviderAttempt = internalMutation({
       Date.now(),
       job.sourcePlanId,
       args.topicPrecheck,
+      args.operationalPrecheck,
       job._id,
       { completed: true },
     );

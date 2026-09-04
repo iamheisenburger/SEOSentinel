@@ -410,9 +410,13 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
-    const [topicPrecheck, demandReadiness, evidenceReadiness, demandStatus] =
+    const [topicPrecheck, operationalPrecheck, demandReadiness,
+      evidenceReadiness, demandStatus] =
       await Promise.all([
       ctx.runQuery(api.inspectTopicReadinessInternal, {
+        siteId: args.siteId,
+      }),
+      ctx.runQuery(api.inspectOperationalReadinessInternal, {
         siteId: args.siteId,
       }),
       ctx.runQuery(internal.expectedClickDemandBackfill.getFleetReadinessInternal, {
@@ -435,6 +439,16 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
+    if (!operationalPrecheck.ready) {
+      return {
+        ...operationalPrecheck,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const recoveryBlockReason = cadenceMicroSeedRecoveryBlockReason(
       demandReadiness,
       evidenceReadiness,
@@ -444,6 +458,7 @@ export const recoverCadenceGap = internalAction({
       siteId: args.siteId,
       sourcePlanId,
       topicPrecheck,
+      operationalPrecheck,
       recoveryPrechecked: true,
       ...(recoveryBlockReason ? { recoveryBlockReason } : {}),
     });
@@ -484,6 +499,7 @@ export const recoverCadenceGap = internalAction({
     const result = await ctx.runMutation(api.reserveAndQueue, {
       siteId: args.siteId,
       topicPrecheck,
+      operationalPrecheck,
       inspectionKey: inspected.inspectionKey,
       reservationDay: inspected.reservationDay,
       rolloutEpoch: inspected.rolloutEpoch,
@@ -549,10 +565,15 @@ export const processCadenceMicroSeed = internalAction({
       );
       return { processed: false, reason: "provider_cost_contract_incompatible" };
     }
-    const topicPrecheck = await ctx.runQuery(
-      api.inspectTopicReadinessInternal,
-      { siteId: args.siteId },
-    );
+    const [topicPrecheck, operationalPrecheck] = await Promise.all([
+      ctx.runQuery(api.inspectTopicReadinessInternal, {
+        siteId: args.siteId,
+      }),
+      ctx.runQuery(api.inspectOperationalReadinessInternal, {
+        siteId: args.siteId,
+        currentJobId: args.jobId,
+      }),
+    ]);
     if (!topicPrecheck.ready) {
       await ctx.runMutation(api.markProviderResponseUnverified, {
         siteId: args.siteId,
@@ -563,11 +584,22 @@ export const processCadenceMicroSeed = internalAction({
       await raiseMiss(ctx, args.siteId, args.jobId, topicPrecheck.reason);
       return { processed: false, reason: topicPrecheck.reason };
     }
+    if (!operationalPrecheck.ready) {
+      await ctx.runMutation(api.markProviderResponseUnverified, {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        workerToken,
+        errorCode: operationalPrecheck.reason,
+      });
+      await raiseMiss(ctx, args.siteId, args.jobId, operationalPrecheck.reason);
+      return { processed: false, reason: operationalPrecheck.reason };
+    }
     const begun = await ctx.runMutation(api.beginProviderAttempt, {
       siteId: args.siteId,
       jobId: args.jobId,
       workerToken,
       topicPrecheck,
+      operationalPrecheck,
     });
     if (!begun.allowed) {
       await ctx.runMutation(api.markProviderResponseUnverified, {

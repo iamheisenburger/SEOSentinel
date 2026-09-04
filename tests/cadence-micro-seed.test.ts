@@ -859,19 +859,23 @@ test("cadence rescue binds a saturated terminal demand receipt without disabling
 });
 
 test("cadence rescue remains eligible until the shared launch buffer minimum is met", () => {
-  assert.match(
-    model,
-    /sealedBuffer\.length >=[\s\S]{0,100}approvedBufferPolicy\(site\.cadencePerWeek \?\? 4\)\.minimum[\s\S]*buffer_minimum_met/,
+  const operationalReadiness = model.slice(
+    model.indexOf("export const inspectOperationalReadinessInternal"),
+    model.indexOf("async function inspectReadiness"),
   );
-  assert.doesNotMatch(model, /sealedBuffer\.length > 0/);
+  assert.match(
+    operationalReadiness,
+    /articles\.filter\(isSealedReady\)\.length >=[\s\S]{0,100}approvedBufferPolicy\(site\.cadencePerWeek \?\? 4\)\.minimum[\s\S]*buffer_minimum_met/,
+  );
+  assert.doesNotMatch(operationalReadiness, /filter\(isSealedReady\)\.length > 0/);
   assert.match(runbook, /sealed buffer below the cadence-derived launch minimum/);
   assert.match(crons, /Below-minimum-buffer rescue is tenant-generic/);
 });
 
 test("a tenant with no publication gets a stable overdue cadence receipt", () => {
   const readiness = model.slice(
+    model.indexOf("export const inspectOperationalReadinessInternal"),
     model.indexOf("async function inspectReadiness"),
-    model.indexOf("export const inspectInternal"),
   );
   assert.match(
     readiness,
@@ -1605,10 +1609,16 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     /cadenceMicroSeedRecoveryBlockReason\([\s\S]*demandReadiness,[\s\S]*evidenceReadiness/,
   );
   assert.match(action, /api\.inspectTopicReadinessInternal/);
+  assert.match(action, /api\.inspectOperationalReadinessInternal/);
   assert.ok(
     recovery.indexOf("api.inspectTopicReadinessInternal") <
       recovery.indexOf("api.inspectInternal"),
     "tenant-sized inventory must be evaluated before the compact admission transaction",
+  );
+  assert.ok(
+    recovery.indexOf("api.inspectOperationalReadinessInternal") <
+      recovery.indexOf("api.inspectInternal"),
+    "quota, buffer, and active-work inventory must be evaluated outside compact source history",
   );
   assert.match(model, /cadence-topic-inventory-v1/);
   assert.match(model, /inventoryFingerprint: sha256Hex/);
@@ -1646,9 +1656,11 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(model, /recovery_precheck_required/);
   assert.match(
     model,
-    /args\.sourcePlanId,[\s\S]*args\.topicPrecheck,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
-    "atomic reservation rechecks the compact cadence fence against the exact topic digest",
+    /args\.sourcePlanId,[\s\S]*args\.topicPrecheck,[\s\S]*args\.operationalPrecheck,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
+    "atomic reservation rechecks compact source history against both exact inventory digests",
   );
+  assert.match(worker, /currentJobId: args\.jobId/);
+  assert.match(worker, /api\.beginProviderAttempt[\s\S]*operationalPrecheck/);
   assert.match(schema, /by_site_source_policy_created/);
   assert.match(model, /withIndex\("by_site_source_policy_created"/);
   assert.doesNotMatch(model, /micro_seed_source_history_read_exhausted/);
@@ -1821,12 +1833,22 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   const topicReadiness = model.slice(
     model.indexOf("export const inspectTopicReadinessInternal"),
+    model.indexOf("export const inspectOperationalReadinessInternal"),
+  );
+  const operationalReadiness = model.slice(
+    model.indexOf("export const inspectOperationalReadinessInternal"),
     model.indexOf("async function inspectReadiness"),
   );
   assert.match(topicReadiness, /cadenceMicroSeedTopicInventory/);
   assert.match(topicReadiness, /cadenceTopicReadinessPrecheck/);
   assert.doesNotMatch(readiness, /cadenceMicroSeedTopicInventory/);
+  assert.match(operationalReadiness, /cadenceMicroSeedArticleInventory/);
+  assert.match(operationalReadiness, /plannedTopicSiteGate/);
+  assert.match(operationalReadiness, /operationalFingerprint: sha256Hex/);
+  assert.doesNotMatch(readiness, /cadenceMicroSeedArticleInventory/);
+  assert.doesNotMatch(readiness, /plannedTopicSiteGate/);
   assert.match(readiness, /topicPrecheck\.inventoryFingerprint/);
+  assert.match(readiness, /operationalPrecheck\.operationalFingerprint/);
   assert.doesNotMatch(readiness, /takeCurrentDomainTopics\(/);
   assert.doesNotMatch(readiness, /takeCurrentDomainArticles\(/);
   const materialization = model.slice(
