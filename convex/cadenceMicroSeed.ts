@@ -1648,14 +1648,22 @@ function currentPolicyLedgerFingerprint(
   jobs: readonly CadenceCurrentPolicyJobProjection[],
 ): string {
   return sha256Hex(JSON.stringify(jobs.map((job) => ({
-    ...job,
     jobId: String(job.jobId),
+    status: job.status,
+    policyVersion: job.policyVersion,
+    rolloutEpoch: job.rolloutEpoch,
     sourcePlanId: String(job.sourcePlanId),
+    attemptKind: job.attemptKind,
     parentMicroSeedJobId: job.parentMicroSeedJobId
       ? String(job.parentMicroSeedJobId)
       : null,
     parentMicroSeedReceiptFingerprint:
       job.parentMicroSeedReceiptFingerprint ?? null,
+    providerCallAttempted: job.providerCallAttempted,
+    providerCallCompleted: job.providerCallCompleted,
+    seed: job.seed,
+    providerSeeds: job.providerSeeds,
+    updatedAt: job.updatedAt,
   }))));
 }
 

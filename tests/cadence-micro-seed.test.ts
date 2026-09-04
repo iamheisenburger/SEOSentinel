@@ -1929,6 +1929,14 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
     /eq\("policyVersion", CADENCE_MICRO_SEED_VERSION\)/,
   );
   assert.match(currentPolicyLedgerReadiness, /currentPolicyLedgerFingerprint/);
+  assert.doesNotMatch(
+    model.slice(
+      model.indexOf("function currentPolicyLedgerFingerprint"),
+      model.indexOf("async function cadenceCurrentPolicyLedgerPrecheck"),
+    ),
+    /\.\.\.job/,
+    "cross-transaction ledger hashing must not depend on object key order",
+  );
   assert.doesNotMatch(currentPolicyReadiness, /by_site_source_policy_created/);
   assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobIds/);
   assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobs/);
