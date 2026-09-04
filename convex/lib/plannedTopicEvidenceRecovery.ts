@@ -322,6 +322,18 @@ export function cadenceMicroSeedRecoveryBlockReason(
     evidence?.actionable !== true &&
     evidence?.reason === "demand_candidates_remaining"
   ) return null;
+  // Once today's evidence batch has completed, the atomic daily phase fence
+  // forbids starting another demand batch. An unrelated demand backlog must
+  // therefore wait for the next reservation day; it cannot veto the exact
+  // guarded micro-topic evidence continuation that the completed evidence
+  // receipt explicitly authorizes. Actionable/ambiguous demand state still
+  // fails closed below.
+  if (
+    evidence?.reason === "daily_batch_exists" &&
+    evidence?.continueToCadenceMicroSeed === true &&
+    demand?.ready === true &&
+    demand?.actionable !== true
+  ) return null;
   if (demand?.ready === true || evidence?.ready === true) {
     return "expected_click_recovery_available";
   }

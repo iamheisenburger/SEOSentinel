@@ -490,6 +490,30 @@ test("guarded recovery and micro admission share the exact executable phase sele
     continueToCadenceMicroSeed: true,
   }), null);
   assert.equal(cadenceMicroSeedRecoveryBlockReason({
+    ready: true,
+    actionable: false,
+    reason: "eligible",
+    candidateCounts: { artifactEligible: 30 },
+    plannedSelection: [],
+  }, {
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+    continueToCadenceMicroSeed: true,
+  }), null);
+  assert.equal(cadenceMicroSeedRecoveryBlockReason({
+    ready: true,
+    actionable: true,
+    reason: "provider_attempt_ambiguous",
+    candidateCounts: { artifactEligible: 30 },
+    plannedSelection: [],
+  }, {
+    ready: false,
+    actionable: false,
+    reason: "daily_batch_exists",
+    continueToCadenceMicroSeed: true,
+  }), "expected_click_recovery_available");
+  assert.equal(cadenceMicroSeedRecoveryBlockReason({
     ready: false,
     actionable: false,
     reason: "daily_batch_exists",
