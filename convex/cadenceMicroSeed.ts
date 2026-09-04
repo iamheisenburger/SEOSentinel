@@ -82,13 +82,8 @@ import {
   EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
   EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
 } from "./lib/expectedClickEvidenceBackfill";
-import {
-  expectedClickDemandFleetReadiness,
-  terminalNoMetricDemandReceiptFingerprint,
-} from "./expectedClickDemandBackfill";
-import {
-  expectedClickEvidenceFleetReadiness,
-} from "./expectedClickEvidenceBackfill";
+import { terminalNoMetricDemandReceiptFingerprint } from
+  "./expectedClickDemandBackfill";
 import { evaluateSerpAttainability } from "./lib/serpAttainability";
 import { verifiedAuthorityTarget } from "./lib/publicationLive";
 import {
@@ -101,7 +96,6 @@ import {
   settleSharedProviderReservation,
 } from "./lib/providerSpendReservation";
 import {
-  cadenceMicroSeedRecoveryBlockReason,
   plannedTopicRecoveryFingerprint,
   plannedTopicSiteGate,
   type PlannedRecoveryArticle,
@@ -111,6 +105,7 @@ import {
   resolvePlanFromFeatures,
 } from "./planLimits";
 import { terminalContentFeasibility } from "./lib/topicLifecycle";
+import { sha256Hex } from "./lib/publicationArtifact";
 import {
   siteExecutionActive,
   siteExecutionAuthorized,
@@ -141,11 +136,6 @@ const CADENCE_MICRO_SEED_ARTICLE_STATUSES = [
   "ready",
   "published",
 ] as const;
-
-function utcDayStart(timestamp: number): number {
-  const date = new Date(timestamp);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-}
 
 function utcMonthStart(timestamp: number): number {
   const date = new Date(timestamp);
@@ -601,6 +591,35 @@ type CadenceArticleInventory = {
   exhausted: boolean;
 };
 
+type CadenceTopicReadinessPrecheck = {
+  ready: true;
+  contract: "cadence-topic-readiness-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  inventoryFingerprint: string;
+  schedulerTopicAvailable: boolean;
+  coveredKeywords: string[];
+};
+
+type CadenceTopicReadinessResult = CadenceTopicReadinessPrecheck | {
+  ready: false;
+  reason: string;
+};
+
+const cadenceTopicReadinessPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-topic-readiness-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  inventoryFingerprint: v.string(),
+  schedulerTopicAvailable: v.boolean(),
+  coveredKeywords: v.array(v.string()),
+});
+
 /** Read compact article projections by lifecycle state. Article Markdown can
  * grow without increasing scheduler transaction cost. */
 async function cadenceMicroSeedArticleInventory(
@@ -725,11 +744,208 @@ async function cadenceMicroSeedTopicInventory(
   return { topics: Array.from(byId.values()), exhausted: false };
 }
 
+/**
+ * Evaluate the tenant-sized topic graph in its own read-only transaction.
+ * The returned digest binds every field that can affect scheduler admission,
+ * exact-keyword reuse, or lexical/SERP coverage. The later reservation
+ * transaction re-runs the compact operational fence with this exact snapshot;
+ * apply therefore fails stale when inventory changes between inspect/apply.
+ */
+function cadenceTopicReadinessPrecheck(args: {
+  site: Doc<"sites">;
+  topics: readonly Doc<"topic_clusters">[];
+  articles: readonly PlannedRecoveryArticle[];
+  timestamp: number;
+}): CadenceTopicReadinessPrecheck | { ready: false; reason: string } {
+  const authority = tenantAuthorityFromStoredEvidence({
+    domain: args.site.seoAuthorityDomain,
+    currentDomain: args.site.domain,
+    domainRank: args.site.seoAuthorityDomainRank,
+    referringDomains: args.site.seoAuthorityReferringDomains,
+    source: args.site.seoAuthoritySource,
+    measuredAt: args.site.seoAuthorityMeasuredAt,
+  });
+  if (!measuredAuthorityIsFresh(authority, args.timestamp)) {
+    return { ready: false, reason: "tenant_authority_unavailable" };
+  }
+  const locationCode = dataForSeoLocationCode(args.site.targetCountry);
+  const languageCode = dataForSeoLanguageCode(args.site.language);
+  const expectedEligibleIds = args.topics.filter((topic) =>
+    topic.status !== "plan_checkpoint" &&
+    !topic.planCheckpointTerminalFailureCode
+  ).flatMap((topic) => {
+    const estimate = estimateTopicExpectedClicks({
+      topic: expectedClickTopicFromStoredEvidence({
+        topicId: String(topic._id),
+        keyword: topic.primaryKeyword,
+        searchVolume: topic.searchVolume,
+        searchDemandSource: topic.searchDemandSource,
+        searchDemandMeasuredAt: topic.searchDemandMeasuredAt,
+        searchDemandLocationCode: topic.searchDemandLocationCode,
+        searchDemandLanguageCode: topic.searchDemandLanguageCode,
+        serpTopUrls: topic.serpTopUrls,
+        serpObservedAt: topic.serpObservedAt,
+        serpLocationCode: topic.serpLocationCode,
+        serpLanguageCode: topic.serpLanguageCode,
+        serpAuthorityCompetitors: topic.serpAuthorityCompetitors,
+      }, { locationCode, languageCode }),
+      tenantAuthority: authority,
+      now: args.timestamp,
+    });
+    return estimate.status === "eligible" ? [String(topic._id)] : [];
+  }).sort();
+  const expectedEligible = new Set(expectedEligibleIds);
+  const businessSignals = tenantTopicBusinessSignals(args.site);
+  const schedulerCandidates = args.topics.filter((topic) => {
+    const fit = evaluateTopicBusinessFit({
+      keyword: topic.primaryKeyword,
+      label: topic.label,
+      ...businessSignals,
+    });
+    return ![
+      "used",
+      "queued",
+      "cannibalizing",
+      "disqualified",
+      "plan_checkpoint",
+    ].includes(topic.status ?? "planned") &&
+      !topic.planCheckpointTerminalFailureCode &&
+      fit.eligible && topic.businessFitEligible === true &&
+      topic.cadenceMicroSeedAnchorEligible !== false &&
+      Number.isFinite(topic.searchVolume) &&
+      Number.isFinite(topic.keywordDifficulty) &&
+      topic.keywordDifficultyMeasured === true &&
+      Boolean(topic.serpIntent?.trim()) &&
+      expectedEligible.has(String(topic._id)) &&
+      evaluateSerpAttainability({
+        serpTopUrls: topic.serpTopUrls,
+        siteHost: args.site.domain,
+      }).attainable;
+  });
+  const coverage = coveredIntentTopics(
+    args.topics.map((topic) => ({
+      _id: String(topic._id),
+      status: topic.status ?? "planned",
+      primaryKeyword: topic.primaryKeyword,
+      serpTopUrls: topic.serpTopUrls,
+    })),
+    args.articles.map((article) => ({
+      topicId: article.topicId ? String(article.topicId) : undefined,
+      slug: article.slug,
+      status: article.status,
+      publicationGateStatus: article.publicationGateStatus,
+      publicationAuditVersion: article.publicationAuditVersion,
+      auditedContentHash: article.auditedContentHash,
+    })),
+  );
+  const schedulable = filterNonCannibalizingIntentTopics(
+    schedulerCandidates,
+    coverage,
+    0.4,
+    0.35,
+    1,
+  );
+  const topicProjection = args.topics.map((topic) => ({
+    id: String(topic._id),
+    status: topic.status ?? null,
+    label: topic.label,
+    primaryKeyword: topic.primaryKeyword,
+    searchVolume: topic.searchVolume ?? null,
+    keywordDifficulty: topic.keywordDifficulty ?? null,
+    keywordDifficultyMeasured: topic.keywordDifficultyMeasured ?? null,
+    searchDemandSource: topic.searchDemandSource ?? null,
+    searchDemandMeasuredAt: topic.searchDemandMeasuredAt ?? null,
+    searchDemandLocationCode: topic.searchDemandLocationCode ?? null,
+    searchDemandLanguageCode: topic.searchDemandLanguageCode ?? null,
+    serpIntent: topic.serpIntent ?? null,
+    serpTopUrls: topic.serpTopUrls ?? [],
+    serpObservedAt: topic.serpObservedAt ?? null,
+    serpLocationCode: topic.serpLocationCode ?? null,
+    serpLanguageCode: topic.serpLanguageCode ?? null,
+    serpAuthorityCompetitors: topic.serpAuthorityCompetitors ?? [],
+    businessFitEligible: topic.businessFitEligible ?? null,
+    cadenceMicroSeedAnchorEligible:
+      topic.cadenceMicroSeedAnchorEligible ?? null,
+    planCheckpointTerminalFailureCode:
+      topic.planCheckpointTerminalFailureCode ?? null,
+    contentFeasibilityStatus: topic.contentFeasibilityStatus ?? null,
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  const articleProjection = args.articles.map((article) => ({
+    id: String(article._id),
+    topicId: article.topicId ? String(article.topicId) : null,
+    slug: article.slug,
+    status: article.status,
+    publicationGateStatus: article.publicationGateStatus ?? null,
+    publicationAuditVersion: article.publicationAuditVersion ?? null,
+    auditedContentHash: article.auditedContentHash ?? null,
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  const canonicalDomain = siteCanonicalDomain(args.site);
+  if (!canonicalDomain) return { ready: false, reason: "site_unavailable" };
+  const coveredKeywords = coverage.map((topic) => topic.primaryKeyword).sort();
+  return {
+    ready: true,
+    contract: "cadence-topic-readiness-v1",
+    siteId: String(args.site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(args.site),
+    rolloutEpoch: args.site.autopilotRolloutEpoch ?? 0,
+    inventoryFingerprint: sha256Hex(JSON.stringify({
+      contract: "cadence-topic-inventory-v1",
+      siteId: String(args.site._id),
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(args.site),
+      rolloutEpoch: args.site.autopilotRolloutEpoch ?? 0,
+      locationCode,
+      languageCode,
+      authority,
+      businessSignals,
+      topics: topicProjection,
+      articles: articleProjection,
+      expectedEligibleIds,
+      schedulerCandidateIds: schedulerCandidates.map((topic) =>
+        String(topic._id)
+      ).sort(),
+      schedulableIds: schedulable.map((topic) => String(topic._id)).sort(),
+      coveredKeywords,
+    })),
+    schedulerTopicAvailable: schedulable.length > 0,
+    coveredKeywords,
+  };
+}
+
+export const inspectTopicReadinessInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<CadenceTopicReadinessResult> => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !siteExecutionActive(site) ||
+      !site.userId ||
+      !(await siteExecutionAuthorized(ctx, site))
+    ) return { ready: false, reason: "site_unavailable" };
+    const articleInventory = await cadenceMicroSeedArticleInventory(ctx, site);
+    const topicInventory = await cadenceMicroSeedTopicInventory(
+      ctx,
+      site,
+      articleInventory.articles,
+    );
+    if (articleInventory.exhausted || topicInventory.exhausted) {
+      return { ready: false, reason: "read_limit_exhausted" };
+    }
+    return cadenceTopicReadinessPrecheck({
+      site,
+      topics: topicInventory.topics,
+      articles: articleInventory.articles,
+      timestamp: Date.now(),
+    });
+  },
+});
+
 async function inspectReadiness(
   ctx: QueryCtx | MutationCtx,
   siteId: Id<"sites">,
   timestamp: number,
   sourcePlanId: Id<"jobs">,
+  topicPrecheck: CadenceTopicReadinessPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
   recoveryPrecheck?: {
     completed: true;
@@ -764,6 +980,17 @@ async function inspectReadiness(
     return { ready: false, reason: "tenant_authority_unavailable" };
   }
 
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (
+    topicPrecheck.contract !== "cadence-topic-readiness-v1" ||
+    topicPrecheck.siteId !== String(site._id) ||
+    !canonicalDomain ||
+    topicPrecheck.canonicalDomain !== canonicalDomain ||
+    topicPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    !/^[a-f0-9]{64}$/.test(topicPrecheck.inventoryFingerprint)
+  ) return { ready: false, reason: "topic_inspection_stale" };
+
   const [articleInventory, activeContentGroups, activeEvidence, activeDemand] =
     await Promise.all([
       cadenceMicroSeedArticleInventory(ctx, site),
@@ -776,15 +1003,8 @@ async function inspectReadiness(
       activeDemandRows(ctx, siteId),
     ]);
   const articles = articleInventory.articles;
-  const topicInventory = await cadenceMicroSeedTopicInventory(
-    ctx,
-    site,
-    articles,
-  );
-  const topics = topicInventory.topics;
   if (
     articleInventory.exhausted ||
-    topicInventory.exhausted ||
     activeContentGroups.some((rows) =>
       rows.length > CADENCE_MICRO_SEED_READ_LIMIT
     )
@@ -827,7 +1047,7 @@ async function inspectReadiness(
   const nextCadenceDueAt = latestPublished
     ? effectivePublishedAt(latestPublished) +
       cadenceIntervalMs(site.cadencePerWeek!)
-    : timestamp;
+    : 0;
   if (nextCadenceDueAt - timestamp > CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS) {
     return { ready: false, reason: "cadence_not_imminent" };
   }
@@ -848,107 +1068,19 @@ async function inspectReadiness(
 
   const locationCode = dataForSeoLocationCode(site.targetCountry);
   const languageCode = dataForSeoLanguageCode(site.language);
-  // Scheduling only needs each topic's own evidence eligibility. Building the
-  // complete portfolio also performs an O(n²) intent-group union used for
-  // aggregate click-goal accounting; that grouping cannot change any topic's
-  // individual status and previously pushed mature tenants over Convex's
-  // one-second transaction limit. Preserve the exact estimator and locale /
-  // authority checks while avoiding work that has no bearing on admission.
-  const expectedEligible = new Set(topics.filter((topic) =>
-    topic.status !== "plan_checkpoint" &&
-    !topic.planCheckpointTerminalFailureCode
-  ).flatMap((topic) => {
-    const estimate = estimateTopicExpectedClicks({
-      topic: expectedClickTopicFromStoredEvidence({
-        topicId: String(topic._id),
-        keyword: topic.primaryKeyword,
-        searchVolume: topic.searchVolume,
-        searchDemandSource: topic.searchDemandSource,
-        searchDemandMeasuredAt: topic.searchDemandMeasuredAt,
-        searchDemandLocationCode: topic.searchDemandLocationCode,
-        searchDemandLanguageCode: topic.searchDemandLanguageCode,
-        serpTopUrls: topic.serpTopUrls,
-        serpObservedAt: topic.serpObservedAt,
-        serpLocationCode: topic.serpLocationCode,
-        serpLanguageCode: topic.serpLanguageCode,
-        serpAuthorityCompetitors: topic.serpAuthorityCompetitors,
-      }, {
-        locationCode,
-        languageCode,
-      }),
-      tenantAuthority: authority,
-      now: timestamp,
-    });
-    return estimate.status === "eligible" ? [estimate.topicId] : [];
-  }));
   const businessSignals = tenantTopicBusinessSignals(site);
-  const schedulerCandidates = topics.filter((topic) => {
-    const fit = evaluateTopicBusinessFit({
-      keyword: topic.primaryKeyword,
-      label: topic.label,
-      ...businessSignals,
-    });
-    return ![
-      "used",
-      "queued",
-      "cannibalizing",
-      "disqualified",
-      "plan_checkpoint",
-    ].includes(
-      topic.status ?? "planned",
-    ) && !topic.planCheckpointTerminalFailureCode &&
-      fit.eligible && topic.businessFitEligible === true &&
-      topic.cadenceMicroSeedAnchorEligible !== false &&
-      Number.isFinite(topic.searchVolume) &&
-      Number.isFinite(topic.keywordDifficulty) &&
-      topic.keywordDifficultyMeasured === true &&
-      Boolean(topic.serpIntent?.trim()) &&
-      expectedEligible.has(String(topic._id)) &&
-      evaluateSerpAttainability({
-        serpTopUrls: topic.serpTopUrls,
-        siteHost: site.domain,
-      }).attainable;
-  });
-  const coverage = coveredIntentTopics(
-    topics.map((topic) => ({
-      _id: String(topic._id),
-      status: topic.status ?? "planned",
-      primaryKeyword: topic.primaryKeyword,
-      serpTopUrls: topic.serpTopUrls,
-    })),
-    articles.map((article) => ({
-      topicId: article.topicId ? String(article.topicId) : undefined,
-      slug: article.slug,
-      status: article.status,
-      publicationGateStatus: article.publicationGateStatus,
-      publicationAuditVersion: article.publicationAuditVersion,
-      auditedContentHash: article.auditedContentHash,
-    })),
-  );
-  if (
-    filterNonCannibalizingIntentTopics(
-      schedulerCandidates,
-      coverage,
-      0.4,
-      0.35,
-      1,
-    ).length > 0
-  ) return { ready: false, reason: "scheduler_topic_available" };
+  if (topicPrecheck.schedulerTopicAvailable) {
+    return { ready: false, reason: "scheduler_topic_available" };
+  }
 
   // Existing non-overlapping planned inventory gets the cheaper exact
   // demand/evidence bridge before discovery is allowed to spend. This also
   // prevents the guarded one-topic evidence apply from selecting a different
   // row after the micro topic is materialized.
-  const recoverySnapshot = {
-    site,
-    topics,
-    articles,
-    activeArticleTopicIds: new Set<string>(),
-    activeJobsExhausted: false,
-    plannedGate: siteGate,
-    plannedAuthorityFresh: true,
-  };
-  const terminalDemandJobsPromise = ctx.db.query("expected_click_demand_jobs")
+  if (!recoveryPrecheck) {
+    return { ready: false, reason: "recovery_precheck_required" };
+  }
+  const terminalDemandJobs = await ctx.db.query("expected_click_demand_jobs")
       .withIndex("by_site_origin_status", (q) =>
         q.eq("siteId", siteId).eq("origin", "autonomous_fleet").eq(
           "status",
@@ -957,24 +1089,6 @@ async function inspectReadiness(
       )
       .order("desc")
       .take(1);
-  const [demandReadiness, evidenceReadiness, terminalDemandJobs] =
-    recoveryPrecheck
-      ? [null, null, await terminalDemandJobsPromise]
-      : await Promise.all([
-        expectedClickDemandFleetReadiness(
-          ctx,
-          siteId,
-          timestamp,
-          recoverySnapshot,
-        ),
-        expectedClickEvidenceFleetReadiness(
-          ctx,
-          siteId,
-          timestamp,
-          recoverySnapshot,
-        ),
-        terminalDemandJobsPromise,
-      ]);
   const terminalDemandJob = terminalDemandJobs[0];
   const terminalDemandNoMetricFingerprint = terminalDemandJob
     ? await terminalNoMetricDemandReceiptFingerprint(
@@ -984,13 +1098,7 @@ async function inspectReadiness(
       timestamp,
     )
     : null;
-  const recoveryBlockReason = recoveryPrecheck
-    ? recoveryPrecheck.blockReason ?? null
-    : cadenceMicroSeedRecoveryBlockReason(
-      demandReadiness,
-      evidenceReadiness,
-      Boolean(terminalDemandNoMetricFingerprint),
-    );
+  const recoveryBlockReason = recoveryPrecheck.blockReason ?? null;
   if (recoveryBlockReason) return { ready: false, reason: recoveryBlockReason };
 
   const sourceJob = await ctx.db.get(sourcePlanId);
@@ -1078,7 +1186,7 @@ async function inspectReadiness(
   }
 
   const anchors = cadenceMicroSeedRecoveryAnchors(site);
-  const coveredKeywords = coverage.map((topic) => topic.primaryKeyword);
+  const coveredKeywords = topicPrecheck.coveredKeywords;
   const primarySeeds = selectCadenceMicroSeedProbeBatch(
     anchors,
     String(source.job._id),
@@ -1264,6 +1372,7 @@ async function inspectReadiness(
     remainingArticles: siteGate.remainingArticles,
     authority,
     businessSignals,
+    topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     sourcePlanId: String(source.job._id),
     sourcePlanReservationId: String(source.reservation._id),
     sourcePlanFingerprint: sourceFingerprint,
@@ -1315,17 +1424,25 @@ export const inspectInternal = internalQuery({
   args: {
     siteId: v.id("sites"),
     sourcePlanId: v.id("jobs"),
+    topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     recoveryPrechecked: v.optional(v.boolean()),
     recoveryBlockReason: v.optional(v.string()),
   },
   handler: async (
     ctx,
-    { siteId, sourcePlanId, recoveryPrechecked, recoveryBlockReason },
+    {
+      siteId,
+      sourcePlanId,
+      topicPrecheck,
+      recoveryPrechecked,
+      recoveryBlockReason,
+    },
   ) => inspectReadiness(
     ctx,
     siteId,
     Date.now(),
     sourcePlanId,
+    topicPrecheck,
     undefined,
     recoveryPrechecked === true
       ? {
@@ -1497,6 +1614,7 @@ export const listLegacyAnchorMismatchRepairsInternal = internalQuery({
 export const reserveAndQueue = internalMutation({
   args: {
     siteId: v.id("sites"),
+    topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     inspectionKey: v.string(),
     reservationDay: v.string(),
     rolloutEpoch: v.number(),
@@ -1515,6 +1633,7 @@ export const reserveAndQueue = internalMutation({
       args.siteId,
       Date.now(),
       args.sourcePlanId,
+      args.topicPrecheck,
       undefined,
       { completed: true },
     );
@@ -1748,6 +1867,7 @@ export const beginProviderAttempt = internalMutation({
     siteId: v.id("sites"),
     jobId: v.id("cadence_micro_seed_jobs"),
     workerToken: v.string(),
+    topicPrecheck: cadenceTopicReadinessPrecheckValidator,
   },
   handler: async (ctx, args) => {
     const { site, job } = await requireWorker(ctx, args);
@@ -1768,6 +1888,7 @@ export const beginProviderAttempt = internalMutation({
       args.siteId,
       Date.now(),
       job.sourcePlanId,
+      args.topicPrecheck,
       job._id,
       { completed: true },
     );
@@ -2610,37 +2731,40 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       ) throw new Error("Cadence micro-seed candidate receipt is incompatible");
       seenReceiptKeywords.add(keyword);
     }
-    const inspected = await inspectReadiness(
-      ctx,
-      args.siteId,
-      Date.now(),
-      job.sourcePlanId,
-      job._id,
-      { completed: true },
-    );
-    if (
-      !inspected.ready ||
-      inspected.sourcePlanFingerprint !== job.sourcePlanFingerprint ||
-      inspected.attemptKind !== cadenceMicroSeedAttemptKind(job.attemptKind) ||
-      inspected.parentMicroSeedJobId !== job.parentMicroSeedJobId ||
-      inspected.parentMicroSeedReceiptFingerprint !==
-        job.parentMicroSeedReceiptFingerprint ||
-      inspected.seed !== job.seed ||
-      JSON.stringify(inspected.providerSeeds) !==
-        JSON.stringify(job.providerSeeds ?? [job.seed]) ||
-      inspected.locationCode !== job.locationCode ||
-      inspected.languageCode.trim().toLowerCase() !==
-        job.languageCode.trim().toLowerCase()
-    ) throw new Error("Cadence micro-seed materialization fence changed");
     const jobKind = cadenceMicroSeedAttemptKind(job.attemptKind);
-    const jobReservation = await ctx.db.get(job.providerSpendReservationId);
+    const timestamp = Date.now();
+    const [jobReservation, sourceReservation, sourcePlan, sourceCheckpoints] =
+      await Promise.all([
+        ctx.db.get(job.providerSpendReservationId),
+        ctx.db.get(job.sourcePlanReservationId),
+        ctx.db.get(job.sourcePlanId),
+        ctx.db.query("plan_candidate_checkpoints")
+          .withIndex("by_plan_job", (q) => q.eq("planJobId", job.sourcePlanId))
+          .order("desc")
+          .take(2),
+      ]);
     const providerCostCeilingMicroUsd = jobKind
       ? cadenceMicroSeedProviderCeilingMicroUsd(jobKind)
       : null;
+    const currentAnchors = new Set(cadenceMicroSeedRecoveryAnchors(site));
+    const jobSeeds = job.providerSeeds ?? [job.seed];
+    const siteGate = await plannedTopicSiteGate(ctx, site, timestamp);
     if (
       !site.userId ||
+      !site.autopilotEnabled ||
+      site.expectedClickSchedulingEnabled !== true ||
+      !verifiedKeywordPlanningActive(site) ||
+      !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+      (site.cadencePerWeek ?? 0) <= 0 ||
+      !siteGate.allowed ||
       !jobKind ||
       providerCostCeilingMicroUsd === null ||
+      job.locationCode !== dataForSeoLocationCode(site.targetCountry) ||
+      job.languageCode.trim().toLowerCase() !==
+        dataForSeoLanguageCode(site.language).trim().toLowerCase() ||
+      jobSeeds.some((seed) =>
+        !currentAnchors.has(normalizeCadenceMicroSeedText(seed))
+      ) ||
       !jobReservation ||
       jobReservation.siteId !== site._id ||
       jobReservation.userId !== site.userId ||
@@ -2652,16 +2776,30 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       jobReservation.releasedAt !== undefined ||
       job.providerCostCeilingMicroUsd !== providerCostCeilingMicroUsd ||
       job.providerCostReservedMicroUsd !== providerCostCeilingMicroUsd ||
+      !sourcePlan ||
+      !validExhaustedSourcePlan({
+        site,
+        job: sourcePlan,
+        reservation: sourceReservation,
+        checkpoints: sourceCheckpoints,
+        timestamp,
+      }) ||
+      !sourceReservation ||
+      sourcePlanFingerprint(
+        sourcePlan,
+        sourceReservation,
+        sourceCheckpoints,
+      ) !== job.sourcePlanFingerprint ||
       Math.ceil(args.providerTaskCostUsd * 1_000_000) >
         providerCostCeilingMicroUsd
-    ) throw new Error("Cadence micro-seed paid reservation changed");
+    ) throw new Error("Cadence micro-seed materialization fence changed");
     await settleSharedProviderReservation(ctx, {
       reservationId: job.providerSpendReservationId,
       siteId: args.siteId,
       purpose: cadenceMicroSeedProviderPurpose(jobKind),
       actualMicroUsd: Math.ceil(args.providerTaskCostUsd * 1_000_000),
       reason: "verified_provider_receipt_actual_cost",
-      timestamp: Date.now(),
+      timestamp,
     });
 
     const articleInventory = await cadenceMicroSeedArticleInventory(ctx, site);
@@ -2727,7 +2865,7 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       source: site.seoAuthoritySource,
       measuredAt: site.seoAuthorityMeasuredAt,
     });
-    if (!measuredAuthorityIsFresh(authority, Date.now())) {
+    if (!measuredAuthorityIsFresh(authority, timestamp)) {
       throw new Error("Cadence micro-seed tenant authority expired");
     }
     const selection = selectCadenceMicroSeedCandidate({
@@ -2753,7 +2891,6 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
         ...businessSignals,
       }).eligible,
     });
-    const timestamp = Date.now();
     const candidateAudit = {
       received: args.providerRowsReceived,
       accepted: selection.accepted,

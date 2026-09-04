@@ -851,7 +851,10 @@ test("cadence rescue binds a saturated terminal demand receipt without disabling
   assert.match(model, /by_site_origin_status/);
   assert.match(demandBackfill, /candidateArtifactEligible/);
   assert.match(model, /terminalNoMetricDemandReceiptFingerprint/);
-  assert.match(model, /cadenceMicroSeedRecoveryBlockReason\([\s\S]*Boolean\(terminalDemandNoMetricFingerprint\)/);
+  assert.match(
+    action,
+    /cadenceMicroSeedRecoveryBlockReason\([\s\S]*demandStatus\?\.terminalNoMetricReceiptValid === true/,
+  );
   assert.doesNotMatch(model, /expected_click_demand_jobs[\s\S]{0,300}(patch|delete)\(/);
 });
 
@@ -863,6 +866,21 @@ test("cadence rescue remains eligible until the shared launch buffer minimum is 
   assert.doesNotMatch(model, /sealedBuffer\.length > 0/);
   assert.match(runbook, /sealed buffer below the cadence-derived launch minimum/);
   assert.match(crons, /Below-minimum-buffer rescue is tenant-generic/);
+});
+
+test("a tenant with no publication gets a stable overdue cadence receipt", () => {
+  const readiness = model.slice(
+    model.indexOf("async function inspectReadiness"),
+    model.indexOf("export const inspectInternal"),
+  );
+  assert.match(
+    readiness,
+    /const nextCadenceDueAt = latestPublished[\s\S]*: 0;/,
+  );
+  assert.doesNotMatch(
+    readiness,
+    /const nextCadenceDueAt = latestPublished[\s\S]*: timestamp;/,
+  );
 });
 
 test("candidate selection fails closed on metrics, brands, fit, exact reuse, and overlap", () => {
@@ -1583,13 +1601,17 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(model, /recordEvidenceQueued[\s\S]*finalizeCadenceMicroSeed/);
   assert.match(model, /plannedEvidenceFingerprint/);
   assert.match(
-    model,
+    action,
     /cadenceMicroSeedRecoveryBlockReason\([\s\S]*demandReadiness,[\s\S]*evidenceReadiness/,
   );
-  assert.match(
-    model,
-    /expectedClickDemandFleetReadiness[\s\S]*expectedClickEvidenceFleetReadiness[\s\S]*recoverySnapshot/,
+  assert.match(action, /api\.inspectTopicReadinessInternal/);
+  assert.ok(
+    recovery.indexOf("api.inspectTopicReadinessInternal") <
+      recovery.indexOf("api.inspectInternal"),
+    "tenant-sized inventory must be evaluated before the compact admission transaction",
   );
+  assert.match(model, /cadence-topic-inventory-v1/);
+  assert.match(model, /inventoryFingerprint: sha256Hex/);
   assert.match(model, /findExactEvidenceJobInternal/);
   assert.match(action, /apply action may have committed[\s\S]*reconcileExactEvidenceJob/);
   assert.match(model, /reconcileWatchdog[\s\S]*provider_attempt_ambiguous/);
@@ -1621,14 +1643,11 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     "portfolio recovery must run outside the one-second cadence inventory transaction",
   );
   assert.match(recovery, /recoveryPrechecked: true/);
+  assert.match(model, /recovery_precheck_required/);
   assert.match(
     model,
-    /recoveryPrecheck[\s\S]*\? \[null, null, await terminalDemandJobsPromise\]/,
-  );
-  assert.match(
-    model,
-    /args\.sourcePlanId,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
-    "atomic reservation rechecks the compact cadence fence without repeating portfolio evaluation",
+    /args\.sourcePlanId,[\s\S]*args\.topicPrecheck,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
+    "atomic reservation rechecks the compact cadence fence against the exact topic digest",
   );
   assert.match(schema, /by_site_source_policy_created/);
   assert.match(model, /withIndex\("by_site_source_policy_created"/);
@@ -1800,7 +1819,14 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
     model.indexOf("async function inspectReadiness"),
     model.indexOf("export const inspectInternal"),
   );
-  assert.match(readiness, /cadenceMicroSeedTopicInventory/);
+  const topicReadiness = model.slice(
+    model.indexOf("export const inspectTopicReadinessInternal"),
+    model.indexOf("async function inspectReadiness"),
+  );
+  assert.match(topicReadiness, /cadenceMicroSeedTopicInventory/);
+  assert.match(topicReadiness, /cadenceTopicReadinessPrecheck/);
+  assert.doesNotMatch(readiness, /cadenceMicroSeedTopicInventory/);
+  assert.match(readiness, /topicPrecheck\.inventoryFingerprint/);
   assert.doesNotMatch(readiness, /takeCurrentDomainTopics\(/);
   assert.doesNotMatch(readiness, /takeCurrentDomainArticles\(/);
   const materialization = model.slice(
@@ -1808,6 +1834,9 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
     model.indexOf("export const reconcileVerifiedProviderCosts"),
   );
   assert.match(materialization, /cadenceMicroSeedTopicInventory/);
+  assert.doesNotMatch(materialization, /inspectReadiness\(/);
+  assert.match(materialization, /sourcePlanFingerprint/);
+  assert.match(materialization, /validExhaustedSourcePlan/);
   assert.doesNotMatch(materialization, /takeCurrentDomainTopics\(/);
   assert.doesNotMatch(materialization, /takeCurrentDomainArticles\(/);
 });
