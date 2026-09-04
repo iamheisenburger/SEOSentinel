@@ -32,6 +32,7 @@ export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   topic_portfolio_goal_replenishment: "waiting",
   topic_portfolio_evidence_replenishment: "waiting",
   topic_replenishment: "waiting",
+  cadence_micro_seed_continuation: "waiting",
   buffer_fill: "waiting",
   cadence_generation: "waiting",
   idle: "waiting",

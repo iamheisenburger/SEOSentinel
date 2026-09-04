@@ -160,6 +160,21 @@ function getDataForSEOCredentials(): { login: string; password: string } | null 
   return { login, password };
 }
 
+// SEO model calls in this module are advisory fallbacks or diagnostics. They
+// must never own an article worker until the worker lease or Convex action
+// deadline expires: doing so can strand an otherwise complete article at the
+// content-scoring step. Keep one explicit, no-retry deadline for every such
+// call and let the existing callers fall back conservatively on failure.
+export const SEO_DIAGNOSTIC_OPENAI_TIMEOUT_MS = 45_000;
+
+function createBoundedSeoDiagnosticOpenAI(apiKey: string): OpenAI {
+  return new OpenAI({
+    apiKey,
+    timeout: SEO_DIAGNOSTIC_OPENAI_TIMEOUT_MS,
+    maxRetries: 0,
+  });
+}
+
 async function dataForSEORequest(
   endpoint: string,
   body: any[],
@@ -1209,7 +1224,7 @@ async function getKeywordMetricsFromAI(
     }));
   }
 
-  const client = new OpenAI({ apiKey });
+  const client = createBoundedSeoDiagnosticOpenAI(apiKey);
 
   try {
     const completion = await client.responses.create({
@@ -1389,7 +1404,7 @@ async function analyzeSERPFromAI(keyword: string): Promise<SerpAnalysis> {
     };
   }
 
-  const client = new OpenAI({ apiKey });
+  const client = createBoundedSeoDiagnosticOpenAI(apiKey);
 
   try {
     const completion = await client.responses.create({
@@ -1493,7 +1508,7 @@ export async function scoreContent(
     };
   }
 
-  const client = new OpenAI({ apiKey });
+  const client = createBoundedSeoDiagnosticOpenAI(apiKey);
 
   // Fetch content from top 3 SERP results for comparison
   const competitorContent: string[] = [];
@@ -1673,7 +1688,7 @@ async function findKeywordGapsFromAI(
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || competitorDomains.length === 0) return [];
 
-  const client = new OpenAI({ apiKey });
+  const client = createBoundedSeoDiagnosticOpenAI(apiKey);
 
   try {
     const completion = await client.responses.create({

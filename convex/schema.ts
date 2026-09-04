@@ -2105,7 +2105,10 @@ export default defineSchema({
       topicFingerprint: v.string(),
       plannedEvidenceFingerprint: v.string(),
       evidenceJobId: v.id("expected_click_evidence_jobs"),
-      outcome: v.literal("semantic_failure"),
+      outcome: v.union(
+        v.literal("semantic_failure"),
+        v.literal("eligible_materialized"),
+      ),
       reason: v.string(),
       completedAt: v.number(),
     }))),

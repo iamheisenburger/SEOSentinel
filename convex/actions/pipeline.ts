@@ -8204,6 +8204,8 @@ export const autopilotTick = internalAction({
       topic_portfolio_evidence_replenishment:
         "A topic evidence replenishment was queued.",
       topic_replenishment: "A bounded topic replenishment was queued.",
+      cadence_micro_seed_continuation:
+        "Another non-overlapping candidate from the paid cadence receipt entered measured evidence review.",
       buffer_fill: "A strict-quality buffer candidate was queued.",
       cadence_generation: "A cadence article candidate was queued.",
       buffer_full: "The strict-quality future buffer is full.",

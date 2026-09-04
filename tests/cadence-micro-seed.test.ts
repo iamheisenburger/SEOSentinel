@@ -1524,3 +1524,43 @@ test("semantic evidence misses advance through immutable candidates without lowe
   assert.match(action, /resumeLegacySemanticCandidateInternal/);
   assert.doesNotMatch(model, /expectedClickStatus:\s*"eligible"/);
 });
+
+test("a successful micro-seed reuses its paid shortlist until the launch buffer is safe", () => {
+  const continuation = model.slice(
+    model.indexOf("export const continueSuccessfulCandidateInternal"),
+    model.indexOf("export const recordProviderReceiptAndMaterialize"),
+  );
+  assert.match(continuation, /articles\.filter\(isSealedReady\)/);
+  assert.match(continuation, /verifiedAuthorityTarget/);
+  assert.match(continuation, /cadenceMicroSeedAttemptExhaustsCurrentEnvelope/);
+  assert.match(continuation, /selectCadenceMicroSeedCandidate/);
+  assert.match(continuation, /no_remaining_nonoverlapping_candidate/);
+  assert.match(continuation, /outcome:\s*"eligible_materialized"/);
+  assert.match(continuation, /status:\s*"awaiting_evidence"/);
+  assert.match(continuation, /resumeCadenceEvidenceHandoff/);
+  assert.doesNotMatch(
+    continuation,
+    /beginProviderAttempt|discoverCadenceMicroSeedFromDataForSEO/,
+  );
+  assert.match(
+    schema,
+    /outcome:\s*v\.union\([\s\S]*v\.literal\("semantic_failure"\)[\s\S]*v\.literal\("eligible_materialized"\)/,
+  );
+  const noTopicBranchStart = scheduler.indexOf("if (!selectedTopic)");
+  const noTopicBranch = scheduler.slice(
+    noTopicBranchStart,
+    scheduler.indexOf("const replenishmentReason", noTopicBranchStart),
+  );
+  assert.match(noTopicBranch, /continueSuccessfulCandidateInternal/);
+  assert.match(noTopicBranch, /cadence_micro_seed_continuation/);
+  assert.ok(
+    scheduler.indexOf(
+      "continueSuccessfulCandidateInternal",
+      noTopicBranchStart,
+    ) < scheduler.indexOf(
+      "internal.jobs.queuePlanIfAbsent",
+      noTopicBranchStart,
+    ),
+    "a paid shortlist continuation must run before another plan is considered",
+  );
+});

@@ -1092,6 +1092,17 @@ export const scheduleCadence = internalAction({
           bufferCount: buffer.length,
         };
       }
+      const microSeedContinuation = await ctx.runMutation(
+        internal.cadenceMicroSeed.continueSuccessfulCandidateInternal,
+        { siteId },
+      );
+      if (microSeedContinuation.advanced) {
+        return {
+          scheduled: 1,
+          mode: "cadence_micro_seed_continuation",
+          bufferCount: buffer.length,
+        };
+      }
       const replenishmentReason = strictExpectedClickScheduling && !portfolio.supportsGoal
         ? portfolioReplenishmentReason
         : fitEligible.length === 0

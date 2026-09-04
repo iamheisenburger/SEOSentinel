@@ -12,9 +12,9 @@ test("paid SEO provider failures expose stable status codes, never response mess
     /"serp\/google\/organic\/live\/regular"[\s\S]*?depth: 10,[\s\S]*?45_000/,
   );
   assert.equal(
-    (seoData.match(/\b45_000\b/g) ?? []).length,
+    (seoData.match(/\n\s{4}45_000,\n/g) ?? []).length,
     1,
-    "only the one-shot live organic SERP call receives the longer timeout",
+    "only the one-shot live organic SERP request overrides the DataForSEO timeout",
   );
   assert.doesNotMatch(seoData, /status_message/);
   assert.doesNotMatch(seoData, /await\s+response\.text\(\)/);
