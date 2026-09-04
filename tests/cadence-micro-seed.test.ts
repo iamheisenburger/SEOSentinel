@@ -1613,6 +1613,7 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(action, /api\.inspectSourceReadinessInternal/);
   assert.match(action, /api\.inspectSourcePlanReadinessInternal/);
   assert.match(action, /api\.inspectPriorPolicyHistoryInternal/);
+  assert.match(action, /api\.inspectCurrentPolicyReadinessInternal/);
   assert.match(action, /policyBatchSize = 8/);
   assert.match(action, /cadence-prior-policy-history-aggregate-v1/);
   assert.match(action, /createHash\("sha256"\)/);
@@ -1638,8 +1639,13 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   );
   assert.ok(
     recovery.indexOf("inspectPriorPolicyHistory") <
-      recovery.indexOf("api.inspectSourceReadinessInternal"),
+      recovery.indexOf("api.inspectCurrentPolicyReadinessInternal"),
     "historical policy generations must be projected before current-chain readiness",
+  );
+  assert.ok(
+    recovery.indexOf("api.inspectCurrentPolicyReadinessInternal") <
+      recovery.indexOf("api.inspectSourceReadinessInternal"),
+    "current recovery receipts must be compacted before final source admission",
   );
   assert.match(model, /cadence-topic-inventory-v1/);
   assert.match(model, /inventoryFingerprint: sha256Hex/);
@@ -1859,7 +1865,7 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   const operationalReadiness = model.slice(
     model.indexOf("export const inspectOperationalReadinessInternal"),
-    model.indexOf("async function cadenceSourceReadinessPrecheck"),
+    model.indexOf("async function cadencePriorPolicyHistoryPrecheck"),
   );
   const sourceReadiness = model.slice(
     model.indexOf("async function cadenceSourceReadinessPrecheck"),
@@ -1867,6 +1873,10 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   const priorPolicyReadiness = model.slice(
     model.indexOf("async function cadencePriorPolicyHistoryPrecheck"),
+    model.indexOf("async function cadenceCurrentPolicyReadinessPrecheck"),
+  );
+  const currentPolicyReadiness = model.slice(
+    model.indexOf("async function cadenceCurrentPolicyReadinessPrecheck"),
     model.indexOf("async function cadenceSourceReadinessPrecheck"),
   );
   const sourcePlanReadiness = model.slice(
@@ -1879,13 +1889,18 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(operationalReadiness, /cadenceMicroSeedArticleInventory/);
   assert.match(operationalReadiness, /plannedTopicSiteGate/);
   assert.match(operationalReadiness, /operationalFingerprint: sha256Hex/);
-  assert.match(sourceReadiness, /by_site_source_policy_created/);
-  assert.match(sourceReadiness, /eq\("policyVersion", CADENCE_MICRO_SEED_VERSION\)/);
+  assert.doesNotMatch(sourceReadiness, /by_site_source_policy_created/);
   assert.doesNotMatch(sourceReadiness, /\.lt\("policyVersion"/);
   assert.match(sourceReadiness, /sourceInventoryFingerprint: sha256Hex/);
   assert.match(sourceReadiness, /priorPolicyHistory\.historyFingerprint/);
   assert.doesNotMatch(sourceReadiness, /priorPolicyPrechecks/);
   assert.doesNotMatch(sourceReadiness, /plan_candidate_checkpoints/);
+  assert.match(currentPolicyReadiness, /by_site_source_policy_created/);
+  assert.match(
+    currentPolicyReadiness,
+    /eq\("policyVersion", CADENCE_MICRO_SEED_VERSION\)/,
+  );
+  assert.match(currentPolicyReadiness, /currentPolicyFingerprint: sha256Hex/);
   assert.match(priorPolicyReadiness, /by_site_source_policy_created/);
   assert.match(priorPolicyReadiness, /eq\("policyVersion", policyVersion\)/);
   assert.match(priorPolicyReadiness, /\.take\(3\)/);

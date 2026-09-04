@@ -687,6 +687,33 @@ type CadencePriorPolicyHistoryAggregate = {
   historyFingerprint: string;
 };
 
+type CadenceCurrentPolicyReadinessPrecheck = {
+  ready: true;
+  contract: "cadence-current-policy-readiness-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  currentJobId?: string;
+  topicInventoryFingerprint: string;
+  priorPolicyHistoryFingerprint: string;
+  sourcePlanId: Id<"jobs">;
+  sourcePlanReservationId: Id<"provider_spend_reservations">;
+  sourcePlanFingerprint: string;
+  currentPolicyFingerprint: string;
+  attemptKind: CadenceMicroSeedAttemptKind;
+  parentMicroSeedJobId?: Id<"cadence_micro_seed_jobs">;
+  parentMicroSeedReceiptFingerprint?: string;
+  seed: string;
+  providerSeeds: string[];
+  locationCode: number;
+  languageCode: string;
+};
+
+type CadenceCurrentPolicyReadinessResult =
+  | CadenceCurrentPolicyReadinessPrecheck
+  | { ready: false; reason: string };
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -763,6 +790,29 @@ const cadencePriorPolicyHistoryAggregateValidator = v.object({
   attemptedPrimarySeeds: v.array(v.string()),
   attemptedFallbackSeeds: v.array(v.string()),
   historyFingerprint: v.string(),
+});
+
+const cadenceCurrentPolicyReadinessPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-current-policy-readiness-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  currentJobId: v.optional(v.string()),
+  topicInventoryFingerprint: v.string(),
+  priorPolicyHistoryFingerprint: v.string(),
+  sourcePlanId: v.id("jobs"),
+  sourcePlanReservationId: v.id("provider_spend_reservations"),
+  sourcePlanFingerprint: v.string(),
+  currentPolicyFingerprint: v.string(),
+  attemptKind: v.union(v.literal("primary"), v.literal("fallback")),
+  parentMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  parentMicroSeedReceiptFingerprint: v.optional(v.string()),
+  seed: v.string(),
+  providerSeeds: v.array(v.string()),
+  locationCode: v.number(),
+  languageCode: v.string(),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -1461,7 +1511,7 @@ export const inspectPriorPolicyHistoryInternal = internalQuery({
  * tenant age; keeping this bounded source ledger in its own transaction makes
  * the admission cost independent of topic and article cardinality.
  */
-async function cadenceSourceReadinessPrecheck(
+async function cadenceCurrentPolicyReadinessPrecheck(
   ctx: QueryCtx | MutationCtx,
   siteId: Id<"sites">,
   timestamp: number,
@@ -1470,7 +1520,7 @@ async function cadenceSourceReadinessPrecheck(
   sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
   priorPolicyHistory: CadencePriorPolicyHistoryAggregate,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
-): Promise<CadenceSourceReadinessResult> {
+): Promise<CadenceCurrentPolicyReadinessResult> {
   const site = await ctx.db.get(siteId);
   if (
     !siteExecutionActive(site) ||
@@ -1698,6 +1748,150 @@ async function cadenceSourceReadinessPrecheck(
   ) {
     return { ready: false, reason: "micro_seed_anchor_batch_drifted" };
   }
+  const receipt = {
+    contract: "cadence-current-policy-readiness-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    currentJobId: currentJobId ? String(currentJobId) : null,
+    topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
+    priorPolicyHistoryFingerprint: priorPolicyHistory.historyFingerprint,
+    sourcePlanId: String(sourcePlanId),
+    sourcePlanReservationId: String(sourceReservationId),
+    sourcePlanFingerprint: sourceFingerprint,
+    sourceJobIds: sourceJobs.map((job) => String(job._id)),
+    attemptKind,
+    parentMicroSeedJobId: parentMicroSeedJobId
+      ? String(parentMicroSeedJobId)
+      : null,
+    parentMicroSeedReceiptFingerprint:
+      parentMicroSeedReceiptFingerprint ?? null,
+    seed,
+    providerSeeds,
+    locationCode,
+    languageCode,
+  };
+  return {
+    ready: true,
+    contract: "cadence-current-policy-readiness-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
+    topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
+    priorPolicyHistoryFingerprint: priorPolicyHistory.historyFingerprint,
+    sourcePlanId,
+    sourcePlanReservationId: sourceReservationId,
+    sourcePlanFingerprint: sourceFingerprint,
+    currentPolicyFingerprint: sha256Hex(JSON.stringify(receipt)),
+    attemptKind,
+    ...(parentMicroSeedJobId ? { parentMicroSeedJobId } : {}),
+    ...(parentMicroSeedReceiptFingerprint
+      ? { parentMicroSeedReceiptFingerprint }
+      : {}),
+    seed,
+    providerSeeds,
+    locationCode,
+    languageCode,
+  };
+}
+
+export const inspectCurrentPolicyReadinessInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+    topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
+    priorPolicyHistory: cadencePriorPolicyHistoryAggregateValidator,
+    currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  },
+  handler: async (ctx, args) => cadenceCurrentPolicyReadinessPrecheck(
+    ctx,
+    args.siteId,
+    Date.now(),
+    args.sourcePlanId,
+    args.topicPrecheck,
+    args.sourcePlanPrecheck,
+    args.priorPolicyHistory,
+    args.currentJobId,
+  ),
+});
+
+/**
+ * Bind the already-projected no-replay and current-policy ledgers to the
+ * account entitlement. This final source transaction performs no recovery-job
+ * scan, so its cost is independent of both tenant age and provider payload
+ * size.
+ */
+async function cadenceSourceReadinessPrecheck(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  sourcePlanId: Id<"jobs">,
+  topicPrecheck: CadenceTopicReadinessPrecheck,
+  sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
+  priorPolicyHistory: CadencePriorPolicyHistoryAggregate,
+  currentPolicyPrecheck: CadenceCurrentPolicyReadinessPrecheck,
+  currentJobId?: Id<"cadence_micro_seed_jobs">,
+): Promise<CadenceSourceReadinessResult> {
+  const site = await ctx.db.get(siteId);
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !(await siteExecutionAuthorized(ctx, site))
+  ) return { ready: false, reason: "site_unavailable" };
+  if (
+    !site.autopilotEnabled ||
+    site.expectedClickSchedulingEnabled !== true ||
+    !verifiedKeywordPlanningActive(site) ||
+    !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
+    (site.cadencePerWeek ?? 0) <= 0
+  ) return { ready: false, reason: "rollout_ineligible" };
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (
+    !canonicalDomain ||
+    topicPrecheck.contract !== "cadence-topic-readiness-v1" ||
+    topicPrecheck.siteId !== String(site._id) ||
+    topicPrecheck.canonicalDomain !== canonicalDomain ||
+    topicPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    !/^[a-f0-9]{64}$/.test(topicPrecheck.inventoryFingerprint) ||
+    sourcePlanPrecheck.contract !== "cadence-source-plan-readiness-v1" ||
+    sourcePlanPrecheck.siteId !== String(site._id) ||
+    sourcePlanPrecheck.canonicalDomain !== canonicalDomain ||
+    sourcePlanPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    sourcePlanPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    sourcePlanPrecheck.sourcePlanId !== sourcePlanId ||
+    !sourcePlanPrecheck.sourcePlanFingerprint ||
+    priorPolicyHistory.contract !==
+      "cadence-prior-policy-history-aggregate-v1" ||
+    priorPolicyHistory.siteId !== String(site._id) ||
+    priorPolicyHistory.canonicalDomain !== canonicalDomain ||
+    priorPolicyHistory.domainRevision !== siteCanonicalDomainRevision(site) ||
+    priorPolicyHistory.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    priorPolicyHistory.sourcePlanId !== sourcePlanId ||
+    priorPolicyHistory.policyVersionCount !== CADENCE_MICRO_SEED_VERSION - 1 ||
+    !/^[a-f0-9]{64}$/.test(priorPolicyHistory.historyFingerprint) ||
+    currentPolicyPrecheck.contract !==
+      "cadence-current-policy-readiness-v1" ||
+    currentPolicyPrecheck.siteId !== String(site._id) ||
+    currentPolicyPrecheck.canonicalDomain !== canonicalDomain ||
+    currentPolicyPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    currentPolicyPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    currentPolicyPrecheck.currentJobId !==
+      (currentJobId ? String(currentJobId) : undefined) ||
+    currentPolicyPrecheck.topicInventoryFingerprint !==
+      topicPrecheck.inventoryFingerprint ||
+    currentPolicyPrecheck.priorPolicyHistoryFingerprint !==
+      priorPolicyHistory.historyFingerprint ||
+    currentPolicyPrecheck.sourcePlanId !== sourcePlanId ||
+    currentPolicyPrecheck.sourcePlanReservationId !==
+      sourcePlanPrecheck.sourcePlanReservationId ||
+    currentPolicyPrecheck.sourcePlanFingerprint !==
+      sourcePlanPrecheck.sourcePlanFingerprint ||
+    !/^[a-f0-9]{64}$/.test(currentPolicyPrecheck.currentPolicyFingerprint)
+  ) return { ready: false, reason: "current_policy_inspection_stale" };
   const entitlement = await ctx.db.query("account_plan_entitlements")
     .withIndex("by_user", (q) => q.eq("userId", site.userId!))
     .unique();
@@ -1705,8 +1899,9 @@ async function cadenceSourceReadinessPrecheck(
     ...(entitlement?.planFeatures ?? site.planFeatures ?? []),
   ].sort();
   const plan = resolvePlanFromFeatures(planFeatures);
-  const providerCostCeilingMicroUsd =
-    cadenceMicroSeedProviderCeilingMicroUsd(attemptKind);
+  const providerCostCeilingMicroUsd = cadenceMicroSeedProviderCeilingMicroUsd(
+    currentPolicyPrecheck.attemptKind,
+  );
   const evidenceHeadroomMicroUsd =
     EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD;
   const receipt = {
@@ -1718,25 +1913,21 @@ async function cadenceSourceReadinessPrecheck(
     currentJobId: currentJobId ? String(currentJobId) : null,
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     sourcePlanId: String(sourcePlanId),
-    sourcePlanReservationId: String(sourceReservationId),
-    sourcePlanFingerprint: sourceFingerprint,
-    sourceJobIds: sourceJobs.map((job) => String(job._id)),
-    priorPolicyHistory: {
-      policyVersionCount: priorPolicyHistory.policyVersionCount,
-      attemptedPrimarySeeds: priorPolicyHistory.attemptedPrimarySeeds,
-      attemptedFallbackSeeds: priorPolicyHistory.attemptedFallbackSeeds,
-      historyFingerprint: priorPolicyHistory.historyFingerprint,
-    },
-    attemptKind,
-    parentMicroSeedJobId: parentMicroSeedJobId
-      ? String(parentMicroSeedJobId)
+    sourcePlanReservationId:
+      String(sourcePlanPrecheck.sourcePlanReservationId),
+    sourcePlanFingerprint: sourcePlanPrecheck.sourcePlanFingerprint,
+    priorPolicyHistoryFingerprint: priorPolicyHistory.historyFingerprint,
+    currentPolicyFingerprint: currentPolicyPrecheck.currentPolicyFingerprint,
+    attemptKind: currentPolicyPrecheck.attemptKind,
+    parentMicroSeedJobId: currentPolicyPrecheck.parentMicroSeedJobId
+      ? String(currentPolicyPrecheck.parentMicroSeedJobId)
       : null,
     parentMicroSeedReceiptFingerprint:
-      parentMicroSeedReceiptFingerprint ?? null,
-    seed,
-    providerSeeds,
-    locationCode,
-    languageCode,
+      currentPolicyPrecheck.parentMicroSeedReceiptFingerprint ?? null,
+    seed: currentPolicyPrecheck.seed,
+    providerSeeds: currentPolicyPrecheck.providerSeeds,
+    locationCode: currentPolicyPrecheck.locationCode,
+    languageCode: currentPolicyPrecheck.languageCode,
     planTier: plan.tier,
     planFeatures,
     providerCostCeilingMicroUsd,
@@ -1753,17 +1944,22 @@ async function cadenceSourceReadinessPrecheck(
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     sourceInventoryFingerprint: sha256Hex(JSON.stringify(receipt)),
     sourcePlanId,
-    sourcePlanReservationId: sourceReservationId,
-    sourcePlanFingerprint: sourceFingerprint,
-    attemptKind,
-    ...(parentMicroSeedJobId ? { parentMicroSeedJobId } : {}),
-    ...(parentMicroSeedReceiptFingerprint
-      ? { parentMicroSeedReceiptFingerprint }
+    sourcePlanReservationId: sourcePlanPrecheck.sourcePlanReservationId,
+    sourcePlanFingerprint: sourcePlanPrecheck.sourcePlanFingerprint,
+    attemptKind: currentPolicyPrecheck.attemptKind,
+    ...(currentPolicyPrecheck.parentMicroSeedJobId
+      ? { parentMicroSeedJobId: currentPolicyPrecheck.parentMicroSeedJobId }
       : {}),
-    seed,
-    providerSeeds,
-    locationCode,
-    languageCode,
+    ...(currentPolicyPrecheck.parentMicroSeedReceiptFingerprint
+      ? {
+          parentMicroSeedReceiptFingerprint:
+            currentPolicyPrecheck.parentMicroSeedReceiptFingerprint,
+        }
+      : {}),
+    seed: currentPolicyPrecheck.seed,
+    providerSeeds: currentPolicyPrecheck.providerSeeds,
+    locationCode: currentPolicyPrecheck.locationCode,
+    languageCode: currentPolicyPrecheck.languageCode,
     planTier: plan.tier,
     planFeatures,
     providerCostCeilingMicroUsd,
@@ -1778,16 +1974,17 @@ export const inspectSourceReadinessInternal = internalQuery({
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
     priorPolicyHistory: cadencePriorPolicyHistoryAggregateValidator,
+    currentPolicyPrecheck: cadenceCurrentPolicyReadinessPrecheckValidator,
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
   handler: async (ctx, args) => cadenceSourceReadinessPrecheck(
     ctx,
     args.siteId,
-    Date.now(),
     args.sourcePlanId,
     args.topicPrecheck,
     args.sourcePlanPrecheck,
     args.priorPolicyHistory,
+    args.currentPolicyPrecheck,
     args.currentJobId,
   ),
 });

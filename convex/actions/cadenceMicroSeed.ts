@@ -562,6 +562,26 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
+    const currentPolicyPrecheck = await ctx.runQuery(
+      api.inspectCurrentPolicyReadinessInternal,
+      {
+        siteId: args.siteId,
+        sourcePlanId,
+        topicPrecheck,
+        sourcePlanPrecheck,
+        priorPolicyHistory,
+      },
+    );
+    if (!currentPolicyPrecheck.ready) {
+      return {
+        ...currentPolicyPrecheck,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const sourcePrecheck = await ctx.runQuery(
       api.inspectSourceReadinessInternal,
       {
@@ -570,6 +590,7 @@ export const recoverCadenceGap = internalAction({
         topicPrecheck,
         sourcePlanPrecheck,
         priorPolicyHistory,
+        currentPolicyPrecheck,
       },
     );
     if (!sourcePrecheck.ready) {
@@ -757,6 +778,32 @@ export const processCadenceMicroSeed = internalAction({
       );
       return { processed: false, reason: priorPolicyHistory.reason };
     }
+    const currentPolicyPrecheck = await ctx.runQuery(
+      api.inspectCurrentPolicyReadinessInternal,
+      {
+        siteId: args.siteId,
+        sourcePlanId: claimed.sourcePlanId,
+        topicPrecheck,
+        sourcePlanPrecheck,
+        priorPolicyHistory,
+        currentJobId: args.jobId,
+      },
+    );
+    if (!currentPolicyPrecheck.ready) {
+      await ctx.runMutation(api.markProviderResponseUnverified, {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        workerToken,
+        errorCode: currentPolicyPrecheck.reason,
+      });
+      await raiseMiss(
+        ctx,
+        args.siteId,
+        args.jobId,
+        currentPolicyPrecheck.reason,
+      );
+      return { processed: false, reason: currentPolicyPrecheck.reason };
+    }
     const sourcePrecheck = await ctx.runQuery(
       api.inspectSourceReadinessInternal,
       {
@@ -765,6 +812,7 @@ export const processCadenceMicroSeed = internalAction({
         topicPrecheck,
         sourcePlanPrecheck,
         priorPolicyHistory,
+        currentPolicyPrecheck,
         currentJobId: args.jobId,
       },
     );
