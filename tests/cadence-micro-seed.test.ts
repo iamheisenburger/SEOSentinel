@@ -404,6 +404,44 @@ test("recovery never lets clipped feature prose displace mature search anchors",
   assert.equal(anchors.includes("website content learning"), false);
 });
 
+test("recovery retains fresh tenant-grounded probes after the legacy rotation is exhausted", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "lead qualification chatbot",
+      "website lead generation automation",
+    ],
+  });
+  const legacyModifiers = [
+    "guide",
+    "checklist",
+    "examples",
+    "best practices",
+  ];
+  const attempted = [
+    "lead qualification chatbot",
+    "website lead generation automation",
+    ...legacyModifiers.flatMap((modifier) => [
+      `lead qualification chatbot ${modifier}`,
+      `website lead generation automation ${modifier}`,
+    ]),
+    "how to use lead qualification chatbot",
+    "how to use website lead generation automation",
+    "lead qualification chatbot for small business",
+    "website lead generation automation for small business",
+  ];
+  const next = selectCadenceMicroSeedProbeBatch(
+    anchors,
+    "source-plan-placeholder",
+    28,
+    attempted,
+  );
+  assert.ok(next.length > 0);
+  assert.ok(next.every((probe) => !attempted.includes(probe)));
+  assert.ok(next.some((probe) =>
+    /cost|pricing|comparison|implementation|workflow|roi|template/.test(probe)
+  ));
+});
+
 test("recovery chooses the least saturated product surface and a distinct fallback", () => {
   const anchors = [
     "lead qualification chatbot",

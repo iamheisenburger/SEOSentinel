@@ -13,6 +13,14 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 29 makes the tenant-grounded direct-metric rotation durable across
+// bounded recovery generations. Production proved that a repeatedly repaired
+// source plan can consume the original 96 exact/modifier probes even though a
+// newer provider contract still has safe, high-intent product queries left to
+// measure. The expanded rotation derives every additional probe from the
+// tenant's own complete product phrase and never relaxes the independent
+// anchor, business-fit, difficulty, SERP, expected-click, article-quality, or
+// publication gates.
 // Version 28 keeps the category-based fallback tenant-grounded with
 // DataForSEO's native phrase-match mode. Production proved that combining
 // phrase-match with a large derived regex can make an otherwise valid live
@@ -65,7 +73,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 28;
+export const CADENCE_MICRO_SEED_VERSION = 29;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // A successful free balance check is bound to the reservation transaction.
 // This window fences that receipt against a stale or replayed admission action;
@@ -436,6 +444,21 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     probes.push(normalized);
   };
   for (const anchor of productAnchors) append(anchor);
+  // Long configured phrases leave no room for an intent modifier. Preserve
+  // the exact phrase first, then derive a bounded core containing only its
+  // meaningful product concepts. This is not a semantic substitute: provider
+  // results still have to share two concepts with the exact persisted seed and
+  // independently pass the current tenant business-fit gate.
+  const compactProductAnchors = [...new Set(productAnchors.map((anchor) => {
+    const meaningful = normalizeCadenceMicroSeedText(anchor)
+      .split(/[^a-z0-9+/-]+/)
+      .filter((token) =>
+        token.length >= 3 && !CADENCE_MICRO_SEED_ANCHOR_NOISE.has(token)
+      )
+      .slice(0, 4);
+    return meaningful.length >= 2 ? meaningful.join(" ") : anchor;
+  }))];
+  for (const anchor of compactProductAnchors) append(anchor);
   const modifiers: Array<(anchor: string) => string> = [
     (anchor) => `${anchor} guide`,
     (anchor) => `${anchor} checklist`,
@@ -443,11 +466,28 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     (anchor) => `${anchor} best practices`,
     (anchor) => `how to use ${anchor}`,
     (anchor) => `${anchor} for small business`,
+    (anchor) => `${anchor} cost`,
+    (anchor) => `${anchor} pricing`,
+    (anchor) => `${anchor} comparison`,
+    (anchor) => `${anchor} alternatives`,
+    (anchor) => `${anchor} implementation`,
+    (anchor) => `${anchor} setup`,
+    (anchor) => `${anchor} workflow`,
+    (anchor) => `${anchor} strategy`,
+    (anchor) => `${anchor} roi`,
+    (anchor) => `${anchor} case study`,
+    (anchor) => `${anchor} template`,
+    (anchor) => `${anchor} tutorial`,
+    (anchor) => `${anchor} process`,
+    (anchor) => `${anchor} benefits`,
+    (anchor) => `${anchor} mistakes`,
+    (anchor) => `how to choose ${anchor}`,
+    (anchor) => `how to improve ${anchor}`,
   ];
   for (const modifier of modifiers) {
-    for (const anchor of productAnchors) append(modifier(anchor));
+    for (const anchor of compactProductAnchors) append(modifier(anchor));
   }
-  return probes.slice(0, 96);
+  return probes.slice(0, 256);
 }
 
 /**
@@ -910,12 +950,14 @@ export type CadenceMicroSeedCandidateEvaluation<T> = {
 };
 
 const CADENCE_MICRO_SEED_ANCHOR_NOISE = new Set([
-  "and", "app", "apps", "application", "applications", "best", "business",
-  "checklist", "checklists", "example", "examples", "for", "guide", "guides",
-  "how", "online", "platform", "platforms", "practice", "practices", "product",
-  "products", "service", "services", "small", "software", "solution",
-  "solutions", "system", "systems", "the", "tool", "tools", "top", "use",
-  "using", "with",
+  "alternatives", "and", "app", "apps", "application", "applications", "best",
+  "benefits", "business", "case", "checklist", "checklists", "choose",
+  "comparison", "cost", "example", "examples", "for", "guide", "guides", "how",
+  "implementation", "improve", "mistakes", "online", "platform", "platforms",
+  "practice", "practices", "pricing", "process", "product", "products", "roi",
+  "service", "services", "setup", "small", "software", "solution", "solutions",
+  "strategy", "study", "system", "systems", "template", "the", "tool", "tools",
+  "top", "tutorial", "use", "using", "with", "workflow",
 ]);
 
 const CADENCE_MICRO_SEED_ANCHOR_ALIASES = new Map([

@@ -1,6 +1,6 @@
 # Cadence micro-seed recovery
 
-Current policy: v28. A policy upgrade preserves every older paid receipt; it
+Current policy: v29. A policy upgrade preserves every older paid receipt; it
 never replays the same endpoint/seed envelope or relaxes keyword, authority,
 SERP, overlap, article-quality, publication, or live-verification gates.
 Version 25 first measures a deterministic portfolio of tenant-grounded exact
@@ -21,6 +21,13 @@ returned an upstream 5xx; phrase-match supplies the provider-side relevance
 fence without that unstable query plan. The unchanged two-concept tenant-fit,
 difficulty, SERP, expected-click, article-quality, publication, and live-
 verification gates still evaluate every returned row.
+Version 29 removes a finite-rotation dead end exposed by repeated bounded
+recovery generations. It expands the direct-metric probe rotation with
+deterministic high-intent variants—such as pricing, comparison, implementation,
+workflow, ROI, and case-study queries—derived only from each tenant's complete
+product phrases. Long phrases receive a bounded product-concept form before a
+modifier is added. Wrapper terms never count toward the two-concept anchor
+gate, and every downstream quality boundary remains unchanged.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready
@@ -54,9 +61,10 @@ fleet ledgers are recomputed before any reservation or provider call.
 - Primary discovery creates one new shared-ledger reservation capped at $0.10.
 - It sends exactly one DataForSEO Labs `keyword_overview/live` task with a
   deterministic batch of at most 32 exact tenant product queries. Those
-  queries are either configured product anchors or bounded guide, checklist,
-  examples, best-practices, how-to, and small-business variants derived from
-  those anchors. Each is 2-6 words and at most 80 characters. The endpoint
+  queries are either configured product anchors or bounded informational and
+  commercial-intent variants derived from those anchors. Each is 2-6 words
+  and at most 80 characters, and wrapper terms cannot satisfy product match.
+  The endpoint
   may return at most one metric row per requested query; no unrequested row is
   eligible.
 - The task itself must report no more than $0.10, and its task-level and
