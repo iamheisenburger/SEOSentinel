@@ -639,6 +639,22 @@ type CadenceSourceReadinessResult =
   | CadenceSourceReadinessPrecheck
   | { ready: false; reason: string };
 
+type CadenceSourcePlanReadinessPrecheck = {
+  ready: true;
+  contract: "cadence-source-plan-readiness-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  sourcePlanId: Id<"jobs">;
+  sourcePlanReservationId: Id<"provider_spend_reservations">;
+  sourcePlanFingerprint: string;
+};
+
+type CadenceSourcePlanReadinessResult =
+  | CadenceSourcePlanReadinessPrecheck
+  | { ready: false; reason: string };
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -689,6 +705,18 @@ const cadenceSourceReadinessPrecheckValidator = v.object({
   planFeatures: v.array(v.string()),
   providerCostCeilingMicroUsd: v.number(),
   evidenceHeadroomMicroUsd: v.number(),
+});
+
+const cadenceSourcePlanReadinessPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-source-plan-readiness-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  sourcePlanId: v.id("jobs"),
+  sourcePlanReservationId: v.id("provider_spend_reservations"),
+  sourcePlanFingerprint: v.string(),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -1212,8 +1240,78 @@ export const inspectOperationalReadinessInternal = internalQuery({
   },
 });
 
+/** Resolve and bind the exact exhausted plan/checkpoint receipt without
+ * touching the independent recovery history. */
+async function cadenceSourcePlanReadinessPrecheck(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  timestamp: number,
+  sourcePlanId: Id<"jobs">,
+): Promise<CadenceSourcePlanReadinessResult> {
+  const site = await ctx.db.get(siteId);
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !(await siteExecutionAuthorized(ctx, site))
+  ) return { ready: false, reason: "site_unavailable" };
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return { ready: false, reason: "site_unavailable" };
+  const sourceJob = await ctx.db.get(sourcePlanId);
+  if (
+    !sourceJob ||
+    sourceJob.siteId !== siteId ||
+    sourceJob.type !== "plan"
+  ) return { ready: false, reason: "source_plan_not_exhausted" };
+  const [sourceReservation, sourceCheckpoints] = await Promise.all([
+    sourceJob.providerSpendReservationId
+      ? ctx.db.get(sourceJob.providerSpendReservationId)
+      : Promise.resolve(null),
+    ctx.db.query("plan_candidate_checkpoints")
+      .withIndex("by_plan_job", (q) => q.eq("planJobId", sourceJob._id))
+      .order("desc")
+      .take(2),
+  ]);
+  if (!validExhaustedSourcePlan({
+    site,
+    job: sourceJob,
+    reservation: sourceReservation,
+    checkpoints: sourceCheckpoints,
+    timestamp,
+  }) || !sourceReservation) {
+    return { ready: false, reason: "source_plan_not_exhausted" };
+  }
+  return {
+    ready: true,
+    contract: "cadence-source-plan-readiness-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    sourcePlanId: sourceJob._id,
+    sourcePlanReservationId: sourceReservation._id,
+    sourcePlanFingerprint: sourcePlanFingerprint(
+      sourceJob,
+      sourceReservation,
+      sourceCheckpoints,
+    ),
+  };
+}
+
+export const inspectSourcePlanReadinessInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+  },
+  handler: async (ctx, args) => cadenceSourcePlanReadinessPrecheck(
+    ctx,
+    args.siteId,
+    Date.now(),
+    args.sourcePlanId,
+  ),
+});
+
 /**
- * Resolve the immutable exhausted-plan and no-replay chain independently from
+ * Resolve the immutable no-replay chain independently from
  * both current inventory projections. Historical recovery receipts grow with
  * tenant age; keeping this bounded source ledger in its own transaction makes
  * the admission cost independent of topic and article cardinality.
@@ -1224,6 +1322,7 @@ async function cadenceSourceReadinessPrecheck(
   timestamp: number,
   sourcePlanId: Id<"jobs">,
   topicPrecheck: CadenceTopicReadinessPrecheck,
+  sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<CadenceSourceReadinessResult> {
   const site = await ctx.db.get(siteId);
@@ -1249,41 +1348,23 @@ async function cadenceSourceReadinessPrecheck(
     topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
     !/^[a-f0-9]{64}$/.test(topicPrecheck.inventoryFingerprint)
   ) return { ready: false, reason: "topic_inspection_stale" };
-
-  const sourceJob = await ctx.db.get(sourcePlanId);
   if (
-    !sourceJob ||
-    sourceJob.siteId !== siteId ||
-    sourceJob.type !== "plan"
-  ) return { ready: false, reason: "source_plan_not_exhausted" };
-  const [sourceReservation, sourceCheckpoints] = await Promise.all([
-    sourceJob.providerSpendReservationId
-      ? ctx.db.get(sourceJob.providerSpendReservationId)
-      : Promise.resolve(null),
-    ctx.db.query("plan_candidate_checkpoints")
-      .withIndex("by_plan_job", (q) => q.eq("planJobId", sourceJob._id))
-      .order("desc")
-      .take(2),
-  ]);
-  if (!validExhaustedSourcePlan({
-    site,
-    job: sourceJob,
-    reservation: sourceReservation,
-    checkpoints: sourceCheckpoints,
-    timestamp,
-  }) || !sourceReservation) {
-    return { ready: false, reason: "source_plan_not_exhausted" };
-  }
-  const sourceFingerprint = sourcePlanFingerprint(
-    sourceJob,
-    sourceReservation,
-    sourceCheckpoints,
-  );
+    sourcePlanPrecheck.contract !== "cadence-source-plan-readiness-v1" ||
+    sourcePlanPrecheck.siteId !== String(site._id) ||
+    !canonicalDomain ||
+    sourcePlanPrecheck.canonicalDomain !== canonicalDomain ||
+    sourcePlanPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+    sourcePlanPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    sourcePlanPrecheck.sourcePlanId !== sourcePlanId ||
+    !sourcePlanPrecheck.sourcePlanFingerprint
+  ) return { ready: false, reason: "source_plan_inspection_stale" };
+  const sourceReservationId = sourcePlanPrecheck.sourcePlanReservationId;
+  const sourceFingerprint = sourcePlanPrecheck.sourcePlanFingerprint;
   const [sourceJobs, priorPolicyJobs] = await Promise.all([
     ctx.db.query("cadence_micro_seed_jobs")
       .withIndex("by_site_source_policy_created", (q) =>
         q.eq("siteId", siteId)
-          .eq("sourcePlanId", sourceJob._id)
+          .eq("sourcePlanId", sourcePlanId)
           .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
       )
       .order("asc")
@@ -1291,7 +1372,7 @@ async function cadenceSourceReadinessPrecheck(
     ctx.db.query("cadence_micro_seed_jobs")
       .withIndex("by_site_source_policy_created", (q) =>
         q.eq("siteId", siteId)
-          .eq("sourcePlanId", sourceJob._id)
+          .eq("sourcePlanId", sourcePlanId)
           .lt("policyVersion", CADENCE_MICRO_SEED_VERSION)
       )
       .order("asc")
@@ -1325,7 +1406,7 @@ async function cadenceSourceReadinessPrecheck(
   const anchors = cadenceMicroSeedRecoveryAnchors(site);
   const primarySeeds = selectCadenceMicroSeedProbeBatch(
     anchors,
-    String(sourceJob._id),
+    String(sourcePlanId),
     CADENCE_MICRO_SEED_VERSION - 1,
     previouslyAttemptedPrimarySeeds,
     topicPrecheck.coveredKeywords,
@@ -1382,8 +1463,8 @@ async function cadenceSourceReadinessPrecheck(
           site,
           job: parent,
           reservation: parentReservation,
-          sourcePlanId: sourceJob._id,
-          sourcePlanReservationId: sourceReservation._id,
+          sourcePlanId,
+          sourcePlanReservationId: sourceReservationId,
           sourcePlanFingerprint: sourceFingerprint,
           primarySeed,
           primarySeeds,
@@ -1403,7 +1484,7 @@ async function cadenceSourceReadinessPrecheck(
       );
       const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
         anchors,
-        String(sourceJob._id),
+        String(sourcePlanId),
         CADENCE_MICRO_SEED_VERSION - 1,
         previouslyAttemptedFallbackSeeds,
         topicPrecheck.coveredKeywords,
@@ -1434,8 +1515,8 @@ async function cadenceSourceReadinessPrecheck(
       site,
       job: parent,
       reservation: parentReservation,
-      sourcePlanId: sourceJob._id,
-      sourcePlanReservationId: sourceReservation._id,
+      sourcePlanId,
+      sourcePlanReservationId: sourceReservationId,
       sourcePlanFingerprint: sourceFingerprint,
       primarySeed,
       primarySeeds,
@@ -1450,7 +1531,7 @@ async function cadenceSourceReadinessPrecheck(
     }
     const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
       anchors,
-      String(sourceJob._id),
+      String(sourcePlanId),
       CADENCE_MICRO_SEED_VERSION - 1,
       previouslyAttemptedFallbackSeeds,
       topicPrecheck.coveredKeywords,
@@ -1500,8 +1581,8 @@ async function cadenceSourceReadinessPrecheck(
     rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
     currentJobId: currentJobId ? String(currentJobId) : null,
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
-    sourcePlanId: String(sourceJob._id),
-    sourcePlanReservationId: String(sourceReservation._id),
+    sourcePlanId: String(sourcePlanId),
+    sourcePlanReservationId: String(sourceReservationId),
     sourcePlanFingerprint: sourceFingerprint,
     sourceJobIds: sourceJobs.map((job) => String(job._id)),
     priorPolicyAttemptReceipts: priorPolicyJobs.map((job) => ({
@@ -1538,8 +1619,8 @@ async function cadenceSourceReadinessPrecheck(
     ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     sourceInventoryFingerprint: sha256Hex(JSON.stringify(receipt)),
-    sourcePlanId: sourceJob._id,
-    sourcePlanReservationId: sourceReservation._id,
+    sourcePlanId,
+    sourcePlanReservationId: sourceReservationId,
     sourcePlanFingerprint: sourceFingerprint,
     attemptKind,
     ...(parentMicroSeedJobId ? { parentMicroSeedJobId } : {}),
@@ -1562,6 +1643,7 @@ export const inspectSourceReadinessInternal = internalQuery({
     siteId: v.id("sites"),
     sourcePlanId: v.id("jobs"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
+    sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
   handler: async (ctx, args) => cadenceSourceReadinessPrecheck(
@@ -1570,6 +1652,7 @@ export const inspectSourceReadinessInternal = internalQuery({
     Date.now(),
     args.sourcePlanId,
     args.topicPrecheck,
+    args.sourcePlanPrecheck,
     args.currentJobId,
   ),
 });

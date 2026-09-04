@@ -1611,6 +1611,7 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(action, /api\.inspectTopicReadinessInternal/);
   assert.match(action, /api\.inspectOperationalReadinessInternal/);
   assert.match(action, /api\.inspectSourceReadinessInternal/);
+  assert.match(action, /api\.inspectSourcePlanReadinessInternal/);
   assert.ok(
     recovery.indexOf("api.inspectTopicReadinessInternal") <
       recovery.indexOf("api.inspectInternal"),
@@ -1625,6 +1626,11 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     recovery.indexOf("api.inspectSourceReadinessInternal") <
       recovery.indexOf("api.inspectInternal"),
     "immutable source history must be projected before compact admission",
+  );
+  assert.ok(
+    recovery.indexOf("api.inspectSourcePlanReadinessInternal") <
+      recovery.indexOf("api.inspectSourceReadinessInternal"),
+    "the exhausted source plan must be bound before its no-replay history",
   );
   assert.match(model, /cadence-topic-inventory-v1/);
   assert.match(model, /inventoryFingerprint: sha256Hex/);
@@ -1850,6 +1856,10 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
     model.indexOf("async function cadenceSourceReadinessPrecheck"),
     model.indexOf("async function inspectReadiness"),
   );
+  const sourcePlanReadiness = model.slice(
+    model.indexOf("async function cadenceSourcePlanReadinessPrecheck"),
+    model.indexOf("async function cadenceSourceReadinessPrecheck"),
+  );
   assert.match(topicReadiness, /cadenceMicroSeedTopicInventory/);
   assert.match(topicReadiness, /cadenceTopicReadinessPrecheck/);
   assert.doesNotMatch(readiness, /cadenceMicroSeedTopicInventory/);
@@ -1858,6 +1868,9 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(operationalReadiness, /operationalFingerprint: sha256Hex/);
   assert.match(sourceReadiness, /by_site_source_policy_created/);
   assert.match(sourceReadiness, /sourceInventoryFingerprint: sha256Hex/);
+  assert.doesNotMatch(sourceReadiness, /plan_candidate_checkpoints/);
+  assert.match(sourcePlanReadiness, /plan_candidate_checkpoints/);
+  assert.match(sourcePlanReadiness, /sourcePlanFingerprint/);
   assert.doesNotMatch(readiness, /cadenceMicroSeedArticleInventory/);
   assert.doesNotMatch(readiness, /plannedTopicSiteGate/);
   assert.doesNotMatch(readiness, /by_site_source_policy_created/);
