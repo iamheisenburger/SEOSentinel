@@ -39,8 +39,8 @@ test("one account cannot reserve the entire daily or monthly fleet wallet", () =
   );
   assert.equal(
     PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
-    5_150_000,
-    "one account can fund a complete plan, recovery chain, and bounded policy-upgrade recoveries",
+    9_600_000,
+    "one account can fund three complete plans, the recovery chain, and bounded policy-upgrade recoveries",
   );
   assert.equal(
     providerAccountMonthlyCeilingMicroUsd("enterprise") +
@@ -49,9 +49,9 @@ test("one account cannot reserve the entire daily or monthly fleet wallet", () =
   );
 });
 
-test("one account can complete every bounded cadence-recovery phase after a full plan", () => {
+test("one account can complete every bounded cadence-recovery phase across three Pro sites", () => {
   const completePlanAndRecovery =
-    2_000_000 + // initial plan plus its one reserved retry/continuation
+    6_000_000 + // one complete plan for each of the three public Pro sites
     100_000 + // primary cadence micro-seed
     50_000 + // fallback cadence micro-seed
     100_000 + // exact demand backfill
@@ -70,7 +70,8 @@ test("one account can complete every bounded cadence-recovery phase after a full
     250_000 + // legacy-anchor quarantine migration and exact evidence
     700_000 + // bounded immutable-receipt release-repair reserve
     450_000 + // v15 primary/fallback plus all three SERP candidate attempts
-    450_000; // v16 diversified primary/fallback plus all three SERP attempts
+    450_000 + // v16 diversified primary/fallback plus all three SERP attempts
+    450_000; // v17 current-fit primary/fallback plus all three SERP attempts
 
   assert.equal(
     completePlanAndRecovery,

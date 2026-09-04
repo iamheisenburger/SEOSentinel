@@ -19,7 +19,8 @@ import {
  * the shared provider account. Only a proven exit before the first paid call
  * may append release metadata; the receipt itself is never deleted.
  */
-// Conservative fleet guard: one complete $2 topic-plan reservation, the full
+// Conservative fleet guard: three complete $2 topic-plan reservations (one
+// for every site in the public Pro bundle), the full
 // bounded cadence-recovery chain ($0.35), one $0.20 evidence-policy upgrade,
 // two complete $0.15 micro-seed policy attempts, one $0.10 ambiguous category
 // attempt, the final timeout-repaired attempt's $0.10 evidence, one complete
@@ -28,7 +29,8 @@ import {
 // release-repair reserve, the complete $0.45 v15 candidate-continuation
 // envelope (primary discovery, fallback discovery when needed, and up to
 // three exact SERP evidence attempts), the complete $0.45 v16
-// saturated-anchor diversification envelope, and a $0.25 reserve for another
+// saturated-anchor diversification envelope, the complete $0.45 v17
+// current-fit-policy recovery envelope, and a $0.25 reserve for another
 // account must all fit in the same UTC day. The repair reserve prevents an
 // immutable ambiguous provider receipt from consuming the next corrected
 // policy version's admission headroom; the monthly cap still bounds aggregate
@@ -42,7 +44,7 @@ import {
 // and only the explicitly versioned micro-seed generations whose immutable
 // predecessors proved a distinct algorithm defect. The monthly $35 fleet
 // circuit breaker remains unchanged.
-export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 5_400_000;
+export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 9_850_000;
 export const SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
