@@ -122,6 +122,49 @@ async function resolveExhaustedSourcePlan(
   throw new Error("cadence_source_plan_read_limit");
 }
 
+async function inspectPriorPolicyHistory(
+  ctx: Pick<ActionCtx, "runQuery">,
+  siteId: Id<"sites">,
+  sourcePlanId: Id<"jobs">,
+) {
+  // Each historical algorithm generation is read through an exact
+  // site/source/policy index range. Running those constant-cardinality reads
+  // independently prevents a mature tenant's immutable history from exceeding
+  // Convex's one-second transaction budget while still binding every prior
+  // paid attempt into the final no-replay digest.
+  const prechecks = [];
+  const policyBatchSize = 8;
+  for (
+    let firstPolicyVersion = 1;
+    firstPolicyVersion < CADENCE_MICRO_SEED_VERSION;
+    firstPolicyVersion += policyBatchSize
+  ) {
+    const policyVersions = Array.from(
+      {
+        length: Math.min(
+          policyBatchSize,
+          CADENCE_MICRO_SEED_VERSION - firstPolicyVersion,
+        ),
+      },
+      (_, index) => firstPolicyVersion + index,
+    );
+    const batch = await Promise.all(policyVersions.map((policyVersion) =>
+      ctx.runQuery(api.inspectPriorPolicyHistoryInternal, {
+        siteId,
+        sourcePlanId,
+        policyVersion,
+      })
+    ));
+    prechecks.push(...batch);
+  }
+  const readyPrechecks = [];
+  for (const precheck of prechecks) {
+    if (!precheck.ready) return precheck;
+    readyPrechecks.push(precheck);
+  }
+  return readyPrechecks;
+}
+
 async function reconcileVerifiedProviderCostPages(
   ctx: Pick<ActionCtx, "runMutation">,
   siteId: Id<"sites">,
@@ -479,6 +522,21 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
+    const priorPolicyPrechecks = await inspectPriorPolicyHistory(
+      ctx,
+      args.siteId,
+      sourcePlanId,
+    );
+    if (!Array.isArray(priorPolicyPrechecks)) {
+      return {
+        ...priorPolicyPrechecks,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const sourcePrecheck = await ctx.runQuery(
       api.inspectSourceReadinessInternal,
       {
@@ -486,6 +544,7 @@ export const recoverCadenceGap = internalAction({
         sourcePlanId,
         topicPrecheck,
         sourcePlanPrecheck,
+        priorPolicyPrechecks,
       },
     );
     if (!sourcePrecheck.ready) {
@@ -653,6 +712,26 @@ export const processCadenceMicroSeed = internalAction({
       await raiseMiss(ctx, args.siteId, args.jobId, sourcePlanPrecheck.reason);
       return { processed: false, reason: sourcePlanPrecheck.reason };
     }
+    const priorPolicyPrechecks = await inspectPriorPolicyHistory(
+      ctx,
+      args.siteId,
+      claimed.sourcePlanId,
+    );
+    if (!Array.isArray(priorPolicyPrechecks)) {
+      await ctx.runMutation(api.markProviderResponseUnverified, {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        workerToken,
+        errorCode: priorPolicyPrechecks.reason,
+      });
+      await raiseMiss(
+        ctx,
+        args.siteId,
+        args.jobId,
+        priorPolicyPrechecks.reason,
+      );
+      return { processed: false, reason: priorPolicyPrechecks.reason };
+    }
     const sourcePrecheck = await ctx.runQuery(
       api.inspectSourceReadinessInternal,
       {
@@ -660,6 +739,7 @@ export const processCadenceMicroSeed = internalAction({
         sourcePlanId: claimed.sourcePlanId,
         topicPrecheck,
         sourcePlanPrecheck,
+        priorPolicyPrechecks,
         currentJobId: args.jobId,
       },
     );

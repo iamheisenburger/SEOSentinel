@@ -655,6 +655,24 @@ type CadenceSourcePlanReadinessResult =
   | CadenceSourcePlanReadinessPrecheck
   | { ready: false; reason: string };
 
+type CadencePriorPolicyHistoryPrecheck = {
+  ready: true;
+  contract: "cadence-prior-policy-history-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  sourcePlanId: Id<"jobs">;
+  policyVersion: number;
+  attemptedPrimarySeeds: string[];
+  attemptedFallbackSeeds: string[];
+  historyFingerprint: string;
+};
+
+type CadencePriorPolicyHistoryResult =
+  | CadencePriorPolicyHistoryPrecheck
+  | { ready: false; reason: string };
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -717,6 +735,20 @@ const cadenceSourcePlanReadinessPrecheckValidator = v.object({
   sourcePlanId: v.id("jobs"),
   sourcePlanReservationId: v.id("provider_spend_reservations"),
   sourcePlanFingerprint: v.string(),
+});
+
+const cadencePriorPolicyHistoryPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-prior-policy-history-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  sourcePlanId: v.id("jobs"),
+  policyVersion: v.number(),
+  attemptedPrimarySeeds: v.array(v.string()),
+  attemptedFallbackSeeds: v.array(v.string()),
+  historyFingerprint: v.string(),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -1311,6 +1343,105 @@ export const inspectSourcePlanReadinessInternal = internalQuery({
 });
 
 /**
+ * Project one historical policy generation at a time. The source/policy index
+ * makes each read constant-cardinality even for mature tenants, while the
+ * action layer binds every prior generation before admission. This preserves
+ * the no-replay invariant without ever loading a tenant's complete recovery
+ * history in one Convex transaction.
+ */
+async function cadencePriorPolicyHistoryPrecheck(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  sourcePlanId: Id<"jobs">,
+  policyVersion: number,
+): Promise<CadencePriorPolicyHistoryResult> {
+  const site = await ctx.db.get(siteId);
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !(await siteExecutionAuthorized(ctx, site))
+  ) return { ready: false, reason: "site_unavailable" };
+  if (
+    !Number.isInteger(policyVersion) ||
+    policyVersion < 1 ||
+    policyVersion >= CADENCE_MICRO_SEED_VERSION
+  ) return { ready: false, reason: "micro_seed_policy_version_incompatible" };
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return { ready: false, reason: "site_unavailable" };
+  const jobs = await ctx.db.query("cadence_micro_seed_jobs")
+    .withIndex("by_site_source_policy_created", (q) =>
+      q.eq("siteId", siteId)
+        .eq("sourcePlanId", sourcePlanId)
+        .eq("policyVersion", policyVersion)
+    )
+    .order("asc")
+    .take(3);
+  // Each policy permits one primary and one fallback. More rows mean an old
+  // invariant was violated, so fail closed instead of silently omitting a paid
+  // attempt from the no-replay ledger.
+  if (jobs.length > 2) {
+    return { ready: false, reason: "micro_seed_policy_history_exhausted" };
+  }
+  const attemptedPrimarySeeds = jobs
+    .filter((job) =>
+      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
+      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("primary")
+    )
+    .flatMap((job) => job.providerSeeds ?? [job.seed]);
+  const attemptedFallbackSeeds = jobs
+    .filter((job) =>
+      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
+      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("fallback")
+    )
+    .flatMap((job) => job.providerSeeds ?? [job.seed]);
+  const receipt = {
+    contract: "cadence-prior-policy-history-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    sourcePlanId: String(sourcePlanId),
+    policyVersion,
+    jobs: jobs.map((job) => ({
+      id: String(job._id),
+      attemptKind: cadenceMicroSeedAttemptKind(job.attemptKind),
+      providerEndpoint: job.providerEndpoint,
+      providerSeeds: job.providerSeeds ?? [job.seed],
+      providerCallAttempted: job.providerCallAttempted,
+      providerAttemptedAt: job.providerAttemptedAt ?? null,
+      providerRequestTag: job.providerRequestTag ?? null,
+    })),
+  };
+  return {
+    ready: true,
+    contract: "cadence-prior-policy-history-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    sourcePlanId,
+    policyVersion,
+    attemptedPrimarySeeds,
+    attemptedFallbackSeeds,
+    historyFingerprint: sha256Hex(JSON.stringify(receipt)),
+  };
+}
+
+export const inspectPriorPolicyHistoryInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+    policyVersion: v.number(),
+  },
+  handler: async (ctx, args) => cadencePriorPolicyHistoryPrecheck(
+    ctx,
+    args.siteId,
+    args.sourcePlanId,
+    args.policyVersion,
+  ),
+});
+
+/**
  * Resolve the immutable no-replay chain independently from
  * both current inventory projections. Historical recovery receipts grow with
  * tenant age; keeping this bounded source ledger in its own transaction makes
@@ -1323,6 +1454,7 @@ async function cadenceSourceReadinessPrecheck(
   sourcePlanId: Id<"jobs">,
   topicPrecheck: CadenceTopicReadinessPrecheck,
   sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
+  priorPolicyPrechecks: CadencePriorPolicyHistoryPrecheck[],
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<CadenceSourceReadinessResult> {
   const site = await ctx.db.get(siteId);
@@ -1358,44 +1490,38 @@ async function cadenceSourceReadinessPrecheck(
     sourcePlanPrecheck.sourcePlanId !== sourcePlanId ||
     !sourcePlanPrecheck.sourcePlanFingerprint
   ) return { ready: false, reason: "source_plan_inspection_stale" };
+  if (
+    priorPolicyPrechecks.length !== CADENCE_MICRO_SEED_VERSION - 1 ||
+    priorPolicyPrechecks.some((precheck, index) =>
+      precheck.contract !== "cadence-prior-policy-history-v1" ||
+      precheck.siteId !== String(site._id) ||
+      precheck.canonicalDomain !== canonicalDomain ||
+      precheck.domainRevision !== siteCanonicalDomainRevision(site) ||
+      precheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+      precheck.sourcePlanId !== sourcePlanId ||
+      precheck.policyVersion !== index + 1 ||
+      !/^[a-f0-9]{64}$/.test(precheck.historyFingerprint)
+    )
+  ) return { ready: false, reason: "micro_seed_policy_history_stale" };
   const sourceReservationId = sourcePlanPrecheck.sourcePlanReservationId;
   const sourceFingerprint = sourcePlanPrecheck.sourcePlanFingerprint;
-  const [sourceJobs, priorPolicyJobs] = await Promise.all([
-    ctx.db.query("cadence_micro_seed_jobs")
-      .withIndex("by_site_source_policy_created", (q) =>
-        q.eq("siteId", siteId)
-          .eq("sourcePlanId", sourcePlanId)
-          .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
-      )
-      .order("asc")
-      .take(3),
-    ctx.db.query("cadence_micro_seed_jobs")
-      .withIndex("by_site_source_policy_created", (q) =>
-        q.eq("siteId", siteId)
-          .eq("sourcePlanId", sourcePlanId)
-          .lt("policyVersion", CADENCE_MICRO_SEED_VERSION)
-      )
-      .order("asc")
-      .take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
-  ]);
+  const sourceJobs = await ctx.db.query("cadence_micro_seed_jobs")
+    .withIndex("by_site_source_policy_created", (q) =>
+      q.eq("siteId", siteId)
+        .eq("sourcePlanId", sourcePlanId)
+        .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
+    )
+    .order("asc")
+    .take(3);
   if (sourceJobs.length > 2) {
     return { ready: false, reason: "micro_seed_source_history_exhausted" };
   }
-  if (priorPolicyJobs.length > CADENCE_MICRO_SEED_READ_LIMIT) {
-    return { ready: false, reason: "micro_seed_policy_history_read_limit" };
-  }
-  const previouslyAttemptedPrimarySeeds = priorPolicyJobs
-    .filter((job) =>
-      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
-      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("primary")
-    )
-    .flatMap((job) => job.providerSeeds ?? [job.seed]);
-  const previouslyAttemptedFallbackSeeds = priorPolicyJobs
-    .filter((job) =>
-      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
-      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("fallback")
-    )
-    .flatMap((job) => job.providerSeeds ?? [job.seed]);
+  const previouslyAttemptedPrimarySeeds = priorPolicyPrechecks.flatMap(
+    (precheck) => precheck.attemptedPrimarySeeds,
+  );
+  const previouslyAttemptedFallbackSeeds = priorPolicyPrechecks.flatMap(
+    (precheck) => precheck.attemptedFallbackSeeds,
+  );
   const currentJob = currentJobId
     ? sourceJobs.find((job) => job._id === currentJobId)
     : undefined;
@@ -1585,14 +1711,11 @@ async function cadenceSourceReadinessPrecheck(
     sourcePlanReservationId: String(sourceReservationId),
     sourcePlanFingerprint: sourceFingerprint,
     sourceJobIds: sourceJobs.map((job) => String(job._id)),
-    priorPolicyAttemptReceipts: priorPolicyJobs.map((job) => ({
-      id: String(job._id),
-      attemptKind: cadenceMicroSeedAttemptKind(job.attemptKind),
-      providerEndpoint: job.providerEndpoint,
-      providerSeeds: job.providerSeeds ?? [job.seed],
-      providerCallAttempted: job.providerCallAttempted,
-      providerAttemptedAt: job.providerAttemptedAt ?? null,
-      providerRequestTag: job.providerRequestTag ?? null,
+    priorPolicyAttemptReceipts: priorPolicyPrechecks.map((precheck) => ({
+      policyVersion: precheck.policyVersion,
+      attemptedPrimarySeeds: precheck.attemptedPrimarySeeds,
+      attemptedFallbackSeeds: precheck.attemptedFallbackSeeds,
+      historyFingerprint: precheck.historyFingerprint,
     })),
     attemptKind,
     parentMicroSeedJobId: parentMicroSeedJobId
@@ -1644,6 +1767,7 @@ export const inspectSourceReadinessInternal = internalQuery({
     sourcePlanId: v.id("jobs"),
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
+    priorPolicyPrechecks: v.array(cadencePriorPolicyHistoryPrecheckValidator),
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
   handler: async (ctx, args) => cadenceSourceReadinessPrecheck(
@@ -1653,6 +1777,7 @@ export const inspectSourceReadinessInternal = internalQuery({
     args.sourcePlanId,
     args.topicPrecheck,
     args.sourcePlanPrecheck,
+    args.priorPolicyPrechecks,
     args.currentJobId,
   ),
 });
