@@ -791,10 +791,27 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site", ["siteId"])
+    .index("by_site_status", ["siteId", "status"])
+    .index("by_site_content_feasibility", [
+      "siteId",
+      "contentFeasibilityStatus",
+    ])
     .index("by_site_domain_revision", [
       "siteId",
       "planningCanonicalDomain",
       "planningDomainRevision",
+    ])
+    .index("by_site_domain_revision_status", [
+      "siteId",
+      "planningCanonicalDomain",
+      "planningDomainRevision",
+      "status",
+    ])
+    .index("by_site_domain_revision_content_feasibility", [
+      "siteId",
+      "planningCanonicalDomain",
+      "planningDomainRevision",
+      "contentFeasibilityStatus",
     ])
     .index("by_site_growth_action_parent", [
       "siteId",

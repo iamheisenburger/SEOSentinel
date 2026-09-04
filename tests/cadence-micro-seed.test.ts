@@ -72,6 +72,10 @@ const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
 const jobs = readFileSync("convex/jobs.ts", "utf8");
 const provider = readFileSync("convex/actions/seoData.ts", "utf8");
 const schema = readFileSync("convex/schema.ts", "utf8");
+const domainBinding = readFileSync(
+  "convex/lib/siteDomainBinding.ts",
+  "utf8",
+);
 const sites = readFileSync("convex/sites.ts", "utf8");
 const crons = readFileSync("convex/crons.ts", "utf8");
 const runbook = readFileSync(
@@ -1768,4 +1772,27 @@ test("a successful micro-seed reuses its paid shortlist until the launch buffer 
     ),
     "a paid shortlist continuation must run before another plan is considered",
   );
+});
+
+test("cadence readiness is independent of bulky terminal topic history", () => {
+  assert.match(schema, /by_site_domain_revision_status/);
+  assert.match(schema, /by_site_domain_revision_content_feasibility/);
+  assert.match(domainBinding, /takeCurrentDomainTopicsByStatus/);
+  assert.match(domainBinding, /takeCurrentDomainTopicsByContentFeasibility/);
+  assert.match(model, /cadenceMicroSeedArticleInventory/);
+  assert.match(model, /takeCurrentDomainArticleSummariesByStatus/);
+  const readiness = model.slice(
+    model.indexOf("async function inspectReadiness"),
+    model.indexOf("export const inspectInternal"),
+  );
+  assert.match(readiness, /cadenceMicroSeedTopicInventory/);
+  assert.doesNotMatch(readiness, /takeCurrentDomainTopics\(/);
+  assert.doesNotMatch(readiness, /takeCurrentDomainArticles\(/);
+  const materialization = model.slice(
+    model.indexOf("export const recordProviderReceiptAndMaterialize"),
+    model.indexOf("export const reconcileVerifiedProviderCosts"),
+  );
+  assert.match(materialization, /cadenceMicroSeedTopicInventory/);
+  assert.doesNotMatch(materialization, /takeCurrentDomainTopics\(/);
+  assert.doesNotMatch(materialization, /takeCurrentDomainArticles\(/);
 });

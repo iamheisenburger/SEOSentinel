@@ -80,6 +80,7 @@ import {
   PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION,
   prioritizeCadenceRecoveryCandidates,
   type PlannedRecoveryInventorySnapshot,
+  type PlannedRecoveryArticle,
   uniqueExactPlannedTargets,
 } from "./lib/plannedTopicEvidenceRecovery";
 import {
@@ -337,7 +338,7 @@ function plannedGuardMismatchDetail(
   return "selection_order_changed";
 }
 
-function artifactFingerprint(article: Doc<"articles">): string | null {
+function artifactFingerprint(article: PlannedRecoveryArticle): string | null {
   if (!articleReservesTopicIntent(article)) return null;
   if (article.status === "ready") {
     return article.auditedContentHash
@@ -354,8 +355,8 @@ function artifactFingerprint(article: Doc<"articles">): string | null {
 }
 
 function bestReservingArticle(
-  articles: Doc<"articles">[],
-): Doc<"articles"> | undefined {
+  articles: PlannedRecoveryArticle[],
+): PlannedRecoveryArticle | undefined {
   return articles
     .filter((article) => articleReservesTopicIntent(article))
     .sort((left, right) => {
@@ -371,7 +372,7 @@ function bestReservingArticle(
 
 function safePublicArticleUrl(
   site: Doc<"sites">,
-  article: Doc<"articles">,
+  article: PlannedRecoveryArticle,
 ): string | undefined {
   if (article.status !== "published") return undefined;
   if (article.publicUrl?.trim()) return article.publicUrl.trim();
@@ -429,7 +430,7 @@ type PageEvidenceRow = {
 function evidenceCandidateInventory(args: {
   site: Doc<"sites">;
   topics: Doc<"topic_clusters">[];
-  articles: Doc<"articles">[];
+  articles: PlannedRecoveryArticle[];
   activeArticleTopicIds: ReadonlySet<string>;
   pageRows: PageEvidenceRow[];
   timestamp: number;
@@ -439,7 +440,7 @@ function evidenceCandidateInventory(args: {
   const currentTopics = args.topics.filter((topic) =>
     topicMatchesCurrentDomain(args.site, topic)
   );
-  const byTopic = new Map<string, Doc<"articles">[]>();
+  const byTopic = new Map<string, PlannedRecoveryArticle[]>();
   for (const article of args.articles) {
     if (!article.topicId || article.siteId !== args.site._id) continue;
     const key = String(article.topicId);

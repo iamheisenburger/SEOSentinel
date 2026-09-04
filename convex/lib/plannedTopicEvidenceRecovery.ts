@@ -24,6 +24,33 @@ export const PLANNED_TOPIC_EVIDENCE_RECOVERY_VERSION = 2;
 export const PLANNED_TOPIC_ACTIVE_JOB_READ_LIMIT = 250;
 export const PLANNED_TOPIC_ARTICLE_USAGE_READ_LIMIT = 1_000;
 
+/** Compact article shape shared by cadence recovery and expected-click
+ * inspection. Full Markdown bodies are deliberately absent so readiness cost
+ * is independent of a tenant's published content volume. */
+export type PlannedRecoveryArticle = {
+  _id: Id<"articles">;
+  siteId: Id<"sites">;
+  topicId?: Id<"topic_clusters">;
+  status: string;
+  slug: string;
+  createdAt: number;
+  auditedAt?: number;
+  publishedAt?: number;
+  publicUrl?: string;
+  publicationGateStatus?: string;
+  publicationGateIssues?: string[];
+  publicationAuditVersion?: number;
+  auditedContentHash?: string;
+  publishedContentHash?: string;
+  publicationReceipt?: { contentHash: string };
+  factCheckScore?: number;
+  editorialQualityScore?: number;
+  qualityRevisionCount?: number;
+  qualityRecoveryVersion?: number;
+  qualityRecoveryAttemptVersion?: number;
+  deterministicQualityRepairAttemptVersion?: number;
+};
+
 /**
  * A tenant below its cadence-specific sealed-buffer minimum cannot let
  * measurements of already-published pages consume the only daily recovery
@@ -429,7 +456,7 @@ export type PlannedTopicSiteGate =
 export type PlannedRecoveryInventorySnapshot = {
   site: Doc<"sites">;
   topics: Doc<"topic_clusters">[];
-  articles: Doc<"articles">[];
+  articles: PlannedRecoveryArticle[];
   activeArticleTopicIds: ReadonlySet<string>;
   activeJobsExhausted: boolean;
   plannedGate: PlannedTopicSiteGate;

@@ -311,6 +311,85 @@ export async function takeCurrentDomainTopics(
   return stamped;
 }
 
+/**
+ * Read one lifecycle slice of the active topic epoch without hydrating large
+ * historical planning checkpoints. Cadence admission uses this instead of a
+ * tenant-wide topic scan, whose cost otherwise grows with immutable history.
+ */
+export async function takeCurrentDomainTopicsByStatus(
+  ctx: DomainQueryCtx,
+  site: Doc<"sites">,
+  status: string | undefined,
+  limit: number,
+): Promise<Doc<"topic_clusters">[]> {
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  if (!canonicalDomain) return [];
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("topic_clusters")
+      .withIndex("by_site_status", (q) =>
+        q.eq("siteId", site._id).eq("status", status)
+      )
+      .order("asc")
+      .take(limit);
+    return legacyEpoch.filter((topic) =>
+      topicMatchesCurrentDomain(site, topic)
+    );
+  }
+  return ctx.db
+    .query("topic_clusters")
+    .withIndex("by_site_domain_revision_status", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("planningCanonicalDomain", canonicalDomain)
+        .eq("planningDomainRevision", domainRevision)
+        .eq("status", status)
+    )
+    .order("asc")
+    .take(limit);
+}
+
+/** Topic-quality tombstones participate in overlap avoidance even though
+ * their lifecycle status is disqualified. Query them through their compact
+ * discriminator rather than loading unrelated historical plan receipts. */
+export async function takeCurrentDomainTopicsByContentFeasibility(
+  ctx: DomainQueryCtx,
+  site: Doc<"sites">,
+  contentFeasibilityStatus: string,
+  limit: number,
+): Promise<Doc<"topic_clusters">[]> {
+  const canonicalDomain = siteCanonicalDomain(site);
+  const domainRevision = siteCanonicalDomainRevision(site);
+  if (!canonicalDomain) return [];
+  if (siteUsesLegacyDomainReceipts(site)) {
+    const legacyEpoch = await ctx.db
+      .query("topic_clusters")
+      .withIndex("by_site_content_feasibility", (q) =>
+        q.eq("siteId", site._id).eq(
+          "contentFeasibilityStatus",
+          contentFeasibilityStatus,
+        )
+      )
+      .order("asc")
+      .take(limit);
+    return legacyEpoch.filter((topic) =>
+      topicMatchesCurrentDomain(site, topic)
+    );
+  }
+  return ctx.db
+    .query("topic_clusters")
+    .withIndex("by_site_domain_revision_content_feasibility", (q) =>
+      q
+        .eq("siteId", site._id)
+        .eq("planningCanonicalDomain", canonicalDomain)
+        .eq("planningDomainRevision", domainRevision)
+        .eq("contentFeasibilityStatus", contentFeasibilityStatus)
+    )
+    .order("asc")
+    .take(limit);
+}
+
 export async function takeCurrentDomainArticles(
   ctx: DomainQueryCtx,
   site: Doc<"sites">,

@@ -102,6 +102,7 @@ import {
   cadenceMicroSeedRecoveryBlockReason,
   plannedTopicRecoveryFingerprint,
   plannedTopicSiteGate,
+  type PlannedRecoveryArticle,
   verifiedKeywordPlanningActive,
 } from "./lib/plannedTopicEvidenceRecovery";
 import {
@@ -115,12 +116,29 @@ import {
 import {
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
+  takeCurrentDomainArticleSummariesByStatus,
   takeCurrentDomainArticles,
   takeCurrentDomainTopics,
+  takeCurrentDomainTopicsByContentFeasibility,
+  takeCurrentDomainTopicsByStatus,
+  topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 
 const ACTIVE_CONTENT_STATUSES = ["pending", "running"] as const;
 const ACTIVE_EVIDENCE_STATUSES = ["pending", "running", "partial"] as const;
+const CADENCE_MICRO_SEED_RELEVANT_TOPIC_READ_LIMIT = 512;
+const CADENCE_MICRO_SEED_CANDIDATE_TOPIC_STATUSES = [
+  undefined,
+  "pending",
+  "planned",
+  "queued",
+] as const;
+const CADENCE_MICRO_SEED_ARTICLE_STATUSES = [
+  "draft",
+  "review",
+  "ready",
+  "published",
+] as const;
 
 function utcDayStart(timestamp: number): number {
   const date = new Date(timestamp);
@@ -571,6 +589,140 @@ async function activeDemandRows(
   return total;
 }
 
+type CadenceTopicInventory = {
+  topics: Doc<"topic_clusters">[];
+  exhausted: boolean;
+};
+
+type CadenceArticleInventory = {
+  articles: PlannedRecoveryArticle[];
+  exhausted: boolean;
+};
+
+/** Read compact article projections by lifecycle state. Article Markdown can
+ * grow without increasing scheduler transaction cost. */
+async function cadenceMicroSeedArticleInventory(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+): Promise<CadenceArticleInventory> {
+  const limit = CADENCE_MICRO_SEED_READ_LIMIT;
+  const groups = await Promise.all(CADENCE_MICRO_SEED_ARTICLE_STATUSES.map(
+    (status) => takeCurrentDomainArticleSummariesByStatus(
+      ctx,
+      site,
+      status,
+      limit + 1,
+    ),
+  ));
+  if (groups.some((rows) => rows.length > limit)) {
+    return { articles: [], exhausted: true };
+  }
+  const articles = groups.flat().map((summary): PlannedRecoveryArticle => ({
+    _id: summary.articleId,
+    siteId: summary.siteId,
+    ...(summary.topicId ? { topicId: summary.topicId } : {}),
+    status: summary.status,
+    slug: summary.slug,
+    createdAt: summary.articleCreatedAt,
+    ...(summary.auditedAt === undefined ? {} : { auditedAt: summary.auditedAt }),
+    ...(summary.publishedAt === undefined
+      ? {}
+      : { publishedAt: summary.publishedAt }),
+    ...(summary.publicUrl === undefined ? {} : { publicUrl: summary.publicUrl }),
+    ...(summary.publicationGateStatus === undefined
+      ? {}
+      : { publicationGateStatus: summary.publicationGateStatus }),
+    ...(summary.publicationGateIssues === undefined
+      ? {}
+      : { publicationGateIssues: summary.publicationGateIssues }),
+    ...(summary.publicationAuditVersion === undefined
+      ? {}
+      : { publicationAuditVersion: summary.publicationAuditVersion }),
+    ...(summary.auditedContentHash === undefined
+      ? {}
+      : { auditedContentHash: summary.auditedContentHash }),
+    ...(summary.publishedContentHash === undefined
+      ? {}
+      : { publishedContentHash: summary.publishedContentHash }),
+    ...(summary.factCheckScore === undefined
+      ? {}
+      : { factCheckScore: summary.factCheckScore }),
+    ...(summary.editorialQualityScore === undefined
+      ? {}
+      : { editorialQualityScore: summary.editorialQualityScore }),
+    ...(summary.qualityRevisionCount === undefined
+      ? {}
+      : { qualityRevisionCount: summary.qualityRevisionCount }),
+    ...(summary.qualityRecoveryVersion === undefined
+      ? {}
+      : { qualityRecoveryVersion: summary.qualityRecoveryVersion }),
+    ...(summary.qualityRecoveryAttemptVersion === undefined
+      ? {}
+      : { qualityRecoveryAttemptVersion: summary.qualityRecoveryAttemptVersion }),
+    ...(summary.deterministicQualityRepairAttemptVersion === undefined
+      ? {}
+      : {
+          deterministicQualityRepairAttemptVersion:
+            summary.deterministicQualityRepairAttemptVersion,
+        }),
+  }));
+  return { articles, exhausted: false };
+}
+
+/**
+ * Build the complete topic set that can affect current cadence admission,
+ * without hydrating immutable terminal planning history. The inventory is the
+ * union of current candidate lifecycle states, durable quality tombstones,
+ * and exact topics referenced by current-domain articles. Every indexed slice
+ * is bounded and fails closed when the bound is crossed.
+ */
+async function cadenceMicroSeedTopicInventory(
+  ctx: QueryCtx | MutationCtx,
+  site: Doc<"sites">,
+  articles: readonly PlannedRecoveryArticle[],
+): Promise<CadenceTopicInventory> {
+  const limit = CADENCE_MICRO_SEED_RELEVANT_TOPIC_READ_LIMIT;
+  const groups = await Promise.all([
+    ...CADENCE_MICRO_SEED_CANDIDATE_TOPIC_STATUSES.map((status) =>
+      takeCurrentDomainTopicsByStatus(ctx, site, status, limit + 1)
+    ),
+    takeCurrentDomainTopicsByContentFeasibility(
+      ctx,
+      site,
+      "too_thin",
+      limit + 1,
+    ),
+    takeCurrentDomainTopicsByContentFeasibility(
+      ctx,
+      site,
+      "quality_exhausted",
+      limit + 1,
+    ),
+  ]);
+  if (groups.some((rows) => rows.length > limit)) {
+    return { topics: [], exhausted: true };
+  }
+  const linkedTopicIds = Array.from(new Set(articles.flatMap((article) =>
+    article.topicId ? [article.topicId] : []
+  )));
+  if (linkedTopicIds.length > limit) {
+    return { topics: [], exhausted: true };
+  }
+  const linkedTopics = await Promise.all(linkedTopicIds.map((topicId) =>
+    ctx.db.get(topicId)
+  ));
+  const byId = new Map<string, Doc<"topic_clusters">>();
+  for (const topic of [...groups.flat(), ...linkedTopics]) {
+    if (
+      topic &&
+      topic.siteId === site._id &&
+      topicMatchesCurrentDomain(site, topic)
+    ) byId.set(String(topic._id), topic);
+  }
+  if (byId.size > limit) return { topics: [], exhausted: true };
+  return { topics: Array.from(byId.values()), exhausted: false };
+}
+
 async function inspectReadiness(
   ctx: QueryCtx | MutationCtx,
   siteId: Id<"sites">,
@@ -606,18 +758,9 @@ async function inspectReadiness(
     return { ready: false, reason: "tenant_authority_unavailable" };
   }
 
-  const [articles, topics, activeContentGroups, activeEvidence, activeDemand] =
+  const [articleInventory, activeContentGroups, activeEvidence, activeDemand] =
     await Promise.all([
-      takeCurrentDomainArticles(
-        ctx,
-        site,
-        CADENCE_MICRO_SEED_READ_LIMIT + 1,
-      ),
-      takeCurrentDomainTopics(
-        ctx,
-        site,
-        CADENCE_MICRO_SEED_READ_LIMIT + 1,
-      ),
+      cadenceMicroSeedArticleInventory(ctx, site),
       Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
         ctx.db.query("jobs").withIndex("by_site_status", (q) =>
           q.eq("siteId", siteId).eq("status", status)
@@ -626,9 +769,16 @@ async function inspectReadiness(
       activeEvidenceRows(ctx, siteId),
       activeDemandRows(ctx, siteId),
     ]);
+  const articles = articleInventory.articles;
+  const topicInventory = await cadenceMicroSeedTopicInventory(
+    ctx,
+    site,
+    articles,
+  );
+  const topics = topicInventory.topics;
   if (
-    articles.length > CADENCE_MICRO_SEED_READ_LIMIT ||
-    topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+    articleInventory.exhausted ||
+    topicInventory.exhausted ||
     activeContentGroups.some((rows) =>
       rows.length > CADENCE_MICRO_SEED_READ_LIMIT
     )
@@ -1838,17 +1988,27 @@ export const resumeLegacySemanticCandidateInternal = internalMutation({
       };
     }
     const job = candidates[0]!;
-    const [topic, evidence, topics, articles, activeGroups] = await Promise.all([
+    const [topic, evidence, articleInventory, activeGroups] = await Promise.all([
       ctx.db.get(job.topicId!),
       ctx.db.get(job.evidenceJobId!),
-      takeCurrentDomainTopics(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
-      takeCurrentDomainArticles(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      cadenceMicroSeedArticleInventory(ctx, site),
       Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
         ctx.db.query("jobs").withIndex("by_site_status", (q) =>
           q.eq("siteId", siteId).eq("status", status)
         ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1)
       )),
     ]);
+    const articles = articleInventory.articles;
+    const topicInventory = await cadenceMicroSeedTopicInventory(
+      ctx,
+      site,
+      articles,
+    );
+    const topics = topic
+      ? Array.from(new Map(
+        [...topicInventory.topics, topic].map((row) => [String(row._id), row]),
+      ).values())
+      : topicInventory.topics;
     const failure = evidence?.serpFailures.find((receipt) =>
       receipt.topicId === job.topicId
     );
@@ -1864,8 +2024,8 @@ export const resumeLegacySemanticCandidateInternal = internalMutation({
       evidence.siteId !== siteId ||
       evidence.status !== "completed" ||
       !failure ||
-      topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
-      articles.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+      topicInventory.exhausted ||
+      articleInventory.exhausted ||
       activeGroups.some((rows) => rows.length > CADENCE_MICRO_SEED_READ_LIMIT)
     ) return { advanced: false as const, reason: "legacy_receipt_changed" as const };
     const linkedArticle = articles.find((article) => article.topicId === topic._id);
@@ -2051,18 +2211,9 @@ export const continueSuccessfulCandidateInternal = internalMutation({
       (site.cadencePerWeek ?? 0) <= 0
     ) return { advanced: false as const, reason: "site_unavailable" as const };
 
-    const [articles, topics, activeGroups, activeEvidence, completedJobs] =
+    const [articleInventory, activeGroups, activeEvidence, completedJobs] =
       await Promise.all([
-        takeCurrentDomainArticles(
-          ctx,
-          site,
-          CADENCE_MICRO_SEED_READ_LIMIT + 1,
-        ),
-        takeCurrentDomainTopics(
-          ctx,
-          site,
-          CADENCE_MICRO_SEED_READ_LIMIT + 1,
-        ),
+        cadenceMicroSeedArticleInventory(ctx, site),
         Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
           ctx.db.query("jobs").withIndex("by_site_status", (q) =>
             q.eq("siteId", siteId).eq("status", status)
@@ -2076,9 +2227,16 @@ export const continueSuccessfulCandidateInternal = internalMutation({
           .order("desc")
           .take(10),
       ]);
+    const articles = articleInventory.articles;
+    const topicInventory = await cadenceMicroSeedTopicInventory(
+      ctx,
+      site,
+      articles,
+    );
+    const topics = topicInventory.topics;
     if (
-      articles.length > CADENCE_MICRO_SEED_READ_LIMIT ||
-      topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+      articleInventory.exhausted ||
+      topicInventory.exhausted ||
       activeGroups.some((rows) =>
         rows.length > CADENCE_MICRO_SEED_READ_LIMIT
       ) ||
@@ -2253,7 +2411,7 @@ function selectCurrentCadenceContinuationCandidate(args: {
   site: Doc<"sites">;
   job: Doc<"cadence_micro_seed_jobs">;
   topics: Doc<"topic_clusters">[];
-  articles: Doc<"articles">[];
+  articles: PlannedRecoveryArticle[];
   domainRank: number;
   excludedActiveTopicIds?: ReadonlySet<string>;
 }): SelectedCandidateReceipt | null {
@@ -2473,21 +2631,17 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       timestamp: Date.now(),
     });
 
-    const [topics, articles] = await Promise.all([
-      takeCurrentDomainTopics(
-        ctx,
-        site,
-        CADENCE_MICRO_SEED_READ_LIMIT + 1,
-      ),
-      takeCurrentDomainArticles(
-        ctx,
-        site,
-        CADENCE_MICRO_SEED_READ_LIMIT + 1,
-      ),
-    ]);
+    const articleInventory = await cadenceMicroSeedArticleInventory(ctx, site);
+    const articles = articleInventory.articles;
+    const topicInventory = await cadenceMicroSeedTopicInventory(
+      ctx,
+      site,
+      articles,
+    );
+    const topics = topicInventory.topics;
     if (
-      topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
-      articles.length > CADENCE_MICRO_SEED_READ_LIMIT
+      topicInventory.exhausted ||
+      articleInventory.exhausted
     ) throw new Error("Cadence micro-seed materialization read limit exhausted");
     const exactKeywords = new Set(topics.map((topic) =>
       normalizeCadenceMicroSeedText(topic.primaryKeyword)
@@ -3660,21 +3814,25 @@ export const finalizeEvidence = internalMutation({
       args.outcome === "semantic_failure" &&
       candidateAttemptCount < CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES
     ) {
-      const [currentTopics, currentArticles] = await Promise.all([
-        takeCurrentDomainTopics(
-          ctx,
-          site!,
-          CADENCE_MICRO_SEED_READ_LIMIT + 1,
-        ),
-        takeCurrentDomainArticles(
-          ctx,
-          site!,
-          CADENCE_MICRO_SEED_READ_LIMIT + 1,
-        ),
-      ]);
+      const currentArticleInventory = await cadenceMicroSeedArticleInventory(
+        ctx,
+        site!,
+      );
+      const currentArticles = currentArticleInventory.articles;
+      const currentTopicInventory = await cadenceMicroSeedTopicInventory(
+        ctx,
+        site!,
+        currentArticles,
+      );
+      const currentTopics = Array.from(new Map(
+        [...currentTopicInventory.topics, topic].map((row) => [
+          String(row._id),
+          row,
+        ]),
+      ).values());
       if (
-        currentTopics.length <= CADENCE_MICRO_SEED_READ_LIMIT &&
-        currentArticles.length <= CADENCE_MICRO_SEED_READ_LIMIT
+        !currentTopicInventory.exhausted &&
+        !currentArticleInventory.exhausted
       ) {
         const authority = tenantAuthorityFromStoredEvidence({
           domain: site!.seoAuthorityDomain,
