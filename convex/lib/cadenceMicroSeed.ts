@@ -12,6 +12,11 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 16 preserves every explicit search anchor first, then supplements
+// the recovery rotation with bounded capability and buyer-problem phrases from
+// the tenant's own profile. A mature site can therefore move beyond a
+// saturated head-term set without inventing a business topic or weakening any
+// downstream quality boundary.
 // Version 15 preserves a bounded, immutable shortlist from the paid discovery
 // receipt and advances through it when live SERP evidence rejects one intent.
 // A semantic miss therefore cannot silently discard another candidate that
@@ -25,7 +30,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 15;
+export const CADENCE_MICRO_SEED_VERSION = 16;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
@@ -226,10 +231,13 @@ export function normalizeCadenceMicroSeedText(value: string): string {
 export function cadenceMicroSeedAnchors(args: {
   anchorKeywords?: string[] | null;
   keyFeatures?: string[] | null;
+  painPoints?: string[] | null;
+  productUsage?: string | null;
+  targetAudienceSummary?: string | null;
 }): string[] {
-  const bounded = (signals: string[]) => tenantDiscoveryAnchors(
+  const bounded = (signals: string[], limit = 24) => tenantDiscoveryAnchors(
     signals.filter((value): value is string => typeof value === "string"),
-    24,
+    limit,
   ).filter((anchor) => {
     const words = normalizeCadenceMicroSeedText(anchor).split(" ");
     return words.length >= 2 && words.length <= 6;
@@ -253,27 +261,40 @@ export function cadenceMicroSeedAnchors(args: {
       longSearchSignals.push(value);
     }
   }
-  const searchAnchors = [...directSearchAnchors];
+  const searchAnchors = directSearchAnchors.slice(0, 12);
   for (const anchor of bounded(longSearchSignals)) {
     if (seenSearchAnchors.has(anchor)) continue;
     seenSearchAnchors.add(anchor);
     searchAnchors.push(anchor);
-    if (searchAnchors.length >= 24) break;
+    if (searchAnchors.length >= 12) break;
   }
-  if (searchAnchors.length >= 2) return searchAnchors;
-
-  // A primary plus one distinct fallback is the complete paid recovery
-  // contract. Supplement sparse profiles from explicit capabilities, without
-  // letting generic feature prose dilute a healthy search-anchor set.
+  // Keep configured search anchors first, but do not let a mature site's
+  // already-covered head terms permanently hide the rest of its explicit
+  // product surface. These supplements remain traceable to the tenant profile
+  // and the independent business-fit gate still requires product alignment.
   const seen = new Set(searchAnchors);
   const supplemented = [...searchAnchors];
-  for (const feature of bounded(args.keyFeatures ?? [])) {
-    if (seen.has(feature)) continue;
-    seen.add(feature);
-    supplemented.push(feature);
-    if (supplemented.length >= 2) break;
-  }
-  return supplemented;
+  const appendCategory = (signals: string[], categoryLimit: number) => {
+    let added = 0;
+    for (const anchor of bounded(signals, categoryLimit * 3)) {
+      if (seen.has(anchor)) continue;
+      seen.add(anchor);
+      supplemented.push(anchor);
+      added += 1;
+      if (added >= categoryLimit || supplemented.length >= 32) break;
+    }
+  };
+  // Category caps prevent one verbose feature from consuming the entire
+  // rotation and guarantee that explicit buyer problems and usage language
+  // remain discoverable on mature tenants.
+  appendCategory(args.keyFeatures ?? [], 6);
+  appendCategory(args.painPoints ?? [], 6);
+  appendCategory([args.productUsage ?? ""], 4);
+  appendCategory([args.targetAudienceSummary ?? ""], 4);
+  // A primary plus one distinct fallback is the complete paid recovery
+  // contract. Profiles with more material retain a wider deterministic
+  // rotation; sparse profiles keep the historical two-anchor minimum.
+  return supplemented.slice(0, 32);
 }
 
 /**
@@ -313,10 +334,14 @@ export function selectCadenceMicroSeedAnchor(
   anchors: readonly string[],
   sourcePlanKey: string,
   policyGeneration = 0,
+  previouslyAttemptedSeeds: readonly string[] = [],
 ): string | null {
+  const attempted = new Set(
+    previouslyAttemptedSeeds.map(normalizeCadenceMicroSeedText).filter(Boolean),
+  );
   const normalized = [...new Set(
     anchors.map(normalizeCadenceMicroSeedText).filter(Boolean),
-  )];
+  )].filter((anchor) => !attempted.has(anchor));
   if (normalized.length === 0) return null;
   let hash = 0;
   for (const character of sourcePlanKey) {
@@ -341,15 +366,20 @@ export function selectCadenceMicroSeedFallbackAnchor(
   sourcePlanKey: string,
   primarySeed: string,
   policyGeneration = 0,
+  previouslyAttemptedSeeds: readonly string[] = [],
 ): string | null {
+  const attempted = new Set(
+    previouslyAttemptedSeeds.map(normalizeCadenceMicroSeedText).filter(Boolean),
+  );
   const normalized = [...new Set(
     anchors.map(normalizeCadenceMicroSeedText).filter(Boolean),
-  )];
+  )].filter((anchor) => !attempted.has(anchor));
   if (normalized.length < 2) return null;
   const expectedPrimary = selectCadenceMicroSeedAnchor(
     normalized,
     sourcePlanKey,
     policyGeneration,
+    previouslyAttemptedSeeds,
   );
   const primary = normalizeCadenceMicroSeedText(primarySeed);
   if (!expectedPrimary || expectedPrimary !== primary) return null;

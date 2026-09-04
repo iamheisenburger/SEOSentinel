@@ -154,7 +154,7 @@ function providerFixture() {
   return { seed, tag, data };
 }
 
-test("paid seeds prefer search anchors and rotate deterministically", () => {
+test("paid seeds preserve search anchors and rotate deterministically", () => {
   assert.deepEqual(cadenceMicroSeedAnchors({
     anchorKeywords: [
       "lead scoring and qualification tool",
@@ -164,6 +164,7 @@ test("paid seeds prefer search anchors and rotate deterministically", () => {
   }), [
     "lead scoring and qualification tool",
     "sales automation chat widget",
+    "qualification tool",
   ]);
   const anchors = cadenceMicroSeedAnchors({
     anchorKeywords: [
@@ -180,12 +181,14 @@ test("paid seeds prefer search anchors and rotate deterministically", () => {
     productUsage: "write generic sales advice",
     painPoints: ["sales teams need more pipeline"],
   } as Parameters<typeof cadenceMicroSeedAnchors>[0] & Record<string, unknown>);
-  assert.deepEqual(anchors, [
+  assert.deepEqual(anchors.slice(0, 4), [
     "lead scoring software",
     "predictive lead qualification",
     "automated sales routing",
     "buyer intent scoring",
   ]);
+  assert.ok(anchors.includes("sales teams need more pipeline"));
+  assert.ok(anchors.includes("write generic sales advice"));
   assert.equal(
     selectCadenceMicroSeedAnchor(anchors, "source-plan-placeholder"),
     selectCadenceMicroSeedAnchor(anchors, "source-plan-placeholder"),
@@ -238,8 +241,8 @@ test("paid seeds prefer search anchors and rotate deterministically", () => {
   );
 });
 
-test("paid seeds supplement sparse search profiles without diluting healthy ones", () => {
-  assert.deepEqual(cadenceMicroSeedAnchors({
+test("paid seeds supplement all search profiles without replacing explicit anchors", () => {
+  const mature = cadenceMicroSeedAnchors({
     anchorKeywords: [
       "AI SEO content generator",
       "automated SEO content creation",
@@ -249,11 +252,14 @@ test("paid seeds supplement sparse search profiles without diluting healthy ones
       "Keyword clustering and planning",
       "Automated content publishing",
     ],
-  }), [
+  });
+  assert.deepEqual(mature.slice(0, 3), [
     "ai seo content generator",
     "automated seo content creation",
     "autonomous content marketing platform",
   ]);
+  assert.ok(mature.includes("keyword clustering and planning"));
+  assert.ok(mature.includes("automated content publishing"));
   assert.deepEqual(cadenceMicroSeedAnchors({
     anchorKeywords: ["Lead scoring software"],
     keyFeatures: [
@@ -263,6 +269,7 @@ test("paid seeds supplement sparse search profiles without diluting healthy ones
   }), [
     "lead scoring software",
     "predictive lead qualification",
+    "automated sales routing",
   ]);
   assert.deepEqual(cadenceMicroSeedAnchors({
     keyFeatures: [
@@ -273,7 +280,71 @@ test("paid seeds supplement sparse search profiles without diluting healthy ones
   }), [
     "predictive lead qualification",
     "automated sales routing",
+    "buyer intent scoring",
   ]);
+});
+
+test("paid seeds expose bounded explicit buyer problems after product anchors", () => {
+  const anchors = cadenceMicroSeedAnchors({
+    anchorKeywords: ["website lead generation automation"],
+    keyFeatures: ["booking link integration"],
+    painPoints: [
+      "Lost leads from visitors who don't immediately fill out forms",
+      "Manual lead qualification consuming sales team time",
+    ],
+    productUsage:
+      "The AI agent captures contact details and books qualified calls",
+    targetAudienceSummary:
+      "Growth teams with high website traffic but low conversion rates",
+  });
+  assert.equal(anchors[0], "website lead generation automation");
+  assert.ok(anchors.includes("booking link integration"));
+  assert.ok(anchors.includes("lost leads visitors who don t"));
+  assert.ok(anchors.includes("manual lead qualification consuming sales team"));
+  assert.ok(anchors.length <= 32);
+  assert.equal(new Set(anchors).size, anchors.length);
+});
+
+test("a policy upgrade advances past every previously attempted tenant anchor", () => {
+  const anchors = [
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "lost leads from website visitors",
+    "booking qualified sales calls",
+  ];
+  const attempted = [
+    "Lead Qualification Chatbot",
+    "website lead generation automation",
+  ];
+  const primary = selectCadenceMicroSeedAnchor(
+    anchors,
+    "mature-source-plan",
+    15,
+    attempted,
+  );
+  assert.ok([
+    "lost leads from website visitors",
+    "booking qualified sales calls",
+  ].includes(primary ?? ""));
+  const fallback = selectCadenceMicroSeedFallbackAnchor(
+    anchors,
+    "mature-source-plan",
+    primary!,
+    15,
+    attempted,
+  );
+  assert.ok(fallback);
+  assert.notEqual(fallback, primary);
+  assert.equal(attempted.includes(fallback!), false);
+  assert.equal(
+    selectCadenceMicroSeedAnchor(
+      anchors,
+      "mature-source-plan",
+      15,
+      anchors,
+    ),
+    null,
+  );
 });
 
 test("legacy unpublished inventory remains eligible only with exact current anchor provenance", () => {

@@ -869,17 +869,37 @@ async function inspectReadiness(
   // Query the exact current policy through a composite index. Historical
   // no-replay receipts remain immutable but cannot make a new policy's own
   // insertion cross an unrelated fixed read limit and invalidate its fence.
-  const sourceJobs = await ctx.db.query("cadence_micro_seed_jobs")
-    .withIndex("by_site_source_policy_created", (q) =>
-      q.eq("siteId", siteId)
-        .eq("sourcePlanId", source!.job._id)
-        .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
-    )
-    .order("asc")
-    .take(3);
+  const [sourceJobs, priorPolicyJobs] = await Promise.all([
+    ctx.db.query("cadence_micro_seed_jobs")
+      .withIndex("by_site_source_policy_created", (q) =>
+        q.eq("siteId", siteId)
+          .eq("sourcePlanId", source!.job._id)
+          .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
+      )
+      .order("asc")
+      .take(3),
+    ctx.db.query("cadence_micro_seed_jobs")
+      .withIndex("by_site_source_policy_created", (q) =>
+        q.eq("siteId", siteId)
+          .eq("sourcePlanId", source!.job._id)
+          .lt("policyVersion", CADENCE_MICRO_SEED_VERSION)
+      )
+      .order("asc")
+      .take(CADENCE_MICRO_SEED_READ_LIMIT + 1),
+  ]);
   if (sourceJobs.length > 2) {
     return { ready: false, reason: "micro_seed_source_history_exhausted" };
   }
+  if (priorPolicyJobs.length > CADENCE_MICRO_SEED_READ_LIMIT) {
+    return { ready: false, reason: "micro_seed_policy_history_read_limit" };
+  }
+  // A versioned policy repair must not spend again on a tenant anchor whose
+  // provider request already ran for this exact exhausted source plan. Rows
+  // that never reached the provider stay retryable; attempted rows are an
+  // immutable exhaustion receipt, regardless of their terminal outcome.
+  const previouslyAttemptedSeeds = priorPolicyJobs
+    .filter((job) => job.providerCallAttempted === true)
+    .map((job) => job.seed);
   const currentJob = currentJobId
     ? sourceJobs.find((job) => job._id === currentJobId)
     : undefined;
@@ -892,6 +912,7 @@ async function inspectReadiness(
     anchors,
     String(source.job._id),
     CADENCE_MICRO_SEED_VERSION - 1,
+    previouslyAttemptedSeeds,
   );
   if (!primarySeed) {
     return { ready: false, reason: "tenant_product_seed_unavailable" };
@@ -964,6 +985,7 @@ async function inspectReadiness(
         String(source.job._id),
         parent.seed,
         CADENCE_MICRO_SEED_VERSION - 1,
+        previouslyAttemptedSeeds,
       );
       if (
         !fallbackSeed ||
@@ -1007,6 +1029,7 @@ async function inspectReadiness(
       String(source.job._id),
       parent.seed,
       CADENCE_MICRO_SEED_VERSION - 1,
+      previouslyAttemptedSeeds,
     );
     if (!fallbackSeed) {
       return { ready: false, reason: "fallback_product_seed_unavailable" };
