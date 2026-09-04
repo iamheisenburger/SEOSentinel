@@ -230,7 +230,7 @@ function sourcePlanFingerprintForPolicy(
     : fingerprint;
 }
 
-function primaryFallbackReceiptFingerprint(
+export function primaryFallbackReceiptFingerprint(
   job: Doc<"cadence_micro_seed_jobs">,
   reservation: Doc<"provider_spend_reservations">,
 ): string {
@@ -311,8 +311,8 @@ const CADENCE_MICRO_SEED_SEMANTIC_FAILURE_CODES = new Set([
   "evidence_not_persisted",
 ]);
 
-async function semanticCandidateExhaustionVerified(
-  ctx: QueryCtx,
+export async function semanticCandidateExhaustionVerified(
+  ctx: QueryCtx | MutationCtx,
   site: Doc<"sites">,
   job: Doc<"cadence_micro_seed_jobs">,
 ): Promise<boolean> {

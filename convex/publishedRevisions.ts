@@ -19,6 +19,7 @@ import {
   publicationDeliveryDestinationHash,
   publicationDeliveryKey,
   PUBLICATION_AUDIT_VERSION,
+  sha256Hex,
   type PublicationArtifact,
 } from "./lib/publicationArtifact";
 import {
@@ -63,6 +64,22 @@ import {
   siteGscConnectionRevision,
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
+import {
+  cadenceIntervalMs,
+  effectivePublishedAt,
+  isSealedReady,
+} from "./lib/autopilotBuffer";
+import { CADENCE_MICRO_SEED_VERSION } from "./lib/cadenceMicroSeed";
+import {
+  primaryFallbackReceiptFingerprint,
+  semanticCandidateExhaustionVerified,
+} from "./cadenceMicroSeed";
+import {
+  CADENCE_REVISION_RECOVERY_VERSION,
+  cadenceRevisionRecoveryReceiptValid,
+  effectiveCadencePublicationAt,
+  type CadenceRevisionExhaustionAttempt,
+} from "./lib/cadenceRevision";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LIVE_VERIFICATION_LEASE_MS = 2 * 60 * 1000;
@@ -505,6 +522,386 @@ async function recentTenantRevisionCount(
     .take(MAX_PUBLISHED_REVISIONS_PER_TENANT_24H + 1);
   return recent.length;
 }
+
+function cadenceExhaustionAttempt(
+  job: Doc<"cadence_micro_seed_jobs">,
+): CadenceRevisionExhaustionAttempt {
+  return {
+    id: String(job._id),
+    siteId: String(job.siteId),
+    sourcePlanId: String(job.sourcePlanId),
+    attemptKind: job.attemptKind,
+    policyVersion: job.policyVersion,
+    rolloutEpoch: job.rolloutEpoch,
+    status: job.status,
+    errorCode: job.errorCode,
+    providerCallAttempted: job.providerCallAttempted,
+    providerCallCompleted: job.providerCallCompleted,
+    providerAttemptedAt: job.providerAttemptedAt,
+    providerCompletedAt: job.providerCompletedAt,
+    completedAt: job.completedAt,
+    createdAt: job.createdAt,
+    candidateReceiptCount: job.candidateReceipts.length,
+    candidateAudit: job.candidateAudit,
+    candidateShortlistCount: job.candidateShortlist?.length ?? 0,
+    candidateAttemptCount: job.candidateAttemptCount,
+    priorCandidateAttemptCount: job.priorCandidateAttempts?.length ?? 0,
+    hasSelectedOrTopicReceipt: Boolean(
+      job.selectedCandidate ||
+        job.topicId ||
+        job.topicFingerprint ||
+        job.plannedEvidenceFingerprint,
+    ),
+    hasEvidenceReceipt: Boolean(
+      job.evidenceJobId ||
+        job.evidenceQueueReason ||
+        job.evidenceFinalizerScheduledAt,
+    ),
+    cadenceScheduleAttempts: job.cadenceScheduleAttempts ?? 0,
+    hasCadenceScheduleReceipt: Boolean(
+      job.cadenceScheduleRequestedAt ||
+        job.cadenceScheduleMode ||
+        job.cadenceScheduleScheduled !== undefined ||
+        job.cadenceScheduleReceiptAt,
+    ),
+    finalizeAttempts: job.finalizeAttempts,
+    workerToken: job.workerToken,
+    leaseExpiresAt: job.leaseExpiresAt,
+    parentMicroSeedJobId: job.parentMicroSeedJobId
+      ? String(job.parentMicroSeedJobId)
+      : undefined,
+    parentMicroSeedReceiptFingerprint:
+      job.parentMicroSeedReceiptFingerprint,
+  };
+}
+
+async function latestVerifiedRevisionAt(
+  ctx: MutationCtx | QueryCtx,
+  site: Doc<"sites">,
+): Promise<number | undefined> {
+  const revisions = await ctx.db
+    .query("published_article_revisions")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", site._id).eq("status", "verified")
+    )
+    .order("desc")
+    .take(50);
+  let latest: number | undefined;
+  for (const revision of revisions) {
+    if (!Number.isSafeInteger(revision.liveVerifiedAt)) continue;
+    const current = await currentRevisionArticle(ctx, revision);
+    if (!current || current.site._id !== site._id) continue;
+    latest = Math.max(latest ?? 0, revision.liveVerifiedAt!);
+  }
+  return latest;
+}
+
+export const getLatestVerifiedRevisionAtInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!siteExecutionActive(site)) return null;
+    const verifiedAt = await latestVerifiedRevisionAt(ctx, site);
+    return verifiedAt === undefined ? null : { verifiedAt };
+  },
+});
+
+/**
+ * A mature tenant can exhaust safe new-page space while still benefiting from
+ * crawl-path maintenance. At an exact due boundary, prepare one immutable,
+ * strict-quality revision only after both current micro-seed attempts proved
+ * that no non-cannibalizing page exists. A sealed new article always wins.
+ */
+export const prepareForCadenceRecovery = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    dueAt: v.number(),
+  },
+  handler: async (ctx, args): Promise<{
+    status: "prepared" | "existing" | "no_safe_candidate" | "bounded_wait";
+    detail: string;
+    revisionId?: Id<"published_article_revisions">;
+  }> => {
+    const site = await ctx.db.get(args.siteId);
+    const timestamp = Date.now();
+    if (
+      !site ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !rolloutAllowsRevision(site) ||
+      site.autopilotRolloutMode !== "live" ||
+      site.approvalRequired ||
+      (site.publishMethod ?? "github") === "manual"
+    ) {
+      return {
+        status: "no_safe_candidate",
+        detail: "Cadence revision recovery requires an executing autonomous tenant.",
+      };
+    }
+    if ((site.publishMethod ?? "github") === "wordpress") {
+      return {
+        status: "no_safe_candidate",
+        detail:
+          "Automatic WordPress revisions require an atomic conditional-write adapter.",
+      };
+    }
+
+    const tenantArticles = await collectCurrentDomainArticles(ctx, site);
+    const sealedReady = tenantArticles.some((article) =>
+      article.status === "ready" && isSealedReady(article)
+    );
+    if (sealedReady) {
+      return {
+        status: "no_safe_candidate",
+        detail: "A sealed new article has priority over cadence revision recovery.",
+      };
+    }
+    const articlePublishedAt = tenantArticles
+      .filter((article) => article.status === "published")
+      .reduce<number | undefined>((latest, article) => {
+        const publishedAt = effectivePublishedAt({
+          createdAt: article.createdAt,
+          publishedAt: article.publishedAt,
+          publicationAuditVersion: article.publicationAuditVersion,
+          auditedContentHash: article.auditedContentHash,
+        });
+        return Math.max(latest ?? 0, publishedAt);
+      }, undefined);
+    const lastPublicationAt = effectiveCadencePublicationAt({
+      articlePublishedAt,
+      verifiedRevisionAt: await latestVerifiedRevisionAt(ctx, site),
+    });
+    const expectedDueAt = (lastPublicationAt ?? site.createdAt) +
+      cadenceIntervalMs(site.cadencePerWeek ?? 4);
+    if (
+      !Number.isSafeInteger(args.dueAt) ||
+      args.dueAt !== expectedDueAt ||
+      timestamp < expectedDueAt
+    ) {
+      return {
+        status: "no_safe_candidate",
+        detail: "Cadence revision recovery is not at the exact current due boundary.",
+      };
+    }
+    for (const status of [
+      "prepared",
+      "leased",
+      "attempted",
+      "verification_pending",
+      "unverified",
+    ] as const) {
+      const unresolved = await ctx.db
+        .query("published_article_revisions")
+        .withIndex("by_site_status", (q) =>
+          q.eq("siteId", site._id).eq("status", status)
+        )
+        .first();
+      if (unresolved) {
+        return {
+          status: "bounded_wait",
+          detail:
+            "An earlier immutable revision must settle before another cadence revision can be prepared.",
+        };
+      }
+    }
+
+    const recentJobs = await ctx.db
+      .query("cadence_micro_seed_jobs")
+      .withIndex("by_site_created", (q) => q.eq("siteId", site._id))
+      .order("desc")
+      .take(40);
+    let exhaustion:
+      | {
+          child: Doc<"cadence_micro_seed_jobs">;
+          parent: Doc<"cadence_micro_seed_jobs">;
+        }
+      | undefined;
+    for (const child of recentJobs) {
+      if (
+        child.attemptKind !== "fallback" ||
+        !child.parentMicroSeedJobId ||
+        child.status !== "missed"
+      ) continue;
+      const parent = await ctx.db.get(child.parentMicroSeedJobId);
+      const parentReservation = parent
+        ? await ctx.db.get(parent.providerSpendReservationId)
+        : null;
+      if (
+        parent &&
+        parentReservation &&
+        (parent.errorCode !== "semantic_failure" ||
+          await semanticCandidateExhaustionVerified(ctx, site, parent)) &&
+        (child.errorCode !== "semantic_failure" ||
+          await semanticCandidateExhaustionVerified(ctx, site, child)) &&
+        cadenceRevisionRecoveryReceiptValid({
+          siteId: String(site._id),
+          rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+          policyVersion: CADENCE_MICRO_SEED_VERSION,
+          expectedParentReceiptFingerprint: primaryFallbackReceiptFingerprint(
+            parent,
+            parentReservation,
+          ),
+          parent: cadenceExhaustionAttempt(parent),
+          child: cadenceExhaustionAttempt(child),
+          now: timestamp,
+        })
+      ) {
+        exhaustion = { child, parent };
+        break;
+      }
+    }
+    if (!exhaustion) {
+      return {
+        status: "no_safe_candidate",
+        detail:
+          "No current immutable primary-plus-fallback opportunity-exhaustion receipt exists.",
+      };
+    }
+
+    let currentConfigHash: string;
+    try {
+      currentConfigHash = publicationDeliveryConfigHash(
+        publicationDeliveryConfig(site),
+      );
+    } catch {
+      return {
+        status: "no_safe_candidate",
+        detail: PUBLISHED_REVISION_PREPARATION_FAILED_DETAIL,
+      };
+    }
+    const verifiedTargets = selectVerifiedAuthorityTargets({
+      site,
+      articles: tenantArticles,
+      now: timestamp,
+    });
+    const verifiedIds = new Set(
+      verifiedTargets.map((target) => String(target.articleId)),
+    );
+    const sourceCandidates = tenantArticles
+      .filter((article) =>
+        article.status === "published" && verifiedIds.has(String(article._id))
+      )
+      .sort((a, b) =>
+        (a.internalLinks?.length ?? 0) - (b.internalLinks?.length ?? 0) ||
+        (a.publishedAt ?? a.createdAt) - (b.publishedAt ?? b.createdAt) ||
+        String(a._id).localeCompare(String(b._id))
+      );
+
+    for (const article of sourceCandidates.slice(0, 25)) {
+      let base: Awaited<ReturnType<typeof effectiveBase>>;
+      try {
+        base = await effectiveBase(ctx, site, article);
+      } catch {
+        continue;
+      }
+      if (
+        !base.artifact.publicationConfigHash ||
+        base.artifact.publicationConfigHash !== currentConfigHash
+      ) continue;
+      const liveDestinations = verifiedTargets
+        .filter((target) => target.articleId !== article._id)
+        .map((target) => ({
+          href: publishedArticleInternalHref(site.urlStructure, target.slug),
+          title: target.title,
+          keywords: target.metaKeywords,
+        }));
+      let next: PublishedRevisionArtifact | null = null;
+      try {
+        next = deterministicInternalLinkRevision({
+          artifact: base.artifact,
+          urlStructure: site.urlStructure,
+          liveDestinations,
+        });
+      } catch {
+        next = null;
+      }
+      if (!next) continue;
+      const baseHrefs = new Set(
+        (base.artifact.internalLinks ?? []).map((link) => link.href),
+      );
+      const targetUrl = (next.internalLinks ?? []).find(
+        (link) => !baseHrefs.has(link.href),
+      )?.href;
+      const target = verifiedTargets.find((candidate) =>
+        publishedArticleInternalHref(site.urlStructure, candidate.slug) ===
+          targetUrl
+      );
+      if (!targetUrl || !target) continue;
+
+      const actionFingerprint = sha256Hex(JSON.stringify({
+        version: CADENCE_REVISION_RECOVERY_VERSION,
+        siteId: String(site._id),
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        dueAt: args.dueAt,
+        microSeedJobId: String(exhaustion.child._id),
+        parentMicroSeedJobId: String(exhaustion.parent._id),
+      }));
+      const nextArtifactHash = publicationArtifactHash(next);
+      const revisionKey = publishedRevisionKey({
+        siteId: String(site._id),
+        articleId: String(article._id),
+        actionFingerprint,
+        kind: "strengthen_cluster",
+        baseArtifactHash: base.artifactHash,
+        nextArtifactHash,
+        baseReceipt: base.receipt,
+      });
+      const duplicate = await ctx.db
+        .query("published_article_revisions")
+        .withIndex("by_key", (q) => q.eq("revisionKey", revisionKey))
+        .unique();
+      if (duplicate) {
+        return {
+          status: "existing",
+          detail: `The exact cadence revision already exists in ${duplicate.status} state.`,
+          revisionId: duplicate._id,
+        };
+      }
+      const revisionId = await ctx.db.insert("published_article_revisions", {
+        siteId: site._id,
+        articleId: article._id,
+        actionFingerprint,
+        kind: "strengthen_cluster",
+        revisionKey,
+        status: "prepared",
+        rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+        cadenceMicroSeedJobId: exhaustion.child._id,
+        cadenceDueAt: args.dueAt,
+        publicationConfigHash: currentConfigHash,
+        publicationDate: base.publicationDate,
+        expectedPublicUrl: publishedArticlePublicUrl({
+          domain: site.domain,
+          urlStructure: site.urlStructure,
+          slug: article.slug,
+        }),
+        baseAuditVersion: base.auditVersion,
+        baseArtifactHash: base.artifactHash,
+        baseArtifact: base.artifact,
+        baseReceipt: base.receipt,
+        nextArtifactHash,
+        nextAuditVersion: PUBLICATION_AUDIT_VERSION,
+        nextArtifact: next,
+        targetArticleId: target.articleId,
+        targetUrl,
+        targetLiveVerifiedAt: target.publicUrlVerifiedAt,
+        attempts: 0,
+        liveVerificationAttempts: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      return {
+        status: "prepared",
+        detail:
+          "Prepared one strict-quality crawl-path revision from exact cadence and live-target receipts.",
+        revisionId,
+      };
+    }
+    return {
+      status: "no_safe_candidate",
+      detail:
+        "No exact relevant link between two recently verified tenant articles passed the strict revision gate.",
+    };
+  },
+});
 
 export const prepareForGrowthAction = internalMutation({
   args: {
@@ -1894,6 +2291,26 @@ export const recordLiveVerification = internalMutation({
             ? timestamp
             : undefined,
           publishedRevisionVerifiedAt: args.status === "verified" ? timestamp : undefined,
+          updatedAt: timestamp,
+        });
+      }
+    }
+    if (
+      args.status === "verified" &&
+      revision.cadenceMicroSeedJobId &&
+      Number.isSafeInteger(revision.cadenceDueAt)
+    ) {
+      const health = await ctx.db
+        .query("autopilot_health")
+        .withIndex("by_site", (q) => q.eq("siteId", revision.siteId))
+        .first();
+      if (health) {
+        await ctx.db.patch(health._id, {
+          lastPublishedAt: timestamp,
+          nextPublicationDueAt:
+            timestamp + cadenceIntervalMs(site.cadencePerWeek ?? 4),
+          detail:
+            "The cadence published a strict, immutable existing-page improvement after safe new-page space was exhausted.",
           updatedAt: timestamp,
         });
       }

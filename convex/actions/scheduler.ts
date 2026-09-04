@@ -44,6 +44,7 @@ import {
 import { nextUtcMonthAt } from "../lib/cadenceLiveness";
 import type { CadenceScheduleResult } from
   "../lib/autopilotRunOutcome.ts";
+import { effectiveCadencePublicationAt } from "../lib/cadenceRevision";
 import {
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
@@ -358,9 +359,17 @@ export const scheduleCadence = internalAction({
     const cadenceMs = cadenceIntervalMs(cadence);
     const bufferPolicy = approvedBufferPolicy(cadence);
     const published = state.published as ArticleSummary[];
-    const lastPublishedAt = state.latestPublished
+    const articlePublishedAt = state.latestPublished
       ? effectivePublishedAt(state.latestPublished)
       : undefined;
+    const latestRevision = await ctx.runQuery(
+      internal.publishedRevisions.getLatestVerifiedRevisionAtInternal,
+      { siteId },
+    );
+    const lastPublishedAt = effectiveCadencePublicationAt({
+      articlePublishedAt,
+      verifiedRevisionAt: latestRevision?.verifiedAt,
+    });
     const publicationDue = !lastPublishedAt || now >= lastPublishedAt + cadenceMs;
 
     // Reclaim ready inventory stranded by an audit-version increment before
@@ -495,6 +504,25 @@ export const scheduleCadence = internalAction({
         message:
           "Publication is due but no strict-quality sealed article is buffered.",
       });
+      const revision = await ctx.runMutation(
+        internal.publishedRevisions.prepareForCadenceRecovery,
+        { siteId, dueAt: (lastPublishedAt ?? site.createdAt) + cadenceMs },
+      );
+      if (
+        revision.revisionId &&
+        (revision.status === "prepared" || revision.status === "existing")
+      ) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.publisher.executePublishedRevisionInternal,
+          { revisionId: revision.revisionId },
+        );
+        return {
+          scheduled: 1,
+          mode: "cadence_revision",
+          bufferCount: buffer.length,
+        };
+      }
     }
 
     // Growth inventory must never delay an already-due sealed publication.

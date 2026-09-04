@@ -1461,6 +1461,10 @@ export default defineSchema({
     siteId: v.id("sites"),
     articleId: v.id("articles"),
     growthActionId: v.optional(v.id("seo_growth_actions")),
+    // A cadence recovery revision is bound to the exact current micro-seed
+    // exhaustion and due boundary. Growth-action revisions leave these empty.
+    cadenceMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+    cadenceDueAt: v.optional(v.number()),
     growthMeasurementKey: v.optional(v.string()),
     actionFingerprint: v.string(),
     kind: v.union(

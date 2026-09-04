@@ -410,9 +410,10 @@ export function needsDeterministicInternalLinkRepair(article: {
 
 /**
  * A coarse fleet cron is allowed to discover work, but it must not define a
- * tenant's publication time. Once an autonomous tenant has a sealed artifact,
- * arm one durable wake-up for the exact cadence deadline. This keeps a daily
- * tenant from drifting up to the three-hour fleet interval after every post.
+ * tenant's publication time. Every autonomous tenant with a prior verified
+ * publication gets one durable wake-up at the exact cadence deadline. A
+ * sealed article can then publish immediately; an empty buffer gets an exact
+ * recovery opportunity instead of drifting to the next three-hour fleet tick.
  */
 export function exactCadenceWakeupAt(args: {
   autonomousDelivery: boolean;
@@ -423,7 +424,6 @@ export function exactCadenceWakeupAt(args: {
 }): number | undefined {
   if (
     !args.autonomousDelivery ||
-    args.sealedBufferCount < 1 ||
     !Number.isFinite(args.lastPublishedAt) ||
     !Number.isFinite(args.cadenceMs) ||
     args.cadenceMs <= 0

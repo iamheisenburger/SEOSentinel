@@ -535,7 +535,7 @@ test("generated drafts cross an atomic action-runtime checkpoint before final re
   );
 });
 
-test("a sealed autonomous buffer arms the exact cadence deadline", () => {
+test("every autonomous publication arms its exact delivery or recovery deadline", () => {
   const now = Date.UTC(2026, 6, 22, 18, 0, 0);
   const cadenceMs = 24 * 60 * 60 * 1000;
   const lastPublishedAt = Date.UTC(2026, 6, 21, 23, 15, 1);
@@ -557,7 +557,7 @@ test("a sealed autonomous buffer arms the exact cadence deadline", () => {
       cadenceMs,
       now,
     }),
-    undefined,
+    lastPublishedAt + cadenceMs,
   );
   assert.equal(
     exactCadenceWakeupAt({

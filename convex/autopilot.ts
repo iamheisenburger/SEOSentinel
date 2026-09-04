@@ -68,6 +68,7 @@ import {
   takeCurrentDomainArticleSummariesByStatus,
   takeCurrentDomainArticles,
 } from "./lib/siteDomainBinding";
+import { effectiveCadencePublicationAt } from "./lib/cadenceRevision";
 
 const SITE_STAGGER_MS = 5_000;
 const LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -79,6 +80,31 @@ const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
   "operator_recovery_of_public_url_verified:";
 const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
 const TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT = 50;
+
+async function latestVerifiedRevisionPublicationAt(
+  ctx: MutationCtx | QueryCtx,
+  site: Doc<"sites">,
+): Promise<number | undefined> {
+  const revisions = await ctx.db
+    .query("published_article_revisions")
+    .withIndex("by_site_status", (q) =>
+      q.eq("siteId", site._id).eq("status", "verified")
+    )
+    .order("desc")
+    .take(50);
+  let latest: number | undefined;
+  for (const revision of revisions) {
+    if (!Number.isSafeInteger(revision.liveVerifiedAt)) continue;
+    const article = await ctx.db.get(revision.articleId);
+    if (
+      !article ||
+      article.siteId !== site._id ||
+      !articleMatchesCurrentDomain(site, article)
+    ) continue;
+    latest = Math.max(latest ?? 0, revision.liveVerifiedAt!);
+  }
+  return latest;
+}
 
 async function publicationCommitBlocksRolloutTransition(
   ctx: MutationCtx,
@@ -947,9 +973,9 @@ export const promoteWarmSiteIfReady = internalMutation({
   },
 });
 
-// The fleet cron is intentionally coarse. A sealed article gets a separate,
-// idempotent tenant wake-up at its exact cadence deadline so publication does
-// not drift until the next three-hour fleet slot.
+// The fleet cron is intentionally coarse. Every autonomous tenant gets a
+// separate, idempotent wake-up at its exact cadence deadline so either sealed
+// delivery or bounded recovery cannot drift to the next three-hour slot.
 export const scheduleCadenceDeadline = internalMutation({
   args: {
     siteId: v.id("sites"),
@@ -990,7 +1016,7 @@ export const scheduleCadenceDeadline = internalMutation({
       scheduledAt: dueAt,
       heartbeatAt: now,
       status: "scheduled",
-      detail: "Exact cadence deadline armed from a sealed publication buffer.",
+      detail: "Exact cadence delivery or recovery deadline armed.",
     });
     await ctx.scheduler.runAt(
       dueAt,
@@ -2418,7 +2444,7 @@ export const auditSla = internalMutation({
       const cadence = site.cadencePerWeek ?? 4;
       const cadenceMs = cadenceIntervalMs(cadence);
       const bufferPolicy = approvedBufferPolicy(cadence);
-      const lastPublishedAt = latestPublished
+      const articlePublishedAt = latestPublished
         ? effectivePublishedAt({
             createdAt: latestPublished.articleCreatedAt,
             publishedAt: latestPublished.publishedAt,
@@ -2426,6 +2452,13 @@ export const auditSla = internalMutation({
             auditedContentHash: latestPublished.auditedContentHash,
           })
         : undefined;
+      const lastPublishedAt = effectiveCadencePublicationAt({
+        articlePublishedAt,
+        verifiedRevisionAt: await latestVerifiedRevisionPublicationAt(
+          ctx,
+          site,
+        ),
+      });
       const nextPublicationDueAt =
         (lastPublishedAt ?? site.createdAt) + cadenceMs;
       const schedulerStale = health
@@ -2616,7 +2649,7 @@ export const refreshSiteCadenceHealth = internalMutation({
             auditedContentHash: a.auditedContentHash,
           }),
       )[0];
-    const lastPublishedAt = latestPublished
+    const articlePublishedAt = latestPublished
       ? effectivePublishedAt({
           createdAt: latestPublished.articleCreatedAt,
           publishedAt: latestPublished.publishedAt,
@@ -2624,6 +2657,10 @@ export const refreshSiteCadenceHealth = internalMutation({
           auditedContentHash: latestPublished.auditedContentHash,
         })
       : undefined;
+    const lastPublishedAt = effectiveCadencePublicationAt({
+      articlePublishedAt,
+      verifiedRevisionAt: await latestVerifiedRevisionPublicationAt(ctx, site),
+    });
     const cadence = site.cadencePerWeek ?? 4;
     const cadenceMs = cadenceIntervalMs(cadence);
     const bufferPolicy = approvedBufferPolicy(cadence);

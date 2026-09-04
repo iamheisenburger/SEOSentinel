@@ -8208,6 +8208,8 @@ export const autopilotTick = internalAction({
         "Another non-overlapping candidate from the paid cadence receipt entered measured evidence review.",
       buffer_fill: "A strict-quality buffer candidate was queued.",
       cadence_generation: "A cadence article candidate was queued.",
+      cadence_revision:
+        "Safe new-page space was exhausted; one strict, receipt-bound existing article revision was queued at the cadence boundary.",
       buffer_full: "The strict-quality future buffer is full.",
       rollout_buffer_ready:
         rolloutBlockers.length > 0
