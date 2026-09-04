@@ -1081,6 +1081,10 @@ export const recordBusinessFitAuditsInternal = internalMutation({
       if (!topic || topic.siteId !== siteId) continue;
       if (planCheckpointTopicExecutionLocked(topic)) continue;
       if (terminalContentFeasibility(topic.contentFeasibilityStatus)) continue;
+      // A lexical product-fit refresh cannot overturn a stronger, immutable
+      // micro-seed provenance mismatch. Only a future explicit provenance
+      // migration may reconsider this tombstone.
+      if (topic.cadenceMicroSeedAnchorEligible === false) continue;
       if (["used", "queued", "cannibalizing"].includes(topic.status ?? "")) {
         continue;
       }

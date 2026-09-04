@@ -12,14 +12,15 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-// Version 13 preserves every already-bounded, user-authored search anchor as
-// one phrase. The general profile extractor intentionally splits sentences at
-// conjunctions, but applying that behavior to a short keyword such as "lead
-// scoring and qualification tool" created the lossy seed "qualification
-// tool". Long profile text can still be reduced into bounded phrases; valid
-// two-to-six-word anchor keywords cannot be fragmented. Version 12's indexed
-// history and meaningful-concept gate remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 13;
+// Version 14 also quarantines unpublished inventory created by an older
+// micro-seed whose selected keyword no longer satisfies the exact source
+// anchor. Without this provenance migration, a sealed but off-anchor legacy
+// article can reserve the only useful intent and make every corrected recovery
+// candidate look like cannibalization. Version 13's whole-phrase anchor
+// preservation, version 12's indexed history, and the meaningful-concept gate
+// remain unchanged.
+export const CADENCE_MICRO_SEED_VERSION = 14;
+export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -266,6 +267,35 @@ export function cadenceMicroSeedAnchors(args: {
     if (supplemented.length >= 2) break;
   }
   return supplemented;
+}
+
+/**
+ * Revalidate an unpublished legacy topic against both immutable creation
+ * evidence and the tenant's current explicit discovery anchors. This catches
+ * historical policies that fragmented a valid user phrase before persisting
+ * the job seed, while preserving any legacy topic whose exact seed remains
+ * authorized and whose selected provider keyword still satisfies it.
+ */
+export function cadenceMicroSeedLegacyAnchorReceiptEligible(args: {
+  currentAnchors: readonly string[];
+  jobSeed: string;
+  selectedKeyword?: string;
+  topicKeyword: string;
+}): boolean {
+  const seed = normalizeCadenceMicroSeedText(args.jobSeed);
+  const selected = normalizeCadenceMicroSeedText(args.selectedKeyword ?? "");
+  const topic = normalizeCadenceMicroSeedText(args.topicKeyword);
+  const authorizedSeeds = new Set(
+    args.currentAnchors.map(normalizeCadenceMicroSeedText).filter(Boolean),
+  );
+  return Boolean(
+    seed &&
+      selected &&
+      topic &&
+      authorizedSeeds.has(seed) &&
+      selected === topic &&
+      cadenceMicroSeedCandidateMatchesAnchor(seed, topic)
+  );
 }
 
 /**

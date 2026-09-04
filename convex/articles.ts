@@ -61,6 +61,12 @@ import {
   recoveredTopicQualitySettlement,
   terminalTopicQualitySettlement,
 } from "./lib/topicLifecycle";
+import {
+  CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
+  CADENCE_MICRO_SEED_VERSION,
+  cadenceMicroSeedAnchors,
+  cadenceMicroSeedLegacyAnchorReceiptEligible,
+} from "./lib/cadenceMicroSeed";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import {
   executionLeasePredatesPlanTransition,
@@ -1300,6 +1306,121 @@ export const quarantineTargetMismatch = internalMutation({
     });
     await syncSummary(ctx, articleId);
     return { quarantined: true, topicId: article.topicId };
+  },
+});
+
+/**
+ * Quarantine only a database-proven, unpublished legacy micro-seed artifact
+ * whose immutable job seed is no longer an exact current tenant anchor, or
+ * whose provider selection no longer satisfies that seed. The article seal
+ * and compact summary are invalidated atomically with the topic tombstone;
+ * published artifacts and active deliveries are immutable.
+ */
+export const quarantineLegacyCadenceAnchorMismatch = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    topicId: v.id("topic_clusters"),
+  },
+  handler: async (ctx, { siteId, topicId }) => {
+    const [site, topic, linkedArticles, activeJobs] = await Promise.all([
+      ctx.db.get(siteId),
+      ctx.db.get(topicId),
+      ctx.db.query("articles").withIndex("by_topic", (q) =>
+        q.eq("topicId", topicId)
+      ).take(11),
+      Promise.all(["pending", "running"].map((status) =>
+        ctx.db.query("jobs").withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        ).take(CADENCE_QUALITY_RECOVERY_READ_LIMIT + 1)
+      )),
+    ]);
+    if (
+      !siteExecutionActive(site) ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !topic ||
+      topic.siteId !== siteId ||
+      !topicMatchesCurrentDomain(site!, topic) ||
+      !topic.cadenceMicroSeedJobId ||
+      !Number.isInteger(topic.cadenceMicroSeedVersion) ||
+      (topic.cadenceMicroSeedVersion ?? 0) >= CADENCE_MICRO_SEED_VERSION ||
+      topic.cadenceMicroSeedAnchorEligible === false ||
+      linkedArticles.length === 0 ||
+      linkedArticles.length > 10 ||
+      linkedArticles.some((article) =>
+        article.siteId !== siteId ||
+        !articleMatchesCurrentDomain(site!, article) ||
+        article.status === "published"
+      ) ||
+      activeJobs.some((rows) =>
+        rows.length > CADENCE_QUALITY_RECOVERY_READ_LIMIT
+      )
+    ) return { quarantined: false as const, reason: "scope_changed" as const };
+
+    const sourceJob = await ctx.db.get(topic.cadenceMicroSeedJobId);
+    if (
+      !sourceJob ||
+      sourceJob.siteId !== siteId ||
+      sourceJob.topicId !== topicId ||
+      sourceJob.policyVersion !== topic.cadenceMicroSeedVersion ||
+      cadenceMicroSeedLegacyAnchorReceiptEligible({
+        currentAnchors: cadenceMicroSeedAnchors(site!),
+        jobSeed: sourceJob.seed,
+        selectedKeyword: sourceJob.selectedCandidate?.keyword,
+        topicKeyword: topic.primaryKeyword,
+      })
+    ) return { quarantined: false as const, reason: "receipt_changed" as const };
+
+    const linkedIds = new Set(linkedArticles.map((article) =>
+      String(article._id)
+    ));
+    const active = activeJobs.flat().some((job) => {
+      if (job.type !== "article") return false;
+      const payload = job.payload && typeof job.payload === "object"
+        ? job.payload as Record<string, unknown>
+        : {};
+      return payload.topicId === topicId ||
+        (job.articleId && linkedIds.has(String(job.articleId))) ||
+        (payload.articleId && linkedIds.has(String(payload.articleId)));
+    });
+    if (active) {
+      return { quarantined: false as const, reason: "work_in_progress" as const };
+    }
+
+    const checkedAt = now();
+    const issue =
+      `Cadence micro-seed provenance mismatch: "${topic.primaryKeyword}" ` +
+      `does not preserve source anchor "${sourceJob.seed}".`;
+    for (const article of linkedArticles) {
+      assertNotPublishing(article);
+      await ctx.db.patch(article._id, {
+        status: "rejected",
+        publicationGateStatus: "blocked",
+        publicationGateIssues: [issue],
+        publicationGateWarnings: [],
+        publicationCheckedAt: checkedAt,
+        publicationAuditVersion: undefined,
+        publicationConfigHash: undefined,
+        publicationConfigSnapshot: undefined,
+        auditedContentHash: undefined,
+        auditedAt: undefined,
+        updatedAt: checkedAt,
+      });
+      await syncSummary(ctx, article._id);
+    }
+    await ctx.db.patch(topicId, {
+      status: "disqualified",
+      cadenceMicroSeedAnchorAuditVersion:
+        CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
+      cadenceMicroSeedAnchorEligible: false,
+      disqualifiedReason: `cadence_micro_seed_anchor_mismatch_v${
+        CADENCE_MICRO_SEED_VERSION
+      }: ${issue}`.slice(0, 240),
+      updatedAt: checkedAt,
+    });
+    return {
+      quarantined: true as const,
+      articlesQuarantined: linkedArticles.length,
+    };
   },
 });
 

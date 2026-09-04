@@ -13,6 +13,7 @@ import {
 } from "./lib/planProviderBudget";
 import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+  CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
   CADENCE_MICRO_SEED_FINALIZE_DELAY_MS,
   CADENCE_MICRO_SEED_LEASE_MS,
   CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS,
@@ -28,6 +29,7 @@ import {
   CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedAnchors,
+  cadenceMicroSeedLegacyAnchorReceiptEligible,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedProviderCeilingMicroUsd,
   cadenceMicroSeedProviderPurpose,
@@ -715,6 +717,7 @@ async function inspectReadiness(
       topic.status ?? "planned",
     ) && !topic.planCheckpointTerminalFailureCode &&
       fit.eligible && topic.businessFitEligible === true &&
+      topic.cadenceMicroSeedAnchorEligible !== false &&
       Number.isFinite(topic.searchVolume) &&
       Number.isFinite(topic.keywordDifficulty) &&
       topic.keywordDifficultyMeasured === true &&
@@ -1108,6 +1111,89 @@ async function inspectReadiness(
 export const inspectInternal = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => inspectReadiness(ctx, siteId, Date.now()),
+});
+
+/**
+ * Find a bounded set of unpublished legacy micro-seed topics whose persisted
+ * immutable job seed is no longer one of the tenant's exact current anchors,
+ * or whose provider selection no longer satisfies that seed. The action layer
+ * settles these before fresh readiness so stale sealed inventory cannot
+ * reserve the corrected intent.
+ */
+export const listLegacyAnchorMismatchRepairsInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !siteExecutionActive(site) ||
+      !(await siteExecutionAuthorized(ctx, site))
+    ) return { topicIds: [] as Id<"topic_clusters">[] };
+    const [topics, articles, activeJobs] = await Promise.all([
+      takeCurrentDomainTopics(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      takeCurrentDomainArticles(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
+      Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
+        ctx.db.query("jobs").withIndex("by_site_status", (q) =>
+          q.eq("siteId", siteId).eq("status", status)
+        ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1)
+      )),
+    ]);
+    if (
+      topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+      articles.length > CADENCE_MICRO_SEED_READ_LIMIT ||
+      activeJobs.some((rows) => rows.length > CADENCE_MICRO_SEED_READ_LIMIT)
+    ) return { topicIds: [] as Id<"topic_clusters">[], reason: "read_limit" };
+
+    const currentAnchors = cadenceMicroSeedAnchors(site);
+    const linkedByTopic = new Map<string, typeof articles>();
+    for (const article of articles) {
+      if (!article.topicId) continue;
+      const key = String(article.topicId);
+      const linked = linkedByTopic.get(key) ?? [];
+      linked.push(article);
+      linkedByTopic.set(key, linked);
+    }
+    const liveJobs = activeJobs.flat();
+    const topicIds: Id<"topic_clusters">[] = [];
+    for (const topic of topics) {
+      if (topicIds.length >= 5) break;
+      if (
+        !topic.cadenceMicroSeedJobId ||
+        !Number.isInteger(topic.cadenceMicroSeedVersion) ||
+        (topic.cadenceMicroSeedVersion ?? 0) >= CADENCE_MICRO_SEED_VERSION ||
+        topic.cadenceMicroSeedAnchorEligible === false
+      ) continue;
+      const linked = linkedByTopic.get(String(topic._id)) ?? [];
+      if (linked.length === 0 || linked.some((article) =>
+        article.status === "published"
+      )) continue;
+      const linkedIds = new Set(linked.map((article) => String(article._id)));
+      const hasActiveJob = liveJobs.some((job) => {
+        if (job.type !== "article") return false;
+        const payload = job.payload && typeof job.payload === "object"
+          ? job.payload as Record<string, unknown>
+          : {};
+        return payload.topicId === topic._id ||
+          (job.articleId && linkedIds.has(String(job.articleId))) ||
+          (payload.articleId && linkedIds.has(String(payload.articleId)));
+      });
+      if (hasActiveJob) continue;
+      const sourceJob = await ctx.db.get(topic.cadenceMicroSeedJobId);
+      if (
+        !sourceJob ||
+        sourceJob.siteId !== siteId ||
+        sourceJob.topicId !== topic._id ||
+        sourceJob.policyVersion !== topic.cadenceMicroSeedVersion ||
+        cadenceMicroSeedLegacyAnchorReceiptEligible({
+          currentAnchors,
+          jobSeed: sourceJob.seed,
+          selectedKeyword: sourceJob.selectedCandidate?.keyword,
+          topicKeyword: topic.primaryKeyword,
+        })
+      ) continue;
+      topicIds.push(topic._id);
+    }
+    return { topicIds };
+  },
 });
 
 export const reserveAndQueue = internalMutation({
@@ -1720,6 +1806,9 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       cadenceMicroSeedVersion: CADENCE_MICRO_SEED_VERSION,
       cadenceMicroSeedJobId: job._id,
       cadenceMicroSeedFingerprint: fingerprint,
+      cadenceMicroSeedAnchorAuditVersion:
+        CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
+      cadenceMicroSeedAnchorEligible: true,
       createdAt: timestamp,
       updatedAt: timestamp,
     });

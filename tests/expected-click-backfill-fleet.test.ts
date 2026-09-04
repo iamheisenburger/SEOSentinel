@@ -491,7 +491,7 @@ test("daily idempotency and the shared provider ceilings remain decisive", () =>
   assert.match(evidence, /const existing = todayJobs\[0\]/);
   assert.equal(EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD, 100_000);
   assert.equal(EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD, 100_000);
-  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 4_250_000);
+  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 4_500_000);
   assert.equal(SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD, 35_000_000);
   assert.match(runbook, /13:15 UTC/);
   assert.match(runbook, /\$0\.20\/day/);

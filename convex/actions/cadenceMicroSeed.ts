@@ -720,6 +720,22 @@ export const dispatchCadenceMicroSeedFleet = internalAction({
 export const runCadenceMicroSeedFleetSite = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<unknown> => {
+    const legacyRepairs = await ctx.runQuery(
+      api.listLegacyAnchorMismatchRepairsInternal,
+      { siteId },
+    );
+    let legacyTopicsQuarantined = 0;
+    let legacyArticlesQuarantined = 0;
+    for (const topicId of legacyRepairs.topicIds) {
+      const repaired = await ctx.runMutation(
+        internal.articles.quarantineLegacyCadenceAnchorMismatch,
+        { siteId, topicId },
+      );
+      if (repaired.quarantined) {
+        legacyTopicsQuarantined += 1;
+        legacyArticlesQuarantined += repaired.articlesQuarantined;
+      }
+    }
     const inspected = await ctx.runAction(
       internal.actions.cadenceMicroSeed.recoverCadenceGap,
       { siteId, mode: "inspect" },
@@ -745,9 +761,14 @@ export const runCadenceMicroSeedFleetSite = internalAction({
       !inspected.sourcePlanFingerprint ||
       !inspected.attemptKind ||
       typeof inspected.providerCostCeilingMicroUsd !== "number"
-    ) return { applied: false, reason: inspected.reason ?? "not_ready" };
+    ) return {
+      applied: false,
+      reason: inspected.reason ?? "not_ready",
+      legacyTopicsQuarantined,
+      legacyArticlesQuarantined,
+    };
     try {
-      return await ctx.runAction(
+      const applied = await ctx.runAction(
         internal.actions.cadenceMicroSeed.recoverCadenceGap,
         {
           siteId,
@@ -765,8 +786,18 @@ export const runCadenceMicroSeedFleetSite = internalAction({
             inspected.providerCostCeilingMicroUsd,
         },
       );
+      return {
+        ...(applied as Record<string, unknown>),
+        legacyTopicsQuarantined,
+        legacyArticlesQuarantined,
+      };
     } catch (error) {
-      return { applied: false, reason: stableFailureCode(error) };
+      return {
+        applied: false,
+        reason: stableFailureCode(error),
+        legacyTopicsQuarantined,
+        legacyArticlesQuarantined,
+      };
     }
   },
 });

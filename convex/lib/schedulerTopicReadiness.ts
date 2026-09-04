@@ -51,6 +51,7 @@ export type SchedulerReadyTopic = {
   planCheckpointId?: unknown;
   planCheckpointTerminalFailureCode?: string;
   contentFeasibilityStatus?: string;
+  cadenceMicroSeedAnchorEligible?: boolean;
 };
 
 export type SchedulerReadySite = TenantTopicSignalSource & {
@@ -238,6 +239,7 @@ export function evaluateSchedulerReadyTopicInventory(args: {
       // terminal product-fit failure. A measured intent mismatch still fails
       // closed before generation.
       businessFitEligible: fit.eligible &&
+        topic.cadenceMicroSeedAnchorEligible !== false &&
         (!hasMeasuredSerp || serpIntent.aligned),
       monthlyDemand: topic.searchVolume,
       expectedClicksMonthly: estimate?.expectedClicksMonthly,

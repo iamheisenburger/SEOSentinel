@@ -13,11 +13,13 @@ import {
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_VERSION,
+  CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
   cadenceMicroSeedAnchors,
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedCandidateMatchesAnchor,
+  cadenceMicroSeedLegacyAnchorReceiptEligible,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedProviderCeilingMicroUsd,
   cadenceMicroSeedProviderPurpose,
@@ -54,6 +56,8 @@ const demandBackfill = readFileSync(
   "utf8",
 );
 const action = readFileSync("convex/actions/cadenceMicroSeed.ts", "utf8");
+const articles = readFileSync("convex/articles.ts", "utf8");
+const topics = readFileSync("convex/topics.ts", "utf8");
 const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
 const jobs = readFileSync("convex/jobs.ts", "utf8");
 const provider = readFileSync("convex/actions/seoData.ts", "utf8");
@@ -269,6 +273,37 @@ test("paid seeds supplement sparse search profiles without diluting healthy ones
     "predictive lead qualification",
     "automated sales routing",
   ]);
+});
+
+test("legacy unpublished inventory remains eligible only with exact current anchor provenance", () => {
+  const currentAnchors = [
+    "lead scoring and qualification tool",
+    "sales automation chat widget",
+  ];
+  assert.equal(cadenceMicroSeedLegacyAnchorReceiptEligible({
+    currentAnchors,
+    jobSeed: "lead scoring and qualification tool",
+    selectedKeyword: "lead qualification tool",
+    topicKeyword: "lead qualification tool",
+  }), true);
+  assert.equal(cadenceMicroSeedLegacyAnchorReceiptEligible({
+    currentAnchors,
+    jobSeed: "qualification tool",
+    selectedKeyword: "tool qualification",
+    topicKeyword: "tool qualification",
+  }), false, "a lossy historical seed cannot reserve the corrected tenant intent");
+  assert.equal(cadenceMicroSeedLegacyAnchorReceiptEligible({
+    currentAnchors,
+    jobSeed: "lead scoring and qualification tool",
+    selectedKeyword: "generic marketing software",
+    topicKeyword: "lead qualification tool",
+  }), false, "the immutable provider selection must equal the topic receipt");
+  assert.equal(cadenceMicroSeedLegacyAnchorReceiptEligible({
+    currentAnchors,
+    jobSeed: "lead scoring and qualification tool",
+    selectedKeyword: "lead qualification tool",
+    topicKeyword: "generic marketing software",
+  }), false, "an off-anchor topic cannot survive through a matching receipt alone");
 });
 
 test("fallback is a distinct $0.05 receipt after an exact terminal primary miss", () => {
@@ -585,17 +620,17 @@ test("receipt envelope is exactly one bounded Labs task", () => {
 });
 
 test("the terminal plan, recovery chain, and bounded policy upgrades fit exactly", () => {
-  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 4_000_000);
+  assert.equal(PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD, 4_250_000);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 2_000_000,
+    requestedMicroUsd: 2_250_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_000_000,
     accountReservedThisMonthMicroUsd: 2_000_000,
-    requestedMicroUsd: 2_000_001,
+    requestedMicroUsd: 2_250_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
 });
@@ -605,25 +640,25 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 1_900_000,
+    requestedMicroUsd: 2_150_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_100_000,
     accountReservedThisMonthMicroUsd: 2_100_000,
-    requestedMicroUsd: 1_900_001,
+    requestedMicroUsd: 2_150_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 1_850_000,
+    requestedMicroUsd: 2_100_000,
     monthlyCeilingMicroUsd: 5_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: 2_150_000,
     accountReservedThisMonthMicroUsd: 2_150_000,
-    requestedMicroUsd: 1_850_001,
+    requestedMicroUsd: 2_100_001,
     monthlyCeilingMicroUsd: 5_000_000,
   }).allowed, false);
   assert.deepEqual(evaluateProviderAccountCapacity({
@@ -639,15 +674,15 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
     monthlyCeilingMicroUsd: 2_500_000,
   }).allowed, false);
 
-  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 4_250_000);
+  assert.equal(SHARED_PROVIDER_DAILY_CEILING_MICRO_USD, 4_500_000);
   assert.deepEqual(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 4_000_000,
-    fleetReservedThisMonthMicroUsd: 4_000_000,
+    fleetReservedTodayMicroUsd: 4_250_000,
+    fleetReservedThisMonthMicroUsd: 4_250_000,
     requestedMicroUsd: 250_000,
   }), { allowed: true });
   assert.equal(evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: 4_000_000,
-    fleetReservedThisMonthMicroUsd: 4_000_000,
+    fleetReservedTodayMicroUsd: 4_250_000,
+    fleetReservedThisMonthMicroUsd: 4_250_000,
     requestedMicroUsd: 250_001,
   }).allowed, false);
   assert.deepEqual(evaluateSharedProviderCapacity({
@@ -1098,4 +1133,31 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     `${model}\n${action}\n${provider}\n${runbook}`,
     /leadpilot|@[a-z0-9.-]+\.[a-z]{2,}/i,
   );
+});
+
+test("the legacy anchor migration is bounded, publication-safe, and runs before new admission", () => {
+  assert.equal(CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION, 1);
+  assert.match(schema, /cadenceMicroSeedAnchorAuditVersion: v\.optional\(v\.number\(\)\)/);
+  assert.match(schema, /cadenceMicroSeedAnchorEligible: v\.optional\(v\.boolean\(\)\)/);
+  assert.match(model, /export const listLegacyAnchorMismatchRepairsInternal/);
+  assert.match(model, /topicIds\.length >= 5/);
+  assert.match(model, /cadenceMicroSeedLegacyAnchorReceiptEligible/);
+  assert.match(model, /cadenceMicroSeedAnchorEligible: true/);
+  const fleetSite = action.slice(
+    action.indexOf("export const runCadenceMicroSeedFleetSite"),
+    action.indexOf("export const finalizeCadenceMicroSeed"),
+  );
+  assert.ok(
+    fleetSite.indexOf("listLegacyAnchorMismatchRepairsInternal") <
+      fleetSite.indexOf("mode: \"inspect\""),
+    "legacy intent locks must settle before fresh cadence inspection",
+  );
+  assert.match(action, /quarantineLegacyCadenceAnchorMismatch/);
+  assert.match(articles, /export const quarantineLegacyCadenceAnchorMismatch/);
+  assert.match(articles, /article\.status === "published"/);
+  assert.match(articles, /reason: "work_in_progress"/);
+  assert.match(articles, /assertNotPublishing\(article\)/);
+  assert.match(articles, /cadenceMicroSeedAnchorEligible: false/);
+  assert.match(articles, /publicationAuditVersion: undefined/);
+  assert.match(topics, /topic\.cadenceMicroSeedAnchorEligible === false/);
 });

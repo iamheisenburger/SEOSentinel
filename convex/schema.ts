@@ -741,6 +741,11 @@ export default defineSchema({
     cadenceMicroSeedVersion: v.optional(v.number()),
     cadenceMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
     cadenceMicroSeedFingerprint: v.optional(v.string()),
+    // Provenance audit for versioned micro-seed inventory. False is a durable
+    // no-publication tombstone for an unpublished legacy topic whose selected
+    // keyword does not preserve its generating job's tenant anchor.
+    cadenceMicroSeedAnchorAuditVersion: v.optional(v.number()),
+    cadenceMicroSeedAnchorEligible: v.optional(v.boolean()),
 
     // Automatic planners durably stage exact measured candidates before the
     // first live SERP call. `plan_checkpoint` is intentionally outside the
