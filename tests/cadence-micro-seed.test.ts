@@ -40,6 +40,7 @@ import {
   selectCadenceMicroSeedAnchorBatch,
   selectCadenceMicroSeedCandidate,
   selectCadenceMicroSeedFallbackAnchor,
+  selectCadenceMicroSeedProbeBatch,
   type CadenceMicroSeedMetric,
 } from "../convex/lib/cadenceMicroSeed.ts";
 import {
@@ -95,9 +96,32 @@ function metric(
   };
 }
 
-function providerFixture() {
-  const seed = "lead scoring software";
+function providerFixture(
+  seeds: string[] = ["lead scoring software"],
+  endpoint: "overview" | "ideas" = "overview",
+) {
+  const seed = seeds[0]!;
   const tag = "cadence-micro-seed-v3-job-placeholder";
+  const items = seeds.map((keyword) => ({
+    se_type: "google",
+    location_code: 2840,
+    language_code: "en",
+    keyword,
+    keyword_info: {
+      search_volume: 90,
+      cpc: 2.4,
+      competition: 0.4,
+      monthly_searches: [
+        { search_volume: 70 },
+        { search_volume: 75 },
+        { search_volume: 80 },
+        { search_volume: 90 },
+      ],
+    },
+    keyword_properties: { keyword_difficulty: 8 },
+    search_intent_info: { main_intent: "commercial" },
+  }));
+  const fallback = endpoint === "ideas";
   const data = {
     status_code: 20_000,
     tasks_count: 1,
@@ -110,52 +134,40 @@ function providerFixture() {
         "v3",
         "dataforseo_labs",
         "google",
-        "keyword_suggestions",
+        fallback ? "keyword_ideas" : "keyword_overview",
         "live",
       ],
       data: {
         api: "dataforseo_labs",
-        function: "keyword_suggestions",
+        function: fallback ? "keyword_ideas" : "keyword_overview",
         se_type: "google",
-        keyword: seed,
+        keywords: seeds,
         location_code: 2840,
         language_code: "en",
-        include_seed_keyword: false,
         include_serp_info: false,
         include_clickstream_data: false,
-        exact_match: false,
         tag,
-        filters: ["keyword_info.search_volume", ">=", 10],
-        order_by: [
-          "keyword_info.search_volume,desc",
-          "keyword_properties.keyword_difficulty,asc",
-        ],
-        limit: 100,
+        ...(fallback
+          ? {
+              closely_variants: false,
+              ignore_synonyms: false,
+              filters: ["keyword_info.search_volume", ">=", 10],
+              order_by: [
+                "relevance,desc",
+                "keyword_info.search_volume,desc",
+                "keyword_properties.keyword_difficulty,asc",
+              ],
+              limit: 100,
+            }
+          : {}),
       },
       result: [{
-        seed_keyword: seed,
+        ...(fallback ? { seed_keywords: seeds } : {}),
         se_type: "google",
         location_code: 2840,
         language_code: "en",
-        items: [{
-          se_type: "google",
-          location_code: 2840,
-          language_code: "en",
-          keyword: "predictive lead scoring platform",
-          keyword_info: {
-            search_volume: 90,
-            cpc: 2.4,
-            competition: 0.4,
-            monthly_searches: [
-              { search_volume: 70 },
-              { search_volume: 75 },
-              { search_volume: 80 },
-              { search_volume: 90 },
-            ],
-          },
-          keyword_properties: { keyword_difficulty: 8 },
-          search_intent_info: { main_intent: "commercial" },
-        }],
+        items_count: items.length,
+        items,
       }],
     }],
   };
@@ -323,11 +335,16 @@ test("recovery seeds keep complete profiles on explicit product anchors", () => 
     painPoints: ["sales teams need more pipeline"],
     targetAudienceSummary: "small b2b businesses with websites",
   });
-  assert.deepEqual(anchors, [
+  assert.deepEqual(anchors.slice(0, 3), [
     "lead qualification chatbot",
     "website lead generation automation",
     "booking link integration",
   ]);
+  assert.ok(anchors.includes("lead qualification chatbot guide"));
+  assert.ok(anchors.every((anchor) =>
+    anchor.length <= 80 && anchor.split(" ").length >= 2 &&
+    anchor.split(" ").length <= 6
+  ));
 
   const sparse = cadenceMicroSeedRecoveryAnchors({
     anchorKeywords: ["lead qualification chatbot"],
@@ -350,12 +367,13 @@ test("recovery adds only complete bounded feature phrases to mature profiles", (
       "AI chat engagement powered by website content learning",
     ],
   });
-  assert.deepEqual(anchors, [
+  assert.deepEqual(anchors.slice(0, 4), [
     "lead qualification chatbot",
     "website lead generation automation",
     "contact detail capture",
     "booking link integration",
   ]);
+  assert.ok(anchors.includes("contact detail capture checklist"));
   assert.equal(anchors.includes("website content learning"), false);
 });
 
@@ -371,12 +389,18 @@ test("recovery never lets clipped feature prose displace mature search anchors",
       "booking link integration",
     ],
   });
-  assert.deepEqual(anchors, [
+  assert.deepEqual(anchors.slice(0, 4), [
     "ai sales agent for websites",
     "lead qualification chatbot",
     "website lead generation automation",
     "booking link integration",
   ]);
+  const probes = selectCadenceMicroSeedProbeBatch(
+    anchors,
+    "source-plan-placeholder",
+  );
+  assert.equal(probes.length, Math.min(32, anchors.length));
+  assert.equal(new Set(probes).size, probes.length);
   assert.equal(anchors.includes("website content learning"), false);
 });
 
@@ -576,7 +600,7 @@ test("legacy unpublished inventory remains eligible only with exact current anch
   }), false, "an off-anchor topic cannot survive through a matching receipt alone");
 });
 
-test("fallback is a distinct $0.10 receipt after an exact terminal primary miss", () => {
+test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
   assert.equal(cadenceMicroSeedAttemptKind(undefined), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("primary"), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("fallback"), "fallback");
@@ -628,8 +652,8 @@ test("fallback is a distinct $0.10 receipt after an exact terminal primary miss"
     providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
     includeSerpInfo: false,
     includeClickstreamData: false,
-    providerCostCeilingMicroUsd: 100_000,
-    providerCostReservedMicroUsd: 100_000,
+    providerCostCeilingMicroUsd: CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
+    providerCostReservedMicroUsd: CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
     providerCallAttempted: true,
     providerCallCompleted: true,
     providerAttemptedAt: attemptedAt,
@@ -704,7 +728,7 @@ test("fallback is a distinct $0.10 receipt after an exact terminal primary miss"
     { locationCode: 2826 },
     { languageCode: "de" },
     { providerCallCompleted: false },
-    { providerTaskCostUsd: 0.100_01 },
+    { providerTaskCostUsd: CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + 0.000_01 },
     { candidateReceiptCount: 1 },
     { candidateAudit: { ...receipt.candidateAudit, received: 1 } },
     { hasSelectedOrTopicReceipt: true },
@@ -918,18 +942,18 @@ test("materialization treats terminal content misses as upstream topic feedback"
   );
 });
 
-test("receipt envelope is a bounded fanout of single-task Labs calls", () => {
+test("receipt envelope is one bounded multi-keyword Labs task", () => {
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD, 100_000);
-  assert.equal(CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT, 6);
+  assert.equal(CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT, 32);
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS, 60_000);
   assert.equal(CADENCE_MICRO_SEED_RESULT_LIMIT, 300);
   assert.equal(
     CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
-    "dataforseo_labs/google/keyword_suggestions/live",
+    "dataforseo_labs/google/keyword_overview/live",
   );
   assert.equal(
     CADENCE_MICRO_SEED_FALLBACK_DISCOVERY_ENDPOINT,
-    "dataforseo_labs/google/related_keywords/live",
+    "dataforseo_labs/google/keyword_ideas/live",
   );
   assert.equal(CADENCE_MICRO_SEED_TASK_COST_CEILING_USD, 0.10);
   assert.equal(cadenceMicroSeedProviderReceiptValid({
@@ -1323,8 +1347,8 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
 });
 
 test("provider helper binds request, locale, intent, measured KD, and both cost receipts", async () => {
-  const fixture = providerFixture();
-  const seeds = [fixture.seed, "booking link integration"];
+  const seeds = ["lead scoring software", "booking link integration"];
+  const fixture = providerFixture(seeds);
   const captured: Array<{ endpoint: string; body: unknown[] }> = [];
   const receipt = await discoverCadenceMicroSeedFromDataForSEO(
     seeds,
@@ -1335,25 +1359,11 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
       requestTag: fixture.tag,
       request: async (endpoint, body) => {
         captured.push({ endpoint, body });
-        const task = body[0] as {
-          keyword: string;
-          tag: string;
-          limit: number;
-        };
-        const response = providerFixture().data;
-        response.tasks[0].data.keyword = task.keyword;
-        response.tasks[0].data.tag = task.tag;
-        response.tasks[0].data.limit = task.limit;
-        response.tasks[0].result[0].seed_keyword = task.keyword;
-        response.tasks[0].result[0].items[0].keyword =
-          task.keyword === seeds[0]
-            ? "predictive lead scoring platform"
-            : "appointment booking integration";
-        return response;
+        return fixture.data;
       },
     },
   );
-  assert.equal(captured.length, 2);
+  assert.equal(captured.length, 1);
   assert.ok(captured.every(({ endpoint }) =>
     endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
   ));
@@ -1361,58 +1371,26 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
     provider,
     /dataForSEORequest\([\s\S]*CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS/,
   );
-  assert.deepEqual(captured.map(({ body }) => body), seeds.map((seed, index) =>
-    [{
-      keyword: seed,
+  assert.deepEqual(captured[0]?.body, [{
+      keywords: seeds,
       location_code: 2840,
       language_code: "en",
-      include_seed_keyword: false,
       include_serp_info: false,
       include_clickstream_data: false,
-      tag: `${fixture.tag}-${index + 1}`,
-      filters: ["keyword_info.search_volume", ">=", 10],
-      order_by: [
-        "keyword_info.search_volume,desc",
-        "keyword_properties.keyword_difficulty,asc",
-      ],
-      limit: CADENCE_MICRO_SEED_RESULT_LIMIT / seeds.length,
-      exact_match: false,
-    }]
-  ));
+      tag: fixture.tag,
+    }]);
   assert.deepEqual(receipt.seeds, seeds);
-  assert.equal(receipt.providerTaskCostUsd, 0.048);
+  assert.equal(receipt.providerTaskCostUsd, 0.024);
   assert.equal(receipt.providerRowsReceived, 2);
   assert.equal(receipt.providerRowsRejected, 0);
   assert.deepEqual(receipt.candidates, [
-    metric("predictive lead scoring platform"),
-    metric("appointment booking integration"),
+    metric("lead scoring software"),
+    metric("booking link integration"),
   ]);
 });
 
-test("provider helper binds the fallback to the distinct related-keyword graph", async () => {
-  const fixture = providerFixture();
-  const task = fixture.data.tasks[0] as unknown as {
-    path: string[];
-    data: Record<string, unknown>;
-    result: Array<{ items: unknown[] }>;
-  };
-  task.path[3] = "related_keywords";
-  task.data.function = "related_keywords";
-  delete task.data.exact_match;
-  task.data.depth = 2;
-  task.data.filters = [
-    "keyword_data.keyword_info.search_volume",
-    ">=",
-    10,
-  ];
-  task.data.order_by = [
-    "keyword_data.keyword_info.search_volume,desc",
-    "keyword_data.keyword_properties.keyword_difficulty,asc",
-  ];
-  task.result[0].items = task.result[0].items.map((item: unknown) => ({
-    se_type: "google",
-    keyword_data: item,
-  }));
+test("provider helper binds the fallback to the distinct keyword-ideas graph", async () => {
+  const fixture = providerFixture(["lead scoring software"], "ideas");
   const receipt = await discoverCadenceMicroSeedFromDataForSEO(
     fixture.seed,
     2840,
@@ -1424,24 +1402,25 @@ test("provider helper binds the fallback to the distinct related-keyword graph",
       request: async (endpoint, body) => {
         assert.equal(endpoint, CADENCE_MICRO_SEED_FALLBACK_DISCOVERY_ENDPOINT);
         assert.deepEqual(body, [{
-          keyword: fixture.seed,
+          keywords: [fixture.seed],
           location_code: 2840,
           language_code: "en",
-          include_seed_keyword: false,
+          closely_variants: false,
+          ignore_synonyms: false,
           include_serp_info: false,
           include_clickstream_data: false,
           tag: fixture.tag,
           filters: [
-            "keyword_data.keyword_info.search_volume",
+            "keyword_info.search_volume",
             ">=",
             10,
           ],
           order_by: [
-            "keyword_data.keyword_info.search_volume,desc",
-            "keyword_data.keyword_properties.keyword_difficulty,asc",
+            "relevance,desc",
+            "keyword_info.search_volume,desc",
+            "keyword_properties.keyword_difficulty,asc",
           ],
           limit: 100,
-          depth: 2,
         }]);
         return fixture.data;
       },
@@ -1451,7 +1430,7 @@ test("provider helper binds the fallback to the distinct related-keyword graph",
   assert.equal(receipt.providerRowsReceived, 1);
   assert.equal(receipt.providerRowsRejected, 0);
   assert.deepEqual(receipt.candidates, [
-    metric("predictive lead scoring platform"),
+    metric("lead scoring software"),
   ]);
 });
 
@@ -1462,7 +1441,7 @@ test("receipt drift fails closed while incomplete provider rows are rejected ind
     (data) => { data.tasks_count = 2; },
     (data) => { data.tasks_error = 1; },
     (data) => { data.tasks[0].data.se_type = "bing"; },
-    (data) => { data.tasks[0].data.exact_match = true; },
+    (data) => { data.tasks[0].data.keywords = ["request drift"]; },
     (data) => { data.tasks[0].result[0].location_code = 2826; },
   ];
   for (const mutate of cases) {

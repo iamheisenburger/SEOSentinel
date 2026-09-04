@@ -45,6 +45,7 @@ import {
   normalizeCadenceMicroSeedText,
   cadenceMicroSeedMatchingAnchor,
   selectCadenceMicroSeedAnchorBatch,
+  selectCadenceMicroSeedProbeBatch,
   selectCadenceMicroSeedCandidate,
   type CadenceMicroSeedAttemptKind,
   type CadenceMicroSeedMetric,
@@ -909,8 +910,17 @@ async function inspectReadiness(
   // provider request already ran for this exact exhausted source plan. Rows
   // that never reached the provider stay retryable; attempted rows are an
   // immutable exhaustion receipt, regardless of their terminal outcome.
-  const previouslyAttemptedSeeds = priorPolicyJobs
-    .filter((job) => cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job))
+  const previouslyAttemptedPrimarySeeds = priorPolicyJobs
+    .filter((job) =>
+      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
+      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("primary")
+    )
+    .flatMap((job) => job.providerSeeds ?? [job.seed]);
+  const previouslyAttemptedFallbackSeeds = priorPolicyJobs
+    .filter((job) =>
+      cadenceMicroSeedAttemptExhaustsCurrentEnvelope(job) &&
+      job.providerEndpoint === cadenceMicroSeedDiscoveryEndpoint("fallback")
+    )
     .flatMap((job) => job.providerSeeds ?? [job.seed]);
   const currentJob = currentJobId
     ? sourceJobs.find((job) => job._id === currentJobId)
@@ -921,11 +931,11 @@ async function inspectReadiness(
 
   const anchors = cadenceMicroSeedRecoveryAnchors(site);
   const coveredKeywords = coverage.map((topic) => topic.primaryKeyword);
-  const primarySeeds = selectCadenceMicroSeedAnchorBatch(
+  const primarySeeds = selectCadenceMicroSeedProbeBatch(
     anchors,
     String(source.job._id),
     CADENCE_MICRO_SEED_VERSION - 1,
-    previouslyAttemptedSeeds,
+    previouslyAttemptedPrimarySeeds,
     coveredKeywords,
   );
   const primarySeed = primarySeeds[0];
@@ -1001,10 +1011,7 @@ async function inspectReadiness(
         anchors,
         String(source.job._id),
         CADENCE_MICRO_SEED_VERSION - 1,
-        [
-          ...previouslyAttemptedSeeds,
-          ...(parent.providerSeeds ?? [parent.seed]),
-        ],
+        previouslyAttemptedFallbackSeeds,
         coveredKeywords,
       );
       const fallbackSeed = fallbackSeeds[0];
@@ -1051,10 +1058,7 @@ async function inspectReadiness(
       anchors,
       String(source.job._id),
       CADENCE_MICRO_SEED_VERSION - 1,
-      [
-        ...previouslyAttemptedSeeds,
-        ...(parent.providerSeeds ?? [parent.seed]),
-      ],
+      previouslyAttemptedFallbackSeeds,
       coveredKeywords,
     );
     const fallbackSeed = fallbackSeeds[0];

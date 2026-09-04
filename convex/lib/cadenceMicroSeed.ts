@@ -13,6 +13,14 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 25 measures a deterministic portfolio of tenant-grounded search
+// queries directly with Keyword Overview, then uses the category-based Ideas
+// graph as its separately receipted fallback. This closes the sparse-provider
+// failure where Suggestions and Related Keywords can both return zero rows for
+// a legitimate B2B product phrase. Query probes are derived only from explicit
+// product anchors, retain the independent business-fit/difficulty/SERP gates,
+// and are bounded in one provider task instead of relying on repeated policy
+// bumps to explore the rest of the tenant's search surface.
 // Version 24 replaces the exhausted multi-anchor Ideas query with one literal
 // Suggestions request per exact tenant product anchor, followed by a distinct
 // Related Keywords graph for the one fallback. DataForSEO permits only one
@@ -51,16 +59,16 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 24;
+export const CADENCE_MICRO_SEED_VERSION = 25;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
-export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 6;
+export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 32;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
-  "dataforseo_labs/google/keyword_suggestions/live";
+  "dataforseo_labs/google/keyword_overview/live";
 export const CADENCE_MICRO_SEED_FALLBACK_DISCOVERY_ENDPOINT =
-  "dataforseo_labs/google/related_keywords/live";
+  "dataforseo_labs/google/keyword_ideas/live";
 export const CADENCE_MICRO_SEED_RESULT_LIMIT = 300;
 export const CADENCE_MICRO_SEED_TASK_COST_CEILING_USD = 0.10;
 export const CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS = 60_000;
@@ -392,9 +400,95 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     ...exactSearchAnchors,
     ...exactFeaturePhrases,
   ])];
-  return exactSearchAnchors.length >= 2
+  const productAnchors = exactSearchAnchors.length >= 2
     ? exactProductAnchors
     : cadenceMicroSeedAnchors(args);
+  // Direct metrics are more useful than another synonym lottery when a
+  // provider has no suggestions for a narrow B2B phrase. Expand only from the
+  // tenant's own exact product language, round-robin by modifier so a verbose
+  // first feature cannot consume the entire bounded probe set. Every probe
+  // remains within the provider's six-word recovery contract and still has to
+  // pass current tenant business fit, measured demand/difficulty, live SERP,
+  // expected-click, article-quality, and publication audits.
+  const probes: string[] = [];
+  const seen = new Set<string>();
+  const append = (value: string) => {
+    const normalized = normalizeCadenceMicroSeedText(value)
+      .replace(/[^a-z0-9+/-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const words = normalized.split(" ").filter(Boolean);
+    if (
+      words.length < 2 || words.length > 6 || normalized.length > 80 ||
+      seen.has(normalized)
+    ) return;
+    seen.add(normalized);
+    probes.push(normalized);
+  };
+  for (const anchor of productAnchors) append(anchor);
+  const modifiers: Array<(anchor: string) => string> = [
+    (anchor) => `${anchor} guide`,
+    (anchor) => `${anchor} checklist`,
+    (anchor) => `${anchor} examples`,
+    (anchor) => `${anchor} best practices`,
+    (anchor) => `how to use ${anchor}`,
+    (anchor) => `${anchor} for small business`,
+  ];
+  for (const modifier of modifiers) {
+    for (const anchor of productAnchors) append(modifier(anchor));
+  }
+  return probes.slice(0, 96);
+}
+
+/**
+ * Deterministically select a broad direct-metric probe portfolio. Unlike the
+ * Suggestions request, Keyword Overview benefits from several query shapes
+ * for the same product concept, so semantic siblings are intentionally kept.
+ */
+export function selectCadenceMicroSeedProbeBatch(
+  probes: readonly string[],
+  sourcePlanKey: string,
+  policyGeneration = 0,
+  previouslyAttemptedSeeds: readonly string[] = [],
+  coveredKeywords: readonly string[] = [],
+  limit = CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT,
+): string[] {
+  if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+  const attempted = new Set(
+    previouslyAttemptedSeeds.map(normalizeCadenceMicroSeedText).filter(Boolean),
+  );
+  const normalized = [...new Set(
+    probes.map(normalizeCadenceMicroSeedText).filter(Boolean),
+  )].filter((probe) => !attempted.has(probe));
+  if (normalized.length === 0) return [];
+  const conflicts = (probe: string) => coveredKeywords.reduce(
+    (count, covered) => count + (
+      filterNonCannibalizingTopics(
+        [{ primaryKeyword: probe }],
+        [covered],
+        0.35,
+        1,
+      ).length === 0 ? 1 : 0
+    ),
+    0,
+  );
+  const ranked = normalized.map((probe, index) => ({
+    probe,
+    index,
+    conflicts: conflicts(probe),
+  })).sort((left, right) =>
+    left.conflicts - right.conflicts || left.index - right.index
+  ).map((candidate) => candidate.probe);
+  let hash = 0;
+  for (const character of sourcePlanKey) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  const generation = Number.isSafeInteger(policyGeneration)
+    ? Math.max(0, policyGeneration)
+    : 0;
+  const offset = (hash + generation * limit) % ranked.length;
+  const rotated = [...ranked.slice(offset), ...ranked.slice(0, offset)];
+  return rotated.slice(0, Math.min(limit, rotated.length));
 }
 
 /**
@@ -496,8 +590,9 @@ function cadenceMicroSeedAnchorsAreDistinct(
 
 /**
  * Build one deterministic provider request from several exact tenant product
- * phrases. DataForSEO accepts up to 200 seeds in one task; six keeps the
- * request and its receipt small while removing the old two-phrase lottery.
+ * phrases. DataForSEO accepts up to 200 seeds in one task; the shared 32-seed
+ * bound keeps the request and its receipt small while removing the old
+ * two-phrase lottery.
  * Every selected keyword must still match one exact seed and pass the
  * independent tenant-fit, difficulty, overlap, live-SERP, expected-click and
  * publication gates.

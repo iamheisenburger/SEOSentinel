@@ -225,10 +225,10 @@ async function dataForSEORequest(
 /**
  * Deliberately small recovery discovery for an empty verified-topic buffer.
  *
- * DataForSEO Labs Live permits one task per request. We therefore issue at
- * most six concurrent single-seed calls and divide one aggregate row limit
- * between them. Primary recovery uses literal Suggestions; the sole fallback
- * uses the distinct Related Keywords graph. Both retain provider-measured
+ * DataForSEO Labs Live permits one task per request. Primary recovery measures
+ * a bounded portfolio of tenant-grounded search probes directly with Keyword
+ * Overview; the sole fallback expands those exact product phrases through the
+ * distinct category-based Keyword Ideas graph. Both return provider-measured
  * demand, difficulty, and intent, and neither can bypass live SERP, article
  * quality, publication, or live-verification gates.
  */
@@ -258,7 +258,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     normalizedSeeds.length > CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT ||
     normalizedSeeds.some((seed) => {
       const wordCount = seed.split(" ").filter(Boolean).length;
-      return seed.length < 4 || seed.length > 200 ||
+      return seed.length < 4 || seed.length > 80 ||
         wordCount < 2 || wordCount > 6;
     })
   ) {
@@ -289,140 +289,126 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
       CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
     ));
   languageCode = dataForSeoLanguageCode(languageCode);
-  const functionName = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
-    ? "keyword_suggestions"
-    : "related_keywords";
-  const filter = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
-    ? ["keyword_info.search_volume", ">=", 10]
-    : ["keyword_data.keyword_info.search_volume", ">=", 10];
-  const orderBy = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
-    ? [
-      "keyword_info.search_volume,desc",
-      "keyword_properties.keyword_difficulty,asc",
-    ]
-    : [
-      "keyword_data.keyword_info.search_volume,desc",
-      "keyword_data.keyword_properties.keyword_difficulty,asc",
-    ];
-  const baseLimit = Math.floor(limit / normalizedSeeds.length);
-  const remainder = limit % normalizedSeeds.length;
-  const responses = await Promise.all(normalizedSeeds.map((seed, index) => {
-    const taskLimit = baseLimit + (index < remainder ? 1 : 0);
-    const taskTag = normalizedSeeds.length === 1
-      ? requestTag
-      : `${requestTag}-${index + 1}`;
-    if (taskTag.length > 255 || taskLimit < 1) {
-      throw new Error("Cadence micro-seed task partition is outside its contract");
-    }
-    const common = {
-      keyword: seed,
-      location_code: locationCode,
-      language_code: languageCode,
-      include_seed_keyword: false,
-      include_serp_info: false,
-      include_clickstream_data: false,
-      tag: taskTag,
-      filters: filter,
-      order_by: orderBy,
-      limit: taskLimit,
-    };
-    const body = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
-      ? { ...common, exact_match: false }
-      : { ...common, depth: 2 };
-    return request(endpoint, [body]).then((data) => ({
-      data,
-      seed,
-      taskLimit,
-      taskTag,
-    }));
-  }));
+  const primary = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT;
+  const functionName = primary ? "keyword_overview" : "keyword_ideas";
+  const filter = ["keyword_info.search_volume", ">=", 10];
+  const orderBy = [
+    "relevance,desc",
+    "keyword_info.search_volume,desc",
+    "keyword_properties.keyword_difficulty,asc",
+  ];
+  const body = primary
+    ? {
+        keywords: normalizedSeeds,
+        location_code: locationCode,
+        language_code: languageCode,
+        include_serp_info: false,
+        include_clickstream_data: false,
+        tag: requestTag,
+      }
+    : {
+        keywords: normalizedSeeds,
+        location_code: locationCode,
+        language_code: languageCode,
+        closely_variants: false,
+        ignore_synonyms: false,
+        include_serp_info: false,
+        include_clickstream_data: false,
+        tag: requestTag,
+        filters: filter,
+        order_by: orderBy,
+        limit,
+      };
+  const data = await request(endpoint, [body]);
 
   const candidates: CadenceMicroSeedKeywordMetric[] = [];
   const seen = new Set<string>();
   let providerRowsRejected = 0;
   let providerRowsReceived = 0;
   let providerTaskCostUsd = 0;
-  for (const response of responses) {
-    const { data, seed, taskLimit, taskTag } = response;
-    const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+  const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+  if (
+    data?.status_code !== 20_000 || data?.tasks_count !== 1 ||
+    data?.tasks_error !== 0 || tasks.length !== 1
+  ) throw new Error("Cadence micro-seed provider receipt is incompatible");
+  const task = tasks[0];
+  const taskData = task?.data;
+  const expectedPath = [
+    "v3", "dataforseo_labs", "google", functionName, "live",
+  ];
+  const commonEchoValid = Boolean(
+    task?.status_code === 20_000 && taskData &&
+      taskData.api === "dataforseo_labs" &&
+      taskData.function === functionName && taskData.se_type === "google" &&
+      JSON.stringify(taskData.keywords) === JSON.stringify(normalizedSeeds) &&
+      taskData.location_code === locationCode &&
+      taskData.language_code === languageCode &&
+      taskData.include_serp_info === false &&
+      taskData.include_clickstream_data === false &&
+      taskData.tag === requestTag &&
+      JSON.stringify(task?.path) === JSON.stringify(expectedPath),
+  );
+  const endpointEchoValid = primary
+    ? taskData?.limit === undefined && taskData?.filters === undefined &&
+      taskData?.order_by === undefined
+    : taskData?.closely_variants === false &&
+      taskData?.ignore_synonyms === false && taskData?.limit === limit &&
+      JSON.stringify(taskData?.filters) === JSON.stringify(filter) &&
+      JSON.stringify(taskData?.order_by) === JSON.stringify(orderBy);
+  if (!commonEchoValid || !endpointEchoValid) {
+    throw new Error("Cadence micro-seed provider request echo is incompatible");
+  }
+  const taskCost = task?.cost;
+  const responseCost = data?.cost;
+  if (
+    typeof taskCost !== "number" || !Number.isFinite(taskCost) ||
+    taskCost < 0 ||
+    typeof responseCost !== "number" || !Number.isFinite(responseCost) ||
+    responseCost < 0 || Math.abs(responseCost - taskCost) > 0.000001
+  ) throw new Error("Cadence micro-seed provider cost exceeded its contract");
+  providerTaskCostUsd = taskCost;
+  if (
+    providerTaskCostUsd >
+      CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + 0.000001
+  ) throw new Error("Cadence micro-seed provider cost exceeded its contract");
+  const resultGroups = Array.isArray(task?.result) ? task.result : [];
+  if (resultGroups.length !== 1) {
+    throw new Error("Cadence micro-seed provider path is incompatible");
+  }
+  const resultGroup = resultGroups[0];
+  if (
+    resultGroup?.location_code !== locationCode ||
+    resultGroup?.language_code !== languageCode ||
+    resultGroup?.se_type !== "google" ||
+    (!primary && JSON.stringify(resultGroup?.seed_keywords) !==
+      JSON.stringify(normalizedSeeds))
+  ) throw new Error("Cadence micro-seed provider path is incompatible");
+  const items = Array.isArray(resultGroup?.items) ? resultGroup.items : [];
+  const maximumRows = primary ? normalizedSeeds.length : limit;
+  if (
+    items.length > maximumRows ||
+    (resultGroup?.items_count !== undefined &&
+      resultGroup.items_count !== items.length)
+  ) throw new Error("Cadence micro-seed provider row limit exceeded");
+  providerRowsReceived = items.length;
+  const requestedExact = new Set(normalizedSeeds);
+  for (const item of items) {
+    const metric = item;
+    const keyword = typeof metric?.keyword === "string"
+      ? metric.keyword.trim().toLowerCase().replace(/\s+/g, " ")
+      : "";
+    const searchVolume = metric?.keyword_info?.search_volume;
+    const difficulty = metric?.keyword_properties?.keyword_difficulty;
+    const cpcValue = metric?.keyword_info?.cpc;
+    const competitionValue = metric?.keyword_info?.competition;
+    const intentValue = metric?.search_intent_info?.main_intent;
+    const monthlySearches = metric?.keyword_info?.monthly_searches;
     if (
-      data?.status_code !== 20_000 || data?.tasks_count !== 1 ||
-      data?.tasks_error !== 0 || tasks.length !== 1
-    ) throw new Error("Cadence micro-seed provider receipt is incompatible");
-    const task = tasks[0];
-    const taskData = task?.data;
-    const expectedPath = [
-      "v3", "dataforseo_labs", "google", functionName, "live",
-    ];
-    if (
-      task?.status_code !== 20_000 || !taskData ||
-      taskData.api !== "dataforseo_labs" ||
-      taskData.function !== functionName || taskData.se_type !== "google" ||
-      taskData.keyword !== seed || taskData.location_code !== locationCode ||
-      taskData.language_code !== languageCode ||
-      taskData.include_seed_keyword !== false ||
-      taskData.include_serp_info !== false ||
-      taskData.include_clickstream_data !== false ||
-      taskData.tag !== taskTag || taskData.limit !== taskLimit ||
-      JSON.stringify(taskData.filters) !== JSON.stringify(filter) ||
-      JSON.stringify(taskData.order_by) !== JSON.stringify(orderBy) ||
-      (endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
-        ? taskData.exact_match !== false
-        : taskData.depth !== 2) ||
-      JSON.stringify(task?.path) !== JSON.stringify(expectedPath)
-    ) throw new Error("Cadence micro-seed provider request echo is incompatible");
-    const resultGroups = Array.isArray(task?.result) ? task.result : [];
-    if (resultGroups.length !== 1) {
-      throw new Error("Cadence micro-seed provider path is incompatible");
-    }
-    const resultGroup = resultGroups[0];
-    if (
-      resultGroup?.seed_keyword !== seed ||
-      resultGroup?.location_code !== locationCode ||
-      resultGroup?.language_code !== languageCode ||
-      resultGroup?.se_type !== "google"
-    ) throw new Error("Cadence micro-seed provider path is incompatible");
-    const taskCost = task?.cost;
-    const responseCost = data?.cost;
-    if (
-      typeof taskCost !== "number" || !Number.isFinite(taskCost) ||
-      taskCost < 0 ||
-      typeof responseCost !== "number" || !Number.isFinite(responseCost) ||
-      responseCost < 0 || Math.abs(responseCost - taskCost) > 0.000001
-    ) throw new Error("Cadence micro-seed provider cost exceeded its contract");
-    providerTaskCostUsd += taskCost;
-    if (
-      providerTaskCostUsd >
-        CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + 0.000001
-    ) throw new Error("Cadence micro-seed provider cost exceeded its contract");
-    const items = Array.isArray(resultGroup?.items) ? resultGroup.items : [];
-    if (
-      items.length > taskLimit ||
-      (resultGroup?.items_count !== undefined &&
-        resultGroup.items_count !== items.length)
-    ) throw new Error("Cadence micro-seed provider row limit exceeded");
-    providerRowsReceived += items.length;
-    if (providerRowsReceived > limit) {
-      throw new Error("Cadence micro-seed provider row limit exceeded");
-    }
-    for (const item of items) {
-      const metric = endpoint === CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT
-        ? item
-        : item?.keyword_data;
-      const keyword = typeof metric?.keyword === "string"
-        ? metric.keyword.trim().toLowerCase().replace(/\s+/g, " ")
-        : "";
-      const searchVolume = metric?.keyword_info?.search_volume;
-      const difficulty = metric?.keyword_properties?.keyword_difficulty;
-      const cpcValue = metric?.keyword_info?.cpc;
-      const competitionValue = metric?.keyword_info?.competition;
-      const intentValue = metric?.search_intent_info?.main_intent;
-      const monthlySearches = metric?.keyword_info?.monthly_searches;
-      if (
         !keyword || keyword.length > 700 || seen.has(keyword) ||
         typeof searchVolume !== "number" || !Number.isFinite(searchVolume) ||
         searchVolume <= 0 || typeof difficulty !== "number" ||
         !Number.isFinite(difficulty) || difficulty < 0 || difficulty > 100 ||
+        (primary && !requestedExact.has(keyword)) ||
         (item?.se_type !== undefined && item.se_type !== "google") ||
         (metric?.se_type !== undefined && metric.se_type !== "google") ||
         metric?.location_code !== locationCode ||
@@ -439,42 +425,41 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
           .includes(intentValue.trim().toLowerCase()) ||
         (monthlySearches !== null && monthlySearches !== undefined &&
           !Array.isArray(monthlySearches))
-      ) {
-        providerRowsRejected += 1;
-        continue;
-      }
-      const trend: number[] = [];
-      let trendCompatible = true;
-      for (const month of Array.isArray(monthlySearches)
-        ? monthlySearches.slice(0, 12)
-        : []) {
-        const value = month && typeof month === "object"
-          ? (month as { search_volume?: unknown }).search_volume
-          : undefined;
-        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-          trendCompatible = false;
-          break;
-        }
-        trend.push(value);
-      }
-      if (!trendCompatible) {
-        providerRowsRejected += 1;
-        continue;
-      }
-      seen.add(keyword);
-      candidates.push({
-        keyword,
-        searchVolume,
-        difficulty,
-        difficultyMeasured: true,
-        ...(typeof cpcValue === "number" ? { cpc: cpcValue } : {}),
-        ...(typeof competitionValue === "number"
-          ? { competition: competitionValue }
-          : {}),
-        intent: intentValue.trim().toLowerCase(),
-        trend,
-      });
+    ) {
+      providerRowsRejected += 1;
+      continue;
     }
+    const trend: number[] = [];
+    let trendCompatible = true;
+    for (const month of Array.isArray(monthlySearches)
+      ? monthlySearches.slice(0, 12)
+      : []) {
+      const value = month && typeof month === "object"
+        ? (month as { search_volume?: unknown }).search_volume
+        : undefined;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        trendCompatible = false;
+        break;
+      }
+      trend.push(value);
+    }
+    if (!trendCompatible) {
+      providerRowsRejected += 1;
+      continue;
+    }
+    seen.add(keyword);
+    candidates.push({
+      keyword,
+      searchVolume,
+      difficulty,
+      difficultyMeasured: true,
+      ...(typeof cpcValue === "number" ? { cpc: cpcValue } : {}),
+      ...(typeof competitionValue === "number"
+        ? { competition: competitionValue }
+        : {}),
+      intent: intentValue.trim().toLowerCase(),
+      trend,
+    });
   }
   return {
     endpoint,

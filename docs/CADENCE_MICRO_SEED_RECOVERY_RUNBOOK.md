@@ -1,13 +1,13 @@
 # Cadence micro-seed recovery
 
-Current policy: v4. A policy upgrade preserves every older paid receipt and
-rotates to a new product-anchor pair; it never replays an earlier provider
-request or relaxes keyword, authority, SERP, overlap, or publication gates.
-Version 4 uses category-based Keyword Ideas because production proved that
-literal Suggestions can return zero rows for valid, specific SaaS anchors.
-It gives that slower live endpoint a bounded 60-second HTTP window; the
-earlier v3 request that crossed the old 20-second boundary remains ambiguous
-and is never replayed.
+Current policy: v25. A policy upgrade preserves every older paid receipt; it
+never replays the same endpoint/seed envelope or relaxes keyword, authority,
+SERP, overlap, article-quality, publication, or live-verification gates.
+Version 25 first measures a deterministic portfolio of tenant-grounded exact
+queries with Keyword Overview. If that receipt proves no usable candidate, a
+separately receipted Keyword Ideas fallback explores the tenant's product
+categories. This replaces the sparse Suggestions/Related Keywords lottery
+that production proved can return no rows for legitimate B2B product phrases.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready
@@ -39,12 +39,14 @@ fleet ledgers are recomputed before any reservation or provider call.
 ## Exact paid envelope
 
 - Primary discovery creates one new shared-ledger reservation capped at $0.10.
-- It sends exactly one DataForSEO Labs `keyword_ideas/live` task with a
-  deterministic batch of at most six exact tenant `anchorKeywords` or sparse
-  profile fallback seeds, at most 300 results, no SERP expansion, and no
-  clickstream data. Every accepted result must preserve at least one exact
-  source seed, which is persisted on the candidate and topic receipt.
-- The task itself must report no more than $0.05, and its task-level and
+- It sends exactly one DataForSEO Labs `keyword_overview/live` task with a
+  deterministic batch of at most 32 exact tenant product queries. Those
+  queries are either configured product anchors or bounded guide, checklist,
+  examples, best-practices, how-to, and small-business variants derived from
+  those anchors. Each is 2-6 words and at most 80 characters. The endpoint
+  may return at most one metric row per requested query; no unrequested row is
+  eligible.
+- The task itself must report no more than $0.10, and its task-level and
   response-level cost receipts must agree.
 - At most one candidate can become a staged topic. It must have positive
   demand, measured organic keyword difficulty, provider intent, current v5
@@ -52,8 +54,10 @@ fleet ledgers are recomputed before any reservation or provider call.
   reuse in any topic state, and no lexical/canonical overlap.
 - If, and only if, that paid task durably completed with no usable candidate,
   Pentra may create one distinct fallback child and one distinct shared-ledger
-  reservation capped at $0.05. The child uses the deterministic next bounded
-  batch of current tenant phrases; it never replays any parent seed.
+  reservation capped at $0.10. The child sends exactly one DataForSEO Labs
+  `keyword_ideas/live` task with a deterministic batch of at most 32 current
+  tenant product phrases, at most 300 results, no SERP expansion, and no
+  clickstream data. It never replays an earlier Keyword Ideas seed envelope.
   The parent receipt must prove either zero rows or a complete one-to-one audit
   where every returned row was rejected by exactly one strict metric, intent,
   difficulty, brand, business-fit, duplicate, or overlap gate. Accepted,
@@ -67,20 +71,13 @@ fleet ledgers are recomputed before any reservation or provider call.
 - The fallback remains one-shot even if its free wallet preflight releases its
   own reservation. A timeout after its durable attempt is terminal, and there
   is no third anchor attempt.
-- Evidence creates a separate existing reservation capped at $0.10. It buys
-  one fresh locale-bound SERP and one bounded competitor-authority snapshot.
-- The primary combined ledger requirement is $0.20. After a consumed $0.10
-  primary receipt, fallback admission requires the exact remaining $0.15:
-  $0.05 fallback plus $0.10 evidence. With the terminal $2 plan, the complete
-  ordinary worst-case account ledger is therefore exactly $2.25. During the
-  bounded v4 migration, the immutable v1 and v2 primary/fallback receipts
-  ($0.30), the one-time demand/evidence policy receipts ($0.20), the ambiguous
-  v3 primary receipt ($0.10), and the v4 primary/fallback/evidence receipts
-  ($0.25) can coexist with the source plan. The exact account ceiling is
-  therefore $3.05 for this migration and still leaves the fixed $0.25
-  other-account reserve inside the $3.30 fleet ceiling.
-  This observes but does not lock evidence capacity; a later evidence race may
-  still stop safely and report a cadence miss.
+- Each candidate can create a separate existing evidence reservation capped
+  at $0.10 for one fresh locale-bound SERP and one bounded competitor-authority
+  snapshot. At most three candidates are retained, so inspection requires
+  $0.40 of current headroom: $0.10 discovery plus $0.30 evidence. Verified
+  provider receipts settle to actual cost before later admission. This
+  observes but does not lock evidence capacity; a later cross-tenant race may
+  still stop safely and report an exact budget miss.
 
 No article is queued until the evidence job persists an eligible expected-click
 receipt for the exact staged topic. A timeout after a durable provider attempt
@@ -124,14 +121,14 @@ Copy the inspection values without editing them:
 npx convex run actions/cadenceMicroSeed:recoverCadenceGap '{"siteId":"<SITE_ID>","mode":"apply","inspectionKey":"<INSPECTION_KEY>","reservationDay":"<YYYY-MM-DD>","rolloutEpoch":<ROLLOUT_EPOCH>,"sourcePlanId":"<SOURCE_PLAN_ID>","sourcePlanFingerprint":"<SOURCE_PLAN_FINGERPRINT>","attemptKind":"primary","providerCostCeilingMicroUsd":100000}' --prod --codegen disable
 ```
 
-For a fallback inspection, copy its two additional parent fields and exact
-smaller ceiling:
+For a fallback inspection, copy its two additional parent fields and the same
+bounded ceiling:
 
 ```sh
-npx convex run actions/cadenceMicroSeed:recoverCadenceGap '{"siteId":"<SITE_ID>","mode":"apply","inspectionKey":"<INSPECTION_KEY>","reservationDay":"<YYYY-MM-DD>","rolloutEpoch":<ROLLOUT_EPOCH>,"sourcePlanId":"<SOURCE_PLAN_ID>","sourcePlanFingerprint":"<SOURCE_PLAN_FINGERPRINT>","attemptKind":"fallback","parentMicroSeedJobId":"<PARENT_MICRO_SEED_JOB_ID>","parentMicroSeedReceiptFingerprint":"<PARENT_ZERO_RESULT_FINGERPRINT>","providerCostCeilingMicroUsd":50000}' --prod --codegen disable
+npx convex run actions/cadenceMicroSeed:recoverCadenceGap '{"siteId":"<SITE_ID>","mode":"apply","inspectionKey":"<INSPECTION_KEY>","reservationDay":"<YYYY-MM-DD>","rolloutEpoch":<ROLLOUT_EPOCH>,"sourcePlanId":"<SOURCE_PLAN_ID>","sourcePlanFingerprint":"<SOURCE_PLAN_FINGERPRINT>","attemptKind":"fallback","parentMicroSeedJobId":"<PARENT_MICRO_SEED_JOB_ID>","parentMicroSeedReceiptFingerprint":"<PARENT_ZERO_RESULT_FINGERPRINT>","providerCostCeilingMicroUsd":100000}' --prod --codegen disable
 ```
 
-Apply performs a free $0.20 primary or $0.15 fallback wallet preflight. The
+Apply performs a free $0.40 primary or fallback wallet preflight. The
 reservation mutation then
 recomputes the complete inspection and uses OCC to reject any entitlement,
 quota, tenant profile, authority, coverage, active-work, day, epoch, source
