@@ -54,6 +54,8 @@ jobs:
         run: npm run scan:secrets
 
       - name: Audit production dependencies
+        id: npm-audit
+        continue-on-error: true
         run: |
           for attempt in 1 2 3; do
             if npm audit --omit=dev --audit-level=high --fetch-timeout=60000 --fetch-retries=0; then
@@ -64,6 +66,42 @@ jobs:
             fi
             sleep 5
           done
+
+      # npm's bulk advisory endpoint is an external dependency and can time out
+      # even while package installs succeed. Preserve a fail-closed release gate
+      # by scanning the exact lockfile with Google's independent OSV database.
+      - name: Scan locked dependencies with OSV fallback
+        id: osv-scan
+        if: ${{ steps.npm-audit.outcome == 'failure' }}
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@baa4139e56d6312335d899e6ba045fa16d1d3d0b # v2.5.1
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+            --output=osv-results.json
+            --format=json
+
+      - name: Validate OSV fallback completion
+        if: ${{ steps.npm-audit.outcome == 'failure' }}
+        env:
+          OSV_SCAN_OUTCOME: ${{ steps.osv-scan.outcome }}
+        run: |
+          if [ ! -s osv-results.json ]; then
+            echo "::error::OSV fallback failed without producing results."
+            exit 1
+          fi
+          if [ "${OSV_SCAN_OUTCOME}" != "success" ]; then
+            echo "OSV found dependency findings; the reporter will classify them."
+          fi
+
+      - name: Enforce OSV fallback findings
+        if: ${{ steps.npm-audit.outcome == 'failure' }}
+        uses: google/osv-scanner-action/osv-reporter-action@baa4139e56d6312335d899e6ba045fa16d1d3d0b # v2.5.1
+        with:
+          scan-args: |-
+            --new=osv-results.json
+            --gh-annotations=true
+            --fail-on-vuln=true
 
       - name: Build production application with non-secret configuration
         env:
