@@ -322,6 +322,7 @@ test("recovery seeds keep complete profiles on explicit product anchors", () => 
   assert.deepEqual(anchors, [
     "lead qualification chatbot",
     "website lead generation automation",
+    "booking link integration",
   ]);
 
   const sparse = cadenceMicroSeedRecoveryAnchors({
@@ -330,6 +331,28 @@ test("recovery seeds keep complete profiles on explicit product anchors", () => 
   });
   assert.ok(sparse.includes("lead qualification chatbot"));
   assert.ok(sparse.includes("sales teams need more pipeline"));
+});
+
+test("recovery adds only complete bounded feature phrases to mature profiles", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "lead qualification chatbot",
+      "website lead generation automation",
+    ],
+    keyFeatures: [
+      "Contact detail capture",
+      "Booking link integration",
+      "24/7 visitor engagement",
+      "AI chat engagement powered by website content learning",
+    ],
+  });
+  assert.deepEqual(anchors, [
+    "lead qualification chatbot",
+    "website lead generation automation",
+    "contact detail capture",
+    "booking link integration",
+  ]);
+  assert.equal(anchors.includes("website content learning"), false);
 });
 
 test("recovery never lets clipped feature prose displace mature search anchors", () => {
@@ -348,6 +371,7 @@ test("recovery never lets clipped feature prose displace mature search anchors",
     "ai sales agent for websites",
     "lead qualification chatbot",
     "website lead generation automation",
+    "booking link integration",
   ]);
   assert.equal(anchors.includes("website content learning"), false);
 });
