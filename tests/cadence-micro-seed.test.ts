@@ -922,6 +922,18 @@ test("an exact retained checkpoint underfill can seed recovery without replaying
   assert.equal(cadenceMicroSeedCheckpointSourcePlanExhaustionKind({
     status: "failed",
     checkpointState: "single",
+    checkpointStatus: "terminal_blocked",
+    providerReservationState: "retained_no_replay",
+    persistedTopicCountState: "missing",
+    requiredVerifiedYield: 7,
+    usableTopicCount: 0,
+    cadenceFailureCategory: "semantic_zero_yield",
+    cadenceFailureCode: "strict_zero_yield",
+    cadenceFailureTerminal: true,
+  }), "strict_zero_yield");
+  assert.equal(cadenceMicroSeedCheckpointSourcePlanExhaustionKind({
+    status: "failed",
+    checkpointState: "single",
     checkpointStatus: "empty",
     providerReservationState: "retained_no_replay",
     persistedTopicCountState: "missing",

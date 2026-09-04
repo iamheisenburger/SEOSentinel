@@ -196,13 +196,16 @@ export function cadenceMicroSeedCheckpointSourcePlanExhaustionKind(args: {
       (args.requiredVerifiedYield ?? -Infinity)
   ) return "underfilled";
   // A strict zero-yield job has already completed its only paid execution,
-  // retained the exact reservation, and atomically closed an empty checkpoint.
-  // It is valid authority for the distinct micro-seed lane even though there
-  // is deliberately no plan result/count to bind. Other failed plans remain
-  // ineligible, so a transient or malformed failure can never grant new spend.
+  // retained the exact reservation, and atomically closed either an empty
+  // checkpoint or a non-empty checkpoint whose every candidate was proven
+  // ineligible. Both are final exhaustion receipts for the distinct
+  // micro-seed lane even though there is deliberately no plan result/count to
+  // bind. Other failed plans remain ineligible, so a transient or malformed
+  // failure can never grant new spend.
   if (
     args.status === "failed" &&
-    args.checkpointStatus === "empty" &&
+    (args.checkpointStatus === "empty" ||
+      args.checkpointStatus === "terminal_blocked") &&
     args.persistedTopicCountState === "missing" &&
     args.usableTopicCount === 0 &&
     args.cadenceFailureCategory === "semantic_zero_yield" &&
