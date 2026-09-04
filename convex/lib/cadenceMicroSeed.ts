@@ -13,6 +13,14 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 31 expands the one-task direct-metric portfolio from 32 to 128
+// tenant-derived probes. Production proved that a high-cadence tenant can
+// have its one demanded 32-probe result already covered while the broad Ideas
+// fallback returns only unrelated uses of generic words such as "sales" and
+// "agent". Measuring more of the already-bounded 256-probe product portfolio
+// directly is deterministic and remains below the existing $0.10 ceiling;
+// every result still has to pass exact anchor, tenant-fit, difficulty, intent,
+// overlap, live-SERP, expected-click, article-quality and publication gates.
 // Version 29 makes the tenant-grounded direct-metric rotation durable across
 // bounded recovery generations. Production proved that a repeatedly repaired
 // source plan can consume the original 96 exact/modifier probes even though a
@@ -80,7 +88,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 30;
+export const CADENCE_MICRO_SEED_VERSION = 31;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -93,7 +101,7 @@ export const CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION = 1;
 // the reservation ledger owns capacity after the job is created.
 export const CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS = 30_000;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
-export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 32;
+export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 128;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -667,8 +675,8 @@ function cadenceMicroSeedAnchorsAreDistinct(
 
 /**
  * Build one deterministic provider request from several exact tenant product
- * phrases. DataForSEO accepts up to 200 seeds in one task; the shared 32-seed
- * bound keeps the request and its receipt small while removing the old
+ * phrases. DataForSEO accepts up to 200 seeds in one task; the shared bounded
+ * portfolio keeps the request and its receipt finite while removing the old
  * two-phrase lottery.
  * Every selected keyword must still match one exact seed and pass the
  * independent tenant-fit, difficulty, overlap, live-SERP, expected-click and

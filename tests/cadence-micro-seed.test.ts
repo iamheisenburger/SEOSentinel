@@ -406,7 +406,10 @@ test("recovery never lets clipped feature prose displace mature search anchors",
     anchors,
     "source-plan-placeholder",
   );
-  assert.equal(probes.length, Math.min(32, anchors.length));
+  assert.equal(
+    probes.length,
+    Math.min(CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT, anchors.length),
+  );
   assert.equal(new Set(probes).size, probes.length);
   assert.equal(anchors.includes("website content learning"), false);
 });
@@ -646,10 +649,10 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
-  assert.equal(CADENCE_MICRO_SEED_VERSION, 30);
-  assert.equal(
-    CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
-    CADENCE_MICRO_SEED_VERSION,
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 31);
+  assert.equal(CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION, 30);
+  assert.ok(
+    CADENCE_MICRO_SEED_VERSION >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
   );
   assert.equal(cadenceMicroSeedAttemptKind(undefined), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("primary"), "primary");
@@ -1086,7 +1089,7 @@ test("materialization treats terminal content misses as upstream topic feedback"
 
 test("receipt envelope is one bounded multi-keyword Labs task", () => {
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD, 100_000);
-  assert.equal(CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT, 32);
+  assert.equal(CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT, 128);
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS, 60_000);
   assert.equal(CADENCE_MICRO_SEED_RESULT_LIMIT, 300);
   assert.equal(
