@@ -714,6 +714,23 @@ type CadenceCurrentPolicyReadinessResult =
   | CadenceCurrentPolicyReadinessPrecheck
   | { ready: false; reason: string };
 
+type CadenceCurrentPolicyLedgerPrecheck = {
+  ready: true;
+  contract: "cadence-current-policy-ledger-v1";
+  siteId: string;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  currentJobId?: string;
+  sourcePlanId: Id<"jobs">;
+  jobIds: Id<"cadence_micro_seed_jobs">[];
+  ledgerFingerprint: string;
+};
+
+type CadenceCurrentPolicyLedgerResult =
+  | CadenceCurrentPolicyLedgerPrecheck
+  | { ready: false; reason: string };
+
 const cadenceTopicReadinessPrecheckValidator = v.object({
   ready: v.literal(true),
   contract: v.literal("cadence-topic-readiness-v1"),
@@ -813,6 +830,19 @@ const cadenceCurrentPolicyReadinessPrecheckValidator = v.object({
   providerSeeds: v.array(v.string()),
   locationCode: v.number(),
   languageCode: v.string(),
+});
+
+const cadenceCurrentPolicyLedgerPrecheckValidator = v.object({
+  ready: v.literal(true),
+  contract: v.literal("cadence-current-policy-ledger-v1"),
+  siteId: v.string(),
+  canonicalDomain: v.string(),
+  domainRevision: v.number(),
+  rolloutEpoch: v.number(),
+  currentJobId: v.optional(v.string()),
+  sourcePlanId: v.id("jobs"),
+  jobIds: v.array(v.id("cadence_micro_seed_jobs")),
+  ledgerFingerprint: v.string(),
 });
 
 /** Read compact article projections by lifecycle state. Article Markdown can
@@ -1505,6 +1535,83 @@ export const inspectPriorPolicyHistoryInternal = internalQuery({
   ),
 });
 
+function currentPolicyLedgerFingerprint(
+  jobs: readonly Doc<"cadence_micro_seed_jobs">[],
+): string {
+  return sha256Hex(JSON.stringify(jobs.map((job) => ({
+    id: String(job._id),
+    status: job.status,
+    policyVersion: job.policyVersion,
+    rolloutEpoch: job.rolloutEpoch,
+    sourcePlanId: String(job.sourcePlanId),
+    attemptKind: cadenceMicroSeedAttemptKind(job.attemptKind),
+    parentMicroSeedJobId: job.parentMicroSeedJobId
+      ? String(job.parentMicroSeedJobId)
+      : null,
+    parentMicroSeedReceiptFingerprint:
+      job.parentMicroSeedReceiptFingerprint ?? null,
+    providerCallAttempted: job.providerCallAttempted,
+    providerCallCompleted: job.providerCallCompleted,
+    updatedAt: job.updatedAt,
+  }))));
+}
+
+async function cadenceCurrentPolicyLedgerPrecheck(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  sourcePlanId: Id<"jobs">,
+  currentJobId?: Id<"cadence_micro_seed_jobs">,
+): Promise<CadenceCurrentPolicyLedgerResult> {
+  const site = await ctx.db.get(siteId);
+  if (
+    !siteExecutionActive(site) ||
+    !site.userId ||
+    !(await siteExecutionAuthorized(ctx, site))
+  ) return { ready: false, reason: "site_unavailable" };
+  const canonicalDomain = siteCanonicalDomain(site);
+  if (!canonicalDomain) return { ready: false, reason: "site_unavailable" };
+  const jobs = await ctx.db.query("cadence_micro_seed_jobs")
+    .withIndex("by_site_source_policy_created", (q) =>
+      q.eq("siteId", siteId)
+        .eq("sourcePlanId", sourcePlanId)
+        .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
+    )
+    .order("asc")
+    .take(3);
+  if (jobs.length > 2) {
+    return { ready: false, reason: "micro_seed_source_history_exhausted" };
+  }
+  if (currentJobId && !jobs.some((job) => job._id === currentJobId)) {
+    return { ready: false, reason: "micro_seed_execution_receipt_unavailable" };
+  }
+  return {
+    ready: true,
+    contract: "cadence-current-policy-ledger-v1",
+    siteId: String(site._id),
+    canonicalDomain,
+    domainRevision: siteCanonicalDomainRevision(site),
+    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
+    sourcePlanId,
+    jobIds: jobs.map((job) => job._id),
+    ledgerFingerprint: currentPolicyLedgerFingerprint(jobs),
+  };
+}
+
+export const inspectCurrentPolicyLedgerInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+    currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+  },
+  handler: async (ctx, args) => cadenceCurrentPolicyLedgerPrecheck(
+    ctx,
+    args.siteId,
+    args.sourcePlanId,
+    args.currentJobId,
+  ),
+});
+
 /**
  * Resolve the immutable no-replay chain independently from
  * both current inventory projections. Historical recovery receipts grow with
@@ -1519,6 +1626,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   topicPrecheck: CadenceTopicReadinessPrecheck,
   sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
   priorPolicyHistory: CadencePriorPolicyHistoryAggregate,
+  currentPolicyLedger: CadenceCurrentPolicyLedgerPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<CadenceCurrentPolicyReadinessResult> {
   const site = await ctx.db.get(siteId);
@@ -1565,19 +1673,36 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     priorPolicyHistory.policyVersionCount !== CADENCE_MICRO_SEED_VERSION - 1 ||
     !/^[a-f0-9]{64}$/.test(priorPolicyHistory.historyFingerprint)
   ) return { ready: false, reason: "micro_seed_policy_history_stale" };
+  if (
+    currentPolicyLedger.contract !== "cadence-current-policy-ledger-v1" ||
+    currentPolicyLedger.siteId !== String(site._id) ||
+    currentPolicyLedger.canonicalDomain !== canonicalDomain ||
+    currentPolicyLedger.domainRevision !== siteCanonicalDomainRevision(site) ||
+    currentPolicyLedger.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    currentPolicyLedger.currentJobId !==
+      (currentJobId ? String(currentJobId) : undefined) ||
+    currentPolicyLedger.sourcePlanId !== sourcePlanId ||
+    currentPolicyLedger.jobIds.length > 2 ||
+    !/^[a-f0-9]{64}$/.test(currentPolicyLedger.ledgerFingerprint)
+  ) return { ready: false, reason: "current_policy_ledger_stale" };
   const sourceReservationId = sourcePlanPrecheck.sourcePlanReservationId;
   const sourceFingerprint = sourcePlanPrecheck.sourcePlanFingerprint;
-  const sourceJobs = await ctx.db.query("cadence_micro_seed_jobs")
-    .withIndex("by_site_source_policy_created", (q) =>
-      q.eq("siteId", siteId)
-        .eq("sourcePlanId", sourcePlanId)
-        .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
-    )
-    .order("asc")
-    .take(3);
-  if (sourceJobs.length > 2) {
-    return { ready: false, reason: "micro_seed_source_history_exhausted" };
-  }
+  const sourceJobRows = await Promise.all(
+    currentPolicyLedger.jobIds.map((jobId) => ctx.db.get(jobId)),
+  );
+  if (sourceJobRows.some((job) =>
+    !job ||
+    job.siteId !== siteId ||
+    job.sourcePlanId !== sourcePlanId ||
+    job.policyVersion !== CADENCE_MICRO_SEED_VERSION
+  )) return { ready: false, reason: "current_policy_ledger_stale" };
+  const sourceJobs = sourceJobRows.filter(
+    (job): job is Doc<"cadence_micro_seed_jobs"> => Boolean(job),
+  );
+  if (
+    currentPolicyLedger.ledgerFingerprint !==
+      currentPolicyLedgerFingerprint(sourceJobs)
+  ) return { ready: false, reason: "current_policy_ledger_stale" };
   const previouslyAttemptedPrimarySeeds =
     priorPolicyHistory.attemptedPrimarySeeds;
   const previouslyAttemptedFallbackSeeds =
@@ -1805,6 +1930,7 @@ export const inspectCurrentPolicyReadinessInternal = internalQuery({
     topicPrecheck: cadenceTopicReadinessPrecheckValidator,
     sourcePlanPrecheck: cadenceSourcePlanReadinessPrecheckValidator,
     priorPolicyHistory: cadencePriorPolicyHistoryAggregateValidator,
+    currentPolicyLedger: cadenceCurrentPolicyLedgerPrecheckValidator,
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
   handler: async (ctx, args) => cadenceCurrentPolicyReadinessPrecheck(
@@ -1815,6 +1941,7 @@ export const inspectCurrentPolicyReadinessInternal = internalQuery({
     args.topicPrecheck,
     args.sourcePlanPrecheck,
     args.priorPolicyHistory,
+    args.currentPolicyLedger,
     args.currentJobId,
   ),
 });

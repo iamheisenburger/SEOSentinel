@@ -562,6 +562,20 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
+    const currentPolicyLedger = await ctx.runQuery(
+      api.inspectCurrentPolicyLedgerInternal,
+      { siteId: args.siteId, sourcePlanId },
+    );
+    if (!currentPolicyLedger.ready) {
+      return {
+        ...currentPolicyLedger,
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const currentPolicyPrecheck = await ctx.runQuery(
       api.inspectCurrentPolicyReadinessInternal,
       {
@@ -570,6 +584,7 @@ export const recoverCadenceGap = internalAction({
         topicPrecheck,
         sourcePlanPrecheck,
         priorPolicyHistory,
+        currentPolicyLedger,
       },
     );
     if (!currentPolicyPrecheck.ready) {
@@ -778,6 +793,29 @@ export const processCadenceMicroSeed = internalAction({
       );
       return { processed: false, reason: priorPolicyHistory.reason };
     }
+    const currentPolicyLedger = await ctx.runQuery(
+      api.inspectCurrentPolicyLedgerInternal,
+      {
+        siteId: args.siteId,
+        sourcePlanId: claimed.sourcePlanId,
+        currentJobId: args.jobId,
+      },
+    );
+    if (!currentPolicyLedger.ready) {
+      await ctx.runMutation(api.markProviderResponseUnverified, {
+        siteId: args.siteId,
+        jobId: args.jobId,
+        workerToken,
+        errorCode: currentPolicyLedger.reason,
+      });
+      await raiseMiss(
+        ctx,
+        args.siteId,
+        args.jobId,
+        currentPolicyLedger.reason,
+      );
+      return { processed: false, reason: currentPolicyLedger.reason };
+    }
     const currentPolicyPrecheck = await ctx.runQuery(
       api.inspectCurrentPolicyReadinessInternal,
       {
@@ -786,6 +824,7 @@ export const processCadenceMicroSeed = internalAction({
         topicPrecheck,
         sourcePlanPrecheck,
         priorPolicyHistory,
+        currentPolicyLedger,
         currentJobId: args.jobId,
       },
     );

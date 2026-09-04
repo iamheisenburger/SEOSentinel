@@ -1614,6 +1614,7 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(action, /api\.inspectSourcePlanReadinessInternal/);
   assert.match(action, /api\.inspectPriorPolicyHistoryInternal/);
   assert.match(action, /api\.inspectCurrentPolicyReadinessInternal/);
+  assert.match(action, /api\.inspectCurrentPolicyLedgerInternal/);
   assert.match(action, /policyBatchSize = 8/);
   assert.match(action, /cadence-prior-policy-history-aggregate-v1/);
   assert.match(action, /createHash\("sha256"\)/);
@@ -1639,8 +1640,13 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   );
   assert.ok(
     recovery.indexOf("inspectPriorPolicyHistory") <
+      recovery.indexOf("api.inspectCurrentPolicyLedgerInternal"),
+    "historical policy generations must be projected before the current ledger",
+  );
+  assert.ok(
+    recovery.indexOf("api.inspectCurrentPolicyLedgerInternal") <
       recovery.indexOf("api.inspectCurrentPolicyReadinessInternal"),
-    "historical policy generations must be projected before current-chain readiness",
+    "the indexed current ledger must be fingerprinted before direct receipt validation",
   );
   assert.ok(
     recovery.indexOf("api.inspectCurrentPolicyReadinessInternal") <
@@ -1873,6 +1879,10 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   const priorPolicyReadiness = model.slice(
     model.indexOf("async function cadencePriorPolicyHistoryPrecheck"),
+    model.indexOf("async function cadenceCurrentPolicyLedgerPrecheck"),
+  );
+  const currentPolicyLedgerReadiness = model.slice(
+    model.indexOf("async function cadenceCurrentPolicyLedgerPrecheck"),
     model.indexOf("async function cadenceCurrentPolicyReadinessPrecheck"),
   );
   const currentPolicyReadiness = model.slice(
@@ -1895,11 +1905,15 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(sourceReadiness, /priorPolicyHistory\.historyFingerprint/);
   assert.doesNotMatch(sourceReadiness, /priorPolicyPrechecks/);
   assert.doesNotMatch(sourceReadiness, /plan_candidate_checkpoints/);
-  assert.match(currentPolicyReadiness, /by_site_source_policy_created/);
+  assert.match(currentPolicyLedgerReadiness, /by_site_source_policy_created/);
   assert.match(
-    currentPolicyReadiness,
+    currentPolicyLedgerReadiness,
     /eq\("policyVersion", CADENCE_MICRO_SEED_VERSION\)/,
   );
+  assert.match(currentPolicyLedgerReadiness, /currentPolicyLedgerFingerprint/);
+  assert.doesNotMatch(currentPolicyReadiness, /by_site_source_policy_created/);
+  assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobIds/);
+  assert.match(currentPolicyReadiness, /ctx\.db\.get\(jobId\)/);
   assert.match(currentPolicyReadiness, /currentPolicyFingerprint: sha256Hex/);
   assert.match(priorPolicyReadiness, /by_site_source_policy_created/);
   assert.match(priorPolicyReadiness, /eq\("policyVersion", policyVersion\)/);
