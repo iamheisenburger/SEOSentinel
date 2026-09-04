@@ -148,9 +148,14 @@ function providerFixture() {
   return { seed, tag, data };
 }
 
-test("paid seeds come only from explicit product anchors and rotate deterministically", () => {
+test("paid seeds prefer search anchors and rotate deterministically", () => {
   const anchors = cadenceMicroSeedAnchors({
-    anchorKeywords: ["Lead scoring software", "lead scoring software"],
+    anchorKeywords: [
+      "Lead scoring software",
+      "Predictive lead qualification",
+      "Automated sales routing",
+      "Buyer intent scoring",
+    ],
     keyFeatures: [
       "Predictive lead qualification",
       "Automated sales routing",
@@ -215,6 +220,44 @@ test("paid seeds come only from explicit product anchors and rotate deterministi
     ),
     fallback,
   );
+});
+
+test("paid seeds supplement sparse search profiles without diluting healthy ones", () => {
+  assert.deepEqual(cadenceMicroSeedAnchors({
+    anchorKeywords: [
+      "AI SEO content generator",
+      "automated SEO content creation",
+      "autonomous content marketing platform",
+    ],
+    keyFeatures: [
+      "Keyword clustering and planning",
+      "Automated content publishing",
+    ],
+  }), [
+    "ai seo content generator",
+    "automated seo content creation",
+    "autonomous content marketing platform",
+  ]);
+  assert.deepEqual(cadenceMicroSeedAnchors({
+    anchorKeywords: ["Lead scoring software"],
+    keyFeatures: [
+      "Predictive lead qualification",
+      "Automated sales routing",
+    ],
+  }), [
+    "lead scoring software",
+    "predictive lead qualification",
+  ]);
+  assert.deepEqual(cadenceMicroSeedAnchors({
+    keyFeatures: [
+      "Predictive lead qualification",
+      "Automated sales routing",
+      "Buyer intent scoring",
+    ],
+  }), [
+    "predictive lead qualification",
+    "automated sales routing",
+  ]);
 });
 
 test("fallback is a distinct $0.05 receipt after an exact terminal primary miss", () => {

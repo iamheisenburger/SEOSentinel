@@ -12,12 +12,15 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-// Version 9 binds micro-seed admission to the scheduler's exact bounded
-// recovery horizon. Historical review rows outside that horizon can no longer
-// veto fresh inventory that the scheduler itself cannot recover. The new
-// version grants one independently receipted attempt with a rotated tenant
-// anchor; all prior receipts remain immutable no-replay evidence.
-export const CADENCE_MICRO_SEED_VERSION = 9;
+// Version 10 prioritizes explicit search-intent anchors over broad capability
+// prose. A phrase such as "keyword clustering and planning" is a legitimate
+// product feature, but the keyword-ideas provider can interpret it as an
+// academic clustering query and exhaust both recovery attempts with irrelevant
+// rows. Tenant-authored anchor keywords are already the narrow, search-facing
+// contract; use feature prose only when fewer than two anchors exist. The new
+// version grants one independently receipted pair while every earlier paid
+// receipt remains immutable no-replay evidence.
+export const CADENCE_MICRO_SEED_VERSION = 10;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -217,13 +220,28 @@ export function cadenceMicroSeedAnchors(args: {
   anchorKeywords?: string[] | null;
   keyFeatures?: string[] | null;
 }): string[] {
-  return tenantDiscoveryAnchors([
-    ...(args.anchorKeywords ?? []),
-    ...(args.keyFeatures ?? []),
-  ].filter((value): value is string => typeof value === "string"), 24).filter((anchor) => {
+  const bounded = (signals: string[]) => tenantDiscoveryAnchors(
+    signals.filter((value): value is string => typeof value === "string"),
+    24,
+  ).filter((anchor) => {
     const words = normalizeCadenceMicroSeedText(anchor).split(" ");
     return words.length >= 2 && words.length <= 6;
   });
+  const searchAnchors = bounded(args.anchorKeywords ?? []);
+  if (searchAnchors.length >= 2) return searchAnchors;
+
+  // A primary plus one distinct fallback is the complete paid recovery
+  // contract. Supplement sparse profiles from explicit capabilities, without
+  // letting generic feature prose dilute a healthy search-anchor set.
+  const seen = new Set(searchAnchors);
+  const supplemented = [...searchAnchors];
+  for (const feature of bounded(args.keyFeatures ?? [])) {
+    if (seen.has(feature)) continue;
+    seen.add(feature);
+    supplemented.push(feature);
+    if (supplemented.length >= 2) break;
+  }
+  return supplemented;
 }
 
 /**
