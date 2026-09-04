@@ -23,6 +23,57 @@ export type PublicationSource = {
   capturedAt?: number;
 };
 
+const MAX_PRESERVED_RESEARCH_EVIDENCE_CHARS = 30_000;
+
+/**
+ * Rebuild the durable research brief from exact source snapshots rather than
+ * from a model-authored summary. This gives every later quality-recovery pass
+ * the same evidence the first pass used and keeps citation ordinals stable.
+ * Invalid or over-budget snapshots are omitted whole so a truncated excerpt
+ * can never masquerade as the content bound by its hash.
+ */
+export function preservedResearchEvidenceSnapshot(
+  sources: PublicationSource[],
+): string {
+  const header =
+    "Strict evidence mode is active. Only the exact preserved source excerpts below may support external factual claims.";
+  const blocks: string[] = [];
+  let used = header.length + "\n\nPRESERVED SOURCE EXCERPTS (citation order):".length;
+  for (const [index, source] of sources.slice(0, 8).entries()) {
+    const excerpt = source.excerpt?.trim() ?? "";
+    if (
+      excerpt.length < 160 ||
+      !source.contentHash ||
+      sha256Hex(excerpt) !== source.contentHash
+    ) {
+      continue;
+    }
+    const title = (source.title?.trim() || "Untitled source")
+      .replace(/\s+/g, " ")
+      .slice(0, 300);
+    const url = source.url.trim().replace(/\s+/g, "").slice(0, 2_048);
+    const block =
+      `[${index + 1}] ${title}\nURL: ${url}\n` +
+      `CONTENT HASH: ${source.contentHash}\nEXCERPT: ${excerpt}`;
+    if (used + 2 + block.length > MAX_PRESERVED_RESEARCH_EVIDENCE_CHARS) {
+      continue;
+    }
+    blocks.push(block);
+    used += 2 + block.length;
+  }
+  if (blocks.length === 0) {
+    return [
+      "Strict evidence mode is active, but no valid external source excerpt was preserved.",
+      "Remove external statistics, benchmarks, attributed quotations, dates, and universal performance claims.",
+    ].join(" ");
+  }
+  return [
+    header,
+    "PRESERVED SOURCE EXCERPTS (citation order):",
+    ...blocks,
+  ].join("\n\n");
+}
+
 export type PublicationArticle = {
   title: string;
   markdown: string;
@@ -262,12 +313,70 @@ function overlapRatio(left: string, right: string): number {
   return overlap / Math.min(a.size, b.size);
 }
 
+function canonicalEvidenceNumber(raw: string): string | null {
+  const compact = raw.toLowerCase().replace(/[\s,]/g, "");
+  const currency = compact.startsWith("$") ? "$" : "";
+  const withoutCurrency = currency ? compact.slice(1) : compact;
+  const match = withoutCurrency.match(
+    /^(\d+(?:\.\d+)?)(%|k|m|b|thousand|million|billion)?$/,
+  );
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  const unit = match[2] ?? "";
+  if (unit === "%") return `${currency}${value}%`;
+  const multiplier =
+    unit === "k" || unit === "thousand"
+      ? 1_000
+      : unit === "m" || unit === "million"
+        ? 1_000_000
+        : unit === "b" || unit === "billion"
+          ? 1_000_000_000
+          : 1;
+  return `${currency}${value * multiplier}`;
+}
+
 function normalizedEvidenceNumbers(value: string): Set<string> {
   return new Set(
-    [...value.matchAll(/(?:\$\s*)?\b\d[\d,]*(?:\.\d+)?(?:\s*%)?/g)].map(
-      (match) => match[0].toLowerCase().replace(/[\s,]/g, ""),
-    ),
+    [
+      ...value
+        .replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ")
+        .matchAll(
+          /(?:\$\s*)?\b\d[\d,]*(?:\.\d+)?(?:\s*(?:%|[kmb]\b|thousand\b|million\b|billion\b))?/gi,
+        ),
+    ]
+      .map((match) => canonicalEvidenceNumber(match[0]))
+      .filter((number): number is string => number !== null),
   );
+}
+
+function claimSentenceSegments(value: string): string[] {
+  return value
+    .split(/\n+/)
+    .flatMap((line) =>
+      line.split(/(?<=[.!?])\s+(?=(?:[-*+]\s+)?(?:\*\*)?[A-Z"'\[])/),
+    )
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+function citationBoundClaimSegments(value: string, citation: number): string[] {
+  return claimSentenceSegments(value).flatMap((segment) => {
+    for (const match of segment.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+      const ordinals = match[1]
+        .split(",")
+        .map((raw) => Number(raw.trim()));
+      if (ordinals.includes(citation)) {
+        // A citation closes the sourced proposition. Conditional advice often
+        // follows after the marker in the same typographic sentence (for
+        // example, an em-dash followed by "check this yourself"). Exclude that
+        // trailing advice from source-similarity math while separately auditing
+        // every citation-free factual sentence below.
+        return [segment.slice(0, (match.index ?? 0) + match[0].length).trim()];
+      }
+    }
+    return [];
+  });
 }
 
 function namedEntities(value: string): string[] {
@@ -447,6 +556,13 @@ function isStandaloneCallToActionLink(paragraph: string): boolean {
   );
 }
 
+function isSourceBibliographyEntry(paragraph: string): boolean {
+  return (
+    /^\s*[-*]\s+https?:\/\//i.test(paragraph) ||
+    /^\s*\[\d+\]\s+[^\n]+https:\/\/\S+\s*$/i.test(paragraph)
+  );
+}
+
 function referencesNamedProduct(value: string, productEvidence: string): boolean {
   const identities = [
     ...productEvidence.matchAll(/^(?:Name|Domain):\s*([^\n]+)/gim),
@@ -500,7 +616,7 @@ export function evidenceRequiredParagraphs(
       (paragraph) =>
         paragraph.length >= 40 &&
         !paragraph.startsWith("#") &&
-        !/^[-*]\s+https?:\/\//i.test(paragraph) &&
+        !isSourceBibliographyEntry(paragraph) &&
         !isReaderMeasurementInstruction(paragraph) &&
         requiresClaimEvidence(paragraph, productEvidence),
     );
@@ -535,6 +651,11 @@ export function validateClaimEvidenceLedger(args: {
     if (entry.claim.trim().length < 12 || entry.reason.trim().length < 12) {
       issues.push(`Claim ledger entry ${index + 1} is not specific enough to audit.`);
     }
+    // Bibliography rows bind citation metadata, not an article proposition.
+    // Their URL/title integrity is enforced by the preserved source array and
+    // publication-source checks, so comparing author-list prose to the source
+    // body would create an impossible evidence gate.
+    if (isSourceBibliographyEntry(entry.claim)) continue;
     if (!entry.supported) continue;
     if (entry.citationNumbers.length > 0) {
       for (const citation of entry.citationNumbers) {
@@ -558,15 +679,42 @@ export function validateClaimEvidenceLedger(args: {
           );
           continue;
         }
-        const evidenceOverlap = overlapRatio(entry.claim, source.excerpt);
-        if (
-          evidenceOverlap < 0.3 ||
-          !exactClaimDetailsPresent(entry.claim, source.excerpt)
-        ) {
+        // The audit contract intentionally binds one complete paragraph to a
+        // ledger entry. A useful paragraph can mix a cited factual sentence
+        // with uncited reader-run advice, so comparing the whole paragraph to
+        // one source creates a false mismatch. Verify every sentence carrying
+        // this citation instead. The fallback preserves fail-closed behavior
+        // for malformed ledgers that cite a source without an inline marker.
+        const citationClaims = citationBoundClaimSegments(entry.claim, citation);
+        const evidenceClaims = citationClaims.length > 0
+          ? citationClaims
+          : [entry.claim];
+        const sourceSupportsEveryCitedClaim = evidenceClaims.every(
+          (claim) =>
+            overlapRatio(claim, source.excerpt!) >= 0.3 &&
+            exactClaimDetailsPresent(claim, source.excerpt!),
+        );
+        if (!sourceSupportsEveryCitedClaim) {
           issues.push(
             `Claim ledger entry ${index + 1} does not deterministically match preserved excerpt [${citation}] (${sourceHost || source.url}).`,
           );
         }
+      }
+      const entryHasInlineCitation = claimSentenceSegments(entry.claim).some(
+        (claim) => inlineCitationNumbers(claim).length > 0,
+      );
+      const uncitedEvidenceClaims = entryHasInlineCitation
+        ? claimSentenceSegments(entry.claim).filter(
+            (claim) =>
+              inlineCitationNumbers(claim).length === 0 &&
+              requiresClaimEvidence(claim, args.productEvidence) &&
+              !productSnapshotSupports(claim),
+          )
+        : [];
+      if (uncitedEvidenceClaims.length > 0) {
+        issues.push(
+          `Claim ledger entry ${index + 1} contains ${uncitedEvidenceClaims.length} uncited factual sentence(s) without matched first-party evidence.`,
+        );
       }
     } else {
       if (
@@ -656,7 +804,7 @@ export function removeUnledgeredEvidenceParagraphs(args: {
       if (
         paragraph.length < 40 ||
         paragraph.startsWith("#") ||
-        /^[-*]\s+https?:\/\//i.test(paragraph) ||
+        isSourceBibliographyEntry(paragraph) ||
         isReaderMeasurementInstruction(paragraph) ||
         !requiresClaimEvidence(paragraph, args.productEvidence)
       ) {

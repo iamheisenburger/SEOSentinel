@@ -34,7 +34,7 @@ export type CadenceWindow = {
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
 export const CADENCE_QUALITY_RECOVERY_READ_LIMIT = 25;
-export const QUALITY_RECOVERY_VERSION = 14;
+export const QUALITY_RECOVERY_VERSION = 15;
 export const DETERMINISTIC_QUALITY_REPAIR_VERSION = 1;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
@@ -46,6 +46,7 @@ const POST_AUDIT_FIXED_POINT_RECOVERY_VERSION = 10;
 const DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION = 11;
 const DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION = 12;
 const CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION = 14;
+const CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION = 15;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -377,6 +378,26 @@ export function qualityRecoveryTargetVersion(
     // legacy implicit v1 marker. Version 13 re-audits only either exact
     // blocked contract once.
     return CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION;
+  }
+  if (
+    Math.max(
+      article.qualityRecoveryVersion ?? 0,
+      article.qualityRecoveryAttemptVersion ?? 0,
+    ) >= CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION &&
+    (article.qualityRecoveryVersion ?? 0) <
+      CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION &&
+    claimLedgerBlocked
+  ) {
+    // Version 14 exposed a contract mismatch: the auditor correctly copied a
+    // whole evidence-required paragraph, but the deterministic validator then
+    // compared uncited reader advice and bibliography metadata to one source
+    // excerpt. Version 15 verifies every citation-bearing sentence against its
+    // hash-bound source, independently rejects uncited factual sentences, and
+    // normalizes equivalent K/M numeric notation. Reopen only that exact
+    // claim-ledger defect once; unrelated editorial failures stay terminal.
+    return CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION;
   }
   return undefined;
 }

@@ -30,6 +30,7 @@ import {
   evaluatePublicationQuality,
   insertReviewedProductImage,
   issuesBlockingPreLinkReview,
+  preservedResearchEvidenceSnapshot,
   publicationMediaQualityStatus,
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
@@ -5532,18 +5533,8 @@ async function handleArticle(
 
   // ── Step 7: Create Draft ──
   const slug = article.slug || buildSlug(article.title);
-  const preservedResearchEvidence = [
-    finalSources.length > 0
-      ? `SOURCE SNAPSHOT (citation order):\n${finalSources
-          .map((source, index) =>
-            `[${index + 1}] ${source.title ?? "Untitled source"} — ${source.url}`,
-          )
-          .join("\n")}`
-      : "SOURCE SNAPSHOT: no external sources were used.",
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-    .slice(0, 4000);
+  const preservedResearchEvidence =
+    preservedResearchEvidenceSnapshot(finalSources);
 
   const draftArgs = {
     siteId,
@@ -6790,11 +6781,11 @@ async function reviewExistingArticleHandler(
     const productEvidenceHash = productEvidence
       ? sha256Hex(productEvidence)
       : undefined;
-    const researchEvidence = article.researchEvidenceSummary
-      ? article.researchEvidenceSummary
-      : sources.length > 0
-      ? "The stored source list contains references but no preserved source excerpts. Do not add or broaden any external claim; retain only claims already supported by a matching inline citation."
-      : "No external evidence is supplied. Treat non-product material as clearly framed recommendations and remove statistics, benchmarks, universal outcomes, and attributed claims.";
+    // Rebuild the review brief from the hash-bound source snapshots on every
+    // pass. Older drafts persisted only source titles in their summary, which
+    // left the remediation model unable to distinguish a valid citation from
+    // an unsupported claim even though the exact excerpt was still stored.
+    const researchEvidence = preservedResearchEvidenceSnapshot(sources);
     const normalizedProductName = productName.trim().toLowerCase();
     const bannedNames = [
       ...(site.competitors ?? []),

@@ -379,7 +379,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 14);
+  assert.equal(QUALITY_RECOVERY_VERSION, 15);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -550,7 +550,7 @@ test("version 8 reopens only claim-audit truncation and its false length failure
   }), undefined);
 });
 
-test("the current version reopens only the current claim-classification defect and legacy marker regression", () => {
+test("current recovery versions isolate claim classification from sentence binding", () => {
   const base = {
     createdAt: QUALITY_RECOVERY_VERSION_INTRODUCED_AT + 1,
     status: "review",
@@ -587,6 +587,11 @@ test("the current version reopens only the current claim-classification defect a
     ...base,
     qualityRecoveryVersion: 14,
     qualityRecoveryAttemptVersion: 14,
+  }), 15);
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    qualityRecoveryVersion: 15,
+    qualityRecoveryAttemptVersion: 15,
   }), undefined);
 
   const articles = readFileSync("convex/articles.ts", "utf8");

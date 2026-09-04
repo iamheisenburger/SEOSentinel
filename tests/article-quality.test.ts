@@ -15,6 +15,7 @@ import {
   inlineCitationNumbers,
   issuesBlockingPreLinkReview,
   PENDING_INTERNAL_LINK_ISSUE,
+  preservedResearchEvidenceSnapshot,
   publicationMediaQualityStatus,
   normalizeSiteOrigin,
   normalizedFactCheckConfidence,
@@ -769,6 +770,111 @@ test("claim ledger cannot empty-pass and must bind citations to a preserved snap
   });
   assert.deepEqual(grounded.issues, []);
   assert.equal(grounded.passed, true);
+});
+
+test("citation auditing accepts exact sourced sentences mixed with reader advice", () => {
+  const excerpt =
+    "The study analyzed 1M websites. It reported that the first category was most common among the top 300K websites and documented encrypted transport as an implementation concern. " +
+    "The preserved source contains enough surrounding methodology and findings for deterministic verification.";
+  const source = {
+    url: "https://arxiv.org/abs/1234.5678",
+    title: "Website implementation study",
+    excerpt,
+    contentHash: sha256Hex(excerpt),
+  };
+  const paragraph =
+    "The study analyzed 1,000,000 websites and found the first category was most common among the top 300,000 websites [1]. Ask each vendor to document its transport controls before you decide.";
+  const result = validateClaimEvidenceLedger({
+    markdown: paragraph,
+    sources: [source],
+    researchEvidence: preservedResearchEvidenceSnapshot([source]),
+    productEvidence: "",
+    claimEvidence: [{
+      claim: paragraph,
+      citationNumbers: [1],
+      supported: true,
+      reason:
+        "The cited sentence matches the preserved study; the second sentence is reader advice.",
+    }],
+  });
+
+  assert.equal(result.passed, true, result.issues.join("\n"));
+  assert.deepEqual(result.issues, []);
+});
+
+test("citation auditing still rejects uncited factual claims mixed into a sourced paragraph", () => {
+  const excerpt =
+    "The study analyzed 1M websites and documented implementation patterns. " +
+    "The preserved source contains enough surrounding methodology and findings for deterministic verification.";
+  const source = {
+    url: "https://arxiv.org/abs/1234.5678",
+    excerpt,
+    contentHash: sha256Hex(excerpt),
+  };
+  const paragraph =
+    "The study analyzed 1 million websites [1]. Chatbots increase website conversion.";
+  const result = validateClaimEvidenceLedger({
+    markdown: paragraph,
+    sources: [source],
+    researchEvidence: preservedResearchEvidenceSnapshot([source]),
+    productEvidence: "",
+    claimEvidence: [{
+      claim: paragraph,
+      citationNumbers: [1],
+      supported: true,
+      reason: "Only the first sentence appears in the preserved source.",
+    }],
+  });
+
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join(" "), /uncited factual sentence/i);
+});
+
+test("durable research evidence keeps valid excerpts and their original citation ordinals", () => {
+  const validExcerpt =
+    "This exact primary-source excerpt is deliberately long enough to be retained as durable evidence. " +
+    "It states the supported mechanism clearly and includes sufficient surrounding context for a later independent quality review.";
+  const snapshot = preservedResearchEvidenceSnapshot([
+    {
+      url: "https://example.invalid/unverified",
+      excerpt: "too short",
+      contentHash: sha256Hex("too short"),
+    },
+    {
+      url: "https://www.nber.org/papers/w12345",
+      title: "Primary study",
+      excerpt: validExcerpt,
+      contentHash: sha256Hex(validExcerpt),
+    },
+  ]);
+
+  assert.match(snapshot, /PRESERVED SOURCE EXCERPTS/);
+  assert.match(snapshot, /\[2\] Primary study/);
+  assert.match(snapshot, new RegExp(sha256Hex(validExcerpt)));
+  assert.match(snapshot, /This exact primary-source excerpt/);
+  assert.doesNotMatch(snapshot, /example\.invalid/);
+});
+
+test("bibliography metadata is not reclassified as an evidence claim", () => {
+  const bibliography =
+    '[1] Researcher, A. "Primary Study." https://arxiv.org/abs/1234.5678';
+  assert.deepEqual(evidenceRequiredParagraphs(bibliography, ""), []);
+  const result = validateClaimEvidenceLedger({
+    markdown: bibliography,
+    sources: [{
+      url: "https://arxiv.org/abs/1234.5678",
+      title: "Primary Study",
+    }],
+    researchEvidence: "",
+    productEvidence: "",
+    claimEvidence: [{
+      claim: bibliography,
+      citationNumbers: [1],
+      supported: true,
+      reason: "This row reproduces the stored source metadata.",
+    }],
+  });
+  assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
 test("comma-list inline citations bind every ordinal to the exact claim ledger", () => {
