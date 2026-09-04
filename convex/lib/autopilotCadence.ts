@@ -387,7 +387,12 @@ export function hasRecoverableQualityWork(
   articles: CadenceArticle[],
   candidateWindowStart: number,
 ): boolean {
-  const terminalTopicIds = new Set(
+  return recoverableQualityArticlesSince(articles, candidateWindowStart).length > 0 ||
+    deterministicMechanicalRepairArticles(articles).length > 0;
+}
+
+function terminalTopicFitIds(articles: CadenceArticle[]): Set<string> {
+  return new Set(
     articles
       .filter((article) =>
         article.topicId &&
@@ -395,16 +400,48 @@ export function hasRecoverableQualityWork(
       )
       .map((article) => article.topicId!),
   );
-  return articles.some((article) =>
-    !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
-    (!article.topicId || !terminalTopicIds.has(article.topicId)) &&
-    ((article.status === "review" &&
+}
+
+function topicFamilyRemainsRecoverable(
+  article: CadenceArticle,
+  terminalTopicIds: ReadonlySet<string>,
+): boolean {
+  return !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
+    (!article.topicId || !terminalTopicIds.has(article.topicId));
+}
+
+/** One authoritative prose/versioned-recovery selector for every cadence
+ * admission path. A terminal product-fit verdict quarantines the whole topic
+ * family, including siblings written before the final verdict was persisted. */
+export function recoverableQualityArticlesSince<T extends CadenceArticle>(
+  articles: T[],
+  candidateWindowStart: number,
+): T[] {
+  const terminalTopicIds = terminalTopicFitIds(articles);
+  return articles
+    .filter((article) =>
+      topicFamilyRemainsRecoverable(article, terminalTopicIds) &&
+      article.status === "review" &&
       article.publicationGateStatus === "blocked" &&
       ((article.createdAt >= candidateWindowStart &&
         (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
-        needsVersionedQualityRecovery(article))) ||
-      needsDeterministicMechanicalRepair(article))
-  );
+        needsVersionedQualityRecovery(article))
+    )
+    .sort(compareQualityRecoveryCandidates);
+}
+
+/** The mechanical lane shares the same topic-family quarantine rather than
+ * reviving a snippet-only sibling for an intent already rejected upstream. */
+export function deterministicMechanicalRepairArticles<
+  T extends CadenceArticle,
+>(articles: T[]): T[] {
+  const terminalTopicIds = terminalTopicFitIds(articles);
+  return articles
+    .filter((article) =>
+      topicFamilyRemainsRecoverable(article, terminalTopicIds) &&
+      needsDeterministicMechanicalRepair(article)
+    )
+    .sort((left, right) => right.createdAt - left.createdAt);
 }
 
 export function findRecoverableQualityArticle(
@@ -413,28 +450,8 @@ export function findRecoverableQualityArticle(
   hoursPerArticle: number,
 ): CadenceArticle | undefined {
   const windowMs = Math.max(1, hoursPerArticle) * 60 * 60 * 1000;
-  const terminalTopicIds = new Set(
-    articles
-      .filter((article) =>
-        article.topicId &&
-        hasTerminalTopicFitFailure(article.publicationGateIssues)
-      )
-      .map((article) => article.topicId!),
-  );
-  return articles
-    .filter(
-      (article) =>
-        article._id &&
-        !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
-        (!article.topicId || !terminalTopicIds.has(article.topicId)) &&
-        article.createdAt <= now &&
-        article.status === "review" &&
-        article.publicationGateStatus === "blocked" &&
-        ((now - article.createdAt < windowMs &&
-          (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
-          needsVersionedQualityRecovery(article)),
-    )
-    .sort((a, b) => b.createdAt - a.createdAt)[0];
+  return recoverableQualityArticlesSince(articles, now - windowMs)
+    .find((article) => article._id && article.createdAt <= now);
 }
 
 export function evaluateCadenceWindow({

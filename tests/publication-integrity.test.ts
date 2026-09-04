@@ -307,7 +307,7 @@ test("final delivery revalidates current tenant topic fit", () => {
   assert.match(jobs, /status: "disqualified"/);
   assert.match(jobs, /terminalTopicFit: true/);
   assert.match(pipeline, /qualityQuarantined: terminalTopicFit/);
-  assert.match(scheduler, /hasTerminalTopicFitFailure/);
+  assert.match(scheduler, /recoverableQualityArticlesSince/);
   assert.ok(PUBLICATION_AUDIT_VERSION >= 5);
 });
 

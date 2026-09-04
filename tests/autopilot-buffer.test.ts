@@ -1227,7 +1227,8 @@ test("broad cost language cannot smuggle an unrelated audience into a niche plan
     /preLinkIssues\.length === 0 && targetAlignmentPassed/,
   );
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
-  assert.match(scheduler, /hasTerminalTargetAlignmentFailure/);
+  assert.match(scheduler, /recoverableQualityArticlesSince/);
+  assert.match(scheduler, /deterministicMechanicalRepairArticles/);
 });
 
 test("evergreen topic labels cannot retain a stale generated year", () => {

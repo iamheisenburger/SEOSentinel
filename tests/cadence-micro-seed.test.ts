@@ -38,7 +38,9 @@ import {
   SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
 } from "../convex/lib/providerSpendReservation.ts";
 import {
+  deterministicMechanicalRepairArticles,
   hasRecoverableQualityWork,
+  recoverableQualityArticlesSince,
 } from "../convex/lib/autopilotCadence.ts";
 
 const model = readFileSync("convex/cadenceMicroSeed.ts", "utf8");
@@ -779,6 +781,13 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
     ),
     false,
   );
+  assert.deepEqual(
+    recoverableQualityArticlesSince(
+      [staleSibling, terminalSibling],
+      candidateWindowStart,
+    ),
+    [],
+  );
 
   const oldOrdinary = { ...ordinary, createdAt: candidateWindowStart - 1 };
   assert.equal(
@@ -797,10 +806,22 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
     hasRecoverableQualityWork([oldMechanical], candidateWindowStart),
     true,
   );
+  assert.deepEqual(
+    deterministicMechanicalRepairArticles([oldMechanical, terminalMechanical]),
+    [oldMechanical],
+  );
   assert.match(model, /hasRecoverableQualityWork\([\s\S]*candidateWindowStart/);
   assert.match(
     scheduler,
     /qualityRecoveryAvailable = hasRecoverableQualityWork\([\s\S]*candidateWindowStart/,
+  );
+  assert.match(
+    scheduler,
+    /const recoverable = recoverableQualityArticlesSince\([\s\S]*candidateWindowStart/,
+  );
+  assert.match(
+    scheduler,
+    /const mechanicallyRecoverable = deterministicMechanicalRepairArticles\(/,
   );
 });
 

@@ -16,11 +16,9 @@ import {
   type ExpectedClickPortfolioEvaluation,
 } from "../lib/expectedClickPortfolio";
 import {
-  compareQualityRecoveryCandidates,
+  deterministicMechanicalRepairArticles,
   hasRecoverableQualityWork,
-  MAX_QUALITY_REVISIONS,
-  needsDeterministicMechanicalRepair,
-  needsVersionedQualityRecovery,
+  recoverableQualityArticlesSince,
 } from "../lib/autopilotCadence";
 import {
   MIN_VERIFIED_TOPIC_HORIZON,
@@ -34,7 +32,6 @@ import {
   exactCadenceWakeupAt,
   coveredIntentTopics,
   filterNonCannibalizingIntentTopics,
-  hasTerminalTopicFitFailure,
   isUnderfilledPlanContinuationPayload,
   MAX_AUDIT_REFRESH_PER_PASS,
   isSealedReady,
@@ -97,10 +94,6 @@ type TopicBusinessFitAuditReport = {
   updated: number;
   topics: Array<Omit<TopicBusinessFitAudit, "version">>;
 };
-
-function hasTerminalTargetAlignmentFailure(article: ArticleSummary): boolean {
-  return hasTerminalTopicFitFailure(article.publicationGateIssues);
-}
 
 // Operator-safe inventory audit. It changes only topic eligibility metadata
 // and status for one explicit tenant; it cannot queue generation or delivery.
@@ -752,17 +745,10 @@ export const scheduleCadence = internalAction({
     }
 
     const recentCandidates = state.recent as ArticleSummary[];
-    const recoverable = (state.review as ArticleSummary[])
-      .filter(
-        (article: ArticleSummary) =>
-          article.status === "review" &&
-          article.publicationGateStatus === "blocked" &&
-          !hasTerminalTargetAlignmentFailure(article) &&
-          ((article.createdAt >= candidateWindowStart &&
-            (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
-            needsVersionedQualityRecovery(article)),
-      )
-      .sort(compareQualityRecoveryCandidates)[0];
+    const recoverable = recoverableQualityArticlesSince(
+      state.review as ArticleSummary[],
+      candidateWindowStart,
+    )[0];
     if (recoverable) {
       const recovery = await ctx.runMutation(internal.jobs.queueQualityRetryIfAbsent, {
         siteId,
@@ -794,11 +780,9 @@ export const scheduleCadence = internalAction({
     // that exact draft one guarded deterministic repair without spending
     // another prose revision. The job mutation remembers the attempt so the
     // scheduler cannot create an infinite loop.
-    const mechanicallyRecoverable = (state.review as ArticleSummary[])
-      .filter(needsDeterministicMechanicalRepair)
-      .sort(
-        (a: ArticleSummary, b: ArticleSummary) => b.createdAt - a.createdAt,
-      )[0];
+    const mechanicallyRecoverable = deterministicMechanicalRepairArticles(
+      state.review as ArticleSummary[],
+    )[0];
     if (mechanicallyRecoverable) {
       const recovery = await ctx.runMutation(
         internal.jobs.queueQualityRetryIfAbsent,
