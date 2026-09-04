@@ -73,6 +73,8 @@ import {
   DATAFORSEO_DEMAND_SOURCE,
   EXPECTED_CLICK_PORTFOLIO_VERSION,
   evaluateStoredExpectedClickPortfolio,
+  estimateTopicExpectedClicks,
+  expectedClickTopicFromStoredEvidence,
   measuredAuthorityIsFresh,
   tenantAuthorityFromStoredEvidence,
 } from "./lib/expectedClickPortfolio";
@@ -846,40 +848,39 @@ async function inspectReadiness(
 
   const locationCode = dataForSeoLocationCode(site.targetCountry);
   const languageCode = dataForSeoLanguageCode(site.language);
-  const portfolio = evaluateStoredExpectedClickPortfolio({
-    topics: topics.filter((topic) =>
-      topic.status !== "plan_checkpoint" &&
-      !topic.planCheckpointTerminalFailureCode
-    ).map((topic) => ({
-      topicId: String(topic._id),
-      keyword: topic.primaryKeyword,
-      searchVolume: topic.searchVolume,
-      searchDemandSource: topic.searchDemandSource,
-      searchDemandMeasuredAt: topic.searchDemandMeasuredAt,
-      searchDemandLocationCode: topic.searchDemandLocationCode,
-      searchDemandLanguageCode: topic.searchDemandLanguageCode,
-      serpTopUrls: topic.serpTopUrls,
-      serpObservedAt: topic.serpObservedAt,
-      serpLocationCode: topic.serpLocationCode,
-      serpLanguageCode: topic.serpLanguageCode,
-      serpAuthorityCompetitors: topic.serpAuthorityCompetitors,
-    })),
-    tenantAuthority: {
-      domain: site.seoAuthorityDomain,
-      currentDomain: site.domain,
-      domainRank: site.seoAuthorityDomainRank,
-      referringDomains: site.seoAuthorityReferringDomains,
-      source: site.seoAuthoritySource,
-      measuredAt: site.seoAuthorityMeasuredAt,
-    },
-    monthlyOrganicClickGoal: 100,
-    currentLocationCode: locationCode,
-    currentLanguageCode: languageCode,
-    now: timestamp,
-  });
-  const expectedEligible = new Set(portfolio.topics.filter((topic) =>
-    topic.status === "eligible"
-  ).map((topic) => topic.topicId));
+  // Scheduling only needs each topic's own evidence eligibility. Building the
+  // complete portfolio also performs an O(n²) intent-group union used for
+  // aggregate click-goal accounting; that grouping cannot change any topic's
+  // individual status and previously pushed mature tenants over Convex's
+  // one-second transaction limit. Preserve the exact estimator and locale /
+  // authority checks while avoiding work that has no bearing on admission.
+  const expectedEligible = new Set(topics.filter((topic) =>
+    topic.status !== "plan_checkpoint" &&
+    !topic.planCheckpointTerminalFailureCode
+  ).flatMap((topic) => {
+    const estimate = estimateTopicExpectedClicks({
+      topic: expectedClickTopicFromStoredEvidence({
+        topicId: String(topic._id),
+        keyword: topic.primaryKeyword,
+        searchVolume: topic.searchVolume,
+        searchDemandSource: topic.searchDemandSource,
+        searchDemandMeasuredAt: topic.searchDemandMeasuredAt,
+        searchDemandLocationCode: topic.searchDemandLocationCode,
+        searchDemandLanguageCode: topic.searchDemandLanguageCode,
+        serpTopUrls: topic.serpTopUrls,
+        serpObservedAt: topic.serpObservedAt,
+        serpLocationCode: topic.serpLocationCode,
+        serpLanguageCode: topic.serpLanguageCode,
+        serpAuthorityCompetitors: topic.serpAuthorityCompetitors,
+      }, {
+        locationCode,
+        languageCode,
+      }),
+      tenantAuthority: authority,
+      now: timestamp,
+    });
+    return estimate.status === "eligible" ? [estimate.topicId] : [];
+  }));
   const businessSignals = tenantTopicBusinessSignals(site);
   const schedulerCandidates = topics.filter((topic) => {
     const fit = evaluateTopicBusinessFit({

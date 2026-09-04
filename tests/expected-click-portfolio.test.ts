@@ -82,6 +82,31 @@ test("topic clicks equal measured demand times CTR times rank probability", () =
   assert.equal(result.version, EXPECTED_CLICK_PORTFOLIO_VERSION);
 });
 
+test("portfolio intent grouping never changes individual topic eligibility", () => {
+  const inputs = [
+    topic("first", 2_000, [32, 36, 39, 42, 45, 48, 51, 54, 58, 62], "same-intent"),
+    topic("second", 900, [35, 38, 41, 44, 47, 50, 53, 56, 59, 63], "same-intent"),
+    { ...topic("missing", 500, [20, 25, 30, 35, 40]), demand: undefined },
+  ];
+  const tenantAuthority = authority(50);
+  const directStatuses = new Map(inputs.map((input) => [
+    input.topicId,
+    estimateTopicExpectedClicks({ topic: input, tenantAuthority, now: NOW }).status,
+  ]));
+  const portfolio = evaluateExpectedClickPortfolio({
+    topics: inputs,
+    tenantAuthority,
+    monthlyOrganicClickGoal: 100,
+    now: NOW,
+  });
+
+  assert.deepEqual(
+    new Map(portfolio.topics.map((result) => [result.topicId, result.status])),
+    directStatuses,
+  );
+  assert.ok(portfolio.duplicateIntentTopicIds.includes("second"));
+});
+
 test("the same demand is worth more when tenant authority exceeds the actual SERP", () => {
   const openSerp = estimateTopicExpectedClicks({
     topic: topic("open", 1_000, [20, 25, 30, 35, 40, 45, 50, 55, 60, 65]),
