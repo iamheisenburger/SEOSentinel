@@ -21,7 +21,7 @@ commands below remain operator canaries and never auto-chain evidence.
 - Exactly one `keywords_data/google_ads/search_volume/live` provider task. No
   keyword-difficulty task and no AI fallback.
 - The complete batch reserves at most 100,000 microUSD ($0.10) through the
-  shared $3.30/day and $35/month provider ledger.
+  shared $5.40/day and $35/month provider ledger.
 - The free DataForSEO wallet endpoint is checked before reservation and again
   before the paid task.
 - Each exact topic/keyword attempt is persisted before HTTP. If the paid task

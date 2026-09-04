@@ -39,7 +39,7 @@ test("one account cannot reserve the entire daily or monthly fleet wallet", () =
   );
   assert.equal(
     PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
-    4_700_000,
+    5_150_000,
     "one account can fund a complete plan, recovery chain, and bounded policy-upgrade recoveries",
   );
   assert.equal(
@@ -69,7 +69,8 @@ test("one account can complete every bounded cadence-recovery phase after a full
     100_000 + // exact evidence for the anchor-preservation recovery
     250_000 + // legacy-anchor quarantine migration and exact evidence
     700_000 + // bounded immutable-receipt release-repair reserve
-    450_000; // v15 primary/fallback plus all three SERP candidate attempts
+    450_000 + // v15 primary/fallback plus all three SERP candidate attempts
+    450_000; // v16 diversified primary/fallback plus all three SERP attempts
 
   assert.equal(
     completePlanAndRecovery,
@@ -79,13 +80,13 @@ test("one account can complete every bounded cadence-recovery phase after a full
     accountReservedTodayMicroUsd: completePlanAndRecovery - 100_000,
     accountReservedThisMonthMicroUsd: completePlanAndRecovery - 100_000,
     requestedMicroUsd: 100_000,
-    monthlyCeilingMicroUsd: 5_000_000,
+    monthlyCeilingMicroUsd: 10_000_000,
   }), { allowed: true });
   assert.equal(evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: completePlanAndRecovery,
     accountReservedThisMonthMicroUsd: completePlanAndRecovery,
     requestedMicroUsd: 1,
-    monthlyCeilingMicroUsd: 5_000_000,
+    monthlyCeilingMicroUsd: 10_000_000,
   }).allowed, false);
 });
 

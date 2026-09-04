@@ -63,7 +63,7 @@ and emit an actionable operator log rather than being replayed.
 - Evidence: at most 10 SERPs plus one bounded authority lookup, with a
   conservative reservation ceiling of **$0.10 per eligible site/day**.
 - A site that needs both phases can therefore reserve at most **$0.20/day**.
-- All tenants and provider features still share the existing **$3.30/day** and
+- All tenants and provider features still share the existing **$5.40/day** and
   **$35/month** ledgers. No fleet action bypasses them. With no other provider
   reservations, the absolute daily envelope can fund at most thirty-three
   $0.10 phase reservations; daily jitter rotates priority rather than letting

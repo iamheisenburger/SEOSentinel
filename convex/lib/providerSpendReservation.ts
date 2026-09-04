@@ -27,7 +27,8 @@ import {
 // migration (each primary, fallback, and evidence), a bounded $0.70
 // release-repair reserve, the complete $0.45 v15 candidate-continuation
 // envelope (primary discovery, fallback discovery when needed, and up to
-// three exact SERP evidence attempts), and a $0.25 reserve for another
+// three exact SERP evidence attempts), the complete $0.45 v16
+// saturated-anchor diversification envelope, and a $0.25 reserve for another
 // account must all fit in the same UTC day. The repair reserve prevents an
 // immutable ambiguous provider receipt from consuming the next corrected
 // policy version's admission headroom; the monthly cap still bounds aggregate
@@ -41,7 +42,7 @@ import {
 // and only the explicitly versioned micro-seed generations whose immutable
 // predecessors proved a distinct algorithm defect. The monthly $35 fleet
 // circuit breaker remains unchanged.
-export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 4_950_000;
+export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 5_400_000;
 export const SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
