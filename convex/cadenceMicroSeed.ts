@@ -5513,6 +5513,7 @@ export const getStatusInternal = internalQuery({
       cadenceScheduleMode: job.cadenceScheduleMode,
       cadenceScheduleScheduled: job.cadenceScheduleScheduled,
       cadenceScheduleReceiptAt: job.cadenceScheduleReceiptAt,
+      cadenceScheduleHandoffVersion: job.cadenceScheduleHandoffVersion,
       errorCode: job.errorCode,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,

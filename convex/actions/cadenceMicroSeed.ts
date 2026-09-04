@@ -11,7 +11,9 @@ import {
   CADENCE_MICRO_SEED_MAX_FINALIZE_ATTEMPTS,
   CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
+  CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
   CADENCE_MICRO_SEED_VERSION,
+  cadenceMicroSeedScheduleHandoffAllowed,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedDiscoveryEndpoint,
   cadenceMicroSeedProviderCeilingMicroUsd,
@@ -1125,27 +1127,68 @@ export const scheduleCadenceForMicroSeed = internalAction({
   },
   handler: async (ctx, args): Promise<unknown> => {
     const job = await ctx.runQuery(api.getJobInternal, args);
-    if (!job || job.status !== "cadence_scheduling") {
+    if (
+      !job ||
+      !job.topicId ||
+      !cadenceMicroSeedScheduleHandoffAllowed({
+        status: job.status,
+        errorCode: job.errorCode,
+        policyVersion: job.policyVersion,
+        handoffVersion: job.cadenceScheduleHandoffVersion,
+      })
+    ) {
       return { scheduled: false, reason: "job_not_scheduling" };
     }
-    let scheduled = 0;
-    let mode = "scheduler_action_failed";
-    try {
-      const result = await ctx.runAction(
-        internal.actions.scheduler.scheduleCadence,
+
+    // Preserve the ordinary live-readiness demotion fence. Warm bootstrap is
+    // already fail-closed by the queue mutation's rollout, authorization,
+    // quota, evidence, overlap and buffer checks.
+    const site = await ctx.runQuery(internal.sites.getFull, {
+      siteId: args.siteId,
+    });
+    if (!site) return { scheduled: false, reason: "site_not_found" };
+    if (site.autopilotRolloutMode === "live") {
+      const readiness = await ctx.runMutation(
+        internal.sites.enforceLiveReadiness,
         { siteId: args.siteId },
       );
-      scheduled = Number.isInteger(result.scheduled) ? result.scheduled : 0;
-      mode = typeof result.mode === "string" && result.mode
-        ? result.mode
-        : "idle";
-    } catch {
-      // The scheduler may have committed the exact article queue before its
-      // action response was lost. The mutation below derives proof from DB.
+      if (!readiness.ready) {
+        return {
+          scheduled: false,
+          reason: "live_readiness_regressed",
+          blockers: readiness.blockers,
+        };
+      }
     }
+
+    const queued = await ctx.runMutation(
+      internal.jobs.queueTopicArticleIfAbsent,
+      {
+        siteId: args.siteId,
+        topicId: job.topicId,
+        bufferFill: true,
+        cadenceMicroSeedJobId: args.jobId,
+      },
+    );
+    if (queued.queued || queued.alreadyQueued) {
+      return {
+        recorded: true,
+        exactTopicScheduled: true,
+        topicId: job.topicId,
+        articleJobId: queued.jobId,
+        mode:
+          `exact_micro_seed_handoff_v${CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION}`,
+      };
+    }
+
+    // Existing in-flight jobs can be transient. Keep the established bounded
+    // retry receipt for an active handoff, but never reopen a terminal repair
+    // that the exact one-shot mutation refused.
+    if (job.status !== "cadence_scheduling") return queued;
+    const mode = queued.reason ?? "exact_micro_seed_handoff_blocked";
     const receipt = await ctx.runMutation(api.recordCadenceScheduleResult, {
       ...args,
-      scheduled,
+      scheduled: 0,
       mode,
     });
     if (receipt.recorded && receipt.exhausted) {

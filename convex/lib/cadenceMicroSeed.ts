@@ -82,6 +82,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
 export const CADENCE_MICRO_SEED_VERSION = 30;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
+// The cadence handoff is a distinct, provider-free boundary. A topic that
+// already paid for and persisted current evidence must not be counted as a
+// second daily candidate merely because earlier drafts exhausted that day's
+// quality-attempt budget. This version makes the one exact repair durable so
+// a terminal pre-fix miss cannot replay indefinitely.
+export const CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION = 1;
 // A successful free balance check is bound to the reservation transaction.
 // This window fences that receipt against a stale or replayed admission action;
 // the reservation ledger owns capacity after the job is created.
@@ -101,6 +107,20 @@ export const CADENCE_MICRO_SEED_LEASE_MS = 2 * 60 * 1000;
 export const CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS = 5 * 60 * 1000;
 export const CADENCE_MICRO_SEED_MAX_WATCHDOG_RECOVERIES = 12;
 export const CADENCE_MICRO_SEED_MAX_JOB_AGE_MS = 2 * 60 * 60 * 1000;
+
+export function cadenceMicroSeedScheduleHandoffAllowed(args: {
+  status: string;
+  errorCode?: string;
+  policyVersion: number;
+  handoffVersion?: number;
+}): boolean {
+  if (args.policyVersion !== CADENCE_MICRO_SEED_VERSION) return false;
+  if (args.status === "cadence_scheduling") return true;
+  return args.status === "missed" &&
+    args.errorCode === "cadence_schedule_unverified" &&
+    (args.handoffVersion ?? 0) <
+      CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION;
+}
 // A terminal primary may authorize its one distinct fallback after midnight,
 // but never as an indefinitely reusable historical spend receipt.
 export const CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS =

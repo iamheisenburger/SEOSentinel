@@ -128,6 +128,17 @@ import { oneSetupQueueDenialDisposition } from
   "./lib/oneSetupExecution.ts";
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
+import {
+  CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS,
+  CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
+  CADENCE_MICRO_SEED_VERSION,
+  cadenceMicroSeedScheduleHandoffAllowed,
+  normalizeCadenceMicroSeedText,
+} from "./lib/cadenceMicroSeed.ts";
+import { EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION } from
+  "./lib/expectedClickEvidenceBackfill.ts";
+import { verifiedKeywordPlanningActive } from
+  "./lib/plannedTopicEvidenceRecovery.ts";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
@@ -1148,20 +1159,106 @@ export const queueTopicArticleIfAbsent = internalMutation({
     bufferFill: v.boolean(),
     manual: v.optional(v.boolean()),
     options: v.optional(v.any()),
+    cadenceMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
-  handler: async (ctx, { siteId, topicId, bufferFill, manual, options }) => {
-    const [site, topic] = await Promise.all([
+  handler: async (
+    ctx,
+    {
+      siteId,
+      topicId,
+      bufferFill,
+      manual,
+      options,
+      cadenceMicroSeedJobId,
+    },
+  ) => {
+    const timestamp = now();
+    const [site, topic, cadenceMicroSeedJob] = await Promise.all([
       ctx.db.get(siteId),
       ctx.db.get(topicId),
+      cadenceMicroSeedJobId
+        ? ctx.db.get(cadenceMicroSeedJobId)
+        : Promise.resolve(null),
     ]);
     if (!site || !topic || topic.siteId !== siteId) {
       throw new Error("Topic does not belong to the site");
+    }
+    if (manual && cadenceMicroSeedJobId) {
+      return { queued: false, reason: "manual_micro_seed_handoff_forbidden" as const };
     }
     if (!topicMatchesCurrentDomain(site, topic)) {
       return { queued: false, reason: "topic_domain_stale" as const };
     }
     if (topicUnavailableForArticleQueue(topic)) {
       return { queued: false, reason: "topic_checkpoint_locked" as const };
+    }
+
+    // A micro-seed has already spent its bounded discovery/evidence budget.
+    // Its exact topic is therefore a continuation of the same cadence attempt,
+    // not a fresh candidate. Validate that immutable boundary here, in the
+    // same transaction that queues the article, so only the generic daily
+    // candidate-attempt budget is bypassed. Every authority, quota, evidence,
+    // overlap, buffer and rollout fence below remains fail closed.
+    if (cadenceMicroSeedJobId) {
+      if (
+        !cadenceMicroSeedJob ||
+        cadenceMicroSeedJob.siteId !== siteId ||
+        cadenceMicroSeedJob.topicId !== topicId ||
+        !cadenceMicroSeedScheduleHandoffAllowed({
+          status: cadenceMicroSeedJob.status,
+          errorCode: cadenceMicroSeedJob.errorCode,
+          policyVersion: cadenceMicroSeedJob.policyVersion,
+          handoffVersion:
+            cadenceMicroSeedJob.cadenceScheduleHandoffVersion,
+        }) ||
+        cadenceMicroSeedJob.createdAt > timestamp + 60_000 ||
+        timestamp - cadenceMicroSeedJob.createdAt >
+          CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS ||
+        cadenceMicroSeedJob.rolloutEpoch !==
+          (site.autopilotRolloutEpoch ?? 0) ||
+        cadenceMicroSeedJob.policyVersion !== CADENCE_MICRO_SEED_VERSION ||
+        topic.cadenceMicroSeedVersion !== CADENCE_MICRO_SEED_VERSION ||
+        topic.cadenceMicroSeedJobId !== cadenceMicroSeedJob._id ||
+        topic.cadenceMicroSeedFingerprint !==
+          cadenceMicroSeedJob.topicFingerprint ||
+        !cadenceMicroSeedJob.selectedCandidate ||
+        normalizeCadenceMicroSeedText(topic.primaryKeyword) !==
+          normalizeCadenceMicroSeedText(
+            cadenceMicroSeedJob.selectedCandidate.keyword,
+          ) ||
+        site.autopilotEnabled !== true ||
+        (site.cadencePerWeek ?? 0) <= 0 ||
+        !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
+        site.expectedClickSchedulingEnabled !== true ||
+        !verifiedKeywordPlanningActive(site)
+      ) {
+        return { queued: false, reason: "micro_seed_handoff_scope_changed" as const };
+      }
+      const evidence = cadenceMicroSeedJob.evidenceJobId
+        ? await ctx.db.get(cadenceMicroSeedJob.evidenceJobId)
+        : null;
+      const selectedEvidence = evidence?.selectedTopics[0];
+      if (
+        !evidence ||
+        evidence.siteId !== siteId ||
+        evidence.userId !== cadenceMicroSeedJob.userId ||
+        evidence.policyVersion !== EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION ||
+        evidence.origin !== "operator_canary" ||
+        evidence.reservationDay !== cadenceMicroSeedJob.reservationDay ||
+        evidence.rolloutEpoch !== cadenceMicroSeedJob.rolloutEpoch ||
+        evidence.selectionScope !== "planned_unmaterialized" ||
+        evidence.status !== "completed" ||
+        evidence.persistedTopics !== 1 ||
+        evidence.providerCallsAttempted <= 0 ||
+        evidence.providerCallsAttempted !== evidence.providerCallsCompleted ||
+        evidence.selectedTopics.length !== 1 ||
+        selectedEvidence?.topicId !== topicId ||
+        selectedEvidence.targetKind !== "planned_topic" ||
+        selectedEvidence.plannedTopicFingerprint !==
+          cadenceMicroSeedJob.plannedEvidenceFingerprint
+      ) {
+        return { queued: false, reason: "micro_seed_evidence_changed" as const };
+      }
     }
     const active = await activeJobsForSite(ctx, siteId);
     const duplicate = active.find((job) => {
@@ -1170,7 +1267,44 @@ export const queueTopicArticleIfAbsent = internalMutation({
         : {};
       return job.type === "article" && payload.topicId === topicId;
     });
-    if (duplicate) return { queued: false, jobId: duplicate._id };
+    if (duplicate) {
+      if (cadenceMicroSeedJob) {
+        const alerts = await ctx.db.query("autopilot_alerts")
+          .withIndex("by_site_kind_status", (q) => q
+            .eq("siteId", siteId)
+            .eq("kind", "cadence_micro_seed_missed")
+            .eq("status", "active"))
+          .take(20);
+        for (const alert of alerts) {
+          await ctx.db.patch(alert._id, {
+            status: "resolved",
+            resolvedAt: timestamp,
+            updatedAt: timestamp,
+          });
+        }
+        await ctx.db.patch(cadenceMicroSeedJob._id, {
+          status: "completed",
+          cadenceScheduleAttempts:
+            (cadenceMicroSeedJob.cadenceScheduleAttempts ?? 0) + 1,
+          cadenceScheduleMode:
+            `exact_micro_seed_handoff_v${CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION}`,
+          cadenceScheduleScheduled: 1,
+          cadenceScheduleReceiptAt: timestamp,
+          cadenceScheduleHandoffVersion:
+            CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
+          errorCode: undefined,
+          completedAt: timestamp,
+          updatedAt: timestamp,
+        });
+      }
+      return { queued: false, jobId: duplicate._id, alreadyQueued: true as const };
+    }
+    if (
+      cadenceMicroSeedJob &&
+      active.some((job) => job.type === "article" || job.type === "plan")
+    ) {
+      return { queued: false, reason: "content_work_in_progress" as const };
+    }
     if (topic.status === "disqualified") {
       return { queued: false, reason: "topic_business_fit_failed" as const };
     }
@@ -1180,12 +1314,116 @@ export const queueTopicArticleIfAbsent = internalMutation({
     ) {
       return { queued: false, reason: "topic_not_available" as const };
     }
-    const timestamp = now();
+
+    if (cadenceMicroSeedJob) {
+      const allowance = await currentSitePlanAllowance(ctx, site);
+      if (!allowance.ok) {
+        return { queued: false, reason: "site_plan_allowance_inactive" as const };
+      }
+      if (
+        !await accountHasArticleHeadroom(
+          ctx,
+          site.userId!,
+          allowance.limits.maxArticles,
+          timestamp,
+        )
+      ) {
+        return { queued: false, reason: "article_quota_reached" as const };
+      }
+      const [readySummaries, publishedSummaries, growthGoal] = await Promise.all([
+        takeCurrentDomainArticleSummariesByStatus(
+          ctx,
+          site,
+          "ready",
+          PLAN_TARGET_INVENTORY_READ_LIMIT + 1,
+        ),
+        takeCurrentDomainArticleSummariesByStatus(
+          ctx,
+          site,
+          "published",
+          PLAN_TARGET_INVENTORY_READ_LIMIT + 1,
+        ),
+        ctx.db.query("seo_growth_goals")
+          .withIndex("by_site", (q) => q.eq("siteId", siteId))
+          .unique(),
+      ]);
+      if (
+        readySummaries.length > PLAN_TARGET_INVENTORY_READ_LIMIT ||
+        publishedSummaries.length > PLAN_TARGET_INVENTORY_READ_LIMIT
+      ) {
+        return { queued: false, reason: "micro_seed_handoff_read_limit" as const };
+      }
+      const readiness = evaluateSchedulerReadyTopicInventory({
+        topics: [topic],
+        site,
+        monthlyOrganicClickGoal:
+          growthGoal?.monthlyOrganicClicksGoal ??
+          DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL,
+        currentLocationCode: dataForSeoLocationCode(site.targetCountry),
+        currentLanguageCode: dataForSeoLanguageCode(site.language),
+      });
+      if (!readiness.schedulerReadyTopicIds.includes(String(topicId))) {
+        return { queued: false, reason: "micro_seed_topic_not_scheduler_ready" as const };
+      }
+      const summaries = [...readySummaries, ...publishedSummaries];
+      const coveredTopicIds = [...new Set(summaries.flatMap((article) =>
+        article.topicId ? [String(article.topicId)] : []
+      ))];
+      const coveredTopicRows = await Promise.all(coveredTopicIds.map(
+        (rawTopicId) => {
+          const coveredTopicId = ctx.db.normalizeId(
+            "topic_clusters",
+            rawTopicId,
+          );
+          return coveredTopicId ? ctx.db.get(coveredTopicId) : null;
+        },
+      ));
+      const covered = coveredIntentTopics(
+        [topic, ...coveredTopicRows.filter(
+          (candidate): candidate is Doc<"topic_clusters"> =>
+            Boolean(candidate && candidate.siteId === siteId),
+        )].map((candidate) => ({
+            _id: String(candidate._id),
+            status: candidate.status ?? "planned",
+            primaryKeyword: candidate.primaryKeyword,
+            serpTopUrls: candidate.serpTopUrls,
+          })),
+        summaries.map((article) => ({
+          topicId: article.topicId ? String(article.topicId) : undefined,
+          slug: article.slug,
+          status: article.status,
+          publicationGateStatus: article.publicationGateStatus,
+          publicationAuditVersion: article.publicationAuditVersion,
+          auditedContentHash: article.auditedContentHash,
+        })),
+      );
+      if (
+        !filterNonCannibalizingIntentTopics([topic], covered).some(
+          (candidate) => candidate._id === topicId,
+        )
+      ) {
+        return { queued: false, reason: "micro_seed_topic_overlap" as const };
+      }
+      const sealedBufferCount = readySummaries.filter(isSealedReady).length;
+      if (
+        sealedBufferCount >=
+          approvedBufferPolicy(site.cadencePerWeek ?? 4).target
+      ) {
+        return { queued: false, reason: "buffer_full" as const };
+      }
+    }
+
     const jobId = await ctx.db.insert("jobs", {
       siteId,
       type: "article",
       status: "pending",
-      payload: { topicId, bufferFill, manual: manual === true, options },
+      payload: {
+        topicId,
+        bufferFill,
+        manual: manual === true,
+        options,
+        ...(cadenceMicroSeedJobId ? { cadenceMicroSeedJobId } : {}),
+      },
       ...rolloutFields(site, manual === true),
       workerAttempts: 0,
       publicationAttempts: 0,
@@ -1193,6 +1431,40 @@ export const queueTopicArticleIfAbsent = internalMutation({
       updatedAt: timestamp,
     });
     await ctx.db.patch(topicId, { status: "queued", updatedAt: timestamp });
+    if (cadenceMicroSeedJob) {
+      const alerts = await ctx.db.query("autopilot_alerts")
+        .withIndex("by_site_kind_status", (q) => q
+          .eq("siteId", siteId)
+          .eq("kind", "cadence_micro_seed_missed")
+          .eq("status", "active"))
+        .take(20);
+      for (const alert of alerts) {
+        await ctx.db.patch(alert._id, {
+          status: "resolved",
+          resolvedAt: timestamp,
+          updatedAt: timestamp,
+        });
+      }
+      await ctx.db.patch(cadenceMicroSeedJob._id, {
+        status: "completed",
+        cadenceScheduleAttempts:
+          (cadenceMicroSeedJob.cadenceScheduleAttempts ?? 0) + 1,
+        cadenceScheduleMode:
+          `exact_micro_seed_handoff_v${CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION}`,
+        cadenceScheduleScheduled: 1,
+        cadenceScheduleReceiptAt: timestamp,
+        cadenceScheduleHandoffVersion:
+          CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
+        errorCode: undefined,
+        completedAt: timestamp,
+        updatedAt: timestamp,
+      });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.actions.pipeline.processNextJob,
+        { siteId, jobId },
+      );
+    }
     return { queued: true, jobId };
   },
 });

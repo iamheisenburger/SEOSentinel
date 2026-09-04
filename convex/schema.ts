@@ -2165,6 +2165,7 @@ export default defineSchema({
     cadenceScheduleMode: v.optional(v.string()),
     cadenceScheduleScheduled: v.optional(v.number()),
     cadenceScheduleReceiptAt: v.optional(v.number()),
+    cadenceScheduleHandoffVersion: v.optional(v.number()),
     finalizeAttempts: v.number(),
     workerAttempts: v.number(),
     workerToken: v.optional(v.string()),

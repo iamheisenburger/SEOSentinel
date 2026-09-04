@@ -16,6 +16,7 @@ import {
   CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT,
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
+  CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
   CADENCE_MICRO_SEED_TASK_COST_CEILING_USD,
   CADENCE_MICRO_SEED_VERSION,
   CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
@@ -34,6 +35,7 @@ import {
   cadenceMicroSeedProviderPurpose,
   cadenceMicroSeedProviderReceiptValid,
   cadenceMicroSeedProviderTrigger,
+  cadenceMicroSeedScheduleHandoffAllowed,
   cadenceMicroSeedSourcePlanExecutionExhausted,
   cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedTerminalMissReceiptValid,
@@ -790,6 +792,64 @@ test("fallback is a distinct bounded receipt after an exact terminal primary mis
       ...invalid,
     }), false);
   }
+});
+
+test("cadence micro-seed handoff repairs only the exact current one-shot boundary", () => {
+  assert.equal(CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION, 1);
+  assert.equal(cadenceMicroSeedScheduleHandoffAllowed({
+    status: "cadence_scheduling",
+    policyVersion: CADENCE_MICRO_SEED_VERSION,
+  }), true);
+  assert.equal(cadenceMicroSeedScheduleHandoffAllowed({
+    status: "missed",
+    errorCode: "cadence_schedule_unverified",
+    policyVersion: CADENCE_MICRO_SEED_VERSION,
+  }), true);
+  assert.equal(cadenceMicroSeedScheduleHandoffAllowed({
+    status: "missed",
+    errorCode: "cadence_schedule_unverified",
+    policyVersion: CADENCE_MICRO_SEED_VERSION,
+    handoffVersion: CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
+  }), false);
+  for (const invalid of [
+    { status: "missed", errorCode: "provider_response_unverified" },
+    { status: "completed", errorCode: undefined },
+    { status: "evidence_running", errorCode: undefined },
+  ]) {
+    assert.equal(cadenceMicroSeedScheduleHandoffAllowed({
+      ...invalid,
+      policyVersion: CADENCE_MICRO_SEED_VERSION,
+    }), false);
+  }
+  assert.equal(cadenceMicroSeedScheduleHandoffAllowed({
+    status: "cadence_scheduling",
+    policyVersion: CADENCE_MICRO_SEED_VERSION - 1,
+  }), false);
+
+  const jobs = readFileSync("convex/jobs.ts", "utf8");
+  assert.match(
+    jobs,
+    /cadenceMicroSeedJobId[\s\S]*currentSitePlanAllowance[\s\S]*accountHasArticleHeadroom/,
+  );
+  assert.match(
+    jobs,
+    /evaluateSchedulerReadyTopicInventory[\s\S]*filterNonCannibalizingIntentTopics/,
+  );
+  assert.match(
+    jobs,
+    /cadenceScheduleHandoffVersion:\s*CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION/,
+  );
+  assert.match(
+    action,
+    /queueTopicArticleIfAbsent[\s\S]*cadenceMicroSeedJobId:\s*args\.jobId/,
+  );
+  assert.doesNotMatch(
+    action.slice(
+      action.indexOf("export const scheduleCadenceForMicroSeed"),
+      action.indexOf("export function cadenceMicroSeedFleetJitterMs"),
+    ),
+    /actions\.scheduler\.scheduleCadence/,
+  );
 });
 
 test("a terminal primary accounts for provider rows rejected before persistence", () => {
