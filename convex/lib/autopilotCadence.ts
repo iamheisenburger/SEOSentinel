@@ -387,13 +387,13 @@ export function hasRecoverableQualityWork(
   candidateWindowStart: number,
 ): boolean {
   return articles.some((article) =>
-    (article.status === "review" &&
+    !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
+    ((article.status === "review" &&
       article.publicationGateStatus === "blocked" &&
-      !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
       ((article.createdAt >= candidateWindowStart &&
         (article.qualityRevisionCount ?? 0) < MAX_QUALITY_REVISIONS) ||
         needsVersionedQualityRecovery(article))) ||
-    needsDeterministicMechanicalRepair(article)
+      needsDeterministicMechanicalRepair(article))
   );
 }
 

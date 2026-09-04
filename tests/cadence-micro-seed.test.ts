@@ -723,6 +723,20 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
     false,
   );
 
+  const terminalMechanical = {
+    ...terminalFit,
+    createdAt: candidateWindowStart - 1,
+    qualityRevisionCount: 2,
+    publicationGateIssues: [
+      "Article failed the current tenant product-fit gate.",
+      "Meta description must end as a complete sentence.",
+    ],
+  };
+  assert.equal(
+    hasRecoverableQualityWork([terminalMechanical], candidateWindowStart),
+    false,
+  );
+
   const oldOrdinary = { ...ordinary, createdAt: candidateWindowStart - 1 };
   assert.equal(
     hasRecoverableQualityWork([oldOrdinary], candidateWindowStart),
