@@ -1459,10 +1459,20 @@ export const queueTopicArticleIfAbsent = internalMutation({
         completedAt: timestamp,
         updatedAt: timestamp,
       });
+      // Enter through the ordinary durable run lifecycle instead of invoking
+      // the worker directly. A direct worker without a runId can complete or
+      // quarantine this candidate, but it does not own the scheduler
+      // continuation that queues a bounded quality revision, delivery, or
+      // buffer refill. The shared follow-up path records the run, claims this
+      // exact already-queued job, and continues every terminal quality state.
       await ctx.scheduler.runAfter(
         0,
-        internal.actions.pipeline.processNextJob,
-        { siteId, jobId },
+        internal.autopilot.dispatchSiteFollowup,
+        {
+          siteId,
+          trigger: "cadence_micro_seed_handoff",
+          reason: `exact_micro_seed_article_job_${jobId}`,
+        },
       );
     }
     return { queued: true, jobId };

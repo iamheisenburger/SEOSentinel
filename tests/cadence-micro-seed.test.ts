@@ -843,6 +843,18 @@ test("cadence micro-seed handoff repairs only the exact current one-shot boundar
     action,
     /queueTopicArticleIfAbsent[\s\S]*cadenceMicroSeedJobId:\s*args\.jobId/,
   );
+  const queueHandoff = jobs.slice(
+    jobs.indexOf("export const queueTopicArticleIfAbsent"),
+    jobs.indexOf("export const queueManualArticleIfAbsent"),
+  );
+  assert.match(
+    queueHandoff,
+    /internal\.autopilot\.dispatchSiteFollowup[\s\S]*cadence_micro_seed_handoff/,
+  );
+  assert.doesNotMatch(
+    queueHandoff,
+    /internal\.actions\.pipeline\.processNextJob/,
+  );
   assert.doesNotMatch(
     action.slice(
       action.indexOf("export const scheduleCadenceForMicroSeed"),
