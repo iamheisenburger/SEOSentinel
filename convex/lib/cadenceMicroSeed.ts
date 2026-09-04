@@ -13,6 +13,14 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 33 expands mature-tenant discovery across the intersection of each
+// tenant's own product phrases and declared audience segments. Production
+// proved that a site with deep existing coverage can exhaust both generic
+// product modifiers and a broad Ideas graph even though product-specific
+// audience searches remain unmeasured. The new probes are deterministic,
+// bounded, and traceable only to persisted tenant profile text; every result
+// still has to pass the unchanged anchor, business-fit, difficulty, intent,
+// overlap, live-SERP, expected-click, article-quality, and publication gates.
 // Version 32 binds semantic-shortlist exhaustion to the one existing fallback
 // and uses the provider's full 200-keyword task capacity. The prior version's
 // immutable seed history makes an upgraded tenant measure only its remaining
@@ -92,7 +100,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 32;
+export const CADENCE_MICRO_SEED_VERSION = 33;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -498,6 +506,82 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     return meaningful.length >= 2 ? meaningful.join(" ") : anchor;
   }))];
   for (const anchor of compactProductAnchors) append(anchor);
+
+  // A mature tenant often covers its generic head terms long before it covers
+  // the same product for each explicit buyer segment. Build those intersections
+  // from tenant-owned profile text rather than inventing industries or relaxing
+  // cannibalization. Keeping both the product core and audience qualifier in the
+  // exact paid seed means the normal two-concept relevance fence remains useful.
+  const qualifierNoise = new Set([
+    "additional", "and", "audience", "audiences", "customer", "customers",
+    "has", "have", "ideal", "includes", "including", "manage", "manages",
+    "minimal", "multiple", "or", "primary", "secondary", "seeks", "target",
+    "their", "understanding", "users", "user", "want", "who", "with", "without",
+  ]);
+  const marketQualifiers: string[] = [];
+  const seenQualifiers = new Set<string>();
+  for (const phrase of tenantDiscoveryAnchors(
+    [args.targetAudienceSummary ?? ""],
+    24,
+  )) {
+    const words = normalizeCadenceMicroSeedText(phrase)
+      .replace(/[^a-z0-9+]+/g, " ")
+      .split(" ")
+      .filter((word) =>
+        word.length >= 2 &&
+        !qualifierNoise.has(word) &&
+        !["the", "this", "that", "these", "those", "to", "of"].includes(word)
+      )
+      .slice(0, 3);
+    const qualifier = words.join(" ");
+    if (
+      words.length === 0 ||
+      qualifier.length > 40 ||
+      seenQualifiers.has(qualifier)
+    ) continue;
+    seenQualifiers.add(qualifier);
+    marketQualifiers.push(qualifier);
+    if (marketQualifiers.length >= 8) break;
+  }
+  const productCores: string[] = [];
+  const seenProductCores = new Set<string>();
+  const appendProductCore = (words: string[]) => {
+    const core = words.join(" ");
+    if (
+      words.length < 2 ||
+      words.length > 3 ||
+      core.length > 36 ||
+      seenProductCores.has(core)
+    ) return;
+    seenProductCores.add(core);
+    productCores.push(core);
+  };
+  for (const anchor of compactProductAnchors) {
+    const words = normalizeCadenceMicroSeedText(anchor)
+      .replace(/[^a-z0-9+]+/g, " ")
+      .split(" ")
+      .filter((word) =>
+        word.length >= 2 &&
+        !["and", "for", "the", "with"].includes(word)
+      );
+    appendProductCore(words.slice(0, Math.min(3, words.length)));
+    if (words.length > 3) appendProductCore(words.slice(-2));
+    if (productCores.length >= 16) break;
+  }
+  let marketProbeCount = 0;
+  for (const productCore of productCores) {
+    for (const qualifier of marketQualifiers) {
+      const before = probes.length;
+      append(`${productCore} for ${qualifier}`);
+      if (probes.length > before) marketProbeCount += 1;
+      if (marketProbeCount >= 96) break;
+      const inverseBefore = probes.length;
+      append(`${qualifier} ${productCore}`);
+      if (probes.length > inverseBefore) marketProbeCount += 1;
+      if (marketProbeCount >= 96) break;
+    }
+    if (marketProbeCount >= 96) break;
+  }
   const modifiers: Array<(anchor: string) => string> = [
     (anchor) => `${anchor} guide`,
     (anchor) => `${anchor} checklist`,

@@ -384,6 +384,31 @@ test("recovery adds only complete bounded feature phrases to mature profiles", (
   assert.equal(anchors.includes("website content learning"), false);
 });
 
+test("recovery measures tenant-owned product and audience intersections", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "lead qualification chatbot",
+      "website lead generation automation",
+    ],
+    keyFeatures: ["booking link integration"],
+    targetAudienceSummary:
+      "Primary target audience includes SaaS founders, B2B marketing managers, and dental practices.",
+  });
+  assert.ok(anchors.includes("lead qualification chatbot"));
+  assert.ok(anchors.includes("lead qualification chatbot for saas founders"));
+  assert.ok(anchors.includes("saas founders lead qualification chatbot"));
+  assert.ok(anchors.includes("b2b marketing managers website lead generation"));
+  assert.ok(anchors.some((anchor) =>
+    anchor.includes("dental practices") && anchor.includes("lead qualification")
+  ));
+  assert.equal(anchors.some((anchor) => /primary|audience|includes/.test(anchor)), false);
+  assert.ok(anchors.every((anchor) =>
+    anchor.length <= 80 && anchor.split(" ").length >= 2 &&
+    anchor.split(" ").length <= 6
+  ));
+  assert.equal(new Set(anchors).size, anchors.length);
+});
+
 test("recovery never lets clipped feature prose displace mature search anchors", () => {
   const anchors = cadenceMicroSeedRecoveryAnchors({
     anchorKeywords: [
@@ -649,7 +674,7 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
-  assert.equal(CADENCE_MICRO_SEED_VERSION, 32);
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 33);
   assert.equal(CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION, 30);
   assert.ok(
     CADENCE_MICRO_SEED_VERSION >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
