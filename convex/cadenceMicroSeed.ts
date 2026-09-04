@@ -302,7 +302,124 @@ function primaryFallbackReceiptFingerprint(
     : fingerprint;
 }
 
-function validPrimaryFallbackReceipt(args: {
+const CADENCE_MICRO_SEED_SEMANTIC_FAILURE_CODES = new Set([
+  "serp_unattainable",
+  "serp_cannibalization_conflict",
+  "serp_business_intent_mismatch",
+  "serp_locale_receipt_mismatch",
+  "insufficient_expected_click_evidence",
+  "evidence_not_persisted",
+]);
+
+async function semanticCandidateExhaustionVerified(
+  ctx: QueryCtx,
+  site: Doc<"sites">,
+  job: Doc<"cadence_micro_seed_jobs">,
+): Promise<boolean> {
+  const shortlist = job.candidateShortlist ?? [];
+  const prior = job.priorCandidateAttempts ?? [];
+  const attemptCount = job.candidateAttemptCount ?? 0;
+  if (
+    job.status !== "missed" ||
+    job.errorCode !== "semantic_failure" ||
+    !job.selectedCandidate ||
+    !job.topicId ||
+    !job.topicFingerprint ||
+    !job.plannedEvidenceFingerprint ||
+    !job.evidenceJobId ||
+    !job.completedAt ||
+    shortlist.length < 1 ||
+    shortlist.length > CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES ||
+    attemptCount !== shortlist.length ||
+    prior.length !== shortlist.length - 1 ||
+    normalizeCadenceMicroSeedText(job.selectedCandidate.keyword) !==
+      normalizeCadenceMicroSeedText(shortlist[shortlist.length - 1]!.keyword) ||
+    prior.some((attempt, index) =>
+      attempt.outcome !== "semantic_failure" ||
+      normalizeCadenceMicroSeedText(attempt.keyword) !==
+        normalizeCadenceMicroSeedText(shortlist[index]!.keyword) ||
+      !CADENCE_MICRO_SEED_SEMANTIC_FAILURE_CODES.has(attempt.reason)
+    )
+  ) return false;
+
+  const attempts = [
+    ...prior.map((attempt) => ({
+      keyword: attempt.keyword,
+      topicId: attempt.topicId,
+      topicFingerprint: attempt.topicFingerprint,
+      plannedEvidenceFingerprint: attempt.plannedEvidenceFingerprint,
+      evidenceJobId: attempt.evidenceJobId,
+      completedAt: attempt.completedAt,
+      expectedReason: attempt.reason,
+    })),
+    {
+      keyword: job.selectedCandidate.keyword,
+      topicId: job.topicId,
+      topicFingerprint: job.topicFingerprint,
+      plannedEvidenceFingerprint: job.plannedEvidenceFingerprint,
+      evidenceJobId: job.evidenceJobId,
+      completedAt: job.completedAt,
+      expectedReason: undefined,
+    },
+  ];
+  if (
+    new Set(attempts.map((attempt) => String(attempt.topicId))).size !==
+      attempts.length ||
+    new Set(attempts.map((attempt) => String(attempt.evidenceJobId))).size !==
+      attempts.length
+  ) return false;
+
+  const receipts = await Promise.all(attempts.map(async (attempt) => {
+    const [topic, evidence, linkedArticle] = await Promise.all([
+      ctx.db.get(attempt.topicId),
+      ctx.db.get(attempt.evidenceJobId),
+      ctx.db.query("articles").withIndex("by_topic", (q) =>
+        q.eq("topicId", attempt.topicId)
+      ).first(),
+    ]);
+    const failure = evidence?.serpFailures.find((candidate) =>
+      candidate.topicId === attempt.topicId &&
+      CADENCE_MICRO_SEED_SEMANTIC_FAILURE_CODES.has(candidate.code)
+    );
+    const selected = evidence?.selectedTopics?.[0];
+    return Boolean(
+      !linkedArticle &&
+        topic && topic.siteId === site._id &&
+        topic.cadenceMicroSeedVersion === job.policyVersion &&
+        topic.cadenceMicroSeedJobId === job._id &&
+        topic.cadenceMicroSeedFingerprint === attempt.topicFingerprint &&
+        normalizeCadenceMicroSeedText(topic.primaryKeyword) ===
+          normalizeCadenceMicroSeedText(attempt.keyword) &&
+        ["disqualified", "cannibalizing"].includes(topic.status ?? "") &&
+        evidence && evidence.siteId === site._id &&
+        evidence.userId === site.userId &&
+        evidence.status === "completed" &&
+        evidence.policyVersion === EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION &&
+        evidence.origin === "operator_canary" &&
+        evidence.selectionScope === "planned_unmaterialized" &&
+        evidence.providerCallsAttempted === 1 &&
+        evidence.providerCallsCompleted === 1 &&
+        evidence.persistedTopics === 0 &&
+        evidence.selectedTopics.length === 1 &&
+        selected?.topicId === attempt.topicId &&
+        selected?.targetKind === "planned_topic" &&
+        selected?.plannedTopicFingerprint ===
+          attempt.plannedEvidenceFingerprint &&
+        evidence.serpFailures.length === 1 &&
+        failure &&
+        (attempt.expectedReason === undefined ||
+          failure.code === attempt.expectedReason) &&
+        Number.isFinite(evidence.completedAt) &&
+        (evidence.completedAt ?? Infinity) <= attempt.completedAt &&
+        attempt.completedAt <= job.completedAt!
+    );
+  }));
+  return receipts.every(Boolean);
+}
+
+async function validPrimaryFallbackReceipt(
+  ctx: QueryCtx,
+  args: {
   site: Doc<"sites">;
   job: Doc<"cadence_micro_seed_jobs">;
   reservation: Doc<"provider_spend_reservations"> | null;
@@ -314,9 +431,7 @@ function validPrimaryFallbackReceipt(args: {
   locationCode: number;
   languageCode: string;
   timestamp: number;
-}): args is typeof args & {
-  reservation: Doc<"provider_spend_reservations">;
-} {
+}): Promise<boolean> {
   const { site, job, reservation, timestamp } = args;
   const candidateAudit = job.candidateAudit;
   const hasSelectedOrTopicReceipt = Boolean(
@@ -333,6 +448,11 @@ function validPrimaryFallbackReceipt(args: {
       job.cadenceScheduleMode ||
       job.cadenceScheduleScheduled !== undefined ||
       job.cadenceScheduleReceiptAt,
+  );
+  const semanticExhaustionVerified = await semanticCandidateExhaustionVerified(
+    ctx,
+    site,
+    job,
   );
   return Boolean(
     site.userId &&
@@ -389,6 +509,18 @@ function validPrimaryFallbackReceipt(args: {
         hasEvidenceOrCadenceReceipt,
         finalizeAttempts: job.finalizeAttempts,
         cadenceScheduleAttempts: job.cadenceScheduleAttempts ?? 0,
+        semanticExhaustionVerified,
+        semanticCandidateShortlistKeywords:
+          job.candidateShortlist?.map((candidate) => candidate.keyword),
+        semanticCandidateAttemptCount: job.candidateAttemptCount,
+        semanticPriorCandidateAttempts: job.priorCandidateAttempts?.map(
+          (attempt) => ({
+            keyword: attempt.keyword,
+            outcome: attempt.outcome,
+            reason: attempt.reason,
+          }),
+        ),
+        semanticSelectedKeyword: job.selectedCandidate?.keyword,
       }) &&
       reservation &&
       job.providerSpendReservationId === reservation._id &&
@@ -1812,7 +1944,7 @@ async function cadenceFallbackParentReadinessPrecheck(
     !parent ||
     !primarySeed ||
     !childEdgeValid ||
-    !validPrimaryFallbackReceipt({
+    !(await validPrimaryFallbackReceipt(ctx, {
       site,
       job: parent,
       reservation,
@@ -1824,7 +1956,7 @@ async function cadenceFallbackParentReadinessPrecheck(
       locationCode: dataForSeoLocationCode(site.targetCountry),
       languageCode: dataForSeoLanguageCode(site.language),
       timestamp,
-    }) ||
+    })) ||
     !reservation
   ) return { ready: false, reason: "micro_seed_fallback_parent_ineligible" };
   return {

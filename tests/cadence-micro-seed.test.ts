@@ -795,6 +795,61 @@ test("fallback is a distinct bounded receipt after an exact terminal primary mis
       ...invalid,
     }), false);
   }
+
+  const semanticExhaustion = {
+    ...receipt,
+    candidateReceiptCount: 5,
+    candidateAudit: {
+      received: 5,
+      accepted: 2,
+      invalidMetric: 1,
+      intentUnavailable: 0,
+      difficulty: 0,
+      brand: 0,
+      businessFit: 0,
+      duplicate: 1,
+      overlap: 1,
+    },
+    errorCode: "semantic_failure",
+    hasSelectedOrTopicReceipt: true,
+    hasEvidenceOrCadenceReceipt: true,
+    finalizeAttempts: 1,
+    semanticExhaustionVerified: true,
+    semanticCandidateShortlistKeywords: [
+      "sales chatbot",
+      "sales integration",
+    ],
+    semanticCandidateAttemptCount: 2,
+    semanticPriorCandidateAttempts: [{
+      keyword: "sales chatbot",
+      outcome: "semantic_failure",
+      reason: "serp_cannibalization_conflict",
+    }],
+    semanticSelectedKeyword: "sales integration",
+  } satisfies Parameters<typeof cadenceMicroSeedTerminalMissReceiptValid>[0];
+  assert.equal(
+    cadenceMicroSeedTerminalMissReceiptValid(semanticExhaustion),
+    true,
+  );
+  for (const invalid of [
+    { semanticExhaustionVerified: false },
+    { semanticCandidateAttemptCount: 1 },
+    { semanticSelectedKeyword: "sales chatbot" },
+    { semanticCandidateShortlistKeywords: ["sales chatbot"] },
+    { semanticPriorCandidateAttempts: [] },
+    { semanticPriorCandidateAttempts: [{
+      keyword: "sales chatbot",
+      outcome: "semantic_failure",
+      reason: "provider_attempt_ambiguous",
+    }] },
+    { hasEvidenceOrCadenceReceipt: false },
+    { finalizeAttempts: 0 },
+  ]) {
+    assert.equal(cadenceMicroSeedTerminalMissReceiptValid({
+      ...semanticExhaustion,
+      ...invalid,
+    }), false);
+  }
 });
 
 test("cadence micro-seed handoff repairs only the exact current one-shot boundary", () => {
@@ -1885,6 +1940,11 @@ test("semantic evidence misses advance through immutable candidates without lowe
   assert.match(action, /!eligible && !finalized\.retryQueued/);
   assert.match(action, /resumeLegacySemanticCandidateInternal/);
   assert.doesNotMatch(model, /expectedClickStatus:\s*"eligible"/);
+  assert.match(model, /semanticCandidateExhaustionVerified/);
+  assert.match(model, /CADENCE_MICRO_SEED_SEMANTIC_FAILURE_CODES/);
+  assert.match(model, /!linkedArticle/);
+  assert.match(model, /evidence\.providerCallsAttempted === 1/);
+  assert.match(model, /evidence\.serpFailures\.length === 1/);
 });
 
 test("a semantic retry rejects a head term that a newly sealed article now owns", () => {

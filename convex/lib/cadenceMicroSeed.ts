@@ -830,6 +830,21 @@ export function cadenceMicroSeedTerminalMissReceiptValid(args: {
   hasEvidenceOrCadenceReceipt: boolean;
   finalizeAttempts: number;
   cadenceScheduleAttempts: number;
+  /**
+   * A primary can also exhaust only after every immutable pre-SERP survivor
+   * has received its own live evidence decision. The database layer sets this
+   * bit only after verifying every topic/evidence edge; the pure contract
+   * below still checks shortlist cardinality and ordering independently.
+   */
+  semanticExhaustionVerified?: boolean;
+  semanticCandidateShortlistKeywords?: string[];
+  semanticCandidateAttemptCount?: number;
+  semanticPriorCandidateAttempts?: Array<{
+    keyword: string;
+    outcome: string;
+    reason: string;
+  }>;
+  semanticSelectedKeyword?: string;
   maximumParentAgeMs?: number;
 }): boolean {
   const attemptedAt = args.providerAttemptedAt;
@@ -842,15 +857,55 @@ export function cadenceMicroSeedTerminalMissReceiptValid(args: {
     ? audit.invalidMetric + audit.intentUnavailable + audit.difficulty +
       audit.brand + audit.businessFit + audit.duplicate + audit.overlap
     : -1;
-  const candidateAuditValid = Boolean(
+  const rowAccountingValid = Boolean(
     audit &&
       Object.values(audit).every((value) =>
         Number.isSafeInteger(value) && value >= 0
       ) &&
-      audit.accepted === 0 &&
       args.candidateReceiptCount <= audit.received &&
       audit.invalidMetric >= audit.received - args.candidateReceiptCount &&
-      rejectionCount === audit.received
+      rejectionCount + audit.accepted === audit.received
+  );
+  const candidateAuditValid = rowAccountingValid && audit?.accepted === 0;
+  const semanticShortlist = args.semanticCandidateShortlistKeywords ?? [];
+  const semanticPriorAttempts = args.semanticPriorCandidateAttempts ?? [];
+  const semanticCandidateCount = args.semanticCandidateAttemptCount ?? 0;
+  const semanticKeywords = semanticShortlist.map(normalizeCadenceMicroSeedText);
+  const semanticReason = /^(?:serp_(?:unattainable|cannibalization_conflict|business_intent_mismatch|locale_receipt_mismatch)|insufficient_expected_click_evidence|evidence_not_persisted)$/;
+  const semanticExhaustionValid = Boolean(
+    args.semanticExhaustionVerified === true &&
+      rowAccountingValid &&
+      audit && audit.accepted > 0 &&
+      semanticShortlist.length === Math.min(
+        audit.accepted,
+        CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
+      ) &&
+      semanticCandidateCount === semanticShortlist.length &&
+      semanticPriorAttempts.length === semanticCandidateCount - 1 &&
+      semanticKeywords.every(Boolean) &&
+      new Set(semanticKeywords).size === semanticKeywords.length &&
+      semanticPriorAttempts.every((attempt, index) =>
+        normalizeCadenceMicroSeedText(attempt.keyword) ===
+          semanticKeywords[index] &&
+        attempt.outcome === "semantic_failure" &&
+        semanticReason.test(attempt.reason)
+      ) &&
+      normalizeCadenceMicroSeedText(args.semanticSelectedKeyword ?? "") ===
+        semanticKeywords[semanticKeywords.length - 1] &&
+      args.errorCode === "semantic_failure" &&
+      args.hasSelectedOrTopicReceipt &&
+      args.hasEvidenceOrCadenceReceipt &&
+      args.finalizeAttempts === 1 &&
+      args.cadenceScheduleAttempts === 0
+  );
+  const terminalMissValid = Boolean(
+    (candidateAuditValid &&
+      args.errorCode === "no_strict_candidate" &&
+      !args.hasSelectedOrTopicReceipt &&
+      !args.hasEvidenceOrCadenceReceipt &&
+      args.finalizeAttempts === 0 &&
+      args.cadenceScheduleAttempts === 0) ||
+      semanticExhaustionValid
   );
   const maximumTimestamp = 8_640_000_000_000_000;
   return Boolean(
@@ -910,14 +965,9 @@ export function cadenceMicroSeedTerminalMissReceiptValid(args: {
       args.providerTaskCostUsd >= 0 &&
       args.providerTaskCostUsd <=
         CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + Number.EPSILON &&
-      candidateAuditValid &&
-      args.errorCode === "no_strict_candidate" &&
+      terminalMissValid &&
       args.workerToken === undefined &&
-      args.leaseExpiresAt === undefined &&
-      !args.hasSelectedOrTopicReceipt &&
-      !args.hasEvidenceOrCadenceReceipt &&
-      args.finalizeAttempts === 0 &&
-      args.cadenceScheduleAttempts === 0
+      args.leaseExpiresAt === undefined
   );
 }
 
