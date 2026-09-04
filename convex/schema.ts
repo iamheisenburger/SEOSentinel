@@ -2099,6 +2099,12 @@ export default defineSchema({
     .index("by_site_created", ["siteId", "createdAt"])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_source_plan", ["siteId", "sourcePlanId"])
+    .index("by_site_source_policy_created", [
+      "siteId",
+      "sourcePlanId",
+      "policyVersion",
+      "createdAt",
+    ])
     .index("by_site_parent", ["siteId", "parentMicroSeedJobId"]),
 
   // One sending identity per tenant. Credentials live here rather than on the

@@ -17,6 +17,7 @@ import {
   cadenceMicroSeedCheckpointSourcePlanExhausted,
   cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedAttemptKind,
+  cadenceMicroSeedCandidateMatchesAnchor,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedProviderCeilingMicroUsd,
   cadenceMicroSeedProviderPurpose,
@@ -476,6 +477,18 @@ test("cadence rescue remains eligible until the shared launch buffer minimum is 
 });
 
 test("candidate selection fails closed on metrics, brands, fit, exact reuse, and overlap", () => {
+  assert.equal(cadenceMicroSeedCandidateMatchesAnchor(
+    "lead scoring and qualification tool",
+    "automated lead qualification software",
+  ), true);
+  assert.equal(cadenceMicroSeedCandidateMatchesAnchor(
+    "lead scoring and qualification tool",
+    "tool qualification",
+  ), false);
+  assert.equal(cadenceMicroSeedCandidateMatchesAnchor(
+    "seo ranking monitoring",
+    "seo rank tracker",
+  ), true);
   const selected = selectCadenceMicroSeedCandidate({
     metrics: [
       metric("predictive lead scoring platform"),
@@ -486,6 +499,7 @@ test("candidate selection fails closed on metrics, brands, fit, exact reuse, and
       metric("zero demand lead scoring", { searchVolume: 0 }),
       metric("already used lead scoring"),
     ],
+    seed: "lead scoring software",
     maximumDifficulty: 20,
     existingExactKeywords: new Set(["already used lead scoring"]),
     coveredTopics: [{ primaryKeyword: "email deliverability monitoring" }],
@@ -504,6 +518,7 @@ test("candidate selection fails closed on metrics, brands, fit, exact reuse, and
 
   const overlap = selectCadenceMicroSeedCandidate({
     metrics: [metric("b2b lead scoring software")],
+    seed: "lead scoring software",
     maximumDifficulty: 20,
     existingExactKeywords: new Set(),
     coveredTopics: [{ primaryKeyword: "lead scoring software" }],
@@ -1062,6 +1077,9 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(action, /dispatchCadenceMicroSeedFleet/);
   assert.match(action, /runCadenceMicroSeedFleetSite/);
   assert.match(schema, /cadence_micro_seed_jobs: defineTable/);
+  assert.match(schema, /by_site_source_policy_created/);
+  assert.match(model, /withIndex\("by_site_source_policy_created"/);
+  assert.doesNotMatch(model, /micro_seed_source_history_read_exhausted/);
   assert.match(schema, /parentMicroSeedJobId:[\s\S]*by_site_parent/);
   assert.match(schema, /cadence_micro_seed_fallback/);
   assert.match(sites, /"cadence_micro_seed_jobs"/);

@@ -12,15 +12,15 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-// Version 11 binds emergency discovery to the provider's phrase-match contract.
-// Version 10 proved that even a narrow, tenant-authored search anchor can drift
-// into a broad category result (for example, "sales automation chat widget"
-// became "tool sales") when `closely_variants` is false. Phrase match preserves
-// the user's search intent while every existing business-fit, evidence, claim,
-// and publication gate remains unchanged. The new version grants one
-// independently receipted pair while every earlier paid receipt remains
+// Version 12 closes both defects observed by the first phrase-match production
+// run. Provider phrase match can still reorder a seed into a vague one-concept
+// phrase, so candidates must preserve at least two meaningful anchor concepts.
+// The durable lookup is also indexed by policy version; inserting the current
+// job can therefore never push an older-version row across a fixed read limit
+// and invalidate its own execution fence. Every business-fit, evidence, claim,
+// and publication gate remains unchanged, while older paid receipts stay
 // immutable no-replay evidence.
-export const CADENCE_MICRO_SEED_VERSION = 11;
+export const CADENCE_MICRO_SEED_VERSION = 12;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -509,6 +509,55 @@ export type CadenceMicroSeedCandidateEvaluation<T> = {
   };
 };
 
+const CADENCE_MICRO_SEED_ANCHOR_NOISE = new Set([
+  "and", "app", "apps", "application", "applications", "best", "for",
+  "online", "platform", "platforms", "product", "products", "service",
+  "services", "software", "solution", "solutions", "system", "systems",
+  "the", "tool", "tools", "top", "with",
+]);
+
+const CADENCE_MICRO_SEED_ANCHOR_ALIASES = new Map([
+  ["automated", "automate"], ["automation", "automate"],
+  ["automating", "automate"], ["conversions", "convert"],
+  ["conversion", "convert"], ["converting", "convert"],
+  ["engagement", "engage"], ["engaging", "engage"],
+  ["generation", "generate"], ["generating", "generate"],
+  ["leads", "lead"], ["monitoring", "monitor"], ["monitors", "monitor"],
+  ["qualification", "qualify"], ["qualified", "qualify"],
+  ["qualifying", "qualify"], ["ranking", "rank"], ["rankings", "rank"],
+  ["scores", "score"], ["scoring", "score"], ["visitors", "visitor"],
+  ["websites", "website"],
+]);
+
+function cadenceMicroSeedAnchorTokens(value: string): Set<string> {
+  return new Set(value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) =>
+      token.length >= 3 && !CADENCE_MICRO_SEED_ANCHOR_NOISE.has(token)
+    )
+    .map((token) => CADENCE_MICRO_SEED_ANCHOR_ALIASES.get(token) ?? token));
+}
+
+/**
+ * Provider relevance is not semantic proof. Preserve at least two meaningful
+ * concepts from a multi-concept tenant anchor before spending on SERP evidence.
+ * Offering wrappers such as "tool" and "software" cannot satisfy the gate.
+ */
+export function cadenceMicroSeedCandidateMatchesAnchor(
+  seed: string,
+  candidateKeyword: string,
+): boolean {
+  const seedTokens = cadenceMicroSeedAnchorTokens(seed);
+  const candidateTokens = cadenceMicroSeedAnchorTokens(candidateKeyword);
+  if (seedTokens.size === 0 || candidateTokens.size === 0) return false;
+  let shared = 0;
+  for (const token of seedTokens) {
+    if (candidateTokens.has(token)) shared += 1;
+  }
+  return shared >= Math.min(2, seedTokens.size);
+}
+
 /**
  * Select at most one provider-returned row. Product fit is supplied by the
  * caller because it binds the current tenant profile/version; this helper
@@ -518,6 +567,7 @@ export function selectCadenceMicroSeedCandidate<
   T extends CadenceMicroSeedMetric,
 >(args: {
   metrics: readonly T[];
+  seed: string;
   maximumDifficulty: number;
   existingExactKeywords: ReadonlySet<string>;
   coveredTopics: SerpCoverageTopic[];
@@ -571,7 +621,10 @@ export function selectCadenceMicroSeedCandidate<
       rejected.brand += 1;
       continue;
     }
-    if (!args.businessFitEligible(candidate)) {
+    if (
+      !cadenceMicroSeedCandidateMatchesAnchor(args.seed, keyword) ||
+      !args.businessFitEligible(candidate)
+    ) {
       rejected.businessFit += 1;
       continue;
     }

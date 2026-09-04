@@ -848,21 +848,17 @@ async function inspectReadiness(
     source.reservation,
     source.checkpoints,
   );
-  const sourceJobHistory = await ctx.db.query("cadence_micro_seed_jobs")
-    .withIndex("by_site_source_plan", (q) =>
-      q.eq("siteId", siteId).eq("sourcePlanId", source!.job._id)
+  // Query the exact current policy through a composite index. Historical
+  // no-replay receipts remain immutable but cannot make a new policy's own
+  // insertion cross an unrelated fixed read limit and invalidate its fence.
+  const sourceJobs = await ctx.db.query("cadence_micro_seed_jobs")
+    .withIndex("by_site_source_policy_created", (q) =>
+      q.eq("siteId", siteId)
+        .eq("sourcePlanId", source!.job._id)
+        .eq("policyVersion", CADENCE_MICRO_SEED_VERSION)
     )
-    .order("desc")
-    .take(17);
-  if (sourceJobHistory.length > 16) {
-    return { ready: false, reason: "micro_seed_source_history_read_exhausted" };
-  }
-  // Old policy rows are immutable no-replay evidence, not a veto on a newer
-  // recovery algorithm. The versioned provider trigger and request tag keep
-  // the new pair independently auditable.
-  const sourceJobs = sourceJobHistory
-    .filter((job) => job.policyVersion === CADENCE_MICRO_SEED_VERSION)
-    .sort((left, right) => left.createdAt - right.createdAt);
+    .order("asc")
+    .take(3);
   if (sourceJobs.length > 2) {
     return { ready: false, reason: "micro_seed_source_history_exhausted" };
   }
@@ -1632,6 +1628,7 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     }
     const selection = selectCadenceMicroSeedCandidate({
       metrics: args.candidates as CadenceMicroSeedMetric[],
+      seed: job.seed,
       // This only decides which bounded query is worth live SERP evidence.
       // Expected-click evidence remains the strict generation boundary.
       maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
