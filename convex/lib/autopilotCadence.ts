@@ -6,6 +6,7 @@ import { isRecoverableWorkerQualityIssue } from "./topicLifecycle.ts";
 
 export type CadenceArticle = {
   _id?: string;
+  topicId?: string;
   createdAt: number;
   publishedAt?: number;
   publicationAuditVersion?: number;
@@ -386,8 +387,17 @@ export function hasRecoverableQualityWork(
   articles: CadenceArticle[],
   candidateWindowStart: number,
 ): boolean {
+  const terminalTopicIds = new Set(
+    articles
+      .filter((article) =>
+        article.topicId &&
+        hasTerminalTopicFitFailure(article.publicationGateIssues)
+      )
+      .map((article) => article.topicId!),
+  );
   return articles.some((article) =>
     !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
+    (!article.topicId || !terminalTopicIds.has(article.topicId)) &&
     ((article.status === "review" &&
       article.publicationGateStatus === "blocked" &&
       ((article.createdAt >= candidateWindowStart &&
@@ -403,10 +413,20 @@ export function findRecoverableQualityArticle(
   hoursPerArticle: number,
 ): CadenceArticle | undefined {
   const windowMs = Math.max(1, hoursPerArticle) * 60 * 60 * 1000;
+  const terminalTopicIds = new Set(
+    articles
+      .filter((article) =>
+        article.topicId &&
+        hasTerminalTopicFitFailure(article.publicationGateIssues)
+      )
+      .map((article) => article.topicId!),
+  );
   return articles
     .filter(
       (article) =>
         article._id &&
+        !hasTerminalTopicFitFailure(article.publicationGateIssues) &&
+        (!article.topicId || !terminalTopicIds.has(article.topicId)) &&
         article.createdAt <= now &&
         article.status === "review" &&
         article.publicationGateStatus === "blocked" &&

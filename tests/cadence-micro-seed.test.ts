@@ -762,6 +762,24 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
     false,
   );
 
+  const terminalSibling = {
+    ...terminalFit,
+    _id: "terminal-sibling",
+    topicId: "bad-topic",
+  };
+  const staleSibling = {
+    ...ordinary,
+    _id: "stale-sibling",
+    topicId: "bad-topic",
+  };
+  assert.equal(
+    hasRecoverableQualityWork(
+      [staleSibling, terminalSibling],
+      candidateWindowStart,
+    ),
+    false,
+  );
+
   const oldOrdinary = { ...ordinary, createdAt: candidateWindowStart - 1 };
   assert.equal(
     hasRecoverableQualityWork([oldOrdinary], candidateWindowStart),

@@ -12,7 +12,11 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-export const CADENCE_MICRO_SEED_VERSION = 7;
+// Version 8 applies terminal product-fit feedback to an entire topic family.
+// It also gives an underfilled source plan one fresh, independently budgeted
+// attempt with the next deterministic tenant anchor; prior version receipts
+// remain immutable no-replay evidence and cannot be charged again.
+export const CADENCE_MICRO_SEED_VERSION = 8;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =

@@ -324,6 +324,48 @@ test("versioned recovery cannot expire before a repair release reaches its next 
   );
 });
 
+test("terminal product-fit feedback quarantines every sibling draft for that topic", () => {
+  const sibling = {
+    _id: "article-stale-sibling",
+    topicId: "topic-off-business",
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Editorial quality score is 78; strict minimum is 85.",
+    ],
+    qualityRevisionCount: 0,
+  };
+  const terminal = {
+    ...sibling,
+    _id: "article-terminal-sibling",
+    publicationGateIssues: [
+      "Recovery article failed the current tenant product-fit gate: keyword targets research intent",
+    ],
+  };
+
+  assert.equal(hasRecoverableQualityWork([sibling, terminal], 0), false);
+  assert.equal(
+    findRecoverableQualityArticle([sibling, terminal], NOW, 24),
+    undefined,
+  );
+  assert.deepEqual(
+    evaluateCadenceWindow({
+      articles: [sibling, terminal],
+      now: NOW,
+      hoursPerArticle: 24,
+      maxAttempts: 3,
+    }),
+    {
+      canGenerate: true,
+      recentAttempts: 2,
+      hasRecentPublication: false,
+      recoveryArticleId: undefined,
+      recoveryRevisionCount: undefined,
+    },
+  );
+});
+
 test("worker, media, and claim-ledger defects retain isolated recovery versions", () => {
   const workerFailure = {
     _id: "article-worker-length",
