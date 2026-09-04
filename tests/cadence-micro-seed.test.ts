@@ -1901,10 +1901,10 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   const currentPolicyLedgerReadiness = model.slice(
     model.indexOf("async function cadenceCurrentPolicyLedgerPrecheck"),
-    model.indexOf("async function cadenceCurrentPolicyReadinessPrecheck"),
+    model.indexOf("function cadenceCurrentPolicyReadinessPrecheck"),
   );
   const currentPolicyReadiness = model.slice(
-    model.indexOf("async function cadenceCurrentPolicyReadinessPrecheck"),
+    model.indexOf("function cadenceCurrentPolicyReadinessPrecheck"),
     model.indexOf("async function cadenceSourceReadinessPrecheck"),
   );
   const sourcePlanReadiness = model.slice(
@@ -1941,6 +1941,12 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobIds/);
   assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobs/);
   assert.doesNotMatch(currentPolicyReadiness, /ctx\.db\.get\(jobId\)/);
+  assert.match(currentPolicyReadiness, /internalAction/);
+  assert.match(currentPolicyReadiness, /inspectCurrentPolicySiteInternal/);
+  assert.match(
+    action,
+    /runAction\([\s\S]*api\.inspectCurrentPolicyReadinessInternal/,
+  );
   assert.doesNotMatch(
     currentPolicyReadiness,
     /siteExecutionAuthorized/,

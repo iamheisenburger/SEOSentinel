@@ -597,7 +597,7 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
-    const currentPolicyPrecheck = await ctx.runQuery(
+    const currentPolicyPrecheck = await ctx.runAction(
       api.inspectCurrentPolicyReadinessInternal,
       {
         siteId: args.siteId,
@@ -868,7 +868,7 @@ export const processCadenceMicroSeed = internalAction({
     const verifiedFallbackParentPrecheck = fallbackParentPrecheck?.ready
       ? fallbackParentPrecheck
       : undefined;
-    const currentPolicyPrecheck = await ctx.runQuery(
+    const currentPolicyPrecheck = await ctx.runAction(
       api.inspectCurrentPolicyReadinessInternal,
       {
         siteId: args.siteId,

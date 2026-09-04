@@ -1,6 +1,7 @@
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+  internalAction,
   internalMutation,
   internalQuery,
   type MutationCtx,
@@ -729,6 +730,27 @@ type CadenceCurrentPolicyReadinessPrecheck = {
 type CadenceCurrentPolicyReadinessResult =
   | CadenceCurrentPolicyReadinessPrecheck
   | { ready: false; reason: string };
+
+type CadenceCurrentPolicySiteProfile = {
+  ready: true;
+  contract: "cadence-current-policy-site-v1";
+  siteId: Id<"sites">;
+  canonicalDomain: string;
+  domainRevision: number;
+  rolloutEpoch: number;
+  autopilotEnabled?: boolean;
+  expectedClickSchedulingEnabled?: boolean;
+  verifiedKeywordDataRequired?: boolean;
+  autopilotRolloutMode?: string;
+  cadencePerWeek?: number;
+  anchorKeywords?: string[];
+  keyFeatures?: string[];
+  painPoints?: string[];
+  productUsage?: string;
+  targetAudienceSummary?: string;
+  targetCountry?: string;
+  language?: string;
+};
 
 type CadenceCurrentPolicyLedgerPrecheck = {
   ready: true;
@@ -1849,7 +1871,7 @@ export const inspectFallbackParentReadinessInternal = internalQuery({
 });
 
 function fallbackParentPrecheckMatches(args: {
-  site: Doc<"sites">;
+  site: CadenceCurrentPolicySiteProfile;
   sourcePlanId: Id<"jobs">;
   currentPolicyLedger: CadenceCurrentPolicyLedgerPrecheck;
   parentMicroSeedJobId: Id<"cadence_micro_seed_jobs">;
@@ -1857,14 +1879,13 @@ function fallbackParentPrecheckMatches(args: {
   precheck?: CadenceFallbackParentPrecheck;
 }): args is typeof args & { precheck: CadenceFallbackParentPrecheck } {
   const { site, precheck } = args;
-  const canonicalDomain = siteCanonicalDomain(site);
   return Boolean(
     precheck &&
       precheck.contract === "cadence-fallback-parent-readiness-v1" &&
-      precheck.siteId === String(site._id) &&
-      precheck.canonicalDomain === canonicalDomain &&
-      precheck.domainRevision === siteCanonicalDomainRevision(site) &&
-      precheck.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
+      precheck.siteId === String(site.siteId) &&
+      precheck.canonicalDomain === site.canonicalDomain &&
+      precheck.domainRevision === site.domainRevision &&
+      precheck.rolloutEpoch === site.rolloutEpoch &&
       precheck.sourcePlanId === args.sourcePlanId &&
       precheck.currentPolicyLedgerFingerprint ===
         args.currentPolicyLedger.ledgerFingerprint &&
@@ -1880,10 +1901,8 @@ function fallbackParentPrecheckMatches(args: {
  * tenant age; keeping this bounded source ledger in its own transaction makes
  * the admission cost independent of topic and article cardinality.
  */
-async function cadenceCurrentPolicyReadinessPrecheck(
-  ctx: QueryCtx | MutationCtx,
-  siteId: Id<"sites">,
-  timestamp: number,
+function cadenceCurrentPolicyReadinessPrecheck(
+  site: CadenceCurrentPolicySiteProfile,
   sourcePlanId: Id<"jobs">,
   topicPrecheck: CadenceTopicReadinessPrecheck,
   sourcePlanPrecheck: CadenceSourcePlanReadinessPrecheck,
@@ -1891,17 +1910,10 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   currentPolicyLedger: CadenceCurrentPolicyLedgerPrecheck,
   fallbackParentPrecheck?: CadenceFallbackParentPrecheck,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
-): Promise<CadenceCurrentPolicyReadinessResult> {
-  const site = await ctx.db.get(siteId);
-  // The immediately preceding current-policy ledger transaction has already
-  // verified account authorization, and cadenceSourceReadinessPrecheck repeats
-  // that database-aware fence before any reservation can be created. Keep this
-  // middle projection to the site/rollout identity check so the two entitlement
-  // index reads do not push a mature tenant over Convex's transaction budget.
-  if (
-    !siteExecutionActive(site) ||
-    !site.userId
-  ) return { ready: false, reason: "site_unavailable" };
+): CadenceCurrentPolicyReadinessResult {
+  if (site.contract !== "cadence-current-policy-site-v1") {
+    return { ready: false, reason: "site_unavailable" };
+  }
   if (
     !site.autopilotEnabled ||
     site.expectedClickSchedulingEnabled !== true ||
@@ -1909,43 +1921,43 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     !["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") ||
     (site.cadencePerWeek ?? 0) <= 0
   ) return { ready: false, reason: "rollout_ineligible" };
-  const canonicalDomain = siteCanonicalDomain(site);
+  const canonicalDomain = site.canonicalDomain;
   if (
     topicPrecheck.contract !== "cadence-topic-readiness-v1" ||
-    topicPrecheck.siteId !== String(site._id) ||
+    topicPrecheck.siteId !== String(site.siteId) ||
     !canonicalDomain ||
     topicPrecheck.canonicalDomain !== canonicalDomain ||
-    topicPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
-    topicPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    topicPrecheck.domainRevision !== site.domainRevision ||
+    topicPrecheck.rolloutEpoch !== site.rolloutEpoch ||
     !/^[a-f0-9]{64}$/.test(topicPrecheck.inventoryFingerprint)
   ) return { ready: false, reason: "topic_inspection_stale" };
   if (
     sourcePlanPrecheck.contract !== "cadence-source-plan-readiness-v1" ||
-    sourcePlanPrecheck.siteId !== String(site._id) ||
+    sourcePlanPrecheck.siteId !== String(site.siteId) ||
     !canonicalDomain ||
     sourcePlanPrecheck.canonicalDomain !== canonicalDomain ||
-    sourcePlanPrecheck.domainRevision !== siteCanonicalDomainRevision(site) ||
-    sourcePlanPrecheck.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    sourcePlanPrecheck.domainRevision !== site.domainRevision ||
+    sourcePlanPrecheck.rolloutEpoch !== site.rolloutEpoch ||
     sourcePlanPrecheck.sourcePlanId !== sourcePlanId ||
     !sourcePlanPrecheck.sourcePlanFingerprint
   ) return { ready: false, reason: "source_plan_inspection_stale" };
   if (
     priorPolicyHistory.contract !==
       "cadence-prior-policy-history-aggregate-v1" ||
-    priorPolicyHistory.siteId !== String(site._id) ||
+    priorPolicyHistory.siteId !== String(site.siteId) ||
     priorPolicyHistory.canonicalDomain !== canonicalDomain ||
-    priorPolicyHistory.domainRevision !== siteCanonicalDomainRevision(site) ||
-    priorPolicyHistory.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    priorPolicyHistory.domainRevision !== site.domainRevision ||
+    priorPolicyHistory.rolloutEpoch !== site.rolloutEpoch ||
     priorPolicyHistory.sourcePlanId !== sourcePlanId ||
     priorPolicyHistory.policyVersionCount !== CADENCE_MICRO_SEED_VERSION - 1 ||
     !/^[a-f0-9]{64}$/.test(priorPolicyHistory.historyFingerprint)
   ) return { ready: false, reason: "micro_seed_policy_history_stale" };
   if (
     currentPolicyLedger.contract !== "cadence-current-policy-ledger-v1" ||
-    currentPolicyLedger.siteId !== String(site._id) ||
+    currentPolicyLedger.siteId !== String(site.siteId) ||
     currentPolicyLedger.canonicalDomain !== canonicalDomain ||
-    currentPolicyLedger.domainRevision !== siteCanonicalDomainRevision(site) ||
-    currentPolicyLedger.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0) ||
+    currentPolicyLedger.domainRevision !== site.domainRevision ||
+    currentPolicyLedger.rolloutEpoch !== site.rolloutEpoch ||
     currentPolicyLedger.currentJobId !==
       (currentJobId ? String(currentJobId) : undefined) ||
     currentPolicyLedger.sourcePlanId !== sourcePlanId ||
@@ -1960,7 +1972,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     job.jobId !== currentPolicyLedger.jobIds[index] ||
     job.sourcePlanId !== sourcePlanId ||
     job.policyVersion !== CADENCE_MICRO_SEED_VERSION ||
-    job.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0)
+    job.rolloutEpoch !== site.rolloutEpoch
   )) return { ready: false, reason: "current_policy_ledger_stale" };
   if (
     currentPolicyLedger.ledgerFingerprint !==
@@ -2101,10 +2113,10 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   }
   const receipt = {
     contract: "cadence-current-policy-readiness-v1",
-    siteId: String(site._id),
+    siteId: String(site.siteId),
     canonicalDomain,
-    domainRevision: siteCanonicalDomainRevision(site),
-    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    domainRevision: site.domainRevision,
+    rolloutEpoch: site.rolloutEpoch,
     currentJobId: currentJobId ? String(currentJobId) : null,
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     priorPolicyHistoryFingerprint: priorPolicyHistory.historyFingerprint,
@@ -2126,10 +2138,10 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   return {
     ready: true,
     contract: "cadence-current-policy-readiness-v1",
-    siteId: String(site._id),
+    siteId: String(site.siteId),
     canonicalDomain,
-    domainRevision: siteCanonicalDomainRevision(site),
-    rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    domainRevision: site.domainRevision,
+    rolloutEpoch: site.rolloutEpoch,
     ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
     topicInventoryFingerprint: topicPrecheck.inventoryFingerprint,
     priorPolicyHistoryFingerprint: priorPolicyHistory.historyFingerprint,
@@ -2149,7 +2161,52 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   };
 }
 
-export const inspectCurrentPolicyReadinessInternal = internalQuery({
+export const inspectCurrentPolicySiteInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, args): Promise<
+    CadenceCurrentPolicySiteProfile | { ready: false; reason: string }
+  > => {
+    const site = await ctx.db.get(args.siteId);
+    const canonicalDomain = site && siteCanonicalDomain(site);
+    if (!siteExecutionActive(site) || !site.userId || !canonicalDomain) {
+      return { ready: false, reason: "site_unavailable" };
+    }
+    return {
+      ready: true,
+      contract: "cadence-current-policy-site-v1",
+      siteId: site._id,
+      canonicalDomain,
+      domainRevision: siteCanonicalDomainRevision(site),
+      rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      ...(site.autopilotEnabled !== undefined
+        ? { autopilotEnabled: site.autopilotEnabled }
+        : {}),
+      ...(site.expectedClickSchedulingEnabled !== undefined
+        ? { expectedClickSchedulingEnabled: site.expectedClickSchedulingEnabled }
+        : {}),
+      ...(site.verifiedKeywordDataRequired !== undefined
+        ? { verifiedKeywordDataRequired: site.verifiedKeywordDataRequired }
+        : {}),
+      ...(site.autopilotRolloutMode
+        ? { autopilotRolloutMode: site.autopilotRolloutMode }
+        : {}),
+      ...(site.cadencePerWeek !== undefined
+        ? { cadencePerWeek: site.cadencePerWeek }
+        : {}),
+      ...(site.anchorKeywords ? { anchorKeywords: site.anchorKeywords } : {}),
+      ...(site.keyFeatures ? { keyFeatures: site.keyFeatures } : {}),
+      ...(site.painPoints ? { painPoints: site.painPoints } : {}),
+      ...(site.productUsage ? { productUsage: site.productUsage } : {}),
+      ...(site.targetAudienceSummary
+        ? { targetAudienceSummary: site.targetAudienceSummary }
+        : {}),
+      ...(site.targetCountry ? { targetCountry: site.targetCountry } : {}),
+      ...(site.language ? { language: site.language } : {}),
+    };
+  },
+});
+
+export const inspectCurrentPolicyReadinessInternal = internalAction({
   args: {
     siteId: v.id("sites"),
     sourcePlanId: v.id("jobs"),
@@ -2160,18 +2217,23 @@ export const inspectCurrentPolicyReadinessInternal = internalQuery({
     fallbackParentPrecheck: v.optional(cadenceFallbackParentPrecheckValidator),
     currentJobId: v.optional(v.id("cadence_micro_seed_jobs")),
   },
-  handler: async (ctx, args) => cadenceCurrentPolicyReadinessPrecheck(
-    ctx,
-    args.siteId,
-    Date.now(),
-    args.sourcePlanId,
-    args.topicPrecheck,
-    args.sourcePlanPrecheck,
-    args.priorPolicyHistory,
-    args.currentPolicyLedger,
-    args.fallbackParentPrecheck,
-    args.currentJobId,
-  ),
+  handler: async (ctx, args): Promise<CadenceCurrentPolicyReadinessResult> => {
+    const site = await ctx.runQuery(
+      internal.cadenceMicroSeed.inspectCurrentPolicySiteInternal,
+      { siteId: args.siteId },
+    );
+    if (!site.ready) return site;
+    return cadenceCurrentPolicyReadinessPrecheck(
+      site,
+      args.sourcePlanId,
+      args.topicPrecheck,
+      args.sourcePlanPrecheck,
+      args.priorPolicyHistory,
+      args.currentPolicyLedger,
+      args.fallbackParentPrecheck,
+      args.currentJobId,
+    );
+  },
 });
 
 /**
