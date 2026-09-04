@@ -395,9 +395,9 @@ test("recovery measures tenant-owned product and audience intersections", () => 
       "Primary target audience includes SaaS founders, B2B marketing managers, and dental practices.",
   });
   assert.ok(anchors.includes("lead qualification chatbot"));
-  assert.ok(anchors.includes("lead qualification chatbot for saas founders"));
-  assert.ok(anchors.includes("saas founders lead qualification chatbot"));
-  assert.ok(anchors.includes("b2b marketing managers website lead generation"));
+  assert.ok(anchors.includes("saas lead qualification"));
+  assert.ok(anchors.includes("lead qualification for saas"));
+  assert.ok(anchors.includes("b2b website lead"));
   assert.ok(anchors.some((anchor) =>
     anchor.includes("dental practices") && anchor.includes("lead qualification")
   ));
@@ -407,6 +407,28 @@ test("recovery measures tenant-owned product and audience intersections", () => 
     anchor.split(" ").length <= 6
   ));
   assert.equal(new Set(anchors).size, anchors.length);
+});
+
+test("recovery turns verbose mature-site audiences into search-shaped probes", () => {
+  const anchors = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "AI SEO content generator",
+      "automated SEO content creation",
+      "content refresh automation",
+    ],
+    targetAudienceSummary:
+      "SaaS founders, B2B marketing managers, SEO professionals, and small businesses that want to scale SEO without hiring in-house staff.",
+  });
+
+  assert.ok(anchors.includes("saas automated seo"));
+  assert.ok(anchors.includes("automated seo for saas"));
+  assert.ok(anchors.includes("b2b seo content"));
+  assert.equal(
+    anchors.some((anchor) =>
+      /hiring staff|scale seo efforts|in house seo/.test(anchor)
+    ),
+    false,
+  );
 });
 
 test("recovery never lets clipped feature prose displace mature search anchors", () => {
@@ -674,7 +696,7 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
-  assert.equal(CADENCE_MICRO_SEED_VERSION, 33);
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 34);
   assert.equal(CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION, 30);
   assert.ok(
     CADENCE_MICRO_SEED_VERSION >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,

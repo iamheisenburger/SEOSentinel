@@ -13,6 +13,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 34 shortens audience-qualified probes into actual search-shaped
+// product/category phrases. Production v33 proved that preserving complete
+// three-word product and audience phrases made every otherwise safe probe too
+// long to return exact demand. V34 derives bounded adjacent product pairs and
+// one- or two-word audience segments from the same tenant-owned profile text;
+// no eligibility or quality boundary changes.
 // Version 33 expands mature-tenant discovery across the intersection of each
 // tenant's own product phrases and declared audience segments. Production
 // proved that a site with deep existing coverage can exhaust both generic
@@ -100,7 +106,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 33;
+export const CADENCE_MICRO_SEED_VERSION = 34;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -514,12 +520,24 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
   // exact paid seed means the normal two-concept relevance fence remains useful.
   const qualifierNoise = new Set([
     "additional", "and", "audience", "audiences", "customer", "customers",
-    "has", "have", "ideal", "includes", "including", "manage", "manages",
-    "minimal", "multiple", "or", "primary", "secondary", "seeks", "target",
-    "their", "understanding", "users", "user", "want", "who", "with", "without",
+    "effort", "efforts", "has", "have", "hiring", "house", "ideal", "in",
+    "includes", "including", "lack", "manage", "manages", "minimal", "multiple",
+    "or", "primary", "scale", "secondary", "seeks", "staff", "target", "their",
+    "understanding", "users", "user", "want", "who", "with", "without",
   ]);
   const marketQualifiers: string[] = [];
   const seenQualifiers = new Set<string>();
+  const addMarketQualifier = (words: string[]) => {
+    const qualifier = words.join(" ");
+    if (
+      words.length === 0 ||
+      words.length > 2 ||
+      qualifier.length > 28 ||
+      seenQualifiers.has(qualifier)
+    ) return;
+    seenQualifiers.add(qualifier);
+    marketQualifiers.push(qualifier);
+  };
   for (const phrase of tenantDiscoveryAnchors(
     [args.targetAudienceSummary ?? ""],
     24,
@@ -531,16 +549,13 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
         word.length >= 2 &&
         !qualifierNoise.has(word) &&
         !["the", "this", "that", "these", "those", "to", "of"].includes(word)
-      )
-      .slice(0, 3);
-    const qualifier = words.join(" ");
+      );
     if (
-      words.length === 0 ||
-      qualifier.length > 40 ||
-      seenQualifiers.has(qualifier)
-    ) continue;
-    seenQualifiers.add(qualifier);
-    marketQualifiers.push(qualifier);
+      words.includes("small") &&
+      words.some((word) => word === "business" || word === "businesses")
+    ) addMarketQualifier(["small", "business"]);
+    if (words.length > 0) addMarketQualifier(words.slice(0, 1));
+    if (words.length > 1) addMarketQualifier(words.slice(0, 2));
     if (marketQualifiers.length >= 8) break;
   }
   const productCores: string[] = [];
@@ -556,7 +571,7 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     seenProductCores.add(core);
     productCores.push(core);
   };
-  for (const anchor of compactProductAnchors) {
+  for (const anchor of productAnchors) {
     const words = normalizeCadenceMicroSeedText(anchor)
       .replace(/[^a-z0-9+]+/g, " ")
       .split(" ")
@@ -564,20 +579,29 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
         word.length >= 2 &&
         !["and", "for", "the", "with"].includes(word)
       );
-    appendProductCore(words.slice(0, Math.min(3, words.length)));
-    if (words.length > 3) appendProductCore(words.slice(-2));
+    for (let index = 0; index + 1 < words.length; index += 1) {
+      const pair = words.slice(index, index + 2);
+      appendProductCore(pair);
+      if (
+        ["automated", "automatic", "autonomous"].includes(pair[0]!)
+      ) appendProductCore([pair[1]!, "automation"]);
+    }
     if (productCores.length >= 16) break;
   }
   let marketProbeCount = 0;
   for (const productCore of productCores) {
     for (const qualifier of marketQualifiers) {
       const before = probes.length;
-      append(`${productCore} for ${qualifier}`);
+      append(`${qualifier} ${productCore}`);
       if (probes.length > before) marketProbeCount += 1;
       if (marketProbeCount >= 96) break;
       const inverseBefore = probes.length;
-      append(`${qualifier} ${productCore}`);
+      append(`${productCore} ${qualifier}`);
       if (probes.length > inverseBefore) marketProbeCount += 1;
+      if (marketProbeCount >= 96) break;
+      const qualifiedBefore = probes.length;
+      append(`${productCore} for ${qualifier}`);
+      if (probes.length > qualifiedBefore) marketProbeCount += 1;
       if (marketProbeCount >= 96) break;
     }
     if (marketProbeCount >= 96) break;
