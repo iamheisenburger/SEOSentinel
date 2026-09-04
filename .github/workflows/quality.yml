@@ -54,7 +54,16 @@ jobs:
         run: npm run scan:secrets
 
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          for attempt in 1 2 3; do
+            if npm audit --omit=dev --audit-level=high --fetch-timeout=60000 --fetch-retries=0; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Build production application with non-secret configuration
         env:
