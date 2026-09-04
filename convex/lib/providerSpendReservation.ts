@@ -22,8 +22,9 @@ import {
 // Conservative fleet guard: one complete $2 topic-plan reservation, the full
 // bounded cadence-recovery chain ($0.35), one $0.20 evidence-policy upgrade,
 // two complete $0.15 micro-seed policy attempts, one $0.10 ambiguous category
-// attempt, and the final timeout-repaired attempt's $0.10 evidence,
-// a bounded $0.70 release-repair reserve, and a $0.25 reserve for another
+// attempt, the final timeout-repaired attempt's $0.10 evidence, one complete
+// $0.25 anchor-preservation migration (primary, fallback, and evidence), a
+// bounded $0.70 release-repair reserve, and a $0.25 reserve for another
 // account must all fit in the same UTC day. The repair reserve prevents an
 // immutable ambiguous provider receipt from consuming the next corrected
 // policy version's admission headroom; the monthly cap still bounds aggregate
@@ -37,7 +38,7 @@ import {
 // and only the explicitly versioned micro-seed generations whose immutable
 // predecessors proved a distinct algorithm defect. The monthly $35 fleet
 // circuit breaker remains unchanged.
-export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 4_000_000;
+export const SHARED_PROVIDER_DAILY_CEILING_MICRO_USD = 4_250_000;
 export const SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const PROVIDER_BALANCE_PREFLIGHT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
