@@ -1931,7 +1931,8 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(currentPolicyLedgerReadiness, /currentPolicyLedgerFingerprint/);
   assert.doesNotMatch(currentPolicyReadiness, /by_site_source_policy_created/);
   assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobIds/);
-  assert.match(currentPolicyReadiness, /ctx\.db\.get\(jobId\)/);
+  assert.match(currentPolicyReadiness, /currentPolicyLedger\.jobs/);
+  assert.doesNotMatch(currentPolicyReadiness, /ctx\.db\.get\(jobId\)/);
   assert.match(currentPolicyReadiness, /currentPolicyFingerprint: sha256Hex/);
   assert.match(priorPolicyReadiness, /by_site_source_policy_created/);
   assert.match(priorPolicyReadiness, /eq\("policyVersion", policyVersion\)/);

@@ -740,7 +740,24 @@ type CadenceCurrentPolicyLedgerPrecheck = {
   currentJobId?: string;
   sourcePlanId: Id<"jobs">;
   jobIds: Id<"cadence_micro_seed_jobs">[];
+  jobs: CadenceCurrentPolicyJobProjection[];
   ledgerFingerprint: string;
+};
+
+type CadenceCurrentPolicyJobProjection = {
+  jobId: Id<"cadence_micro_seed_jobs">;
+  status: string;
+  policyVersion: number;
+  rolloutEpoch: number;
+  sourcePlanId: Id<"jobs">;
+  attemptKind: CadenceMicroSeedAttemptKind;
+  parentMicroSeedJobId?: Id<"cadence_micro_seed_jobs">;
+  parentMicroSeedReceiptFingerprint?: string;
+  providerCallAttempted: boolean;
+  providerCallCompleted: boolean;
+  seed: string;
+  providerSeeds: string[];
+  updatedAt: number;
 };
 
 type CadenceCurrentPolicyLedgerResult =
@@ -877,6 +894,21 @@ const cadenceCurrentPolicyLedgerPrecheckValidator = v.object({
   currentJobId: v.optional(v.string()),
   sourcePlanId: v.id("jobs"),
   jobIds: v.array(v.id("cadence_micro_seed_jobs")),
+  jobs: v.array(v.object({
+    jobId: v.id("cadence_micro_seed_jobs"),
+    status: v.string(),
+    policyVersion: v.number(),
+    rolloutEpoch: v.number(),
+    sourcePlanId: v.id("jobs"),
+    attemptKind: v.union(v.literal("primary"), v.literal("fallback")),
+    parentMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
+    parentMicroSeedReceiptFingerprint: v.optional(v.string()),
+    providerCallAttempted: v.boolean(),
+    providerCallCompleted: v.boolean(),
+    seed: v.string(),
+    providerSeeds: v.array(v.string()),
+    updatedAt: v.number(),
+  })),
   ledgerFingerprint: v.string(),
 });
 
@@ -1585,24 +1617,45 @@ export const inspectPriorPolicyHistoryInternal = internalQuery({
   ),
 });
 
-function currentPolicyLedgerFingerprint(
-  jobs: readonly Doc<"cadence_micro_seed_jobs">[],
-): string {
-  return sha256Hex(JSON.stringify(jobs.map((job) => ({
-    id: String(job._id),
+function currentPolicyJobProjection(
+  job: Doc<"cadence_micro_seed_jobs">,
+): CadenceCurrentPolicyJobProjection {
+  return {
+    jobId: job._id,
     status: job.status,
     policyVersion: job.policyVersion,
     rolloutEpoch: job.rolloutEpoch,
+    sourcePlanId: job.sourcePlanId,
+    attemptKind: cadenceMicroSeedAttemptKind(job.attemptKind) ?? "primary",
+    ...(job.parentMicroSeedJobId
+      ? { parentMicroSeedJobId: job.parentMicroSeedJobId }
+      : {}),
+    ...(job.parentMicroSeedReceiptFingerprint
+      ? {
+          parentMicroSeedReceiptFingerprint:
+            job.parentMicroSeedReceiptFingerprint,
+        }
+      : {}),
+    providerCallAttempted: job.providerCallAttempted,
+    providerCallCompleted: job.providerCallCompleted,
+    seed: job.seed,
+    providerSeeds: job.providerSeeds ?? [job.seed],
+    updatedAt: job.updatedAt,
+  };
+}
+
+function currentPolicyLedgerFingerprint(
+  jobs: readonly CadenceCurrentPolicyJobProjection[],
+): string {
+  return sha256Hex(JSON.stringify(jobs.map((job) => ({
+    ...job,
+    jobId: String(job.jobId),
     sourcePlanId: String(job.sourcePlanId),
-    attemptKind: cadenceMicroSeedAttemptKind(job.attemptKind),
     parentMicroSeedJobId: job.parentMicroSeedJobId
       ? String(job.parentMicroSeedJobId)
       : null,
     parentMicroSeedReceiptFingerprint:
       job.parentMicroSeedReceiptFingerprint ?? null,
-    providerCallAttempted: job.providerCallAttempted,
-    providerCallCompleted: job.providerCallCompleted,
-    updatedAt: job.updatedAt,
   }))));
 }
 
@@ -1634,6 +1687,7 @@ async function cadenceCurrentPolicyLedgerPrecheck(
   if (currentJobId && !jobs.some((job) => job._id === currentJobId)) {
     return { ready: false, reason: "micro_seed_execution_receipt_unavailable" };
   }
+  const jobProjections = jobs.map(currentPolicyJobProjection);
   return {
     ready: true,
     contract: "cadence-current-policy-ledger-v1",
@@ -1644,7 +1698,8 @@ async function cadenceCurrentPolicyLedgerPrecheck(
     ...(currentJobId ? { currentJobId: String(currentJobId) } : {}),
     sourcePlanId,
     jobIds: jobs.map((job) => job._id),
-    ledgerFingerprint: currentPolicyLedgerFingerprint(jobs),
+    jobs: jobProjections,
+    ledgerFingerprint: currentPolicyLedgerFingerprint(jobProjections),
   };
 }
 
@@ -1883,22 +1938,18 @@ async function cadenceCurrentPolicyReadinessPrecheck(
       (currentJobId ? String(currentJobId) : undefined) ||
     currentPolicyLedger.sourcePlanId !== sourcePlanId ||
     currentPolicyLedger.jobIds.length > 2 ||
+    currentPolicyLedger.jobs.length !== currentPolicyLedger.jobIds.length ||
     !/^[a-f0-9]{64}$/.test(currentPolicyLedger.ledgerFingerprint)
   ) return { ready: false, reason: "current_policy_ledger_stale" };
   const sourceReservationId = sourcePlanPrecheck.sourcePlanReservationId;
   const sourceFingerprint = sourcePlanPrecheck.sourcePlanFingerprint;
-  const sourceJobRows = await Promise.all(
-    currentPolicyLedger.jobIds.map((jobId) => ctx.db.get(jobId)),
-  );
-  if (sourceJobRows.some((job) =>
-    !job ||
-    job.siteId !== siteId ||
+  const sourceJobs = currentPolicyLedger.jobs;
+  if (sourceJobs.some((job, index) =>
+    job.jobId !== currentPolicyLedger.jobIds[index] ||
     job.sourcePlanId !== sourcePlanId ||
-    job.policyVersion !== CADENCE_MICRO_SEED_VERSION
+    job.policyVersion !== CADENCE_MICRO_SEED_VERSION ||
+    job.rolloutEpoch !== (site.autopilotRolloutEpoch ?? 0)
   )) return { ready: false, reason: "current_policy_ledger_stale" };
-  const sourceJobs = sourceJobRows.filter(
-    (job): job is Doc<"cadence_micro_seed_jobs"> => Boolean(job),
-  );
   if (
     currentPolicyLedger.ledgerFingerprint !==
       currentPolicyLedgerFingerprint(sourceJobs)
@@ -1908,7 +1959,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
   const previouslyAttemptedFallbackSeeds =
     priorPolicyHistory.attemptedFallbackSeeds;
   const currentJob = currentJobId
-    ? sourceJobs.find((job) => job._id === currentJobId)
+    ? sourceJobs.find((job) => job.jobId === currentJobId)
     : undefined;
   if (currentJobId && !currentJob) {
     return { ready: false, reason: "micro_seed_execution_receipt_unavailable" };
@@ -1953,18 +2004,18 @@ async function cadenceCurrentPolicyReadinessPrecheck(
         return { ready: false, reason: "micro_seed_fallback_receipt_incompatible" };
       }
       const parent = sourceJobs.find((job) =>
-        job._id === currentJob.parentMicroSeedJobId
+        job.jobId === currentJob.parentMicroSeedJobId
       );
       if (
         !parent ||
-        parent._id === currentJob._id ||
+        parent.jobId === currentJob.jobId ||
         !fallbackParentPrecheck ||
         !fallbackParentPrecheckMatches({
           site,
           sourcePlanId,
           currentPolicyLedger,
-          parentMicroSeedJobId: parent._id,
-          expectedChildJobId: currentJob._id,
+          parentMicroSeedJobId: parent.jobId,
+          expectedChildJobId: currentJob.jobId,
           precheck: fallbackParentPrecheck,
         })
       ) {
@@ -1988,7 +2039,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
       }
       seed = fallbackSeed;
       providerSeeds = fallbackSeeds;
-      parentMicroSeedJobId = parent._id;
+      parentMicroSeedJobId = parent.jobId;
       parentMicroSeedReceiptFingerprint = parentFingerprint;
     }
   } else if (sourceJobs.length === 1) {
@@ -1999,7 +2050,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
         site,
         sourcePlanId,
         currentPolicyLedger,
-        parentMicroSeedJobId: parent._id,
+        parentMicroSeedJobId: parent.jobId,
         precheck: fallbackParentPrecheck,
       })
     ) {
@@ -2019,7 +2070,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     attemptKind = "fallback";
     seed = fallbackSeed;
     providerSeeds = fallbackSeeds;
-    parentMicroSeedJobId = parent._id;
+    parentMicroSeedJobId = parent.jobId;
     parentMicroSeedReceiptFingerprint =
       fallbackParentPrecheck.parentMicroSeedReceiptFingerprint;
   } else if (sourceJobs.length === 2) {
@@ -2048,7 +2099,7 @@ async function cadenceCurrentPolicyReadinessPrecheck(
     sourcePlanId: String(sourcePlanId),
     sourcePlanReservationId: String(sourceReservationId),
     sourcePlanFingerprint: sourceFingerprint,
-    sourceJobIds: sourceJobs.map((job) => String(job._id)),
+    sourceJobIds: sourceJobs.map((job) => String(job.jobId)),
     attemptKind,
     parentMicroSeedJobId: parentMicroSeedJobId
       ? String(parentMicroSeedJobId)
