@@ -1080,10 +1080,6 @@ test("fallback, demand, and evidence fit the exact remaining account and fleet l
   }).allowed, false);
 
   assert.match(
-    model,
-    /evidenceHeadroomMicroUsd \* CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES/,
-  );
-  assert.match(
     action,
     /EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD \*\s*CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES/,
   );
@@ -1550,10 +1546,15 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     model,
     /cadenceMicroSeedProviderPurpose\(inspected\.attemptKind\)[\s\S]*reservedMicroUsd: inspected\.providerCostCeilingMicroUsd/,
   );
-  assert.match(
-    model,
-    /currentJobId \? 0 : providerCostCeilingMicroUsd[\s\S]*evidenceHeadroomMicroUsd/,
+  assert.doesNotMatch(
+    model.slice(
+      model.indexOf("async function inspectReadiness"),
+      model.indexOf("export const inspectInternal"),
+    ),
+    /provider_spend_reservations[\s\S]*\.collect\(\)/,
+    "eligibility checks must not rescan the historical provider ledger",
   );
+  assert.match(model, /reserveSharedProviderBudget\(ctx/);
   assert.match(
     action,
     /inspected\.providerCostCeilingMicroUsd \+[\s\S]*EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD/,
@@ -1602,6 +1603,14 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(action, /dispatchCadenceMicroSeedFleet/);
   assert.match(action, /runCadenceMicroSeedFleetSite/);
   assert.match(schema, /cadence_micro_seed_jobs: defineTable/);
+  assert.match(model, /export const findSourcePlanPageInternal/);
+  assert.match(model, /\.paginate\(\{ cursor: cursor \?\? null, numItems: Math\.min\(4, 50 - examined\) \}\)/);
+  assert.match(action, /resolveExhaustedSourcePlan/);
+  assert.match(action, /page\.examined <= examined/);
+  assert.ok(
+    recovery.indexOf("resolveExhaustedSourcePlan") <
+      recovery.indexOf("api.inspectInternal"),
+  );
   assert.match(schema, /by_site_source_policy_created/);
   assert.match(model, /withIndex\("by_site_source_policy_created"/);
   assert.doesNotMatch(model, /micro_seed_source_history_read_exhausted/);

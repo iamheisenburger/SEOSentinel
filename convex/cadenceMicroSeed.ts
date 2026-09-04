@@ -94,13 +94,9 @@ import {
   dataForSeoLocationCode,
 } from "./lib/dataForSeoLocale";
 import {
-  evaluateProviderAccountCapacity,
-  evaluateSharedProviderCapacity,
-  providerAccountMonthlyCeilingMicroUsd,
   releaseSharedProviderReservation,
   reserveSharedProviderBudget,
   settleSharedProviderReservation,
-  summarizeProviderReservationLedger,
 } from "./lib/providerSpendReservation";
 import {
   cadenceMicroSeedRecoveryBlockReason,
@@ -579,6 +575,7 @@ async function inspectReadiness(
   ctx: QueryCtx | MutationCtx,
   siteId: Id<"sites">,
   timestamp: number,
+  sourcePlanId: Id<"jobs">,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
 ): Promise<ReadinessResult> {
   const site = await ctx.db.get(siteId);
@@ -836,45 +833,35 @@ async function inspectReadiness(
   );
   if (recoveryBlockReason) return { ready: false, reason: recoveryBlockReason };
 
-  const sourcePlans = await ctx.db.query("jobs")
-    .withIndex("by_site_type_created", (q) =>
-      q.eq("siteId", siteId).eq("type", "plan").gte(
-        "createdAt",
-        timestamp - CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
-      )
-    )
-    .order("desc")
-    .take(50);
-  let source:
-    | {
-        job: Doc<"jobs">;
-        reservation: Doc<"provider_spend_reservations">;
-        checkpoints: Doc<"plan_candidate_checkpoints">[];
-      }
-    | undefined;
-  for (const job of sourcePlans) {
-    const [reservation, checkpoints] = await Promise.all([
-      job.providerSpendReservationId
-        ? ctx.db.get(job.providerSpendReservationId)
-        : Promise.resolve(null),
-      ctx.db.query("plan_candidate_checkpoints")
-        .withIndex("by_plan_job", (q) => q.eq("planJobId", job._id))
-        .order("desc")
-        .take(2),
-    ]);
-    if (validExhaustedSourcePlan({
-      site,
-      job,
-      reservation,
-      checkpoints,
-      timestamp,
-    })) {
-      if (!reservation) continue;
-      source = { job, reservation, checkpoints };
-      break;
-    }
+  const sourceJob = await ctx.db.get(sourcePlanId);
+  if (
+    !sourceJob ||
+    sourceJob.siteId !== siteId ||
+    sourceJob.type !== "plan"
+  ) return { ready: false, reason: "source_plan_not_exhausted" };
+  const [sourceReservation, sourceCheckpoints] = await Promise.all([
+    sourceJob.providerSpendReservationId
+      ? ctx.db.get(sourceJob.providerSpendReservationId)
+      : Promise.resolve(null),
+    ctx.db.query("plan_candidate_checkpoints")
+      .withIndex("by_plan_job", (q) => q.eq("planJobId", sourceJob._id))
+      .order("desc")
+      .take(2),
+  ]);
+  if (!validExhaustedSourcePlan({
+    site,
+    job: sourceJob,
+    reservation: sourceReservation,
+    checkpoints: sourceCheckpoints,
+    timestamp,
+  }) || !sourceReservation) {
+    return { ready: false, reason: "source_plan_not_exhausted" };
   }
-  if (!source) return { ready: false, reason: "source_plan_not_exhausted" };
+  const source = {
+    job: sourceJob,
+    reservation: sourceReservation,
+    checkpoints: sourceCheckpoints,
+  };
   const sourceFingerprint = sourcePlanFingerprint(
     source.job,
     source.reservation,
@@ -1096,41 +1083,15 @@ async function inspectReadiness(
   const plan = resolvePlanFromFeatures(
     entitlement?.planFeatures ?? site.planFeatures ?? [],
   );
-  const ledgerRows = await ctx.db.query("provider_spend_reservations")
-    .withIndex("by_created", (q) => q.gte("createdAt", utcMonthStart(timestamp)))
-    .collect();
-  const ledger = summarizeProviderReservationLedger(
-    ledgerRows,
-    site.userId,
-    timestamp,
-  );
   const providerCostCeilingMicroUsd =
     cadenceMicroSeedProviderCeilingMicroUsd(attemptKind);
   const evidenceHeadroomMicroUsd =
     EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD;
-  // Inspect the complete bounded continuation headroom. Discovery can retain
-  // up to three strict candidates and each candidate owns a separate exact
-  // live-SERP evidence receipt. Admission must therefore prove room for every
-  // possible evidence attempt, rather than admitting a job that can be
-  // deterministically stranded after its first semantic rejection. This
-  // observes rather than locks evidence capacity, so a later cross-tenant race
-  // remains an honest budget miss and never a fabricated SEO rejection.
-  const combinedHeadroom =
-    (currentJobId ? 0 : providerCostCeilingMicroUsd) +
-    evidenceHeadroomMicroUsd * CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES;
-  const accountCapacity = evaluateProviderAccountCapacity({
-    accountReservedTodayMicroUsd: ledger.accountReservedTodayMicroUsd,
-    accountReservedThisMonthMicroUsd: ledger.accountReservedThisMonthMicroUsd,
-    requestedMicroUsd: combinedHeadroom,
-    monthlyCeilingMicroUsd: providerAccountMonthlyCeilingMicroUsd(plan.tier),
-  });
-  if (!accountCapacity.allowed) return { ready: false, reason: accountCapacity.reason };
-  const fleetCapacity = evaluateSharedProviderCapacity({
-    fleetReservedTodayMicroUsd: ledger.fleetReservedTodayMicroUsd,
-    fleetReservedThisMonthMicroUsd: ledger.fleetReservedThisMonthMicroUsd,
-    requestedMicroUsd: combinedHeadroom,
-  });
-  if (!fleetCapacity.allowed) return { ready: false, reason: fleetCapacity.reason };
+  // This inspection is an eligibility fence, not a billing transaction. The
+  // exact account/fleet capacity decision remains inside reserveAndQueue's
+  // serializable reservation mutation. Keeping the historical ledger out of
+  // every eligibility recheck prevents mature tenants from timing out while
+  // preserving the same fail-closed budget boundary before any provider call.
 
   const descriptor = {
     contract: "cadence-micro-seed-inspection-v2",
@@ -1191,8 +1152,81 @@ async function inspectReadiness(
 }
 
 export const inspectInternal = internalQuery({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => inspectReadiness(ctx, siteId, Date.now()),
+  args: { siteId: v.id("sites"), sourcePlanId: v.id("jobs") },
+  handler: async (ctx, { siteId, sourcePlanId }) =>
+    inspectReadiness(ctx, siteId, Date.now(), sourcePlanId),
+});
+
+/** Resolve one exact exhausted source plan in small pages. Mature tenants can
+ * retain substantial immutable plan history, so readiness must never walk all
+ * candidate plans inside the one-second eligibility transaction. */
+export const findSourcePlanPageInternal = internalQuery({
+  args: {
+    siteId: v.id("sites"),
+    cursor: v.optional(v.string()),
+    examined: v.number(),
+  },
+  handler: async (ctx, { siteId, cursor, examined }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !siteExecutionActive(site) ||
+      !site.userId ||
+      !(await siteExecutionAuthorized(ctx, site))
+    ) {
+      return {
+        sourcePlanId: undefined,
+        isDone: true,
+        continueCursor: undefined,
+        examined,
+      };
+    }
+    if (!Number.isInteger(examined) || examined < 0 || examined > 50) {
+      throw new Error("Cadence micro-seed source-plan cursor is incompatible");
+    }
+    if (examined === 50) {
+      return {
+        sourcePlanId: undefined,
+        isDone: true,
+        continueCursor: undefined,
+        examined,
+      };
+    }
+    const timestamp = Date.now();
+    const page = await ctx.db.query("jobs")
+      .withIndex("by_site_type_created", (q) =>
+        q.eq("siteId", siteId).eq("type", "plan").gte(
+          "createdAt",
+          timestamp - CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
+        )
+      )
+      .order("desc")
+      .paginate({ cursor: cursor ?? null, numItems: Math.min(4, 50 - examined) });
+    const receipts = await Promise.all(page.page.map(async (job) => {
+      const [reservation, checkpoints] = await Promise.all([
+        job.providerSpendReservationId
+          ? ctx.db.get(job.providerSpendReservationId)
+          : Promise.resolve(null),
+        ctx.db.query("plan_candidate_checkpoints")
+          .withIndex("by_plan_job", (q) => q.eq("planJobId", job._id))
+          .order("desc")
+          .take(2),
+      ]);
+      return validExhaustedSourcePlan({
+        site,
+        job,
+        reservation,
+        checkpoints,
+        timestamp,
+      }) ? job._id : undefined;
+    }));
+    const nextExamined = examined + page.page.length;
+    return {
+      sourcePlanId: receipts.find((id) => id !== undefined),
+      isDone: page.isDone || nextExamined >= 50,
+      continueCursor: page.isDone ? undefined : page.continueCursor,
+      examined: nextExamined,
+    };
+  },
 });
 
 /**
@@ -1297,7 +1331,12 @@ export const reserveAndQueue = internalMutation({
     providerBalanceRequiredMicroUsd: v.number(),
   },
   handler: async (ctx, args) => {
-    const inspected = await inspectReadiness(ctx, args.siteId, Date.now());
+    const inspected = await inspectReadiness(
+      ctx,
+      args.siteId,
+      Date.now(),
+      args.sourcePlanId,
+    );
     if (
       !inspected.ready ||
       inspected.inspectionKey !== args.inspectionKey ||
@@ -1547,6 +1586,7 @@ export const beginProviderAttempt = internalMutation({
       ctx,
       args.siteId,
       Date.now(),
+      job.sourcePlanId,
       job._id,
     );
     if (
@@ -2384,6 +2424,7 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       ctx,
       args.siteId,
       Date.now(),
+      job.sourcePlanId,
       job._id,
     );
     if (

@@ -32,6 +32,12 @@ Actual-cost reconciliation is paginated into small tenant-scoped transactions
 before admission. Accumulating immutable recovery history can therefore never
 overflow the mutation time budget and silently prevent a mature tenant from
 using the next valid recovery generation.
+Exhausted source-plan resolution is likewise paginated in four-plan pages with
+a hard 50-plan horizon. The one-second eligibility and execution transactions
+re-read only the selected exact plan, reservation, and checkpoint partition;
+they never walk historical plans or the monthly provider ledger. Shared fleet
+and account capacity remains fail-closed in the serializable reservation
+mutation immediately before a provider job can exist.
 
 This is a last-resort, tenant-generic recovery for an imminent cadence window
 with a sealed buffer below the cadence-derived launch minimum, no scheduler-ready

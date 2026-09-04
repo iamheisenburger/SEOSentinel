@@ -90,6 +90,36 @@ type ReconciledProviderCosts = {
   reclaimedMicroUsd: number;
 };
 
+async function resolveExhaustedSourcePlan(
+  ctx: Pick<ActionCtx, "runQuery">,
+  siteId: Id<"sites">,
+): Promise<Id<"jobs"> | undefined> {
+  let cursor: string | undefined;
+  let examined = 0;
+  for (let pageNumber = 0; pageNumber < 13; pageNumber += 1) {
+    const page = await ctx.runQuery(api.findSourcePlanPageInternal, {
+      siteId,
+      examined,
+      ...(cursor ? { cursor } : {}),
+    }) as {
+      sourcePlanId?: Id<"jobs">;
+      isDone: boolean;
+      continueCursor?: string;
+      examined: number;
+    };
+    if (page.sourcePlanId) return page.sourcePlanId;
+    if (page.isDone) return undefined;
+    if (
+      !page.continueCursor ||
+      page.continueCursor === cursor ||
+      page.examined <= examined
+    ) throw new Error("cadence_source_plan_cursor_invalid");
+    cursor = page.continueCursor;
+    examined = page.examined;
+  }
+  throw new Error("cadence_source_plan_read_limit");
+}
+
 async function reconcileVerifiedProviderCostPages(
   ctx: Pick<ActionCtx, "runMutation">,
   siteId: Id<"sites">,
@@ -366,8 +396,21 @@ export const recoverCadenceGap = internalAction({
       ctx,
       args.siteId,
     );
+    const sourcePlanId = await resolveExhaustedSourcePlan(ctx, args.siteId);
+    if (!sourcePlanId) {
+      return {
+        ready: false,
+        reason: "source_plan_not_exhausted",
+        providerCallsMade: 0,
+        providerReservationsCreated: 0,
+        evidenceCeilingMicroUsd:
+          EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
+      };
+    }
     const inspected = await ctx.runQuery(api.inspectInternal, {
       siteId: args.siteId,
+      sourcePlanId,
     });
     if (args.mode === "inspect" || !inspected.ready) {
       return {
