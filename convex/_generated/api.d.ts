@@ -52,6 +52,7 @@ import type * as lib_autopilotReadiness from "../lib/autopilotReadiness.js";
 import type * as lib_autopilotRunOutcome from "../lib/autopilotRunOutcome.js";
 import type * as lib_cadenceLiveness from "../lib/cadenceLiveness.js";
 import type * as lib_cadenceMicroSeed from "../lib/cadenceMicroSeed.js";
+import type * as lib_cadenceRevision from "../lib/cadenceRevision.js";
 import type * as lib_currentGscRows from "../lib/currentGscRows.js";
 import type * as lib_dataForSeoAccountBalance from "../lib/dataForSeoAccountBalance.js";
 import type * as lib_dataForSeoLocale from "../lib/dataForSeoLocale.js";
@@ -198,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   "lib/autopilotRunOutcome": typeof lib_autopilotRunOutcome;
   "lib/cadenceLiveness": typeof lib_cadenceLiveness;
   "lib/cadenceMicroSeed": typeof lib_cadenceMicroSeed;
+  "lib/cadenceRevision": typeof lib_cadenceRevision;
   "lib/currentGscRows": typeof lib_currentGscRows;
   "lib/dataForSeoAccountBalance": typeof lib_dataForSeoAccountBalance;
   "lib/dataForSeoLocale": typeof lib_dataForSeoLocale;
