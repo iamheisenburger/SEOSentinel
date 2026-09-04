@@ -33,7 +33,7 @@ import {
   cadenceMicroSeedProviderPurpose,
   cadenceMicroSeedProviderReceiptValid,
   cadenceMicroSeedProviderTrigger,
-  cadenceMicroSeedCheckpointSourcePlanExhausted,
+  cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedSourcePlanExecutionExhausted,
   cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedTerminalMissReceiptValid,
@@ -413,16 +413,29 @@ function validExhaustedSourcePlan(args: {
       marker,
       result,
     });
-  const checkpointExecutionExhausted = Boolean(
-    terminal?.checkpoint && cadenceMicroSeedCheckpointSourcePlanExhausted({
+  const checkpointExhaustionKind = terminal?.checkpoint
+    ? cadenceMicroSeedCheckpointSourcePlanExhaustionKind({
       status: terminal.status,
       checkpointState: terminal.checkpointState,
+      checkpointStatus: terminal.checkpoint.status,
       providerReservationState: terminal.providerReservationState,
       persistedTopicCountState: terminal.persistedTopicCountState,
       requiredVerifiedYield: terminal.checkpoint.requiredVerifiedYield,
       usableTopicCount: terminal.checkpoint.usableTopicCount,
-    }),
-  );
+      cadenceFailureCategory: terminal.cadenceFailure?.category,
+      cadenceFailureCode: terminal.cadenceFailure?.code,
+      cadenceFailureTerminal: terminal.cadenceFailure?.terminal,
+    })
+    : null;
+  const checkpointExecutionExhausted = checkpointExhaustionKind !== null;
+  const executionReceiptBound = checkpointExhaustionKind === "strict_zero_yield"
+    ? terminal?.checkpoint?.workerExecution === 1
+    : providerBudget.workerExecution === 1 &&
+      providerBudget.reservedMicroUsd ===
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+      providerBudget.ceilingMicroUsd ===
+        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+      providerBudget.reservationDay === job.providerCostReservationDay;
   return Boolean(
     site.userId &&
       job.siteId === site._id &&
@@ -431,12 +444,7 @@ function validExhaustedSourcePlan(args: {
       job.domainRevision === siteCanonicalDomainRevision(site) &&
       job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
       (legacyExecutionExhausted || checkpointExecutionExhausted) &&
-      providerBudget.workerExecution === 1 &&
-      providerBudget.reservedMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      providerBudget.ceilingMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      providerBudget.reservationDay === job.providerCostReservationDay &&
+      executionReceiptBound &&
       job.providerCostCeilingMicroUsd ===
         AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
       job.providerCostReservedMicroUsd ===

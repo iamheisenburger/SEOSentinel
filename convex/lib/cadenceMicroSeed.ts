@@ -143,26 +143,53 @@ export function cadenceMicroSeedSourcePlanFresh(args: {
   );
 }
 
-export function cadenceMicroSeedCheckpointSourcePlanExhausted(args: {
+export function cadenceMicroSeedCheckpointSourcePlanExhaustionKind(args: {
   status?: string;
   checkpointState?: string;
+  checkpointStatus?: string;
   providerReservationState?: string;
   persistedTopicCountState?: string;
   requiredVerifiedYield?: number;
   usableTopicCount?: number;
-}): boolean {
-  return Boolean(
+  cadenceFailureCategory?: string;
+  cadenceFailureCode?: string;
+  cadenceFailureTerminal?: boolean;
+}): "underfilled" | "strict_zero_yield" | null {
+  const exactCheckpoint =
+    args.checkpointState === "single" &&
+    args.providerReservationState === "retained_no_replay" &&
+    Number.isSafeInteger(args.requiredVerifiedYield) &&
+    (args.requiredVerifiedYield ?? 0) > 0 &&
+    Number.isSafeInteger(args.usableTopicCount) &&
+    (args.usableTopicCount ?? -1) >= 0;
+  if (!exactCheckpoint) return null;
+  if (
     args.status === "done" &&
-      args.checkpointState === "single" &&
-      args.providerReservationState === "retained_no_replay" &&
-      args.persistedTopicCountState === "recorded" &&
-      Number.isSafeInteger(args.requiredVerifiedYield) &&
-      (args.requiredVerifiedYield ?? 0) > 0 &&
-      Number.isSafeInteger(args.usableTopicCount) &&
-      (args.usableTopicCount ?? -1) >= 0 &&
-      (args.usableTopicCount ?? Infinity) <
-        (args.requiredVerifiedYield ?? -Infinity)
-  );
+    args.persistedTopicCountState === "recorded" &&
+    (args.usableTopicCount ?? Infinity) <
+      (args.requiredVerifiedYield ?? -Infinity)
+  ) return "underfilled";
+  // A strict zero-yield job has already completed its only paid execution,
+  // retained the exact reservation, and atomically closed an empty checkpoint.
+  // It is valid authority for the distinct micro-seed lane even though there
+  // is deliberately no plan result/count to bind. Other failed plans remain
+  // ineligible, so a transient or malformed failure can never grant new spend.
+  if (
+    args.status === "failed" &&
+    args.checkpointStatus === "empty" &&
+    args.persistedTopicCountState === "missing" &&
+    args.usableTopicCount === 0 &&
+    args.cadenceFailureCategory === "semantic_zero_yield" &&
+    args.cadenceFailureCode === "strict_zero_yield" &&
+    args.cadenceFailureTerminal === true
+  ) return "strict_zero_yield";
+  return null;
+}
+
+export function cadenceMicroSeedCheckpointSourcePlanExhausted(
+  args: Parameters<typeof cadenceMicroSeedCheckpointSourcePlanExhaustionKind>[0],
+): boolean {
+  return cadenceMicroSeedCheckpointSourcePlanExhaustionKind(args) !== null;
 }
 
 export type CadenceMicroSeedMetric = {

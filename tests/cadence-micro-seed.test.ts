@@ -15,6 +15,7 @@ import {
   CADENCE_MICRO_SEED_VERSION,
   cadenceMicroSeedAnchors,
   cadenceMicroSeedCheckpointSourcePlanExhausted,
+  cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedProviderCeilingMicroUsd,
@@ -685,6 +686,30 @@ test("an exact retained checkpoint underfill can seed recovery without replaying
     requiredVerifiedYield: 7,
     usableTopicCount: 7,
   }), false);
+  assert.equal(cadenceMicroSeedCheckpointSourcePlanExhaustionKind({
+    status: "failed",
+    checkpointState: "single",
+    checkpointStatus: "empty",
+    providerReservationState: "retained_no_replay",
+    persistedTopicCountState: "missing",
+    requiredVerifiedYield: 10,
+    usableTopicCount: 0,
+    cadenceFailureCategory: "semantic_zero_yield",
+    cadenceFailureCode: "strict_zero_yield",
+    cadenceFailureTerminal: true,
+  }), "strict_zero_yield");
+  assert.equal(cadenceMicroSeedCheckpointSourcePlanExhaustionKind({
+    status: "failed",
+    checkpointState: "single",
+    checkpointStatus: "empty",
+    providerReservationState: "retained_no_replay",
+    persistedTopicCountState: "missing",
+    requiredVerifiedYield: 10,
+    usableTopicCount: 0,
+    cadenceFailureCategory: "transient_provider",
+    cadenceFailureCode: "transient_provider_failure",
+    cadenceFailureTerminal: true,
+  }), null);
   assert.equal(cadenceMicroSeedCheckpointSourcePlanExhausted({
     status: "done",
     checkpointState: "multiple_or_invalid",
