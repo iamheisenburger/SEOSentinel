@@ -2097,94 +2097,19 @@ export const continueSuccessfulCandidateInternal = internalMutation({
         reason: "tenant_authority_unavailable" as const,
       };
     }
-    const exactKeywords = new Set(topics.map((row) =>
-      normalizeCadenceMicroSeedText(row.primaryKeyword)
-    ));
-    const reservedCoverage = coveredIntentTopics(
-      topics.map((row) => ({
-        _id: String(row._id),
-        status: row.status ?? "planned",
-        primaryKeyword: row.primaryKeyword,
-        serpTopUrls: row.serpTopUrls,
-      })),
-      articles.map((article) => ({
-        topicId: article.topicId ? String(article.topicId) : undefined,
-        slug: article.slug,
-        status: article.status,
-        publicationGateStatus: article.publicationGateStatus,
-        publicationAuditVersion: article.publicationAuditVersion,
-        auditedContentHash: article.auditedContentHash,
-      })),
-    );
-    const activeInventoryCoverage = topics
-      .filter((row) => !["used", "cannibalizing", "disqualified"].includes(
-        row.status ?? "planned",
-      ))
-      .map((row) => ({
-        primaryKeyword: row.primaryKeyword,
-        serpTopUrls: row.serpTopUrls,
-      }));
-    const failedContentCoverage = topics
-      .filter((row) => terminalContentFeasibility(row.contentFeasibilityStatus))
-      .map((row) => ({
-        primaryKeyword: row.primaryKeyword,
-        serpTopUrls: row.serpTopUrls,
-      }));
-    const attemptedKeywords = new Set([
-      normalizeCadenceMicroSeedText(job.selectedCandidate!.keyword),
-      ...(job.priorCandidateAttempts ?? []).map((attempt) =>
-        normalizeCadenceMicroSeedText(attempt.keyword)
-      ),
-    ]);
-    const metrics: CadenceMicroSeedMetric[] = job.candidateReceipts.flatMap(
-      (candidate) => candidate.difficultyMeasured === true
-        ? [{ ...candidate, difficultyMeasured: true as const }]
-        : [],
-    );
-    const selection = selectCadenceMicroSeedCandidate({
-      metrics,
-      seed: job.seed,
-      seeds: job.providerSeeds ?? [job.seed],
-      maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
-        authority.domainRank,
-      ),
-      existingExactKeywords: exactKeywords,
-      coveredTopics: [
-        ...reservedCoverage,
-        ...activeInventoryCoverage,
-        ...failedContentCoverage,
-      ],
-      siteName: site.siteName,
-      competitors: site.competitors,
-      businessFitEligible: (candidate) => evaluateTopicBusinessFit({
-        keyword: candidate.keyword,
-        label: candidate.keyword,
-        ...tenantTopicBusinessSignals(site),
-      }).eligible,
+    const nextCandidate = selectCurrentCadenceContinuationCandidate({
+      site,
+      job,
+      topics,
+      articles,
+      domainRank: authority.domainRank,
     });
-    const nextMetric = selection.acceptedCandidates.find((candidate) =>
-      !attemptedKeywords.has(
-        normalizeCadenceMicroSeedText(candidate.keyword),
-      )
-    );
-    const matchingAnchor = nextMetric
-      ? cadenceMicroSeedMatchingAnchor(
-        job.providerSeeds ?? [job.seed],
-        nextMetric.keyword,
-      )
-      : undefined;
-    if (!nextMetric || !matchingAnchor) {
+    if (!nextCandidate) {
       return {
         advanced: false as const,
         reason: "no_remaining_nonoverlapping_candidate" as const,
       };
     }
-    const nextCandidate = selectedCandidateReceipt({
-      site,
-      candidate: nextMetric,
-      sourceSeed: matchingAnchor,
-      measuredAt: job.selectedCandidate!.measuredAt,
-    });
     const next = await insertCadenceMicroSeedTopic({
       ctx,
       site,
@@ -2246,6 +2171,110 @@ export const continueSuccessfulCandidateInternal = internalMutation({
     };
   },
 });
+
+/**
+ * Re-run the complete pre-SERP admission contract immediately before every
+ * continuation. The paid receipt's shortlist is only a historical ordering:
+ * another candidate may since have produced a sealed article, or the tenant
+ * profile/coverage may have changed. Exact attempted keywords remain excluded
+ * even if a later cleanup removes their topic rows.
+ */
+function selectCurrentCadenceContinuationCandidate(args: {
+  site: Doc<"sites">;
+  job: Doc<"cadence_micro_seed_jobs">;
+  topics: Doc<"topic_clusters">[];
+  articles: Doc<"articles">[];
+  domainRank: number;
+  excludedActiveTopicIds?: ReadonlySet<string>;
+}): SelectedCandidateReceipt | null {
+  const exactKeywords = new Set(args.topics.map((row) =>
+    normalizeCadenceMicroSeedText(row.primaryKeyword)
+  ));
+  const reservedCoverage = coveredIntentTopics(
+    args.topics.map((row) => ({
+      _id: String(row._id),
+      status: row.status ?? "planned",
+      primaryKeyword: row.primaryKeyword,
+      serpTopUrls: row.serpTopUrls,
+    })),
+    args.articles.map((article) => ({
+      topicId: article.topicId ? String(article.topicId) : undefined,
+      slug: article.slug,
+      status: article.status,
+      publicationGateStatus: article.publicationGateStatus,
+      publicationAuditVersion: article.publicationAuditVersion,
+      auditedContentHash: article.auditedContentHash,
+    })),
+  );
+  const activeInventoryCoverage = args.topics
+    .filter((row) =>
+      !args.excludedActiveTopicIds?.has(String(row._id)) &&
+      !["used", "cannibalizing", "disqualified"].includes(
+        row.status ?? "planned",
+      )
+    )
+    .map((row) => ({
+      primaryKeyword: row.primaryKeyword,
+      serpTopUrls: row.serpTopUrls,
+    }));
+  const failedContentCoverage = args.topics
+    .filter((row) => terminalContentFeasibility(row.contentFeasibilityStatus))
+    .map((row) => ({
+      primaryKeyword: row.primaryKeyword,
+      serpTopUrls: row.serpTopUrls,
+    }));
+  const attemptedKeywords = new Set([
+    normalizeCadenceMicroSeedText(args.job.selectedCandidate!.keyword),
+    ...(args.job.priorCandidateAttempts ?? []).map((attempt) =>
+      normalizeCadenceMicroSeedText(attempt.keyword)
+    ),
+  ]);
+  const metrics: CadenceMicroSeedMetric[] = args.job.candidateReceipts.flatMap(
+    (candidate) => candidate.difficultyMeasured === true
+      ? [{ ...candidate, difficultyMeasured: true as const }]
+      : [],
+  );
+  const selection = selectCadenceMicroSeedCandidate({
+    metrics,
+    seed: args.job.seed,
+    seeds: args.job.providerSeeds ?? [args.job.seed],
+    maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
+      args.domainRank,
+    ),
+    existingExactKeywords: exactKeywords,
+    coveredTopics: [
+      ...reservedCoverage,
+      ...activeInventoryCoverage,
+      ...failedContentCoverage,
+    ],
+    siteName: args.site.siteName,
+    competitors: args.site.competitors,
+    businessFitEligible: (candidate) => evaluateTopicBusinessFit({
+      keyword: candidate.keyword,
+      label: candidate.keyword,
+      ...tenantTopicBusinessSignals(args.site),
+    }).eligible,
+  });
+  const nextMetric = selection.acceptedCandidates.find((candidate) =>
+    !attemptedKeywords.has(
+      normalizeCadenceMicroSeedText(candidate.keyword),
+    )
+  );
+  const matchingAnchor = nextMetric
+    ? cadenceMicroSeedMatchingAnchor(
+      args.job.providerSeeds ?? [args.job.seed],
+      nextMetric.keyword,
+    )
+    : undefined;
+  return nextMetric && matchingAnchor
+    ? selectedCandidateReceipt({
+      site: args.site,
+      candidate: nextMetric,
+      sourceSeed: matchingAnchor,
+      measuredAt: args.job.selectedCandidate!.measuredAt,
+    })
+    : null;
+}
 
 export const recordProviderReceiptAndMaterialize = internalMutation({
   args: {
@@ -3456,27 +3485,58 @@ export const finalizeEvidence = internalMutation({
       ? semanticReason
       : "provider_attempt_ambiguous";
     const cannibalizing = verifiedReason.includes("cannibalization");
+    let nextCandidate: SelectedCandidateReceipt | null = null;
+    const candidateAttemptCount = job.candidateAttemptCount ?? 1;
+    if (
+      args.outcome === "semantic_failure" &&
+      candidateAttemptCount < CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES
+    ) {
+      const [currentTopics, currentArticles] = await Promise.all([
+        takeCurrentDomainTopics(
+          ctx,
+          site!,
+          CADENCE_MICRO_SEED_READ_LIMIT + 1,
+        ),
+        takeCurrentDomainArticles(
+          ctx,
+          site!,
+          CADENCE_MICRO_SEED_READ_LIMIT + 1,
+        ),
+      ]);
+      if (
+        currentTopics.length <= CADENCE_MICRO_SEED_READ_LIMIT &&
+        currentArticles.length <= CADENCE_MICRO_SEED_READ_LIMIT
+      ) {
+        const authority = tenantAuthorityFromStoredEvidence({
+          domain: site!.seoAuthorityDomain,
+          currentDomain: site!.domain,
+          domainRank: site!.seoAuthorityDomainRank,
+          referringDomains: site!.seoAuthorityReferringDomains,
+          source: site!.seoAuthoritySource,
+          measuredAt: site!.seoAuthorityMeasuredAt,
+        });
+        if (measuredAuthorityIsFresh(authority, timestamp)) {
+          nextCandidate = selectCurrentCadenceContinuationCandidate({
+            site: site!,
+            job,
+            topics: currentTopics,
+            articles: currentArticles,
+            domainRank: authority.domainRank,
+            // This topic just failed live evidence and is about to become
+            // terminal. It must not reserve intent as active inventory while
+            // the replacement is selected, but its exact keyword remains in
+            // the duplicate fence.
+            excludedActiveTopicIds: new Set([String(topic._id)]),
+          });
+        }
+      }
+    }
     await ctx.db.patch(topic._id, {
       status: cannibalizing ? "cannibalizing" : "disqualified",
       disqualifiedReason: `cadence_micro_seed_${args.outcome}:${verifiedReason}`
         .slice(0, 240),
       updatedAt: timestamp,
     });
-    const attemptedKeywords = new Set([
-      normalizeCadenceMicroSeedText(job.selectedCandidate!.keyword),
-      ...(job.priorCandidateAttempts ?? []).map((attempt) =>
-        normalizeCadenceMicroSeedText(attempt.keyword)
-      ),
-    ]);
-    const candidateAttemptCount = job.candidateAttemptCount ?? 1;
-    const nextCandidate = args.outcome === "semantic_failure" &&
-        candidateAttemptCount < CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES
-      ? (job.candidateShortlist ?? []).find((candidate) =>
-          !attemptedKeywords.has(
-            normalizeCadenceMicroSeedText(candidate.keyword),
-          )
-        )
-      : undefined;
     if (nextCandidate) {
       const next = await insertCadenceMicroSeedTopic({
         ctx,

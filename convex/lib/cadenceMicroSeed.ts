@@ -13,6 +13,10 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 23 revalidates every semantic-retry candidate against the tenant's
+// current article/topic coverage. A shortlist captured before the first
+// article was sealed can no longer introduce a now-overlapping candidate and
+// strand the evidence handoff.
 // Version 18 keeps recovery on the tenant's explicit search/product surface
 // and ranks those anchors by current lexical saturation before choosing a
 // deterministic primary plus a genuinely distinct fallback. Broad audience
@@ -42,7 +46,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 22;
+export const CADENCE_MICRO_SEED_VERSION = 23;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
 export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 6;

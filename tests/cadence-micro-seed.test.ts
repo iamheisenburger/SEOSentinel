@@ -1518,11 +1518,44 @@ test("semantic evidence misses advance through immutable candidates without lowe
   assert.match(schema, /priorCandidateAttempts:\s*v\.optional/);
   assert.match(model, /selection\.acceptedCandidates/);
   assert.match(model, /candidateAttemptCount:\s*1/);
-  assert.match(model, /args\.outcome === "semantic_failure"[\s\S]*nextCandidate/);
+  const finalizer = model.slice(
+    model.indexOf("export const finalizeEvidence"),
+    model.indexOf("export const recordCadenceScheduleResult"),
+  );
+  assert.match(
+    finalizer,
+    /args\.outcome === "semantic_failure"[\s\S]*selectCurrentCadenceContinuationCandidate/,
+  );
+  assert.match(finalizer, /excludedActiveTopicIds/);
+  assert.doesNotMatch(
+    finalizer,
+    /candidateShortlist \?\? \[\]\)\.find/,
+    "semantic retries must not trust a shortlist captured before current coverage existed",
+  );
   assert.match(model, /status:\s*"awaiting_evidence"[\s\S]*retryQueued:\s*true/);
   assert.match(action, /!eligible && !finalized\.retryQueued/);
   assert.match(action, /resumeLegacySemanticCandidateInternal/);
   assert.doesNotMatch(model, /expectedClickStatus:\s*"eligible"/);
+});
+
+test("a semantic retry rejects a head term that a newly sealed article now owns", () => {
+  const selected = selectCadenceMicroSeedCandidate({
+    metrics: [
+      metric("ai sales automation", { searchVolume: 260, difficulty: 21 }),
+      metric("booking link integration software", {
+        searchVolume: 90,
+        difficulty: 8,
+      }),
+    ],
+    seed: "sales automation chat widget",
+    seeds: ["sales automation chat widget", "booking link integration"],
+    maximumDifficulty: 32,
+    existingExactKeywords: new Set(),
+    coveredTopics: [{ primaryKeyword: "sales automation tools" }],
+    businessFitEligible: () => true,
+  });
+  assert.equal(selected.selected?.keyword, "booking link integration software");
+  assert.equal(selected.rejected.overlap, 1);
 });
 
 test("a successful micro-seed reuses its paid shortlist until the launch buffer is safe", () => {
