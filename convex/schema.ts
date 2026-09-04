@@ -1721,6 +1721,13 @@ export default defineSchema({
     purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback
     trigger: v.string(),
     reservedMicroUsd: v.number(),
+    // Once an exact paid-provider receipt is durably committed, the original
+    // ceiling reservation remains immutable for audit while capacity accounts
+    // for the verified actual charge. Ambiguous calls never receive these
+    // fields and therefore continue consuming their full fail-closed reserve.
+    settledMicroUsd: v.optional(v.number()),
+    settledAt: v.optional(v.number()),
+    settlementReason: v.optional(v.string()),
     reservationDay: v.string(),
     reservationMonth: v.string(),
     // Release is permitted only when the free account-balance preflight failed

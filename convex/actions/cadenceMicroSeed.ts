@@ -331,6 +331,10 @@ export const recoverCadenceGap = internalAction({
     providerCostCeilingMicroUsd: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<unknown> => {
+    const reconciledCosts = await ctx.runMutation(
+      api.reconcileVerifiedProviderCosts,
+      { siteId: args.siteId },
+    );
     const inspected = await ctx.runQuery(api.inspectInternal, {
       siteId: args.siteId,
     });
@@ -344,6 +348,7 @@ export const recoverCadenceGap = internalAction({
           : undefined,
         evidenceCeilingMicroUsd:
           EXPECTED_CLICK_EVIDENCE_BACKFILL_PROVIDER_CEILING_MICRO_USD,
+        reconciledCosts,
       };
     }
     if (
@@ -379,7 +384,7 @@ export const recoverCadenceGap = internalAction({
         inspected.parentMicroSeedReceiptFingerprint,
       providerCostCeilingMicroUsd: inspected.providerCostCeilingMicroUsd,
     });
-    return { applied: result.queued === true, result };
+    return { applied: result.queued === true, result, reconciledCosts };
   },
 });
 

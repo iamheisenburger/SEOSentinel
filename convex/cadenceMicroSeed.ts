@@ -97,6 +97,7 @@ import {
   providerAccountMonthlyCeilingMicroUsd,
   releaseSharedProviderReservation,
   reserveSharedProviderBudget,
+  settleSharedProviderReservation,
   summarizeProviderReservationLedger,
 } from "./lib/providerSpendReservation";
 import {
@@ -2396,6 +2397,14 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       Math.ceil(args.providerTaskCostUsd * 1_000_000) >
         providerCostCeilingMicroUsd
     ) throw new Error("Cadence micro-seed paid reservation changed");
+    await settleSharedProviderReservation(ctx, {
+      reservationId: job.providerSpendReservationId,
+      siteId: args.siteId,
+      purpose: cadenceMicroSeedProviderPurpose(jobKind),
+      actualMicroUsd: Math.ceil(args.providerTaskCostUsd * 1_000_000),
+      reason: "verified_provider_receipt_actual_cost",
+      timestamp: Date.now(),
+    });
 
     const [topics, articles] = await Promise.all([
       takeCurrentDomainTopics(
@@ -2566,6 +2575,81 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       keywordDifficulty: selected.difficulty,
       providerTaskCostUsd: args.providerTaskCostUsd,
     };
+  },
+});
+
+/**
+ * Additive reconciliation for exact receipts written before actual-cost
+ * settlement existed. It is tenant-scoped and bounded; ambiguous attempts,
+ * released reservations, mismatched ownership, and incomplete receipts remain
+ * fully reserved. The normal recovery action invokes this before admission so
+ * every tenant benefits without an operator-only bypass.
+ */
+export const reconcileVerifiedProviderCosts = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (
+      !siteExecutionActive(site) ||
+      !(await siteExecutionAuthorized(ctx, site)) ||
+      !site.userId
+    ) return { examined: 0, settled: 0, reclaimedMicroUsd: 0 };
+    const monthStart = utcMonthStart(Date.now());
+    const jobs = await ctx.db
+      .query("cadence_micro_seed_jobs")
+      .withIndex("by_site_created", (q) =>
+        q.eq("siteId", siteId).gte("createdAt", monthStart)
+      )
+      .order("desc")
+      .take(CADENCE_MICRO_SEED_READ_LIMIT);
+    let settled = 0;
+    let reclaimedMicroUsd = 0;
+    for (const job of jobs) {
+      const jobKind = cadenceMicroSeedAttemptKind(job.attemptKind);
+      const actualMicroUsd = typeof job.providerTaskCostUsd === "number"
+        ? Math.ceil(job.providerTaskCostUsd * 1_000_000)
+        : null;
+      if (
+        !jobKind ||
+        job.userId !== site.userId ||
+        job.providerCallCompleted !== true ||
+        job.providerAttemptedAt === undefined ||
+        job.providerCompletedAt === undefined ||
+        job.providerCompletedAt < job.providerAttemptedAt ||
+        actualMicroUsd === null ||
+        !Number.isSafeInteger(actualMicroUsd) ||
+        actualMicroUsd < 0 ||
+        actualMicroUsd > job.providerCostCeilingMicroUsd ||
+        job.providerCostReservedMicroUsd !== job.providerCostCeilingMicroUsd
+      ) continue;
+      const reservation = await ctx.db.get(job.providerSpendReservationId);
+      const expectedPurpose = cadenceMicroSeedProviderPurpose(jobKind);
+      if (
+        !reservation ||
+        reservation.siteId !== siteId ||
+        reservation.userId !== site.userId ||
+        reservation.purpose !== expectedPurpose ||
+        reservation.trigger !== `${expectedPurpose}_v${job.policyVersion}` ||
+        reservation.reservedMicroUsd !== job.providerCostCeilingMicroUsd ||
+        reservation.reservationDay !== job.reservationDay ||
+        reservation.createdAt !== job.createdAt ||
+        reservation.releasedAt !== undefined ||
+        reservation.settledMicroUsd !== undefined
+      ) continue;
+      const result = await settleSharedProviderReservation(ctx, {
+        reservationId: reservation._id,
+        siteId,
+        purpose: expectedPurpose,
+        actualMicroUsd,
+        reason: "verified_provider_receipt_actual_cost",
+        timestamp: Date.now(),
+      });
+      if (result.settled) {
+        settled += 1;
+        reclaimedMicroUsd += reservation.reservedMicroUsd - actualMicroUsd;
+      }
+    }
+    return { examined: jobs.length, settled, reclaimedMicroUsd };
   },
 });
 

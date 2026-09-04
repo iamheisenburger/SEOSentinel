@@ -83,6 +83,9 @@ export type ProviderReservationReleaseReason =
   | "plan_reservation_day_expired_before_execution"
   | "one_setup_planning_context_superseded_before_execution";
 
+export type ProviderReservationSettlementReason =
+  | "verified_provider_receipt_actual_cost";
+
 export type SharedProviderPurpose =
   | "topic_plan"
   | "authority_discovery"
@@ -189,9 +192,27 @@ export function evaluateProviderAccountCapacity(args: {
 type ProviderReservationLedgerRow = {
   userId: string;
   reservedMicroUsd: number;
+  settledMicroUsd?: number;
   releasedAt?: number;
   createdAt: number;
 };
+
+/**
+ * Capacity consumption is fail-closed until an exact provider receipt exists.
+ * A verified receipt may lower consumption to its actual charge, but can never
+ * enlarge, erase, or release the immutable reservation audit record.
+ */
+export function providerReservationConsumedMicroUsd(
+  row: Pick<ProviderReservationLedgerRow, "reservedMicroUsd" | "settledMicroUsd">,
+): number {
+  if (
+    row.settledMicroUsd !== undefined &&
+    Number.isSafeInteger(row.settledMicroUsd) &&
+    row.settledMicroUsd >= 0 &&
+    row.settledMicroUsd <= row.reservedMicroUsd
+  ) return row.settledMicroUsd;
+  return row.reservedMicroUsd;
+}
 
 /**
  * Summarize the immutable reservation ledger without depending on siteId.
@@ -217,14 +238,15 @@ export function summarizeProviderReservationLedger(
 
   for (const row of rows) {
     if (row.releasedAt !== undefined || row.createdAt < monthStart) continue;
-    fleetReservedThisMonthMicroUsd += row.reservedMicroUsd;
+    const consumedMicroUsd = providerReservationConsumedMicroUsd(row);
+    fleetReservedThisMonthMicroUsd += consumedMicroUsd;
     if (row.userId === userId) {
-      accountReservedThisMonthMicroUsd += row.reservedMicroUsd;
+      accountReservedThisMonthMicroUsd += consumedMicroUsd;
     }
     if (row.createdAt >= dayStart) {
-      fleetReservedTodayMicroUsd += row.reservedMicroUsd;
+      fleetReservedTodayMicroUsd += consumedMicroUsd;
       if (row.userId === userId) {
-        accountReservedTodayMicroUsd += row.reservedMicroUsd;
+        accountReservedTodayMicroUsd += consumedMicroUsd;
       }
     }
   }
@@ -235,6 +257,61 @@ export function summarizeProviderReservationLedger(
     accountReservedTodayMicroUsd,
     accountReservedThisMonthMicroUsd,
   };
+}
+
+/**
+ * Settle a reservation only after the caller has atomically validated and
+ * committed an exact provider receipt. Replays are idempotent when the exact
+ * same cost is supplied; any conflicting settlement fails closed.
+ */
+export async function settleSharedProviderReservation(
+  ctx: MutationCtx,
+  args: {
+    reservationId: Id<"provider_spend_reservations">;
+    siteId: Id<"sites">;
+    purpose: SharedProviderPurpose;
+    actualMicroUsd: number;
+    reason: ProviderReservationSettlementReason;
+    timestamp: number;
+  },
+): Promise<{ settled: boolean; consumedMicroUsd: number }> {
+  const reservation = await ctx.db.get(args.reservationId);
+  if (
+    !reservation ||
+    reservation.siteId !== args.siteId ||
+    reservation.purpose !== args.purpose
+  ) {
+    throw new Error("Provider reservation settlement crossed a tenant boundary");
+  }
+  if (
+    reservation.releasedAt !== undefined ||
+    !Number.isSafeInteger(args.actualMicroUsd) ||
+    args.actualMicroUsd < 0 ||
+    args.actualMicroUsd > reservation.reservedMicroUsd ||
+    !Number.isFinite(args.timestamp) ||
+    args.timestamp < reservation.createdAt
+  ) {
+    throw new Error("Provider reservation settlement is incompatible");
+  }
+  if (reservation.settledMicroUsd !== undefined) {
+    if (
+      reservation.settledMicroUsd !== args.actualMicroUsd ||
+      reservation.settlementReason !== args.reason ||
+      reservation.settledAt === undefined
+    ) {
+      throw new Error("Provider reservation settlement receipt changed");
+    }
+    return {
+      settled: false,
+      consumedMicroUsd: reservation.settledMicroUsd,
+    };
+  }
+  await ctx.db.patch(args.reservationId, {
+    settledMicroUsd: args.actualMicroUsd,
+    settledAt: args.timestamp,
+    settlementReason: args.reason,
+  });
+  return { settled: true, consumedMicroUsd: args.actualMicroUsd };
 }
 
 export function evaluateSharedProviderCapacity(args: {
@@ -421,6 +498,9 @@ export async function releaseSharedProviderReservation(
   }
   if (reservation.releasedAt !== undefined) {
     return { released: false };
+  }
+  if (reservation.settledAt !== undefined) {
+    throw new Error("A settled provider reservation cannot be released");
   }
   await ctx.db.patch(args.reservationId, {
     releasedAt: args.timestamp,

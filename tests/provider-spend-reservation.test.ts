@@ -9,6 +9,7 @@ import {
   PROVIDER_OTHER_ACCOUNTS_DAILY_RESERVE_MICRO_USD,
   PROVIDER_OTHER_ACCOUNTS_MONTHLY_RESERVE_MICRO_USD,
   providerAccountMonthlyCeilingMicroUsd,
+  providerReservationConsumedMicroUsd,
   SHARED_PROVIDER_DAILY_CEILING_MICRO_USD,
   SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
   summarizeProviderReservationLedger,
@@ -152,6 +153,7 @@ test("ledger summaries isolate accounts, ignore released rows, and survive site 
       {
         userId: "owner-b",
         reservedMicroUsd: 300_000,
+        settledMicroUsd: 25_000,
         createdAt: now - 60_000,
       },
       {
@@ -171,11 +173,59 @@ test("ledger summaries isolate accounts, ignore released rows, and survive site 
   );
 
   assert.deepEqual(summary, {
-    fleetReservedTodayMicroUsd: 400_000,
-    fleetReservedThisMonthMicroUsd: 600_000,
+    fleetReservedTodayMicroUsd: 125_000,
+    fleetReservedThisMonthMicroUsd: 325_000,
     accountReservedTodayMicroUsd: 100_000,
     accountReservedThisMonthMicroUsd: 300_000,
   });
+});
+
+test("verified actual cost reduces capacity while invalid settlement fails closed", () => {
+  assert.equal(providerReservationConsumedMicroUsd({
+    reservedMicroUsd: 100_000,
+    settledMicroUsd: 12_345,
+  }), 12_345);
+  assert.equal(providerReservationConsumedMicroUsd({
+    reservedMicroUsd: 100_000,
+    settledMicroUsd: 100_001,
+  }), 100_000);
+  assert.equal(providerReservationConsumedMicroUsd({
+    reservedMicroUsd: 100_000,
+    settledMicroUsd: -1,
+  }), 100_000);
+  assert.equal(providerReservationConsumedMicroUsd({
+    reservedMicroUsd: 100_000,
+  }), 100_000);
+});
+
+test("receipt settlement is tenant-bound, exact, idempotent, and never releases audit rows", () => {
+  const source = readFileSync(
+    "convex/lib/providerSpendReservation.ts",
+    "utf8",
+  );
+  const settle = source.slice(
+    source.indexOf("export async function settleSharedProviderReservation"),
+    source.indexOf("export function evaluateSharedProviderCapacity"),
+  );
+  assert.match(settle, /reservation\.siteId !== args\.siteId/);
+  assert.match(settle, /reservation\.purpose !== args\.purpose/);
+  assert.match(settle, /reservation\.releasedAt !== undefined/);
+  assert.match(settle, /args\.actualMicroUsd > reservation\.reservedMicroUsd/);
+  assert.match(settle, /reservation\.settledMicroUsd !== args\.actualMicroUsd/);
+  assert.match(settle, /settlementReason: args\.reason/);
+  assert.doesNotMatch(settle, /releasedAt:\s*args\.timestamp/);
+});
+
+test("release cannot erase capacity consumed by a verified paid receipt", () => {
+  const source = readFileSync(
+    "convex/lib/providerSpendReservation.ts",
+    "utf8",
+  );
+  const release = source.slice(
+    source.indexOf("export async function releaseSharedProviderReservation"),
+  );
+  assert.match(release, /reservation\.settledAt !== undefined/);
+  assert.match(release, /A settled provider reservation cannot be released/);
 });
 
 test("atomic reservation re-reads ownership and applies account capacity before fleet capacity", () => {

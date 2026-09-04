@@ -1581,6 +1581,35 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   );
 });
 
+test("verified micro-seed receipts settle actual cost before future admission", () => {
+  const model = readFileSync("convex/cadenceMicroSeed.ts", "utf8");
+  const action = readFileSync("convex/actions/cadenceMicroSeed.ts", "utf8");
+  const receiptStart = model.indexOf(
+    "export const recordProviderReceiptAndMaterialize",
+  );
+  const reconciliationStart = model.indexOf(
+    "export const reconcileVerifiedProviderCosts",
+  );
+  const receipt = model.slice(receiptStart, reconciliationStart);
+  const recoveryStart = action.indexOf("export const recoverCadenceGap");
+  const workerStart = action.indexOf("export const processCadenceMicroSeed");
+  const recovery = action.slice(recoveryStart, workerStart);
+
+  assert.ok(receiptStart >= 0);
+  assert.ok(reconciliationStart > receiptStart);
+  assert.match(receipt, /settleSharedProviderReservation\(ctx/);
+  assert.match(receipt, /actualMicroUsd:\s*Math\.ceil\(args\.providerTaskCostUsd \* 1_000_000\)/);
+  assert.match(receipt, /verified_provider_receipt_actual_cost/);
+  assert.match(model.slice(reconciliationStart), /providerCallCompleted !== true/);
+  assert.match(model.slice(reconciliationStart), /providerCompletedAt < job\.providerAttemptedAt/);
+  assert.match(model.slice(reconciliationStart), /reservation\.siteId !== siteId/);
+  assert.match(model.slice(reconciliationStart), /reservation\.settledMicroUsd !== undefined/);
+  assert.ok(
+    recovery.indexOf("api.reconcileVerifiedProviderCosts") <
+      recovery.indexOf("api.inspectInternal"),
+  );
+});
+
 test("the legacy anchor migration is bounded, publication-safe, and runs before new admission", () => {
   assert.equal(CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION, 1);
   assert.match(schema, /cadenceMicroSeedAnchorAuditVersion: v\.optional\(v\.number\(\)\)/);
