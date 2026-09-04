@@ -14,6 +14,7 @@ import {
 import {
   CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
   CADENCE_MICRO_SEED_BALANCE_RECEIPT_MAX_AGE_MS,
+  CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
   CADENCE_MICRO_SEED_FINALIZE_DELAY_MS,
   CADENCE_MICRO_SEED_LEASE_MS,
   CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS,
@@ -214,6 +215,18 @@ function sourcePlanFingerprint(
       updatedAt: checkpoint.updatedAt,
     })),
   });
+}
+
+function sourcePlanFingerprintForPolicy(
+  job: Doc<"jobs">,
+  reservation: Doc<"provider_spend_reservations">,
+  checkpoints: readonly Doc<"plan_candidate_checkpoints">[],
+  policyVersion: number,
+): string {
+  const fingerprint = sourcePlanFingerprint(job, reservation, checkpoints);
+  return policyVersion >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION
+    ? sha256Hex(fingerprint)
+    : fingerprint;
 }
 
 function primaryFallbackReceiptFingerprint(
@@ -1415,10 +1428,11 @@ async function cadenceSourcePlanReadinessPrecheck(
     rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
     sourcePlanId: sourceJob._id,
     sourcePlanReservationId: sourceReservation._id,
-    sourcePlanFingerprint: sourcePlanFingerprint(
+    sourcePlanFingerprint: sourcePlanFingerprintForPolicy(
       sourceJob,
       sourceReservation,
       sourceCheckpoints,
+      CADENCE_MICRO_SEED_VERSION,
     ),
   };
 }
@@ -2247,7 +2261,7 @@ async function inspectReadiness(
   };
   return {
     ready: true,
-    inspectionKey: JSON.stringify(descriptor),
+    inspectionKey: sha256Hex(JSON.stringify(descriptor)),
     reservationDay: descriptor.reservationDay,
     rolloutEpoch: descriptor.rolloutEpoch,
     sourcePlanId: sourcePrecheck.sourcePlanId,
@@ -2810,10 +2824,11 @@ export const beginProviderAttempt = internalMutation({
         timestamp,
       }) ||
       !sourceReservation ||
-      sourcePlanFingerprint(
+      sourcePlanFingerprintForPolicy(
         sourcePlan,
         sourceReservation,
         sourceCheckpoints,
+        job.policyVersion,
       ) !==
         job.sourcePlanFingerprint
     ) throw new Error("Cadence micro-seed reservation is stale");
@@ -3653,10 +3668,11 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
         timestamp,
       }) ||
       !sourceReservation ||
-      sourcePlanFingerprint(
+      sourcePlanFingerprintForPolicy(
         sourcePlan,
         sourceReservation,
         sourceCheckpoints,
+        job.policyVersion,
       ) !== job.sourcePlanFingerprint ||
       Math.ceil(args.providerTaskCostUsd * 1_000_000) >
         providerCostCeilingMicroUsd

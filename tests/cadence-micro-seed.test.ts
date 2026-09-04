@@ -6,6 +6,7 @@ import { discoverCadenceMicroSeedFromDataForSEO } from
   "../convex/actions/seoData.ts";
 import {
   CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+  CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
   CADENCE_MICRO_SEED_FALLBACK_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD,
   CADENCE_MICRO_SEED_MAX_FALLBACK_PARENT_AGE_MS,
@@ -643,6 +644,11 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 30);
+  assert.equal(
+    CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
+    CADENCE_MICRO_SEED_VERSION,
+  );
   assert.equal(cadenceMicroSeedAttemptKind(undefined), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("primary"), "primary");
   assert.equal(cadenceMicroSeedAttemptKind("fallback"), "fallback");
@@ -1921,6 +1927,14 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   assert.match(priorPolicyReadiness, /historyFingerprint: sha256Hex/);
   assert.match(sourcePlanReadiness, /plan_candidate_checkpoints/);
   assert.match(sourcePlanReadiness, /sourcePlanFingerprint/);
+  assert.match(
+    model,
+    /sourcePlanFingerprintForPolicy[\s\S]*CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION[\s\S]*sha256Hex\(fingerprint\)/,
+  );
+  assert.match(
+    readiness,
+    /inspectionKey: sha256Hex\(JSON\.stringify\(descriptor\)\)/,
+  );
   assert.doesNotMatch(readiness, /cadenceMicroSeedArticleInventory/);
   assert.doesNotMatch(readiness, /plannedTopicSiteGate/);
   assert.doesNotMatch(readiness, /by_site_source_policy_created/);
@@ -1936,7 +1950,8 @@ test("cadence readiness is independent of bulky terminal topic history", () => {
   );
   assert.match(materialization, /cadenceMicroSeedTopicInventory/);
   assert.doesNotMatch(materialization, /inspectReadiness\(/);
-  assert.match(materialization, /sourcePlanFingerprint/);
+  assert.match(materialization, /sourcePlanFingerprintForPolicy/);
+  assert.match(materialization, /job\.policyVersion/);
   assert.match(materialization, /validExhaustedSourcePlan/);
   assert.doesNotMatch(materialization, /takeCurrentDomainTopics\(/);
   assert.doesNotMatch(materialization, /takeCurrentDomainArticles\(/);

@@ -73,7 +73,14 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 29;
+// Version 30 compacts immutable source-plan and inspection receipts before
+// persisting them on recovery jobs. Version 29 stored the complete serialized
+// receipts, so a valid exhausted plan could make later admission/fallback
+// validation exceed Convex's transaction limit. The compact representation is
+// still content-addressed and the policy boundary preserves v29 as no-replay
+// history instead of spending against the same provider attempt again.
+export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
+export const CADENCE_MICRO_SEED_VERSION = 30;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // A successful free balance check is bound to the reservation transaction.
 // This window fences that receipt against a stale or replayed admission action;
