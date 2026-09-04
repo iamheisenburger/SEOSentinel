@@ -23,6 +23,8 @@ import {
   "../lib/expectedClickEvidenceBackfill";
 import { EXPECTED_CLICK_PORTFOLIO_VERSION } from
   "../lib/expectedClickPortfolio";
+import { cadenceMicroSeedRecoveryBlockReason } from
+  "../lib/plannedTopicEvidenceRecovery";
 import {
   assertDataForSeoAccountBalance,
   isDataForSeoBalancePreflightError,
@@ -408,9 +410,27 @@ export const recoverCadenceGap = internalAction({
         reconciledCosts,
       };
     }
+    const [demandReadiness, evidenceReadiness, demandStatus] = await Promise.all([
+      ctx.runQuery(internal.expectedClickDemandBackfill.getFleetReadinessInternal, {
+        siteId: args.siteId,
+      }),
+      ctx.runQuery(internal.expectedClickEvidenceBackfill.getFleetReadinessInternal, {
+        siteId: args.siteId,
+      }),
+      ctx.runQuery(internal.expectedClickDemandBackfill.getStatusInternal, {
+        siteId: args.siteId,
+      }),
+    ]);
+    const recoveryBlockReason = cadenceMicroSeedRecoveryBlockReason(
+      demandReadiness,
+      evidenceReadiness,
+      demandStatus?.terminalNoMetricReceiptValid === true,
+    );
     const inspected = await ctx.runQuery(api.inspectInternal, {
       siteId: args.siteId,
       sourcePlanId,
+      recoveryPrechecked: true,
+      ...(recoveryBlockReason ? { recoveryBlockReason } : {}),
     });
     if (args.mode === "inspect" || !inspected.ready) {
       return {

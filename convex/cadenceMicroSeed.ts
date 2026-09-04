@@ -729,6 +729,10 @@ async function inspectReadiness(
   timestamp: number,
   sourcePlanId: Id<"jobs">,
   currentJobId?: Id<"cadence_micro_seed_jobs">,
+  recoveryPrecheck?: {
+    completed: true;
+    blockReason?: string;
+  },
 ): Promise<ReadinessResult> {
   const site = await ctx.db.get(siteId);
   if (
@@ -943,21 +947,7 @@ async function inspectReadiness(
     plannedGate: siteGate,
     plannedAuthorityFresh: true,
   };
-  const [demandReadiness, evidenceReadiness, terminalDemandJobs] =
-    await Promise.all([
-    expectedClickDemandFleetReadiness(
-      ctx,
-      siteId,
-      timestamp,
-      recoverySnapshot,
-    ),
-    expectedClickEvidenceFleetReadiness(
-      ctx,
-      siteId,
-      timestamp,
-      recoverySnapshot,
-    ),
-    ctx.db.query("expected_click_demand_jobs")
+  const terminalDemandJobsPromise = ctx.db.query("expected_click_demand_jobs")
       .withIndex("by_site_origin_status", (q) =>
         q.eq("siteId", siteId).eq("origin", "autonomous_fleet").eq(
           "status",
@@ -965,8 +955,25 @@ async function inspectReadiness(
         )
       )
       .order("desc")
-      .take(1),
-  ]);
+      .take(1);
+  const [demandReadiness, evidenceReadiness, terminalDemandJobs] =
+    recoveryPrecheck
+      ? [null, null, await terminalDemandJobsPromise]
+      : await Promise.all([
+        expectedClickDemandFleetReadiness(
+          ctx,
+          siteId,
+          timestamp,
+          recoverySnapshot,
+        ),
+        expectedClickEvidenceFleetReadiness(
+          ctx,
+          siteId,
+          timestamp,
+          recoverySnapshot,
+        ),
+        terminalDemandJobsPromise,
+      ]);
   const terminalDemandJob = terminalDemandJobs[0];
   const terminalDemandNoMetricFingerprint = terminalDemandJob
     ? await terminalNoMetricDemandReceiptFingerprint(
@@ -976,11 +983,13 @@ async function inspectReadiness(
       timestamp,
     )
     : null;
-  const recoveryBlockReason = cadenceMicroSeedRecoveryBlockReason(
-    demandReadiness,
-    evidenceReadiness,
-    Boolean(terminalDemandNoMetricFingerprint),
-  );
+  const recoveryBlockReason = recoveryPrecheck
+    ? recoveryPrecheck.blockReason ?? null
+    : cadenceMicroSeedRecoveryBlockReason(
+      demandReadiness,
+      evidenceReadiness,
+      Boolean(terminalDemandNoMetricFingerprint),
+    );
   if (recoveryBlockReason) return { ready: false, reason: recoveryBlockReason };
 
   const sourceJob = await ctx.db.get(sourcePlanId);
@@ -1302,9 +1311,28 @@ async function inspectReadiness(
 }
 
 export const inspectInternal = internalQuery({
-  args: { siteId: v.id("sites"), sourcePlanId: v.id("jobs") },
-  handler: async (ctx, { siteId, sourcePlanId }) =>
-    inspectReadiness(ctx, siteId, Date.now(), sourcePlanId),
+  args: {
+    siteId: v.id("sites"),
+    sourcePlanId: v.id("jobs"),
+    recoveryPrechecked: v.optional(v.boolean()),
+    recoveryBlockReason: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    { siteId, sourcePlanId, recoveryPrechecked, recoveryBlockReason },
+  ) => inspectReadiness(
+    ctx,
+    siteId,
+    Date.now(),
+    sourcePlanId,
+    undefined,
+    recoveryPrechecked === true
+      ? {
+          completed: true,
+          ...(recoveryBlockReason ? { blockReason: recoveryBlockReason } : {}),
+        }
+      : undefined,
+  ),
 });
 
 /** Resolve one exact exhausted source plan in small pages. Mature tenants can
@@ -1486,6 +1514,8 @@ export const reserveAndQueue = internalMutation({
       args.siteId,
       Date.now(),
       args.sourcePlanId,
+      undefined,
+      { completed: true },
     );
     if (
       !inspected.ready ||
@@ -1738,6 +1768,7 @@ export const beginProviderAttempt = internalMutation({
       Date.now(),
       job.sourcePlanId,
       job._id,
+      { completed: true },
     );
     if (
       !inspected.ready ||
@@ -2584,6 +2615,7 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       Date.now(),
       job.sourcePlanId,
       job._id,
+      { completed: true },
     );
     if (
       !inspected.ready ||

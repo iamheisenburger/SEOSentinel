@@ -1615,6 +1615,21 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     recovery.indexOf("resolveExhaustedSourcePlan") <
       recovery.indexOf("api.inspectInternal"),
   );
+  assert.ok(
+    recovery.indexOf("getFleetReadinessInternal") <
+      recovery.indexOf("api.inspectInternal"),
+    "portfolio recovery must run outside the one-second cadence inventory transaction",
+  );
+  assert.match(recovery, /recoveryPrechecked: true/);
+  assert.match(
+    model,
+    /recoveryPrecheck[\s\S]*\? \[null, null, await terminalDemandJobsPromise\]/,
+  );
+  assert.match(
+    model,
+    /args\.sourcePlanId,[\s\S]*undefined,[\s\S]*\{ completed: true \}/,
+    "atomic reservation rechecks the compact cadence fence without repeating portfolio evaluation",
+  );
   assert.match(schema, /by_site_source_policy_created/);
   assert.match(model, /withIndex\("by_site_source_policy_created"/);
   assert.doesNotMatch(model, /micro_seed_source_history_read_exhausted/);
