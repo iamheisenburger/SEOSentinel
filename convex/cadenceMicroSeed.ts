@@ -12,7 +12,6 @@ import {
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
 import {
-  CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
   CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
   CADENCE_MICRO_SEED_FINALIZE_DELAY_MS,
   CADENCE_MICRO_SEED_LEASE_MS,
@@ -35,6 +34,7 @@ import {
   cadenceMicroSeedLegacyAnchorReceiptEligible,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedProviderCeilingMicroUsd,
+  cadenceMicroSeedDiscoveryEndpoint,
   cadenceMicroSeedProviderPurpose,
   cadenceMicroSeedProviderReceiptValid,
   cadenceMicroSeedProviderTrigger,
@@ -1352,7 +1352,9 @@ export const reserveAndQueue = internalMutation({
       providerSeeds: inspected.providerSeeds,
       locationCode: inspected.locationCode,
       languageCode: inspected.languageCode,
-      providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+      providerEndpoint: cadenceMicroSeedDiscoveryEndpoint(
+        inspected.attemptKind,
+      ),
       providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
       includeSerpInfo: false,
       includeClickstreamData: false,
@@ -1589,6 +1591,7 @@ export const beginProviderAttempt = internalMutation({
     });
     return {
       allowed: true as const,
+      attemptKind: jobKind,
       seed: job.seed,
       providerSeeds: job.providerSeeds ?? [job.seed],
       locationCode: job.locationCode,

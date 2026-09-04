@@ -12,6 +12,7 @@ import {
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_VERSION,
   cadenceMicroSeedAttemptKind,
+  cadenceMicroSeedDiscoveryEndpoint,
   cadenceMicroSeedProviderCeilingMicroUsd,
 } from "../lib/cadenceMicroSeed";
 import {
@@ -459,9 +460,10 @@ export const processCadenceMicroSeed = internalAction({
       | MaterializedMicroSeed
       | null = null;
     try {
+      const attemptKind = cadenceMicroSeedAttemptKind(begun.attemptKind);
       if (
-        begun.endpoint !==
-          "dataforseo_labs/google/keyword_ideas/live" ||
+        !attemptKind ||
+        begun.endpoint !== cadenceMicroSeedDiscoveryEndpoint(attemptKind) ||
         begun.resultLimit !== CADENCE_MICRO_SEED_RESULT_LIMIT ||
         begun.includeSerpInfo !== false ||
         begun.includeClickstreamData !== false
@@ -471,6 +473,7 @@ export const processCadenceMicroSeed = internalAction({
         begun.locationCode,
         begun.languageCode,
         {
+          endpoint: begun.endpoint,
           limit: begun.resultLimit,
           requestTag: begun.providerRequestTag,
         },
