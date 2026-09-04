@@ -39,10 +39,12 @@ fleet ledgers are recomputed before any reservation or provider call.
 ## Exact paid envelope
 
 - Primary discovery creates one new shared-ledger reservation capped at $0.10.
-- It sends exactly one DataForSEO Labs `keyword_ideas/live` task with
-  one tenant `anchorKeywords` or `keyFeatures` seed, at most 100 results, no
-  SERP expansion, and no clickstream data.
-- The task itself must report no more than $0.024, and its task-level and
+- It sends exactly one DataForSEO Labs `keyword_ideas/live` task with a
+  deterministic batch of at most six exact tenant `anchorKeywords` or sparse
+  profile fallback seeds, at most 300 results, no SERP expansion, and no
+  clickstream data. Every accepted result must preserve at least one exact
+  source seed, which is persisted on the candidate and topic receipt.
+- The task itself must report no more than $0.05, and its task-level and
   response-level cost receipts must agree.
 - At most one candidate can become a staged topic. It must have positive
   demand, measured organic keyword difficulty, provider intent, current v5
@@ -50,8 +52,8 @@ fleet ledgers are recomputed before any reservation or provider call.
   reuse in any topic state, and no lexical/canonical overlap.
 - If, and only if, that paid task durably completed with no usable candidate,
   Pentra may create one distinct fallback child and one distinct shared-ledger
-  reservation capped at $0.05. The child uses the deterministic next current
-  `anchorKeywords`/`keyFeatures` phrase; it never replays the original seed.
+  reservation capped at $0.05. The child uses the deterministic next bounded
+  batch of current tenant phrases; it never replays any parent seed.
   The parent receipt must prove either zero rows or a complete one-to-one audit
   where every returned row was rejected by exactly one strict metric, intent,
   difficulty, brand, business-fit, duplicate, or overlap gate. Accepted,

@@ -741,6 +741,7 @@ export default defineSchema({
     cadenceMicroSeedVersion: v.optional(v.number()),
     cadenceMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
     cadenceMicroSeedFingerprint: v.optional(v.string()),
+    cadenceMicroSeedAnchorSeed: v.optional(v.string()),
     // Provenance audit for versioned micro-seed inventory. False is a durable
     // no-publication tombstone for an unpublished legacy topic whose selected
     // keyword does not preserve its generating job's tenant anchor.
@@ -2029,6 +2030,7 @@ export default defineSchema({
     parentMicroSeedJobId: v.optional(v.id("cadence_micro_seed_jobs")),
     parentMicroSeedReceiptFingerprint: v.optional(v.string()),
     seed: v.string(),
+    providerSeeds: v.optional(v.array(v.string())),
     locationCode: v.number(),
     languageCode: v.string(),
     providerEndpoint: v.string(),
@@ -2066,6 +2068,7 @@ export default defineSchema({
       overlap: v.number(),
     })),
     selectedCandidate: v.optional(v.object({
+      sourceSeed: v.optional(v.string()),
       keyword: v.string(),
       label: v.string(),
       searchVolume: v.number(),
@@ -2082,6 +2085,7 @@ export default defineSchema({
     // the original paid receipt. Live evidence is attempted sequentially so a
     // semantic rejection cannot silently discard the remaining valid rows.
     candidateShortlist: v.optional(v.array(v.object({
+      sourceSeed: v.optional(v.string()),
       keyword: v.string(),
       label: v.string(),
       searchVolume: v.number(),

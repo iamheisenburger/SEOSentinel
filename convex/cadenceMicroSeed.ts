@@ -42,9 +42,9 @@ import {
   cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedTerminalMissReceiptValid,
   normalizeCadenceMicroSeedText,
-  selectCadenceMicroSeedAnchor,
+  cadenceMicroSeedMatchingAnchor,
+  selectCadenceMicroSeedAnchorBatch,
   selectCadenceMicroSeedCandidate,
-  selectCadenceMicroSeedFallbackAnchor,
   type CadenceMicroSeedAttemptKind,
   type CadenceMicroSeedMetric,
 } from "./lib/cadenceMicroSeed";
@@ -232,6 +232,9 @@ function primaryFallbackReceiptFingerprint(
       sourcePlanFingerprint: job.sourcePlanFingerprint,
       sourcePlanReservationId: String(job.sourcePlanReservationId),
       seed: normalizeCadenceMicroSeedText(job.seed),
+      providerSeeds: (job.providerSeeds ?? [job.seed]).map(
+        normalizeCadenceMicroSeedText,
+      ),
       locationCode: job.locationCode,
       languageCode: job.languageCode.trim().toLowerCase(),
       providerEndpoint: job.providerEndpoint,
@@ -279,6 +282,7 @@ function validPrimaryFallbackReceipt(args: {
   sourcePlanReservationId: Id<"provider_spend_reservations">;
   sourcePlanFingerprint: string;
   primarySeed: string;
+  primarySeeds: readonly string[];
   locationCode: number;
   languageCode: string;
   timestamp: number;
@@ -311,6 +315,8 @@ function validPrimaryFallbackReceipt(args: {
       job.sourcePlanFingerprint === args.sourcePlanFingerprint &&
       job.parentMicroSeedJobId === undefined &&
       job.parentMicroSeedReceiptFingerprint === undefined &&
+      JSON.stringify(job.providerSeeds ?? [job.seed]) ===
+        JSON.stringify(args.primarySeeds) &&
       cadenceMicroSeedTerminalMissReceiptValid({
         attemptKind: job.attemptKind,
         hasParent: Boolean(
@@ -520,6 +526,7 @@ type ReadinessResult =
       parentMicroSeedJobId?: Id<"cadence_micro_seed_jobs">;
       parentMicroSeedReceiptFingerprint?: string;
       seed: string;
+      providerSeeds: string[];
       locationCode: number;
       languageCode: string;
       planTier: string;
@@ -901,7 +908,7 @@ async function inspectReadiness(
   // immutable exhaustion receipt, regardless of their terminal outcome.
   const previouslyAttemptedSeeds = priorPolicyJobs
     .filter((job) => job.providerCallAttempted === true)
-    .map((job) => job.seed);
+    .flatMap((job) => job.providerSeeds ?? [job.seed]);
   const currentJob = currentJobId
     ? sourceJobs.find((job) => job._id === currentJobId)
     : undefined;
@@ -911,18 +918,20 @@ async function inspectReadiness(
 
   const anchors = cadenceMicroSeedRecoveryAnchors(site);
   const coveredKeywords = coverage.map((topic) => topic.primaryKeyword);
-  const primarySeed = selectCadenceMicroSeedAnchor(
+  const primarySeeds = selectCadenceMicroSeedAnchorBatch(
     anchors,
     String(source.job._id),
     CADENCE_MICRO_SEED_VERSION - 1,
     previouslyAttemptedSeeds,
     coveredKeywords,
   );
+  const primarySeed = primarySeeds[0];
   if (!primarySeed) {
     return { ready: false, reason: "tenant_product_seed_unavailable" };
   }
   let attemptKind: CadenceMicroSeedAttemptKind = "primary";
   let seed = primarySeed;
+  let providerSeeds = primarySeeds;
   let parentMicroSeedJobId: Id<"cadence_micro_seed_jobs"> | undefined;
   let parentMicroSeedReceiptFingerprint: string | undefined;
 
@@ -970,6 +979,7 @@ async function inspectReadiness(
           sourcePlanReservationId: source.reservation._id,
           sourcePlanFingerprint: sourceFingerprint,
           primarySeed,
+          primarySeeds,
           locationCode,
           languageCode,
           timestamp,
@@ -984,14 +994,17 @@ async function inspectReadiness(
         parent,
         parentReservation,
       );
-      const fallbackSeed = selectCadenceMicroSeedFallbackAnchor(
+      const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
         anchors,
         String(source.job._id),
-        parent.seed,
         CADENCE_MICRO_SEED_VERSION - 1,
-        previouslyAttemptedSeeds,
+        [
+          ...previouslyAttemptedSeeds,
+          ...(parent.providerSeeds ?? [parent.seed]),
+        ],
         coveredKeywords,
       );
+      const fallbackSeed = fallbackSeeds[0];
       if (
         !fallbackSeed ||
         currentJob.parentMicroSeedReceiptFingerprint !== parentFingerprint
@@ -999,6 +1012,7 @@ async function inspectReadiness(
         return { ready: false, reason: "micro_seed_fallback_parent_drifted" };
       }
       seed = fallbackSeed;
+      providerSeeds = fallbackSeeds;
       parentMicroSeedJobId = parent._id;
       parentMicroSeedReceiptFingerprint = parentFingerprint;
     }
@@ -1020,6 +1034,7 @@ async function inspectReadiness(
       sourcePlanReservationId: source.reservation._id,
       sourcePlanFingerprint: sourceFingerprint,
       primarySeed,
+      primarySeeds,
       locationCode,
       languageCode,
       timestamp,
@@ -1029,19 +1044,23 @@ async function inspectReadiness(
     if (!parentReservation) {
       return { ready: false, reason: "source_plan_already_recovered" };
     }
-    const fallbackSeed = selectCadenceMicroSeedFallbackAnchor(
+    const fallbackSeeds = selectCadenceMicroSeedAnchorBatch(
       anchors,
       String(source.job._id),
-      parent.seed,
       CADENCE_MICRO_SEED_VERSION - 1,
-      previouslyAttemptedSeeds,
+      [
+        ...previouslyAttemptedSeeds,
+        ...(parent.providerSeeds ?? [parent.seed]),
+      ],
       coveredKeywords,
     );
+    const fallbackSeed = fallbackSeeds[0];
     if (!fallbackSeed) {
       return { ready: false, reason: "fallback_product_seed_unavailable" };
     }
     attemptKind = "fallback";
     seed = fallbackSeed;
+    providerSeeds = fallbackSeeds;
     parentMicroSeedJobId = parent._id;
     parentMicroSeedReceiptFingerprint = primaryFallbackReceiptFingerprint(
       parent,
@@ -1055,6 +1074,13 @@ async function inspectReadiness(
 
   if (currentJob && normalizeCadenceMicroSeedText(currentJob.seed) !== seed) {
     return { ready: false, reason: "micro_seed_anchor_drifted" };
+  }
+  if (
+    currentJob &&
+    JSON.stringify(currentJob.providerSeeds ?? [currentJob.seed]) !==
+      JSON.stringify(providerSeeds)
+  ) {
+    return { ready: false, reason: "micro_seed_anchor_batch_drifted" };
   }
   const entitlement = await ctx.db.query("account_plan_entitlements")
     .withIndex("by_user", (q) => q.eq("userId", site.userId!))
@@ -1119,6 +1145,7 @@ async function inspectReadiness(
     parentMicroSeedReceiptFingerprint:
       parentMicroSeedReceiptFingerprint ?? null,
     seed,
+    providerSeeds,
     locationCode,
     languageCode,
     nextCadenceDueAt,
@@ -1145,6 +1172,7 @@ async function inspectReadiness(
       ? { parentMicroSeedReceiptFingerprint }
       : {}),
     seed,
+    providerSeeds,
     locationCode,
     languageCode,
     planTier: plan.tier,
@@ -1231,7 +1259,10 @@ export const listLegacyAnchorMismatchRepairsInternal = internalQuery({
         sourceJob.policyVersion !== topic.cadenceMicroSeedVersion ||
         cadenceMicroSeedLegacyAnchorReceiptEligible({
           currentAnchors,
-          jobSeed: sourceJob.seed,
+          jobSeed:
+            sourceJob.selectedCandidate?.sourceSeed ??
+            topic.cadenceMicroSeedAnchorSeed ??
+            sourceJob.seed,
           selectedKeyword: sourceJob.selectedCandidate?.keyword,
           topicKeyword: topic.primaryKeyword,
         })
@@ -1316,6 +1347,7 @@ export const reserveAndQueue = internalMutation({
           }
         : {}),
       seed: inspected.seed,
+      providerSeeds: inspected.providerSeeds,
       locationCode: inspected.locationCode,
       languageCode: inspected.languageCode,
       providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
@@ -1350,6 +1382,7 @@ export const reserveAndQueue = internalMutation({
       queued: true as const,
       jobId,
       seed: inspected.seed,
+      providerSeeds: inspected.providerSeeds,
       sourcePlanId: inspected.sourcePlanId,
       attemptKind: inspected.attemptKind,
       parentMicroSeedJobId: inspected.parentMicroSeedJobId,
@@ -1494,6 +1527,8 @@ export const beginProviderAttempt = internalMutation({
       inspected.parentMicroSeedReceiptFingerprint !==
         job.parentMicroSeedReceiptFingerprint ||
       inspected.seed !== job.seed ||
+      JSON.stringify(inspected.providerSeeds) !==
+        JSON.stringify(job.providerSeeds ?? [job.seed]) ||
       inspected.locationCode !== job.locationCode ||
       inspected.languageCode !== job.languageCode
     ) {
@@ -1553,6 +1588,7 @@ export const beginProviderAttempt = internalMutation({
     return {
       allowed: true as const,
       seed: job.seed,
+      providerSeeds: job.providerSeeds ?? [job.seed],
       locationCode: job.locationCode,
       languageCode: job.languageCode,
       endpoint: job.providerEndpoint,
@@ -1582,6 +1618,7 @@ type SelectedCandidateReceipt = NonNullable<
 function selectedCandidateReceipt(args: {
   site: Doc<"sites">;
   candidate: CadenceMicroSeedMetric;
+  sourceSeed: string;
   measuredAt: number;
 }): SelectedCandidateReceipt {
   const fit = evaluateTopicBusinessFit({
@@ -1593,6 +1630,7 @@ function selectedCandidateReceipt(args: {
     throw new Error("Cadence micro-seed business fit drifted");
   }
   return {
+    sourceSeed: normalizeCadenceMicroSeedText(args.sourceSeed),
     keyword: normalizeCadenceMicroSeedText(args.candidate.keyword),
     label: args.candidate.keyword,
     searchVolume: args.candidate.searchVolume,
@@ -1656,6 +1694,8 @@ async function insertCadenceMicroSeedTopic(args: {
     cadenceMicroSeedVersion: args.job.policyVersion,
     cadenceMicroSeedJobId: args.job._id,
     cadenceMicroSeedFingerprint: fingerprint,
+    cadenceMicroSeedAnchorSeed:
+      args.selected.sourceSeed ?? args.job.seed,
     cadenceMicroSeedAnchorAuditVersion:
       CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION,
     cadenceMicroSeedAnchorEligible: true,
@@ -1821,6 +1861,7 @@ export const resumeLegacySemanticCandidateInternal = internalMutation({
     const selection = selectCadenceMicroSeedCandidate({
       metrics,
       seed: job.seed,
+      seeds: job.providerSeeds ?? [job.seed],
       maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
         authority.domainRank,
       ),
@@ -1847,6 +1888,10 @@ export const resumeLegacySemanticCandidateInternal = internalMutation({
       .map((candidate) => selectedCandidateReceipt({
         site,
         candidate,
+        sourceSeed: cadenceMicroSeedMatchingAnchor(
+          job.providerSeeds ?? [job.seed],
+          candidate.keyword,
+        )!,
         measuredAt: job.selectedCandidate!.measuredAt,
       }));
     const nextCandidate = remaining[0];
@@ -1919,6 +1964,7 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     workerToken: v.string(),
     endpoint: v.string(),
     seed: v.string(),
+    seeds: v.array(v.string()),
     requestTag: v.string(),
     resultLimit: v.number(),
     locationCode: v.number(),
@@ -1943,6 +1989,8 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       args.locationCode !== job.locationCode ||
       args.languageCode.trim().toLowerCase() !==
         job.languageCode.trim().toLowerCase() ||
+      JSON.stringify(args.seeds) !==
+        JSON.stringify(job.providerSeeds ?? [job.seed]) ||
       job.includeSerpInfo !== false ||
       job.includeClickstreamData !== false ||
       !cadenceMicroSeedProviderReceiptValid({
@@ -1997,6 +2045,8 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       inspected.parentMicroSeedReceiptFingerprint !==
         job.parentMicroSeedReceiptFingerprint ||
       inspected.seed !== job.seed ||
+      JSON.stringify(inspected.providerSeeds) !==
+        JSON.stringify(job.providerSeeds ?? [job.seed]) ||
       inspected.locationCode !== job.locationCode ||
       inspected.languageCode.trim().toLowerCase() !==
         job.languageCode.trim().toLowerCase()
@@ -2098,6 +2148,7 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
     const selection = selectCadenceMicroSeedCandidate({
       metrics: args.candidates as CadenceMicroSeedMetric[],
       seed: job.seed,
+      seeds: job.providerSeeds ?? [job.seed],
       // This only decides which bounded query is worth live SERP evidence.
       // Expected-click evidence remains the strict generation boundary.
       maximumDifficulty: cadenceMicroSeedPreSerpDifficultyCeiling(
@@ -2149,6 +2200,10 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       .map((candidate) => selectedCandidateReceipt({
         site,
         candidate,
+        sourceSeed: cadenceMicroSeedMatchingAnchor(
+          job.providerSeeds ?? [job.seed],
+          candidate.keyword,
+        )!,
         measuredAt: args.measuredAt,
       }));
     const selected = candidateShortlist[0];
@@ -3429,6 +3484,7 @@ export const getStatusInternal = internalQuery({
         job.parentMicroSeedReceiptFingerprint,
       reservationDay: job.reservationDay,
       seed: job.seed,
+      providerSeeds: job.providerSeeds ?? [job.seed],
       providerCostCeilingMicroUsd: job.providerCostCeilingMicroUsd,
       providerSpendReservationId: job.providerSpendReservationId,
       providerCallAttempted: job.providerCallAttempted,
@@ -3438,6 +3494,7 @@ export const getStatusInternal = internalQuery({
       candidatesAccepted: job.candidateAudit?.accepted ?? 0,
       candidateAudit: job.candidateAudit,
       selectedKeyword: job.selectedCandidate?.keyword,
+      selectedSourceSeed: job.selectedCandidate?.sourceSeed ?? job.seed,
       selectedSearchVolume: job.selectedCandidate?.searchVolume,
       selectedKeywordDifficulty: job.selectedCandidate?.difficulty,
       topicId: job.topicId,

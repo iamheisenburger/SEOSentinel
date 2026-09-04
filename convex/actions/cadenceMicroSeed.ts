@@ -467,7 +467,7 @@ export const processCadenceMicroSeed = internalAction({
         begun.includeClickstreamData !== false
       ) throw new Error("Cadence micro-seed provider contract drifted");
       const receipt = await discoverCadenceMicroSeedFromDataForSEO(
-        begun.seed,
+        begun.providerSeeds,
         begun.locationCode,
         begun.languageCode,
         {
@@ -483,6 +483,7 @@ export const processCadenceMicroSeed = internalAction({
           workerToken,
           endpoint: receipt.endpoint,
           seed: receipt.seed,
+          seeds: receipt.seeds,
           requestTag: receipt.requestTag,
           resultLimit: receipt.resultLimit,
           locationCode: receipt.locationCode,

@@ -11,6 +11,7 @@ import {
   CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES,
   CADENCE_MICRO_SEED_MAX_SOURCE_PLAN_AGE_MS,
   CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD,
+  CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT,
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
   CADENCE_MICRO_SEED_RESULT_LIMIT,
   CADENCE_MICRO_SEED_VERSION,
@@ -21,6 +22,7 @@ import {
   cadenceMicroSeedCheckpointSourcePlanExhaustionKind,
   cadenceMicroSeedAttemptKind,
   cadenceMicroSeedCandidateMatchesAnchor,
+  cadenceMicroSeedMatchingAnchor,
   cadenceMicroSeedLegacyAnchorReceiptEligible,
   cadenceMicroSeedPreSerpDifficultyCeiling,
   cadenceMicroSeedProviderCeilingMicroUsd,
@@ -31,6 +33,7 @@ import {
   cadenceMicroSeedSourcePlanFresh,
   cadenceMicroSeedTerminalMissReceiptValid,
   selectCadenceMicroSeedAnchor,
+  selectCadenceMicroSeedAnchorBatch,
   selectCadenceMicroSeedCandidate,
   selectCadenceMicroSeedFallbackAnchor,
   type CadenceMicroSeedMetric,
@@ -399,6 +402,56 @@ test("recovery fallback skips a near-duplicate product anchor", () => {
   ), "booking link integration");
 });
 
+test("recovery batches distinct exact tenant anchors without replay", () => {
+  const anchors = [
+    "lead qualification chatbot",
+    "automated lead qualification software",
+    "booking link integration",
+    "website visitor identification",
+    "sales conversation analytics",
+    "automated follow up sequences",
+    "buyer intent scoring",
+    "pipeline attribution dashboard",
+  ];
+  const first = selectCadenceMicroSeedAnchorBatch(
+    anchors,
+    "source-plan-placeholder",
+    19,
+    ["buyer intent scoring"],
+  );
+  assert.ok(first.length > 1);
+  assert.ok(first.length <= CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT);
+  assert.equal(first.includes("buyer intent scoring"), false);
+  assert.equal(new Set(first).size, first.length);
+  assert.deepEqual(
+    first,
+    selectCadenceMicroSeedAnchorBatch(
+      anchors,
+      "source-plan-placeholder",
+      19,
+      ["buyer intent scoring"],
+    ),
+  );
+  const second = selectCadenceMicroSeedAnchorBatch(
+    anchors,
+    "source-plan-placeholder",
+    19,
+    ["buyer intent scoring", ...first],
+  );
+  assert.equal(second.some((seed) => first.includes(seed)), false);
+  assert.equal(
+    cadenceMicroSeedMatchingAnchor(
+      first,
+      `${first[0]} platform`,
+    ),
+    first[0],
+  );
+  assert.equal(
+    cadenceMicroSeedMatchingAnchor(first, "unrelated payroll workflow"),
+    null,
+  );
+});
+
 test("a policy upgrade advances past every previously attempted tenant anchor", () => {
   const anchors = [
     "lead qualification chatbot",
@@ -513,7 +566,7 @@ test("fallback is a distinct $0.05 receipt after an exact terminal primary miss"
     languageCode: "en",
     expectedLanguageCode: "EN",
     providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
-    providerResultLimit: 100,
+    providerResultLimit: CADENCE_MICRO_SEED_RESULT_LIMIT,
     includeSerpInfo: false,
     includeClickstreamData: false,
     providerCostCeilingMicroUsd: 100_000,
@@ -592,7 +645,7 @@ test("fallback is a distinct $0.05 receipt after an exact terminal primary miss"
     { locationCode: 2826 },
     { languageCode: "de" },
     { providerCallCompleted: false },
-    { providerTaskCostUsd: 0.024_01 },
+    { providerTaskCostUsd: 0.050_01 },
     { candidateReceiptCount: 1 },
     { candidateAudit: { ...receipt.candidateAudit, received: 1 } },
     { hasSelectedOrTopicReceipt: true },
@@ -769,6 +822,23 @@ test("candidate selection preserves a bounded score-ordered SERP shortlist", () 
   );
 });
 
+test("candidate selection accepts any receipted batch seed and rejects drift", () => {
+  const selected = selectCadenceMicroSeedCandidate({
+    metrics: [
+      metric("booking link integration software"),
+      metric("unrelated payroll workflow"),
+    ],
+    seed: "lead qualification chatbot",
+    seeds: ["lead qualification chatbot", "booking link integration"],
+    maximumDifficulty: 20,
+    existingExactKeywords: new Set(),
+    coveredTopics: [],
+    businessFitEligible: () => true,
+  });
+  assert.equal(selected.selected?.keyword, "booking link integration software");
+  assert.equal(selected.rejected.businessFit, 1);
+});
+
 test("cadence discovery uses the bounded pre-SERP reach ceiling", () => {
   assert.equal(cadenceMicroSeedPreSerpDifficultyCeiling(0), 32);
   assert.equal(cadenceMicroSeedPreSerpDifficultyCeiling(4), 32);
@@ -791,8 +861,9 @@ test("materialization treats terminal content misses as upstream topic feedback"
 
 test("receipt envelope is exactly one bounded Labs task", () => {
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD, 100_000);
+  assert.equal(CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT, 6);
   assert.equal(CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS, 60_000);
-  assert.equal(CADENCE_MICRO_SEED_RESULT_LIMIT, 100);
+  assert.equal(CADENCE_MICRO_SEED_RESULT_LIMIT, 300);
   assert.equal(
     CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
     "dataforseo_labs/google/keyword_ideas/live",
@@ -1189,14 +1260,18 @@ test("micro admission and scheduler share exact quality-recovery priority", () =
 
 test("provider helper binds request, locale, intent, measured KD, and both cost receipts", async () => {
   const fixture = providerFixture();
+  const seeds = [fixture.seed, "booking link integration"];
+  fixture.data.tasks[0].data.keywords = seeds;
+  fixture.data.tasks[0].result[0].seed_keywords = seeds;
+  fixture.data.tasks[0].data.limit = CADENCE_MICRO_SEED_RESULT_LIMIT;
   let capturedEndpoint = "";
   let capturedBody: unknown;
   const receipt = await discoverCadenceMicroSeedFromDataForSEO(
-    fixture.seed,
+    seeds,
     2840,
     "en",
     {
-      limit: 100,
+      limit: CADENCE_MICRO_SEED_RESULT_LIMIT,
       requestTag: fixture.tag,
       request: async (endpoint, body) => {
         capturedEndpoint = endpoint;
@@ -1211,7 +1286,7 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
     /dataForSEORequest\([\s\S]*CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS/,
   );
   assert.deepEqual(capturedBody, [{
-    keywords: [fixture.seed],
+    keywords: seeds,
     location_code: 2840,
     language_code: "en",
     closely_variants: true,
@@ -1224,8 +1299,9 @@ test("provider helper binds request, locale, intent, measured KD, and both cost 
       "keyword_info.search_volume,desc",
       "keyword_properties.keyword_difficulty,asc",
     ],
-    limit: 100,
+    limit: CADENCE_MICRO_SEED_RESULT_LIMIT,
   }]);
+  assert.deepEqual(receipt.seeds, seeds);
   assert.equal(receipt.providerTaskCostUsd, 0.024);
   assert.equal(receipt.providerRowsReceived, 1);
   assert.equal(receipt.providerRowsRejected, 0);
@@ -1298,7 +1374,7 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
   assert.match(model, /providerCallAttempted: true[\s\S]*providerRequestTag/);
   assert.match(
     model,
-    /validPrimaryFallbackReceipt[\s\S]*selectCadenceMicroSeedFallbackAnchor/,
+    /validPrimaryFallbackReceipt[\s\S]*selectCadenceMicroSeedAnchorBatch/,
   );
   assert.match(
     model,
@@ -1388,6 +1464,8 @@ test("the legacy anchor migration is bounded, publication-safe, and runs before 
 });
 
 test("semantic evidence misses advance through immutable candidates without lowering quality", () => {
+  assert.match(schema, /providerSeeds:\s*v\.optional\(v\.array/);
+  assert.match(schema, /sourceSeed:\s*v\.optional\(v\.string/);
   assert.match(schema, /candidateShortlist:\s*v\.optional/);
   assert.match(schema, /priorCandidateAttempts:\s*v\.optional/);
   assert.match(model, /selection\.acceptedCandidates/);

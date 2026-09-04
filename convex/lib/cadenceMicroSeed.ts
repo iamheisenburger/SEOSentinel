@@ -42,15 +42,16 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // candidate look like cannibalization. Version 13's whole-phrase anchor
 // preservation, version 12's indexed history, and the meaningful-concept gate
 // remain unchanged.
-export const CADENCE_MICRO_SEED_VERSION = 19;
+export const CADENCE_MICRO_SEED_VERSION = 20;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 export const CADENCE_MICRO_SEED_MAX_SERP_CANDIDATES = 3;
+export const CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT = 6;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
   "dataforseo_labs/google/keyword_ideas/live";
-export const CADENCE_MICRO_SEED_RESULT_LIMIT = 100;
-export const CADENCE_MICRO_SEED_TASK_COST_CEILING_USD = 0.024;
+export const CADENCE_MICRO_SEED_RESULT_LIMIT = 300;
+export const CADENCE_MICRO_SEED_TASK_COST_CEILING_USD = 0.05;
 export const CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS = 60_000;
 export const CADENCE_MICRO_SEED_LEASE_MS = 2 * 60 * 1000;
 export const CADENCE_MICRO_SEED_WATCHDOG_DELAY_MS = 5 * 60 * 1000;
@@ -306,9 +307,9 @@ export function cadenceMicroSeedAnchors(args: {
   appendCategory(args.painPoints ?? [], 6);
   appendCategory([args.productUsage ?? ""], 4);
   appendCategory([args.targetAudienceSummary ?? ""], 4);
-  // A primary plus one distinct fallback is the complete paid recovery
-  // contract. Profiles with more material retain a wider deterministic
-  // rotation; sparse profiles keep the historical two-anchor minimum.
+  // One bounded primary batch plus one disjoint fallback batch is the complete
+  // paid recovery contract. Profiles with more material retain a wider
+  // deterministic rotation; sparse profiles keep their available anchors.
   return supplemented.slice(0, 32);
 }
 
@@ -435,6 +436,43 @@ function cadenceMicroSeedAnchorsAreDistinct(
   }
   return shared < 2 ||
     shared / Math.min(leftTokens.size, rightTokens.size) < 0.6;
+}
+
+/**
+ * Build one deterministic provider request from several exact tenant product
+ * phrases. DataForSEO accepts up to 200 seeds in one task; six keeps the
+ * request and its receipt small while removing the old two-phrase lottery.
+ * Every selected keyword must still match one exact seed and pass the
+ * independent tenant-fit, difficulty, overlap, live-SERP, expected-click and
+ * publication gates.
+ */
+export function selectCadenceMicroSeedAnchorBatch(
+  anchors: readonly string[],
+  sourcePlanKey: string,
+  policyGeneration = 0,
+  previouslyAttemptedSeeds: readonly string[] = [],
+  coveredKeywords: readonly string[] = [],
+  limit = CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT,
+): string[] {
+  if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+  const selected: string[] = [];
+  const excluded = [...previouslyAttemptedSeeds];
+  while (selected.length < limit) {
+    const distinctAnchors = anchors.filter((anchor) =>
+      selected.every((prior) => cadenceMicroSeedAnchorsAreDistinct(anchor, prior))
+    );
+    const next = selectCadenceMicroSeedAnchor(
+      distinctAnchors,
+      sourcePlanKey,
+      policyGeneration,
+      excluded,
+      coveredKeywords,
+    );
+    if (!next) break;
+    selected.push(next);
+    excluded.push(next);
+  }
+  return selected;
 }
 
 /**
@@ -759,6 +797,19 @@ export function cadenceMicroSeedCandidateMatchesAnchor(
   return shared >= Math.min(2, seedTokens.size);
 }
 
+/** Exact source phrase authorising a provider keyword, or null when none do. */
+export function cadenceMicroSeedMatchingAnchor(
+  seeds: readonly string[],
+  candidateKeyword: string,
+): string | null {
+  for (const seed of seeds) {
+    if (cadenceMicroSeedCandidateMatchesAnchor(seed, candidateKeyword)) {
+      return normalizeCadenceMicroSeedText(seed);
+    }
+  }
+  return null;
+}
+
 /**
  * Rank provider-returned rows and expose a bounded shortlist. Product fit is supplied by the
  * caller because it binds the current tenant profile/version; this helper
@@ -769,6 +820,7 @@ export function selectCadenceMicroSeedCandidate<
 >(args: {
   metrics: readonly T[];
   seed: string;
+  seeds?: readonly string[];
   maximumDifficulty: number;
   existingExactKeywords: ReadonlySet<string>;
   coveredTopics: SerpCoverageTopic[];
@@ -823,7 +875,7 @@ export function selectCadenceMicroSeedCandidate<
       continue;
     }
     if (
-      !cadenceMicroSeedCandidateMatchesAnchor(args.seed, keyword) ||
+      !cadenceMicroSeedMatchingAnchor(args.seeds ?? [args.seed], keyword) ||
       !args.businessFitEligible(candidate)
     ) {
       rejected.businessFit += 1;

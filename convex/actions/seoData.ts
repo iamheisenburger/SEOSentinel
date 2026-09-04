@@ -19,7 +19,10 @@ import { computeAuthorityKeywordDifficultyCeiling } from
   "../lib/authorityDifficulty.ts";
 import { safeFetchPublicText } from "../lib/safeOutbound.ts";
 import {
+  CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT,
   CADENCE_MICRO_SEED_PROVIDER_TIMEOUT_MS,
+  CADENCE_MICRO_SEED_RESULT_LIMIT,
+  CADENCE_MICRO_SEED_TASK_COST_CEILING_USD,
 } from "../lib/cadenceMicroSeed.ts";
 import {
   DATAFORSEO_AUTHORITY_SOURCE,
@@ -137,6 +140,7 @@ export interface CadenceMicroSeedKeywordMetric {
 export interface CadenceMicroSeedDiscoveryReceipt {
   endpoint: "dataforseo_labs/google/keyword_ideas/live";
   seed: string;
+  seeds: string[];
   requestTag: string;
   locationCode: number;
   languageCode: string;
@@ -202,9 +206,10 @@ async function dataForSEORequest(
 /**
  * One deliberately tiny recovery request for an empty verified-topic buffer.
  *
- * This is not the general planner: it sends exactly one tenant-derived seed
- * to the category-based Ideas endpoint, never asks for clickstream or SERP
- * data, and accepts at most one hundred DataForSEO Labs rows. The earlier
+ * This is not the general planner: it sends one bounded batch of exact
+ * tenant-derived seeds to the category-based Ideas endpoint, never asks for
+ * clickstream or SERP data, and accepts at most three hundred DataForSEO Labs
+ * rows. The earlier
  * literal Suggestions endpoint legitimately returned zero rows for specific
  * SaaS product phrases; Ideas supplies adjacent searcher language in the same
  * provider category while preserving exact demand, organic difficulty, and
@@ -212,7 +217,7 @@ async function dataForSEORequest(
  * scheduler-eligible.
  */
 export async function discoverCadenceMicroSeedFromDataForSEO(
-  seed: string,
+  seedOrSeeds: string | string[],
   locationCode: number = 2840,
   languageCode: string = "en",
   options: {
@@ -224,18 +229,28 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   if (!getDataForSEOCredentials() && !options.request) {
     throw new Error("DataForSEO credentials not configured");
   }
-  const normalizedSeed = seed.trim().toLowerCase().replace(/\s+/g, " ");
-  const wordCount = normalizedSeed.split(" ").filter(Boolean).length;
+  const normalizedSeeds = [...new Set(
+    (Array.isArray(seedOrSeeds) ? seedOrSeeds : [seedOrSeeds])
+      .map((seed) => seed.trim().toLowerCase().replace(/\s+/g, " "))
+      .filter(Boolean),
+  )];
   if (
-    normalizedSeed.length < 4 ||
-    normalizedSeed.length > 200 ||
-    wordCount < 2 ||
-    wordCount > 6
+    normalizedSeeds.length < 1 ||
+    normalizedSeeds.length > CADENCE_MICRO_SEED_PROVIDER_SEED_LIMIT ||
+    normalizedSeeds.some((seed) => {
+      const wordCount = seed.split(" ").filter(Boolean).length;
+      return seed.length < 4 || seed.length > 200 ||
+        wordCount < 2 || wordCount > 6;
+    })
   ) {
     throw new Error("Cadence micro-seed is outside its bounded contract");
   }
-  const requestedLimit = options.limit ?? 100;
-  if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) {
+  const normalizedSeed = normalizedSeeds[0]!;
+  const requestedLimit = options.limit ?? CADENCE_MICRO_SEED_RESULT_LIMIT;
+  if (
+    !Number.isInteger(requestedLimit) || requestedLimit < 1 ||
+    requestedLimit > CADENCE_MICRO_SEED_RESULT_LIMIT
+  ) {
     throw new Error("Cadence micro-seed result limit is outside its contract");
   }
   const limit = requestedLimit;
@@ -252,7 +267,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     ));
   languageCode = dataForSeoLanguageCode(languageCode);
   const data = await request(endpoint, [{
-    keywords: [normalizedSeed],
+    keywords: normalizedSeeds,
     location_code: locationCode,
     language_code: languageCode,
     closely_variants: true,
@@ -285,7 +300,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     taskData.api !== "dataforseo_labs" ||
     taskData.function !== "keyword_ideas" ||
     taskData.se_type !== "google" ||
-    JSON.stringify(taskData.keywords) !== JSON.stringify([normalizedSeed]) ||
+    JSON.stringify(taskData.keywords) !== JSON.stringify(normalizedSeeds) ||
     taskData.location_code !== locationCode ||
     taskData.language_code !== languageCode ||
     taskData.include_serp_info !== false ||
@@ -313,7 +328,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
       "live",
     ]) ||
     JSON.stringify(resultGroup?.seed_keywords) !==
-      JSON.stringify([normalizedSeed]) ||
+      JSON.stringify(normalizedSeeds) ||
     (resultGroup?.location_code !== undefined &&
       resultGroup.location_code !== locationCode) ||
     (resultGroup?.language_code !== undefined &&
@@ -328,11 +343,11 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
     typeof providerTaskCostUsd !== "number" ||
     !Number.isFinite(providerTaskCostUsd) ||
     providerTaskCostUsd < 0 ||
-    providerTaskCostUsd > 0.024001 ||
+    providerTaskCostUsd > CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + 0.000001 ||
     typeof providerResponseCostUsd !== "number" ||
     !Number.isFinite(providerResponseCostUsd) ||
     providerResponseCostUsd < 0 ||
-    providerResponseCostUsd > 0.024001 ||
+    providerResponseCostUsd > CADENCE_MICRO_SEED_TASK_COST_CEILING_USD + 0.000001 ||
     Math.abs(providerResponseCostUsd - providerTaskCostUsd) > 0.000001
   ) {
     throw new Error("Cadence micro-seed provider cost exceeded its contract");
@@ -431,6 +446,7 @@ export async function discoverCadenceMicroSeedFromDataForSEO(
   return {
     endpoint,
     seed: normalizedSeed,
+    seeds: normalizedSeeds,
     requestTag,
     locationCode,
     languageCode,
