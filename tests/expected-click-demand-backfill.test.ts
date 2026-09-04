@@ -483,6 +483,7 @@ test("one daily job shares the fleet ledger and tenant deletion drains it", () =
   assert.match(schema, /expected_click_demand_jobs: defineTable/);
   assert.match(schema, /searchDemandBackfillAttemptJobId: v\.optional/);
   assert.match(schema, /\.index\("by_site_day", \["siteId", "reservationDay"\]\)/);
+  assert.match(schema, /\.index\("by_site_day_epoch_policy", \[/);
   assert.match(sites, /"expected_click_demand_jobs"/);
   assert.match(
     sites,

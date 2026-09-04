@@ -69,7 +69,6 @@ import {
   cadenceInventoryNeedsPlannedRecovery,
   exactPlannedRecoverySelectionMatches,
   expectedClickTargetKind,
-  isCurrentExpectedClickBatch,
   partitionPlannedTopicRecoveryCoverage,
   plannedTargetsAllowedForQueue,
   plannedTopicDemandAdmission,
@@ -91,6 +90,7 @@ const jobOriginValidator = v.union(
   v.literal("autonomous_fleet"),
 );
 const FLEET_UNRESOLVED_STATUS_READ_LIMIT = 25;
+const CURRENT_DAY_BATCH_READ_LIMIT = 25;
 const DEMAND_UNRESOLVED_STATUSES = [
   "pending",
   "running",
@@ -102,6 +102,46 @@ const EVIDENCE_UNRESOLVED_STATUSES = [
   "running",
   "partial",
 ] as const;
+
+async function currentDemandJobsForDay(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  reservationDay: string,
+  rolloutEpoch: number,
+) {
+  const rows = await ctx.db.query("expected_click_demand_jobs")
+    .withIndex("by_site_day_epoch_policy", (q) => q
+      .eq("siteId", siteId)
+      .eq("reservationDay", reservationDay)
+      .eq("rolloutEpoch", rolloutEpoch)
+      .eq("policyVersion", EXPECTED_CLICK_DEMAND_BACKFILL_VERSION))
+    .order("desc")
+    .take(CURRENT_DAY_BATCH_READ_LIMIT + 1);
+  return {
+    jobs: rows.slice(0, CURRENT_DAY_BATCH_READ_LIMIT),
+    exhausted: rows.length > CURRENT_DAY_BATCH_READ_LIMIT,
+  };
+}
+
+async function currentEvidenceJobsForDay(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  reservationDay: string,
+  rolloutEpoch: number,
+) {
+  const rows = await ctx.db.query("expected_click_evidence_jobs")
+    .withIndex("by_site_day_epoch_policy", (q) => q
+      .eq("siteId", siteId)
+      .eq("reservationDay", reservationDay)
+      .eq("rolloutEpoch", rolloutEpoch)
+      .eq("policyVersion", EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION))
+    .order("desc")
+    .take(CURRENT_DAY_BATCH_READ_LIMIT + 1);
+  return {
+    jobs: rows.slice(0, CURRENT_DAY_BATCH_READ_LIMIT),
+    exhausted: rows.length > CURRENT_DAY_BATCH_READ_LIMIT,
+  };
+}
 
 function demandReservationTrigger(
   origin: string | undefined,
@@ -924,19 +964,22 @@ export async function expectedClickDemandFleetReadiness(
       };
     }
     const reservationDay = utcDemandBackfillDay(timestamp);
-    const todayRows = await ctx.db
-      .query("expected_click_demand_jobs")
-      .withIndex("by_site_day", (q) =>
-        q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-      )
-      .collect();
-    const todayJob = todayRows.find((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        site.autopilotRolloutEpoch ?? 0,
-        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
-      )
+    const todayBatch = await currentDemandJobsForDay(
+      ctx,
+      siteId,
+      reservationDay,
+      site.autopilotRolloutEpoch ?? 0,
     );
+    if (todayBatch.exhausted) {
+      return {
+        ready: false as const,
+        reason: "current_batch_read_limit_exhausted" as const,
+        actionable: true,
+        candidateCount: 0,
+        continueToEvidence: false,
+      };
+    }
+    const todayJob = todayBatch.jobs[0];
     if (todayJob) {
       const ambiguous = todayJob.providerCallAttempted === true &&
         todayJob.providerCallCompleted !== true;
@@ -1245,46 +1288,35 @@ async function reserveDemandOutcome(
     const timestamp = Date.now();
     const reservationDay = utcDemandBackfillDay(timestamp);
     const [
-      todayJobRows,
-      todayEvidenceJobRows,
+      todayBatch,
+      todayEvidenceBatch,
       unresolvedDemand,
       unresolvedEvidence,
     ] = await Promise.all([
-      ctx.db
-        .query("expected_click_demand_jobs")
-        .withIndex("by_site_day", (q) =>
-          q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-        )
-        .collect(),
-      ctx.db
-        .query("expected_click_evidence_jobs")
-        .withIndex("by_site_day", (q) =>
-          q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-        )
-        .collect(),
+      currentDemandJobsForDay(
+        ctx,
+        siteId,
+        reservationDay,
+        site.autopilotRolloutEpoch ?? 0,
+      ),
+      currentEvidenceJobsForDay(
+        ctx,
+        siteId,
+        reservationDay,
+        site.autopilotRolloutEpoch ?? 0,
+      ),
       unresolvedFleetDemandJobs(ctx, siteId),
       unresolvedFleetEvidenceJobs(ctx, siteId),
     ]);
-    const todayJobs = todayJobRows.filter((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        site.autopilotRolloutEpoch ?? 0,
-        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
-      )
-    );
-    const todayEvidenceJobs = todayEvidenceJobRows.filter((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        site.autopilotRolloutEpoch ?? 0,
-        EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
-      )
-    );
+    const todayJobs = todayBatch.jobs;
+    const todayEvidenceJobs = todayEvidenceBatch.jobs;
     const phaseDecision = planDemandPhaseReservation({
       todayEvidenceJobs: todayEvidenceJobs.length,
       unresolvedDemandJobs: unresolvedDemand.jobs.length,
       unresolvedEvidenceJobs: unresolvedEvidence.jobs.length,
       unresolvedReadLimitExhausted:
-        unresolvedDemand.exhausted || unresolvedEvidence.exhausted,
+        unresolvedDemand.exhausted || unresolvedEvidence.exhausted ||
+        todayBatch.exhausted || todayEvidenceBatch.exhausted,
     });
     if (!phaseDecision.allowed) {
       return {

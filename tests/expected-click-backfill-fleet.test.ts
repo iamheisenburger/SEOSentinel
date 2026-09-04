@@ -485,8 +485,18 @@ test("every paid evidence call revalidates its exact current-day reservation", (
 });
 
 test("daily idempotency and the shared provider ceilings remain decisive", () => {
-  assert.match(demand, /withIndex\("by_site_day"/);
-  assert.match(evidence, /withIndex\("by_site_day"/);
+  assert.match(demand, /withIndex\("by_site_day_epoch_policy"/);
+  assert.match(evidence, /withIndex\("by_site_day_epoch_policy"/);
+  assert.match(demand, /\.take\(CURRENT_DAY_BATCH_READ_LIMIT \+ 1\)/);
+  assert.match(evidence, /\.take\(CURRENT_DAY_BATCH_READ_LIMIT \+ 1\)/);
+  assert.doesNotMatch(
+    demand,
+    /withIndex\("by_site_day"[\s\S]{0,200}\.collect\(\)/,
+  );
+  assert.doesNotMatch(
+    evidence,
+    /withIndex\("by_site_day"[\s\S]{0,200}\.collect\(\)/,
+  );
   assert.match(demand, /const existing = todayJobs\[0\]/);
   assert.match(evidence, /const existing = todayJobs\[0\]/);
   assert.equal(EXPECTED_CLICK_DEMAND_BACKFILL_PROVIDER_CEILING_MICRO_USD, 100_000);

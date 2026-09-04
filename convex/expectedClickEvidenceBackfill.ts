@@ -74,7 +74,6 @@ import {
   filterPlannedTopicRecoveryCoverage,
   guardedEvidenceContinuationAllowed,
   hasExactPlannedEvidenceAttempt,
-  isCurrentExpectedClickBatch,
   plannedTargetsAllowedForQueue,
   plannedTopicEvidenceAdmission,
   plannedTopicSiteGate,
@@ -96,6 +95,7 @@ import {
 
 const workerApi = internal.actions.expectedClickEvidenceBackfill;
 const FLEET_UNRESOLVED_STATUS_READ_LIMIT = 25;
+const CURRENT_DAY_BATCH_READ_LIMIT = 25;
 const DEMAND_UNRESOLVED_STATUSES = [
   "pending",
   "running",
@@ -111,6 +111,46 @@ const jobOriginValidator = v.union(
   v.literal("operator_canary"),
   v.literal("autonomous_fleet"),
 );
+
+async function currentDemandJobsForDay(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  reservationDay: string,
+  rolloutEpoch: number,
+) {
+  const rows = await ctx.db.query("expected_click_demand_jobs")
+    .withIndex("by_site_day_epoch_policy", (q) => q
+      .eq("siteId", siteId)
+      .eq("reservationDay", reservationDay)
+      .eq("rolloutEpoch", rolloutEpoch)
+      .eq("policyVersion", EXPECTED_CLICK_DEMAND_BACKFILL_VERSION))
+    .order("desc")
+    .take(CURRENT_DAY_BATCH_READ_LIMIT + 1);
+  return {
+    jobs: rows.slice(0, CURRENT_DAY_BATCH_READ_LIMIT),
+    exhausted: rows.length > CURRENT_DAY_BATCH_READ_LIMIT,
+  };
+}
+
+async function currentEvidenceJobsForDay(
+  ctx: QueryCtx | MutationCtx,
+  siteId: Id<"sites">,
+  reservationDay: string,
+  rolloutEpoch: number,
+) {
+  const rows = await ctx.db.query("expected_click_evidence_jobs")
+    .withIndex("by_site_day_epoch_policy", (q) => q
+      .eq("siteId", siteId)
+      .eq("reservationDay", reservationDay)
+      .eq("rolloutEpoch", rolloutEpoch)
+      .eq("policyVersion", EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION))
+    .order("desc")
+    .take(CURRENT_DAY_BATCH_READ_LIMIT + 1);
+  return {
+    jobs: rows.slice(0, CURRENT_DAY_BATCH_READ_LIMIT),
+    exhausted: rows.length > CURRENT_DAY_BATCH_READ_LIMIT,
+  };
+}
 
 function evidenceReservationTrigger(
   origin: string | undefined,
@@ -1000,35 +1040,30 @@ export async function expectedClickEvidenceFleetReadiness(
       };
     }
     const reservationDay = utcBackfillDay(timestamp);
-    const [todayEvidenceRows, todayDemandRows] = await Promise.all([
-      ctx.db
-        .query("expected_click_evidence_jobs")
-        .withIndex("by_site_day", (q) =>
-          q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-        )
-        .collect(),
-      ctx.db
-        .query("expected_click_demand_jobs")
-        .withIndex("by_site_day", (q) =>
-          q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-        )
-        .collect(),
+    const [todayEvidenceBatch, todayDemandBatch] = await Promise.all([
+      currentEvidenceJobsForDay(
+        ctx,
+        siteId,
+        reservationDay,
+        site.autopilotRolloutEpoch ?? 0,
+      ),
+      currentDemandJobsForDay(
+        ctx,
+        siteId,
+        reservationDay,
+        site.autopilotRolloutEpoch ?? 0,
+      ),
     ]);
-    const currentRolloutEpoch = site.autopilotRolloutEpoch ?? 0;
-    const todayEvidenceJobs = todayEvidenceRows.filter((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        currentRolloutEpoch,
-        EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
-      )
-    );
-    const todayDemandJob = todayDemandRows.find((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        currentRolloutEpoch,
-        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
-      )
-    );
+    if (todayEvidenceBatch.exhausted || todayDemandBatch.exhausted) {
+      return {
+        ready: false as const,
+        reason: "current_batch_read_limit_exhausted" as const,
+        actionable: true,
+        candidateCount: 0,
+      };
+    }
+    const todayEvidenceJobs = todayEvidenceBatch.jobs;
+    const todayDemandJob = todayDemandBatch.jobs[0];
     const completedEvidenceBatchAllowsGuardedContinuation =
       todayEvidenceJobs.length > 0 &&
       todayEvidenceJobs.every((job) => job.status === "completed");
@@ -1370,40 +1405,28 @@ async function reserveEvidenceOutcome(
     const timestamp = Date.now();
     const reservationDay = utcBackfillDay(timestamp);
     const [
-      todayJobRows,
-      todayDemandJobRows,
+      todayBatch,
+      todayDemandBatch,
       unresolvedDemand,
       unresolvedEvidence,
     ] = await Promise.all([
-      ctx.db
-        .query("expected_click_evidence_jobs")
-        .withIndex("by_site_day", (q) =>
-          q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-        )
-        .collect(),
-      ctx.db
-        .query("expected_click_demand_jobs")
-        .withIndex("by_site_day", (q) =>
-          q.eq("siteId", siteId).eq("reservationDay", reservationDay)
-        )
-        .collect(),
+      currentEvidenceJobsForDay(
+        ctx,
+        siteId,
+        reservationDay,
+        site.autopilotRolloutEpoch ?? 0,
+      ),
+      currentDemandJobsForDay(
+        ctx,
+        siteId,
+        reservationDay,
+        site.autopilotRolloutEpoch ?? 0,
+      ),
       unresolvedFleetDemandJobs(ctx, siteId),
       unresolvedFleetEvidenceJobs(ctx, siteId),
     ]);
-    const todayJobs = todayJobRows.filter((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        site.autopilotRolloutEpoch ?? 0,
-        EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
-      )
-    );
-    const todayDemandJobs = todayDemandJobRows.filter((job) =>
-      isCurrentExpectedClickBatch(
-        job,
-        site.autopilotRolloutEpoch ?? 0,
-        EXPECTED_CLICK_DEMAND_BACKFILL_VERSION,
-      )
-    );
+    const todayJobs = todayBatch.jobs;
+    const todayDemandJobs = todayDemandBatch.jobs;
     // Ordinary fleet/operator work remains one batch per policy/day. A
     // completed batch may be followed only by a uniquely fingerprinted,
     // inspect-bound planned recovery. This is the cadence micro-seed handoff:
@@ -1447,7 +1470,8 @@ async function reserveEvidenceOutcome(
       unresolvedDemandJobs: unresolvedDemand.jobs.length,
       unresolvedEvidenceJobs: unresolvedEvidence.jobs.length,
       unresolvedReadLimitExhausted:
-        unresolvedDemand.exhausted || unresolvedEvidence.exhausted,
+        unresolvedDemand.exhausted || unresolvedEvidence.exhausted ||
+        todayBatch.exhausted || todayDemandBatch.exhausted,
     });
     if (!initialPhaseDecision.allowed) {
       return {

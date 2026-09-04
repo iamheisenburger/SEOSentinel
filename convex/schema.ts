@@ -1908,6 +1908,12 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_day", ["siteId", "reservationDay"])
+    .index("by_site_day_epoch_policy", [
+      "siteId",
+      "reservationDay",
+      "rolloutEpoch",
+      "policyVersion",
+    ])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_origin_status", ["siteId", "origin", "status"])
     .index("by_site_created", ["siteId", "createdAt"]),
@@ -2008,6 +2014,12 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_site_day", ["siteId", "reservationDay"])
+    .index("by_site_day_epoch_policy", [
+      "siteId",
+      "reservationDay",
+      "rolloutEpoch",
+      "policyVersion",
+    ])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_origin_status", ["siteId", "origin", "status"])
     .index("by_site_created", ["siteId", "createdAt"]),

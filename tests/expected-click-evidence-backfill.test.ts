@@ -252,7 +252,8 @@ test("one batch/policy/day reserves the shared provider ledger before its durabl
     'db.insert("expected_click_evidence_jobs"',
   );
   assert.ok(reservationIndex >= 0 && insertIndex > reservationIndex);
-  assert.match(model, /withIndex\("by_site_day"/);
+  assert.match(model, /withIndex\("by_site_day_epoch_policy"/);
+  assert.match(model, /\.take\(CURRENT_DAY_BATCH_READ_LIMIT \+ 1\)/);
   assert.match(model, /purpose: "expected_click_evidence_backfill"/);
   assert.match(reservation, /expected_click_evidence_backfill/);
   assert.match(model, /const existing = todayJobs\[0\]/);
@@ -265,6 +266,7 @@ test("schema, deletion and runbook preserve the durable tenant boundary", () => 
   assert.match(schema, /expectedClickBackfillVersion: v\.optional\(v\.number\(\)\)/);
   assert.match(schema, /expectedClickBackfillJobId: v\.optional/);
   assert.match(schema, /\.index\("by_site_day", \["siteId", "reservationDay"\]\)/);
+  assert.match(schema, /\.index\("by_site_day_epoch_policy", \[/);
   assert.match(sites, /"expected_click_evidence_jobs"/);
   assert.match(
     sites,

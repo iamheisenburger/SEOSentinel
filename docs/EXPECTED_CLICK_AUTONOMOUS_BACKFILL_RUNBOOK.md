@@ -36,9 +36,11 @@ spend path.
 The fleet page contains only non-deleting sites with a user, autopilot enabled,
 `expectedClickSchedulingEnabled === true`, and rollout mode `warm` or `live`.
 The site action re-reads those fields immediately before every stage. Existing
-atomic `by_site_day` checks still enforce at most one new demand job and one new
-evidence job per site, policy version, and UTC day. This lets a repaired policy
-recover immediately while retaining every older receipt and reservation.
+atomic `by_site_day_epoch_policy` checks still enforce at most one new demand
+job and one new evidence job per site, policy version, and UTC day. Each lookup
+is capped at 26 exact-version rows and fails closed if that invariant is ever
+exceeded. This lets a repaired policy recover immediately without scanning
+unrelated historical receipts or reservations.
 
 The queue mutations also hold the cross-phase lock: demand refuses any same-day
 evidence phase, while evidence requires no unresolved fleet job, a completed
