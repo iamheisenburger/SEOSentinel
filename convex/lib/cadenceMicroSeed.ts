@@ -12,15 +12,14 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
-// Version 12 closes both defects observed by the first phrase-match production
-// run. Provider phrase match can still reorder a seed into a vague one-concept
-// phrase, so candidates must preserve at least two meaningful anchor concepts.
-// The durable lookup is also indexed by policy version; inserting the current
-// job can therefore never push an older-version row across a fixed read limit
-// and invalidate its own execution fence. Every business-fit, evidence, claim,
-// and publication gate remains unchanged, while older paid receipts stay
-// immutable no-replay evidence.
-export const CADENCE_MICRO_SEED_VERSION = 12;
+// Version 13 preserves every already-bounded, user-authored search anchor as
+// one phrase. The general profile extractor intentionally splits sentences at
+// conjunctions, but applying that behavior to a short keyword such as "lead
+// scoring and qualification tool" created the lossy seed "qualification
+// tool". Long profile text can still be reduced into bounded phrases; valid
+// two-to-six-word anchor keywords cannot be fragmented. Version 12's indexed
+// history and meaningful-concept gate remain unchanged.
+export const CADENCE_MICRO_SEED_VERSION = 13;
 export const CADENCE_MICRO_SEED_PROVIDER_CEILING_MICRO_USD = 100_000;
 export const CADENCE_MICRO_SEED_FALLBACK_PROVIDER_CEILING_MICRO_USD = 50_000;
 export const CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT =
@@ -227,7 +226,32 @@ export function cadenceMicroSeedAnchors(args: {
     const words = normalizeCadenceMicroSeedText(anchor).split(" ");
     return words.length >= 2 && words.length <= 6;
   });
-  const searchAnchors = bounded(args.anchorKeywords ?? []);
+  const directSearchAnchors: string[] = [];
+  const longSearchSignals: string[] = [];
+  const seenSearchAnchors = new Set<string>();
+  for (const value of args.anchorKeywords ?? []) {
+    if (typeof value !== "string") continue;
+    const normalized = normalizeCadenceMicroSeedText(value)
+      .replace(/[^a-z0-9+ -]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const words = normalized.split(" ").filter(Boolean);
+    if (words.length >= 2 && words.length <= 6) {
+      if (!seenSearchAnchors.has(normalized)) {
+        seenSearchAnchors.add(normalized);
+        directSearchAnchors.push(normalized);
+      }
+    } else if (words.length > 6) {
+      longSearchSignals.push(value);
+    }
+  }
+  const searchAnchors = [...directSearchAnchors];
+  for (const anchor of bounded(longSearchSignals)) {
+    if (seenSearchAnchors.has(anchor)) continue;
+    seenSearchAnchors.add(anchor);
+    searchAnchors.push(anchor);
+    if (searchAnchors.length >= 24) break;
+  }
   if (searchAnchors.length >= 2) return searchAnchors;
 
   // A primary plus one distinct fallback is the complete paid recovery

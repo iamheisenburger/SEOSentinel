@@ -150,6 +150,16 @@ function providerFixture() {
 }
 
 test("paid seeds prefer search anchors and rotate deterministically", () => {
+  assert.deepEqual(cadenceMicroSeedAnchors({
+    anchorKeywords: [
+      "lead scoring and qualification tool",
+      "sales automation chat widget",
+    ],
+    keyFeatures: ["qualification tool"],
+  }), [
+    "lead scoring and qualification tool",
+    "sales automation chat widget",
+  ]);
   const anchors = cadenceMicroSeedAnchors({
     anchorKeywords: [
       "Lead scoring software",
