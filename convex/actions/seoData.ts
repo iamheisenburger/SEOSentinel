@@ -104,7 +104,20 @@ export type KeywordDiscoveryRequest = (
   body: any[],
 ) => Promise<any>;
 
+export type KeywordDiscoveryExclusion = "already_known" | "product_fit" | "existing_intent";
+export type KeywordDiscoveryDiagnostics = {
+  unique: number;
+  eligible: number;
+  selected: number;
+  excluded: Record<KeywordDiscoveryExclusion, number>;
+};
+
 export interface KeywordDiscoveryOptions {
+  /** Provider-free, keyword-only checks must precede truncation and paid KD
+   * enrichment. Otherwise already-covered high-volume rows consume the entire
+   * shortlist. Unknown difficulty is deliberately not an exclusion here. */
+  excludeKeyword?: (keyword: string) => KeywordDiscoveryExclusion | undefined;
+  onDiagnostics?: (diagnostics: KeywordDiscoveryDiagnostics) => void;
   /**
    * Measured domain authority of the tenant. When present, discovery keeps the
    * candidates this tenant can realistically win instead of the highest-volume
@@ -800,6 +813,7 @@ export async function discoverKeywords(
   const resultsByKeyword = new Map<string, KeywordMetrics>();
   const productExpandedKeywords = new Set<string>();
   const sourceErrors: string[] = [];
+  const exclusions = new Map<string, KeywordDiscoveryExclusion>();
   const minimumResults = Math.max(
     1,
     Math.min(limit, options.minimumResults ?? 20),
@@ -812,6 +826,8 @@ export async function discoverKeywords(
     const existing = resultsByKeyword.get(key);
     if (!existing) {
       resultsByKeyword.set(key, candidate);
+      const reason = options.excludeKeyword?.(candidate.keyword);
+      if (reason) exclusions.set(key, reason);
       return;
     }
     resultsByKeyword.set(key, {
@@ -828,6 +844,10 @@ export async function discoverKeywords(
       trend: candidate.trend.length > 0 ? candidate.trend : existing.trend,
     });
   };
+  // Count usable inventory, not rows which the caller has already proven it
+  // cannot admit. This also keeps bounded fallback discovery reachable when
+  // a mature tenant's first source only returns its existing coverage.
+  const eligibleCount = () => resultsByKeyword.size - exclusions.size;
 
   const googleAdsResults = (data: any): KeywordMetrics[] => {
     const parsed: KeywordMetrics[] = [];
@@ -961,7 +981,7 @@ export async function discoverKeywords(
       );
     }
     if (
-      resultsByKeyword.size >= targetResults &&
+      eligibleCount() >= targetResults &&
       options.expandProductAnchors !== true
     ) break;
   }
@@ -970,7 +990,7 @@ export async function discoverKeywords(
   // anchors into long-tail suggestions and includes difficulty in the result.
   let labsCount = 0;
   if (
-    resultsByKeyword.size < minimumResults ||
+    eligibleCount() < minimumResults ||
     options.expandProductAnchors === true
   ) {
     const genericSeedWords = new Set([
@@ -1018,7 +1038,7 @@ export async function discoverKeywords(
         );
       }
       if (
-        resultsByKeyword.size >= targetResults &&
+        eligibleCount() >= targetResults &&
         options.expandProductAnchors !== true
       ) break;
     }
@@ -1032,7 +1052,7 @@ export async function discoverKeywords(
   const relatedSeedLimit = Math.max(0, options.maxRelatedSeeds ?? 0);
   if (
     relatedSeedLimit > 0 &&
-    (resultsByKeyword.size < minimumResults ||
+    (eligibleCount() < minimumResults ||
       options.expandProductAnchors === true)
   ) {
     const relatedSeeds = seeds
@@ -1078,7 +1098,7 @@ export async function discoverKeywords(
   // better recovery source than broad domain suggestions for young sites.
   let keywordIdeasCount = 0;
   if (
-    (resultsByKeyword.size < minimumResults ||
+    (eligibleCount() < minimumResults ||
       options.expandProductAnchors === true) &&
     options.useKeywordIdeas !== false
   ) {
@@ -1117,7 +1137,7 @@ export async function discoverKeywords(
   // A site-based request is the final bounded fallback. It remains tied to the
   // tenant's actual business rather than inventing unverified AI keywords.
   let siteCount = 0;
-  if (resultsByKeyword.size < minimumResults && options.targetDomain) {
+  if (eligibleCount() < minimumResults && options.targetDomain) {
     const target = options.targetDomain
       .replace(/^https?:\/\//i, "")
       .replace(/^www\./i, "")
@@ -1155,7 +1175,9 @@ export async function discoverKeywords(
   // gets to publish. Ranking by raw volume keeps exactly the head terms an
   // incumbent owns and discards the long tail a weak domain can win, which is
   // how a rank-4 tenant ended up with 205 topics and no reachable SERP.
-  const discovered = [...resultsByKeyword.values()];
+  const discovered = [...resultsByKeyword.entries()]
+    .filter(([key]) => !exclusions.has(key))
+    .map(([, metric]) => metric);
   const byWinnability = typeof options.tenantAuthority === "number"
     ? orderDiscoveryByWinnability(options.tenantAuthority, discovered)
     : discovered.slice().sort((a, b) => b.searchVolume - a.searchVolume);
@@ -1170,6 +1192,14 @@ export async function discoverKeywords(
       return 0;
     })
     .slice(0, limit);
+  const excluded = { already_known: 0, product_fit: 0, existing_intent: 0 };
+  for (const reason of exclusions.values()) excluded[reason] += 1;
+  options.onDiagnostics?.({
+    unique: resultsByKeyword.size,
+    eligible: discovered.length,
+    selected: topResults.length,
+    excluded,
+  });
   console.log(
     `Keyword discovery sources: Google Ads=${googleAdsCount}, Labs=${labsCount}, related=${relatedCount}, ideas=${keywordIdeasCount}, site=${siteCount}, unique=${topResults.length}` +
       (sourceErrors.length > 0 ? `, recoverable errors=${sourceErrors.length}` : ""),

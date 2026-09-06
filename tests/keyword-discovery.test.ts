@@ -6,7 +6,106 @@ import {
   computeMaxKD,
   discoverKeywords,
   type KeywordDiscoveryRequest,
+  type KeywordDiscoveryDiagnostics,
 } from "../convex/actions/seoData.ts";
+
+test("mature inventory and unrelated terms cannot crowd usable topics out before KD measurement", async () => {
+  let diagnostics: KeywordDiscoveryDiagnostics | undefined;
+  const measured: string[][] = [];
+  const results = await discoverKeywords(["example product"], 2840, "en", 3, {
+    minimumResults: 1,
+    maxGoogleAdsBatches: 1,
+    excludeKeyword: (keyword) => keyword.startsWith("covered ") ? "already_known"
+      : keyword.startsWith("unrelated ") ? "product_fit"
+      : keyword.startsWith("legacy overlap ") ? "existing_intent" : undefined,
+    onDiagnostics: (value) => { diagnostics = value; },
+    request: async (endpoint, body) => {
+      if (endpoint === "keywords_data/google_ads/keywords_for_keywords/live") {
+        return { tasks: [{ result: [
+          ...Array.from({ length: 400 }, (_, index) => ({ keyword: `covered ${index}`, search_volume: 100_000 })),
+          { keyword: "unrelated demand", search_volume: 90_000 },
+          { keyword: "legacy overlap demand", search_volume: 80_000 },
+          { keyword: "useful distinct workflow", search_volume: 100 },
+          { keyword: "useful distinct comparison", search_volume: 90 },
+          { keyword: "useful distinct question", search_volume: 80 },
+        ] }] };
+      }
+      if (endpoint === "dataforseo_labs/google/bulk_keyword_difficulty/live") {
+        measured.push(body[0].keywords);
+        return { tasks: [{ result: [{ items: body[0].keywords.map((keyword: string) => ({ keyword, keyword_difficulty: 0 })) }] }] };
+      }
+      throw new Error(`Unexpected paid expansion: ${endpoint}`);
+    },
+  });
+  assert.equal(results.length, 3);
+  assert.ok(results.every((row) => row.keyword.startsWith("useful ") && row.difficultyMeasured && row.difficulty === 0));
+  assert.deepEqual(measured, [results.map((row) => row.keyword)]);
+  assert.deepEqual(diagnostics, {
+    unique: 405, eligible: 3, selected: 3,
+    excluded: { already_known: 400, product_fit: 1, existing_intent: 1 },
+  });
+});
+
+test("a covered source does not suppress bounded discovery fallback or consume another KD request", async () => {
+  const endpoints: string[] = [];
+  let diagnostics: KeywordDiscoveryDiagnostics | undefined;
+  const results = await discoverKeywords(["useful workflow"], 2840, "en", 5, {
+    minimumResults: 1,
+    maxGoogleAdsBatches: 1,
+    maxLabsSeeds: 1,
+    useKeywordIdeas: false,
+    excludeKeyword: (keyword) => keyword === "old workflow" ? "already_known" : undefined,
+    onDiagnostics: (value) => { diagnostics = value; },
+    request: async (endpoint, body) => {
+      endpoints.push(endpoint);
+      if (endpoint === "keywords_data/google_ads/keywords_for_keywords/live") {
+        return { tasks: [{ result: [{ keyword: "old workflow", search_volume: 10000 }] }] };
+      }
+      if (endpoint === "dataforseo_labs/google/keyword_suggestions/live") {
+        return { tasks: [{ result: [{ items: [
+          { keyword: "old workflow", keyword_info: { search_volume: 10000 } },
+          { keyword: "new workflow", keyword_info: { search_volume: 100 } },
+        ] }] }] };
+      }
+      if (endpoint === "dataforseo_labs/google/bulk_keyword_difficulty/live") {
+        assert.deepEqual(body[0].keywords, ["new workflow"]);
+        return { tasks: [{ result: [{ items: [{ keyword: "new workflow", keyword_difficulty: 2 }] }] }] };
+      }
+      throw new Error(`Unexpected endpoint: ${endpoint}`);
+    },
+  });
+  assert.deepEqual(endpoints, [
+    "keywords_data/google_ads/keywords_for_keywords/live",
+    "dataforseo_labs/google/keyword_suggestions/live",
+    "dataforseo_labs/google/bulk_keyword_difficulty/live",
+  ]);
+  assert.deepEqual(results.map((row) => row.keyword), ["new workflow"]);
+  assert.equal(diagnostics?.excluded.already_known, 1, "a keyword repeated by another source is counted once");
+});
+
+test("an entirely excluded inventory returns an exact diagnostic without buying KD", async () => {
+  let diagnostics: KeywordDiscoveryDiagnostics | undefined;
+  let requests = 0;
+  const results = await discoverKeywords(["example workflow"], 2840, "en", 5, {
+    minimumResults: 1,
+    maxGoogleAdsBatches: 1,
+    maxLabsSeeds: 0,
+    useKeywordIdeas: false,
+    excludeKeyword: () => "existing_intent",
+    onDiagnostics: (value) => { diagnostics = value; },
+    request: async (endpoint) => {
+      requests += 1;
+      assert.equal(endpoint, "keywords_data/google_ads/keywords_for_keywords/live");
+      return { tasks: [{ result: [{ keyword: "example workflow", search_volume: 100 }] }] };
+    },
+  });
+  assert.deepEqual(results, []);
+  assert.equal(requests, 1);
+  assert.deepEqual(diagnostics, {
+    unique: 1, eligible: 0, selected: 0,
+    excluded: { already_known: 0, product_fit: 0, existing_intent: 1 },
+  });
+});
 
 test("keyword difficulty ceiling is bounded by both authority and referring domains", () => {
   assert.equal(computeMaxKD(null), 15);

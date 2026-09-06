@@ -2527,6 +2527,7 @@ async function handlePlan(
     { siteId },
   );
   const existingKeywords = existingTopics.map((t: { primaryKeyword: string }) => t.primaryKeyword);
+  const existingSet = new Set(existingKeywords.map((kw: string) => kw.trim().toLowerCase()));
   const discoveryCoverage = coveredIntentTopics(
     existingTopics.map((topic) => ({
       _id: String(topic._id),
@@ -2709,6 +2710,7 @@ async function handlePlan(
   let keywordDiscoveryError: unknown = null;
   let checkpointSeedBatches: string[][] = [];
   let discoverySeedCount = 0;
+  let discoveryDiagnostics: import("./seoData").KeywordDiscoveryDiagnostics | undefined;
   try {
     const { discoverKeywords, findKeywordGaps, getKeywordMetrics } = await import("./seoData");
 
@@ -2820,6 +2822,19 @@ async function handlePlan(
         // authority the shortlist collapses to the highest-volume head terms,
         // which on a weak domain is an inventory with no reachable SERP.
         tenantAuthority: site.seoAuthorityDomainRank,
+        excludeKeyword: (keyword) => {
+          if (existingSet.has(keyword.trim().toLowerCase())) return "already_known";
+          if (!evaluateTopicBusinessFit({
+            keyword,
+            ...tenantBusinessSignals,
+            growthSeed: growthContext?.seed,
+          }).eligible) return "product_fit";
+          if (blockedByUnfingerprintedCoverage(keyword, discoveryCoverage)) {
+            return "existing_intent";
+          }
+          return undefined;
+        },
+        onDiagnostics: (diagnostics) => { discoveryDiagnostics = diagnostics; },
       },
     ))
       .filter(k => k.searchVolume >= 10)
@@ -2905,9 +2920,17 @@ async function handlePlan(
   }
 
   if (requireVerifiedKeywordData && discoveredKeywords.length === 0) {
+    if (discoveryDiagnostics && discoveryDiagnostics.unique > 0 &&
+        discoveryDiagnostics.eligible === 0) {
+      throw new Error(
+        `Honest inventory miss: every discovered keyword failed preselection. Discovery inventory: ${JSON.stringify(discoveryDiagnostics)}`,
+      );
+    }
     const reason = keywordDiscoveryError instanceof Error
       ? keywordDiscoveryError.message
-      : "no verified keyword metrics were returned";
+      : discoveryDiagnostics
+        ? `discovery inventory ${JSON.stringify(discoveryDiagnostics)}`
+        : "no verified keyword metrics were returned";
     throw new Error(
       `Verified keyword data is required for ${site.domain}; refusing to save an AI-only content plan (${reason}).`,
     );
@@ -2916,8 +2939,6 @@ async function handlePlan(
   // ══════════════════════════════════════════════════════════════════════
   // STEP 3: Filter, score, and rank keyword candidates
   // ══════════════════════════════════════════════════════════════════════
-
-  const existingSet = new Set(existingKeywords.map((kw: string) => kw.toLowerCase()));
 
   // Keyword-level quality filter — only blocks brands (niche relevance left to the AI)
   const isKeywordBlocked = (kw: string): string | null => {
@@ -3123,7 +3144,8 @@ async function handlePlan(
     console.log(`Deterministically selected ${plan.length} measured topic(s).`);
   } else if (requireVerifiedKeywordData) {
     throw new Error(
-      "Verified discovery returned no measured, authority-attainable, tenant-product-fit keyword; rotating the bounded seed window instead of paying a model to invent one.",
+      "Verified discovery returned no measured, authority-attainable, tenant-product-fit keyword; rotating the bounded seed window instead of paying a model to invent one." +
+      (discoveryDiagnostics ? ` Discovery inventory: ${JSON.stringify(discoveryDiagnostics)}` : ""),
     );
   } else {
     // ── AI-FIRST: no DataForSEO data, let AI generate keywords ──

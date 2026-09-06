@@ -18,6 +18,22 @@ article and never a reason to postpone the new-article clock.
   remaining-article allowance that double-charges fulfilled work.
 - Preserve the next available rolling-window slot with an ordinary scheduler
   wake, independently of the older exact terminal-receipt observer.
+- Apply tenant-known-topic, product-fit and existing-intent exclusions before
+  the discovery shortlist limit and paid difficulty enrichment. Exhausted
+  source rows no longer suppress bounded discovery fallbacks. Persist counts
+  in a terminal discovery error so empty inventory has a concrete explanation.
+
+## Observations
+
+The first controlled refill after `b554435` failed with zero selected topics
+(job `j97cmrscg745tey26jdw6n85218dw1hd`). Pentra still had zero sealed
+articles. Its distinct-plan reconsideration was durably scheduled for
+2026-09-06 00:44:25.893 UTC. This proves neither replenishment nor delivery;
+it records a failed production test and the automatic recovery boundary.
+
+Local regression fixtures cover 400 already-covered keywords crowding out
+three usable topics, a covered source requiring bounded fallback, and an
+entirely excluded source that must not buy another difficulty request.
 
 ## Not yet accepted
 
