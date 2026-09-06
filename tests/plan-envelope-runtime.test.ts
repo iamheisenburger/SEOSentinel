@@ -7,6 +7,9 @@ import { automaticPlanYieldTarget, planProviderAmountsMatch, planProviderEnvelop
 import { planSeedBatchManifestHash } from "../convex/lib/planCandidateCheckpoint.ts";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "../convex/lib/autopilotBuffer.ts";
 import { DATAFORSEO_AUTHORITY_SOURCE, DATAFORSEO_DEMAND_SOURCE } from "../convex/lib/expectedClickPortfolio.ts";
+import { CANONICAL_PLANS } from "../convex/planLimits.ts";
+import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD, SHARED_PROVIDER_DAILY_CEILING_MICRO_USD,
+  SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/providerSpendReservation.ts";
 
 type Row = Record<string, unknown>;
 type Expression = (r: Row) => unknown;
@@ -256,7 +259,7 @@ test("new reservation survives checkpoint staging, exact replay and per-candidat
   assert.equal((await f.run("planCandidateCheckpoints", "beginInlineSerp", begin)).reason, "already_attempted");
 });
 
-test("lifecycle and monthly-count fences cannot be bypassed by the cheaper execution envelope", async () => {
+test("lifecycle fences stay closed and legacy monthly-count policy is retained", async () => {
   for (const patch of [{ deletionStatus: "deleting" }, { planParkedAt: now }, { domainOwnershipConflictAt: now }]) {
     const f = fixture(); Object.assign(f.row(f.id)!, patch); const before = structuredClone(f.tables);
     await assert.rejects(queued(f), /Site not found/);
@@ -268,7 +271,134 @@ test("lifecycle and monthly-count fences cannot be bypassed by the cheaper execu
     reservedMicroUsd: 1_000_000, settledMicroUsd: 1_000_000, settledAt: now - 10_000,
   })));
   const before = structuredClone(f.tables);
-  const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+  const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "owner_requested_plan", manual: true });
   assert.equal(result.reason, "plan_headroom_exhausted");
   assert.deepEqual(f.tables, before);
+});
+
+function historicalUnderfilledPlans(f: ReturnType<typeof fixture>, count: number) {
+  for (let i = 0; i < count; i++) {
+    const createdAt = now - 2 * 86_400_000;
+    f.tables.provider_spend_reservations.push({ _id: `historical-spend-${i}`, siteId: f.id,
+      userId: `owner-${f.id}`, purpose: "topic_plan", createdAt, reservedMicroUsd: 1_000_000 });
+    f.tables.jobs.push({ _id: `historical-job-${i}`, siteId: f.id, type: "plan", status: "done",
+      createdAt, updatedAt: createdAt + 1000, result: { count: 2 }, providerCostReservedMicroUsd: 1_000_000,
+      providerSpendReservationId: `historical-spend-${i}` });
+  }
+}
+
+function fixtureForPlan(plan: typeof CANONICAL_PLANS[number]) {
+  const f = fixture();
+  const features = [`max_sites_${plan.maxSites === 9999 ? "unlimited" : plan.maxSites}`, `max_articles_${plan.maxArticles}`];
+  Object.assign(f.row(f.id)!, { planFeatures: features });
+  Object.assign(f.tables.account_plan_entitlements[0], {
+    planFeatures: features, maxSites: plan.maxSites, maxArticles: plan.maxArticles,
+  });
+  return f;
+}
+
+test("automatic refill does not mistake a two-topic plan for ten articles at any canonical tier", async () => {
+  for (const plan of CANONICAL_PLANS) {
+    const f = fixtureForPlan(plan);
+    historicalUnderfilledPlans(f, Math.ceil(plan.maxArticles / 10));
+    const priorJobs = structuredClone(f.tables.jobs), priorSpend = structuredClone(f.tables.provider_spend_reservations);
+    const { job, spend } = await queued(f);
+    assert.equal(job.providerCostReservedMicroUsd, 1_000_000, plan.tier);
+    assert.equal(spend.reservedMicroUsd, 1_000_000);
+    assert.deepEqual(f.tables.jobs.slice(0, -1), priorJobs, "past work is not replayed or rewritten");
+    assert.deepEqual(f.tables.provider_spend_reservations.slice(0, -1), priorSpend, "past spend is still charged");
+  }
+});
+
+test("refill after underfilled plans still respects the real monthly dollar ceiling at every tier", async () => {
+  for (const plan of CANONICAL_PLANS) {
+    const f = fixtureForPlan(plan), count = Math.ceil(plan.maxArticles / 10);
+    historicalUnderfilledPlans(f, count);
+    f.tables.provider_spend_reservations.push({ _id: "other-account-purpose", siteId: f.id,
+      userId: `owner-${f.id}`, purpose: "authority_discovery", createdAt: now - 2 * 86_400_000,
+      reservedMicroUsd: PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD[plan.tier] - count * 1_000_000 - 999_999 });
+    const before = structuredClone(f.tables);
+    const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+    assert.equal(result.queued, false, plan.tier);
+    assert.equal(result.reason, "provider_account_monthly_budget_reserved", plan.tier);
+    assert.deepEqual(f.tables, before, "no job or reservation on denial");
+  }
+});
+
+test("post-underfill refill still charges other sites and deleted sites owned by the same account", async () => {
+  for (const siteId of ["second-site", undefined]) {
+    const f = fixture(); historicalUnderfilledPlans(f, 15);
+    f.tables.provider_spend_reservations.push({ _id: "other-site-spend", siteId,
+      userId: `owner-${f.id}`, purpose: "authority_discovery", createdAt: now - 2 * 86_400_000,
+      reservedMicroUsd: 12_000_001 });
+    const before = structuredClone(f.tables);
+    const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+    assert.equal(result.reason, "provider_account_monthly_budget_reserved");
+    assert.deepEqual(f.tables, before);
+  }
+});
+
+test("post-underfill refill cannot bypass either shared fleet dollar ceiling", async () => {
+  for (const monthly of [true, false]) {
+    const f = fixture(); historicalUnderfilledPlans(f, 15);
+    f.tables.provider_spend_reservations.push({ _id: "foreign-account", siteId: "foreign",
+      userId: "foreign-owner", purpose: "authority_discovery",
+      createdAt: monthly ? now - 2 * 86_400_000 : now - 1000,
+      reservedMicroUsd: (monthly ? SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD - 15_000_000
+        : SHARED_PROVIDER_DAILY_CEILING_MICRO_USD) - 999_999 });
+    const before = structuredClone(f.tables);
+    const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+    assert.equal(result.reason, monthly ? "provider_fleet_monthly_budget_reserved" : "provider_fleet_daily_budget_reserved");
+    assert.deepEqual(f.tables, before);
+  }
+});
+
+test("replenishment still stops at real article quota and caps the next target to remaining quota", async () => {
+  for (const plan of CANONICAL_PLANS) for (const remaining of [0, 1]) {
+    const f = fixtureForPlan(plan); historicalUnderfilledPlans(f, Math.ceil(plan.maxArticles / 10));
+    f.tables.usage_log.push(...Array.from({ length: plan.maxArticles - remaining }, (_, i) => ({
+      _id: `usage-${i}`, userId: `owner-${f.id}`, type: "article_generated", createdAt: now - 1000,
+    })));
+    const before = structuredClone(f.tables);
+    const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+    assert.equal(result.queued, remaining > 0, plan.tier);
+    if (remaining === 0) assert.deepEqual(f.tables, before);
+    else {
+      const target = (f.row(result.jobId)!.payload as Row).planYieldTarget as Row;
+      assert.equal(target.requiredVerifiedYield, 1, plan.tier);
+      assert.equal(target.articleQuotaHeadroom, 1, plan.tier);
+    }
+  }
+});
+
+test("underfilled plans still consume rolling attempt capacity and schedule a future recheck", async () => {
+  for (const [cadence, count] of [[7, 3], [21, 5]]) {
+    const f = fixture(cadence); historicalUnderfilledPlans(f, 15);
+    const recent = f.tables.jobs.slice(0, count);
+    for (const [i, job] of recent.entries()) Object.assign(job, {
+      createdAt: now - (i + 1) * 3_600_000, payload: { reason: "topic_evidence_replenishment" },
+    });
+    const before = structuredClone(f.tables);
+    const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+    assert.equal(result.queued, false);
+    assert.equal(result.reason, "recent_limit");
+    assert.deepEqual({ ...f.tables, autopilot_runs: [] }, before);
+    assert.equal(f.tables.autopilot_runs.length, 1);
+    assert.equal(f.tables.autopilot_runs[0].status, "scheduled");
+    assert.ok(Number(f.tables.autopilot_runs[0].scheduledAt) > now);
+    assert.ok(f.scheduled.some(row => Number(row.dueAt) > now));
+  }
+});
+
+test("post-underfill refill never overrides pause or entitlement reconciliation", async () => {
+  for (const paused of [true, false]) {
+    const f = fixture(); historicalUnderfilledPlans(f, 15);
+    if (paused) f.row(f.id)!.autopilotEnabled = false;
+    else f.tables.account_plan_entitlements[0].status = "reconciling";
+    const before = structuredClone(f.tables);
+    const result = await f.run("jobs", "queuePlanIfAbsent", { siteId: f.id, reason: "topic_evidence_replenishment" });
+    assert.equal(result.queued, false);
+    assert.equal(result.reason, paused ? "autopilot_disabled" : "plan_entitlement_missing");
+    assert.deepEqual(f.tables, before);
+  }
 });

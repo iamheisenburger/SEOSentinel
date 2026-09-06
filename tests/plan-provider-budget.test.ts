@@ -214,7 +214,7 @@ test("queue-time yield target is horizon-aware, quota-capped, and immutable", ()
   }), null);
 });
 
-test("paid plan allowance cannot exceed remaining ten-topic article headroom", () => {
+test("legacy/manual attempt allowance retains its ten-topic headroom policy", () => {
   assert.equal(automaticPlanAllowanceForArticleHeadroom(0), 0);
   assert.equal(automaticPlanAllowanceForArticleHeadroom(-1), 0);
   assert.equal(automaticPlanAllowanceForArticleHeadroom(Number.NaN), 0);
@@ -222,6 +222,31 @@ test("paid plan allowance cannot exceed remaining ten-topic article headroom", (
   assert.equal(automaticPlanAllowanceForArticleHeadroom(10), 1);
   assert.equal(automaticPlanAllowanceForArticleHeadroom(11), 2);
   assert.equal(automaticPlanAllowanceForArticleHeadroom(25), 3);
+});
+
+test("checkpoint refill uses real article headroom and unchanged daily spend instead of assumed topic yield", () => {
+  const base = { remainingArticles: 1, monthlyArticleAllowance: 150,
+    cadencePerWeek: 7, singleExecution: true as const, reservedTodayMicroUsd: 0 };
+  assert.deepEqual(evaluatePlanProviderReservationCapacity(base), { allowed: true, monthlyPlanAllowance: null });
+  for (const remainingArticles of [0, -1, NaN, Infinity]) {
+    assert.deepEqual(evaluatePlanProviderReservationCapacity({ ...base, remainingArticles }), {
+      allowed: false, reason: "article_quota_no_headroom", monthlyPlanAllowance: null,
+    });
+  }
+  for (const reservedTodayMicroUsd of [5_000_001, NaN, Infinity, -1]) {
+    assert.deepEqual(evaluatePlanProviderReservationCapacity({ ...base, reservedTodayMicroUsd }), {
+      allowed: false, reason: "provider_daily_budget_reserved", monthlyPlanAllowance: null,
+    });
+  }
+  assert.equal(evaluatePlanProviderReservationCapacity({ ...base, reservedTodayMicroUsd: 5_000_000 }).allowed, true);
+});
+
+test("legacy/manual planning cannot treat missing or malformed attempt counts as free headroom", () => {
+  for (const budgetedPlansThisMonth of [NaN, Infinity, -1]) {
+    assert.deepEqual(evaluatePlanProviderReservationCapacity({
+      remainingArticles: 150, monthlyArticleAllowance: 150, budgetedPlansThisMonth, reservedTodayMicroUsd: 0,
+    }), { allowed: false, reason: "plan_headroom_exhausted", monthlyPlanAllowance: 15 });
+  }
 });
 
 test("a free tenant gets one reserved plan and repeated customer clicks fail closed", () => {

@@ -648,6 +648,10 @@ export function automaticPlanDailyCeilingMicroUsd(cadencePerWeek?: number): numb
     (cadencePerWeek === undefined ? 1 : topicReplenishmentBudget(cadencePerWeek));
 }
 
+/** Legacy/manual attempt allowance. A checkpoint refill is instead bounded
+ * by actual article quota, verified inventory need, rolling attempt limits,
+ * and its atomically reserved local/account/fleet dollar envelope. A paid
+ * execution's ten-topic maximum is not a guarantee of ten usable topics. */
 export function automaticPlanAllowanceForArticleHeadroom(
   remainingArticles: number,
 ): number {
@@ -658,35 +662,43 @@ export function automaticPlanAllowanceForArticleHeadroom(
 }
 
 export type PlanProviderCapacityDecision =
-  | { allowed: true; monthlyPlanAllowance: number }
+  | { allowed: true; monthlyPlanAllowance: number | null }
   | {
       allowed: false;
       reason:
         | "article_quota_no_headroom"
         | "plan_headroom_exhausted"
         | "provider_daily_budget_reserved";
-      monthlyPlanAllowance: number;
+      monthlyPlanAllowance: number | null;
     };
 
 export function evaluatePlanProviderReservationCapacity(args: {
   remainingArticles: number;
   monthlyArticleAllowance?: number;
   cadencePerWeek?: number;
-  budgetedPlansThisMonth: number;
   reservedTodayMicroUsd: number;
-  singleExecution?: boolean;
-}): PlanProviderCapacityDecision {
-  const monthlyPlanAllowance = automaticPlanAllowanceForArticleHeadroom(
+} & (
+  | { singleExecution: true; budgetedPlansThisMonth?: never }
+  | { singleExecution?: false; budgetedPlansThisMonth: number }
+)): PlanProviderCapacityDecision {
+  const legacyPlanAllowance = automaticPlanAllowanceForArticleHeadroom(
     args.monthlyArticleAllowance ?? args.remainingArticles,
   );
-  if (!Number.isFinite(args.remainingArticles) || args.remainingArticles < 1 || monthlyPlanAllowance === 0) {
+  // null explicitly means this attempt-count policy does not apply, not
+  // unlimited provider spend. The shared monetary reservation is mandatory.
+  const monthlyPlanAllowance = args.singleExecution === true ? null : legacyPlanAllowance;
+  if (!Number.isFinite(args.remainingArticles) || args.remainingArticles < 1 || legacyPlanAllowance === 0) {
     return {
       allowed: false,
       reason: "article_quota_no_headroom",
       monthlyPlanAllowance,
     };
   }
-  if (args.budgetedPlansThisMonth >= monthlyPlanAllowance) {
+  if (args.singleExecution !== true && (
+    !Number.isFinite(args.budgetedPlansThisMonth) ||
+    args.budgetedPlansThisMonth < 0 ||
+    args.budgetedPlansThisMonth >= legacyPlanAllowance
+  )) {
     return {
       allowed: false,
       reason: "plan_headroom_exhausted",
@@ -694,6 +706,7 @@ export function evaluatePlanProviderReservationCapacity(args: {
     };
   }
   if (
+    !Number.isFinite(args.reservedTodayMicroUsd) || args.reservedTodayMicroUsd < 0 ||
     args.reservedTodayMicroUsd +
       (args.singleExecution === true
         ? AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD

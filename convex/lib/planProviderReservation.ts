@@ -196,10 +196,15 @@ export async function reservePlanProviderBudget(
     };
   }
 
-  // Finite tiers can inspect every entitled site directly. Enterprise has no
-  // site-count ceiling, so its account-wide plan headroom comes from the
-  // durable provider reservation ledger rather than truncating the site set.
-  const budgetedPlansThisMonth = limits.maxSites >= 9999
+  // New single-execution checkpoint refills must prove actual inventory need
+  // at queue admission; they do not assume each past plan yielded ten topics.
+  // Do not read a monthly job count for that policy. Every past reservation
+  // still counts in the authoritative shared monetary ledger below.
+  // Legacy/manual paths retain their conservative attempt-count guard. Finite
+  // tiers inspect entitled sites; Enterprise counts account reservations.
+  const budgetedPlansThisMonth = options?.singleExecution === true
+    ? undefined
+    : limits.maxSites >= 9999
     ? (
         await ctx.db
           .query("provider_spend_reservations")
@@ -258,9 +263,10 @@ export async function reservePlanProviderBudget(
     // remainder that double-charges every article already delivered.
     monthlyArticleAllowance: limits.maxArticles,
     cadencePerWeek: site.cadencePerWeek ?? 4,
-    budgetedPlansThisMonth,
     reservedTodayMicroUsd,
-    singleExecution: options?.singleExecution,
+    ...(budgetedPlansThisMonth === undefined
+      ? { singleExecution: true as const }
+      : { budgetedPlansThisMonth }),
   });
   if (!capacity.allowed) {
     return {
@@ -270,7 +276,7 @@ export async function reservePlanProviderBudget(
         ? budgetedPlansThisMonth
         : undefined,
       maximum: capacity.reason === "plan_headroom_exhausted"
-        ? capacity.monthlyPlanAllowance
+        ? capacity.monthlyPlanAllowance ?? undefined
         : undefined,
       reservedMicroUsd: reservedTodayMicroUsd,
       ceilingMicroUsd: automaticPlanDailyCeilingMicroUsd(site.cadencePerWeek ?? 4),
