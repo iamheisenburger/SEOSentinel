@@ -3950,6 +3950,7 @@ const SITE_DELETION_STAGES = [
   "provider_spend_reservations",
   "legacy_publication_receipt_adoptions",
   "published_article_revisions",
+  "published_correction_audits",
   "seo_growth_actions",
   "seo_growth_health",
   "seo_growth_goals",
@@ -4647,6 +4648,8 @@ async function deletionRowsForStage(
       return ctx.db.query("legacy_publication_receipt_adoptions").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "published_article_revisions":
       return ctx.db.query("published_article_revisions").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "published_correction_audits":
+      return ctx.db.query("published_correction_audits").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "seo_growth_actions":
       return ctx.db.query("seo_growth_actions").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "seo_growth_health":

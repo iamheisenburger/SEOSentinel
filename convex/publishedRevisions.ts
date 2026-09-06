@@ -70,6 +70,8 @@ import {
   isSealedReady,
 } from "./lib/autopilotBuffer";
 import { CADENCE_MICRO_SEED_VERSION } from "./lib/cadenceMicroSeed";
+import { correctionInputHash, validatePublishedCorrection, PUBLISHED_CORRECTION_VERSION } from "./lib/publishedCorrection";
+import { validateClaimEvidenceLedger } from "./lib/articleQuality";
 import {
   primaryFallbackReceiptFingerprint,
   semanticCandidateExhaustionVerified,
@@ -233,7 +235,7 @@ const legacyAdoptionReceiptValidator = v.object({
   receivedAt: v.number(),
 });
 
-function artifactSnapshot(
+export function artifactSnapshot(
   article: PublicationArtifact & { title: string; slug: string; markdown: string },
 ): PublishedRevisionArtifact {
   return {
@@ -309,7 +311,7 @@ async function latestFinalRevision(
   return verified.createdAt >= rolledBack.createdAt ? verified : rolledBack;
 }
 
-async function effectiveBase(
+export async function effectiveBase(
   ctx: MutationCtx | QueryCtx,
   site: Doc<"sites">,
   article: Doc<"articles">,
@@ -387,7 +389,7 @@ async function effectiveBase(
   };
 }
 
-function rolloutAllowsRevision(site: Doc<"sites">): boolean {
+export function rolloutAllowsRevision(site: Doc<"sites">): boolean {
   return Boolean(
     siteExecutionActive(site) &&
     site.autopilotEnabled &&
@@ -411,6 +413,47 @@ async function currentRevisionArticle(
     !articleMatchesCurrentDomain(site, article)
   ) return null;
   return { site, article };
+}
+
+async function assertCorrectionAudit(
+  ctx: QueryCtx | MutationCtx,
+  revision: Doc<"published_article_revisions">,
+  article: Doc<"articles">,
+  base: PublishedRevisionArtifact,
+  next: PublishedRevisionArtifact,
+) {
+  const audit = revision.correctionAuditId
+    ? await ctx.db.get(revision.correctionAuditId) : null;
+  const proof = audit?.audit as { editorialScore?: number; factCheckScore?: number;
+    materialDefects?: unknown[]; claimEvidence?: unknown } | undefined;
+  if (!audit || audit.status !== "passed" || audit.version !== PUBLISHED_CORRECTION_VERSION ||
+    audit.revisionId !== revision._id || audit.siteId !== revision.siteId ||
+    audit.articleId !== revision.articleId || audit.baseArtifactHash !== revision.baseArtifactHash ||
+    audit.nextArtifactHash !== revision.nextArtifactHash ||
+    audit.publicationConfigHash !== revision.publicationConfigHash ||
+    audit.rolloutEpoch !== revision.rolloutEpoch ||
+    audit.productEvidenceHash !== next.productEvidenceHash ||
+    audit.proposal.title !== next.title || audit.proposal.metaTitle !== next.metaTitle ||
+    audit.proposal.metaDescription !== next.metaDescription ||
+    audit.inputHash !== revision.actionFingerprint ||
+    correctionInputHash({ siteId: String(audit.siteId), articleId: String(audit.articleId),
+      baseArtifactHash: audit.baseArtifactHash, productEvidenceHash: audit.productEvidenceHash,
+      reason: audit.reason, proposal: audit.proposal }) !== audit.inputHash ||
+    publicationArtifactHashForAuditVersion(base, revisionBaseAuditVersion(revision)) !== revision.baseArtifactHash ||
+    publicationArtifactHashForAuditVersion(next, revisionNextAuditVersion(revision)) !== revision.nextArtifactHash ||
+    proof?.editorialScore !== next.editorialQualityScore ||
+    proof?.factCheckScore !== next.factCheckScore || proof?.materialDefects?.length !== 0 ||
+    JSON.stringify(proof?.claimEvidence) !== JSON.stringify(next.claimEvidence)) {
+    throw new Error("Editorial correction lost its completed independent audit");
+  }
+  validatePublishedCorrection({ base, next, productEvidence: article.productEvidenceSnapshot ?? "" });
+}
+
+function assertCorrectionRollbackEvidence(artifact: PublishedRevisionArtifact, productEvidence: string) {
+  const ledger = validateClaimEvidenceLedger({ markdown: artifact.markdown,
+    sources: artifact.sources ?? [], researchEvidence: artifact.researchEvidenceSummary ?? "",
+    productEvidence, productEvidenceHash: artifact.productEvidenceHash, claimEvidence: artifact.claimEvidence ?? [] });
+  if (!ledger.passed) throw new Error("The preserved correction base fails the current evidence review; restoring it requires a newly audited correction");
 }
 
 function legacyGitHubAdoptionEligibility(
@@ -509,7 +552,7 @@ async function requireOwner(
   return site;
 }
 
-async function recentTenantRevisionCount(
+export async function recentTenantRevisionCount(
   ctx: MutationCtx | QueryCtx,
   siteId: Id<"sites">,
   now: number,
@@ -1773,10 +1816,19 @@ export const claimExecution = internalMutation({
       revision.nextArtifact as PublishedRevisionArtifact,
     );
     if (revision.kind === "rollback") {
+      const source = revision.rollbackOfRevisionId ? await ctx.db.get(revision.rollbackOfRevisionId) : null;
+      if (!source || source.siteId !== revision.siteId || source.articleId !== revision.articleId ||
+        source.nextArtifactHash !== revision.baseArtifactHash || source.baseArtifactHash !== revision.nextArtifactHash) {
+        throw new Error("Rollback lost its exact preserved revision chain");
+      }
+      if (source.kind === "editorial_correction") assertCorrectionRollbackEvidence(nextArtifact, article.productEvidenceSnapshot ?? "");
       rollbackRevisionArtifact({
         current: baseArtifact,
         preservedBase: nextArtifact,
+        allowEditorialTitleChange: source.kind === "editorial_correction",
       });
+    } else if (revision.kind === "editorial_correction") {
+      await assertCorrectionAudit(ctx, revision, article, baseArtifact, nextArtifact);
     } else {
       validateDeterministicRevision({
         base: baseArtifact,
@@ -1868,6 +1920,11 @@ export const recordAttempted = internalMutation({
     const targetCurrent = revision && site
       ? await revisionTargetStillCurrent(ctx, site, revision)
       : false;
+    if (revision?.kind === "editorial_correction" && article) {
+      await assertCorrectionAudit(ctx, revision, article,
+        artifactSnapshot(revision.baseArtifact as PublishedRevisionArtifact),
+        artifactSnapshot(revision.nextArtifact as PublishedRevisionArtifact));
+    }
     if (
       !revision ||
       revision.status !== "leased" ||
@@ -2295,26 +2352,8 @@ export const recordLiveVerification = internalMutation({
         });
       }
     }
-    if (
-      args.status === "verified" &&
-      revision.cadenceMicroSeedJobId &&
-      Number.isSafeInteger(revision.cadenceDueAt)
-    ) {
-      const health = await ctx.db
-        .query("autopilot_health")
-        .withIndex("by_site", (q) => q.eq("siteId", revision.siteId))
-        .first();
-      if (health) {
-        await ctx.db.patch(health._id, {
-          lastPublishedAt: timestamp,
-          nextPublicationDueAt:
-            timestamp + cadenceIntervalMs(site.cadencePerWeek ?? 4),
-          detail:
-            "The cadence published a strict, immutable existing-page improvement after safe new-page space was exhausted.",
-          updatedAt: timestamp,
-        });
-      }
-    }
+    // A revision is not a new article. Even late callbacks from the retired
+    // cadence-recovery path must preserve the new-article publication clock.
     return { recorded: true, status: finalStatus };
   },
 });
@@ -2352,7 +2391,9 @@ export const requestRollback = mutation({
     }
     const current = artifactSnapshot(source.nextArtifact as PublishedRevisionArtifact);
     const preservedBase = artifactSnapshot(source.baseArtifact as PublishedRevisionArtifact);
-    const next = rollbackRevisionArtifact({ current, preservedBase });
+    if (source.kind === "editorial_correction") assertCorrectionRollbackEvidence(preservedBase, sourceArticle.productEvidenceSnapshot ?? "");
+    const next = rollbackRevisionArtifact({ current, preservedBase,
+      allowEditorialTitleChange: source.kind === "editorial_correction" });
     const sourceBaseAuditVersion = revisionBaseAuditVersion(source);
     const sourceNextAuditVersion = revisionNextAuditVersion(source);
     const nextArtifactHash = publicationArtifactHashForAuditVersion(

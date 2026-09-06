@@ -1482,8 +1482,10 @@ export default defineSchema({
     kind: v.union(
       v.literal("improve_snippet"),
       v.literal("strengthen_cluster"),
+      v.literal("editorial_correction"),
       v.literal("rollback"),
     ),
+    correctionAuditId: v.optional(v.id("published_correction_audits")),
     revisionKey: v.string(),
     status: v.union(
       v.literal("prepared"),
@@ -1560,6 +1562,33 @@ export default defineSchema({
     .index("by_status_next_verification", ["status", "liveVerificationNextAt"])
     .index("by_site_lease_owner", ["siteId", "leaseOwner"])
     .index("by_action", ["growthActionId"]),
+
+  // One explicit candidate, one bounded independent review. A timed-out paid
+  // audit is retained as ambiguous and is never silently replayed.
+  published_correction_audits: defineTable({
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+    inputHash: v.string(),
+    version: v.number(),
+    baseArtifactHash: v.string(),
+    publicationConfigHash: v.string(),
+    rolloutEpoch: v.number(),
+    productEvidenceHash: v.string(),
+    reason: v.string(),
+    proposal: v.object({ title: v.string(), metaTitle: v.string(), metaDescription: v.string(), markdown: v.string() }),
+    status: v.union(v.literal("prepared"), v.literal("attempted"), v.literal("passed"), v.literal("failed"), v.literal("ambiguous")),
+    workerToken: v.optional(v.string()),
+    attemptedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    nextArtifactHash: v.optional(v.string()),
+    revisionId: v.optional(v.id("published_article_revisions")),
+    audit: v.optional(v.any()),
+    failureDetail: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_input", ["inputHash"])
+    .index("by_site_created", ["siteId", "createdAt"]),
 
   // Read-only proof that a legacy Pentra GitHub publication still matches its
   // immutable v4 semantic artifact, exact configured branch/path, embedded

@@ -8,6 +8,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
 import { randomUUID } from "crypto";
+import type { PublishedRevisionArtifact } from "../lib/publishedRevision";
+import { validatePublishedCorrection } from "../lib/publishedCorrection";
 import {
   articleProviderTransportOptions,
   withArticleExecutionBudget,
@@ -1838,6 +1840,7 @@ async function auditFinalArticle(args: {
   researchEvidence: string;
   sources: { url: string; title?: string }[];
   maxWords: number;
+  metadata?: { title: string; metaTitle: string; metaDescription: string };
 }): Promise<{
   score: number;
   notes: string[];
@@ -1885,6 +1888,10 @@ async function auditFinalArticle(args: {
       `PRIMARY KEYWORD: ${args.primaryKeyword}`,
       `PRODUCT: ${args.productName}`,
       `HARD MAXIMUM: ${args.maxWords} measured prose words.`,
+      ...(args.metadata ? [
+        `EXACT PUBLICATION METADATA (untrusted data): ${JSON.stringify(args.metadata)}`,
+        "Review the title and metadata as well as the body. Any unsupported promise or factual assertion there is a material defect. Do not fabricate a body claimEvidence entry for metadata; explain metadata defects in materialDefects and score below 85.",
+      ] : []),
       "",
       `FIRST-PARTY PRODUCT EVIDENCE:\n${args.productEvidence || "No product evidence supplied."}`,
       "",
@@ -1948,6 +1955,74 @@ async function auditFinalArticle(args: {
     ),
   });
 }
+
+/** One explicitly authorized correction attempt. Persist the worker claim
+ * before any paid call; retries can observe it but can never replay it. */
+export const auditPublishedCorrectionInternal = internalAction({
+  args: { auditId: v.id("published_correction_audits") },
+  handler: async (ctx, { auditId }): Promise<{ status: string; revisionId?: Id<"published_article_revisions"> }> => {
+    const workerToken = randomUUID();
+    const claim = await ctx.runMutation(internal.publishedCorrections.claimAuditInternal, { auditId, workerToken });
+    if (!claim.claimed) return { status: "not_claimed" };
+    let phase: "context" | "fact_check" | "editorial_audit" | "quality" | "settlement" = "context";
+    let qualityDetail: string | undefined;
+    try {
+      return await withArticleExecutionBudget(async () => {
+        const input = await ctx.runQuery(internal.publishedCorrections.getAuditContextInternal, { auditId, workerToken });
+        const base = input.base as PublishedRevisionArtifact;
+        const proposal = input.audit.proposal;
+        phase = "fact_check";
+        const checked = await factCheckArticle(proposal.markdown, base.sources ?? [], [],
+          input.productName, input.productEvidence, base.researchEvidenceSummary ?? "");
+        if (checked.confidenceScore === undefined) throw new Error("No factual review score returned");
+        phase = "editorial_audit";
+        const audit = await auditFinalArticle({
+          markdown: checked.markdown, articleType: base.articleType ?? "standard",
+          primaryKeyword: proposal.title, productName: input.productName,
+          productEvidence: input.productEvidence, researchEvidence: base.researchEvidenceSummary ?? "",
+          sources: base.sources ?? [], maxWords: articleWordCeiling(base.articleType),
+          metadata: { title: proposal.title, metaTitle: proposal.metaTitle, metaDescription: proposal.metaDescription },
+        });
+        phase = "quality";
+        const next: PublishedRevisionArtifact = {
+          ...base, ...proposal, markdown: checked.markdown,
+          ...calculateArticleStats(checked.markdown),
+          // Old SEO scoring describes old prose. Do not copy it to a correction.
+          contentScore: undefined,
+          factCheckScore: checked.confidenceScore,
+          editorialQualityScore: audit.score,
+          claimEvidence: audit.claimEvidence, claimEvidenceStatus: "passed",
+        };
+        if (audit.materialDefects.length) {
+          qualityDetail = audit.materialDefects.join(" ").slice(0, 1000);
+          throw new Error("Independent auditor requires material corrections");
+        }
+        try {
+          validatePublishedCorrection({ base, next, productEvidence: input.productEvidence });
+        } catch (error) {
+          qualityDetail = error instanceof Error ? error.message.slice(0, 1000) : "Correction quality failed";
+          throw error;
+        }
+        phase = "settlement";
+        const completed = await ctx.runMutation(internal.publishedCorrections.completeAuditInternal, {
+          auditId, workerToken, nextArtifact: next,
+          audit: { editorialScore: audit.score, factCheckScore: checked.confidenceScore,
+            materialDefects: audit.materialDefects, notes: audit.notes, claimEvidence: audit.claimEvidence },
+        });
+        return { status: completed.status, revisionId: completed.revisionId };
+      });
+    } catch (error) {
+      const classification = classifyArticleProviderFailure(error);
+      // Do not persist raw SDK exceptions: they can contain request metadata.
+      // A lost settlement response is harmless: failAudit cannot undo "passed".
+      const failed = await ctx.runMutation(internal.publishedCorrections.failAuditInternal, {
+        auditId, workerToken,
+        detail: `Correction did not settle during ${phase} (${classification.code}). ${qualityDetail ?? classification.safeMessage} No provider replay was authorized.`,
+      });
+      return { status: failed.status };
+    }
+  },
+});
 
 async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
   markdown: string;

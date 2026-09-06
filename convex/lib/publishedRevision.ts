@@ -3,6 +3,7 @@ import {
   appendRelatedInternalLinks,
   publishedArticleInternalHref,
   selectRelatedInternalLinks,
+  stripGeneratedInternalLinks,
   validateInternalLinkSuggestions,
   type RelatedInternalDestination,
 } from "./internalLinks.ts";
@@ -16,7 +17,8 @@ import {
   type PublicationReceipt,
   validatePublicationReceipt,
 } from "./publicationReceipts.ts";
-import { assertSafePublishableMarkdown } from "./safeMarkdownHtml.ts";
+import { assertSafePublishableMarkdown, renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
+import { verifyLiveCorrectionBody } from "./publishedCorrection.ts";
 import {
   canonicalPublicationUrl,
   verifyLivePublicationPage,
@@ -141,6 +143,7 @@ export async function selectPreparedPublishedRevision<Request, RevisionId>(args:
 export type PublishedRevisionKind =
   | "improve_snippet"
   | "strengthen_cluster"
+  | "editorial_correction"
   | "rollback";
 
 export type PublishedRevisionArtifact = PublicationArtifact & {
@@ -282,6 +285,9 @@ export function validateDeterministicRevision(args: {
   kind: PublishedRevisionKind;
   allowedNewHrefs?: string[];
 }): PublishedRevisionArtifact {
+  if (args.kind === "editorial_correction") {
+    throw new Error("Editorial correction requires a completed independent audit, not deterministic revision approval");
+  }
   if (
     args.base.title !== args.next.title ||
     args.base.slug !== args.next.slug ||
@@ -489,9 +495,10 @@ export function webhookRevisionReceiptFromResponse(args: {
 export function rollbackRevisionArtifact(args: {
   current: PublishedRevisionArtifact;
   preservedBase: PublishedRevisionArtifact;
+  allowEditorialTitleChange?: boolean;
 }): PublishedRevisionArtifact {
   if (
-    args.current.title !== args.preservedBase.title ||
+    (!args.allowEditorialTitleChange && args.current.title !== args.preservedBase.title) ||
     args.current.slug !== args.preservedBase.slug ||
     args.current.publicationConfigHash !== args.preservedBase.publicationConfigHash
   ) {
@@ -699,6 +706,13 @@ export function verifyLivePublishedRevision(args: {
 
   if (args.kind === "rollback") {
     let observableChange = false;
+    if (stripGeneratedInternalLinks(args.base.markdown) !== stripGeneratedInternalLinks(args.next.markdown)) {
+      verifyLiveCorrectionBody({ html: args.html,
+        renderedBaseParagraphs: args.base.markdown.split(/\n\s*\n/).map(renderSafePublicationHtml),
+        renderedNext: renderSafePublicationHtml(args.next.markdown),
+      });
+      observableChange = true;
+    }
     const baseRenderedTitle = args.base.metaTitle ?? args.base.title;
     const nextRenderedTitle = args.next.metaTitle ?? args.next.title;
     if (baseRenderedTitle !== nextRenderedTitle) {
@@ -736,5 +750,13 @@ export function verifyLivePublishedRevision(args: {
     if (!observableChange) {
       throw new Error("Live rollback has no deterministically verifiable field change");
     }
+  }
+  if (args.kind === "editorial_correction") {
+    assertExactLiveMetaTitle(args.html, args.next.metaTitle ?? args.next.title);
+    assertExactLiveMetaDescription(args.html, args.next.metaDescription);
+    verifyLiveCorrectionBody({ html: args.html,
+      renderedBaseParagraphs: args.base.markdown.split(/\n\s*\n/).map(renderSafePublicationHtml),
+      renderedNext: renderSafePublicationHtml(args.next.markdown),
+    });
   }
 }

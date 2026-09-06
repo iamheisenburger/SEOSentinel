@@ -4,6 +4,32 @@ The customer promise is a new, useful article at the configured cadence.
 An existing-page revision is a separate improvement, never a replacement
 article and never a reason to postpone the new-article clock.
 
+## September 6: audited published-prose corrections
+
+An internal, explicitly authorized `publishedCorrections:requestAuditInternal`
+request now binds an exact site, article, current artifact hash, evidence
+snapshot, destination, rollout epoch, and proposed prose/metadata. It accepts
+no supplied reviewer score. A durable worker claim precedes paid fact checking
+and independent final auditing. The exact reviewed result must pass the strict
+quality and claim-ledger checks before creating an `editorial_correction`
+revision. Each tenant is limited to three distinct audit attempts per day and
+one active attempt; ambiguous or failed inputs are not replayed.
+
+The normal revision publisher retains the original publication row, date and
+receipt, uses exact GitHub compare-and-swap, and verifies canonical URL,
+metadata and the entire corrected live prose. Hidden/hydration copies cannot
+substitute for visible content. Rollback remains bound to the preserved
+revision and cannot restore prose rejected by the current evidence checks.
+Both this path and late callbacks from retired cadence revisions preserve the
+new-article clock. Tenant deletion also deletes correction audit records.
+
+`FIVERR_EDITORIAL_CORRECTION_PROPOSAL.md` is a proposed correction for the
+published Fiverr research article, not a publication or quality receipt. It
+removes unsupported platform-mechanics claims and supplies a reader-run
+worksheet. It must undergo the deployed independent reviews and exact live
+verification before any successful correction is claimed. This work does not
+count as a new cadence article or establish SEO growth.
+
 ## Repair under verification, September 6, 2026
 
 - Remove revision substitution from the scheduler and cadence health.
@@ -926,3 +952,17 @@ the prose ledger. All seven retained their strict publication result. This
 comparison establishes regression scope only; it does not re-audit semantic
 quality or turn those historical media annotations into new prose evidence.
 The final production build and Convex deployment dry-run also passed.
+
+Release `af58b5bc2eaf81e5730e652e25343f658053c131` passed GitHub
+quality run `34042578483` at 15:34:31 UTC. Vercel production deployment
+`6294715220` completed successfully, and Convex deployment to
+`wary-starfish-773` completed before the 15:35:15 UTC clock observation.
+The production credential file remains untracked.
+
+Native Chrome confirmed the existing signed-in acceptance tabs are controllable
+without reconnecting, signing out, or changing settings. Pentra's settings
+show 7 articles/week and its GitHub repository; LeadPilot's show 21/week and
+its separate repository. Both expose 119 of 150 remaining account article
+credits. LeadPilot's Overview still identifies its legacy One Setup contract
+as 3/7 verified. These are read-only customer-path checks, not a successful
+clean new-customer onboarding or an additional natural publication.
