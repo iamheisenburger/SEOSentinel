@@ -274,3 +274,76 @@ The two authenticated browser harness cases remain explicitly skipped; the
 actual signed-in settings acceptance above is separate evidence. A previously
 stranded pending job does not acquire a historical wake merely by deploying
 this fix; any controlled restart will be recorded separately.
+
+The atomic-wake correction deployed as
+`c2cfb5582c555a3d0818dde31945710306f61473`. Convex deployment succeeded;
+GitHub production deployment `6292799828` / Vercel
+`4kUtkaV5TGX6cFS4E3oLvx5D7yzt` completed at 12:15:55 UTC. GitHub quality
+run `34032548286` subsequently succeeded (all 1,239 tests, all release gates,
+10 public browser checks; the two authenticated harness cases remain skipped).
+
+After CI passed, a second explicitly controlled scheduler invocation resumed
+the already-eligible pre-correction pending job, without resetting it or
+changing its attempt count: run `kd71xv9rg4z2p8jz87z018fx1d8dxbcj`, trigger
+`operator_controlled_pending_retry_resume`. This is the follow-up needed for
+the historical missing-wake state, not a claim that deployment retroactively
+created a wake or that the restart was natural.
+
+The restarted job entered writing at 12:19:19.164 UTC with worker attempt one.
+At 12:20:51.366 UTC it persisted article `j570rhgqhyv3w5gs7keqsa2j158dxg5a`,
+a 1,894-word draft with the product-evidence snapshot retained. A 12:21 UTC
+job projection showed the same article ID while the worker was still at
+"Reviewing editorial quality". The separate article projection confirmed it
+was still an unsealed `draft`, not a ready/published artifact. This proves the
+early durable checkpoint on the deployed worker without claiming quality
+acceptance or scheduled delivery before either has happened.
+
+### Saved-draft completion and research capability correction, 12:36 UTC
+
+The controlled LeadPilot retry durably handed its saved draft to the final
+review worker at 12:25:04.272 UTC. Article
+`j570rhgqhyv3w5gs7keqsa2j158dxg5a` became sealed `ready` at
+12:29:45.764 UTC: 2,049 words, editorial score 88, factual score 86, media and
+publication gates passed, audit version 7, recovery version 16. Its original
+job completed without another generation attempt. LeadPilot now has five
+sealed ready articles; its minimum is nine and target twelve. This proves the
+checkpoint/review handoff, not a new publication or full inventory acceptance.
+A separate older draft's ordinary recovery subsequently ended explicitly as
+`quality_quarantined`; it was not counted as ready or replayed manually.
+
+The completed draft's intermediate research notes exposed a deterministic
+provider request defect: the primary-source fallback passed domain filters to
+`gpt-4o-mini`, which rejects that parameter. A local candidate using
+`gpt-4.1-mini` passed simulated transport tests but also failed the live API
+capability check with HTTP 400; that candidate was never deployed.
+
+The final correction preserves the unfiltered `gpt-4o-mini` research tier and
+uses `gpt-5-mini` with low reasoning only for the filtered primary-evidence
+attempt. Search is required, the primary-domain list is unchanged, and only
+provider-attributed citations become candidate sources. Subsequent strict
+source filtering and captured-content validation remain unchanged. The
+reasoning path has a bounded 4,096-token combined reasoning/output allowance;
+the existing three-minute request deadline and zero transport retries remain.
+Official capability guidance:
+https://developers.openai.com/api/docs/guides/tools-web-search.
+
+A live invocation of the exact repaired `webResearch` function using the
+deployed OpenAI credential succeeded with one HTTP 200 request
+`req_8f328c1749864e65abdadc14bcca85b7` and eight provider-attributed candidate
+sources for LeadPilot's lead-scoring topic. This was a controlled, read-only
+research acceptance call; it did not queue an article or claim those sources
+had passed the later content-capture gate. Credentials were never displayed.
+
+New runtime regressions exercise the actual research function and SDK request
+serialization for both research tiers, citation provenance, insecure/duplicate
+URL rejection, empty evidence, and visible non-replayed API failure. Additional
+runtime tests exercise the actual GitHub transport across two generic owners,
+empty repositories, exact byte delivery, lost acknowledgements, branch drift,
+customer-owned file protection, and lost publication ownership. These are
+simulated boundary tests, not additional live tenant publications.
+
+Local release gates passed: all 1,248 tests, type-check, additive schema check,
+secret scan of 560 tracked files, zero dependency vulnerabilities, production
+build, and 10 public browser checks. Lint has zero errors and 157 warnings
+(two fewer than the prior release); two authenticated harness cases remain
+explicitly skipped rather than counted as passing.

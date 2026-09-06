@@ -2160,17 +2160,23 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    model: "gpt-4o-mini",
-    tools: [
-      primaryEvidenceOnly
-        ? ({
-            type: "web_search",
-            search_context_size: "high",
-            filters: { allowed_domains: STRICT_EVIDENCE_SEARCH_DOMAINS },
-          } as any)
-        : ({ type: "web_search_preview", search_context_size: "high" } as any),
-    ],
-    max_output_tokens: 1600,
+    // Keep the primary-source path capability-bound: both 4o-mini and 4.1-mini
+    // reject domain filters in live API checks. The bounded 5-mini search path
+    // supports them; preserve the cheaper unfiltered research path separately.
+    // https://developers.openai.com/api/docs/guides/tools-web-search#limitations
+    model: primaryEvidenceOnly ? "gpt-5-mini" : "gpt-4o-mini",
+    tools: [primaryEvidenceOnly
+      ? {
+          type: "web_search",
+          search_context_size: "high",
+          filters: { allowed_domains: STRICT_EVIDENCE_SEARCH_DOMAINS },
+        }
+      : { type: "web_search_preview", search_context_size: "high" }],
+    tool_choice: "required",
+    // Reasoning tokens share the output limit. Keep enough room for the brief
+    // while retaining the worker's three-minute, no-transport-retry deadline.
+    ...(primaryEvidenceOnly ? { reasoning: { effort: "low" as const } } : {}),
+    max_output_tokens: primaryEvidenceOnly ? 4096 : 1600,
     input: [
       {
         role: "system",
