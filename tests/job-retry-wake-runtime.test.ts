@@ -134,3 +134,48 @@ test("a stale failure or exhausted retry never arms more provider work", async (
   await exhausted.run("markRetryableFailure", { jobId: "job", workerToken: "owned-worker", error: "Timeout" });
   assert.equal(exhausted.job.status, "failed"); assert.equal(exhausted.wakes.length, 0);
 });
+
+test("capacity deferral commits its wake without relying on a surviving action or spending an attempt", async () => {
+  for (const siteId of ["tenant-a", "tenant-b"]) {
+    for (const reason of ["account_concurrency", "fleet_concurrency"]) {
+      for (const checkpoint of [false, true]) {
+        const f = fixture(siteId, checkpoint);
+        const args = { jobId: "job", workerToken: "owned-worker", reason, retryAfterMs: 120_000 };
+        await f.run("deferArticleProviderAdmission", args);
+        assert.equal(f.job.status, "pending");
+        assert.equal(f.job.workerAttempts, 0);
+        assert.equal(f.tables.article_generation_attempts[0].status, "reserved");
+        assert.equal(f.job.articleId, checkpoint ? "saved-draft" : undefined);
+        assert.equal(f.tables.usage_log.length, checkpoint ? 1 : 0);
+        assert.equal(f.wakes.length, 1, "The mutation must arm the wake even if its calling action dies");
+        assert.equal(f.wakes[0].at, f.job.nextAttemptAt);
+        assert.equal(f.wakes[0].at, NOW + 120_000);
+        assert.equal(f.wakes[0].name, "autopilot:dispatchSiteFollowup");
+        assert.deepEqual(f.wakes[0].args, { siteId, trigger: "provider_capacity_retry", reason });
+        const writes = f.writes.length;
+        await f.run("deferArticleProviderAdmission", args);
+        assert.equal(f.writes.length, writes);
+        assert.equal(f.wakes.length, 1);
+      }
+    }
+  }
+});
+
+test("capacity deferral rejects stale/non-article work and retains the minimum pacing interval", async () => {
+  for (const variant of ["stale", "non-article", "missing-site"]) {
+    const f = fixture();
+    if (variant === "non-article") f.job.type = "plan";
+    if (variant === "missing-site") delete f.job.siteId;
+    await f.run("deferArticleProviderAdmission", {
+      jobId: "job", workerToken: variant === "stale" ? "wrong" : "owned-worker",
+      reason: "account_concurrency", retryAfterMs: 120_000,
+    });
+    assert.equal(f.writes.length, 0); assert.equal(f.wakes.length, 0);
+  }
+  const f = fixture();
+  await f.run("deferArticleProviderAdmission", {
+    jobId: "job", workerToken: "owned-worker", reason: "fleet_concurrency", retryAfterMs: 1,
+  });
+  assert.equal(f.job.nextAttemptAt, NOW + 30_000);
+  assert.equal(f.wakes[0].at, f.job.nextAttemptAt);
+});

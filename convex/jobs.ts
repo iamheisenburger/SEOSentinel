@@ -3453,7 +3453,12 @@ export const deferArticleProviderAdmission = internalMutation({
   },
   handler: async (ctx, { jobId, workerToken, reason, retryAfterMs }) => {
     const job = await ctx.db.get(jobId);
-    if (!job || !ownsJob(job, workerToken)) {
+    if (
+      !job ||
+      job.type !== "article" ||
+      !job.siteId ||
+      !ownsJob(job, workerToken)
+    ) {
       return { deferred: false, nextAttemptAt: undefined };
     }
     if (await releaseReservedUsage(ctx, job)) job.reservationId = undefined;
@@ -3469,6 +3474,13 @@ export const deferArticleProviderAdmission = internalMutation({
       leaseExpiresAt: undefined,
       updatedAt: currentTime,
     });
+    // Commit the wake with the pending transition. An action can be interrupted
+    // immediately after this mutation; it must not own retry scheduling.
+    await ctx.scheduler.runAt(
+      nextAttemptAt,
+      internal.autopilot.dispatchSiteFollowup,
+      { siteId: job.siteId, trigger: "provider_capacity_retry", reason },
+    );
     return { deferred: true, nextAttemptAt };
   },
 });

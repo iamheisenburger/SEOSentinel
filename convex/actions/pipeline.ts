@@ -9301,17 +9301,7 @@ export const processNextJob = internalAction({
               retryAfterMs: error.retryAfterMs ?? 2 * 60 * 1000,
             },
           );
-          if (deferred.deferred && deferred.nextAttemptAt) {
-            await ctx.scheduler.runAt(
-              deferred.nextAttemptAt,
-              internal.autopilot.dispatchSiteFollowup,
-              {
-                siteId: args.siteId,
-                trigger: "provider_capacity_retry",
-                reason: error.reason,
-              },
-            );
-          }
+          // The deferral mutation owns the pending transition and exact wake.
           return {
             processed: deferred.deferred,
             jobId: job._id,

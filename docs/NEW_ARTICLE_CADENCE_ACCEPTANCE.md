@@ -347,3 +347,31 @@ secret scan of 560 tracked files, zero dependency vulnerabilities, production
 build, and 10 public browser checks. Lint has zero errors and 157 warnings
 (two fewer than the prior release); two authenticated harness cases remain
 explicitly skipped rather than counted as passing.
+
+The research correction deployed as
+`609a4cbdf081f2e07b4d466331ca6c2cdec806f8`. Convex deployment succeeded;
+GitHub production deployment `6293009287` completed at 12:37:49 UTC, and
+GitHub quality run `34033640153` succeeded. An additional live invocation of
+the exact unfiltered research branch also returned HTTP 200 in one request
+(`req_7fb105eb846b4921a0659f6f99dbde8c`, four candidate citations), confirming
+that requiring a search did not break the retained lower-cost tier.
+
+### Capacity-deferral interruption safety
+
+The same pending-without-wake interruption window fixed for expired leases
+and transient failures also existed when provider account/fleet concurrency
+deferred a job: the mutation saved the job, then the action scheduled its wake.
+Registered-handler regression tests reproduced the missing wake, as well as
+missing article/site guards, before the correction. The mutation now owns the
+pending transition and exact canonical wake; the action no longer duplicates
+it. Existing 30-second minimum pacing, retry counts, paid-attempt receipts,
+saved drafts, and usage settlement are unchanged. Duplicate or stale workers,
+non-article jobs and jobs without a site cannot mutate or schedule work.
+Tests cover both concurrency reasons, both generic tenants and both saved-draft
+states. This is interruption-boundary regression evidence, not a claim that
+this particular failure was observed in a new production run.
+
+The capacity correction passed all 1,250 repository tests, type-check,
+zero-error lint (157 warnings), additive schema, secret scan, dependency audit,
+production build, 10 public browser checks, and Convex deployment dry-run.
+The two authenticated harness skips remain disclosed separately.
