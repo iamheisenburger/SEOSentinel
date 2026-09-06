@@ -969,6 +969,59 @@ test("citation auditing accepts exact sourced sentences mixed with reader advice
   assert.deepEqual(result.issues, []);
 });
 
+test("exact paragraph receipts cannot inherit citations from similar neighboring prose", () => {
+  for (const brand of ["HarborDesk", "CedarWorks"]) {
+    const own = `${brand} stores approved documents in the shared archive and records publication timestamps for reviewers.`;
+    const cited = "Research found that approved documents in the shared archive have publication timestamps available for reviewers [1].";
+    const productEvidence = `Name: ${brand}\nDomain: ${brand.toLowerCase()}.example\n${own}`;
+    const excerpt = "Research found that approved documents in the shared archive have publication timestamps available for reviewers. The preserved report describes the study design and the observed archival workflow in sufficient detail for review.";
+    const source = { url: "https://research.example/archive", excerpt, contentHash: sha256Hex(excerpt) };
+    const ownEntry = { claim: own, supported: true, citationNumbers: [],
+      reason: "Exact hashed first-party product evidence supports this paragraph." };
+    const sourceEntry = { claim: cited, supported: true, citationNumbers: [1],
+      reason: "The preserved research excerpt supports this separate paragraph." };
+    for (const claimEvidence of [[ownEntry, sourceEntry], [sourceEntry, ownEntry]]) {
+      const result = validateClaimEvidenceLedger({
+        markdown: `${own}\n\n${cited}`, sources: [source], researchEvidence: excerpt,
+        productEvidence, productEvidenceHash: sha256Hex(productEvidence), claimEvidence,
+      });
+      assert.equal(result.requiredClaimCount, 2);
+      assert.equal(result.passed, true, result.issues.join("\n"));
+    }
+  }
+});
+
+test("an exact paragraph receipt cannot borrow a neighboring receipt's missing citation binding", () => {
+  const first = "Research found that reviewed documents in the shared archive retain publication timestamps for readers [1].";
+  const second = "Research found that approved documents in the shared archive retain publication timestamps for reviewers [1].";
+  const excerpt = "Research found that reviewed and approved documents in the shared archive retain publication timestamps for readers and reviewers. The preserved report explains this measured archive behavior with additional context for the audit.";
+  const result = validateClaimEvidenceLedger({
+    markdown: `${first}\n\n${second}`,
+    sources: [{ url: "https://research.example/archive", excerpt, contentHash: sha256Hex(excerpt) }],
+    researchEvidence: excerpt, productEvidence: "", claimEvidence: [
+      { claim: first, supported: true, citationNumbers: [], reason: "An incomplete citation binding was returned for this exact paragraph." },
+      { claim: second, supported: true, citationNumbers: [1], reason: "Only this separate paragraph has a bound source receipt." },
+    ],
+  });
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join("\n"), /paragraph 1 cites \[1\] without a matching supported claim-ledger entry/);
+});
+
+test("exact paragraph selection does not waive unsupported entries, snapshots or real missing inline citations", () => {
+  const claim = "Research found that approved documents in the shared archive retain publication timestamps for reviewers.";
+  const excerpt = `${claim} The preserved report describes the study design and the observed archival workflow in sufficient detail for review.`;
+  const base = { markdown: claim, sources: [{ url: "https://research.example/archive", excerpt, contentHash: sha256Hex(excerpt) }],
+    researchEvidence: excerpt, productEvidence: "" };
+  const entry = { claim, supported: true, citationNumbers: [1], reason: "The source supports this paragraph but its inline citation is missing." };
+  const missing = validateClaimEvidenceLedger({ ...base, claimEvidence: [entry] });
+  assert.match(missing.issues.join("\n"), /omits the inline citation/);
+  const unsupported = validateClaimEvidenceLedger({ ...base, claimEvidence: [{ ...entry, supported: false }] });
+  assert.match(unsupported.issues.join("\n"), /unsupported/);
+  const invalidSnapshot = validateClaimEvidenceLedger({ ...base, sources: [{ ...base.sources[0], contentHash: "invalid" }],
+    claimEvidence: [entry] });
+  assert.match(invalidSnapshot.issues.join("\n"), /content hash is missing or invalid/);
+});
+
 test("citation auditing still rejects uncited factual claims mixed into a sourced paragraph", () => {
   const excerpt =
     "The study analyzed 1M websites and documented implementation patterns. " +

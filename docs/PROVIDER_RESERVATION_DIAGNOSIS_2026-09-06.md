@@ -458,3 +458,45 @@ revision had completed as `quality_quarantined`: 1,909 words, still blocked,
 no active article job, and no increase in Pentra's three sealed articles.
 Its original publication deadline remains armed for September 7 11:45:12 UTC.
 Passing the watchdog release gates does not settle this quality outcome.
+
+The watchdog repair was committed as
+`831a2b0a47667d274d44fdfa1ee6c57fb417fffa`. GitHub quality run
+`34051209296` succeeded. Production deployment `6296350831` succeeded at
+18:17:42 UTC; Convex `wary-starfish-773` deployment completed by 18:20:35 UTC.
+No historical run outcome was changed to success.
+
+### Cross-paragraph citation contamination in exact-ledger coverage
+
+The saved Daily Rank Tracker article's evidence-required paragraph four has
+an exact, supported, unnumbered first-party ledger entry. Nevertheless the
+coverage matcher reported a missing numbered inline citation. It used every
+entry with 30% shared vocabulary, so a different paragraph's research citation
+contaminated the first-party paragraph. The same defect also affected Agency
+Rank Tracking's paragraph ten. This is a false binding requirement, not proof
+that the article as a whole is safe or ready.
+
+Independent HarborDesk and CedarWorks fixtures reproduce this failure without
+tenant names, production data, or provider calls. Another regression verifies
+the converse: an exact entry with a missing source binding must not borrow it
+from a similar neighboring entry. The local repair prefers the exact complete
+paragraph receipt required by the current auditor contract. Legacy summarized
+ledgers retain the existing similarity fallback only when no exact entry is
+present. Every ledger entry still undergoes independent source/hash/detail,
+unsupported-claim and citation checks; no score, threshold, retry allowance,
+quality version or stored receipt changes.
+
+A provider-free before/after comparison covered the seven currently sealed
+articles and both blocked new drafts, scoped only to Pentra and LeadPilot.
+All seven sealed articles had identical raw-ledger results (including three
+pre-existing reviewed-media annotation mismatches). Both new drafts remained
+blocked; only their erroneous cross-paragraph missing-citation issue was
+removed. Agency Rank Tracking retained eight defects; Daily Rank Tracker
+retained four. No published or ready artifact was rewritten or promoted.
+
+The exact-receipt repair passed 1,371 repository tests, type-check, lint
+(zero errors; 157 existing warnings), additive schema check, the 582-file
+secret scan, dependency audit (zero vulnerabilities), production build and
+10 public Playwright checks. The two authenticated Playwright checks were
+explicitly skipped. Native Chrome control was independently reconfirmed on
+the signed-in LeadPilot settings page; no reconnect, sign-out or owner action
+was necessary and no settings were changed.

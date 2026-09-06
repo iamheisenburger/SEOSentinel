@@ -800,7 +800,15 @@ export function validateClaimEvidenceLedger(args: {
   }
 
   for (const [index, paragraph] of paragraphs.entries()) {
-    const matchingEntries = args.claimEvidence.filter(
+    // Current auditors copy each complete claim unit verbatim. Bind that
+    // exact receipt before considering the older summary-shaped ledgers.
+    // Shared vocabulary in another paragraph must neither add a citation
+    // requirement here nor supply a binding this exact receipt omitted.
+    // Every ledger entry still undergoes its independent evidence checks above.
+    const exactEntries = args.claimEvidence.filter(
+      (entry) => entry.claim.trim() === paragraph,
+    );
+    const matchingEntries = (exactEntries.length > 0 ? exactEntries : args.claimEvidence).filter(
       (entry) => entry.supported && overlapRatio(paragraph, entry.claim) >= 0.3,
     );
     if (matchingEntries.length === 0) {
