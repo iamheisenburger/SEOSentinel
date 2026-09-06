@@ -2786,11 +2786,13 @@ export const pruneLifecycle = internalMutation({
 export const getOperatorSnapshot = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
+    const snapshotAt = Date.now();
     const site = await ctx.db.get(siteId);
     if (!site) throw new Error("Site not found");
     const [
       health,
       runs,
+      upcomingRuns,
       ready,
       review,
       pending,
@@ -2809,6 +2811,13 @@ export const getOperatorSnapshot = internalQuery({
         .withIndex("by_site", (q) => q.eq("siteId", siteId))
         .order("desc")
         .take(8),
+      ctx.db
+        .query("autopilot_runs")
+        .withIndex("by_site_scheduled", (q) =>
+          q.eq("siteId", siteId).gte("scheduledAt", snapshotAt),
+        )
+        .order("asc")
+        .take(12),
       takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
       takeCurrentDomainArticleSummariesByStatus(ctx, site, "review", 8),
       ctx.db
@@ -2849,6 +2858,17 @@ export const getOperatorSnapshot = internalQuery({
         .order("desc")
         .first(),
     ]);
+    // Recent activity and even the bounded upcoming list can hide a
+    // publication deadline. Resolve its exact indexed receipt independently.
+    // A run row is scheduling intent, not an assertion about provider health.
+    const cadenceDeadline = Number.isSafeInteger(health?.nextPublicationDueAt)
+      ? await ctx.db.query("autopilot_runs")
+        .withIndex("by_site_scheduled", (q) =>
+          q.eq("siteId", siteId).eq("scheduledAt", health!.nextPublicationDueAt!),
+        )
+        .filter((q) => q.eq(q.field("trigger"), "cadence_deadline"))
+        .first()
+      : null;
     const planJobs = latestTerminalPlanJobs(donePlanJobs, failedPlanJobs);
     const planReceipts = await Promise.all(planJobs.map(async (job) => {
       const [checkpointRows, reservation] = await Promise.all([
@@ -2899,6 +2919,11 @@ export const getOperatorSnapshot = internalQuery({
         rolloutStartedAt: site.autopilotRolloutStartedAt,
       },
       health: operatorHealthReceipt(health),
+      snapshotAt,
+      cadenceDeadline: cadenceDeadline
+        ? operatorContinuationRunReceipt(cadenceDeadline)
+        : null,
+      upcomingRuns: upcomingRuns.map(operatorContinuationRunReceipt),
       runs: runs.map(operatorContinuationRunReceipt),
       planReceipts,
       ready: ready.map((article) =>

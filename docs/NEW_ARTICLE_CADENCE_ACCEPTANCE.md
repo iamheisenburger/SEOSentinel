@@ -375,3 +375,47 @@ The capacity correction passed all 1,250 repository tests, type-check,
 zero-error lint (157 warnings), additive schema, secret scan, dependency audit,
 production build, 10 public browser checks, and Convex deployment dry-run.
 The two authenticated harness skips remain disclosed separately.
+
+The capacity correction deployed as
+`5e54e1c14448478cb0ad4bdae454c8747fbd3691`. Convex deployment succeeded;
+GitHub production deployment `6293048682` completed at 12:41:59 UTC and
+GitHub quality run `34033846494` succeeded (1,250 tests and all release gates).
+
+Post-backend-deploy bounded projections showed both tenants still in live
+mode: Pentra epoch 6 with three sealed ready articles; LeadPilot epoch 9 with
+five. Neither had a pending or running article job in that projection. The
+LeadPilot health warning refers to the separately quarantined older candidate,
+not the newly sealed saved draft. Both measured topic portfolios still report
+insufficient evidence; no SEO-growth claim is made.
+
+The next configured new-article deadlines remain September 6 at 14:14:43.010
+UTC for LeadPilot and September 7 at 11:45:12.262 UTC for Pentra. These are
+future deadlines, not completed publications. The goal remains active pending
+sustained current-release natural delivery and replenishment acceptance.
+
+## September 6 bounded inventory and continuation audit
+
+An actual registered-query regression reproduced the high-cadence budget
+mismatch: a fifteen-candidate allowance was projected through a ten-row read.
+The read now uses the same cadence-derived allowance, newest first, so the
+oldest returned candidate gives the correct next rolling-window slot even
+when older excess attempts exist. Fixtures cover two arbitrary tenants,
+four cadence values, legacy/current domain bindings, foreign tenants and
+expired attempts. The paid allowance and publication gates did not change.
+
+An actual pipeline-function regression also reproduced missing immediate
+dispatch after an admitted topic-replenishment plan. The continuation now
+dispatches ordinary topic, portfolio-goal and portfolio-evidence plans through
+the existing canonical dispatcher. Denied, cooling-down and unknown scheduler
+results cannot dispatch work. Micro-seed evidence retains its own wake.
+
+The credential-free operator snapshot now resolves the exact health-bound
+publication deadline independently of its eight recent runs and projects
+twelve upcoming runs. Allowlisted deadline kinds distinguish publication
+from refill/quota wakes. This exposes durable scheduling intent; it does not
+manufacture a successful execution or attest to provider availability.
+
+These corrections passed all 1,255 repository tests, type-check, zero-error
+lint (157 unchanged warnings), additive schema validation, tracked secret scan,
+dependency audit, production build, ten public browser checks and Convex dry-run.
+The two authenticated harness skips are not counted as passes.

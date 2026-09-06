@@ -724,6 +724,11 @@ export function operatorContinuationRunReceipt(
     recoveryOfRunId: run.recoveryOfRunId,
     jobId: run.jobId,
     trigger,
+    // Preserve exact, allowlisted deadline kinds without exposing arbitrary
+    // caller-supplied trigger strings or claim material.
+    deadlineKind: (["cadence_deadline", "quality_budget_deadline",
+      "generation_quota_deadline", "cadence_refill_deadline"] as const)
+      .find((kind) => kind === run.trigger),
     status: safeOperatorCode(run.status, RUN_STATUSES),
     outcome: safeOperatorCode(run.outcome, AUTOPILOT_OPERATOR_RUN_OUTCOMES),
     scheduledAt: run.scheduledAt,

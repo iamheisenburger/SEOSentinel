@@ -7899,6 +7899,18 @@ async function continueAutopilotAfterProcessedJob(
       trigger: "plan_ready",
       reason: "pending_topic_plan_ready_for_processing",
     },
+    topic_replenishment: {
+      trigger: "plan_ready",
+      reason: "admitted_topic_replenishment_ready_for_processing",
+    },
+    topic_portfolio_goal_replenishment: {
+      trigger: "plan_ready",
+      reason: "admitted_portfolio_plan_ready_for_processing",
+    },
+    topic_portfolio_evidence_replenishment: {
+      trigger: "plan_ready",
+      reason: "admitted_evidence_plan_ready_for_processing",
+    },
     buffer_fill: {
       trigger: processed.planCompleted ? "plan_ready" : "buffer_fill",
       reason: processed.planCompleted

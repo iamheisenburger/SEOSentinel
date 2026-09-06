@@ -30,6 +30,7 @@ import {
 } from "./lib/publicationLease";
 import {
   DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
+  autopilotCandidateBudget,
   effectivePublishedAt,
   evaluateTopicBusinessFit,
   migrationBlocksAutopilot,
@@ -488,6 +489,7 @@ async function takeCurrentRecentSummaries(
       .withIndex("by_site_created", (q) =>
         q.eq("siteId", site._id).gte("articleCreatedAt", since)
       )
+      .order("desc")
       .take(limit);
     return legacyEpoch.filter((article) =>
       articleMatchesCurrentDomain(site, article)
@@ -504,6 +506,7 @@ async function takeCurrentRecentSummaries(
         .eq("domainRevision", siteCanonicalDomainRevision(site))
         .gte("articleCreatedAt", since)
     )
+    .order("desc")
     .take(limit);
 }
 
@@ -672,7 +675,13 @@ export const getAutopilotState = internalQuery({
           "review",
           CADENCE_QUALITY_RECOVERY_READ_LIMIT,
         ),
-        takeCurrentRecentSummaries(ctx, site, since, 10),
+        // Read the newest full allowance: a fixed ten-row projection cannot
+        // enforce a high-cadence fifteen-candidate budget. The oldest member
+        // of this bounded newest set is also the next rolling-window slot.
+        takeCurrentRecentSummaries(ctx, site, since, autopilotCandidateBudget(
+          site.autopilotRolloutMode ?? "observe",
+          site.cadencePerWeek,
+        )),
         takeCurrentSummariesByStatus(ctx, site, "published", 50),
         ctx.db
           .query("maintenance_state")
