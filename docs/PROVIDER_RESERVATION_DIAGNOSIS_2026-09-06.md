@@ -216,3 +216,47 @@ advertised article volume at observed discovery yield. That economics/capacity
 constraint remains separate from this demonstrably false attempt-count stop.
 Production acceptance, the interrupted article's outcome, and sustained refill
 on both sites remain unproven while the deployment is disabled.
+
+## Service recovery and exact worker-lease observer
+
+A fresh exact-site query at 17:11:50.092 UTC succeeded. Subsequent Pentra and
+LeadPilot projections and the signed-in Pentra UI also responded. The cause of
+this service restoration is unknown; no billing purchase was made by the agent.
+The local monthly-yield repair `5c12696dbe8ccd51fb4fef1e421bf557597a8c8c` was
+pushed after this observation and passed GitHub quality run `34047890223`.
+Its Convex deploy was held while the interrupted job's recovery was inspected.
+
+The interrupted article job still had workerAttempts zero, no saved article, and its
+last progress heartbeat at 16:59:45.546 UTC. Its lease expires at 17:29:45.546
+UTC. The ordinary parent-run observer had correctly recorded
+`execution_interrupted` at 17:10:44.520 UTC. That parent receipt is not proof
+that the separate job lease has expired, so no early reset was performed.
+
+A runtime regression exposed a separate liveness gap: `markRunning` and
+`claimPending` acquired a worker lease without atomically arming its expiry
+observer. `resetStuckJobs` already scheduled bounded retries after detecting an
+expired lease, but detection depended on another scheduler tick. Both claim
+paths now arm one exact job/site/worker-token observer in the same mutation.
+The observer follows a renewed expiry without scheduling on every heartbeat.
+At expiry it uses the existing ambiguous-attempt settlement, checkpoint
+preservation, retry budget and canonical follow-up. No provider call is made
+by the observer itself. Ambiguous topic plans remain terminal without replay.
+
+The exact scheduled path reads only its job, cannot reap a sibling or foreign
+job, and ignores replaced tokens, completed jobs, missing/malformed leases and
+onboarding jobs whose separate claim system owns recovery. Duplicate expired
+observers cannot increment attempts or schedule the retry twice. Existing
+site/global sweep interfaces are retained as fallback; no fleet sweep was
+manually invoked during this investigation.
+
+Local runtime tests reproduce the previously missing claim-time wake and cover
+both claim paths on two synthetic tenants, actual heartbeat renewal, saved
+draft versus no-draft recovery, exact retry timing, replay/ownership fences,
+sibling isolation, exhausted attempts and terminal ambiguous plans. The full
+suite passes 1,359 tests, type-check passes, lint remains zero errors/157
+existing warnings, schema stays additive, dependency audit reports zero
+vulnerabilities, and the production build passes. The tracked-source secret
+scan passes (581 files). Public Playwright checks passed 10/10 with two
+authenticated checks explicitly skipped. The existing signed-in production
+Pentra page also recovered from its error screen; no credentials or sign-outs
+were needed. Release and recovery evidence follow after completion.

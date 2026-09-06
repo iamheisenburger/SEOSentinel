@@ -767,16 +767,54 @@ export const listByStatus = internalQuery({
 // Reclaim only expired worker leases. Resetting a job invalidates the old token
 // before another worker can claim it. Exhausted leases become terminal instead
 // of remaining "running" forever and deadlocking the tenant scheduler.
+async function armWorkerLeaseRecovery(
+  ctx: MutationCtx,
+  job: Doc<"jobs">,
+  workerToken: string,
+  leaseExpiresAt: number,
+): Promise<void> {
+  if (!job.siteId || onboardingClaimOwnsLifecycle(job)) return;
+  await ctx.scheduler.runAt(leaseExpiresAt, internal.jobs.resetStuckJobs, {
+    siteId: job.siteId,
+    jobId: job._id,
+    expectedWorkerToken: workerToken,
+  });
+}
+
 export const resetStuckJobs = internalMutation({
-  args: { siteId: v.optional(v.id("sites")) },
-  handler: async (ctx, { siteId }) => {
+  args: {
+    siteId: v.optional(v.id("sites")),
+    jobId: v.optional(v.id("jobs")),
+    expectedWorkerToken: v.optional(v.string()),
+  },
+  handler: async (ctx, { siteId, jobId, expectedWorkerToken }) => {
     const currentTime = now();
     const legacyStaleAt = currentTime - JOB_LEASE_MS;
     let reset = 0;
     let terminal = 0;
     let reservationsReleased = 0;
 
-    const runningJobs = siteId
+    let exactJob: Doc<"jobs"> | null = null;
+    if (jobId !== undefined || expectedWorkerToken !== undefined) {
+      if (!siteId || !jobId || !expectedWorkerToken) {
+        throw new Error("Exact worker recovery requires site, job and lease token");
+      }
+      exactJob = await ctx.db.get(jobId);
+      if (
+        !exactJob || exactJob.siteId !== siteId || exactJob.status !== "running" ||
+        exactJob.workerToken !== expectedWorkerToken || onboardingClaimOwnsLifecycle(exactJob) ||
+        !Number.isSafeInteger(exactJob.leaseExpiresAt) || (exactJob.leaseExpiresAt ?? 0) <= 0
+      ) return { reset, terminal, reservationsReleased };
+      if (exactJob.leaseExpiresAt! > currentTime) {
+        // A heartbeat renewed this same lease. Follow its current expiry in
+        // one chain, rather than creating a scheduled function per heartbeat.
+        await armWorkerLeaseRecovery(ctx, exactJob, expectedWorkerToken, exactJob.leaseExpiresAt!);
+        return { reset, terminal, reservationsReleased };
+      }
+    }
+    // The scheduled path reads only its exact job. It never reaps another
+    // tenant/job or invalidates a newer worker when an old observer arrives.
+    const runningJobs = exactJob ? [exactJob] : siteId
       ? await ctx.db
           .query("jobs")
           .withIndex("by_site_status", (q) =>
@@ -2987,6 +3025,7 @@ export const markRunning = internalMutation({
       nextAttemptAt: undefined,
       updatedAt: currentTime,
     });
+    await armWorkerLeaseRecovery(ctx, job, args.workerToken, currentTime + JOB_LEASE_MS);
     return { ...job, status: "running", workerToken: args.workerToken };
   },
 });
@@ -3040,6 +3079,7 @@ export const claimPending = internalMutation({
       nextAttemptAt: undefined,
       updatedAt,
     });
+    await armWorkerLeaseRecovery(ctx, job, workerToken, leaseExpiresAt);
     return {
       ...job,
       status: "running",
