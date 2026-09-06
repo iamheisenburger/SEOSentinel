@@ -12,6 +12,7 @@ import {
   oneSetupQueueDenialDisposition,
   oneSetupTerminalReceiptSettlementAllowed,
   nextOneSetupWatchGeneration,
+  oneSetupOwnerRetryWindow,
 } from "../convex/lib/oneSetupExecution.ts";
 import {
   ONE_SETUP_DOMAIN_REVISION_INTEGRATION_CONTRACT,
@@ -55,6 +56,24 @@ test("an ambiguous response resumes the bound plan after the lease", () => {
     }),
     { kind: "claimable", resumePlan: true },
   );
+});
+
+test("explicit fresh-plan retries have a cooldown and a persistent three-per-UTC-day envelope", () => {
+  const day = Date.UTC(2026, 8, 6);
+  assert.deepEqual(oneSetupOwnerRetryWindow(undefined, day + 1000), {
+    windowStartAt: day, attemptInWindow: 1, eligibleAt: day + 1000,
+  });
+  const first = { requestedAt: day + 1000, windowStartAt: day, attemptInWindow: 1 };
+  assert.equal(oneSetupOwnerRetryWindow(first, day + 2000).eligibleAt, day + 901_000);
+  const last = { ...first, requestedAt: day + 23 * 3_600_000, attemptInWindow: 3 };
+  assert.equal(oneSetupOwnerRetryWindow(last, last.requestedAt + 1).eligibleAt, day + 86_400_000);
+  assert.deepEqual(oneSetupOwnerRetryWindow(last, day + 86_400_001), {
+    windowStartAt: day + 86_400_000, attemptInWindow: 1, eligibleAt: day + 86_400_001,
+  });
+  for (const patch of [{ attemptInWindow: 0 }, { attemptInWindow: 4 },
+    { attemptInWindow: NaN }, { requestedAt: day + 10_000 }, { windowStartAt: day + 1 }]) {
+    assert.throws(() => oneSetupOwnerRetryWindow({ ...first, ...patch }, day + 2000));
+  }
 });
 
 test("terminal paid-plan receipts are reused and never replayed", () => {

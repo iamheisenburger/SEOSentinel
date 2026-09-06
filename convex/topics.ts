@@ -502,7 +502,9 @@ export const upsertMany = internalMutation({
         job.workerToken !== planExecution.workerToken ||
         (job.leaseExpiresAt ?? 0) <= timestamp ||
         (job.workerAttempts ?? 0) + 1 !== planExecution.workerExecution ||
-        site.expectedClickSchedulingEnabled !==
+        // The producer treats an omitted opt-in flag as false. Persistence
+        // must use the same semantics without accepting a real mode change.
+        (site.expectedClickSchedulingEnabled === true) !==
           planExecution.expectedClickSchedulingEnabled ||
         !jobAuthorizedForExecution(site, job) ||
         !(await siteExecutionAuthorized(ctx, site)) ||

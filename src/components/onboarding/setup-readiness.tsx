@@ -72,6 +72,7 @@ export function SetupReadiness({
   const acceptAutopublishConsent = useMutation(
     api.sites.acceptPublisherAutopublishConsent,
   );
+  const retryInitialPlan = useMutation(api.oneSetupExecutions.requestFailedPlanRetry);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -82,6 +83,7 @@ export function SetupReadiness({
       | "connect_gmail_outreach"
       | "configure_smtp_outreach"
       | "accept_publisher_autopublish"
+      | "retry_initial_plan"
       | "review_publishing",
   ) {
     if (kind === "connect_publishing" || kind === "review_publishing") {
@@ -111,12 +113,24 @@ export function SetupReadiness({
     setPendingAction(kind);
     setActionError(null);
     try {
-      await acceptAutopublishConsent({ siteId });
+      if (kind === "retry_initial_plan") {
+        const retry = readiness?.initialPlanRetry;
+        if (!retry || !readiness) throw new Error("The failed plan receipt changed. Refresh before retrying.");
+        const result = await retryInitialPlan({ siteId,
+          expectedPlanJobId: retry.planJobId,
+          expectedPlanGeneration: retry.planGeneration,
+          expectedConfigurationRevision: readiness.configurationRevision });
+        if (result.state === "waiting") {
+          setActionError(`A new planning attempt is eligible after ${new Date(result.eligibleAt).toLocaleString()}. No new attempt was started.`);
+        }
+      } else {
+        await acceptAutopublishConsent({ siteId });
+      }
     } catch (error) {
       setActionError(
         error instanceof Error
           ? error.message
-          : "Automatic publishing could not be authorized.",
+          : "The requested setup action could not be completed.",
       );
     } finally {
       setPendingAction(null);

@@ -28,6 +28,42 @@ export function oneSetupCompletedPlanReceipt(args: {
     Number.isSafeInteger(args.completedAt) && (args.completedAt ?? -1) >= 0;
 }
 
+export const ONE_SETUP_OWNER_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
+export const ONE_SETUP_OWNER_RETRIES_PER_UTC_DAY = 3;
+
+export type OneSetupOwnerRetryWindow = {
+  requestedAt: number;
+  windowStartAt: number;
+  attemptInWindow: number;
+};
+
+/** Owner clicks cannot turn a terminal setup failure into unbounded spending.
+ * The canonical provider reservation enforces the shared budget separately. */
+export function oneSetupOwnerRetryWindow(
+  previous: OneSetupOwnerRetryWindow | undefined,
+  now: number,
+): { windowStartAt: number; attemptInWindow: number; eligibleAt: number } {
+  const day = 24 * 60 * 60 * 1000;
+  if (!Number.isSafeInteger(now) || now <= 0) throw new Error("Invalid retry clock");
+  const windowStartAt = Math.floor(now / day) * day;
+  if (!previous) return { windowStartAt, attemptInWindow: 1, eligibleAt: now };
+  if (
+    !Number.isSafeInteger(previous.requestedAt) || previous.requestedAt <= 0 ||
+    previous.requestedAt > now ||
+    previous.windowStartAt !== Math.floor(previous.requestedAt / day) * day ||
+    !Number.isSafeInteger(previous.attemptInWindow) || previous.attemptInWindow < 1 ||
+    previous.attemptInWindow > ONE_SETUP_OWNER_RETRIES_PER_UTC_DAY
+  ) throw new Error("Invalid owner retry receipt");
+  const sameWindow = previous.windowStartAt === windowStartAt;
+  return {
+    windowStartAt,
+    attemptInWindow: sameWindow ? previous.attemptInWindow + 1 : 1,
+    eligibleAt: Math.max(now, previous.requestedAt + ONE_SETUP_OWNER_RETRY_COOLDOWN_MS,
+      sameWindow && previous.attemptInWindow >= ONE_SETUP_OWNER_RETRIES_PER_UTC_DAY
+        ? windowStartAt + day : now),
+  };
+}
+
 export type OneSetupExecutionTerminalPatch = {
   status: "completed" | "blocked";
   blockerCode: string | undefined;

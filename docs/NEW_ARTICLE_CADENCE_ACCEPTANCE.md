@@ -708,3 +708,82 @@ warnings), additive schema check, secret scan, dependency audit, production
 build and Convex deployment dry-run passed. Ten public Playwright checks also
 passed; the two authenticated harness tests remained skipped and are not
 counted as passes. The signed-in native Chrome check is separate evidence.
+
+### Release and exact post-deployment diagnostics, September 6 at 14:26 UTC
+
+Release `5bf658f0c00184fe2ff1e63886411f5835124326` was pushed after the
+natural LeadPilot delivery and local gates. GitHub quality run `34038963632`
+completed successfully at 14:25:39 UTC. Production deployment `6294035327`
+completed on Vercel, and Convex deployment to `wary-starfish-773` completed
+before the 14:26:26 UTC checkpoint. No schema indexes were deleted.
+The signed-in production Chrome page now displays the exact blocked setup
+reference, verifying the customer-facing release without changing settings.
+
+The new indexed projection resolved Pentra's 6/7 setup status to initial plan
+`j974t6ts50tzg1x8fv1e74tah18damnk`, created August 28, under request
+`qd73eqwrxhnrbm6pxgjxyfz9y18dbsp3` and execution
+`qh77pw8kay2y67rxy2j3v1kesx8dbf84`. Its failure code is
+`transient_provider_failure`; the execution is blocked. This historical
+failure is not a fresh provider-credit error. The job has a spend reservation,
+zero recorded worker attempts, no result, and no recorded reservation release.
+That is insufficient proof to declare it zero-spend or blindly replay it.
+Its underlying failure and a safe current-configuration recovery still need
+investigation. LeadPilot has no current One Setup request; its existing
+connected cadence is running, but new-onboarding acceptance remains open.
+
+A credential-free comparison of the stored error against local source literals
+identified `convex/topics.ts`'s exact plan-persistence fence error: “Plan topic
+persistence lost its exact tenant, lease, rollout, or reservation contract”.
+The historical `transient_provider_failure` label therefore must not be read
+as proof of depleted provider funds. The precise failed fence is not recorded
+by that combined error. No current provider call or blind historical replay
+was made while investigating it.
+
+The newly deployed provider-free interruption mutation settled only historical
+LeadPilot run `kd7d4f2w60zhtrwp0dz82qyv858dx0wz`, fenced to its exact
+11:27:40.901 UTC start, as `failed` / `execution_interrupted`. Before/after
+projections confirmed current health, next deadline and active jobs were
+unchanged. No provider request, new job, or publication was triggered by this
+settlement. Both sites retain the verified future deadline receipts and sealed
+inventory counts recorded above. The overall goal remains active and incomplete.
+
+### Planning persistence and explicit failed-setup recovery, September 6
+
+Tracing the historical combined fence exposed an independently reproducible
+generic defect: the planning producer normalizes an omitted optional
+`expectedClickSchedulingEnabled` flag to `false`, but `topics.upsertMany`
+compared the raw optional site field to that boolean. An ordinary completed
+plan for an unconfigured/legacy tenant could therefore be rejected at commit.
+The actual registered mutation fails its new omitted-flag runtime case at
+release `5bf658f`; the normalized comparison passes for omitted, explicit
+false and explicit true across two unrelated fixture tenants. Real policy
+changes, foreign tenancy, stale leases, worker executions, domain revisions,
+spent/released reservations and a second commit still fail atomically.
+This proves the defect exists, not which subfence failed on August 28.
+
+The customer now has a separate, authenticated `Retry content plan` action
+for an exact, current, terminal failed initial plan. It records explicit
+owner authorization for one successor generation and resumes the canonical
+setup queue; it never rewrites the failed job or releases its historical
+spend reservation. Ordinary resaves and duplicate clicks cannot purchase
+another plan. The action rechecks current ownership, configuration, domain,
+planning context, lifecycle, entitlements, failure timing and job identity.
+It is limited to three owner retries per UTC day, at least fifteen minutes
+apart, in addition to the existing canonical queue's provider reservations
+and allowance checks. Waiting or rejected requests create no successor.
+The scheduled action and recovery watchdog are armed in the same mutation.
+Dispatch failure rolls the authorization back. Invalid counters fail closed.
+
+Runtime tests cover two tenants, idempotency, changed settings, foreign users,
+deletion tombstones, entitlement changes, active/completed/zero-yield jobs,
+daily limits, cooldowns and dispatch rollback. Readiness hides the action
+when the execution's saved choices no longer match the current request.
+This is an explicitly authorized new attempt that may consume provider
+capacity, not a zero-spend recovery claim or proof of autonomous replenishment.
+Production execution of this path and the public article correction remain
+open at this local checkpoint; no final release certification is claimed.
+
+Local release gates passed: 1,286 tests, type-check, zero-error lint with the
+same 157 existing warnings, additive schema check, dependency audit, build,
+and Convex dry-run. Ten public Playwright checks passed; two authenticated
+harness checks were skipped and are not treated as acceptance passes.

@@ -1,4 +1,4 @@
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery, mutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -17,6 +17,8 @@ import {
   oneSetupExecutionNextEligibleAt,
   oneSetupExecutionWatchIdentityMatches,
   oneSetupExecutionTerminalPatch,
+  oneSetupOwnerRetryWindow,
+  ONE_SETUP_OWNER_RETRY_COOLDOWN_MS,
   oneSetupPlanSettlement,
   oneSetupTerminalReceiptSettlementAllowed,
   nextOneSetupWatchGeneration,
@@ -569,6 +571,7 @@ export const getOperatorSnapshot = internalQuery({
         initialPlanJobId: request.initialPlanJobId,
         initialPlanGeneration: request.initialPlanGeneration,
         initialPlanRecoveryCount: request.initialPlanRecoveryCount ?? 0,
+        initialPlanOwnerRetry: request.initialPlanOwnerRetry,
         fulfillmentState: request.fulfillmentState,
         fulfillmentAttempt: request.fulfillmentAttempt,
         nextAttemptAt: request.nextAttemptAt,
@@ -595,6 +598,97 @@ export const getOperatorSnapshot = internalQuery({
         providerReservationReleasedAt: boundJob.providerReservationReleasedAt,
       } : null,
     };
+  },
+});
+
+/** An authenticated, explicit new-attempt authorization, not a resave or replay.
+ * The old paid job and reservation remain immutable. The successor must pass
+ * the same current queue, tenant, allowance and pre-provider guards as setup. */
+export const requestFailedPlanRetry = mutation({
+  args: {
+    siteId: v.id("sites"),
+    expectedPlanJobId: v.id("jobs"),
+    expectedPlanGeneration: v.number(),
+    expectedConfigurationRevision: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const [identity, site] = await Promise.all([
+      ctx.auth.getUserIdentity(), ctx.db.get(args.siteId),
+    ]);
+    if (!identity || !site?.userId || identity.subject !== site.userId) {
+      throw new Error("Not authorized to retry this setup");
+    }
+    if (!Number.isSafeInteger(args.expectedPlanGeneration) || args.expectedPlanGeneration <= 0 ||
+      args.expectedPlanGeneration >= Number.MAX_SAFE_INTEGER ||
+      !Number.isSafeInteger(args.expectedConfigurationRevision) || args.expectedConfigurationRevision <= 0) {
+      throw new Error("Invalid setup retry identity");
+    }
+    const request = await ctx.db.query("managed_provisioning_requests")
+      .withIndex("by_site", q => q.eq("siteId", args.siteId)).unique();
+    if (!request || request.configurationRevision !== args.expectedConfigurationRevision ||
+      request.initialPlanQuarantineCode) throw new Error("Setup retry lost its current request fence");
+    await activeRequestContext(ctx, { siteId: args.siteId, requestId: request._id });
+    const prior = request.initialPlanOwnerRetry;
+    if (prior?.previousJobId === args.expectedPlanJobId &&
+      prior.previousGeneration === args.expectedPlanGeneration &&
+      prior.configurationRevision === args.expectedConfigurationRevision &&
+      (request.initialPlanGeneration ?? 0) > args.expectedPlanGeneration) {
+      return { state: "already_requested" as const };
+    }
+    const execution = await ctx.db.query("one_setup_executions")
+      .withIndex("by_request_configuration", q => q.eq("requestId", request._id)
+        .eq("configurationRevision", args.expectedConfigurationRevision)).unique();
+    const job = await ctx.db.get(args.expectedPlanJobId);
+    const now = Date.now();
+    if (!execution || execution.status !== "blocked" ||
+      execution.siteId !== site._id || execution.planJobId !== args.expectedPlanJobId ||
+      request.initialPlanJobId !== args.expectedPlanJobId ||
+      request.initialPlanGeneration !== args.expectedPlanGeneration ||
+      !requestMatchesExecution(request, execution, site) ||
+      !job || job.status !== "failed" || (job.leaseExpiresAt ?? 0) > now ||
+      !planBindingMatches(request, execution, job, site) ||
+      (await oneSetupInitialPlanCurrency(ctx, { site, job })).kind !== "current") {
+      throw new Error("Only the exact current terminal failed plan can authorize a new attempt");
+    }
+    if (!Number.isSafeInteger(job.updatedAt) || job.updatedAt <= 0 ||
+      (job.cadenceFailure?.eligibleAt !== undefined &&
+        !Number.isSafeInteger(job.cadenceFailure.eligibleAt))) {
+      throw new Error("Invalid failed-plan timing receipt");
+    }
+    const window = oneSetupOwnerRetryWindow(prior, now);
+    const eligibleAt = Math.max(window.eligibleAt,
+      job.updatedAt + ONE_SETUP_OWNER_RETRY_COOLDOWN_MS,
+      job.cadenceFailure?.eligibleAt ?? 0);
+    if (eligibleAt > now) return { state: "waiting" as const, eligibleAt };
+    await ctx.db.patch(request._id, {
+      initialPlanGeneration: args.expectedPlanGeneration + 1,
+      initialPlanJobId: undefined,
+      initialPlanBoundAt: undefined,
+      initialPlanRecoveryCount: 0,
+      initialPlanOwnerRetry: {
+        previousJobId: job._id,
+        previousGeneration: args.expectedPlanGeneration,
+        configurationRevision: args.expectedConfigurationRevision,
+        requestedAt: now,
+        windowStartAt: window.windowStartAt,
+        attemptInWindow: window.attemptInWindow,
+      },
+      updatedAt: now,
+    });
+    await ctx.db.patch(execution._id, {
+      status: "pending", planJobId: undefined, topicCount: undefined,
+      blockerCode: undefined, claimNonce: undefined, leaseExpiresAt: undefined,
+      claimWatchAttempt: undefined, claimWatchNextAt: undefined,
+      pendingResumeAttempt: undefined, pendingResumeNextAt: undefined,
+      bootstrapAuthorizationWatchAttempt: undefined,
+      bootstrapAuthorizationNextAt: undefined,
+      planSettlementWatchAttempt: undefined, planSettlementNextAt: undefined,
+      completedAt: undefined, updatedAt: now,
+    });
+    const successor = await ctx.db.get(execution._id);
+    if (!successor) throw new Error("Setup retry execution disappeared");
+    await scheduleExactResumeWithWatchdog(ctx, { execution: successor, recoveryAttempt: 1 });
+    return { state: "retry_requested" as const };
   },
 });
 

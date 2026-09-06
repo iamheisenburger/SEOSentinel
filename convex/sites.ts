@@ -117,8 +117,10 @@ import {
   oneSetupLegacyInitialPlanJobBindingMatches,
   oneSetupInitialPlanReceiptDecision,
 } from "./lib/oneSetupInitialPlan.ts";
-import { oneSetupCompletedPlanReceipt, oneSetupExecutionNextEligibleAt } from
+import { oneSetupCompletedPlanReceipt, oneSetupExecutionNextEligibleAt,
+  oneSetupOwnerRetryWindow, ONE_SETUP_OWNER_RETRY_COOLDOWN_MS } from
   "./lib/oneSetupExecution.ts";
+import { oneSetupInitialPlanCurrency } from "./lib/oneSetupInitialPlanDb.ts";
 import {
   canonicalGscReceiptMutationFenceCurrent,
   oneSetupManagedOutreachMailboxReceiptVerified,
@@ -2543,6 +2545,11 @@ export const getOneSetupReadiness = query({
         currentExecution.siteId === site._id &&
         currentExecution.ownerAccountKey === ownerAccountKey &&
         currentExecution.domainSnapshot === domainSnapshot &&
+        currentExecution.automationMode === request?.automationMode &&
+        currentExecution.requestedCadencePerWeek === request?.requestedCadencePerWeek &&
+        currentExecution.publisherMode === request?.publisher.mode &&
+        currentExecution.searchMeasurementMode === request?.searchMeasurement.mode &&
+        currentExecution.outreachMailboxMode === request?.outreachMailbox.mode &&
         currentExecution.domainRevisionSnapshot ===
           request?.domainRevisionSnapshot,
     );
@@ -2557,6 +2564,35 @@ export const getOneSetupReadiness = query({
       currentExecutionValid &&
         (currentExecution!.status === "blocked" || persistentProviderRecovery),
     );
+    let initialPlanRetry: {
+      planJobId: Id<"jobs">; planGeneration: number; eligibleAt: number;
+    } | null = null;
+    if (requestValid && currentExecutionValid && currentExecution!.status === "blocked" &&
+      !request!.initialPlanQuarantineCode && currentExecution!.planJobId &&
+      currentExecution!.planJobId === request!.initialPlanJobId &&
+      Number.isSafeInteger(request!.initialPlanGeneration) &&
+      (request!.initialPlanGeneration ?? 0) > 0 &&
+      (request!.initialPlanGeneration ?? 0) < Number.MAX_SAFE_INTEGER) {
+      const job = await ctx.db.get(currentExecution!.planJobId);
+      const now = Date.now();
+      if (job?.siteId === site._id && job.status === "failed" &&
+        (job.leaseExpiresAt ?? 0) <= now &&
+        Number.isSafeInteger(job.updatedAt) && job.updatedAt > 0 &&
+        (job.cadenceFailure?.eligibleAt === undefined ||
+          Number.isSafeInteger(job.cadenceFailure.eligibleAt)) &&
+        (await oneSetupInitialPlanCurrency(ctx, { site, job })).kind === "current") {
+        try {
+          const retryWindow = oneSetupOwnerRetryWindow(request!.initialPlanOwnerRetry, now);
+          initialPlanRetry = { planJobId: job._id,
+            planGeneration: request!.initialPlanGeneration!,
+            eligibleAt: Math.max(retryWindow.eligibleAt,
+              job.updatedAt + ONE_SETUP_OWNER_RETRY_COOLDOWN_MS,
+              job.cadenceFailure?.eligibleAt ?? 0) };
+        } catch {
+          // A malformed budget receipt needs operator attention, not a retry.
+        }
+      }
+    }
     const publisherProgress = requestValid
       ? request!.publisher
       : pendingOneSetupCapability("connect_existing");
@@ -2684,6 +2720,7 @@ export const getOneSetupReadiness = query({
         | "connect_gmail_outreach"
         | "configure_smtp_outreach"
         | "accept_publisher_autopublish"
+        | "retry_initial_plan"
         | "review_publishing";
       actionLabel?: string;
     }> = [
@@ -2693,7 +2730,7 @@ export const getOneSetupReadiness = query({
         label: "Content plan prepared",
         state: planState,
         actionRequiredBy: contentPlanActionRequired
-          ? currentExecutionBlocker?.startsWith("provider_")
+          ? !initialPlanRetry && currentExecutionBlocker?.startsWith("provider_")
             ? "operator"
             : "owner"
           : undefined,
@@ -2701,10 +2738,14 @@ export const getOneSetupReadiness = query({
           ? currentExecutionBlocker
           : undefined,
         actionMessage: contentPlanActionRequired
-          ? persistentProviderRecovery
+          ? initialPlanRetry
+            ? "The previous content plan failed. Retry starts one new planning attempt under current limits; the old paid receipt is preserved. New work may consume provider capacity."
+            : persistentProviderRecovery
             ? "Pentra is continuing bounded provider reinspection; persistent funding or provider availability needs operator attention."
             : "The exact setup execution stopped safely and requires attention; no paid plan receipt was replayed."
           : undefined,
+        actionKind: initialPlanRetry ? "retry_initial_plan" : undefined,
+        actionLabel: initialPlanRetry ? "Retry content plan" : undefined,
       },
       { key: "cadence", label: "Cadence reserved", state: cadenceState },
       {
@@ -2856,6 +2897,7 @@ export const getOneSetupReadiness = query({
           }),
         }
         : null,
+      initialPlanRetry,
       // This is a narrowly named publishing receipt. It must not be presented
       // as proof that outreach, ranking, or conversion outcomes are active.
       publishingRolloutLive: site.autopilotRolloutMode === "live",

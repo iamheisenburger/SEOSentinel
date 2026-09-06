@@ -506,7 +506,7 @@ test("cancelled legacy planners cannot persist through an ordinary upsert race",
   );
   assert.match(
     upsert,
-    /site\.expectedClickSchedulingEnabled !==\s*planExecution\.expectedClickSchedulingEnabled/,
+    /\(site\.expectedClickSchedulingEnabled === true\) !==\s*planExecution\.expectedClickSchedulingEnabled/,
   );
   assert.match(upsert, /jobAuthorizedForExecution\(site, job\)/);
   assert.match(upsert, /siteExecutionAuthorized\(ctx, site\)/);

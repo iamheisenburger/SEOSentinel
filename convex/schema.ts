@@ -239,6 +239,16 @@ export default defineSchema({
     // backoff and persistent operator visibility. Paid/ambiguous failures never
     // increment this counter or authorize a successor generation.
     initialPlanRecoveryCount: v.optional(v.number()),
+    // Explicit owner authorization is separate from passive/zero-spend
+    // recovery. It can purchase one fresh attempt, never replay the old job.
+    initialPlanOwnerRetry: v.optional(v.object({
+      previousJobId: v.id("jobs"),
+      previousGeneration: v.number(),
+      configurationRevision: v.number(),
+      requestedAt: v.number(),
+      windowStartAt: v.number(),
+      attemptInWindow: v.number(),
+    })),
     automationMode: v.union(
       v.literal("assisted"),
       v.literal("full"),

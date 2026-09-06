@@ -6,6 +6,8 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { buildSync } from "esbuild";
 import { accountDeletionKey } from "../convex/lib/accountDeletion.ts";
+import { oneSetupInitialPlanContextFingerprint } from "../convex/lib/oneSetupInitialPlan.ts";
+import { getFunctionName } from "convex/server";
 
 type Row = Record<string, unknown>;
 type Handler = { _handler: (ctx: unknown, args: Row) => Promise<Row> };
@@ -20,7 +22,10 @@ const bundles = Object.fromEntries(["sites", "oneSetupExecutions"].map(name => {
 }));
 
 function fixture() {
-  let owner = "owner-a";
+  let owner: string | null = "owner-a";
+  let clock = timestamp;
+  let rejectDispatch = false;
+  const wakes: Array<{ at: number; name: string; args: Row }> = [];
   const tables: Record<string, Row[]> = {
     sites: [], managed_provisioning_requests: [], one_setup_executions: [], jobs: [],
     account_plan_entitlements: [], account_deletion_receipts: [], pages: [],
@@ -39,6 +44,7 @@ function fixture() {
     tables.managed_provisioning_requests.push({ _id: `request-${id}`, ...binding,
       contractVersion: 1, revision: 1, initialPlanJobId: `job-${id}`,
       initialPlanReceiptVersion: 1, initialPlanGeneration: 1,
+      initialPlanContextFingerprint: oneSetupInitialPlanContextFingerprint({ domain: `${id}.example` }),
       publisher: { mode: "connect_existing", state: "ready" },
       searchMeasurement: { mode: "connect_existing", state: "ready" },
       outreachMailbox: { mode: "connect_existing", state: "ready" },
@@ -58,9 +64,11 @@ function fixture() {
   const row = (id: string) => Object.values(tables).flat().find(value => value._id === id)!;
   const reads: Array<{ table: string; index: string }> = [];
   const ctx = {
-    auth: { async getUserIdentity() { return { subject: owner }; } },
+    auth: { async getUserIdentity() { return owner ? { subject: owner } : null; } },
     db: {
       async get(id: string) { return structuredClone(row(id) ?? null); },
+      normalizeId(table: string, id: string) { return tables[table]?.some(r => r._id === id) ? id : null; },
+      async patch(id: string, patch: Row) { assert.ok(row(id)); Object.assign(row(id), structuredClone(patch)); },
       query(table: string) {
         assert.ok(tables[table], `Unexpected table ${table}`);
         const predicates: Array<(value: Row) => boolean> = [];
@@ -77,19 +85,160 @@ function fixture() {
         return chain;
       },
     },
+    scheduler: {
+      async runAfter(delay: number, ref: Parameters<typeof getFunctionName>[0], args: Row) {
+        if (rejectDispatch) throw new Error("Injected dispatch failure");
+        wakes.push({ at: clock + delay, name: getFunctionName(ref), args: structuredClone(args) });
+      },
+      async runAt(at: number, ref: Parameters<typeof getFunctionName>[0], args: Row) {
+        wakes.push({ at, name: getFunctionName(ref), args: structuredClone(args) });
+      },
+    },
   };
   const modules = Object.fromEntries(Object.entries(bundles).map(([name, source]) => {
     const runtime = { exports: {} as Record<string, Handler> };
     runInNewContext(source, { module: runtime, exports: runtime.exports,
       require: createRequire(import.meta.url), URL, TextEncoder, console, process: { env: {} },
-      Date: class extends Date { static now() { return timestamp; } } });
+      Date: class extends Date { static now() { return clock; } } });
     return [name, runtime.exports];
   }));
-  return { tables, row, reads, asOwner(value: string) { owner = value; },
+  return { tables, row, reads, wakes, asOwner(value: string | null) { owner = value; },
+    at(value: number) { clock = value; },
+    rejectDispatch() { rejectDispatch = true; },
     async run(module: string, name: string, args: Row) {
-      return structuredClone(await modules[module][name]._handler(ctx, args));
+      const before = structuredClone(tables); const wakeCount = wakes.length;
+      try { return structuredClone(await modules[module][name]._handler(ctx, args)); }
+      catch (error) {
+        for (const [table, rows] of Object.entries(before)) tables[table] = rows;
+        wakes.length = wakeCount;
+        throw error;
+      }
     } };
 }
+
+function failedPlanFixture(id = "a") {
+  const f = fixture(); f.asOwner(`owner-${id}`);
+  Object.assign(f.row(`execution-${id}`), { status: "blocked", blockerCode: "transient_provider_failure" });
+  Object.assign(f.row(`job-${id}`), { status: "failed", result: undefined,
+    createdAt: timestamp - 3_600_000, updatedAt: timestamp - 1_800_000,
+    providerSpendReservationId: "immutable-paid-reservation" });
+  return f;
+}
+const retryArgs = (id = "a", generation = 1) => ({ siteId: id,
+  expectedPlanJobId: `job-${id}`, expectedPlanGeneration: generation,
+  expectedConfigurationRevision: 1 });
+
+test("explicit owner retry authorizes one successor without replaying or rewriting the failed paid receipt", async () => {
+  for (const id of ["a", "b"]) {
+    const f = failedPlanFixture(id); const oldJob = structuredClone(f.row(`job-${id}`));
+    const site = structuredClone(f.row(id));
+    const result = await f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs(id));
+    assert.equal(result.state, "retry_requested");
+    assert.equal(f.row(`request-${id}`).initialPlanGeneration, 2);
+    assert.equal(f.row(`request-${id}`).initialPlanJobId, undefined);
+    assert.equal(f.row(`request-${id}`).configurationRevision, 1);
+    assert.equal(f.row(`execution-${id}`).status, "pending");
+    assert.equal(f.row(`execution-${id}`).planJobId, undefined);
+    assert.deepEqual(f.row(`job-${id}`), oldJob);
+    assert.deepEqual(f.row(id), site, "retry cannot change cadence, publishing or outreach authority");
+    assert.equal(f.tables.jobs.length, 2, "the canonical queue must reserve the new paid job");
+    assert.deepEqual(f.wakes.map(w => w.name), ["actions/pipeline:resumeOneSetupExecutionInternal", "oneSetupExecutions:recoverScheduledResumeDispatch"]);
+    const committed = structuredClone(f.tables);
+    assert.equal((await f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs(id))).state, "already_requested");
+    assert.deepEqual(f.tables, committed); assert.equal(f.wakes.length, 2);
+  }
+});
+
+test("owner retry refuses stale, foreign, active, completed, zero-yield and ambiguous receipt bindings", async () => {
+  for (const [id, patch] of [
+    ["a", { planParkedAt: timestamp }], ["a", { accountDeletionRequestedAt: timestamp }],
+    ["a", { canonicalDomainRevision: 2 }], ["a", { niche: "changed planning context" }],
+    ["a", { domainOwnershipConflictAt: timestamp }],
+    ["entitlement-a", { status: "pending" }], ["entitlement-a", { maxArticles: 5 }],
+    ["request-a", { initialPlanQuarantineCode: "ambiguous_legacy_receipt" }],
+    ["execution-a", { status: "completed" }], ["execution-a", { status: "plan_queued" }],
+    ["execution-a", { automationMode: "approval" }], ["execution-a", { requestedCadencePerWeek: 21 }],
+    ["execution-a", { publisherMode: "managed" }],
+    ["job-a", { status: "running" }], ["job-a", { status: "pending" }],
+    ["job-a", { status: "done", result: { count: 0 } }],
+    ["job-a", { siteId: "b" }], ["job-a", { leaseExpiresAt: timestamp + 1 }],
+  ] as Array<[string, Row]>) {
+    const f = failedPlanFixture(); Object.assign(f.row(id), patch); const before = structuredClone(f.tables);
+    await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()));
+    assert.deepEqual(f.tables, before); assert.equal(f.wakes.length, 0);
+  }
+  for (const owner of [null, "owner-b"]) {
+    const f = failedPlanFixture(); f.asOwner(owner); const before = structuredClone(f.tables);
+    await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()), /Not authorized/);
+    assert.deepEqual(f.tables, before);
+  }
+  for (const patch of [{ expectedPlanGeneration: 2 }, { expectedConfigurationRevision: 2 },
+    { expectedPlanJobId: "job-b" }, { expectedPlanGeneration: NaN }]) {
+    const f = failedPlanFixture(); const before = structuredClone(f.tables);
+    await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", { ...retryArgs(), ...patch }));
+    assert.deepEqual(f.tables, before);
+  }
+});
+
+test("owner retry respects failure eligibility and rolls back authorization when dispatch cannot be armed", async () => {
+  for (const patch of [{ updatedAt: timestamp - 1 },
+    { cadenceFailure: { eligibleAt: timestamp + 60_000 } }]) {
+    const f = failedPlanFixture(); Object.assign(f.row("job-a"), patch); const before = structuredClone(f.tables);
+    const result = await f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs());
+    assert.equal(result.state, "waiting"); assert.ok(Number(result.eligibleAt) > timestamp);
+    assert.deepEqual(f.tables, before); assert.equal(f.wakes.length, 0);
+  }
+  const f = failedPlanFixture(); f.rejectDispatch(); const before = structuredClone(f.tables);
+  await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()), /Injected dispatch failure/);
+  assert.deepEqual(f.tables, before); assert.equal(f.wakes.length, 0);
+});
+
+test("repeated distinct owner retries retain the daily envelope and reject corrupted counters", async () => {
+  for (const attemptInWindow of [3, 4, NaN]) {
+    const f = failedPlanFixture();
+    f.row("request-a").initialPlanOwnerRetry = {
+      previousJobId: "an-earlier-failed-job", previousGeneration: 1,
+      configurationRevision: 1, requestedAt: timestamp - 1_800_000,
+      windowStartAt: Date.UTC(2026, 8, 6), attemptInWindow,
+    };
+    const before = structuredClone(f.tables);
+    if (attemptInWindow === 3) {
+      const result = await f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs());
+      assert.equal(result.state, "waiting");
+      assert.equal(result.eligibleAt, Date.UTC(2026, 8, 7));
+    } else {
+      await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()), /Invalid owner retry/);
+    }
+    assert.deepEqual(f.tables, before); assert.equal(f.wakes.length, 0);
+  }
+});
+
+test("customer readiness exposes the exact failed-plan retry and removes it after authorization", async () => {
+  const f = failedPlanFixture();
+  const result = await f.run("sites", "getOneSetupReadiness", { siteId: "a" });
+  const retry = result.initialPlanRetry as Row;
+  assert.equal(retry.planJobId, "job-a"); assert.equal(retry.planGeneration, 1);
+  assert.equal((result.stages as Row[]).find(s => s.key === "content_plan")?.actionKind, "retry_initial_plan");
+  await f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs());
+  const after = await f.run("sites", "getOneSetupReadiness", { siteId: "a" });
+  assert.equal(after.initialPlanRetry, null);
+  assert.equal((after.stages as Row[]).find(s => s.key === "content_plan")?.actionKind, undefined);
+});
+
+test("stale setup choices cannot advertise a retry and deleted accounts cannot authorize it", async () => {
+  for (const patch of [{ automationMode: "approval" }, { requestedCadencePerWeek: 21 },
+    { publisherMode: "managed" }, { searchMeasurementMode: "managed" },
+    { outreachMailboxMode: "managed" }]) {
+    const f = failedPlanFixture(); Object.assign(f.row("execution-a"), patch);
+    const result = await f.run("sites", "getOneSetupReadiness", { siteId: "a" });
+    assert.equal(result.initialPlanRetry, null);
+  }
+  const f = failedPlanFixture();
+  f.tables.account_deletion_receipts.push({ _id: "deleted-a", accountKey: accountDeletionKey("owner-a") });
+  const before = structuredClone(f.tables);
+  await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()));
+  assert.deepEqual(f.tables, before); assert.equal(f.wakes.length, 0);
+});
 
 test("completed setup plans stay prepared after all initial topics have been consumed", async () => {
   const f = fixture();
