@@ -84,7 +84,7 @@ import { terminallyClosePlanCheckpoints } from
 import { releaseSharedProviderReservation } from
   "./lib/providerSpendReservation";
 import {
-  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  planProviderAmountsMatch,
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
 import {
@@ -1102,12 +1102,7 @@ async function cancelAutonomousJobsForEpochTransition(
         reservation.trigger === expectedReservationTrigger &&
         reservation.createdAt === job.createdAt &&
         reservation.reservationDay === job.providerCostReservationDay &&
-        reservation.reservedMicroUsd ===
-          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-        job.providerCostReservedMicroUsd ===
-          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-        job.providerCostCeilingMicroUsd ===
-          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+        planProviderAmountsMatch(job, reservation.reservedMicroUsd) &&
         reservation.releasedAt === undefined;
       if (exactUntouchedReservation) {
         releasedPlanReservation = (await releaseSharedProviderReservation(

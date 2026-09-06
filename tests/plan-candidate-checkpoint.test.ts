@@ -472,8 +472,7 @@ test("expected-click toggles cancel every crossing plan contract and release onl
     cancellation,
     /topicPlanProviderReservationTriggerFromPayload\(payload\)/,
   );
-  assert.ok((cancellation.match(/AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD/g) ?? [])
-    .length >= 3);
+  assert.match(cancellation, /planProviderAmountsMatch\(job, reservation\.reservedMicroUsd\)/);
   assert.match(cancellation, /job\.status === "running"/);
   assert.match(cancellation, /status: "ambiguous"/);
   assert.match(cancellation, /expectedClickPlanMigrationJobId === job\._id/);

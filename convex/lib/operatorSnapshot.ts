@@ -5,7 +5,7 @@ import {
 } from "./planCandidateCheckpoint.ts";
 import {
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
-  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  planProviderAmountsMatch,
   TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
   automaticSingleExecutionCheckpointTargetFromPayload,
   topicPlanCooldownWakeAt,
@@ -664,12 +664,7 @@ export function operatorTerminalPlanReceipt(args: {
       args.reservation.reservationMonth === providerReservationPeriod.month &&
       args.reservation.reservedMicroUsd ===
         args.job.providerCostReservedMicroUsd &&
-      args.reservation.reservedMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      args.job.providerCostReservedMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      args.job.providerCostCeilingMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+      planProviderAmountsMatch(args.job, args.reservation.reservedMicroUsd) &&
       releasePairMatches
   );
   return {

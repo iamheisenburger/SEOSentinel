@@ -5,7 +5,7 @@ import test from "node:test";
 import { buildSync } from "esbuild";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD } from "../convex/lib/planProviderBudget.ts";
+import { AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD, automaticPlanYieldTarget } from "../convex/lib/planProviderBudget.ts";
 
 const contents = process.env.PLAN_PERSISTENCE_BASELINE_REF
   ? execFileSync("git", ["show", `${process.env.PLAN_PERSISTENCE_BASELINE_REF}:convex/topics.ts`], { encoding: "utf8" })
@@ -104,4 +104,15 @@ test("real policy transitions and exact tenant, lease, execution and spend fence
     await assert.rejects(f.commit(), /Plan topic persistence lost/);
     assert.deepEqual(f.tables, before);
   }
+});
+
+test("single-execution plans cannot bypass checkpoint persistence through the ordinary writer", async () => {
+  const f = fixture(true);
+  Object.assign(f.row("plan")!, { providerCostReservedMicroUsd: 1_000_000, providerCostCeilingMicroUsd: 1_000_000,
+    payload: { reason: "topic_evidence_replenishment", planCheckpointModeVersion: 1, planProviderEnvelopeVersion: 2,
+      planYieldTarget: automaticPlanYieldTarget({ targetBufferShortfall: 4, verifiedHorizonShortfall: 7, articleQuotaHeadroom: 20 }) } });
+  f.row("spend")!.reservedMicroUsd = 1_000_000;
+  const before = structuredClone(f.tables);
+  await assert.rejects(f.commit(), /Plan topic persistence lost/);
+  assert.deepEqual(f.tables, before);
 });

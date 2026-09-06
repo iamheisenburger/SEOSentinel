@@ -104,7 +104,7 @@ import { hasReusableExpectedClickSerpEvidence } from
 import {
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
   AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD,
-  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  planProviderAmountsMatch,
   EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
   automaticSingleExecutionCheckpointTargetFromPayload,
   classifyPlanFailure,
@@ -307,10 +307,7 @@ async function assertCurrentOneSetupInitialPlan(
 
 function assertPlanProviderReservation(job: Doc<"jobs">): void {
   if (
-    job.providerCostCeilingMicroUsd !==
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
-    job.providerCostReservedMicroUsd !==
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD ||
+    !planProviderAmountsMatch(job) ||
     job.providerCostReservationDay !==
         new Date(job.createdAt).toISOString().slice(0, 10) ||
     job.providerReservationReleasedAt !== undefined

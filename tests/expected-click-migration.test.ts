@@ -134,11 +134,11 @@ test("the expected-click bridge is versioned, one-shot, and tenant scoped", () =
 test("migration discounts only legacy plan counters, never shared fleet spend", () => {
   assert.match(
     reservation,
-    /options\s*\?\s*hasExplicitPlanProviderReservation\(job\)\s*:\s*isBudgetedPlanJob\(job\)/,
+    /migration\s*\?\s*hasExplicitPlanProviderReservation\(job\)\s*:\s*isBudgetedPlanJob\(job\)/,
   );
   assert.match(
     reservation,
-    /reserveSharedProviderBudget\(ctx, \{[\s\S]*reservedMicroUsd:\s*AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD/,
+    /options\?\.singleExecution === true\s*\? AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD\s*:\s*AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD/,
   );
   assert.match(
     reservation,

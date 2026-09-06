@@ -9,7 +9,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import {
-  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  planProviderAmountsMatch,
   topicPlanProviderReservationTriggerFromPayload,
 } from "./lib/planProviderBudget";
 import {
@@ -603,10 +603,8 @@ function validExhaustedSourcePlan(args: {
   const executionReceiptBound = checkpointExhaustionKind === "strict_zero_yield"
     ? terminal?.checkpoint?.workerExecution === 1
     : providerBudget.workerExecution === 1 &&
-      providerBudget.reservedMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      providerBudget.ceilingMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+      providerBudget.reservedMicroUsd === job.providerCostReservedMicroUsd &&
+      providerBudget.ceilingMicroUsd === job.providerCostCeilingMicroUsd &&
       providerBudget.reservationDay === job.providerCostReservationDay;
   return Boolean(
     site.userId &&
@@ -617,10 +615,7 @@ function validExhaustedSourcePlan(args: {
       job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
       (legacyExecutionExhausted || checkpointExecutionExhausted) &&
       executionReceiptBound &&
-      job.providerCostCeilingMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-      job.providerCostReservedMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+      planProviderAmountsMatch(job) &&
       cadenceMicroSeedSourcePlanFresh({
         jobCreatedAt: job.createdAt,
         reservationDay: job.providerCostReservationDay,
@@ -632,8 +627,7 @@ function validExhaustedSourcePlan(args: {
       reservation.userId === site.userId &&
       reservation.purpose === "topic_plan" &&
       reservation.trigger === "topic_plan" &&
-      reservation.reservedMicroUsd ===
-        AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+      planProviderAmountsMatch(job, reservation.reservedMicroUsd) &&
       reservation.reservationDay === job.providerCostReservationDay &&
       reservation.createdAt === job.createdAt &&
       reservation.releasedAt === undefined,

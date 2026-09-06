@@ -28,6 +28,9 @@ export const AUTOMATIC_PLAN_TOPIC_CAPACITY = 10;
 export const AUTOMATIC_PLAN_MINIMUM_VERIFIED_YIELD = 7;
 export const AUTOMATIC_PLAN_YIELD_TARGET_VERSION = 1;
 export const PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION = 1;
+// Prospective only: old receipts keep their two-execution reservation. This
+// marker binds a new, strictly single-execution checkpoint plan to one ceiling.
+export const PLAN_SINGLE_EXECUTION_ENVELOPE_VERSION = 2;
 export const UNDERFILLED_PLAN_CONTINUATION_RECOVERY_VERSION = 1;
 export const AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD = 1_000_000;
 export const AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES = 1;
@@ -439,6 +442,33 @@ export function automaticSingleExecutionCheckpointTargetFromPayload(
   return automaticPlanYieldTargetFromPayload(payloadValue);
 }
 
+export function planProviderEnvelopeMicroUsd(payloadValue: unknown): number | null {
+  const payload = payloadValue && typeof payloadValue === "object"
+    ? payloadValue as Record<string, unknown> : {};
+  if (payload.planProviderEnvelopeVersion === undefined) {
+    return AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD;
+  }
+  return payload.planProviderEnvelopeVersion === PLAN_SINGLE_EXECUTION_ENVELOPE_VERSION &&
+      automaticSingleExecutionCheckpointTargetFromPayload(payload) &&
+      payload.oneSetupExecutionId === undefined &&
+      payload.underfilledPlanContinuation === undefined
+    ? AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD : null;
+}
+
+/** Amount validation is shared by every producer/consumer of the immutable
+ * reservation. Ownership, UTC day, release and live worker checks stay at each
+ * boundary. A reduced amount without the exact one-execution contract fails. */
+export function planProviderAmountsMatch(job: {
+  payload?: unknown;
+  providerCostCeilingMicroUsd?: number;
+  providerCostReservedMicroUsd?: number;
+}, ...reservationAmounts: [] | [number | undefined]): boolean {
+  const expected = planProviderEnvelopeMicroUsd(job.payload);
+  return expected !== null && job.providerCostCeilingMicroUsd === expected &&
+    job.providerCostReservedMicroUsd === expected &&
+    (reservationAmounts.length === 0 || reservationAmounts[0] === expected);
+}
+
 /**
  * Freeze the amount of verified inventory one paid plan is allowed to pursue.
  *
@@ -598,10 +628,7 @@ export function hasExplicitPlanProviderReservation(
   if (job.type !== "plan") return false;
   if (job.providerReservationReleasedAt !== undefined) return false;
   return (
-    job.providerCostCeilingMicroUsd ===
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-    job.providerCostReservedMicroUsd ===
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+    planProviderAmountsMatch(job) &&
     /^\d{4}-\d{2}-\d{2}$/.test(job.providerCostReservationDay ?? "") &&
     job.providerSpendReservationId !== undefined
   );
@@ -647,6 +674,7 @@ export function evaluatePlanProviderReservationCapacity(args: {
   cadencePerWeek?: number;
   budgetedPlansThisMonth: number;
   reservedTodayMicroUsd: number;
+  singleExecution?: boolean;
 }): PlanProviderCapacityDecision {
   const monthlyPlanAllowance = automaticPlanAllowanceForArticleHeadroom(
     args.monthlyArticleAllowance ?? args.remainingArticles,
@@ -667,7 +695,9 @@ export function evaluatePlanProviderReservationCapacity(args: {
   }
   if (
     args.reservedTodayMicroUsd +
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD >
+      (args.singleExecution === true
+        ? AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD
+        : AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD) >
     automaticPlanDailyCeilingMicroUsd(args.cadencePerWeek)
   ) {
     return {

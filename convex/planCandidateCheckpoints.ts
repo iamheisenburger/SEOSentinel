@@ -40,7 +40,7 @@ import {
   type PlanCheckpointCandidate,
 } from "./lib/planCandidateCheckpoint";
 import {
-  AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  planProviderAmountsMatch,
   automaticSingleExecutionCheckpointTargetFromPayload,
 } from "./lib/planProviderBudget";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
@@ -239,17 +239,12 @@ async function exactReservation(
     reservation.userId === site.userId &&
     reservation.purpose === "topic_plan" &&
     reservation.trigger === "topic_plan" &&
-    reservation.reservedMicroUsd ===
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+    planProviderAmountsMatch(job, reservation.reservedMicroUsd) &&
     reservation.reservationDay === job.providerCostReservationDay &&
     reservation.createdAt === job.createdAt &&
     reservation.releasedAt === undefined &&
     reservation.settledAt === undefined &&
     reservation.settledMicroUsd === undefined &&
-    job.providerCostCeilingMicroUsd ===
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-    job.providerCostReservedMicroUsd ===
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
     job.providerReservationReleasedAt === undefined
   );
 }

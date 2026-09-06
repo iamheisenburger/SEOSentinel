@@ -33,6 +33,8 @@ import {
   AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES,
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  PLAN_SINGLE_EXECUTION_ENVELOPE_VERSION,
+  planProviderAmountsMatch,
   EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
   UNDERFILLED_PLAN_CONTINUATION_RECOVERY_VERSION,
   automaticPlanYieldTarget,
@@ -2247,7 +2249,13 @@ export const queuePlanIfAbsent = internalMutation({
     // "manual" controls rollout authorization only; it is never a spending
     // bypass. Reserve only after every no-provider gate so a rejected queue
     // request cannot consume capacity.
-    const reservation = await reservePlanProviderBudget(ctx, site, timestamp);
+    const singleExecution = Boolean(
+      planYieldTarget && site.expectedClickSchedulingEnabled === true,
+    );
+    const reservation = await reservePlanProviderBudget(
+      ctx, site, timestamp,
+      singleExecution ? { singleExecution: true } : undefined,
+    );
     if (!reservation.ok) {
       const denial = setupExecution
         ? oneSetupQueueDenialDisposition({
@@ -2308,6 +2316,7 @@ export const queuePlanIfAbsent = internalMutation({
             ? {
                 planCheckpointModeVersion:
                   PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION,
+                planProviderEnvelopeVersion: PLAN_SINGLE_EXECUTION_ENVELOPE_VERSION,
               }
             : {}),
           ...(setupExecution
@@ -2745,12 +2754,7 @@ export const abortPlanForProviderBalance = internalMutation({
           topicPlanProviderReservationTriggerFromPayload(payload) &&
         reservation.createdAt === job.createdAt &&
         reservation.reservationDay === job.providerCostReservationDay &&
-        reservation.reservedMicroUsd ===
-          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-        job.providerCostReservedMicroUsd ===
-          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
-        job.providerCostCeilingMicroUsd ===
-          AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
+        planProviderAmountsMatch(job, reservation.reservedMicroUsd) &&
         reservation.releasedAt === undefined
       );
       if (exactUntouchedReservation) {

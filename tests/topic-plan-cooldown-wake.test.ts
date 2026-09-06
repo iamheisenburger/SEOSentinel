@@ -227,7 +227,7 @@ test("cooldown execution is fenced before ordinary scheduler and paid work", () 
   assert.match(tick, /runClaimNonce: topicPlanCooldown\.claimNonce/);
   assert.doesNotMatch(claim, /DataForSEO|handlePlan|providerCall/);
   assert.match(scheduler, /internal\.jobs\.queuePlanIfAbsent/);
-  assert.match(jobs, /reservePlanProviderBudget\(ctx, site, timestamp\)/);
+  assert.match(jobs, /reservePlanProviderBudget\(\s*ctx, site, timestamp,/);
 });
 
 test("claim-committed action death has a bounded exactly-once watchdog", () => {

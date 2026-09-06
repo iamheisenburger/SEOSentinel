@@ -357,7 +357,7 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
   );
   const schema = readFileSync("convex/schema.ts", "utf8");
 
-  assert.match(jobs, /reservePlanProviderBudget\(ctx, site, timestamp\)/);
+  assert.match(jobs, /reservePlanProviderBudget\(\s*ctx, site, timestamp,/);
   assert.doesNotMatch(jobs, /operatorBudgetBypass/);
   assert.match(jobs, /providerCostReservedMicroUsd/);
   assert.match(jobs, /AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES/);
@@ -389,8 +389,7 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
     balanceAbort,
     /topicPlanProviderReservationTriggerFromPayload\(payload\)/,
   );
-  assert.ok((balanceAbort.match(/AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD/g) ?? [])
-    .length >= 3);
+  assert.match(balanceAbort, /planProviderAmountsMatch\(job, reservation\.reservedMicroUsd\)/);
   assert.match(
     balanceAbort,
     /expectedClickPlanMigrationReservedAt === job\.createdAt/,
@@ -551,8 +550,8 @@ test("no operator or internal plan path can bypass the shared provider reservati
     pipeline.indexOf("function assertPlanProviderReservation"),
     pipeline.indexOf("const TopicSchema"),
   );
-  assert.match(queue, /reservePlanProviderBudget\(ctx, site, timestamp\)/);
-  assert.match(worker, /providerCostReservedMicroUsd/);
+  assert.match(queue, /reservePlanProviderBudget\(\s*ctx, site, timestamp,/);
+  assert.match(worker, /planProviderAmountsMatch\(job\)/);
   assert.match(worker, /providerReservationReleasedAt/);
   assert.match(worker, /refusing paid discovery/);
 });
@@ -578,7 +577,7 @@ test("deleting tenants cannot queue or reserve paid topic-plan work", () => {
   assert.match(internalQueue, /siteExecutionActive\(site\)/);
   assert.ok(
     internalQueue.indexOf("siteExecutionActive(site)") <
-      internalQueue.indexOf("reservePlanProviderBudget(ctx, site, timestamp)"),
+      internalQueue.indexOf("await reservePlanProviderBudget("),
     "the internal queue must fence deletion before reserving provider spend",
   );
 });

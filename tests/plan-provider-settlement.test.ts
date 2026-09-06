@@ -72,6 +72,16 @@ test("successful single-execution plan requires an exact terminal checkpoint", a
   assert.equal((await f.run()).retired, 1);
 });
 
+test("a prospective one-execution envelope has no unused contingency to retire", async () => {
+  const f = fixture();
+  Object.assign(f.job, { providerCostCeilingMicroUsd: 1_000_000, providerCostReservedMicroUsd: 1_000_000,
+    payload: { ...(f.job.payload as Record<string, unknown>), planProviderEnvelopeVersion: 2 } });
+  f.reservation.reservedMicroUsd = 1_000_000;
+  assert.equal((await f.run()).retired, 0);
+  assert.equal(f.patches.length, 0);
+  assert.equal(f.reservation.settledMicroUsd, undefined);
+});
+
 test("active, legacy, ambiguous, retried or unbound plan work retains its entire envelope", async () => {
   for (const patch of [
     { status: "running" }, { status: "pending" }, { workerAttempts: 1 }, { workerAttempts: undefined },

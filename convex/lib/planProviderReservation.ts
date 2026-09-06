@@ -6,6 +6,7 @@ import {
 } from "../planLimits";
 import {
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+  AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD,
   automaticPlanDailyCeilingMicroUsd,
   EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
   evaluatePlanProviderReservationCapacity,
@@ -118,15 +119,27 @@ export async function reservePlanProviderBudget(
   ctx: MutationCtx,
   site: Doc<"sites">,
   timestamp: number,
-  options?: { expectedClickMigrationVersion: number },
+  options?: { expectedClickMigrationVersion: number; singleExecution?: never } |
+    { singleExecution: true; expectedClickMigrationVersion?: never },
 ): Promise<PlanProviderReservationResult> {
   if (
-    options &&
+    options?.expectedClickMigrationVersion !== undefined &&
     options.expectedClickMigrationVersion !==
       EXPECTED_CLICK_PLAN_MIGRATION_VERSION
   ) {
     throw new Error("Unsupported expected-click plan migration version");
   }
+  if (
+    options?.singleExecution === true &&
+    (site.expectedClickSchedulingEnabled !== true ||
+      options.expectedClickMigrationVersion !== undefined)
+  ) {
+    throw new Error("Single-execution planning requires checkpoint scheduling");
+  }
+  const migration = options?.expectedClickMigrationVersion !== undefined;
+  const reservedMicroUsd = options?.singleExecution === true
+    ? AUTOMATIC_PLAN_PROVIDER_EXECUTION_CEILING_MICRO_USD
+    : AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD;
   if (!site.userId) return { ok: false, reason: "owner_unbound" };
   if (!siteExecutionActive(site)) {
     return { ok: false, reason: "site_parked" };
@@ -213,7 +226,7 @@ export async function reservePlanProviderBudget(
           ),
         )
       ).flat().filter((job) =>
-        options
+        migration
           ? hasExplicitPlanProviderReservation(job)
           : isBudgetedPlanJob(job)
       ).length;
@@ -228,7 +241,7 @@ export async function reservePlanProviderBudget(
     .take(50);
   const reservedTodayMicroUsd = dailyPlanJobs
     .filter((job) =>
-      options
+      migration
         ? hasExplicitPlanProviderReservation(job)
         : isBudgetedPlanJob(job)
     )
@@ -247,6 +260,7 @@ export async function reservePlanProviderBudget(
     cadencePerWeek: site.cadencePerWeek ?? 4,
     budgetedPlansThisMonth,
     reservedTodayMicroUsd,
+    singleExecution: options?.singleExecution,
   });
   if (!capacity.allowed) {
     return {
@@ -269,14 +283,14 @@ export async function reservePlanProviderBudget(
     userId: site.userId,
     purpose: "topic_plan",
     trigger: topicPlanProviderReservationTriggerFromPayload(
-      options
+      migration
         ? {
             expectedClickPlanMigrationVersion:
-              options.expectedClickMigrationVersion,
+              options!.expectedClickMigrationVersion,
           }
         : undefined,
     ),
-    reservedMicroUsd: AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    reservedMicroUsd,
     timestamp,
   });
   if (!shared.ok) {
@@ -291,10 +305,8 @@ export async function reservePlanProviderBudget(
 
   return {
     ok: true,
-    providerCostCeilingMicroUsd:
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-    providerCostReservedMicroUsd:
-      AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
+    providerCostCeilingMicroUsd: reservedMicroUsd,
+    providerCostReservedMicroUsd: reservedMicroUsd,
     providerCostReservationDay: utcDayKey(timestamp),
     providerSpendReservationId: shared.reservationId,
   };
