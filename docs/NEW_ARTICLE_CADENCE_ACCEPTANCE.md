@@ -594,3 +594,28 @@ Pentra articles and five LeadPilot articles, no active article jobs, and the
 same future publication receipts. This unchanged state is a waiting condition,
 not additional publication progress. Runtime release `768b1d8` remains frozen
 until the 14:14:43.010 UTC LeadPilot execution has been observed.
+
+### Bounded public-article audit, 13:58 UTC
+
+One controlled diagnostic ran the actual locally revised `auditFinalArticle`
+against the already-public Pentra Fiverr article. The deployed Anthropic
+credential completed one request successfully (HTTP 200,
+`req_011CenJc9rqLGfAcNdpgt4k2`, `claude-sonnet-5`, 6,064 input and 1,017 output
+tokens). No production job, article, schedule or publication was mutated.
+This is a controlled diagnostic, not a natural production acceptance receipt.
+
+The auditor returned 83/100 and marked the article's unsupported assertion
+that Fiverr publishes no ranking documentation as a material defect. It also
+flagged the unsupported autocomplete-provenance assertion in its notes. This
+confirms that the new audit instruction can reject the observed example; it
+does not certify every future article. Its suggestion merely to soften an
+absence claim is not accepted as a factual correction: the relevant official
+documentation must be used, or the unsupported assertion removed.
+
+Earlier local audit harness attempts stopped before any provider request
+because their CommonJS/ESM bridge mishandled the Markdown parser default
+imports. An offline transport test reproduced and corrected that harness
+problem before the single real request. These zero-request failures are not
+provider funding failures. The published wording remains uncorrected pending
+a properly bound editorial revision; no existing-page edit may count as a
+new-article cadence delivery.
