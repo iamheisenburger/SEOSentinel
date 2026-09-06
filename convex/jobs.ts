@@ -46,6 +46,7 @@ import {
   evaluateAutomaticPlanContinuation,
   planRetryUsesCurrentReservationDay,
   topicPlanCooldownClaimNonce,
+  topicPlanCooldownTerminalWriteAllowed,
   topicPlanCooldownWakeAt,
   TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
   TOPIC_PLAN_COOLDOWN_WAKE_TRIGGER,
@@ -91,6 +92,7 @@ import {
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
 import { DEFAULT_MONTHLY_ORGANIC_CLICKS_GOAL } from "./lib/seoGrowth";
+import { ORDINARY_RUN_INTERRUPTION_GRACE_MS } from "./lib/autopilotRunLease";
 import {
   dataForSeoLanguageCode,
   dataForSeoLocationCode,
@@ -3144,10 +3146,11 @@ export const yieldGeneratedArticleForReview = internalMutation({
     runContinuationAttempt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const [job, site, article] = await Promise.all([
+    const [job, site, article, run] = await Promise.all([
       ctx.db.get(args.jobId),
       ctx.db.get(args.siteId),
       ctx.db.get(args.articleId),
+      args.runId ? ctx.db.get(args.runId) : null,
     ]);
     const payload = job?.payload && typeof job.payload === "object"
       ? job.payload as Record<string, unknown>
@@ -3161,9 +3164,23 @@ export const yieldGeneratedArticleForReview = internalMutation({
       !ownsJob(job, args.workerToken) ||
       job.articleId !== args.articleId ||
       payload.articleId !== args.articleId ||
+      payload.reviewCheckpointVersion !== undefined ||
       article.siteId !== args.siteId ||
       !articleMatchesCurrentDomain(site, article) ||
-      !jobAuthorizedForExecution(site, job)
+      !jobAuthorizedForExecution(site, job) ||
+      (args.runId !== undefined && (
+        !run || run.siteId !== args.siteId || run.status !== "running" ||
+        !Number.isSafeInteger(run.startedAt) || (run.startedAt ?? 0) <= 0 ||
+        (run.startedAt ?? Infinity) > now() ||
+        (run.jobId !== undefined && run.jobId !== args.jobId) ||
+        (run.articleId !== undefined && run.articleId !== args.articleId) ||
+        run.claimNonce === "" ||
+        !topicPlanCooldownTerminalWriteAllowed({
+          runClaimNonce: run.claimNonce, runContinuationAttempt: run.continuationAttempt,
+          runStatus: run.status, claimNonce: args.runClaimNonce,
+          continuationAttempt: args.runContinuationAttempt,
+        })
+      ))
     ) {
       return { scheduled: false as const, reason: "checkpoint_fence_changed" as const };
     }
@@ -3186,6 +3203,18 @@ export const yieldGeneratedArticleForReview = internalMutation({
       nextAttemptAt: undefined,
       updatedAt: currentTime,
     });
+    if (run && run.claimNonce === undefined) {
+      // Preserve the original execution identity and bind only this exact
+      // acknowledged article handoff. Job heartbeats cannot extend this timer.
+      await ctx.db.patch(run._id, {
+        jobId: job._id, articleId: article._id, heartbeatAt: currentTime,
+      });
+      await ctx.scheduler.runAt(
+        currentTime + ORDINARY_RUN_INTERRUPTION_GRACE_MS,
+        internal.autopilot.settleInterruptedRun,
+        { siteId: args.siteId, runId: run._id, expectedStartedAt: run.startedAt! },
+      );
+    }
     await ctx.scheduler.runAfter(
       0,
       internal.actions.pipeline.processNextJob,

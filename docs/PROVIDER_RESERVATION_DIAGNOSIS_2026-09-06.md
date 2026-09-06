@@ -356,3 +356,105 @@ the exact seven existing sealed Pentra/LeadPilot drafts against both validator
 versions. Passed/failed results, issue counts and required-claim counts were
 identical for all eight. This does not recertify old media annotations or
 convert the newly failed article into accepted content; no article was mutated.
+
+The sentence-specific feedback repair was committed and pushed as
+`5fa0f3120604a7fec2e180460e78ed439f032412`. GitHub quality run
+`34049703910` passed in 2m17s; GitHub/Vercel production deployment
+`6296070556` reported success. Convex deployed to `wary-starfish-773`
+before the 17:51:09 UTC checkpoint. The tracked-source secret scan passed,
+and the production env remained untracked.
+
+At 17:51:01.640 UTC the article remained blocked at revision count 1, with
+another ordinary recovery job `j97fv0n2gmedtsgx70y59m82ch8dwbvg` running.
+That job started before this deployment; its eventual outcome cannot be
+attributed to the new feedback without further evidence. No recovery ordinal
+was reset, no version-bump replay was introduced, and no new generation was
+manually triggered. Sustained new-article refill and subsequent exact natural
+cadence publications remain open acceptance requirements.
+
+The next post-deployment run `kd7567h4gxeazkggpremyfbvs18dxfmj` started
+at 17:51:54.513 UTC with job `j97f0qcx9s402gs4kq8tn8dz2n8dx0sq`.
+The active-job projection alone does not identify its article. An exact job
+read at 17:58:21.712 UTC established that this is **new generation for the
+next topic**, `Daily Rank Tracker`, with saved draft
+`j57b4nfqjmn4gybphxj47mzr918dwjms`, not another recovery pass for the
+earlier Agency Rank Tracking article. The earlier article remained blocked
+after two ordinary quality revisions. Statements about the new run must not
+be misattributed to that earlier article. The new job was at its exact-audit
+remediation step; no acceptance verdict was yet available.
+
+At 18:00:18.802 UTC the Daily Rank Tracker job had yielded to its durable
+review continuation. Its saved draft had 1,805 words, factual score 86,
+editorial score 84 and media passed. Its first bounded remediation still left
+two evidence defects. Production notes now include the new exact cited
+sentence and `insufficient source wording overlap` reason, directly proving
+use of the deployed diagnostics; this is not proof of successful remediation.
+The read-only observer for the earlier article was stopped after its identity
+was distinguished from this new generation. No production worker was stopped.
+
+The natural 18:00 scheduler wake completed for both scoped sites without a
+manual invocation. Pentra run `kd798ytgvrpt0h7kzscqw25qyn8dxr8j` completed
+at 18:00:50.642 UTC as `work_in_progress`, with the exact active Daily Rank
+Tracker job present. LeadPilot run `kd78khdp32zsz9reh5sb76395d8dw82v`
+completed at 18:01:02.568 UTC as `topic_replenishment_exhausted`, with no
+active job. Sealed inventories remained three and four respectively, and
+both future publication deadlines remained armed. These unchanged inventories
+are not new publication or growth evidence. Final review of the new Pentra
+draft remains pending.
+
+At 18:05:58.998 UTC the exact job read showed processing `done`, while
+Daily Rank Tracker remained `review` and `blocked`: 1,806 words, factual
+score 93, editorial score 84, media passed, claim evidence failed, revision
+count zero. The final saved issues identify an unsupported standalone-tool
+comparison table and a position-bias claim not matching its preserved source.
+The final review therefore did **not** yield a sealed article. This corrects
+any inference that terminal job completion or deployed feedback is successful
+buffer replenishment. No article was published or manually marked ready.
+The goal remains active and incomplete; the next task is improving genuine
+source-grounded generation/remediation while observing its bounded ordinary
+recovery, not reducing the publication threshold or resetting replay limits.
+
+### Ordinary run watchdog incorrectly interrupted a valid review continuation
+
+The exact subsequent run projection exposed another deterministic lifecycle
+defect. Parent `kd7567h4gxeazkggpremyfbvs18dxfmj`, started 17:51:54.513
+UTC, was marked `execution_interrupted` at 18:03:54.549 UTC even though the
+generation action had already acknowledged a durable review handoff at
+17:59:58 UTC. That separately scheduled review action legitimately completed
+the job at 18:05:17.876 UTC. This was a false parent interruption, not evidence
+of a provider-credit failure. The article itself still failed quality; fixing
+the parent receipt must not turn it into a successful publication.
+
+Registered-handler runtime tests reproduce the premature failure using the
+actual job handoff and ordinary run observer. The local repair binds the parent
+to its exact acknowledged job/article handoff and atomically arms one further
+12-minute observation window for that second Node action. The original start
+time remains unchanged. A live job lease or heartbeat alone cannot extend the
+parent, and the same job cannot repeatedly acquire review handoff windows.
+Foreign, malformed, stale and mismatched handoff proofs do not defer timeout;
+an unacknowledged review still becomes interrupted after the bounded window.
+Manual and separately fenced plan-owned continuations retain their own paths.
+Scheduling failure rolls back both parent and job writes; duplicate observers
+do not schedule provider work or additional timers. No schema field or index
+change is required. Historical failed receipts have not been rewritten.
+
+At 18:12:11.266 UTC Daily Rank Tracker remained blocked after its first quality
+revision (1,905 words, factual 93, editorial 84). Ordinary recovery job
+`j97ftcqe9mb24wsf9e2ytbrwz58dwmrd` was running under run
+`kd76vtxr8xk187vgjjnx53vvhn8dw7sk`; the buffer remained three. The newer
+feedback is deployed and observable, but successful new sealed inventory has
+not yet followed. This is still an unfinished generation/remediation outcome.
+
+The parent-watchdog repair passed all 1,368 repository tests, type-check,
+lint (zero errors; 157 existing warnings), the additive 60-table/291-index
+schema check, the 582-tracked-file secret scan, dependency audit (zero
+vulnerabilities), production build and 10 public Playwright checks. The two
+credential-dependent Playwright checks remained explicitly skipped. Native
+Chrome inspection of the two signed-in settings pages is separate evidence,
+not a substitute for those skipped tests or clean new-user onboarding.
+
+The 18:16:21 UTC bounded projection showed Daily Rank Tracker's second quality
+revision had completed as `quality_quarantined`: 1,909 words, still blocked,
+no active article job, and no increase in Pentra's three sealed articles.
+Its original publication deadline remains armed for September 7 11:45:12 UTC.
+Passing the watchdog release gates does not settle this quality outcome.

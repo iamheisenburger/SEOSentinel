@@ -69,6 +69,10 @@ import {
   takeCurrentDomainArticles,
 } from "./lib/siteDomainBinding";
 import { effectiveCadencePublicationAt } from "./lib/cadenceRevision";
+import {
+  ORDINARY_RUN_INTERRUPTION_GRACE_MS,
+  ordinaryArticleReviewInterruptionDeadline,
+} from "./lib/autopilotRunLease";
 
 const SITE_STAGGER_MS = 5_000;
 const LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -80,10 +84,6 @@ const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
   "operator_recovery_of_public_url_verified:";
 const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
 const TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT = 50;
-// Ordinary autopilotTick executions use the Node runtime, whose hard ceiling
-// is ten minutes. Allow an additional two minutes before recording an absent
-// terminal acknowledgement. This is not a job lease or a provider retry.
-const ORDINARY_RUN_INTERRUPTION_GRACE_MS = 12 * 60 * 1000;
 
 async function publicationCommitBlocksRolloutTransition(
   ctx: MutationCtx,
@@ -1848,6 +1848,15 @@ export const settleInterruptedRun = internalMutation({
       run.startedAt !== expectedStartedAt ||
       now < expectedStartedAt + ORDINARY_RUN_INTERRUPTION_GRACE_MS
     ) return { settled: false as const, reason: "execution_fence_changed_or_live" };
+
+    const reviewDeadline = ordinaryArticleReviewInterruptionDeadline(
+      run, run.jobId ? await ctx.db.get(run.jobId) : null, now,
+    );
+    if (reviewDeadline !== null && now < reviewDeadline) {
+      // The handoff atomically armed a second bounded observer. The original
+      // timer must not fail a legitimate second action, nor fork another timer.
+      return { settled: false as const, reason: "article_review_continuation_live" };
+    }
 
     const detail =
       "The ordinary Node action exceeded its execution window without a terminal acknowledgement. " +
