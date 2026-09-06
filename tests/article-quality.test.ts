@@ -1211,6 +1211,33 @@ test("classifies and normalizes strict evidence sources", () => {
   assert.equal(filtered.rejected.length, 1);
 });
 
+test("documentation on a dedicated help/docs host is treated like documentation under a path", () => {
+  for (const url of [
+    "https://help.fiverr.com/hc/en-us/articles/23429542870161",
+    "https://docs.github.com/en/actions",
+    "https://docs.stripe.com/payments",
+    "https://help.vendor-one.example/en/workflows",
+    "https://support.vendor-two.example/articles/routing",
+    "https://developers.vendor-three.example/reference/workflows",
+  ]) {
+    const result = classifyEvidenceSource(url);
+    assert.equal(result.strictEligible, true, url);
+    assert.equal(result.tier, "official-doc", "documentation must not become universal research evidence");
+  }
+});
+
+test("documentation host recognition does not admit insecure URLs, community hosts or general vendor marketing", () => {
+  for (const url of [
+    "http://docs.vendor-one.example/reference",
+    "https://docs.local/workflows",
+    "https://docs.medium.com/articles/workflows",
+    "https://help.blogspot.com/hc/article",
+    "https://vendor-one.example/blog/research",
+    "https://docs-vendor-one.example/blog/research",
+    "https://vendor-two.example/?redirect=https://docs.vendor-one.example/",
+  ]) assert.equal(classifyEvidenceSource(url).strictEligible, false, url);
+});
+
 test("uses format-specific people-first word ceilings", () => {
   assert.equal(articleWordCeiling("checklist"), 2400);
   assert.equal(articleWordCeiling("how-to"), 2800);

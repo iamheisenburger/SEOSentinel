@@ -1,5 +1,5 @@
 import { internalMutation, internalQuery } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -14,6 +14,7 @@ import {
 import {
   oneSetupConfigurationRevisionIsCurrent,
   oneSetupExecutionClaimDisposition,
+  oneSetupExecutionNextEligibleAt,
   oneSetupExecutionWatchIdentityMatches,
   oneSetupExecutionTerminalPatch,
   oneSetupPlanSettlement,
@@ -220,7 +221,7 @@ async function scheduleExactResumeWithWatchdog(
 }
 
 async function receiptRequestContext(
-  ctx: MutationCtx,
+  ctx: MutationCtx | QueryCtx,
   args: {
     siteId: Id<"sites">;
     requestId: Id<"managed_provisioning_requests">;
@@ -529,6 +530,73 @@ async function armPlanSettlementWatch(
   );
   return { generation, attempt, nextAt };
 }
+
+/** Exact-site, read-only execution receipts. Never returns connection secrets,
+ * sender details, job payloads, provider output, or a global tenant queue. */
+export const getOperatorSnapshot = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const request = await ctx.db.query("managed_provisioning_requests")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId)).unique();
+    if (!request) return { siteId, requestExists: false as const };
+    let context: Awaited<ReturnType<typeof receiptRequestContext>>;
+    try {
+      context = await receiptRequestContext(ctx, { siteId, requestId: request._id });
+    } catch {
+      return { siteId, requestExists: true as const, currentRequest: false as const };
+    }
+    const execution = await ctx.db.query("one_setup_executions")
+      .withIndex("by_request_configuration", (q) => q
+        .eq("requestId", request._id)
+        .eq("configurationRevision", request.configurationRevision ?? 0))
+      .unique();
+    const currentExecution = execution && execution.siteId === siteId &&
+      execution.requestId === request._id &&
+      requestMatchesExecution(request, execution, context.site)
+      ? execution : null;
+    const job = currentExecution?.planJobId
+      ? await ctx.db.get(currentExecution.planJobId) : null;
+    const boundJob = currentExecution &&
+      planBindingMatches(request, currentExecution, job, context.site) ? job : null;
+    const result = boundJob?.result && typeof boundJob.result === "object"
+      ? boundJob.result as Record<string, unknown> : {};
+    return {
+      siteId, snapshotAt: Date.now(), requestExists: true as const,
+      currentRequest: true as const,
+      request: {
+        requestId: request._id,
+        configurationRevision: request.configurationRevision,
+        initialPlanJobId: request.initialPlanJobId,
+        initialPlanGeneration: request.initialPlanGeneration,
+        initialPlanRecoveryCount: request.initialPlanRecoveryCount ?? 0,
+        fulfillmentState: request.fulfillmentState,
+        fulfillmentAttempt: request.fulfillmentAttempt,
+        nextAttemptAt: request.nextAttemptAt,
+      },
+      execution: currentExecution ? {
+        executionId: currentExecution._id,
+        status: currentExecution.status,
+        blockerCode: currentExecution.blockerCode,
+        planJobId: currentExecution.planJobId,
+        topicCount: currentExecution.topicCount,
+        createdAt: currentExecution.createdAt,
+        completedAt: currentExecution.completedAt,
+        updatedAt: currentExecution.updatedAt,
+        nextEligibleAt: oneSetupExecutionNextEligibleAt(currentExecution),
+      } : null,
+      boundPlan: boundJob ? {
+        jobId: boundJob._id,
+        status: boundJob.status,
+        workerAttempts: boundJob.workerAttempts,
+        resultCount: Number.isSafeInteger(result.count) ? result.count as number : undefined,
+        failureCode: boundJob.cadenceFailure?.code,
+        failureCategory: boundJob.cadenceFailure?.category,
+        eligibleAt: boundJob.cadenceFailure?.eligibleAt,
+        providerReservationReleasedAt: boundJob.providerReservationReleasedAt,
+      } : null,
+    };
+  },
+});
 
 export const claim = internalMutation({
   args: {

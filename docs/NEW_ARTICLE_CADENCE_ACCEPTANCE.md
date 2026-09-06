@@ -419,3 +419,178 @@ These corrections passed all 1,255 repository tests, type-check, zero-error
 lint (157 unchanged warnings), additive schema validation, tracked secret scan,
 dependency audit, production build, ten public browser checks and Convex dry-run.
 The two authenticated harness skips are not counted as passes.
+
+The correction deployed as `768b1d89a8344184bf6508288f69c2d1263ec248`.
+Convex deployment succeeded, GitHub quality run `34034600618` succeeded,
+and GitHub production deployment `6293191804` reported success.
+
+The post-deploy indexed projection at 12:57 UTC confirmed these exact rows:
+
+- LeadPilot publication: `kd71xdrvjr666kj90g2pxshdgx8dxd2f`, scheduled for
+  September 6 at 14:14:43.010 UTC.
+- LeadPilot refill: `kd7dc11gc9ztaxze9f5jmmqg4h8dxcky`, scheduled for
+  September 7 at 00:01:24.126 UTC. This matches the next rolling plan slot.
+- Pentra publication: `kd7d8feh9t1jwj9w6wtm3f0rj58dx3td`, scheduled for
+  September 7 at 11:45:12.262 UTC.
+
+Pentra remained at three sealed articles (minimum three, target four);
+LeadPilot at five (minimum nine, target twelve). No active article jobs were
+projected. An older interrupted LeadPilot run still has a historical running
+row; it is not counted as active work or successful convergence.
+
+Provider-free prechecks before the 13:15 evidence fleet found ten Pentra
+demand candidates and no LeadPilot demand/evidence candidates. LeadPilot's
+last bounded micro-seed also had no strict candidate. These observations do
+not authorize bypassing exclusions or replaying failed paid work. Await the
+ordinary evidence/refill boundaries and exact publication executions; the goal
+remains active, with sustained current-release delivery not yet accepted.
+
+## Frozen-release deadline verification
+
+With runtime release `768b1d8` unchanged, four additional local registered-
+mutation tests verified exact deadline creation for both arbitrary tenants at
+every integer cadence from 1 through 21 per week. Three duplicate calls per
+deadline retained one run and one action; publication and the three allowed
+refill/quota triggers did not suppress each other at a shared timestamp.
+Disabled/manual/approval-only, parked, ownership-conflicted and entitlement-
+mismatched sites could not arm publication. Injected scheduler-write failure
+rolled back the run receipt and allowed a subsequent successful request.
+All 1,259 local tests, type-check and targeted lint passed. These four tests
+are not part of the earlier 1,255-test GitHub run and required no deployment.
+
+A bounded read-only process in the active task observes only Pentra and
+LeadPilot at 13:15/13:16/13:18 and around LeadPilot's 14:14:43 UTC deadline.
+It creates no Codex automation and triggers no generation or publishing.
+Its output must be inspected before calling either natural stage successful.
+
+### Natural 13:15 UTC evidence fleet result
+
+Pentra's post-release demand job `nn70zz33ab44ffh7b3t775awws8dwwvz`
+ran with origin `autonomous_fleet` from 13:15:16.488 to 13:15:22.507 UTC.
+Its ten exact keyword lookups completed, but all ten returned
+`exact_metric_missing`: zero metric receipts and zero persisted topics.
+The epoch-6 evidence inspection subsequently skipped at 13:15:23.038 UTC
+with `no_current_demand_candidates`. Missing exact metrics are not proof of
+zero market demand, failed funding, or a software defect; this paid batch
+was not replayed and no search volume was invented.
+
+LeadPilot's epoch-9 ordinary demand inspection skipped at 13:16:45.762 UTC
+with `no_eligible_legacy_topics`; its evidence inspection skipped at
+13:16:46.492 UTC with `no_current_demand_candidates`. The latest older
+demand/evidence jobs were not relabelled as new fleet work. Neither tenant
+gained ready inventory from this natural evidence window.
+
+The 13:18 bounded projections still showed three sealed ready articles for
+Pentra and five for LeadPilot, with no active article jobs. LeadPilot's exact
+14:14:43.010 UTC publication row remained scheduled, not executed.
+
+The local observation reader initially failed because the Convex CLI exited
+before flushing piped stdout: an isolated reproduction returned precisely
+8,192 bytes of incomplete JSON. Making the child CLI's stdout blocking
+before importing its entry point returned a complete 13,853-byte JSON
+snapshot. Only the faulty read-only observer process was terminated and
+replaced; no production job was reset, replayed or restarted. The corrected
+observer remains bound to the same two tenants and publication checkpoints.
+
+Chrome's tab-debugger transport later reported `Debugger unattached`, but
+native Chrome control successfully opened the already-signed-in Pentra
+dashboard and Settings page. GitHub remained visibly connected. No account
+was signed out and no publishing, credential or security setting was changed.
+
+### Interruption accounting repair prepared locally (not deployed)
+
+At 13:25 UTC the bounded LeadPilot snapshot still contained historical run
+`kd7d4f2w60zhtrwp0dz82qyv858dx0wz`, running since 11:27:40.901 UTC
+with no later heartbeat. Its saved article job had completed under a later
+run. The stale run does not hold the article queue, but remains a false live
+receipt and an operational acceptance blocker. A registered-handler test
+confirmed that ordinary run claiming armed no terminal observer. Convex's
+documented Node action limit is ten minutes:
+https://docs.convex.dev/production/state/limits.
+
+The local repair atomically arms one provider-free observer when an ordinary
+run starts. After twelve minutes, it can mark that exact tenant/start-time
+receipt `failed` with outcome `execution_interrupted`. It does not report a
+successful article, change any job, advance the publication clock, or replay
+provider work. Fenced long-lived plan continuations retain their own observers.
+If a newer run owns tenant health, the historical settlement preserves that
+health and its alerts. Late completion callbacks cannot overwrite the failure.
+
+Runtime tests cover two unrelated tenant fixtures, duplicate claims and
+observers, mutation rollback when observer scheduling fails, live and changed
+execution fences, terminal receipts, fenced continuations, and newer-health
+preservation. Production remains on `768b1d8` for the pending 14:14:43 UTC
+publication observation; the historical production row has not been mutated.
+
+### Documentation-source correction prepared locally (not deployed)
+
+A public-artifact review at approximately 13:33 UTC found an overbroad
+absence claim in Pentra's already-published Fiverr keyword article. A missing
+retrieved source is not evidence that a platform publishes no documentation
+or offers no measurement. Fiverr's own help centre publishes both search
+and recommendation guidance and keyword analytics documentation:
+https://help.fiverr.com/hc/en-us/articles/23429542870161-Fiverr-s-search-and-recommendation-system
+and https://help.fiverr.com/hc/en-us/articles/6523401252881-Advanced-Analytics-for-Seller-plus.
+The previous editorial score is not treated as proof that this wording was
+correct. The published article has not yet been changed by this local repair.
+
+A regression reproduced a generic source-filter gap: documentation under
+`vendor.example/docs` was eligible, while documentation hosted at
+`docs.vendor.example` or `help.vendor.example` was rejected. The local fix
+recognizes dedicated documentation hosts as `official-doc`, not universal
+research evidence. HTTPS validation, known community-host exclusions,
+source capture, and exact-proposition review remain required. Fixtures cover
+several unrelated vendors, insecure and local URLs, community subdomains,
+marketing pages and misleading URL queries.
+
+Research, final audit, revision and empty-research instructions now explicitly
+separate a retrieval limitation from proof of nonexistence. They do not lower
+quality thresholds, invent citations, replay provider work, change the research
+model, or invalidate existing inventory by fiat. Seventy-five targeted tests
+passed, followed by all 1,267 repository tests, type-check, lint with zero
+errors and 157 existing warnings, additive schema validation, tracked-file
+secret scan, dependency audit, production build and Convex deployment dry-run.
+Ten public browser checks passed; two authenticated harness tests remained
+skipped and are not counted as passes. Native Chrome inspection separately
+confirmed signed-in Settings and the connected Pentra GitHub destination.
+The specific published wording still needs a verified correction, which must
+not count as a new article. These local changes are not deployed yet.
+
+### Signed-in cadence and initial-plan readiness acceptance
+
+Native Chrome inspection reached both existing tenants' website management
+pages. LeadPilot displayed 21/week, Autopilot, connected GitHub publishing and
+connected Search Console; its settings accepted the same 1–21/week range and
+explained the monthly article allowance. Pentra displayed 7/week, Autopilot and
+its connected GitHub destination. No settings were saved, credentials changed,
+or article execution triggered through these checks. These are existing-tenant
+read-only checks, not a completed clean new-customer onboarding run.
+
+LeadPilot still requests the current One Setup migration. Pentra shows a
+blocked initial-plan execution at 6/7 setup stages, with a generic message but
+no visible failure reference. Neither state is being described as setup
+completion. The local readiness UI now displays the existing reason code;
+an indexed, credential-free internal projection can inspect the exact site's
+current request, execution and bound plan without reading a global queue.
+The specific Pentra execution must be inspected after deployment before any
+repair or owner action can be selected.
+
+A registered-query regression against the current deployed source reproduced
+another generic defect: consuming the initial topics changed a completed
+`Content plan prepared` stage back to queued. The local query now preserves
+a current, positive, completed initial-plan receipt bound to the same job,
+tenant, configuration and domain. It does not convert blocked or zero-yield
+plans into success, generate topics, or claim the current publication buffer
+is full. Four runtime tests cover both unrelated tenant fixtures, ownership
+and configuration boundaries, missing/invalid receipts, readonly behavior,
+and exclusion of credentials, sender details and provider output from the
+operator projection. All 1,271 repository tests, type-check, zero-error lint
+(157 existing warnings), additive schema validation, tracked-file secret scan,
+dependency audit, production build and deployment dry-run passed. Ten public
+browser checks passed; the two authenticated harness skips remain disclosed.
+
+At 13:48 UTC, fresh bounded production projections still showed three sealed
+Pentra articles and five LeadPilot articles, no active article jobs, and the
+same future publication receipts. This unchanged state is a waiting condition,
+not additional publication progress. Runtime release `768b1d8` remains frozen
+until the 14:14:43.010 UTC LeadPilot execution has been observed.

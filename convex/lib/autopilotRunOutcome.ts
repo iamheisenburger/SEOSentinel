@@ -120,6 +120,7 @@ export function classifyProcessedJobOutcome(processed: {
  */
 const SYSTEM_RUN_OUTCOMES = [
   "failed",
+  "execution_interrupted",
   "domain_epoch_invalidated",
   "cadence_held",
   "onboarding_in_progress",

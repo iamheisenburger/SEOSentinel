@@ -73,6 +73,7 @@ test("research does not manufacture citations when search finds no evidence", as
   const result = await f.run({ label: "A niche workflow", primaryKeyword: "niche workflow" }, undefined, undefined, true);
   assert.equal(result.sources.length, 0);
   assert.equal(f.requests.length, 1);
+  assert.match(JSON.stringify(f.requests[0].input), /failed search is not proof that documentation or measurements do not exist/);
 });
 
 test("unsupported research requests remain visible and are not silently replayed", async () => {

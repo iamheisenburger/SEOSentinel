@@ -71,6 +71,7 @@ test("existing tenants have an explicit current-contract One Setup migration pat
 });
 
 test("One Setup exposes exact blockers and treats cadence as a target rate", () => {
+  assert.match(readinessUi, /Reference: \{stage\.reasonCode\}/);
   assert.match(wizard, /Postal address shown in email footers/);
   assert.match(wizard, /Do not enter an email address/);
   assert.match(wizard, /postalAddressError\(managedPhysicalAddress\)/);

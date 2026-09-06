@@ -131,7 +131,12 @@ export function classifyEvidenceSource(value: string): EvidenceSourceQuality {
   }
 
   const looksLikeDocumentation =
-    /\/(?:docs?|documentation|developers?|support|help|reference|api)(?:\/|$)/.test(path);
+    /\/(?:docs?|documentation|developers?|support|help|reference|api)(?:\/|$)/.test(path) ||
+    // Many vendors host the same first-party documentation at docs.vendor or
+    // help.vendor rather than vendor/docs. This is a documentation candidate,
+    // not an academic tier or proof of any claim: capture and exact-proposition
+    // review still apply. Known community/blog hosts remain excluded below.
+    /^(?:www\.)?(?:docs?|documentation|developers?|support|help|reference|api)\.[^.]+\./.test(host);
   if (looksLikeDocumentation && !matchesAnyHost(host, LOW_AUTHORITY_HOSTS)) {
     return {
       url: normalized,

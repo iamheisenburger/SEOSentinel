@@ -117,7 +117,7 @@ import {
   oneSetupLegacyInitialPlanJobBindingMatches,
   oneSetupInitialPlanReceiptDecision,
 } from "./lib/oneSetupInitialPlan.ts";
-import { oneSetupExecutionNextEligibleAt } from
+import { oneSetupCompletedPlanReceipt, oneSetupExecutionNextEligibleAt } from
   "./lib/oneSetupExecution.ts";
 import {
   canonicalGscReceiptMutationFenceCurrent,
@@ -2538,6 +2538,8 @@ export const getOneSetupReadiness = query({
       : null;
     const currentExecutionValid = Boolean(
       currentExecution &&
+        currentExecution.requestId === request?._id &&
+        currentExecution.configurationRevision === request?.configurationRevision &&
         currentExecution.siteId === site._id &&
         currentExecution.ownerAccountKey === ownerAccountKey &&
         currentExecution.domainSnapshot === domainSnapshot &&
@@ -2632,7 +2634,14 @@ export const getOneSetupReadiness = query({
           : "action_required";
     const planState: OneSetupReadinessState = contentPlanActionRequired
       ? "blocked"
-      : (schedulerReadiness?.schedulerReadyTopicIds.length ?? 0) > 0
+      : oneSetupCompletedPlanReceipt({
+          currentExecutionValid,
+          requestPlanJobId: request?.initialPlanJobId,
+          executionPlanJobId: currentExecution?.planJobId,
+          status: currentExecution?.status,
+          topicCount: currentExecution?.topicCount,
+          completedAt: currentExecution?.completedAt,
+        }) || (schedulerReadiness?.schedulerReadyTopicIds.length ?? 0) > 0
       ? "ready"
       : requestValid
         ? "queued"

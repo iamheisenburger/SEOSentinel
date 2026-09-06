@@ -10,6 +10,24 @@ export type OneSetupExecutionStatus =
   | "completed"
   | "blocked";
 
+/** Historical setup completion is distinct from today's unconsumed inventory.
+ * The caller must first verify the current tenant/configuration binding. */
+export function oneSetupCompletedPlanReceipt(args: {
+  currentExecutionValid: boolean;
+  requestPlanJobId?: string;
+  executionPlanJobId?: string;
+  status?: string;
+  topicCount?: number;
+  completedAt?: number;
+}): boolean {
+  return args.currentExecutionValid &&
+    Boolean(args.requestPlanJobId) &&
+    args.requestPlanJobId === args.executionPlanJobId &&
+    args.status === "completed" &&
+    Number.isSafeInteger(args.topicCount) && (args.topicCount ?? 0) > 0 &&
+    Number.isSafeInteger(args.completedAt) && (args.completedAt ?? -1) >= 0;
+}
+
 export type OneSetupExecutionTerminalPatch = {
   status: "completed" | "blocked";
   blockerCode: string | undefined;

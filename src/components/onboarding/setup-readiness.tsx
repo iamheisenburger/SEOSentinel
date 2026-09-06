@@ -232,6 +232,11 @@ export function SetupReadiness({
                 <p className="mt-2 pl-5 text-[10px] leading-relaxed text-[#73788F]">
                   {stage.actionMessage}
                 </p>
+                {stage.reasonCode && (
+                  <p className="mt-1 pl-5 break-words font-mono text-[9px] text-[#73788F]">
+                    Reference: {stage.reasonCode}
+                  </p>
+                )}
                 {stage.actionKind === "accept_publisher_autopublish" && (
                   <p className="mt-2 pl-5 text-[9px] leading-relaxed text-[#73788F]">
                     {readiness.publisherAutopublishConsent.text}

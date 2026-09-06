@@ -1870,6 +1870,7 @@ async function auditFinalArticle(args: {
       "The score measures search-intent satisfaction, usefulness, factual restraint, product grounding, clarity, structure, citation integrity, and absence of generic AI filler.",
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
       "Do not require an external citation for advice, decision questions, or an explicitly author-proposed framework. Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is.",
+      "Missing retrieved evidence is not proof of nonexistence. Reject unsupported assertions that a platform publishes no documentation, discloses no mechanics, or offers no measurement merely because the supplied research found none. An author-proposed framework or uncertainty disclaimer does not exempt surrounding factual assertions from review.",
       "If every factual and evidence gate passes, a score below 85 requires a concrete material change named in the notes. Minor polish, source absence by itself, or a vague statement that advice feels common is not a sub-85 defect.",
       "Return every concrete change required before publication in materialDefects. Return an empty array when no material editorial change is required. The numeric score and materialDefects must agree with the 85-point contract.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
@@ -2046,6 +2047,7 @@ async function remediateFinalArticle(args: {
       "- When the unsupported proposition contained useful advice, preserve only a conditional diagnostic the reader can verify (for example, 'If your analytics show X, test Y'). Do not claim that the condition is common, that one approach converts better, or that user behaviour has a known cause without supplied evidence.",
       "- When discussing measurement, distinguish what a business should measure from what the product itself currently reports.",
       "- When an audit says an uncited category, taxonomy, or best practice is presented as settled industry fact, rewrite the heading and lead-in so it is unmistakably an author-proposed evaluation framework, reader-run test, decision question, or conditional recommendation. Do not leave the same universal claim under a different heading.",
+      "- Never convert missing research into a claim that documentation, a feature, a published mechanic, or a measurement does not exist. Delete unsupported absence claims; state only the narrow limitation of the available evidence when the reader genuinely needs it. Avoid repeated source-policy disclaimers as filler.",
       "- When an audit identifies generic listicle advice or filler, remove it or turn it into a topic-specific tool with explicit reader inputs, a procedure, an observable output, and a decision rule. A renamed generic list is not a repair.",
       "- Preserve valid citations and the Sources section. Do not create a citation, URL, source, image, screenshot, video, or raw HTML.",
       lengthRecovery
@@ -2184,6 +2186,7 @@ async function webResearch(
           "You are a research assistant. Search the web for current, factual information on the given topic. " +
           "Use primary evidence only: official documentation for mechanics, original research, public datasets, standards bodies, government or academic material, and first-party pages solely for that product's own facts. " +
           "Do not substitute vendor blogs, affiliate roundups, content farms, or secondary summaries when primary evidence is unavailable. Returning no sources is valid and preferable to weak evidence. " +
+          "A failed search is not proof that documentation or measurements do not exist; describe a retrieval limitation, never invent a platform-wide absence claim. " +
           "Do not manufacture a statistics or quotations section. Include a number or quotation only when the exact claim is visible in a primary source. " +
           "Identify the reader's unresolved questions, supported mechanisms, and useful evidence gaps. Compile a concise prose research brief with inline citations supplied by web search." +
           competitorExclusion,
@@ -4427,6 +4430,7 @@ async function handleArticle(
           researchContext = [
             "Strict evidence mode is active.",
             "Secondary and vendor-authored sources were excluded from the article evidence set.",
+            "No source was captured by this research attempt. This does not mean relevant official documentation, published mechanics, or measurements do not exist. Do not make such absence claims or use repeated evidence disclaimers as filler.",
             "Do not use external statistics, percentages, benchmarks, attributed quotations, dates, or universal performance claims.",
             "Write practical, product-grounded guidance and use only the authoritative sources listed separately for factual mechanics.",
           ].join(" ");

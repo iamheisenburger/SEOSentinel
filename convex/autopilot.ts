@@ -80,6 +80,10 @@ const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
   "operator_recovery_of_public_url_verified:";
 const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
 const TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT = 50;
+// Ordinary autopilotTick executions use the Node runtime, whose hard ceiling
+// is ten minutes. Allow an additional two minutes before recording an absent
+// terminal acknowledgement. This is not a job lease or a provider retry.
+const ORDINARY_RUN_INTERRUPTION_GRACE_MS = 12 * 60 * 1000;
 
 async function publicationCommitBlocksRolloutTransition(
   ctx: MutationCtx,
@@ -1787,7 +1791,7 @@ export const markRunStarted = internalMutation({
   handler: async (ctx, { runId }) => {
     const run = await ctx.db.get(runId);
     if (!run) return { started: false as const, reason: "run_missing" };
-    if (run.claimNonce) {
+    if (run.claimNonce !== undefined) {
       return { started: false as const, reason: "fenced_run" };
     }
     if (run.status !== "scheduled") {
@@ -1817,7 +1821,64 @@ export const markRunStarted = internalMutation({
       detail: "Autopilot tick is running.",
       ...(run.trigger === "natural" ? { lastNaturalStartedAt: now } : {}),
     });
+    // Claim and observer commit together. A hard action timeout cannot execute
+    // the action's catch/finally, and must not leave a permanent running row.
+    await ctx.scheduler.runAt(
+      now + ORDINARY_RUN_INTERRUPTION_GRACE_MS,
+      internal.autopilot.settleInterruptedRun,
+      { siteId: run.siteId, runId, expectedStartedAt: now },
+    );
     return { started: true as const };
+  },
+});
+
+export const settleInterruptedRun = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    runId: v.id("autopilot_runs"),
+    expectedStartedAt: v.number(),
+  },
+  handler: async (ctx, { siteId, runId, expectedStartedAt }) => {
+    const run = await ctx.db.get(runId);
+    const now = Date.now();
+    if (
+      !run || run.siteId !== siteId || run.status !== "running" ||
+      run.claimNonce !== undefined ||
+      !Number.isSafeInteger(expectedStartedAt) || expectedStartedAt <= 0 ||
+      run.startedAt !== expectedStartedAt ||
+      now < expectedStartedAt + ORDINARY_RUN_INTERRUPTION_GRACE_MS
+    ) return { settled: false as const, reason: "execution_fence_changed_or_live" };
+
+    const detail =
+      "The ordinary Node action exceeded its execution window without a terminal acknowledgement. " +
+      "This run is interrupted, not successful. Any separately leased job retains its existing recovery owner.";
+    await ctx.db.patch(runId, {
+      status: "failed",
+      outcome: "execution_interrupted",
+      completedAt: now,
+      heartbeatAt: now,
+      detail,
+    });
+
+    // A later run may already have recovered the job or published an article.
+    // Preserve that newer health, its cadence clock and its alerts verbatim.
+    const health = await ctx.db.query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", siteId))
+      .first();
+    if (health?.lastRunId === runId) {
+      await upsertHealth(ctx, siteId, {
+        status: "run_failed", heartbeatAt: now, detail,
+      });
+      await setAlert(ctx, {
+        siteId,
+        runId,
+        kind: run.trigger === "natural" ? "natural_run_failed" : `${run.trigger}_run_failed`,
+        message: detail,
+      });
+    }
+    // Deliberately no job mutation, publication, provider call or new tick.
+    // The durable job recovery and ordinary scheduler remain their owners.
+    return { settled: true as const, reason: "execution_interrupted" };
   },
 });
 
