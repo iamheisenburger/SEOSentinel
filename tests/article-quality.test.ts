@@ -1270,6 +1270,51 @@ test("sentence-opening lead-ins do not become phantom named entities", () => {
   assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
+test("source mismatch feedback identifies the exact cited sentence and failed evidence detail", () => {
+  for (const brand of ["Harbor", "Cedar"]) {
+    const excerpt = `${brand} Metrics reports clicks, impressions, and average position. ` +
+      "The report groups observations by page and query. Readers can compare the recorded measurements across reporting periods and inspect each page separately.";
+    const check = (claim: string) => validateClaimEvidenceLedger({
+      markdown: claim,
+      sources: [{ url: "https://docs.example.com/report", excerpt, contentHash: sha256Hex(excerpt) }],
+      researchEvidence: excerpt, productEvidence: "",
+      claimEvidence: [{ claim, citationNumbers: [1], supported: true, reason: "The auditor asserts that the captured report supports this sentence." }],
+    });
+    const identity = `${brand} Search Console reports clicks, impressions, and average position [1].`;
+    const identityResult = check(identity);
+    assert.equal(identityResult.passed, false);
+    assert.match(identityResult.issues.join("\n"), /Cited sentence:/);
+    assert.ok(identityResult.issues.join("\n").includes(identity.slice(0, -1)));
+    assert.ok(identityResult.issues.join("\n").includes(`named phrase absent from excerpt: "${brand.toLowerCase()} search console"`));
+    const numeric = check(`${brand} Metrics reports 900 clicks and average position [1].`);
+    assert.equal(numeric.passed, false);
+    assert.match(numeric.issues.join("\n"), /number absent from excerpt: "900"/);
+    const unmatched = check("Proprietary workflows guarantee automated campaign optimization without manual intervention [1].");
+    assert.equal(unmatched.passed, false);
+    assert.match(unmatched.issues.join("\n"), /insufficient source wording overlap/);
+    const corrected = check(`${brand} Metrics reports clicks, impressions, and average position [1].`);
+    assert.equal(corrected.passed, true, corrected.issues.join("\n"));
+  }
+});
+
+test("source mismatch diagnostics are bounded without dropping additional failing sentences", () => {
+  const excerpt = "The measurement report describes clicks, impressions, and position. ".repeat(4);
+  const claim = Array.from({ length: 8 }, (_, i) =>
+    `Invented System ${i + 100} guarantees ${"unsupported ".repeat(70)} [1].`,
+  ).join(" ");
+  const result = validateClaimEvidenceLedger({
+    markdown: claim,
+    sources: [{ url: "https://docs.example.com/report", excerpt, contentHash: sha256Hex(excerpt) }],
+    researchEvidence: excerpt, productEvidence: "",
+    claimEvidence: [{ claim, citationNumbers: [1], supported: true, reason: "The auditor incorrectly asserts support for all invented system details." }],
+  });
+  assert.equal(result.passed, false);
+  const issue = result.issues.find((issue) => issue.includes("does not deterministically match"))!;
+  assert.equal((issue.match(/Cited sentence:/g) ?? []).length, 3);
+  assert.match(issue, /5 additional mismatched cited sentences/);
+  assert.ok(issue.length < 2400);
+});
+
 test("claim ledger rejects unsupported citation-free product assertions", () => {
   const result = validateClaimEvidenceLedger({
     markdown: "The product automatically guarantees qualified pipeline growth.",

@@ -420,6 +420,28 @@ function exactClaimDetailsPresent(claim: string, evidence: string): boolean {
   return namedEntities(claim).every((entity) => normalizedEvidence.includes(entity));
 }
 
+// Diagnostic only: retain the existing exact-detail and overlap predicates.
+// A paragraph number alone made the editor guess which cited sentence failed,
+// spending its bounded repair on a different proposition. Never interpret a
+// matching diagnostic as semantic proof; the independent audit still applies.
+function sourceClaimMismatchDiagnostic(claim: string, excerpt: string): string {
+  const evidenceNumbers = normalizedEvidenceNumbers(excerpt);
+  const normalizedExcerpt = excerpt.toLowerCase();
+  const reasons = [
+    ...[...normalizedEvidenceNumbers(claim)]
+      .filter((number) => !evidenceNumbers.has(number))
+      .slice(0, 3)
+      .map((number) => `number absent from excerpt: ${JSON.stringify(number.slice(0, 80))}`),
+    ...namedEntities(claim)
+      .filter((entity) => !normalizedExcerpt.includes(entity))
+      .slice(0, 3)
+      .map((entity) => `named phrase absent from excerpt: ${JSON.stringify(entity.slice(0, 80))}`),
+    ...(overlapRatio(claim, excerpt) < 0.3 ? ["insufficient source wording overlap"] : []),
+  ];
+  const quoted = claim.length > 420 ? `${claim.slice(0, 420)}…` : claim;
+  return `Cited sentence: ${JSON.stringify(quoted)}; ${reasons.join("; ")}.`;
+}
+
 export function inlineCitationNumbers(value: string): number[] {
   return [...new Set(markdownCitationMarkers(value).flatMap(marker => marker.numbers))];
 }
@@ -733,14 +755,19 @@ export function validateClaimEvidenceLedger(args: {
         const evidenceClaims = citationClaims.length > 0
           ? citationClaims
           : [entry.claim];
-        const sourceSupportsEveryCitedClaim = evidenceClaims.every(
+        const mismatchedClaims = evidenceClaims.filter(
           (claim) =>
-            overlapRatio(claim, source.excerpt!) >= 0.3 &&
-            exactClaimDetailsPresent(claim, source.excerpt!),
+            !(overlapRatio(claim, source.excerpt!) >= 0.3 &&
+              exactClaimDetailsPresent(claim, source.excerpt!)),
         );
-        if (!sourceSupportsEveryCitedClaim) {
+        if (mismatchedClaims.length > 0) {
+          const diagnostics = mismatchedClaims.slice(0, 3)
+            .map((claim) => sourceClaimMismatchDiagnostic(claim, source.excerpt!));
+          if (mismatchedClaims.length > 3) {
+            diagnostics.push(`${mismatchedClaims.length - 3} additional mismatched cited sentences require review.`);
+          }
           issues.push(
-            `Claim ledger entry ${index + 1} does not deterministically match preserved excerpt [${citation}] (${sourceHost || source.url}).`,
+            `Claim ledger entry ${index + 1} does not deterministically match preserved excerpt [${citation}] (${sourceHost || source.url}). ${diagnostics.join(" ")}`,
           );
         }
       }

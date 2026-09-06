@@ -260,3 +260,99 @@ scan passes (581 files). Public Playwright checks passed 10/10 with two
 authenticated checks explicitly skipped. The existing signed-in production
 Pentra page also recovered from its error screen; no credentials or sign-outs
 were needed. Release and recovery evidence follow after completion.
+
+### Bound deployment and controlled attachment of the historical lease
+
+Release `6aac18033fe4b53f30fcdd7e158cc689993ec1ef` includes the monthly-yield
+repair and exact lease observer. GitHub quality run `34048215580` passed in
+2m28s. GitHub/Vercel production deployment `6295792203` reported success at
+17:19:43 UTC; Convex deployment to `wary-starfish-773` completed by 17:22:15 UTC.
+The source worktree remained clean except for the untracked production env.
+
+At 17:22:44.012 UTC the historical article job's exact current token was used
+internally to attach the observer while its lease was still unexpired. The
+mutation returned zero resets, zero terminalizations and zero reservation
+releases. A read-back confirmed unchanged token, workerAttempts zero, `running`
+status and the original 17:29:45.546 UTC expiry. No token was printed, no
+provider work was manually replayed, and no cadence setting was changed.
+This attachment is explicitly controlled recovery setup, not a natural claim
+or proof that the future observer/retry has executed.
+
+A bounded read-only process observes this one job from just after its lease
+boundary until terminal state or 18:00 UTC, with one-minute reads and output
+only when state changes or a read fails. It follows any saved article ID only
+after checking the same exact tenant. The process invokes no mutation/provider,
+and no Codex scheduled automation was created.
+
+Both existing signed-in Chrome tabs recovered after refresh. LeadPilot's
+settings still show GitHub connected and 21/week; Pentra still shows 7/week.
+No accounts were signed out, no credentials were exposed, and no settings were
+saved. The goal remains open pending actual recovery, sealed refill and
+subsequent natural new-article delivery on both sites.
+
+At 17:29:51.744 UTC the read-only observer recorded the first real transition:
+the historical job was `pending`, workerAttempts 1, updatedAt
+`1788715785821` (17:29:45.821 UTC), with nextAttemptAt `1788715845821`
+(17:30:45.821 UTC). The recovery mutation therefore executed 275 ms after
+the original lease expiry without an early lease reset or manual scheduler
+trigger. The next ordinary retry and its article outcome are not yet proven
+by this pending-state observation.
+
+An exact Pentra projection at 17:31:29.241 UTC then confirmed the same job
+`running`, workerAttempts 1. Ordinary follow-up run
+`kd7039qtn2xrvp1bxfeymnzdmx8dwj4h` was scheduled at 17:30:46.043 UTC and
+started at 17:30:47.525 UTC. Health moved to `recovering`; approvedBufferCount
+remained 3 and nextPublicationDueAt remained `1788781512262`. This proves
+automatic retry dispatch after expiry, not successful article generation,
+quality acceptance, or a new publication.
+
+At 17:33:59.226 UTC the bounded observer found the same retry at step 8,
+`Fact-checking claims`, with saved draft `j578gjsyg41fan5r8nx640h1ms8dx32x`
+(1,745 words, updated 17:33:36.910 UTC). The durable draft checkpoint now
+exists; no quality scores, sealed state or new publication were asserted at
+this checkpoint. The job remains on workerAttempts 1.
+
+The observer terminated after reading the job as `done` at 17:42:20.434 UTC;
+this means terminal processing, **not** article acceptance. The article was
+saved in `review` at 17:41:20.109 UTC, 1,562 words, factual score 93,
+editorial score 84, media passed, claim evidence failed and publication blocked.
+Parent run `kd7039qtn2xrvp1bxfeymnzdmx8dwj4h` completed as
+`quality_quarantined`. The ordinary follow-up created quality-recovery job
+`j975dc4v50j0k9873mkde8fg198dxsb5` for the same saved article at
+17:41:32.216 UTC; no manual replay or new topic was requested. The three
+previous sealed articles and next publication deadline remained unchanged.
+
+### Reproduced sentence-specific repair feedback gap
+
+A provider-free diagnostic evaluated the actual source matcher against the
+saved article and its exact captured excerpts. It identified four mismatched
+cited sentences grouped into three paragraph-level issues: one unmatched
+named phrase (`Google Search Console`, where the excerpt uses `Search Console`)
+and three low-overlap sentences. One also added a location/device mechanism
+not stated by that captured excerpt. The earlier remediation notes guessed
+different underlying causes because they received only ledger entry numbers,
+not the actual failed sentence or matching condition. This is not evidence
+that every rejected proposition is false or every other proposition is true.
+
+Two failing regressions reproduce the uninformative feedback using unrelated
+synthetic vendor names, missing numeric details and low-overlap claims. The
+local repair adds bounded sentence-specific diagnostics and tells the editor
+to use only the narrower proposition the excerpt supports, without alias
+assumptions or keyword stuffing. Exact-detail checks, the overlap predicate,
+independent semantic review, issue counts and quality thresholds are unchanged.
+Corrected supported fixture claims pass; all unsupported fixture variants
+remain blocked. Long/many-failure diagnostics are bounded and disclose omitted
+failure counts. This change does not force a production quality retry, change
+the algorithm version, or claim the current article now passes. Full release
+gates and production acceptance are still pending at this local checkpoint.
+
+The local release gates then passed: 1,361 repository tests, type-check,
+lint with zero errors and the same 157 existing warnings, additive schema
+validation, zero dependency vulnerabilities, production build, and ten public
+Playwright checks. Two authenticated harness checks remain explicitly skipped.
+Native Chrome's existing signed-in acceptance path was verified separately.
+A provider-free before/after comparison evaluated the new reviewed draft and
+the exact seven existing sealed Pentra/LeadPilot drafts against both validator
+versions. Passed/failed results, issue counts and required-claim counts were
+identical for all eight. This does not recertify old media annotations or
+convert the newly failed article into accepted content; no article was mutated.
