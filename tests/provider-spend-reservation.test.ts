@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   evaluateProviderAccountCapacity,
+  evaluateSharedProviderCapacity,
   PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
   PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD,
   PROVIDER_OTHER_ACCOUNTS_DAILY_RESERVE_MICRO_USD,
@@ -14,6 +15,34 @@ import {
   SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
   summarizeProviderReservationLedger,
 } from "../convex/lib/providerSpendReservation.ts";
+import { oneSetupQueueDenialDisposition } from "../convex/lib/oneSetupExecution.ts";
+
+test("simultaneously exhausted daily and monthly windows report the monthly blocker and wake", () => {
+  const now = Date.UTC(2026, 8, 6, 16);
+  for (const tier of Object.keys(PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD) as Array<keyof typeof PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD>) {
+    const decision = evaluateProviderAccountCapacity({
+      accountReservedTodayMicroUsd: PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
+      accountReservedThisMonthMicroUsd: PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD[tier],
+      monthlyCeilingMicroUsd: PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD[tier],
+      requestedMicroUsd: 1,
+    });
+    assert.equal(decision.allowed, false);
+    if (decision.allowed) throw new Error("expected denial");
+    assert.equal(decision.reason, "provider_account_monthly_budget_reserved");
+    assert.deepEqual(oneSetupQueueDenialDisposition({ reason: decision.reason, now }),
+      { kind: "retry", eligibleAt: Date.UTC(2026, 9, 1) + 1_000 });
+  }
+  const fleet = evaluateSharedProviderCapacity({
+    fleetReservedTodayMicroUsd: SHARED_PROVIDER_DAILY_CEILING_MICRO_USD,
+    fleetReservedThisMonthMicroUsd: SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
+    requestedMicroUsd: 1,
+  });
+  assert.equal(fleet.allowed, false);
+  if (fleet.allowed) throw new Error("expected denial");
+  assert.equal(fleet.reason, "provider_fleet_monthly_budget_reserved");
+  assert.deepEqual(oneSetupQueueDenialDisposition({ reason: fleet.reason, now }),
+    { kind: "retry", eligibleAt: Date.UTC(2026, 9, 1) + 1_000 });
+});
 
 test("every canonical plan has its exact account-level monthly provider ceiling", () => {
   assert.deepEqual(PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD, {

@@ -165,6 +165,19 @@ export function evaluateProviderAccountCapacity(args: {
   requestedMicroUsd: number;
   monthlyCeilingMicroUsd: number;
 }): ProviderAccountCapacityDecision {
+  // Report the longest blocking window. A daily reset cannot restore capacity
+  // when the same request also exceeds the monthly account ceiling.
+  if (
+    args.accountReservedThisMonthMicroUsd + args.requestedMicroUsd >
+    args.monthlyCeilingMicroUsd
+  ) {
+    return {
+      allowed: false,
+      reason: "provider_account_monthly_budget_reserved",
+      reservedMicroUsd: args.accountReservedThisMonthMicroUsd,
+      ceilingMicroUsd: args.monthlyCeilingMicroUsd,
+    };
+  }
   if (
     args.accountReservedTodayMicroUsd + args.requestedMicroUsd >
       PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD
@@ -174,17 +187,6 @@ export function evaluateProviderAccountCapacity(args: {
       reason: "provider_account_daily_budget_reserved",
       reservedMicroUsd: args.accountReservedTodayMicroUsd,
       ceilingMicroUsd: PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
-    };
-  }
-  if (
-    args.accountReservedThisMonthMicroUsd + args.requestedMicroUsd >
-      args.monthlyCeilingMicroUsd
-  ) {
-    return {
-      allowed: false,
-      reason: "provider_account_monthly_budget_reserved",
-      reservedMicroUsd: args.accountReservedThisMonthMicroUsd,
-      ceilingMicroUsd: args.monthlyCeilingMicroUsd,
     };
   }
   return { allowed: true };
@@ -322,17 +324,6 @@ export function evaluateSharedProviderCapacity(args: {
   requestedMicroUsd: number;
 }): SharedProviderCapacityDecision {
   if (
-    args.fleetReservedTodayMicroUsd + args.requestedMicroUsd >
-    SHARED_PROVIDER_DAILY_CEILING_MICRO_USD
-  ) {
-    return {
-      allowed: false,
-      reason: "provider_fleet_daily_budget_reserved",
-      reservedMicroUsd: args.fleetReservedTodayMicroUsd,
-      ceilingMicroUsd: SHARED_PROVIDER_DAILY_CEILING_MICRO_USD,
-    };
-  }
-  if (
     args.fleetReservedThisMonthMicroUsd + args.requestedMicroUsd >
     SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD
   ) {
@@ -341,6 +332,17 @@ export function evaluateSharedProviderCapacity(args: {
       reason: "provider_fleet_monthly_budget_reserved",
       reservedMicroUsd: args.fleetReservedThisMonthMicroUsd,
       ceilingMicroUsd: SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
+    };
+  }
+  if (
+    args.fleetReservedTodayMicroUsd + args.requestedMicroUsd >
+    SHARED_PROVIDER_DAILY_CEILING_MICRO_USD
+  ) {
+    return {
+      allowed: false,
+      reason: "provider_fleet_daily_budget_reserved",
+      reservedMicroUsd: args.fleetReservedTodayMicroUsd,
+      ceilingMicroUsd: SHARED_PROVIDER_DAILY_CEILING_MICRO_USD,
     };
   }
   return { allowed: true };

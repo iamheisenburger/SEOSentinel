@@ -148,6 +148,7 @@ import type * as pages from "../pages.js";
 import type * as planCandidateCheckpoints from "../planCandidateCheckpoints.js";
 import type * as planJobs from "../planJobs.js";
 import type * as planLimits from "../planLimits.js";
+import type * as providerBudget from "../providerBudget.js";
 import type * as publishedCorrections from "../publishedCorrections.js";
 import type * as publishedRevisions from "../publishedRevisions.js";
 import type * as publisher from "../publisher.js";
@@ -304,6 +305,7 @@ declare const fullApi: ApiFromModules<{
   planCandidateCheckpoints: typeof planCandidateCheckpoints;
   planJobs: typeof planJobs;
   planLimits: typeof planLimits;
+  providerBudget: typeof providerBudget;
   publishedCorrections: typeof publishedCorrections;
   publishedRevisions: typeof publishedRevisions;
   publisher: typeof publisher;
