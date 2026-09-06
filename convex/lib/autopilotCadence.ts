@@ -34,7 +34,7 @@ export type CadenceWindow = {
 export const MAX_CADENCE_CANDIDATES = 2;
 export const MAX_QUALITY_REVISIONS = 2;
 export const CADENCE_QUALITY_RECOVERY_READ_LIMIT = 25;
-export const QUALITY_RECOVERY_VERSION = 15;
+export const QUALITY_RECOVERY_VERSION = 16;
 export const DETERMINISTIC_QUALITY_REPAIR_VERSION = 1;
 const MEDIA_QUALITY_RECOVERY_VERSION = 3;
 const PROVIDER_FAILOVER_RECOVERY_VERSION = 4;
@@ -47,6 +47,7 @@ const DETERMINISTIC_INTERNAL_LINK_RECOVERY_VERSION = 11;
 const DESCRIPTIVE_INTERNAL_LINK_RECOVERY_VERSION = 12;
 const CLAIM_LEDGER_CLASSIFICATION_RECOVERY_VERSION = 14;
 const CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION = 15;
+const EVIDENCE_INPUT_CLASSIFICATION_RECOVERY_VERSION = 16;
 export const WORKER_LENGTH_RECOVERY_VERSION = 2;
 // Immutable deployment boundary for the first recovery algorithm. Jobs queued
 // by that release did not yet carry an explicit recovery version, so this lets
@@ -398,6 +399,28 @@ export function qualityRecoveryTargetVersion(
     // normalizes equivalent K/M numeric notation. Reopen only that exact
     // claim-ledger defect once; unrelated editorial failures stay terminal.
     return CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION;
+  }
+  if (
+    Math.max(
+      article.qualityRecoveryVersion ?? 0,
+      article.qualityRecoveryAttemptVersion ?? 0,
+    ) >= CLAIM_LEDGER_SENTENCE_BINDING_RECOVERY_VERSION &&
+    (article.qualityRecoveryVersion ?? 0) <
+      EVIDENCE_INPUT_CLASSIFICATION_RECOVERY_VERSION &&
+    (article.qualityRecoveryAttemptVersion ?? 0) <
+      EVIDENCE_INPUT_CLASSIFICATION_RECOVERY_VERSION &&
+    claimLedgerBlocked &&
+    issues.every((issue) =>
+      issue === "Strict publication requires a completed claim-to-evidence audit." ||
+      issue === "Editorial quality score is 84; strict minimum is 85."
+    )
+  ) {
+    // v15 treated the bare word "evidence" in writing instructions as a
+    // sourced factual assertion. Re-audit only claim-ledger-only failures
+    // (including their deterministic 84 score cap), once. The queue persists
+    // the attempt before provider work; v16 outcomes and unrelated quality
+    // failures never reopen through this migration. All gates still re-run.
+    return EVIDENCE_INPUT_CLASSIFICATION_RECOVERY_VERSION;
   }
   return undefined;
 }

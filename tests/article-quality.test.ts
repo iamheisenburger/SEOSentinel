@@ -505,6 +505,81 @@ test("an actual research attribution still requires exact evidence", () => {
   assert.match(result.issues.join(" "), /absent from the claim ledger/i);
 });
 
+test("evidence as a writing input does not turn advice into an external factual claim", () => {
+  const paragraphs = [
+    '1. Who, specifically, is the reader? Not "everyone considering this category" — a named role in a named situation.\n2. What situation brought them to this page rather than a different one?\n3. What evidence would this reader need to move forward?\n4. Given that evidence need, which format actually fits — a product page, a use-case page, a workflow page, or a comparison page?',
+    "- **Buyer problem:** the specific friction, risk, delay, or uncertainty the reader recognizes\n- **Product capability:** the verified action the product can perform\n- **Workflow change:** what the user does differently after adopting that capability\n- **Evidence:** a demonstration, approved documentation, or other reviewable support\n- **Limitation:** the condition that prevents the claim from becoming misleading\n- **Next action:** the sensible step for a reader who wants to evaluate fit",
+    "1. State the situation and the decision the page supports.\n2. Describe the relevant workflow in plain language.\n3. Explain the product capabilities involved.\n4. Show the controls, prerequisites, and limits.\n5. Present the evidence available for review.\n6. Give the reader a proportionate next step.",
+    "A product-truth record gates what you're allowed to claim. A decision statement anchors each page to a specific reader. An evidence map ties every message to a verifiable source. A reusable packet keeps repeated facts consistent. Review gates catch drift before it reaches a buyer. None of these substitutes for the others — an evidence map built on an incomplete product-truth record will still produce unsupported claims.",
+    "To put the system into practice, pick one workflow that matters to your business now. Write its product-truth record, write its decision statement, build its evidence map, and run the reader tools above against the resulting draft before publishing. Use what you learn from that single asset — where a tool caught a problem, where reviewers disagreed — to adjust the process before applying it to the next workflow.",
+    "A procurement brief can have separate fields for the proposed purchase, evidence to review, and unanswered questions. Fill those fields from your own evaluation before requesting approval.",
+  ];
+  for (const paragraph of paragraphs) {
+    const result = validateClaimEvidenceLedger({
+      markdown: paragraph,
+      sources: [],
+      researchEvidence: "",
+      productEvidence: "Name: ExampleApp\nDomain: example.invalid",
+      claimEvidence: [{ claim: paragraph, citationNumbers: [], supported: true, reason: "Author-proposed writing advice." }],
+    });
+    assert.equal(result.requiredClaimCount, 0, paragraph);
+    assert.deepEqual(result.issues, [], paragraph);
+  }
+});
+
+test("evidence assertions and facts mixed into advice remain fail-closed", () => {
+  const factualClaims = [
+    "The evidence shows that automated briefs improve organic performance.",
+    "Evidence from controlled trials confirms that chatbots improve conversion.",
+    "There is evidence that automated briefs improve organic performance.",
+    "There is evidence of a measurable improvement in organic performance.",
+    "ExampleApp automatically publishes every article without review.",
+    "The workflow increases sales by 35% within a month.",
+    "This method improves organic performance [1].",
+  ];
+  for (const claim of factualClaims) {
+    for (const prefix of ["", "An evidence map lists the material to review. "]) {
+      const paragraph = prefix + claim;
+      const result = validateClaimEvidenceLedger({
+        markdown: paragraph,
+        sources: [],
+        researchEvidence: "",
+        productEvidence: "Name: ExampleApp\nDomain: example.invalid",
+        claimEvidence: [{ claim: paragraph, citationNumbers: [], supported: true, reason: "Claimed support is not a substitute for preserved evidence." }],
+      });
+      assert.equal(result.requiredClaimCount, 1, paragraph);
+      assert.equal(result.passed, false, paragraph);
+      assert.match(result.issues.join(" "), /neither a matched source excerpt nor a valid matched first-party evidence snapshot/i);
+    }
+  }
+});
+
+test("reader procedures are formatting-independent and cannot hide factual body claims", () => {
+  const procedure = [
+    "1. **What is the buyer problem?** Name the specific friction, risk, delay, or uncertainty the reader recognizes.",
+    "2. **What is the product capability?** Name only the verified action the product can perform — not an inferred benefit.",
+    "3. **What changes in the reader's workflow** once they adopt that capability?",
+    "4. **What evidence supports this?** A demonstration, approved documentation, or other reviewable source.",
+    "5. **What is the limitation?** The condition that prevents the claim from becoming misleading.",
+    "6. **What is the next action** for a reader who wants to evaluate fit?",
+  ].join("\n");
+  const productEvidence = "Name: ExampleApp\nDomain: example.invalid";
+  for (const markdown of [procedure, procedure.replaceAll("**", "")]) {
+    assert.deepEqual(evidenceRequiredParagraphs(markdown, productEvidence), []);
+    for (const fact of [
+      "ExampleApp automatically publishes every article.",
+      "Chatbots convert more website visitors.",
+      "Evidence shows that automated briefs improve organic performance.",
+      "The workflow increases sales by 35% within a month.",
+    ]) {
+      const mixed = `${markdown} ${fact}`;
+      assert.deepEqual(evidenceRequiredParagraphs(mixed, productEvidence), [mixed]);
+    }
+  }
+  const disguised = "1. **Check the output.** Chatbots convert more visitors.\n2. **Confirm the audit trail.** Record the result.";
+  assert.deepEqual(evidenceRequiredParagraphs(disguised, productEvidence), [disguised]);
+});
+
 test("reader-supplied ROI measurement instructions do not require external evidence", () => {
   const productEvidence =
     "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot learns website content, captures visitor contact details, and preserves conversation context.";

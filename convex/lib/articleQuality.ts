@@ -270,8 +270,12 @@ export function countDifferentiationSignals(
   return signals;
 }
 
+// Mentioning evidence as an input to an author's checklist is not itself a
+// factual assertion. Require an attribution/assertion ("evidence shows...",
+// "evidence that/of...") while the independent citation, numeric, outcome,
+// and named-product checks below continue to guard facts embedded in advice.
 const FACTUAL_CLAIM_PATTERN =
-  /\b(?:according to|stud(?:y|ies)|survey|dataset|evidence|findings?|average|majority)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
+  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings?|average|majority)\b|\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
 
 /**
  * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately
@@ -524,7 +528,7 @@ function isExplicitAuthorFramework(
   );
 }
 
-function isReaderRunProcedure(paragraph: string): boolean {
+function isReaderRunProcedure(paragraph: string, productEvidence: string): boolean {
   if (
     INLINE_CITATION_PATTERN.test(paragraph) ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
@@ -534,19 +538,23 @@ function isReaderRunProcedure(paragraph: string): boolean {
       paragraph,
     )
   ) return false;
-  const steps = paragraph.match(/^\s*\d+[.)]\s+\*\*([^*]+)\*\*/gm) ?? [];
-  if (steps.length < 2) return false;
+  // Formatting is not semantics: the question mark can sit inside or outside
+  // bold text, and an ordered procedure need not use bold at all. Inspect the
+  // whole step, not just a bold heading that could hide unsupported body prose.
+  const steps = paragraph.trim().split(/\n(?=\s*\d+[.)]\s+)/);
+  if (steps.length < 2 || !steps.every((step) => /^\s*\d+[.)]\s+/.test(step))) return false;
   return steps.every((step) => {
-    const heading = step
-      .replace(/^\s*\d+[.)]\s+\*\*/, "")
-      .replace(/\*\*$/, "")
+    const plain = step
+      .replace(/^\s*\d+[.)]\s+/, "")
+      .replace(/\*\*|__/g, "")
       .trim();
-    return (
-      heading.endsWith("?") ||
-      /^(?:name|check|look|test|confirm|measure|track|record|compare|calculate|write|document|ask|decide|verify)\b/i.test(
-        heading,
-      )
-    );
+    const heading = plain.match(/^[^.!?\n]+[.!?](?=\s|$)/)?.[0] ?? plain;
+    const body = plain.slice(heading.length);
+    const isQuestion = heading.endsWith("?") &&
+      /^(?:what|which|who|where|when|how|why|is|are|does|do|can|will|should)\b/i.test(heading);
+    const isInstruction = /^(?:name|check|look|test|confirm|measure|track|record|compare|calculate|write|document|ask|decide|verify|state|describe|explain|show|present|give)\b/i.test(heading);
+    return (isQuestion || (isInstruction && !hasEvidenceClaimSignal(heading, productEvidence))) &&
+      !hasEvidenceClaimSignal(body, productEvidence);
   });
 }
 
@@ -581,13 +589,7 @@ function referencesNamedProduct(value: string, productEvidence: string): boolean
   return identities.some((identity) => normalized.includes(identity));
 }
 
-function requiresClaimEvidence(value: string, productEvidence: string): boolean {
-  if (
-    isReaderMeasurementInstruction(value) ||
-    isExplicitAuthorFramework(value, productEvidence) ||
-    isReaderRunProcedure(value) ||
-    isStandaloneCallToActionLink(value)
-  ) return false;
+function hasEvidenceClaimSignal(value: string, productEvidence: string): boolean {
   return (
     INLINE_CITATION_PATTERN.test(value) ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||
@@ -597,6 +599,16 @@ function requiresClaimEvidence(value: string, productEvidence: string): boolean 
     referencesNamedProduct(value, productEvidence) ||
     /\b(?:chatbots?|platforms?|software|tools?|automation)\b[^\n.!?]{0,100}\b(?:improves?|increases?|reduces?|saves?|boosts?|drives?|generates?|converts?)\b/i.test(value)
   );
+}
+
+function requiresClaimEvidence(value: string, productEvidence: string): boolean {
+  if (
+    isReaderMeasurementInstruction(value) ||
+    isExplicitAuthorFramework(value, productEvidence) ||
+    isReaderRunProcedure(value, productEvidence) ||
+    isStandaloneCallToActionLink(value)
+  ) return false;
+  return hasEvidenceClaimSignal(value, productEvidence);
 }
 
 /**

@@ -379,7 +379,7 @@ test("worker, media, and claim-ledger defects retain isolated recovery versions"
     qualityRecoveryVersion: 1,
     qualityRecoveryAttemptVersion: 1,
   };
-  assert.equal(QUALITY_RECOVERY_VERSION, 15);
+  assert.equal(QUALITY_RECOVERY_VERSION, 16);
   assert.equal(qualityRecoveryTargetVersion(workerFailure), 2);
   assert.equal(needsVersionedQualityRecovery(workerFailure), true);
   assert.equal(
@@ -592,7 +592,7 @@ test("current recovery versions isolate claim classification from sentence bindi
     ...base,
     qualityRecoveryVersion: 15,
     qualityRecoveryAttemptVersion: 15,
-  }), undefined);
+  }), 16);
 
   const articles = readFileSync("convex/articles.ts", "utf8");
   assert.match(
@@ -603,6 +603,40 @@ test("current recovery versions isolate claim classification from sentence bindi
     articles,
     /qualityRecoveryAttemptVersion:\s*Math\.max\([\s\S]*?article\.qualityRecoveryAttemptVersion \?\? 0,[\s\S]*?args\.qualityRecoveryVersion/,
   );
+});
+
+test("evidence-input classification recovery is one-shot and cannot reopen unrelated failures", () => {
+  const base = {
+    createdAt: NOW - HOUR,
+    status: "review",
+    publicationGateStatus: "blocked",
+    publicationGateIssues: [
+      "Editorial quality score is 84; strict minimum is 85.",
+      "Strict publication requires a completed claim-to-evidence audit.",
+    ],
+    qualityRevisionCount: 2,
+    qualityRecoveryVersion: 15,
+    qualityRecoveryAttemptVersion: 15,
+  };
+  assert.equal(qualityRecoveryTargetVersion(base), 16);
+  assert.equal(qualityRecoveryTargetVersion({ ...base, qualityRecoveryAttemptVersion: 16 }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({ ...base, qualityRecoveryVersion: 16 }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({ ...base, qualityRevisionCount: 1 }), undefined);
+  assert.equal(qualityRecoveryTargetVersion({ ...base, status: "published" }), undefined);
+  for (const issue of [
+    "Editorial quality score is 78; strict minimum is 85.",
+    "Article topic does not match the tenant business.",
+    "Media quality review failed.",
+  ]) {
+    assert.equal(qualityRecoveryTargetVersion({
+      ...base,
+      publicationGateIssues: [...base.publicationGateIssues, issue],
+    }), undefined);
+  }
+  assert.equal(qualityRecoveryTargetVersion({
+    ...base,
+    publicationGateIssues: ["Editorial quality score is 84; strict minimum is 85."],
+  }), undefined);
 });
 
 test("version 9 reopens only a version-8 exact editorial audit that can now be remediated", () => {

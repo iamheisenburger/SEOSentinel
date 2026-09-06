@@ -46,7 +46,9 @@ At the initial inspection Pentra had zero sealed articles; LeadPilot had two.
 Both had publishing receipts, but this is not sustained refill proof.
 The actual settings mutation is regression-tested for cadence changes,
 unchanged saves, disable/resume, publisher changes, owner authentication and
-in-flight delivery locks. Production cadence-change acceptance remains open.
+in-flight delivery locks. The signed-in LeadPilot settings path subsequently
+accepted a controlled 20/week to 21/week restoration without losing live mode;
+this is settings acceptance, not sustained article-delivery acceptance.
 The published bootstrap adapter matrix is still GitHub-only; general customer
 onboarding and every advertised adapter require their own acceptance.
 
@@ -55,3 +57,46 @@ exact scheduled new-article delivery and public verification on both allowed
 tenants, plus generic cadence-change/recovery tests. Quality scores and
 publication tests do not establish SEO growth; measured organic visits,
 search clicks and conversions must be reported separately.
+
+## September 6 funded recovery and customer acceptance
+
+The deployed Anthropic and OpenAI credentials both returned successful minimal
+responses at 11:17 UTC after the owner restored funding. Preserved work resumed
+through ordinary scheduler continuations, without a manual scheduler invocation.
+
+LeadPilot published new article `j5753dvprnqbzd8c5jjmrxmmrd8dt9w8` at
+06:14:43.010 UTC against its 06:14:34.458 deadline (8.552 seconds later).
+The exact GitHub commit is `ac63fb190a0a380b595f8d9b374eeab755b75888`;
+the durable live verification completed at 06:17:14.442 UTC, and a separate
+11:19 UTC HTTP check returned 200 with the expected title at
+https://leadpilot.chat/blog/automated-sales-workflow-decision-gates.
+This is one new-article delivery, not a revision or evidence of SEO growth.
+
+Pentra's preserved job produced article `j571r4bvpd7fydzxcz7ey5cs3h8dxnxb`.
+Its exact-prose review found no material editorial defects, but deterministic
+claim classification rejected author-proposed writing instructions containing
+the bare word "evidence". Later remediation exposed an equivalent false
+rejection when question marks were outside bold formatting in numbered reader
+questions. These failures kept the ledger blocked and capped the score at 84.
+They are software defects, not proof that the draft is inherently low quality.
+
+The repair distinguishes an evidence input from an evidence assertion and
+classifies numbered reader procedures independently of bold formatting. It
+checks full procedure bodies so headings cannot hide unsupported facts.
+Citation, numeric, product-claim, evidence-binding, and publication thresholds
+remain enforced. Recovery v16 allows one re-audit of v15 claim-ledger-only
+failures (including the deterministic 84 cap), durably fenced at queue admission.
+It does not reopen unrelated defects or reset any failed provider job.
+
+Customer acceptance also reproduced an authentication race on a fresh signed-in
+Chrome tab: `sites:getCadenceCapacity` ran before Convex accepted the session and
+crashed the route. The private dashboard now waits for Convex authentication
+before mounting owner-only queries; failed authentication provides retry/sign-in
+actions. Regression tests execute the real dashboard boundary. Separate runtime
+tests execute new-site creation, consent, and durable setup handlers across
+all supported integer cadences (1–21/week), owner isolation, configuration
+supersession, browser closure, and delayed billing reconciliation.
+
+These local checks do not complete the goal. Pentra still needs production
+re-audit, sealed inventory, new-article delivery, and continued replenishment.
+The revised customer authentication path needs live deployment acceptance.
