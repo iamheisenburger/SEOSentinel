@@ -2991,6 +2991,7 @@ async function handlePlan(
     opportunity: number;
     feedbackBonus: number;
   }[] = [];
+  let discoveryFunnel: Record<string, number> | undefined;
   const {
     coreBusinessSignals: businessSignals,
     productAnchorSignals,
@@ -3059,6 +3060,12 @@ async function handlePlan(
       if (candidates.length >= 80) break;
     }
     console.log(`Candidate pool: ${candidates.length} keywords (from ${discoveredKeywords.length} discovered)`);
+    discoveryFunnel = {
+      discovered: discoveredKeywords.length, unused: unused.length,
+      measured: measured.length, authorityEligible: difficultyEligible.length,
+      brandSafe: unblocked.length, productFit: raw.length,
+      distinctCandidates: candidates.length,
+    };
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -3145,7 +3152,8 @@ async function handlePlan(
   } else if (requireVerifiedKeywordData) {
     throw new Error(
       "Verified discovery returned no measured, authority-attainable, tenant-product-fit keyword; rotating the bounded seed window instead of paying a model to invent one." +
-      (discoveryDiagnostics ? ` Discovery inventory: ${JSON.stringify(discoveryDiagnostics)}` : ""),
+      (discoveryDiagnostics ? ` Discovery inventory: ${JSON.stringify(discoveryDiagnostics)}` : "") +
+      (discoveryFunnel ? ` Funnel: ${JSON.stringify(discoveryFunnel)}` : ""),
     );
   } else {
     // ── AI-FIRST: no DataForSEO data, let AI generate keywords ──

@@ -22,6 +22,11 @@ article and never a reason to postpone the new-article clock.
   the discovery shortlist limit and paid difficulty enrichment. Exhausted
   source rows no longer suppress bounded discovery fallbacks. Persist counts
   in a terminal discovery error so empty inventory has a concrete explanation.
+- A positive-to-positive cadence-only edit retains its already verified live
+  or warm rollout and destination receipt. It still cancels stale jobs under
+  the configuration lock, increments the epoch, refreshes health and schedules
+  immediate canonical deadline evaluation. Mixed configuration changes and
+  resumption from observe mode still require readiness reconciliation.
 
 ## Observations
 
@@ -39,8 +44,9 @@ entirely excluded source that must not buy another difficulty request.
 
 At the initial inspection Pentra had zero sealed articles; LeadPilot had two.
 Both had publishing receipts, but this is not sustained refill proof.
-Changing cadence also currently invalidates rollout to observe mode and must
-be reconciled automatically before this feature can be called complete.
+The actual settings mutation is regression-tested for cadence changes,
+unchanged saves, disable/resume, publisher changes, owner authentication and
+in-flight delivery locks. Production cadence-change acceptance remains open.
 The published bootstrap adapter matrix is still GitHub-only; general customer
 onboarding and every advertised adapter require their own acceptance.
 

@@ -40,6 +40,7 @@ import {
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
 import { approvedBufferPolicy } from "./lib/autopilotBuffer.ts";
+import { retainsRolloutForCadenceEdit } from "./lib/cadenceSettings.ts";
 import {
   autonomousOutreachTransportIssues,
   outreachDeletionGate,
@@ -743,6 +744,32 @@ function publisherConnectionInvalidationPatch(
         publisherDestinationReceipt: undefined,
       }
     : {};
+}
+
+async function scheduleCadenceSettingsReconciliation(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+  patch: Record<string, unknown>,
+  retainedRollout: boolean,
+) {
+  if (patch.cadencePerWeek === undefined ||
+      patch.cadencePerWeek === site.cadencePerWeek) return;
+  await ctx.scheduler.runAfter(0, internal.autopilot.refreshSiteCadenceHealth, {
+    siteId: site._id,
+  });
+  if (retainedRollout) {
+    await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, {
+      siteId: site._id,
+      trigger: "cadence_configuration_changed",
+      reason: "Owner changed cadence; recalculate the next new-article deadline and buffer from current configuration.",
+    });
+  } else if (Number(patch.cadencePerWeek) > 0) {
+    // Resume from pause still traverses canonical readiness and standing
+    // authorization; it cannot promote itself by changing the cadence.
+    await ctx.scheduler.runAfter(0, internal.actions.scheduler.reclaimStrandedPublicationInventory, {
+      siteId: site._id,
+    });
+  }
 }
 
 async function scheduleManagedPublisherResume(
@@ -3470,6 +3497,7 @@ export const upsert = mutation({
         definedData,
       );
       const invalidatesRollout = deliveryConfigChanged(currentSite!, definedData);
+      const retainCadenceRollout = retainsRolloutForCadenceEdit(currentSite!, definedData);
       if (invalidatesRollout) await assertConfigUnlocked(ctx, currentSite!);
       if (invalidatesRollout) {
         await cancelAutonomousJobsForEpochTransition(
@@ -3487,12 +3515,14 @@ export const upsert = mutation({
         domainOwnershipConflictAt: undefined,
         ...(invalidatesRollout
           ? {
-              autopilotRolloutMode: "observe",
+              autopilotRolloutMode: retainCadenceRollout ? currentSite!.autopilotRolloutMode : "observe",
               autopilotRolloutEpoch:
                 (currentSite!.autopilotRolloutEpoch ?? 0) + 1,
-              publicationAdapterVerifiedAt: undefined,
-              publicationAdapterVersion: undefined,
-              publicationAdapterConfigHash: undefined,
+              ...(retainCadenceRollout ? {} : {
+                publicationAdapterVerifiedAt: undefined,
+                publicationAdapterVersion: undefined,
+                publicationAdapterConfigHash: undefined,
+              }),
             }
           : {}),
         ...publisherConnectionInvalidationPatch(
@@ -3513,6 +3543,7 @@ export const upsert = mutation({
       if (publisherConnectionInvalidated) {
         await scheduleManagedPublisherResume(ctx, args.id, true);
       }
+      await scheduleCadenceSettingsReconciliation(ctx, currentSite!, definedData, retainCadenceRollout);
       if (authorityDomainChanged) {
         await invalidateDomainCadenceState(ctx, args.id);
       }
@@ -3560,6 +3591,7 @@ export const upsert = mutation({
         await demoteOutreachForDomainChange(ctx, existing._id);
       }
       const invalidatesRollout = deliveryConfigChanged(existing, merged);
+      const retainCadenceRollout = retainsRolloutForCadenceEdit(existing, merged);
       if (invalidatesRollout) await assertConfigUnlocked(ctx, existing);
       if (invalidatesRollout) {
         await cancelAutonomousJobsForEpochTransition(
@@ -3577,12 +3609,14 @@ export const upsert = mutation({
         domainOwnershipConflictAt: undefined,
         ...(invalidatesRollout
           ? {
-              autopilotRolloutMode: "observe",
+              autopilotRolloutMode: retainCadenceRollout ? existing.autopilotRolloutMode : "observe",
               autopilotRolloutEpoch:
                 (existing.autopilotRolloutEpoch ?? 0) + 1,
-              publicationAdapterVerifiedAt: undefined,
-              publicationAdapterVersion: undefined,
-              publicationAdapterConfigHash: undefined,
+              ...(retainCadenceRollout ? {} : {
+                publicationAdapterVerifiedAt: undefined,
+                publicationAdapterVersion: undefined,
+                publicationAdapterConfigHash: undefined,
+              }),
             }
           : {}),
         ...publisherConnectionInvalidationPatch(
@@ -3603,6 +3637,7 @@ export const upsert = mutation({
       if (publisherConnectionInvalidated) {
         await scheduleManagedPublisherResume(ctx, existing._id, true);
       }
+      await scheduleCadenceSettingsReconciliation(ctx, existing, merged, retainCadenceRollout);
       if (authorityDomainChanged) {
         await invalidateDomainCadenceState(ctx, existing._id);
       }
@@ -3766,6 +3801,7 @@ export const updateSite = mutation({
       patch,
     );
     const invalidatesRollout = deliveryConfigChanged(site, patch);
+    const retainCadenceRollout = retainsRolloutForCadenceEdit(site, patch);
     if (invalidatesRollout) await assertConfigUnlocked(ctx, site);
     if (invalidatesRollout) {
       await cancelAutonomousJobsForEpochTransition(
@@ -3778,11 +3814,13 @@ export const updateSite = mutation({
       ...patch,
       ...(invalidatesRollout
         ? {
-            autopilotRolloutMode: "observe",
+            autopilotRolloutMode: retainCadenceRollout ? site.autopilotRolloutMode : "observe",
             autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
-            publicationAdapterVerifiedAt: undefined,
-            publicationAdapterVersion: undefined,
-            publicationAdapterConfigHash: undefined,
+            ...(retainCadenceRollout ? {} : {
+              publicationAdapterVerifiedAt: undefined,
+              publicationAdapterVersion: undefined,
+              publicationAdapterConfigHash: undefined,
+            }),
           }
         : {}),
       ...publisherConnectionInvalidationPatch(
@@ -3793,6 +3831,7 @@ export const updateSite = mutation({
     if (publisherConnectionInvalidated) {
       await scheduleManagedPublisherResume(ctx, siteId, true);
     }
+    await scheduleCadenceSettingsReconciliation(ctx, site, patch, retainCadenceRollout);
     await syncOrganicClickGoal(ctx, siteId, fields.organicClickGoalMonthly);
   },
 });
