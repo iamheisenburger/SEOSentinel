@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   articleWordCeiling,
+  articleReviewImprovesWithoutRegression,
   clampMetaDescription,
   clampMetaTitle,
   containsExecutableMdx,
@@ -1942,4 +1943,32 @@ test("malformed strict tool output receives one bounded schema correction", () =
   assert.match(structured, /outputSchema\.safeParse\(toolUse\.input\)/);
   assert.match(structured, /failed schema validation; retrying once/);
   assert.doesNotMatch(structured, /attempt < 3/);
+});
+
+test("review improvement is monotonic across editorial, factual and evidence dimensions", () => {
+  const baseline = { editorialScore: 82, factualScore: 92, evidenceDefects: 2, materialDefects: 2 };
+  assert.equal(articleReviewImprovesWithoutRegression(baseline, baseline), false);
+  for (const improvement of [
+    { editorialScore: 84 }, { factualScore: 95 }, { evidenceDefects: 1 }, { materialDefects: 1 },
+  ]) assert.equal(articleReviewImprovesWithoutRegression(baseline, { ...baseline, ...improvement }), true);
+  for (const regression of [
+    { editorialScore: 81, factualScore: 99 }, { editorialScore: 84, factualScore: 85 },
+    { editorialScore: 84, evidenceDefects: 3 }, { editorialScore: 84, materialDefects: 3 },
+  ]) assert.equal(articleReviewImprovesWithoutRegression(baseline, { ...baseline, ...regression }), false);
+  for (const field of Object.keys(baseline)) {
+    for (const invalid of [NaN, Infinity, -1]) {
+      assert.equal(articleReviewImprovesWithoutRegression(baseline, { ...baseline, [field]: invalid }), false);
+      assert.equal(articleReviewImprovesWithoutRegression({ ...baseline, [field]: invalid }, baseline), false);
+    }
+  }
+  assert.equal(articleReviewImprovesWithoutRegression(baseline, { ...baseline, factualScore: 101 }), false);
+  assert.equal(articleReviewImprovesWithoutRegression(baseline, { ...baseline, evidenceDefects: 0.5 }), false);
+});
+
+test("generation and both recovery selection points share the non-regression rule", () => {
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const recoveryStart = pipeline.indexOf("async function reviewExistingArticleHandler");
+  assert.equal((pipeline.slice(0, recoveryStart).match(/articleReviewImprovesWithoutRegression\(\{/g) ?? []).length, 1);
+  assert.equal((pipeline.slice(recoveryStart).match(/articleReviewImprovesWithoutRegression\(\{/g) ?? []).length, 2);
+  assert.match(pipeline, /!recoveryBaseline \|\| postAuditPass <= 1/);
 });

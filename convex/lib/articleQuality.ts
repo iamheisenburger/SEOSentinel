@@ -175,6 +175,33 @@ export function contractConsistentEditorialScore(args: {
   return score;
 }
 
+type ArticleReviewAssessment = {
+  editorialScore: number;
+  factualScore: number;
+  evidenceDefects: number;
+  materialDefects: number;
+};
+
+/** An editorial score cannot buy a regression in another independently
+ * checked quality dimension. Shared by generation and both recovery edits. */
+export function articleReviewImprovesWithoutRegression(
+  baseline: ArticleReviewAssessment,
+  candidate: ArticleReviewAssessment,
+): boolean {
+  const valid = (value: ArticleReviewAssessment) =>
+    [value.editorialScore, value.factualScore].every(score => Number.isFinite(score) && score >= 0 && score <= 100) &&
+    [value.evidenceDefects, value.materialDefects].every(count => Number.isSafeInteger(count) && count >= 0);
+  return valid(baseline) && valid(candidate) &&
+    candidate.editorialScore >= baseline.editorialScore &&
+    candidate.factualScore >= baseline.factualScore &&
+    candidate.evidenceDefects <= baseline.evidenceDefects &&
+    candidate.materialDefects <= baseline.materialDefects &&
+    (candidate.editorialScore > baseline.editorialScore ||
+      candidate.factualScore > baseline.factualScore ||
+      candidate.evidenceDefects < baseline.evidenceDefects ||
+      candidate.materialDefects < baseline.materialDefects);
+}
+
 /**
  * Exact claim auditing can remove a substantial part of a generated draft.
  * Asking the editor to stop at the publication floor therefore makes the

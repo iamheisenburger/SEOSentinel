@@ -24,7 +24,7 @@ const markdown = `# Archive review workflow\n\n${Array.from({ length: 45 }, () =
 type Audit = { score: number; notes: string[]; materialDefects: string[]; claimEvidence: [] };
 type ProviderRequest = { tool_choice: { name: string }; messages: Array<{ content: string }>; model: string };
 type ReviewArgs = { siteId: string; articleId: string; incrementRevision: boolean };
-type ReviewResult = { readyForPublication: boolean; editorialQualityScore: number; qualityRevisionCount: number };
+type ReviewResult = { readyForPublication: boolean; editorialQualityScore: number; factCheckScore: number; qualityRevisionCount: number };
 type PersistedReview = { editorialQualityNotes: string[]; markdown: string; qualityRevisionCount: number };
 
 function fixture(siteId: string, audit: Audit) {
@@ -37,6 +37,8 @@ function fixture(siteId: string, audit: Audit) {
   const writes: PersistedReview[] = [];
   const mutations: string[] = [];
   const nextAudits: Audit[] = [];
+  const behavior: { remediationMarkdown?: string; auditFor?: (request: ProviderRequest) => Audit;
+    factScoreFor?: (markdown: string) => number } = {};
   const transport: typeof fetch = async (input, init) => {
     assert.equal(String(input), "https://api.anthropic.com/v1/messages");
     assert.equal(init?.method, "POST");
@@ -45,10 +47,13 @@ function fixture(siteId: string, audit: Audit) {
     requests.push(request);
     assert.ok(requests.length <= 20, "Provider replay must remain bounded");
     const name = request.tool_choice.name;
-    const response = name === "audit_final_article" ? nextAudits.shift() ?? audit
-      : name === "review_article" ? { markdown, notes: "Controlled factual review.", confidenceScore: 95,
-          claimCount: 1, verifiedCount: 1, citations: [] }
-      : name === "remediate_final_article" ? { markdown, notes: ["No change in this controlled fixture."] }
+    const reviewedMarkdown = name === "review_article"
+      ? request.messages[0].content.split("Article to review:\n")[1] : markdown;
+    const factualScore = behavior.factScoreFor?.(reviewedMarkdown) ?? 95;
+    const response = name === "audit_final_article" ? behavior.auditFor?.(request) ?? nextAudits.shift() ?? audit
+      : name === "review_article" ? { markdown: reviewedMarkdown, notes: "Controlled factual review.", confidenceScore: factualScore,
+          claimCount: 100, verifiedCount: factualScore, citations: [] }
+      : name === "remediate_final_article" ? { markdown: behavior.remediationMarkdown ?? markdown, notes: ["Controlled recovery edit."] }
       : name === "submit_final_metadata" ? { title: article.title, metaTitle: article.title,
           metaDescription: "Review your archive workflow using observed requirements, practical evaluation questions, and a clearly documented next action." }
       : undefined;
@@ -93,7 +98,7 @@ function fixture(siteId: string, audit: Audit) {
       } else throw new Error(`Unexpected mutation: ${name}`);
     },
   };
-  return { article, requests, writes, mutations, audit, nextAudits,
+  return { article, requests, writes, mutations, audit, nextAudits, behavior,
     run: (incrementRevision = false) => runtime.exports.reviewExistingArticleHandler(ctx,
       { siteId, articleId: article._id, incrementRevision }),
   };
@@ -114,13 +119,13 @@ test("required editorial corrections survive persistence and reach the next boun
     const firstRequestCount = f.requests.length;
     assert.equal(firstRequestCount, 6, "The unchanged candidate must terminate after one guarded pass");
     const second = await f.run(true);
-    const edit = f.requests[firstRequestCount];
+    const edit = f.requests[firstRequestCount + 2];
     assert.equal(edit.tool_choice.name, "remediate_final_article");
     const notes = edit.messages[0].content.split("INDEPENDENT AUDIT NOTES:\n")[1].split("\n\nFIRST-PARTY PRODUCT EVIDENCE:")[0];
     for (const correction of corrections) assert.ok(notes.includes(correction), "Next attempt must receive every material correction in this fixture");
     assert.ok(notes.indexOf(corrections[0]) < notes.indexOf("General review observation 0"));
     assert.ok(notes.split("\n").length <= 20, "Keep the existing persisted feedback bound");
-    assert.equal(f.requests.length - firstRequestCount, 7, "Do not add review calls or extend retries");
+    assert.equal(f.requests.length - firstRequestCount, 9, "The fresh baseline replaces a later pass and stays below the old ten-call maximum");
     assert.equal(second.readyForPublication, false);
     assert.equal(second.qualityRevisionCount, 1);
     assert.deepEqual(f.mutations, ["articles:applyQualityReview", "articles:recordPublicationCheck",
@@ -145,7 +150,7 @@ test("legacy explicit corrections outrank long generic gate summaries and duplic
   f.article.publicationGateIssues = Array.from({ length: 25 }, (_, i) => `Generic gate summary ${i}.`);
   f.article.editorialQualityNotes = ["General comment.", correction, ledger, correction];
   await f.run(true);
-  const notes = f.requests[0].messages[0].content.split("INDEPENDENT AUDIT NOTES:\n")[1]
+  const notes = f.requests[2].messages[0].content.split("INDEPENDENT AUDIT NOTES:\n")[1]
     .split("\n\nFIRST-PARTY PRODUCT EVIDENCE:")[0].split("\n");
   assert.equal(notes.length, 20);
   assert.equal(notes[0], `- ${correction}`);
@@ -170,4 +175,81 @@ test("a clean current audit neither fabricates nor retains resolved material def
   await f.run();
   assert.equal(f.requests.length, 3, "Clean prose needs no remediation or extra provider call");
   assert.ok(f.writes[0].editorialQualityNotes.every(note => !note.includes(corrections[0]) && !note.startsWith("Material editorial defect")));
+});
+
+test("the first recovery edit cannot replace a freshly stronger exact draft", async () => {
+  for (const [siteId, candidateEditorial, candidateFactual] of [
+    ["juniper", 80, 95], ["aspen", 92, 70],
+  ] as const) {
+    const f = fixture(siteId, { score: 82, notes: [], materialDefects: [corrections[0]], claimEvidence: [] });
+    Object.assign(f.article, { editorialQualityScore: 99, factCheckScore: 100 });
+    f.article.editorialQualityNotes = [`Material editorial defect 1: ${corrections[0]}`];
+    f.behavior.remediationMarkdown = `${markdown}\n\nInspect the candidate handoff separately.`;
+    f.behavior.auditFor = request => request.messages[0].content.split("EXACT FINISHED ARTICLE:\n")[1]
+      .includes("candidate handoff")
+      ? { score: candidateEditorial, notes: [], materialDefects: candidateEditorial < 85 ? ["Candidate remains incomplete."] : [], claimEvidence: [] }
+      : f.audit;
+    f.behavior.factScoreFor = body => body.includes("candidate handoff") ? candidateFactual : 95;
+    const result = await f.run(true);
+    assert.equal(result.editorialQualityScore, 82, "Select the freshly audited baseline, not the weaker initial edit");
+    assert.equal(result.factCheckScore, 95);
+    assert.equal(result.qualityRevisionCount, 1);
+    assert.equal(result.readyForPublication, false);
+    assert.equal(f.writes[0].markdown, markdown);
+    assert.ok(f.requests.length <= 10, "Do not increase the old ten-call maximum for a length-valid recovery");
+  }
+});
+
+test("a non-regressing first recovery improvement is still retained", async () => {
+  const f = fixture("willow", { score: 82, notes: [], materialDefects: [corrections[0]], claimEvidence: [] });
+  f.article.editorialQualityNotes = [`Material editorial defect 1: ${corrections[0]}`];
+  const candidate = `${markdown}\n\nInspect the improved handoff separately.`;
+  f.behavior.remediationMarkdown = candidate;
+  f.behavior.auditFor = request => request.messages[0].content.split("EXACT FINISHED ARTICLE:\n")[1]
+    .includes("improved handoff") ? { score: 92, notes: [], materialDefects: [], claimEvidence: [] } : f.audit;
+  const result = await f.run(true);
+  assert.equal(result.editorialQualityScore, 92);
+  assert.equal(result.factCheckScore, 95);
+  assert.equal(f.writes[0].markdown, candidate);
+  assert.equal(f.requests.length, 6, "Passing recovery needs no later editing pass");
+});
+
+test("a truncated first edit preserves a complete fresh baseline without paid length reconstruction", async () => {
+  const f = fixture("fir", { score: 82, notes: [], materialDefects: [corrections[0]], claimEvidence: [] });
+  f.article.editorialQualityNotes = [`Material editorial defect 1: ${corrections[0]}`];
+  f.behavior.remediationMarkdown = "Review your own requirements before choosing the next step.";
+  const result = await f.run(true);
+  assert.equal(result.readyForPublication, false);
+  assert.equal(f.writes[0].markdown, markdown);
+  assert.ok(f.writes[0].editorialQualityNotes.some(note => note.includes("broke the length contract")));
+  assert.equal(f.requests.length, 7);
+  assert.ok(f.requests.every(request => !request.messages[0].content.includes("Evidence-safe length recovery pass")));
+});
+
+test("a higher editorial score cannot conceal newly introduced deterministic evidence defects", async () => {
+  for (const incrementRevision of [false, true]) {
+    const f = fixture("poplar", { score: 80, notes: [], materialDefects: [corrections[0]], claimEvidence: [] });
+    f.article.editorialQualityNotes = [`Material editorial defect 1: ${corrections[0]}`];
+    f.behavior.remediationMarkdown = `${markdown}\n\npoplar Archive synchronizes records with every connected inbox automatically.`;
+    f.behavior.auditFor = request => request.messages[0].content.split("EXACT FINISHED ARTICLE:\n")[1]
+      .includes("synchronizes records")
+      ? { score: 84, notes: [], materialDefects: ["Clarify the handoff."], claimEvidence: [] } : f.audit;
+    const result = await f.run(incrementRevision);
+    assert.equal(result.editorialQualityScore, 80);
+    assert.equal(f.writes[0].markdown, markdown, "A missing claim receipt must not trade away for a higher subjective score");
+    assert.equal(result.readyForPublication, false);
+    assert.ok(f.requests.length <= 10);
+  }
+});
+
+test("an already incomplete stored draft cannot be selected as a fallback over a complete recovery", async () => {
+  const f = fixture("larch", { score: 82, notes: [], materialDefects: [corrections[0]], claimEvidence: [] });
+  f.article.markdown = "A short unfinished draft.";
+  f.article.editorialQualityNotes = [`Material editorial defect 1: ${corrections[0]}`];
+  const result = await f.run(true);
+  assert.equal(f.requests[0].tool_choice.name, "remediate_final_article");
+  assert.equal(f.writes[0].markdown, markdown);
+  assert.equal(result.readyForPublication, false);
+  assert.equal(result.qualityRevisionCount, 1);
+  assert.equal(f.requests.length, 7);
 });

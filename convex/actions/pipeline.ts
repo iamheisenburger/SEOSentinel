@@ -26,6 +26,7 @@ import {
 } from "../lib/internalLinks";
 import {
   articleWordCeiling,
+  articleReviewImprovesWithoutRegression,
   clampMetaDescription,
   clampMetaTitle,
   evidenceSafeLengthRecoveryTarget,
@@ -5407,10 +5408,18 @@ async function handleArticle(
             ),
           );
 
-          const remediationImproved =
-            remediationAuditScore > initialAuditScore ||
-            remainingEvidenceDefectCount < initialEvidenceDefectCount;
-          if (remediationAuditScore >= initialAuditScore && remediationImproved) {
+          const remediationImproved = articleReviewImprovesWithoutRegression({
+            editorialScore: initialAuditScore,
+            factualScore: factCheckScore ?? 0,
+            evidenceDefects: initialEvidenceDefectCount,
+            materialDefects: finalAudit.materialDefects.length,
+          }, {
+            editorialScore: remediationAuditScore,
+            factualScore: reviewed.confidenceScore,
+            evidenceDefects: remainingEvidenceDefectCount,
+            materialDefects: remediationAudit.materialDefects.length,
+          });
+          if (remediationImproved) {
             finalMarkdown = exactRemediationMarkdown;
             factCheckScore = reviewed.confidenceScore;
             factCheckNotes = [
@@ -6992,7 +7001,41 @@ async function reviewExistingArticleHandler(
           isRecoverableWorkerQualityIssue(issue)
         ),
     );
+    let recoveryBaseline: {
+      markdown: string;
+      reviewed: Awaited<ReturnType<typeof factCheckArticle>>;
+      audit: Awaited<ReturnType<typeof auditFinalArticle>>;
+      stats: ReturnType<typeof calculateArticleStats>;
+    } | undefined;
+    const initialRecoveryNotes: string[] = [];
     if (incrementRevision && storedDefects.length > 0) {
+      // A stored score is not a current proof. Audit the existing length-valid
+      // draft against this review's exact evidence before the first editor
+      // can replace it. This consumes one of the later remediation passes,
+      // not an additional provider envelope (same audits, one fewer edit).
+      if (persistedLengthIsValid) {
+        const baselineReviewed = await factCheckArticle(
+          reviewMarkdown, sources, bannedNames, productName,
+          productEvidence, researchEvidence,
+        );
+        if (baselineReviewed.confidenceScore === undefined) {
+          throw new Error("Recovery baseline fact check returned no confidence score");
+        }
+        const baselineAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
+          markdown: baselineReviewed.markdown,
+          articleType: article.articleType ?? "standard",
+          primaryKeyword: topic?.primaryKeyword ?? article.title,
+          productName, productEvidence, researchEvidence, sources,
+          minWords: minimumWords, maxWords,
+        });
+        const baselineMarkdown = repairDanglingStructuredIntroductions(baselineAudit.markdown);
+        recoveryBaseline = {
+          markdown: baselineMarkdown,
+          reviewed: baselineReviewed,
+          audit: baselineAudit.audit,
+          stats: calculateArticleStats(baselineMarkdown),
+        };
+      }
       const remediated = await remediateFinalArticle({
         markdown: reviewMarkdown,
         articleType: article.articleType ?? "standard",
@@ -7045,6 +7088,23 @@ async function reviewExistingArticleHandler(
     );
     let audit = exactAudit.audit;
     let stats = calculateArticleStats(exactReviewedMarkdown);
+    if (
+      recoveryBaseline &&
+      recoveryBaseline.stats.wordCount >= minimumWords &&
+      recoveryBaseline.stats.wordCount <= maxWords &&
+      (stats.wordCount < minimumWords || stats.wordCount > maxWords)
+    ) {
+      // Do not spend length-reconstruction calls on a regressing first edit
+      // when the current audit already proved a complete baseline exists.
+      initialRecoveryNotes.push(
+        "Initial recovery edit was rejected because it broke the length contract; the freshly audited complete baseline was retained.",
+      );
+      exactReviewedMarkdown = recoveryBaseline.markdown;
+      reviewed = recoveryBaseline.reviewed;
+      reviewedConfidenceScore = recoveryBaseline.reviewed.confidenceScore!;
+      audit = recoveryBaseline.audit;
+      stats = recoveryBaseline.stats;
+    }
 
     // Unsupported-claim removal is intentionally destructive: it may prune
     // prose that the earlier editor counted toward the minimum. Retrying the
@@ -7153,7 +7213,37 @@ async function reviewExistingArticleHandler(
     };
 
     let auditState = assessExactAudit(exactReviewedMarkdown, audit);
-    const postAuditRemediationNotes: string[] = [];
+    const postAuditRemediationNotes: string[] = [...initialRecoveryNotes];
+    if (
+      recoveryBaseline &&
+      recoveryBaseline.stats.wordCount >= minimumWords &&
+      recoveryBaseline.stats.wordCount <= maxWords
+    ) {
+      const baselineState = assessExactAudit(recoveryBaseline.markdown, recoveryBaseline.audit);
+      const baselineConfidence = recoveryBaseline.reviewed.confidenceScore!;
+      const improved = articleReviewImprovesWithoutRegression({
+        editorialScore: baselineState.score,
+        factualScore: baselineConfidence,
+        evidenceDefects: baselineState.evidenceDefectCount,
+        materialDefects: recoveryBaseline.audit.materialDefects.length,
+      }, {
+        editorialScore: auditState.score,
+        factualScore: reviewedConfidenceScore,
+        evidenceDefects: auditState.evidenceDefectCount,
+        materialDefects: audit.materialDefects.length,
+      });
+      if (!improved) {
+        postAuditRemediationNotes.push(
+          "Initial recovery edit was rejected; the freshly audited baseline was retained because the candidate did not improve it without regression.",
+        );
+        exactReviewedMarkdown = recoveryBaseline.markdown;
+        reviewed = recoveryBaseline.reviewed;
+        reviewedConfidenceScore = baselineConfidence;
+        audit = recoveryBaseline.audit;
+        auditState = baselineState;
+        stats = recoveryBaseline.stats;
+      }
+    }
 
     // The exact auditor can identify a material editorial defect that was not
     // present in the stored notes supplied to the first recovery edit. Apply
@@ -7164,6 +7254,7 @@ async function reviewExistingArticleHandler(
     for (
       let postAuditPass = 1;
       postAuditPass <= 2 &&
+        (!recoveryBaseline || postAuditPass <= 1) &&
         (auditState.score < 85 || auditState.evidenceDefectCount > 0);
       postAuditPass++
     ) {
@@ -7242,10 +7333,18 @@ async function reviewExistingArticleHandler(
           remediatedMarkdown,
           remediatedAudit.audit,
         );
-        const improved =
-          remediatedState.score > auditState.score ||
-          remediatedState.evidenceDefectCount < auditState.evidenceDefectCount;
-        if (remediatedState.score >= auditState.score && improved) {
+        const improved = articleReviewImprovesWithoutRegression({
+          editorialScore: auditState.score,
+          factualScore: reviewedConfidenceScore,
+          evidenceDefects: auditState.evidenceDefectCount,
+          materialDefects: audit.materialDefects.length,
+        }, {
+          editorialScore: remediatedState.score,
+          factualScore: remediatedFactCheck.confidenceScore,
+          evidenceDefects: remediatedState.evidenceDefectCount,
+          materialDefects: remediatedAudit.audit.materialDefects.length,
+        });
+        if (improved) {
           postAuditRemediationNotes.push(
             ...remediated.notes.map(
               (note) => `Post-audit remediation pass ${postAuditPass}: ${note}`,

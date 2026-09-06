@@ -74,7 +74,7 @@ test("existing-draft recovery closes fresh editorial feedback with one guarded r
   const audit = handler.indexOf("let auditState = assessExactAudit");
   const remediation = handler.indexOf("const remediated = await remediateFinalArticle", audit);
   const reAudit = handler.indexOf("const remediatedAudit = await auditFinalArticleWithUnsupportedClaimRemoval", remediation);
-  const guardedAcceptance = handler.indexOf("remediatedState.score >= auditState.score && improved", reAudit);
+  const guardedAcceptance = handler.indexOf("articleReviewImprovesWithoutRegression", reAudit);
   assert.ok(audit >= 0 && remediation > audit && reAudit > remediation);
   assert.ok(guardedAcceptance > reAudit);
   assert.match(handler, /postAuditPass <= 2/);
