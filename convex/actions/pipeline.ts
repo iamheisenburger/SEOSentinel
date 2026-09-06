@@ -1854,7 +1854,7 @@ async function auditFinalArticle(args: {
     args.productEvidence,
   );
   const requiredClaimUnitPrompt = requiredClaimUnits.length === 0
-    ? "No paragraph was deterministically classified as evidence-required. Return an empty claimEvidence array."
+    ? "The detector supplied no required claim units. Independently inspect the entire article for factual assertions; an empty detector result does not establish factual safety."
     : JSON.stringify(
         requiredClaimUnits.map((paragraph, index) => ({
           id: index + 1,
@@ -1873,7 +1873,7 @@ async function auditFinalArticle(args: {
       "If every factual and evidence gate passes, a score below 85 requires a concrete material change named in the notes. Minor polish, source absence by itself, or a vague statement that advice feels common is not a sub-85 defect.",
       "Return every concrete change required before publication in materialDefects. Return an empty array when no material editorial change is required. The numeric score and materialDefects must agree with the 85-point contract.",
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
-      "The system has deterministically enumerated every paragraph that requires evidence. Return exactly one claimEvidence entry for every supplied claim unit, in the same order, and copy that unit's complete paragraph verbatim into claim. Do not omit, merge, summarize, or split a claim unit.",
+      "The detector's required claim units are a coverage floor, not exhaustive. Return exactly one claimEvidence entry for every supplied claim unit, in the same order, and copy that unit's complete paragraph verbatim into claim. Do not omit, merge, summarize, or split a claim unit. Independently inspect the entire article and append any additional externally verifiable factual paragraphs not covered by those units. Copy each additional paragraph verbatim and do not duplicate entries. An empty ledger is valid only when neither the detector nor your independent review identifies a factual assertion requiring evidence.",
       "Mark a claim unit supported only when the supplied evidence directly supports every externally verifiable proposition in it; citation presence alone is not evidence. If only part is supported, mark the whole unit unsupported and explain the unsupported proposition.",
       "Do not put editorial summaries, descriptions of what the article says, or recommendations clearly framed as advice into claimEvidence. They are not externally verifiable evidence claims.",
       "The first-party product evidence is a separate unnumbered snapshot. For a product claim supported only by that snapshot, return an empty citationNumbers array. Never invent a citation ordinal for product evidence or for a source absent from the supplied source array.",
@@ -1925,7 +1925,7 @@ async function auditFinalArticle(args: {
     outputSchema: z.object({
       score: z.number().min(0).max(100),
       notes: z.array(z.string()).default([]),
-      materialDefects: z.array(z.string()).default([]),
+      materialDefects: z.array(z.string().trim().min(1)),
       claimEvidence: z.array(
         z.object({
           claim: z.string(),
@@ -1934,7 +1934,10 @@ async function auditFinalArticle(args: {
           reason: z.string(),
         }),
       ),
-    }),
+    }).refine(
+      (audit) => (audit.score >= 85) === (audit.materialDefects.length === 0),
+      { path: ["materialDefects"], message: "A score below 85 requires a concrete material defect; a score of 85 or more requires no material defects. Reassess the exact article and make the score and required corrections agree." },
+    ),
     // A ledger that must cover the whole article cannot share the old 2K
     // ceiling used for score-only output. Scale a bounded allowance with the
     // deterministic unit count so complete ledgers do not truncate, without

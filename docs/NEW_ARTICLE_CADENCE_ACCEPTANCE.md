@@ -846,3 +846,83 @@ zero-error lint (157 existing warnings), additive schema check, dependency
 audit, production build and ten public Playwright checks. The two authenticated
 harness checks remain explicitly skipped; the signed-in Chrome action above
 is separate production acceptance evidence.
+
+### Ordinary 15:00 UTC checkpoint and wait-reporting release
+
+Wait-reporting release `666dcd546e3e8515e3fe467faa41ff0b7cb74e6c`
+passed GitHub quality run `34040809443` and Vercel production deployment
+`6294376425`. Native Chrome on `pentra.dev` now visibly states “Planning is
+waiting—not currently generating”, distinguishes Pentra's reserved internal
+allowance from provider wallet funding, and shows the automatic retry time.
+The displayed local time is September 6 at 17:00:01 PDT, equivalent to
+September 7 at 00:00:01 UTC. No reconnect or password action was needed.
+
+The ordinary 15:00 fleet cadence was observed without a manual trigger.
+Pentra run `kd7aazwvkf53t4625vevjyr1kh8dw9j5` completed at 15:00:37.754
+UTC as `planning_blocked`; LeadPilot run
+`kd77pcgkpezh97ecj5e2y2518n8dxm0g` completed at 15:00:41.420 UTC as
+`topic_replenishment_exhausted`. Neither run invented active work. Pentra
+retains three sealed articles and its September 7 11:45:12.262 UTC
+publication deadline; LeadPilot retains four sealed articles and its
+September 6 22:14:51.187 UTC deadline. Those unchanged inventories and
+future deadlines are not new publishing or growth evidence. There were no
+active jobs at the 15:00:50 UTC projection. The goal remains incomplete.
+
+### Controlled factual-audit regression, September 6 at 15:18–15:24 UTC
+
+The existing Pentra article `j575539aga6nqkh50v4md4e4rs8dx8wf`
+(`/blog/fiverr-keywords-research`) was inspected by exact ID and tenant.
+Its actual body still matches its publication hash
+`9f7a8c24be946031978e75e3d8dbd34346adaa5339b9bdbd3d43d0608cb78c65`.
+No production article, publication receipt, deadline, or inventory was changed.
+This historical article contains platform-mechanics and nonexistence assertions
+that lack preserved evidence. It is not evidence of acceptable quality.
+
+A bounded controlled audit using the deployed Anthropic credential returned
+HTTP 200 at 15:18:14.284 UTC, request
+`req_011CenQgVFhhKDswwbGkNyRC` (9,890 input and 1,888 output tokens).
+It returned score 83 with no material defects. The existing helper would
+promote that inconsistent score to 85. The local repair removes this promotion:
+the helper can only retain or lower the provider score, and the structured
+audit requires agreement between the score and explicit material defects.
+An inconsistent response receives the existing single schema clarification;
+a second inconsistency fails closed, without another provider replay.
+
+The controlled run with that schema at 15:21:06.980 UTC returned the same
+83/no-defects inconsistency, request `req_011CenQuDjfmfMpN91KBzuqX`
+(9,890 input, 2,579 output tokens). One clarification at 15:21:33.699 UTC,
+request `req_011CenQwBVY92CasV1wvdTnE` (9,997 input, 1,713 output tokens),
+returned 86/no defects. The deterministic ledger still rejected unsupported
+platform claims. This is evidence of the bounded clarification and validation
+behavior, **not** evidence that the article is now correct or accepted.
+
+The generic repair also makes the deterministic claim list a coverage floor,
+not a command to ignore other assertions. The auditor must independently
+inspect the whole article; explicitly unsupported claims fail even when a
+pattern detector misses them. Framework labels, measurement instructions,
+and failed-retrieval disclaimers cannot exempt surrounding outside facts.
+For platform-mechanics or absence assertions, first-party snapshots must
+identify the product and match each such sentence; shared vocabulary cannot
+certify an unrelated platform. This additional authority check does not
+apply a new sentence-level overlap threshold to ordinary transitions or
+advice in mixed paragraphs. Both generation and draft review already build
+identity-bearing Name/Domain snapshots. Regression cases preserve reader questions, conditional advice,
+retrieval limitations, and genuine own-product support.
+
+Runtime tests execute the actual audit function, SDK request serialization,
+schema parsing, bounded clarification, and exact post-pruning re-audit, with
+only provider transport substituted. Those tests are not semantic provider
+acceptance. Before release, 1,299 repository tests, type-check, additive schema
+check, and dependency audit passed; lint has zero errors and the unchanged
+157 warnings. Ten public Playwright checks passed; two authenticated harness
+checks remain skipped. No claim of sustained refill, corrected historical
+publication, generic new-user acceptance, or measured growth follows from
+these results. Those acceptance requirements remain open.
+
+The final before/after check covered the exact three Pentra and four LeadPilot
+sealed drafts and introduced no new ledger failures. Four passed both full
+ledger checks; three already had a generated reviewed-image caption outside
+the prose ledger. All seven retained their strict publication result. This
+comparison establishes regression scope only; it does not re-audit semantic
+quality or turn those historical media annotations into new prose evidence.
+The final production build and Convex deployment dry-run also passed.

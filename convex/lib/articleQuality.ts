@@ -154,11 +154,10 @@ export function normalizedFactCheckConfidence(args: {
 
 /**
  * Enforce the editorial auditor's published scoring contract. A sub-85 score
- * is meaningful only when the auditor names at least one material change; an
- * otherwise clean article must not be stranded by an unexplained numeric
- * preference. Conversely, any declared material defect keeps the score below
- * the publication threshold. Deterministic evidence checks remain a separate,
- * fail-closed gate and are passed in here only to cap the score.
+ * requires a concrete defect under the structured provider contract. An
+ * inconsistent response gets a bounded clarification there, never a local
+ * promotion to a passing score. Declared or deterministic defects can only
+ * lower the score; this helper cannot manufacture a successful audit.
  */
 export function contractConsistentEditorialScore(args: {
   score: number;
@@ -173,7 +172,7 @@ export function contractConsistentEditorialScore(args: {
     .map((defect) => defect.trim())
     .filter(Boolean);
   if (materialDefects.length > 0) return Math.min(score, 84);
-  return score < 85 ? 85 : score;
+  return score;
 }
 
 /**
@@ -437,10 +436,54 @@ export function removeUnverifiedInlineCitations(
   return removeUnverifiedMarkdownCitations(markdown, sourceCount);
 }
 
-function isReaderMeasurementInstruction(paragraph: string): boolean {
+/** Labels describe the author's method; they do not establish outside facts. */
+function plainClaimSegment(segment: string): string {
+  return segment.replace(/\*\*|__/g, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]?\]\s*)?/, "").trim();
+}
+
+function isEvaluationQuestion(value: string): boolean {
+  return /^(?:Q:\s*)?(?:what|which|who|where|when|how|why|is|are|does|do|can|will|should)\b/i.test(value) && value.endsWith("?");
+}
+
+function hasNonExemptAssertion(value: string, productEvidence: string): boolean {
+  return claimSentenceSegments(value).some((segment) => {
+    const plain = plainClaimSegment(segment);
+    // A standalone evaluation question is not its own affirmative answer.
+    if (isEvaluationQuestion(plain)) return false;
+    if (/^(?:the|a|your|our)\s+(?:\w+\s+){0,2}question\s+is\s+whether\b/i.test(plain) && !/;|\bbut\b/i.test(plain)) return false;
+    return (
+      /\baccording to\b|\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b/i.test(plain) ||
+      hasExternalSystemAssertion(plain) ||
+      (referencesNamedProduct(plain, productEvidence) &&
+        /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?)\b/i.test(plain)) ||
+      /\b(?:chatbots?|platforms?|software|tools?|automation)\b[^\n.!?]{0,100}\b(?:improves?|increases?|reduces?|saves?|boosts?|drives?|generates?|converts?)\b/i.test(plain)
+    );
+  });
+}
+
+function hasExternalSystemAssertion(value: string): boolean {
+  return claimSentenceSegments(value).some((segment) => {
+    const plain = plainClaimSegment(segment);
+    if (isEvaluationQuestion(plain)) return false;
+    // A writer's failed retrieval is not a platform-wide absence assertion.
+    // Neither are prohibitions directed at the reader ("Do not publish...").
+    const absence = plain.match(/\b(?:does not|doesn't|do not|don't|never)\s+(?:publish(?:es)?|provides?|offers?|exposes?|discloses?|documents?|reports?|supports?|includes?|measures?|tracks?)\b/i);
+    const subject = absence ? plain.slice(0, absence.index).trim() : "";
+    const negativeAssertion = !!subject && !/^please$/i.test(subject) &&
+      !/\b(?:you|your|we|our|if|unless|whether|may|might|could|would)\b/i.test(subject);
+    return negativeAssertion ||
+      /\b(?:no|neither)\s+(?:\w+[ -]){0,4}(?:documentation|reports?|analytics|measurements?|metrics?|data)\s+(?:is|are)\s+(?:available|published|provided|disclosed)\b/i.test(plain) ||
+      /\b(?:autocomplete|suggestions?|rankings?|search results?|filters?|categor(?:y|ies)|scores?|recommendations?|visibility)\b[^\n.!?;]{0,80}\b(?:comes? from|(?:is|are) (?:based on|derived from)|determines?|controls?|depends? on)\b/i.test(plain);
+  });
+}
+
+function isReaderMeasurementInstruction(paragraph: string, productEvidence = ""): boolean {
   if (
     inlineCitationNumbers(paragraph).length > 0 ||
-    EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph)
+    EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
+    HYPE_PATTERN.test(paragraph) ||
+    hasNonExemptAssertion(paragraph, productEvidence)
   ) {
     return false;
   }
@@ -486,6 +529,7 @@ function isExplicitAuthorFramework(
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
     HYPE_PATTERN.test(paragraph) ||
     QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
+    hasNonExemptAssertion(paragraph, productEvidence) ||
     (referencesNamedProduct(paragraph, productEvidence) &&
       /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?)\b/i.test(
         paragraph,
@@ -567,6 +611,7 @@ function hasEvidenceClaimSignal(value: string, productEvidence: string): boolean
     inlineCitationNumbers(value).length > 0 ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||
     FACTUAL_CLAIM_PATTERN.test(value) ||
+    hasExternalSystemAssertion(value) ||
     HYPE_PATTERN.test(value) ||
     QUANTIFIED_OUTCOME_PATTERN.test(value) ||
     referencesNamedProduct(value, productEvidence) ||
@@ -576,7 +621,7 @@ function hasEvidenceClaimSignal(value: string, productEvidence: string): boolean
 
 function requiresClaimEvidence(value: string, productEvidence: string): boolean {
   if (
-    isReaderMeasurementInstruction(value) ||
+    isReaderMeasurementInstruction(value, productEvidence) ||
     isExplicitAuthorFramework(value, productEvidence) ||
     isReaderRunProcedure(value, productEvidence) ||
     isStandaloneCallToActionLink(value)
@@ -602,7 +647,6 @@ export function evidenceRequiredParagraphs(
         paragraph.length >= 40 &&
         !paragraph.startsWith("#") &&
         !isSourceBibliographyEntry(paragraph) &&
-        !isReaderMeasurementInstruction(paragraph) &&
         requiresClaimEvidence(paragraph, productEvidence),
     );
 }
@@ -622,13 +666,25 @@ export function validateClaimEvidenceLedger(args: {
   const productSnapshotSupports = (claim: string) =>
     productSnapshotValid &&
     overlapRatio(claim, args.productEvidence) >= 0.3 &&
-    exactClaimDetailsPresent(claim, args.productEvidence);
+    exactClaimDetailsPresent(claim, args.productEvidence) &&
+    // A mixed paragraph can contain transitions, advice, and own-product
+    // facts. Preserve its existing evidence matching, but require exact
+    // product authority for each platform-mechanics/absence assertion.
+    // Shared vocabulary or one genuine own-product sentence cannot launder
+    // an unrelated platform assertion through the whole paragraph.
+    claimSentenceSegments(claim)
+      .filter(hasExternalSystemAssertion)
+      .every((sentence) =>
+        referencesNamedProduct(sentence, args.productEvidence) &&
+        overlapRatio(sentence, args.productEvidence) >= 0.3 &&
+        exactClaimDetailsPresent(sentence, args.productEvidence),
+      );
   const paragraphs = evidenceRequiredParagraphs(
     args.markdown,
     args.productEvidence,
   );
 
-  if (args.claimEvidence.length === 0) {
+  if (paragraphs.length > 0 && args.claimEvidence.length === 0) {
     issues.push("Claim-to-evidence ledger is empty.");
   }
 
@@ -641,7 +697,10 @@ export function validateClaimEvidenceLedger(args: {
     // publication-source checks, so comparing author-list prose to the source
     // body would create an impossible evidence gate.
     if (isSourceBibliographyEntry(entry.claim)) continue;
-    if (!entry.supported) continue;
+    if (!entry.supported) {
+      issues.push(`Claim ledger entry ${index + 1} is unsupported: ${entry.reason.slice(0, 220)}`);
+      continue;
+    }
     if (entry.citationNumbers.length > 0) {
       for (const citation of entry.citationNumbers) {
         const source = args.sources[citation - 1];
@@ -790,7 +849,7 @@ export function removeUnledgeredEvidenceParagraphs(args: {
         paragraph.length < 40 ||
         paragraph.startsWith("#") ||
         isSourceBibliographyEntry(paragraph) ||
-        isReaderMeasurementInstruction(paragraph) ||
+        isReaderMeasurementInstruction(paragraph, args.productEvidence) ||
         !requiresClaimEvidence(paragraph, args.productEvidence)
       ) {
         return chunk;

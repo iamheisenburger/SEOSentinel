@@ -131,7 +131,7 @@ test("editorial score enforces the auditor's material-defect contract", () => {
     score: 84,
     materialDefects: [],
     deterministicEvidenceDefectCount: 0,
-  }), 85);
+  }), 84, "an unexplained low score must not be promoted into a passing audit");
   assert.equal(contractConsistentEditorialScore({
     score: 92,
     materialDefects: ["The comparison omits the decision criteria."],
@@ -631,7 +631,17 @@ test("ROI question framing, FAQ prompts, and input checklists are not factual cl
   });
 
   assert.equal(result.requiredClaimCount, 0);
-  assert.deepEqual(result.issues, ["Claim-to-evidence ledger is empty."]);
+  assert.deepEqual(result.issues, [], "questions without factual assertions do not need invented ledger entries");
+});
+
+test("an independently identified unsupported claim blocks even when no deterministic pattern matches", () => {
+  const claim = "Letters arrive instantly across every network without any delivery failures.";
+  assert.deepEqual(evidenceRequiredParagraphs(claim, ""), []);
+  const result = validateClaimEvidenceLedger({ markdown: claim, sources: [], productEvidence: "", researchEvidence: "",
+    claimEvidence: [{ claim, citationNumbers: [], supported: false, reason: "No preserved evidence supports this delivery guarantee." }],
+  });
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join(" "), /unsupported/i);
 });
 
 test("explicit author frameworks, reader-run procedures, and standalone CTAs are not evidence claims", () => {
@@ -694,6 +704,88 @@ test("authorial ranking disclaimers are exempt but embedded product capabilities
     evidenceRequiredParagraphs(capabilityClaim, productEvidence),
     [capabilityClaim],
   );
+});
+
+test("framework and measurement labels cannot exempt third-party factual assertions", () => {
+  const productEvidence = "Name: ExampleApp\nDomain: example.invalid";
+  const assertions = [
+    "Atlas Market does not publish how its ranking system works.",
+    "Northwind Cloud never discloses its recommendation mechanics.",
+    "The platform does not provide impression measurements for sellers.",
+    "No analytics reports are available from the service.",
+    "Autocomplete suggestions come from actual customer queries.",
+    "The selected category determines which search results include a listing.",
+    "Research shows that this workflow improves organic performance.",
+    "ExampleApp automatically publishes every article without review.",
+  ];
+  for (const assertion of assertions) {
+    for (const prefix of [
+      "",
+      "This is an author-proposed framework, not an external standard. ",
+      "Record the result in your own worksheet. ",
+      "The practical question is whether the workflow suits your business. ",
+    ]) {
+      const paragraph = prefix + assertion;
+      assert.deepEqual(evidenceRequiredParagraphs(paragraph, productEvidence), [paragraph], paragraph);
+      const checked = validateClaimEvidenceLedger({
+        markdown: paragraph, sources: [], researchEvidence: "", productEvidence,
+        claimEvidence: [{ claim: paragraph, citationNumbers: [], supported: true,
+          reason: "A prose label cannot substitute for a preserved evidence source." }],
+      });
+      assert.equal(checked.passed, false, paragraph);
+    }
+  }
+});
+
+test("first-party word overlap cannot certify an unrelated platform's mechanics", () => {
+  const productEvidence = "Name: ExampleApp\nDomain: example.invalid\nExampleApp helps teams research keyword ranking and publish content. Its workflow records how the system works and what steps an author chose.";
+  const external = "VendorDock does not publish how its keyword ranking system works.";
+  const own = "ExampleApp helps teams research keyword ranking and publish content.";
+  for (const paragraph of [external, `${own} ${external}`]) {
+    const result = validateClaimEvidenceLedger({ markdown: paragraph, sources: [], researchEvidence: "", productEvidence,
+      productEvidenceHash: sha256Hex(productEvidence),
+      claimEvidence: [{ claim: paragraph, supported: true, citationNumbers: [], reason: "The auditor asserted support based on overlapping research vocabulary." }],
+    });
+    assert.equal(result.passed, false, paragraph);
+    assert.match(result.issues.join(" "), /neither a matched source excerpt/);
+  }
+  const valid = validateClaimEvidenceLedger({ markdown: own, sources: [], researchEvidence: "", productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{ claim: own, supported: true, citationNumbers: [], reason: "The exact first-party product snapshot states this capability." }],
+  });
+  assert.equal(valid.passed, true, valid.issues.join(" "));
+});
+
+test("first-party authority checks preserve mixed transitions and genuinely documented limitations", () => {
+  const productEvidence = "Name: ExampleApp\nDomain: example.invalid\nExampleApp researches keywords and publishes approved articles through a connected repository. ExampleApp does not provide an email inbox.";
+  for (const claim of [
+    "This is where ExampleApp fits in the operating system described above. ExampleApp researches keywords and publishes approved articles through a connected repository.",
+    "ExampleApp does not provide an email inbox.",
+  ]) {
+    const checked = validateClaimEvidenceLedger({
+      markdown: claim, sources: [], researchEvidence: "", productEvidence,
+      productEvidenceHash: sha256Hex(productEvidence),
+      claimEvidence: [{ claim, supported: true, citationNumbers: [], reason: "The preserved first-party snapshot states the exact product capability or limitation." }],
+    });
+    assert.equal(checked.passed, true, checked.issues.join("\n"));
+  }
+});
+
+test("retrieval limitations and reader instructions remain distinct from platform absence claims", () => {
+  const productEvidence = "Name: ExampleApp\nDomain: example.invalid";
+  for (const paragraph of [
+    "No external source was captured during this research attempt; do not infer a platform-wide limitation from that.",
+    "We did not find documentation in the supplied research; check the service's current help pages before deciding.",
+    "Do not publish an assertion about a platform's ranking system without supporting documentation.",
+    "- Do not publish an assertion about a platform's ranking system without supporting documentation.",
+    "Does the platform never disclose its recommendation mechanics?",
+    "Record the analytics reports available in your own account before choosing what to measure.",
+    "The practical question is whether your account offers the reports you need.",
+    "If your business does not offer a service, record that limitation before choosing the next action.",
+    "A visitor may want to talk immediately but need a service you do not provide. Record the uncertainty before deciding.",
+    "- [ ] What evidence supports the fit classification?\n- [ ] What information is unknown rather than negative?",
+    "This is an author-proposed framework, not an external standard. Compare the options against your own requirements.",
+  ]) assert.deepEqual(evidenceRequiredParagraphs(paragraph, productEvidence), [], paragraph);
 });
 
 test("first-party sentence lead-ins do not become phantom named entities", () => {
@@ -1133,6 +1225,24 @@ test("misnumbered first-party claims fall back only to the exact hashed product 
   });
 
   assert.equal(result.passed, true, result.issues.join("\n"));
+});
+
+test("a headerless snapshot cannot certify an external platform assertion", () => {
+  const claim = "VendorDock does not publish how its keyword ranking system works.";
+  const productEvidence = claim;
+  const result = validateClaimEvidenceLedger({
+    markdown: claim,
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{
+      claim, citationNumbers: [1], supported: true,
+      reason: "The captured text repeats the assertion but supplies no product identity or external source.",
+    }],
+  });
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join("\n"), /missing source/);
 });
 
 test("sentence-opening lead-ins do not become phantom named entities", () => {
