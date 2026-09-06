@@ -619,3 +619,44 @@ problem before the single real request. These zero-request failures are not
 provider funding failures. The published wording remains uncorrected pending
 a properly bound editorial revision; no existing-page edit may count as a
 new-article cadence delivery.
+
+### Strict evidence discovery no longer excludes unlisted official sources
+
+The source-classifier repair alone was insufficient: the strict OpenAI search
+request still sent a fixed `allowed_domains` list. Runtime regressions using
+the actual research function and SDK reproduced exclusion of Stripe docs,
+GitHub docs and NIST research, despite their eligibility under the unchanged
+source policy. OpenAI documents this parameter as a discovery restriction:
+https://developers.openai.com/api/docs/guides/tools-web-search#domain-filtering.
+
+The local repair removes that fixed discovery list, retaining the same model,
+required search capability, output allowance, transport deadline and no-retry
+policy. Provider-attributed citations, strict source classification, bounded
+DNS-pinned source capture, preserved excerpts and exact claim validation still
+apply. Regression tests also verify that secondary/blog and marketing sources
+remain ineligible; discovery is not evidence acceptance.
+
+At approximately 14:03 UTC, one controlled request using the deployed OpenAI
+credential and actual revised research function completed successfully:
+`req_abf6f1a9313449d29b848271bcf497ae`, response
+`resp_0d99470c1e79ea6f006a9d728d3b2887d1ab5ef5f49badf6e2`, HTTP 200,
+`gpt-5-mini-2025-08-07`, one search call, 9,059 input and 2,894 output tokens.
+It found seven official Fiverr help URLs plus a secondary PDF URL. This is
+discovery evidence only, not an article or natural production receipt.
+
+A subsequent provider-free capture of three returned help pages rejected all
+three. A direct call through the actual safe outbound client confirmed HTTP
+403 for the Creating a Gig page. No access control was bypassed and no search
+summary was substituted for a preserved source excerpt. Thus the discovery
+defect is repaired locally, but this host's current capture failure remains a
+real evidence limitation. The published article remains uncorrected.
+
+All 1,274 repository tests, type-check, lint (zero errors, 157 existing
+warnings), additive schema check, tracked-source secret scan, dependency
+audit, production build with the non-secret CI configuration, ten public
+Playwright checks, and Convex dry-run passed. Two authenticated harness
+tests remain skipped. Initial local build/deploy-dry-run invocations omitted
+the established environment setup; rerunning with the correct non-secret
+build settings and silently sourced deployment environment passed. They were
+local invocation failures, not production or funding failures. No production
+deployment has occurred during the pending LeadPilot cadence observation.

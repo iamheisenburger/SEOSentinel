@@ -141,7 +141,6 @@ import {
   siteCanonicalDomainRevision,
 } from "../lib/siteDomainBinding";
 import {
-  STRICT_EVIDENCE_SEARCH_DOMAINS,
   strictEvidenceSources,
 } from "../lib/sourceQuality";
 import {
@@ -2162,16 +2161,16 @@ async function webResearch(
   console.log(`Web research: searching for "${searchQuery}"...`);
 
   const completion = await client.responses.create({
-    // Keep the primary-source path capability-bound: both 4o-mini and 4.1-mini
-    // reject domain filters in live API checks. The bounded 5-mini search path
-    // supports them; preserve the cheaper unfiltered research path separately.
-    // https://developers.openai.com/api/docs/guides/tools-web-search#limitations
+    // Discovery is topic-generic, not restricted to a fixed vendor roster.
+    // An allowlist excluded eligible vendor docs and even unlisted government
+    // sources before source capture could evaluate them. Preserve the bounded
+    // model/transport and validate attributed sources after discovery instead.
+    // https://developers.openai.com/api/docs/guides/tools-web-search#domain-filtering
     model: primaryEvidenceOnly ? "gpt-5-mini" : "gpt-4o-mini",
     tools: [primaryEvidenceOnly
       ? {
           type: "web_search",
           search_context_size: "high",
-          filters: { allowed_domains: STRICT_EVIDENCE_SEARCH_DOMAINS },
         }
       : { type: "web_search_preview", search_context_size: "high" }],
     tool_choice: "required",
@@ -2199,7 +2198,7 @@ async function webResearch(
           `Primary Keyword: ${topic.primaryKeyword}\n` +
           `Secondary Keywords: ${topic.secondaryKeywords?.join(", ") ?? "none"}\n` +
           `Search Intent: ${topic.intent ?? "informational"}\n` +
-          `${primaryEvidenceOnly ? "Search only the allowed primary-research, government, standards, and official-documentation domains.\n" : ""}\n` +
+          `${primaryEvidenceOnly ? "Find the relevant original research, government, standards or official product documentation for this topic; do not limit discovery to familiar vendors.\n" : ""}\n` +
           `Return a concise prose research brief. Cite every web-derived claim through the web-search citation mechanism. If no primary evidence supports the topic, say so plainly.`,
       },
     ],
