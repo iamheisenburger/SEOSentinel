@@ -188,7 +188,7 @@ export async function generateMetadata({
   const description = article.metaDescription || undefined;
 
   return {
-    title: { absolute: article.title },
+    title: { absolute: article.metaTitle || article.title },
     description,
     keywords: article.metaKeywords,
     alternates: canonical ? { canonical } : undefined,

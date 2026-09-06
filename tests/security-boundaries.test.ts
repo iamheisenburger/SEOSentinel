@@ -35,7 +35,7 @@ test("tenant article and topic reads require owner checks while blog reads remai
   assert.match(articles, /export const listBySite = query[\s\S]*requireSiteOwner/);
   assert.match(topics, /export const get = query[\s\S]*requireSiteOwner/);
   assert.match(blog, /export const getPublishedBySlug = query/);
-  assert.match(blog, /article\.status !== "published"/);
+  assert.match(blog, /original\.status !== "published"/);
 });
 
 test("legacy migration backfills timestamps without resurrecting old delivery retries", () => {

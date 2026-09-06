@@ -20,7 +20,6 @@ import {
   publicationDeliveryKey,
   PUBLICATION_AUDIT_VERSION,
   sha256Hex,
-  type PublicationArtifact,
 } from "./lib/publicationArtifact";
 import {
   publishedArticlePublicUrl,
@@ -72,6 +71,8 @@ import {
 import { CADENCE_MICRO_SEED_VERSION } from "./lib/cadenceMicroSeed";
 import { correctionInputHash, validatePublishedCorrection, PUBLISHED_CORRECTION_VERSION } from "./lib/publishedCorrection";
 import { validateClaimEvidenceLedger } from "./lib/articleQuality";
+import { artifactSnapshot, REVISION_ARTIFACT_RENDERER_VERSION, revisionArtifactRendererVersion } from "./lib/revisionArtifact";
+export { artifactSnapshot } from "./lib/revisionArtifact";
 import {
   primaryFallbackReceiptFingerprint,
   semanticCandidateExhaustionVerified,
@@ -235,39 +236,6 @@ const legacyAdoptionReceiptValidator = v.object({
   receivedAt: v.number(),
 });
 
-export function artifactSnapshot(
-  article: PublicationArtifact & { title: string; slug: string; markdown: string },
-): PublishedRevisionArtifact {
-  return {
-    title: article.title,
-    slug: article.slug,
-    markdown: article.markdown,
-    articleType: article.articleType,
-    metaTitle: article.metaTitle,
-    metaDescription: article.metaDescription,
-    metaKeywords: "metaKeywords" in article
-      ? (article as { metaKeywords?: string[] }).metaKeywords
-      : undefined,
-    language: article.language,
-    featuredImage: article.featuredImage,
-    reviewedMediaUrls: article.reviewedMediaUrls,
-    readingTime: article.readingTime,
-    wordCount: article.wordCount,
-    factCheckScore: article.factCheckScore,
-    contentScore: article.contentScore,
-    editorialQualityScore: article.editorialQualityScore,
-    mediaQualityStatus: article.mediaQualityStatus,
-    productEvidenceStatus: article.productEvidenceStatus,
-    claimEvidenceStatus: article.claimEvidenceStatus,
-    claimEvidence: article.claimEvidence,
-    researchEvidenceSummary: article.researchEvidenceSummary,
-    productEvidenceHash: article.productEvidenceHash,
-    publicationConfigHash: article.publicationConfigHash,
-    sources: article.sources,
-    internalLinks: article.internalLinks,
-  };
-}
-
 function isFinalRevision(
   revision: Doc<"published_article_revisions">,
 ): boolean {
@@ -284,6 +252,37 @@ function revisionNextAuditVersion(
   revision: Doc<"published_article_revisions">,
 ): number {
   return revision.nextAuditVersion ?? PUBLICATION_AUDIT_VERSION;
+}
+
+function assertRevisionRendererSeal(revision: Doc<"published_article_revisions">) {
+  const base = revision.baseArtifactRendererVersion, next = revision.nextArtifactRendererVersion;
+  revisionArtifactRendererVersion(base);
+  revisionArtifactRendererVersion(next);
+  if (base === undefined && next === undefined) return; // Preserve legacy identity/bytes.
+  if (base === undefined || next === undefined || publishedRevisionKey({
+    siteId: String(revision.siteId), articleId: String(revision.articleId), actionFingerprint: revision.actionFingerprint,
+    kind: revision.kind, baseArtifactHash: revision.baseArtifactHash, nextArtifactHash: revision.nextArtifactHash,
+    baseReceipt: revision.baseReceipt, baseArtifactRendererVersion: base, nextArtifactRendererVersion: next,
+  }) !== revision.revisionKey) throw new Error("Revision artifact renderer changed after sealing");
+}
+
+async function assertRendererRepair(ctx: QueryCtx | MutationCtx, revision: Doc<"published_article_revisions">, article: Doc<"articles">) {
+  const source = revision.rendererRepairOfRevisionId ? await ctx.db.get(revision.rendererRepairOfRevisionId) : null;
+  if (!source || source.siteId !== revision.siteId || source.articleId !== revision.articleId ||
+    !isFinalRevision(source) || !source.receipt || source.kind === "renderer_repair" ||
+    revisionArtifactRendererVersion(source.nextArtifactRendererVersion) !== 1 ||
+    revision.baseArtifactRendererVersion !== 1 || revision.nextArtifactRendererVersion !== REVISION_ARTIFACT_RENDERER_VERSION ||
+    revision.baseArtifactHash !== source.nextArtifactHash || revision.nextArtifactHash !== source.nextArtifactHash ||
+    revisionBaseAuditVersion(revision) !== revisionNextAuditVersion(source) || revisionNextAuditVersion(revision) !== revisionNextAuditVersion(source) ||
+    revision.publicationDate !== source.publicationDate || revision.publicationConfigHash !== source.publicationConfigHash ||
+    revision.baseReceipt.deliveryKey !== source.receipt.deliveryKey || revision.baseReceipt.externalId !== source.receipt.externalId ||
+    JSON.stringify(artifactSnapshot(revision.baseArtifact)) !== JSON.stringify(artifactSnapshot(source.nextArtifact)) ||
+    JSON.stringify(artifactSnapshot(revision.nextArtifact)) !== JSON.stringify(artifactSnapshot(source.nextArtifact))) {
+    throw new Error("Renderer repair lost its exact verified source; prose and audit evidence cannot change");
+  }
+  if (source.kind === "editorial_correction") {
+    await assertCorrectionAudit(ctx, source, article, artifactSnapshot(source.baseArtifact), artifactSnapshot(source.nextArtifact));
+  }
 }
 
 async function latestFinalRevision(
@@ -321,9 +320,11 @@ export async function effectiveBase(
   receipt: PublicationReceipt;
   publicationDate: number;
   auditVersion: number;
+  artifactRendererVersion: number;
 }> {
   const latest = await latestFinalRevision(ctx, article._id);
   if (latest) {
+    assertRevisionRendererSeal(latest);
     const artifact = artifactSnapshot(
       latest.nextArtifact as PublishedRevisionArtifact,
     );
@@ -358,6 +359,7 @@ export async function effectiveBase(
       },
       publicationDate: latest.publicationDate,
       auditVersion: revisionNextAuditVersion(latest),
+      artifactRendererVersion: revisionArtifactRendererVersion(latest.nextArtifactRendererVersion),
     };
   }
 
@@ -386,6 +388,7 @@ export async function effectiveBase(
     receipt,
     publicationDate: article.publicationDate,
     auditVersion,
+    artifactRendererVersion: 1,
   };
 }
 
@@ -887,6 +890,8 @@ export const prepareForCadenceRecovery = internalMutation({
         baseArtifactHash: base.artifactHash,
         nextArtifactHash,
         baseReceipt: base.receipt,
+        baseArtifactRendererVersion: base.artifactRendererVersion,
+        nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
       });
       const duplicate = await ctx.db
         .query("published_article_revisions")
@@ -917,6 +922,8 @@ export const prepareForCadenceRecovery = internalMutation({
           slug: article.slug,
         }),
         baseAuditVersion: base.auditVersion,
+        baseArtifactRendererVersion: base.artifactRendererVersion,
+        nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
         baseArtifactHash: base.artifactHash,
         baseArtifact: base.artifact,
         baseReceipt: base.receipt,
@@ -1182,6 +1189,8 @@ export const prepareForGrowthAction = internalMutation({
       baseArtifactHash: base.artifactHash,
       nextArtifactHash,
       baseReceipt: base.receipt,
+      baseArtifactRendererVersion: base.artifactRendererVersion,
+      nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
     });
     const duplicate = await ctx.db
       .query("published_article_revisions")
@@ -1208,6 +1217,8 @@ export const prepareForGrowthAction = internalMutation({
       publicationDate: base.publicationDate,
       expectedPublicUrl,
       baseAuditVersion: base.auditVersion,
+      baseArtifactRendererVersion: base.artifactRendererVersion,
+      nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
       baseArtifactHash: base.artifactHash,
       baseArtifact: base.artifact,
       baseReceipt: base.receipt,
@@ -1234,6 +1245,53 @@ export const prepareForGrowthAction = internalMutation({
       detail: "Prepared a deterministic revision against the exact immutable publication receipt.",
       revisionId,
     };
+  },
+});
+
+/** One additive v1 -> v2 serialization migration per exact verified revision.
+ * No provider review, new prose, cadence credit, or rewriting old receipts. */
+export const requestRendererRepairInternal = internalMutation({
+  args: { siteId: v.id("sites"), revisionId: v.id("published_article_revisions") },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId), source = await ctx.db.get(args.revisionId);
+    const article = source ? await ctx.db.get(source.articleId) : null;
+    if (!site || !source || !article || source.siteId !== site._id || article.siteId !== site._id ||
+      !articleMatchesCurrentDomain(site, article) || !rolloutAllowsRevision(site) || !await siteExecutionAuthorized(ctx, site) ||
+      !isFinalRevision(source) || !source.receipt || source.kind === "renderer_repair" ||
+      source.baseReceipt.method !== "github" || revisionArtifactRendererVersion(source.nextArtifactRendererVersion) !== 1 ||
+      publicationDeliveryConfigHash(publicationDeliveryConfig(site)) !== source.publicationConfigHash) {
+      throw new Error("Renderer repair requires an exact verified legacy GitHub revision on the current tenant destination");
+    }
+    const baseReceipt: PublicationReceipt = { method: source.receipt.method, deliveryKey: source.receipt.deliveryKey,
+      contentHash: source.receipt.contentHash, externalId: source.receipt.externalId, url: source.receipt.url,
+      status: source.receipt.status, receivedAt: source.receipt.receivedAt };
+    const actionFingerprint = `artifact-renderer-v2:${source.revisionKey}`;
+    const revisionKey = publishedRevisionKey({ siteId: String(site._id), articleId: String(article._id), actionFingerprint,
+      kind: "renderer_repair", baseArtifactHash: source.nextArtifactHash, nextArtifactHash: source.nextArtifactHash, baseReceipt,
+      baseArtifactRendererVersion: 1, nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION });
+    const existing = await ctx.db.query("published_article_revisions").withIndex("by_key", q => q.eq("revisionKey", revisionKey)).unique();
+    if (existing) return { revisionId: existing._id, existing: true };
+    const latest = await latestFinalRevision(ctx, article._id);
+    if (latest?._id !== source._id) throw new Error("Only the latest verified revision can receive a renderer repair");
+    for (const status of ["prepared", "leased", "attempted", "verification_pending", "unverified"] as const) {
+      if (await ctx.db.query("published_article_revisions").withIndex("by_article_status_created", q =>
+        q.eq("articleId", article._id).eq("status", status)).first()) throw new Error("Another revision on this article is unresolved");
+    }
+    const base = await effectiveBase(ctx, site, article);
+    const now = Date.now();
+    const fields = { siteId: site._id, articleId: article._id, rendererRepairOfRevisionId: source._id,
+      actionFingerprint, revisionKey, kind: "renderer_repair" as const, status: "prepared" as const,
+      rolloutEpoch: site.autopilotRolloutEpoch ?? 0, publicationConfigHash: source.publicationConfigHash,
+      publicationDate: source.publicationDate, expectedPublicUrl: source.expectedPublicUrl,
+      baseArtifactHash: base.artifactHash, nextArtifactHash: base.artifactHash,
+      baseArtifact: base.artifact, nextArtifact: base.artifact, baseReceipt,
+      baseAuditVersion: base.auditVersion, nextAuditVersion: base.auditVersion,
+      baseArtifactRendererVersion: 1, nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
+      attempts: 0, liveVerificationAttempts: 0, createdAt: now, updatedAt: now };
+    await assertRendererRepair(ctx, { ...fields, _id: source._id, _creationTime: now }, article);
+    const revisionId = await ctx.db.insert("published_article_revisions", fields);
+    await ctx.scheduler.runAfter(0, internal.publisher.executePublishedRevisionInternal, { revisionId });
+    return { revisionId, existing: false };
   },
 });
 
@@ -1799,10 +1857,12 @@ export const claimExecution = internalMutation({
     ) {
       throw new Error("Published revision artifact snapshot changed after preparation");
     }
+    assertRevisionRendererSeal(revision);
     const currentBase = await effectiveBase(ctx, site, article);
     if (
       currentBase.artifactHash !== revision.baseArtifactHash ||
       currentBase.auditVersion !== revisionBaseAuditVersion(revision) ||
+      currentBase.artifactRendererVersion !== revisionArtifactRendererVersion(revision.baseArtifactRendererVersion) ||
       currentBase.publicationDate !== revision.publicationDate ||
       currentBase.receipt.deliveryKey !== revision.baseReceipt.deliveryKey ||
       currentBase.receipt.externalId !== revision.baseReceipt.externalId
@@ -1827,6 +1887,8 @@ export const claimExecution = internalMutation({
         preservedBase: nextArtifact,
         allowEditorialTitleChange: source.kind === "editorial_correction",
       });
+    } else if (revision.kind === "renderer_repair") {
+      await assertRendererRepair(ctx, revision, article);
     } else if (revision.kind === "editorial_correction") {
       await assertCorrectionAudit(ctx, revision, article, baseArtifact, nextArtifact);
     } else {
@@ -1920,6 +1982,8 @@ export const recordAttempted = internalMutation({
     const targetCurrent = revision && site
       ? await revisionTargetStillCurrent(ctx, site, revision)
       : false;
+    if (revision) assertRevisionRendererSeal(revision);
+    if (revision?.kind === "renderer_repair" && article) await assertRendererRepair(ctx, revision, article);
     if (revision?.kind === "editorial_correction" && article) {
       await assertCorrectionAudit(ctx, revision, article,
         artifactSnapshot(revision.baseArtifact as PublishedRevisionArtifact),
@@ -2377,6 +2441,7 @@ export const requestRollback = mutation({
     ) {
       throw new Error("Only an exact verified tenant revision can be rolled back");
     }
+    if (source.kind === "renderer_repair") throw new Error("A metadata renderer repair cannot be rolled back to stale audit metadata");
     const sourceArticle = await ctx.db.get(source.articleId);
     if (
       !sourceArticle ||
@@ -2418,6 +2483,8 @@ export const requestRollback = mutation({
       baseArtifactHash: source.nextArtifactHash,
       nextArtifactHash,
       baseReceipt: rollbackBaseReceipt,
+      baseArtifactRendererVersion: revisionArtifactRendererVersion(source.nextArtifactRendererVersion),
+      nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
     });
     const existing = await ctx.db
       .query("published_article_revisions")
@@ -2457,6 +2524,8 @@ export const requestRollback = mutation({
       publicationDate: source.publicationDate,
       expectedPublicUrl: source.expectedPublicUrl,
       baseAuditVersion: sourceNextAuditVersion,
+      baseArtifactRendererVersion: revisionArtifactRendererVersion(source.nextArtifactRendererVersion),
+      nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
       baseArtifactHash: source.nextArtifactHash,
       baseArtifact: current,
       baseReceipt: rollbackBaseReceipt,

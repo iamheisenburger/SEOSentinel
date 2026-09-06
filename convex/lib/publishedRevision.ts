@@ -144,6 +144,7 @@ export type PublishedRevisionKind =
   | "improve_snippet"
   | "strengthen_cluster"
   | "editorial_correction"
+  | "renderer_repair"
   | "rollback";
 
 export type PublishedRevisionArtifact = PublicationArtifact & {
@@ -285,7 +286,7 @@ export function validateDeterministicRevision(args: {
   kind: PublishedRevisionKind;
   allowedNewHrefs?: string[];
 }): PublishedRevisionArtifact {
-  if (args.kind === "editorial_correction") {
+  if (args.kind === "editorial_correction" || args.kind === "renderer_repair") {
     throw new Error("Editorial correction requires a completed independent audit, not deterministic revision approval");
   }
   if (
@@ -341,6 +342,8 @@ export function publishedRevisionKey(args: {
   baseArtifactHash: string;
   nextArtifactHash: string;
   baseReceipt: PublicationReceipt;
+  baseArtifactRendererVersion?: number;
+  nextArtifactRendererVersion?: number;
 }): string {
   validatePublicationReceipt(args.baseReceipt);
   return sha256Hex(JSON.stringify({
@@ -353,6 +356,10 @@ export function publishedRevisionKey(args: {
     nextArtifactHash: args.nextArtifactHash,
     baseDeliveryKey: args.baseReceipt.deliveryKey,
     baseExternalId: args.baseReceipt.externalId,
+    ...(args.baseArtifactRendererVersion === undefined && args.nextArtifactRendererVersion === undefined ? {} : {
+      baseArtifactRendererVersion: args.baseArtifactRendererVersion,
+      nextArtifactRendererVersion: args.nextArtifactRendererVersion,
+    }),
   }));
 }
 
@@ -513,11 +520,15 @@ export function rollbackRevisionArtifact(args: {
 
 function decodeHtml(value: string): string {
   return value
-    .replace(/&amp;/gi, "&")
+    .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (entity, hex: string | undefined, decimal: string | undefined) => {
+      const code = Number.parseInt(hex ?? decimal ?? "", hex ? 16 : 10);
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : entity;
+    })
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
     .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">");
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&");
 }
 
 function normalizedHtmlText(value: string): string {
@@ -751,7 +762,7 @@ export function verifyLivePublishedRevision(args: {
       throw new Error("Live rollback has no deterministically verifiable field change");
     }
   }
-  if (args.kind === "editorial_correction") {
+  if (args.kind === "editorial_correction" || args.kind === "renderer_repair") {
     assertExactLiveMetaTitle(args.html, args.next.metaTitle ?? args.next.title);
     assertExactLiveMetaDescription(args.html, args.next.metaDescription);
     verifyLiveCorrectionBody({ html: args.html,

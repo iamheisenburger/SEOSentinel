@@ -1483,9 +1483,13 @@ export default defineSchema({
       v.literal("improve_snippet"),
       v.literal("strengthen_cluster"),
       v.literal("editorial_correction"),
+      v.literal("renderer_repair"),
       v.literal("rollback"),
     ),
     correctionAuditId: v.optional(v.id("published_correction_audits")),
+    rendererRepairOfRevisionId: v.optional(v.id("published_article_revisions")),
+    baseArtifactRendererVersion: v.optional(v.number()),
+    nextArtifactRendererVersion: v.optional(v.number()),
     revisionKey: v.string(),
     status: v.union(
       v.literal("prepared"),

@@ -28,6 +28,7 @@ import {
   wordpressReceiptFromResponse,
 } from "./lib/publicationReceipts";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
+import { revisionArticleRecord } from "./lib/revisionArtifact";
 import {
   PUBLICATION_AUDIT_VERSION,
   assertSupportedPublicationAdapterVersion,
@@ -1499,13 +1500,6 @@ async function publishToWebhook(
 
 type RevisionDoc = Doc<"published_article_revisions">;
 
-function revisionArticleRecord(
-  article: ArticleRecord,
-  artifact: PublishedRevisionArtifact,
-): ArticleRecord {
-  return { ...article, ...artifact };
-}
-
 function revisionReceipt(args: {
   revision: RevisionDoc;
   externalId: string;
@@ -1562,10 +1556,14 @@ async function reviseGitHub(args: {
   const base = revisionArticleRecord(
     args.article,
     args.revision.baseArtifact as PublishedRevisionArtifact,
+    args.revision.baseArtifactRendererVersion,
+    args.revision.baseArtifactHash,
   );
   const next = revisionArticleRecord(
     args.article,
     args.revision.nextArtifact as PublishedRevisionArtifact,
+    args.revision.nextArtifactRendererVersion,
+    args.revision.nextArtifactHash,
   );
   const expectedCurrentContent = buildMdx(
     base,
@@ -1633,6 +1631,8 @@ async function reviseWebhook(args: {
   const next = revisionArticleRecord(
     args.article,
     args.revision.nextArtifact as PublishedRevisionArtifact,
+    args.revision.nextArtifactRendererVersion,
+    args.revision.nextArtifactHash,
   );
   const deliveryKey = publishedRevisionDeliveryKey(args.revision.revisionKey);
   const payload = JSON.stringify({

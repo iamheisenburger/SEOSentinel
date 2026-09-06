@@ -9,7 +9,7 @@ import { correctionInputHash, validateCorrectionDestinations, validatePublishedC
 import { publicationArtifactHash, publicationDeliveryConfig, publicationDeliveryConfigHash,
   PUBLICATION_AUDIT_VERSION, sha256Hex } from "../convex/lib/publicationArtifact.ts";
 import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
-import { verifyLivePublishedRevision, rollbackRevisionArtifact,
+import { verifyLivePublishedRevision, rollbackRevisionArtifact, publishedRevisionKey,
   type PublishedRevisionArtifact } from "../convex/lib/publishedRevision.ts";
 
 type Args = Record<string, unknown>;
@@ -51,6 +51,7 @@ function fixture() {
   const receipt = { method: "github", deliveryKey: `pentra:${"a".repeat(64)}`, contentHash: hash,
     externalId: "base-commit", status: "committed", url: "https://github.com/owner/repo/commit/base", receivedAt: NOW - 1000 };
   tables.articles.push({ ...base, _id: "article", siteId: "site", status: "published", publicationDate: NOW - 1000,
+    publicationConfigSnapshot: publicationDeliveryConfig(site as never),
     productEvidenceSnapshot: "", publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
     publicationReceipt: receipt, publishedContentHash: hash });
   const get = (id: string) => Object.values(tables).flat().find(row => row._id === id) ?? null;
@@ -170,6 +171,8 @@ test("real correction workflow audits exact prose, preserves history and schedul
   assert.equal(f.tables.published_correction_audits[0].status, "passed");
   const revision = f.tables.published_article_revisions[0];
   assert.equal(revision.kind, "editorial_correction");
+  assert.equal(revision.baseArtifactRendererVersion, 1);
+  assert.equal(revision.nextArtifactRendererVersion, 2);
   assert.equal(revision.publicationDate, before[0].publicationDate);
   assert.deepEqual(f.tables.articles, before);
   assert.equal((revision.nextArtifact as Args).contentScore, undefined);
@@ -297,4 +300,49 @@ test("editorial title rollback is explicit and complete prose is verified at the
   verifyLivePublishedRevision({ expectedUrl: url, fetchedUrl: url, html, base, next, kind: "editorial_correction" });
   assert.throws(() => verifyLivePublishedRevision({ expectedUrl: url, fetchedUrl: url,
     html: html.replace(renderSafePublicationHtml(next.markdown), ""), base, next, kind: "editorial_correction" }));
+});
+
+async function legacyVerifiedCorrection() {
+  const f = fixture(); const requested = await f.request(); f.reviewed();
+  await f.run("actions/pipeline", "auditPublishedCorrectionInternal", { auditId: requested.auditId });
+  const row = f.tables.published_article_revisions[0];
+  delete row.baseArtifactRendererVersion; delete row.nextArtifactRendererVersion;
+  row.revisionKey = publishedRevisionKey({ siteId: "site", articleId: "article", actionFingerprint: String(row.actionFingerprint),
+    kind: "editorial_correction", baseArtifactHash: String(row.baseArtifactHash), nextArtifactHash: String(row.nextArtifactHash), baseReceipt: row.baseReceipt as never });
+  row.status = "verified"; row.attemptedAt = NOW;
+  row.receipt = { method: "github", revisionKey: row.revisionKey, deliveryKey: `pentra:${row.revisionKey}`, baseContentHash: row.baseArtifactHash,
+    baseExternalId: (row.baseReceipt as Args).externalId, contentHash: row.nextArtifactHash, externalId: "legacy-correction-commit",
+    status: "committed", url: "https://github.com/owner/repo/commit/legacy", receivedAt: NOW };
+  f.advance(1000);
+  return { ...f, source: row, repair: () => f.run("publishedRevisions", "requestRendererRepairInternal", { siteId: "site", revisionId: row._id }) };
+}
+
+test("renderer repair is additive, once per verified source, with no paid review or cadence mutation", async () => {
+  const f = await legacyVerifiedCorrection(), original = structuredClone(f.tables.articles), health = structuredClone(f.tables.autopilot_health);
+  const source = structuredClone(f.source), calls = f.requests.length;
+  const result = await f.repair();
+  assert.equal((await f.repair()).revisionId, result.revisionId);
+  assert.equal(f.tables.published_article_revisions.length, 2);
+  const revision = f.get(String(result.revisionId))!;
+  assert.equal(revision.kind, "renderer_repair");
+  assert.equal(revision.baseArtifactHash, revision.nextArtifactHash);
+  assert.deepEqual(revision.nextArtifact, f.source.nextArtifact);
+  assert.equal(revision.baseArtifactRendererVersion, 1); assert.equal(revision.nextArtifactRendererVersion, 2);
+  await f.run("publishedRevisions", "claimExecution", { revisionId: revision._id, leaseOwner: "repair" });
+  await f.run("publishedRevisions", "recordAttempted", { revisionId: revision._id, leaseOwner: "repair" });
+  assert.equal(f.requests.length, calls);
+  assert.deepEqual(f.tables.articles, original); assert.deepEqual(f.tables.autopilot_health, health); assert.deepEqual(f.source, source);
+});
+
+test("renderer repair rejects stale sources, cross-tenant requests and changed proof at both write fences", async () => {
+  const f = await legacyVerifiedCorrection();
+  await assert.rejects(f.run("publishedRevisions", "requestRendererRepairInternal", { siteId: "other", revisionId: f.source._id }));
+  f.source.status = "verification_pending"; await assert.rejects(f.repair()); f.source.status = "verified";
+  const result = await f.repair(), revision = f.get(String(result.revisionId))!;
+  revision.nextArtifactRendererVersion = 1;
+  await assert.rejects(f.run("publishedRevisions", "claimExecution", { revisionId: revision._id, leaseOwner: "repair" }), /renderer changed/);
+  revision.nextArtifactRendererVersion = 2;
+  await f.run("publishedRevisions", "claimExecution", { revisionId: revision._id, leaseOwner: "repair" });
+  (revision.nextArtifact as Args).markdown = "Injected prose";
+  await assert.rejects(f.run("publishedRevisions", "recordAttempted", { revisionId: revision._id, leaseOwner: "repair" }), /exact verified source/);
 });

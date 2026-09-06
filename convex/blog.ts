@@ -2,6 +2,7 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { publicRevisionProjection, projectPublicArticleRows } from "./lib/publicRevisionProjection";
 import {
   articleMatchesCurrentDomain,
   siteCanonicalDomain,
@@ -155,16 +156,15 @@ export const listPublishedByDomain = query({
     const published = useSummaries
       ? await currentPublishedSummaries(ctx, site)
       : await currentPublishedArticles(ctx, site);
-    return published.map((a) => ({
+    const projected = await projectPublicArticleRows(ctx, site, published);
+    return projected.map((a) => ({
         _id: "articleId" in a ? a.articleId : a._id,
         title: a.title,
         slug: normalizeSlug(a.slug || ""),
         metaDescription: a.metaDescription,
         featuredImage: a.featuredImage,
         readingTime: a.readingTime,
-        createdAt: "articleCreatedAt" in a
-          ? a.publishedAt ?? a.articleCreatedAt
-          : a.publishedAt ?? a.createdAt,
+        createdAt: a.publishedAt ?? ("articleCreatedAt" in a ? a.articleCreatedAt : a.createdAt),
       }));
   },
 });
@@ -182,11 +182,12 @@ export const listPublishedSlugs = query({
     const published = useSummaries
       ? await currentPublishedSummaries(ctx, site)
       : await currentPublishedArticles(ctx, site);
-    const articles = published.map((a) => ({
+    const projected = await projectPublicArticleRows(ctx, site, published);
+    const articles = projected.map((a) => ({
         slug: normalizeSlug(a.slug || ""),
-        updatedAt: "articleUpdatedAt" in a
-          ? a.publishedAt ?? a.articleUpdatedAt ?? a.articleCreatedAt
-          : a.publishedAt ?? a.updatedAt ?? a.createdAt,
+        updatedAt: "articleId" in a
+          ? Math.max(a.publishedAt ?? 0, a.articleUpdatedAt ?? 0, a.articleCreatedAt)
+          : Math.max(a.publishedAt ?? 0, a.updatedAt ?? 0, a.createdAt),
       }));
     return { articles, urlStructure };
   },
@@ -199,16 +200,19 @@ export const getPublishedBySlug = query({
     if (!site) return null;
 
     const normalizedSlug = normalizeSlug(slug);
-    const article = await currentArticleBySlug(ctx, site, normalizedSlug);
+    const original = await currentArticleBySlug(ctx, site, normalizedSlug);
     if (
-      !article ||
-      article.status !== "published" ||
-      !articleMatchesCurrentDomain(site, article)
+      !original ||
+      original.status !== "published" ||
+      !articleMatchesCurrentDomain(site, original)
     ) return null;
+    const article = await publicRevisionProjection(ctx, site, original);
+    if (!article) return null;
 
     return {
       _id: article._id,
       title: article.title,
+      metaTitle: article.metaTitle,
       slug: normalizeSlug(article.slug || ""),
       markdown: article.markdown,
       metaDescription: article.metaDescription,

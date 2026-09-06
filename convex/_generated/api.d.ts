@@ -115,6 +115,7 @@ import type * as lib_planProviderSettlement from "../lib/planProviderSettlement.
 import type * as lib_planSiteAllowance from "../lib/planSiteAllowance.js";
 import type * as lib_plannedTopicEvidenceRecovery from "../lib/plannedTopicEvidenceRecovery.js";
 import type * as lib_providerSpendReservation from "../lib/providerSpendReservation.js";
+import type * as lib_publicRevisionProjection from "../lib/publicRevisionProjection.js";
 import type * as lib_publicationArtifact from "../lib/publicationArtifact.js";
 import type * as lib_publicationLease from "../lib/publicationLease.js";
 import type * as lib_publicationLive from "../lib/publicationLive.js";
@@ -122,6 +123,7 @@ import type * as lib_publicationReceipts from "../lib/publicationReceipts.js";
 import type * as lib_publishedCorrection from "../lib/publishedCorrection.js";
 import type * as lib_publishedRevision from "../lib/publishedRevision.js";
 import type * as lib_publisherProvisioning from "../lib/publisherProvisioning.js";
+import type * as lib_revisionArtifact from "../lib/revisionArtifact.js";
 import type * as lib_safeMarkdownHtml from "../lib/safeMarkdownHtml.js";
 import type * as lib_safeOutbound from "../lib/safeOutbound.js";
 import type * as lib_schedulerTopicReadiness from "../lib/schedulerTopicReadiness.js";
@@ -269,6 +271,7 @@ declare const fullApi: ApiFromModules<{
   "lib/planSiteAllowance": typeof lib_planSiteAllowance;
   "lib/plannedTopicEvidenceRecovery": typeof lib_plannedTopicEvidenceRecovery;
   "lib/providerSpendReservation": typeof lib_providerSpendReservation;
+  "lib/publicRevisionProjection": typeof lib_publicRevisionProjection;
   "lib/publicationArtifact": typeof lib_publicationArtifact;
   "lib/publicationLease": typeof lib_publicationLease;
   "lib/publicationLive": typeof lib_publicationLive;
@@ -276,6 +279,7 @@ declare const fullApi: ApiFromModules<{
   "lib/publishedCorrection": typeof lib_publishedCorrection;
   "lib/publishedRevision": typeof lib_publishedRevision;
   "lib/publisherProvisioning": typeof lib_publisherProvisioning;
+  "lib/revisionArtifact": typeof lib_revisionArtifact;
   "lib/safeMarkdownHtml": typeof lib_safeMarkdownHtml;
   "lib/safeOutbound": typeof lib_safeOutbound;
   "lib/schedulerTopicReadiness": typeof lib_schedulerTopicReadiness;

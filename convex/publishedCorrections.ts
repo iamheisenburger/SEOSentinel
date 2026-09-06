@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { REVISION_ARTIFACT_RENDERER_VERSION } from "./lib/revisionArtifact";
 import { artifactSnapshot, effectiveBase, rolloutAllowsRevision, recentTenantRevisionCount } from "./publishedRevisions";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
@@ -142,7 +143,8 @@ export const completeAuditInternal = internalMutation({
     const nextArtifactHash = publicationArtifactHash(next);
     const revisionKey = publishedRevisionKey({ siteId: String(row.siteId), articleId: String(row.articleId),
       actionFingerprint: row.inputHash, kind: "editorial_correction", baseArtifactHash: c.base.artifactHash,
-      nextArtifactHash, baseReceipt: c.base.receipt });
+      nextArtifactHash, baseReceipt: c.base.receipt,
+      baseArtifactRendererVersion: c.base.artifactRendererVersion, nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION });
     const revisionId = await ctx.db.insert("published_article_revisions", {
       siteId: row.siteId, articleId: row.articleId, correctionAuditId: row._id,
       actionFingerprint: row.inputHash, kind: "editorial_correction", revisionKey, status: "prepared",
@@ -150,6 +152,7 @@ export const completeAuditInternal = internalMutation({
       publicationDate: c.base.publicationDate,
       expectedPublicUrl: publishedArticlePublicUrl({ domain: c.site.domain, urlStructure: c.site.urlStructure, slug: next.slug }),
       baseAuditVersion: c.base.auditVersion, baseArtifactHash: c.base.artifactHash,
+      baseArtifactRendererVersion: c.base.artifactRendererVersion, nextArtifactRendererVersion: REVISION_ARTIFACT_RENDERER_VERSION,
       baseArtifact: c.base.artifact, baseReceipt: c.base.receipt,
       nextArtifactHash, nextAuditVersion: PUBLICATION_AUDIT_VERSION, nextArtifact: next,
       attempts: 0, liveVerificationAttempts: 0, createdAt: now, updatedAt: now,
