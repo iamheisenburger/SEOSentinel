@@ -812,3 +812,37 @@ All 1,287 tests, type-check, zero-error lint (157 existing warnings), additive
 schema check, secret scan, dependency audit, production build and deployment
 dry-run passed. Public browser acceptance remains ten passed and two
 explicitly skipped authenticated harness checks.
+
+### Signed-in production recovery acceptance, September 6 at 14:55 UTC
+
+Release `ecc466c559b3c957f40ab3faf4480bb03f8f0a2d` passed GitHub quality
+run `34040454492` at 14:54:01 UTC, Vercel production deployment
+`6294312814`, and the Convex deployment. The safe production projection
+confirmed the old plan's actual currency reason: `planning_context_changed`.
+Native Chrome displayed the new `Retry content plan` action with its current
+business-settings and provider-capacity disclosure. The authorized click at
+14:54:55.484 UTC produced exactly one successor authorization, generation 2,
+under the same configuration revision 1. No cadence or connection setting
+was changed and no prospect was contacted.
+
+The ordinary setup queue then returned `provider_account_daily_budget_reserved`.
+Execution `qh77pw8kay2y67rxy2j3v1kesx8dbf84` is durably `pending` with
+`nextEligibleAt=1788739201000`, September 7 at 00:00:01 UTC. There is no
+new bound plan job and no paid provider request was made. This is Pentra's
+internal reservation ceiling, not evidence of an empty OpenAI/Anthropic
+wallet. The historical failed job remains byte-equivalent under canonical
+JSON hashing before and after the customer action:
+`6f74f6fda790a755e97e60f5ee6aae19a1d34a5ad0b8284592861a54d01ccfda`.
+
+The page initially showed only generic preparation text for this scheduled
+wait. A read-only UI change and actual React server-render test now expose
+the internal-allowance distinction, automatic retry time, and no-repeat-click
+instruction while leaving running/completed executions unchanged. This is
+truthful wait reporting, not a completed plan or successful replenishment.
+Sustained inventory replenishment, the known public article correction,
+clean generic new-user acceptance and measured SEO growth remain open.
+The wait-reporting change passed 1,288 repository tests, type-check,
+zero-error lint (157 existing warnings), additive schema check, dependency
+audit, production build and ten public Playwright checks. The two authenticated
+harness checks remain explicitly skipped; the signed-in Chrome action above
+is separate production acceptance evidence.

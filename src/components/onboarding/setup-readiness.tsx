@@ -154,6 +154,16 @@ export function SetupReadiness({
   const actionStages = readiness.stages.filter(
     (stage) => stage.actionRequiredBy && stage.actionMessage,
   );
+  const planningWait = readiness.initialPlanExecution?.status === "pending" &&
+      readiness.initialPlanExecution.nextEligibleAt &&
+      readiness.initialPlanExecution.blockerCode
+    ? readiness.initialPlanExecution : null;
+  const waitingForBudget = planningWait && [
+    "provider_daily_budget_reserved", "provider_account_daily_budget_reserved",
+    "provider_fleet_daily_budget_reserved", "provider_account_monthly_budget_reserved",
+    "provider_fleet_monthly_budget_reserved", "plan_headroom_exhausted",
+    "article_quota_no_headroom",
+  ].includes(planningWait.blockerCode!);
 
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
@@ -274,6 +284,18 @@ export function SetupReadiness({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {planningWait && (
+        <div role="status" className="mt-3 rounded-lg border border-[#38BDF8]/15 bg-[#38BDF8]/[0.04] px-3 py-2.5 text-[10px] leading-relaxed text-[#8B8FA3]">
+          <p className="font-medium text-[#38BDF8]">Planning is waiting—not currently generating</p>
+          <p className="mt-1">
+            {waitingForBudget
+              ? "Pentra's internal planning allowance is reserved. This is separate from your provider wallet balance; adding provider credits does not reset this allowance."
+              : "The current planning attempt is queued for a later automatic retry."}
+          </p>
+          <p className="mt-1">Automatic retry: {new Date(planningWait.nextEligibleAt!).toLocaleString()}. No repeat click is needed.</p>
         </div>
       )}
 
