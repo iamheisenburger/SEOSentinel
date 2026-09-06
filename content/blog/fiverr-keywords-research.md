@@ -3,16 +3,15 @@ title: "Fiverr Keyword Research: A Seller's Testing Worksheet"
 metaTitle: "Fiverr Keyword Research: A Seller's Testing Worksheet"
 description: "Use this seller worksheet to assess service-fit keywords, record research observations, test clear wording, and review results without guessing at rankings."
 generator: "pentra"
-pentraDeliveryKey: "pentra:77e3e393117d5c3d56d3c5528289d48d3e77527e94ee0815f065c3df5721eefb"
+pentraDeliveryKey: "pentra:852b0aed01ecd47086dbfd6c1d9bd9dc7e1745d38dc8229129a3a9fa1eedf499"
 status: "published"
 qualityGateVersion: 7
-auditedContentHash: "9f7a8c24be946031978e75e3d8dbd34346adaa5339b9bdbd3d43d0608cb78c65"
+auditedContentHash: "f6c8f49cdfe89851b2e49ddc71dca99937e4027b021adee7a09ee3926056bbc1"
 canonicalUrl: "https://pentra.dev/blog/fiverr-keywords-research"
 featuredImage: "https://wary-starfish-773.convex.cloud/api/storage/dda9513e-c7d5-4c92-b690-24401fd4814f"
 readingTime: 8
 wordCount: 1762
 factCheckScore: 100
-contentScore: 78
 editorialQualityScore: 88
 mediaQualityStatus: "passed"
 language: "en"
