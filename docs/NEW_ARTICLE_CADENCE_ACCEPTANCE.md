@@ -97,6 +97,67 @@ tests execute new-site creation, consent, and durable setup handlers across
 all supported integer cadences (1–21/week), owner isolation, configuration
 supersession, browser closure, and delayed billing reconciliation.
 
-These local checks do not complete the goal. Pentra still needs production
-re-audit, sealed inventory, new-article delivery, and continued replenishment.
-The revised customer authentication path needs live deployment acceptance.
+These checks do not complete the goal. Pentra still needs production re-audit,
+sealed inventory, new-article delivery, and continued replenishment.
+
+### Bound deployment and live settings result, 11:40 UTC
+
+- Source: `7c3e345436a897d55a7b8342f39f33b3cac41180`.
+- GitHub quality run `34030726615`: succeeded. All 1,219 tests passed;
+  type-check, additive schema, secret scan, dependency audit and production
+  build passed. Lint: zero errors, 159 existing warnings. Public Playwright:
+  10 passed, two authenticated harness cases skipped; separate signed-in
+  production browser checks are recorded below.
+- Convex deployment to `wary-starfish-773`: succeeded.
+- GitHub production deployment `6292458647`: succeeded at 11:37:06 UTC;
+  Vercel deployment `BVFdRxV8SozBAFHPwZd7nuGfpk2G`, served by `pentra.dev`.
+- A fresh signed-in page load visibly transitioned from "Connecting your
+  workspace" to settings, with no new Convex authentication/capacity errors.
+  LeadPilot retained 21/week and Pentra retained 7/week; both showed GitHub
+  connected. No settings were changed and no accounts were signed out.
+- LeadPilot ordinary refill reached four sealed ready articles. The preserved
+  funded job completed with `buffer_ready`, and a distinct refill job started.
+- Pentra's saved draft still had its deployed-v15 failed ledger at the last
+  read. Running the patched validator locally against that exact saved prose,
+  ledger and hashed evidence passed with zero defects. This is a reproduction
+  check, not a production seal or publication receipt. A different ordinary
+  article job was already in flight when the repair deployed; the one-shot
+  v16 re-audit must still be observed through normal scheduling.
+
+The provider funding blocker and browser-control blocker are resolved. The
+autonomous new-article cadence goal remains active and incomplete.
+
+### Production delivery and recovery, 11:45–11:47 UTC
+
+Pentra automatically published new article `j575539aga6nqkh50v4md4e4rs8dx8wf`
+at 11:45:12.262 UTC, through GitHub commit
+`8e117276cf6cecc867f6cff56b6b57b5340a45d2`. Its exact content receipt hash is
+`9f7a8c24be946031978e75e3d8dbd34346adaa5339b9bdbd3d43d0608cb78c65`.
+The 1,870-word article passed editorial (88), fact review (86), claim evidence,
+media and publication gates, with quality recovery version 16. The durable
+public-URL verification and an independent HTTP 200/title/canonical check both
+confirm https://pentra.dev/blog/fiverr-keywords-research.
+
+This is recovery of an overdue delivery, not an on-time result: the prior due
+time was 09:35:25.931 UTC. The next normal 7/week deadline is September 7 at
+11:45:12.262 UTC. Publication was not manually triggered.
+
+The scheduler then admitted recovery job `j975kwv74v8aj1hewxkxah45e58dxwfc` for
+the previously stranded draft `j571r4bvpd7fydzxcz7ey5cs3h8dxnxb`, persisting
+attempt version 16 before worker execution. At 11:47:10.421 UTC the same draft
+became ready with editorial score 88, fact score 100, passed claim evidence,
+passed publication gates and no gate issues. Its total revision count is 3;
+the migration did not reset history or create a replacement article.
+
+### Markdown-preserving citation cleanup
+
+A separate quality defect was reproduced from the deployed cleanup function:
+pruning `[1]: URL` with no external source removed only the marker and left a
+visible `: URL` line; its global whitespace cleanup also changed code indentation
+and numeric examples. The replacement uses Markdown source ranges, preserves
+code/images/ordinary links and formatting, removes unbound reference metadata
+as a unit, and preserves verified citation slots. Claim detection uses the same
+Markdown boundaries, so literal code cannot become a phantom citation or pass
+as evidence. Tests cover native and bundled execution, escaped literals,
+reference and inline links, adjacent/mixed slots, idempotence and malformed
+source counts. This change does not lower any publication-quality threshold.

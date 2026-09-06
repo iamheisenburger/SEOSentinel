@@ -1,5 +1,6 @@
 import { classifyEvidenceSource } from "./sourceQuality.ts";
 import { sha256Hex } from "./publicationArtifact.ts";
+import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -366,17 +367,14 @@ function claimSentenceSegments(value: string): string[] {
 
 function citationBoundClaimSegments(value: string, citation: number): string[] {
   return claimSentenceSegments(value).flatMap((segment) => {
-    for (const match of segment.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
-      const ordinals = match[1]
-        .split(",")
-        .map((raw) => Number(raw.trim()));
-      if (ordinals.includes(citation)) {
+    for (const marker of markdownCitationMarkers(segment)) {
+      if (marker.numbers.includes(citation)) {
         // A citation closes the sourced proposition. Conditional advice often
         // follows after the marker in the same typographic sentence (for
         // example, an em-dash followed by "check this yourself"). Exclude that
         // trailing advice from source-similarity math while separately auditing
         // every citation-free factual sentence below.
-        return [segment.slice(0, (match.index ?? 0) + match[0].length).trim()];
+        return [segment.slice(0, marker.end).trim()];
       }
     }
     return [];
@@ -424,16 +422,7 @@ function exactClaimDetailsPresent(claim: string, evidence: string): boolean {
 }
 
 export function inlineCitationNumbers(value: string): number[] {
-  const numbers: number[] = [];
-  for (const match of value.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
-    for (const raw of match[1].split(",")) {
-      const citation = Number(raw.trim());
-      if (Number.isInteger(citation) && citation > 0 && !numbers.includes(citation)) {
-        numbers.push(citation);
-      }
-    }
-  }
-  return numbers;
+  return [...new Set(markdownCitationMarkers(value).flatMap(marker => marker.numbers))];
 }
 
 /**
@@ -445,28 +434,12 @@ export function removeUnverifiedInlineCitations(
   markdown: string,
   sourceCount: number,
 ): string {
-  const maximum = Math.max(0, Math.floor(sourceCount));
-  return markdown
-    .replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_match, raw: string) => {
-      const verified = raw
-        .split(",")
-        .map((value) => Number(value.trim()))
-        .filter(
-          (value, index, values) =>
-            Number.isInteger(value) &&
-            value >= 1 &&
-            value <= maximum &&
-            values.indexOf(value) === index,
-        );
-      return verified.length > 0 ? `[${verified.join(", ")}]` : "";
-    })
-    .replace(/[ \t]+([,.;:!?])/g, "$1")
-    .replace(/[ \t]{2,}/g, " ");
+  return removeUnverifiedMarkdownCitations(markdown, sourceCount);
 }
 
 function isReaderMeasurementInstruction(paragraph: string): boolean {
   if (
-    INLINE_CITATION_PATTERN.test(paragraph) ||
+    inlineCitationNumbers(paragraph).length > 0 ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph)
   ) {
     return false;
@@ -509,7 +482,7 @@ function isExplicitAuthorFramework(
   productEvidence: string,
 ): boolean {
   if (
-    INLINE_CITATION_PATTERN.test(paragraph) ||
+    inlineCitationNumbers(paragraph).length > 0 ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
     HYPE_PATTERN.test(paragraph) ||
     QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
@@ -530,7 +503,7 @@ function isExplicitAuthorFramework(
 
 function isReaderRunProcedure(paragraph: string, productEvidence: string): boolean {
   if (
-    INLINE_CITATION_PATTERN.test(paragraph) ||
+    inlineCitationNumbers(paragraph).length > 0 ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph) ||
     HYPE_PATTERN.test(paragraph) ||
     QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
@@ -591,7 +564,7 @@ function referencesNamedProduct(value: string, productEvidence: string): boolean
 
 function hasEvidenceClaimSignal(value: string, productEvidence: string): boolean {
   return (
-    INLINE_CITATION_PATTERN.test(value) ||
+    inlineCitationNumbers(value).length > 0 ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||
     FACTUAL_CLAIM_PATTERN.test(value) ||
     HYPE_PATTERN.test(value) ||
@@ -838,7 +811,6 @@ const QUANTIFIED_OUTCOME_PATTERN =
   /(?:\b(?:increase|improve|boost|grow|lift|raise|reduce|decrease|cut|save|recover|free up)\w*\b[^\n.!?]{0,70}\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\b|minutes?\b|days?\b|\$))|(?:\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*(?:%|x\b|hours?\s*(?:\/|per)\s*week)\b)/i;
 const EVIDENCE_REQUIRED_NUMBER_PATTERN =
   /(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\$?\d[\d,]*(?:\.\d+)?)?|\b\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\d[\d,]*(?:\.\d+)?)?\s*\+?\s*(?:%|x|[-‑–— ]?(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|questions?|conversations?|orders?|customers?|users?|visitors?|leads?|calls?|employees?|responses?|messages?|sessions?|articles?|posts?|points?|scores?))|\b\d+(?:\s*\/\s*\d+)+\s*(?:points?|scores?)\b|\b(?:above|below|under|over|at\s+least|at\s+most|more\s+than|fewer\s+than)\s+\d+(?:\.\d+)?\b)(?![\w])/i;
-const INLINE_CITATION_PATTERN = /\[\d+(?:\s*,\s*\d+)*\]/;
 const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
 const DANGLING_META_END_PATTERN =
   /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that)$/i;
@@ -1043,7 +1015,7 @@ function quantifiedParagraphs(markdown: string): string[] {
 export function uncitedEvidenceRequiredParagraphs(markdown: string): string[] {
   return quantifiedParagraphs(markdown).filter(
     (paragraph) =>
-      !INLINE_CITATION_PATTERN.test(paragraph) &&
+      inlineCitationNumbers(paragraph).length === 0 &&
       !EXTERNAL_LINK_PATTERN.test(paragraph),
   );
 }
