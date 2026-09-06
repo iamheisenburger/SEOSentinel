@@ -13,6 +13,7 @@ import {
   topicPlanProviderReservationTriggerFromPayload,
 } from "./planProviderBudget";
 import { reserveSharedProviderBudget } from "./providerSpendReservation";
+import { retireSingleExecutionPlanContingencies } from "./planProviderSettlement.ts";
 import {
   siteExecutionActive,
   siteExecutionAuthorized,
@@ -262,6 +263,7 @@ export async function reservePlanProviderBudget(
     };
   }
 
+  await retireSingleExecutionPlanContingencies(ctx, site, timestamp);
   const shared = await reserveSharedProviderBudget(ctx, {
     siteId: site._id,
     userId: site.userId,

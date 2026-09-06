@@ -109,6 +109,7 @@ import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
 import type * as lib_planCandidateCheckpoint from "../lib/planCandidateCheckpoint.js";
 import type * as lib_planProviderBudget from "../lib/planProviderBudget.js";
 import type * as lib_planProviderReservation from "../lib/planProviderReservation.js";
+import type * as lib_planProviderSettlement from "../lib/planProviderSettlement.js";
 import type * as lib_planSiteAllowance from "../lib/planSiteAllowance.js";
 import type * as lib_plannedTopicEvidenceRecovery from "../lib/plannedTopicEvidenceRecovery.js";
 import type * as lib_providerSpendReservation from "../lib/providerSpendReservation.js";
@@ -258,6 +259,7 @@ declare const fullApi: ApiFromModules<{
   "lib/planCandidateCheckpoint": typeof lib_planCandidateCheckpoint;
   "lib/planProviderBudget": typeof lib_planProviderBudget;
   "lib/planProviderReservation": typeof lib_planProviderReservation;
+  "lib/planProviderSettlement": typeof lib_planProviderSettlement;
   "lib/planSiteAllowance": typeof lib_planSiteAllowance;
   "lib/plannedTopicEvidenceRecovery": typeof lib_plannedTopicEvidenceRecovery;
   "lib/providerSpendReservation": typeof lib_providerSpendReservation;

@@ -100,6 +100,40 @@ test("unchanged verified non-GitHub connections are not erased by a schedule edi
   }
 });
 
+test("full settings form resubmission compares unchanged lists by value", async () => {
+  const unchanged = {
+    siteName: "Example", niche: "Business software", tone: "Professional",
+    language: "en", autopilotEnabled: true, approvalRequired: false,
+    ctaText: "Get started", ctaUrl: "https://example.org/signup",
+    urlStructure: "/blog/[slug]", externalLinking: true, sourceCitations: true,
+    youtubeEmbeds: false, brandPrimaryColor: "#111111", brandAccentColor: "#222222",
+    brandFontFamily: "Inter", targetCountry: "United States",
+    targetAudienceSummary: "Small businesses",
+    painPoints: ["Repetitive administration"], competitors: ["example.com"],
+    anchorKeywords: ["workflow automation", "business workflows"],
+  };
+  const f = fixture(structuredClone(unchanged));
+  await f.run({ ...structuredClone(unchanged), cadencePerWeek: 14 });
+  assert.equal(f.site.autopilotRolloutMode, "live");
+  assert.equal(f.site.autopilotRolloutEpoch, 6);
+  assert.ok(f.scheduled.some(s => s.name === "autopilot:dispatchSiteFollowup"));
+  const noChange = fixture(structuredClone(unchanged));
+  await noChange.run({ ...structuredClone(unchanged), cadencePerWeek: 7 });
+  assert.equal(noChange.site.autopilotRolloutEpoch, 5);
+  assert.equal(noChange.site.autopilotRolloutMode, "live");
+  assert.equal(noChange.job.status, "pending");
+  assert.equal(noChange.scheduled.length, 0);
+  for (const changed of [[], ["different topic"], ["business workflows", "workflow automation"]]) {
+    const changedFixture = fixture(structuredClone(unchanged));
+    await changedFixture.run({ ...structuredClone(unchanged), anchorKeywords: changed, cadencePerWeek: 14 });
+    assert.equal(changedFixture.site.autopilotRolloutMode, "observe");
+  }
+  assert.equal(retainsRolloutForCadenceEdit(
+    { ...fixture().site, futureConfig: { enabled: true } },
+    { cadencePerWeek: 14, futureConfig: { enabled: true } },
+  ), false);
+});
+
 test("disabling automation cancels old jobs and cannot schedule paid work or publication", async () => {
   const f = fixture();
   await f.run({ autopilotEnabled: false });

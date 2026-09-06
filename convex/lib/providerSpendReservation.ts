@@ -84,7 +84,8 @@ export type ProviderReservationReleaseReason =
   | "one_setup_planning_context_superseded_before_execution";
 
 export type ProviderReservationSettlementReason =
-  | "verified_provider_receipt_actual_cost";
+  | "verified_provider_receipt_actual_cost"
+  | "single_execution_plan_contingency_retired";
 
 export type SharedProviderPurpose =
   | "topic_plan"
@@ -198,9 +199,9 @@ type ProviderReservationLedgerRow = {
 };
 
 /**
- * Capacity consumption is fail-closed until an exact provider receipt exists.
- * A verified receipt may lower consumption to its actual charge, but can never
- * enlarge, erase, or release the immutable reservation audit record.
+ * Capacity consumption is fail-closed until a settlement receipt exists.
+ * Actual provider cost or the complete ceiling of a permanently closed
+ * execution may lower consumption, but never erase the immutable reservation.
  */
 export function providerReservationConsumedMicroUsd(
   row: Pick<ProviderReservationLedgerRow, "reservedMicroUsd" | "settledMicroUsd">,
@@ -260,9 +261,10 @@ export function summarizeProviderReservationLedger(
 }
 
 /**
- * Settle a reservation only after the caller has atomically validated and
- * committed an exact provider receipt. Replays are idempotent when the exact
- * same cost is supplied; any conflicting settlement fails closed.
+ * Settle only after an atomically validated provider-cost receipt or permanent
+ * execution-close proof. Contingency retirement keeps the full executed cost
+ * ceiling and is explicitly not a claim about actual billed spend. Replays
+ * require the same amount and reason; conflicting settlement fails closed.
  */
 export async function settleSharedProviderReservation(
   ctx: MutationCtx,

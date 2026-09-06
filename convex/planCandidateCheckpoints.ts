@@ -244,6 +244,8 @@ async function exactReservation(
     reservation.reservationDay === job.providerCostReservationDay &&
     reservation.createdAt === job.createdAt &&
     reservation.releasedAt === undefined &&
+    reservation.settledAt === undefined &&
+    reservation.settledMicroUsd === undefined &&
     job.providerCostCeilingMicroUsd ===
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD &&
     job.providerCostReservedMicroUsd ===

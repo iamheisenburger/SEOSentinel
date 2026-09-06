@@ -1,13 +1,27 @@
-import { mutation } from "./_generated/server";
+import { internalMutation, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { reservePlanProviderBudget } from "./lib/planProviderReservation";
+import { retireSingleExecutionPlanContingencies } from "./lib/planProviderSettlement.ts";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import {
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
 } from "./lib/siteDomainBinding";
 
 const now = () => Date.now();
+
+/** Provider-free catch-up; ordinary queue admission uses the same reducer. */
+export const reconcileClosedPlanReservations = internalMutation({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      return { examined: 0, retired: 0, reclaimedMicroUsd: 0 };
+    }
+    return await retireSingleExecutionPlanContingencies(ctx, site, now());
+  },
+});
 
 export const queuePlanGeneration = mutation({
   args: { siteId: v.id("sites") },

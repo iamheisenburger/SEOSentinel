@@ -40,7 +40,7 @@ import {
   warmAutopilotReadiness,
 } from "./lib/autopilotReadiness";
 import { approvedBufferPolicy } from "./lib/autopilotBuffer.ts";
-import { retainsRolloutForCadenceEdit } from "./lib/cadenceSettings.ts";
+import { retainsRolloutForCadenceEdit, siteSettingValuesEqual } from "./lib/cadenceSettings.ts";
 import {
   autonomousOutreachTransportIssues,
   outreachDeletionGate,
@@ -719,7 +719,7 @@ function deliveryConfigChanged(
   patch: Record<string, unknown>,
 ): boolean {
   return Object.entries(patch).some(
-    ([key, value]) => DELIVERY_CONFIG_KEYS.has(key) && site[key] !== value,
+    ([key, value]) => DELIVERY_CONFIG_KEYS.has(key) && !siteSettingValuesEqual(site[key], value),
   );
 }
 
@@ -729,7 +729,7 @@ function publisherConnectionChanged(
 ): boolean {
   return Object.entries(patch).some(
     ([key, value]) =>
-      PUBLISHER_CONNECTION_KEYS.has(key) && site[key] !== value,
+      PUBLISHER_CONNECTION_KEYS.has(key) && !siteSettingValuesEqual(site[key], value),
   );
 }
 
