@@ -40,6 +40,7 @@ import type * as growthLoop from "../growthLoop.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
+import type * as lib_articleExecutionBudget from "../lib/articleExecutionBudget.js";
 import type * as lib_articleGenerationAttempt from "../lib/articleGenerationAttempt.js";
 import type * as lib_articleProviderFailure from "../lib/articleProviderFailure.js";
 import type * as lib_articleQuality from "../lib/articleQuality.js";
@@ -191,6 +192,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   jobs: typeof jobs;
   "lib/accountDeletion": typeof lib_accountDeletion;
+  "lib/articleExecutionBudget": typeof lib_articleExecutionBudget;
   "lib/articleGenerationAttempt": typeof lib_articleGenerationAttempt;
   "lib/articleProviderFailure": typeof lib_articleProviderFailure;
   "lib/articleQuality": typeof lib_articleQuality;

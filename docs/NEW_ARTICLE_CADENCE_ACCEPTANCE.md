@@ -206,3 +206,71 @@ production settings acceptance is recorded above. Lint remains at zero errors
 and 159 pre-existing warnings. Running the new registered-handler tests against
 the previous mutation reproduced two failures; the repaired mutation passes all
 three runtime cases.
+
+### Bound execution-budget release and controlled recovery, 12:09 UTC
+
+The execution-budget repair is deployed as
+`b319ece77e981afee651d5ed4cca5688759043cf` (including parent `19e77e3`).
+The initial Convex bundle check rejected the new Node-only helper before
+deployment; its explicit Node runtime directive and regression assertion were
+added before a successful dry-run and production deployment. Convex now serves
+this release on `wary-starfish-773`. GitHub quality run `34031967509` succeeded,
+including all 1,235 repository tests and the public browser checks. GitHub
+production deployment `6292691894` / Vercel
+`G4KErem3HYmfBKGQuR3ng1NQPsgm` succeeded at 12:03:56 UTC.
+
+Pentra's ordinary refill reached three sealed ready articles by 12:02:20.937
+UTC: `j57cbdpkn5z37vqd3m27wq00xd8dwxhp`,
+`j57bndnv12v8agerp1gs7z510d8dxp1x`, and
+`j571r4bvpd7fydzxcz7ey5cs3h8dxnxb`. This meets its minimum of three;
+the target of four is not yet filled. Its follow-up run
+`kd730awbsw134h2kt53xn1fm5h8dwbm7` completed with `buffer_ready`.
+This proves replenishment after the earlier overdue publication, not the next
+on-time publication or organic search growth.
+
+LeadPilot still had four sealed ready articles and its 14:14:43.010 UTC
+September 6 publication deadline. Its old pre-repair job
+`j970z8gpkbqm702msz6q10mp0h8dx78e` remained without a draft checkpoint after
+its lease expired at 12:03:59.159 UTC. One explicitly controlled recovery was
+dispatched through the canonical site scheduler, not directly to a provider:
+run `kd7bt39jm1tsqpcg7jp4y65j6s8dwrr0`, scheduled at 12:09:12.812 UTC.
+The scheduler settled the expired execution and stored worker attempt one's
+eligibility time as 12:10:13.614 UTC. Subsequent inspection after that time found
+the job still pending: the lease-reset mutation had not actually armed a wake.
+No second manual recovery was dispatched. The retry's checkpoint, review
+completion and inventory result remain to be observed.
+This intervention is controlled recovery evidence, never natural-cadence proof.
+
+Chrome control and both signed-in settings pages are working. The LeadPilot
+settings tab was handed back without changing cadence, credentials or accounts.
+The goal remains active: sustained current-release new-article delivery on
+both sites and generic supported-customer acceptance are not yet complete.
+
+### Atomic retry-wake correction
+
+The controlled recovery exposed a generic liveness defect rather than a
+provider-funding problem: `resetStuckJobs` committed `pending` and
+`nextAttemptAt`, but never scheduled a function at that time. Ordinary transient
+failure had a related interruption gap: its mutation persisted the retry,
+while a later action call separately scheduled the wake.
+
+Both retry transitions now atomically schedule the canonical site follow-up in
+the same mutation. The action no longer schedules a duplicate. No retry limits,
+paid-attempt receipts, tenant authorization, delivery priority or publication
+gates are relaxed. Expired ambiguous planning jobs still follow their existing
+terminal no-replay path. Existing pending work is not reset again by this change.
+
+Registered-handler tests reproduce both missing-wake cases against the prior
+code (two failures) and pass after the correction. They cover distinct tenant
+IDs, saved-draft preservation, one-time reservation release, immutable attempt
+settlement, fresh/foreign leases, exhausted retries and duplicate stale
+completions. Actual scheduler delivery and exact-deadline tests now exercise
+every integer cadence from 1 through 21 per week, not only sample rates.
+
+Local gates passed for this correction: all 1,239 tests, type-check, zero lint
+errors (159 existing warnings), schema compatibility, dependency audit,
+production build, 10 public browser checks and Convex deployment dry-run.
+The two authenticated browser harness cases remain explicitly skipped; the
+actual signed-in settings acceptance above is separate evidence. A previously
+stranded pending job does not acquire a historical wake merely by deploying
+this fix; any controlled restart will be recorded separately.

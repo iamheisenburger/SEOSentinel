@@ -843,13 +843,29 @@ export const resetStuckJobs = internalMutation({
         continue;
       }
       if (attempts <= MAX_JOB_ATTEMPTS) {
+        const nextAttemptAt = currentTime + attempts * 60_000;
         await ctx.db.patch(job._id, {
           ...ownershipReset,
           status: "pending",
-          nextAttemptAt: currentTime + attempts * 60_000,
+          nextAttemptAt,
           workerAttempts: attempts,
           error: `Worker lease expired; retry ${attempts}/${MAX_JOB_ATTEMPTS} is delayed and eligible to resume.`,
         });
+        if (job.siteId) {
+          // Commit the wake with the retry. A timestamp without a scheduled
+          // function can strand this job until an unrelated fleet/deadline tick.
+          // The canonical scheduler still enforces current tenant authorization,
+          // delivery priority and the job's bounded attempt/worker fences.
+          await ctx.scheduler.runAt(
+            nextAttemptAt,
+            internal.autopilot.dispatchSiteFollowup,
+            {
+              siteId: job.siteId,
+              trigger: "job_lease_retry",
+              reason: `expired_worker_retry_${attempts}`,
+            },
+          );
+        }
         reset += 1;
       } else {
         await ctx.db.patch(job._id, {
@@ -4628,6 +4644,19 @@ export const markRetryableFailure = internalMutation({
       leaseExpiresAt: undefined,
       updatedAt: currentTime,
     });
+    if (willRetry && nextAttemptAt && job.siteId) {
+      // Mutation scheduling is atomic with the state transition. The parent
+      // action may terminate immediately after this mutation returns.
+      await ctx.scheduler.runAt(
+        nextAttemptAt,
+        internal.autopilot.dispatchSiteFollowup,
+        {
+          siteId: job.siteId,
+          trigger: "job_retry",
+          reason: `bounded_retry_${attempts}`,
+        },
+      );
+    }
     if (!willRetry && job.type === "plan") {
       await activateTerminalPlanCheckpoints(ctx, jobId, currentTime);
       await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);

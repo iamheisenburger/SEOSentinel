@@ -673,10 +673,12 @@ test("every quality terminal state immediately re-enters the bounded scheduler",
   );
 });
 
-test("bounded worker retries schedule their own exact wake-up", () => {
+test("bounded worker retry mutations own their exact wake-up, not the parent action", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   const jobs = readFileSync("convex/jobs.ts", "utf8");
-  assert.match(pipeline, /ctx\.scheduler\.runAt\(\s*retry\.nextAttemptAt/);
-  assert.match(pipeline, /trigger:\s*"job_retry"/);
+  const retry = jobs.slice(jobs.indexOf("export const markRetryableFailure"), jobs.indexOf("export const markPublishFailed"));
+  assert.match(retry, /ctx\.scheduler\.runAt\(\s*nextAttemptAt/);
+  assert.match(retry, /trigger:\s*"job_retry"/);
+  assert.doesNotMatch(pipeline, /ctx\.scheduler\.runAt\(\s*retry\.nextAttemptAt/);
   assert.match(jobs, /return \{ updated: true, willRetry, attempts, nextAttemptAt \}/);
 });

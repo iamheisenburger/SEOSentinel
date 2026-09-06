@@ -9429,20 +9429,8 @@ export const processNextJob = internalAction({
         workerToken,
         error: message,
       });
-      if (retry.willRetry && retry.nextAttemptAt) {
-        // A retry with a durable timestamp must wake itself. Depending on the
-        // next three-hour fleet cron turned a two-minute backoff into a silent
-        // cadence miss and required an operator to poke the tenant manually.
-        await ctx.scheduler.runAt(
-          retry.nextAttemptAt,
-          internal.autopilot.dispatchSiteFollowup,
-          {
-            siteId: args.siteId,
-            trigger: "job_retry",
-            reason: `bounded_retry_${retry.attempts}`,
-          },
-        );
-      }
+      // The retry mutation atomically arms its own wake; this action must not
+      // duplicate it or own the gap between committing and scheduling a retry.
       return {
         processed: retry.updated,
         jobId: job._id,

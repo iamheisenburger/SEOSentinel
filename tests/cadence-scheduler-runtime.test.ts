@@ -60,8 +60,8 @@ function runtime(cadence: number, overdue: boolean, ready: boolean, readiness = 
   };
 }
 
-test("actual scheduler delivers sealed new articles at every supported sample cadence", async () => {
-  for (const cadence of [1, 4, 7, 14, 21]) {
+test("actual scheduler delivers sealed new articles at every supported integer cadence", async () => {
+  for (let cadence = 1; cadence <= 21; cadence += 1) {
     const harness = runtime(cadence, true, true);
     assert.deepEqual(await harness.run(), { scheduled: 1, mode: "buffer_delivery", bufferCount: 1 });
     assert.equal(harness.calls.filter(c => c.name === "jobs:queuePublicationIfAbsent").length, 1);
@@ -69,7 +69,7 @@ test("actual scheduler delivers sealed new articles at every supported sample ca
 });
 
 test("actual scheduler arms exact future deadline instead of publishing early", async () => {
-  for (const cadence of [1, 4, 7, 14, 21]) {
+  for (let cadence = 1; cadence <= 21; cadence += 1) {
     const harness = runtime(cadence, false, true);
     await assert.rejects(harness.run(), error => error === REFILL);
     assert.equal(harness.calls.find(c => c.name === "autopilot:scheduleCadenceDeadline")?.args.dueAt, NOW + 1);
