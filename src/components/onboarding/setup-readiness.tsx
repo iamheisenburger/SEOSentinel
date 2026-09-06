@@ -119,6 +119,7 @@ export function SetupReadiness({
         const result = await retryInitialPlan({ siteId,
           expectedPlanJobId: retry.planJobId,
           expectedPlanGeneration: retry.planGeneration,
+          expectedPlanningContextFingerprint: retry.planningContextFingerprint,
           expectedConfigurationRevision: readiness.configurationRevision });
         if (result.state === "waiting") {
           setActionError(`A new planning attempt is eligible after ${new Date(result.eligibleAt).toLocaleString()}. No new attempt was started.`);

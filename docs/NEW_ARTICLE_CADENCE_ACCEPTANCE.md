@@ -787,3 +787,28 @@ Local release gates passed: 1,286 tests, type-check, zero-error lint with the
 same 157 existing warnings, additive schema check, dependency audit, build,
 and Convex dry-run. Ten public Playwright checks passed; two authenticated
 harness checks were skipped and are not treated as acceptance passes.
+
+Release `735710afbbe5d2aab34d611d3cb73e852155ab8d` passed GitHub quality
+run `34040052333` at 14:46:18 UTC, production deployment `6294237483`,
+and Convex deployment before the 14:47 UTC inspection. The signed-in page
+still did not advertise a retry for Pentra's historical failed plan; no new
+paid plan was started. Exact job inspection confirmed the stable request,
+generation and canonical-domain stamps, but the existing safe projection did
+not identify a stale planning context or quarantine.
+
+A further runtime case covers business-input changes after a failed plan.
+The new explicit authorization carries the current non-secret planning
+fingerprint returned by readiness. The mutation compares it to current
+business inputs before authorizing one successor generation; stale browser
+clicks are rejected. A changed planning context is allowed only for this
+explicit NEW attempt, with all original tenant, request, configuration,
+domain and failed-job bindings intact. The previous job is not retagged or
+replayed. This does not relax the ordinary pre-provider or commit currency
+checks. The operator projection now exposes the controlled currency reason
+and quarantine code without returning private business inputs or credentials.
+The actual production eligibility reason still requires the next projection.
+The new authorization also preserves both old and new context fingerprints.
+All 1,287 tests, type-check, zero-error lint (157 existing warnings), additive
+schema check, secret scan, dependency audit, production build and deployment
+dry-run passed. Public browser acceptance remains ten passed and two
+explicitly skipped authenticated harness checks.

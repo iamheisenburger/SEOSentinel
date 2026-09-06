@@ -126,6 +126,7 @@ function failedPlanFixture(id = "a") {
 }
 const retryArgs = (id = "a", generation = 1) => ({ siteId: id,
   expectedPlanJobId: `job-${id}`, expectedPlanGeneration: generation,
+  expectedPlanningContextFingerprint: oneSetupInitialPlanContextFingerprint({ domain: `${id}.example` }),
   expectedConfigurationRevision: 1 });
 
 test("explicit owner retry authorizes one successor without replaying or rewriting the failed paid receipt", async () => {
@@ -191,6 +192,29 @@ test("owner retry respects failure eligibility and rolls back authorization when
   const f = failedPlanFixture(); f.rejectDispatch(); const before = structuredClone(f.tables);
   await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()), /Injected dispatch failure/);
   assert.deepEqual(f.tables, before); assert.equal(f.wakes.length, 0);
+});
+
+test("a fresh owner authorization can use changed business inputs without retagging or replaying the failed job", async () => {
+  const f = failedPlanFixture(); f.row("a").niche = "Current customer business";
+  const oldJob = structuredClone(f.row("job-a"));
+  const snapshot = await f.run("oneSetupExecutions", "getOperatorSnapshot", { siteId: "a" });
+  assert.deepEqual((snapshot.boundPlan as Row).planningCurrency, { kind: "stale", reason: "planning_context_changed" });
+  const readiness = await f.run("sites", "getOneSetupReadiness", { siteId: "a" });
+  const retry = readiness.initialPlanRetry as Row;
+  assert.equal(retry.planJobId, "job-a");
+  assert.equal(retry.planningContextFingerprint,
+    oneSetupInitialPlanContextFingerprint({ domain: "a.example", niche: "Current customer business" }));
+  await assert.rejects(f.run("oneSetupExecutions", "requestFailedPlanRetry", retryArgs()), /settings changed/);
+  const result = await f.run("oneSetupExecutions", "requestFailedPlanRetry", {
+    ...retryArgs(), expectedPlanningContextFingerprint: retry.planningContextFingerprint,
+  });
+  assert.equal(result.state, "retry_requested");
+  assert.equal(f.row("request-a").initialPlanGeneration, 2);
+  assert.equal(f.row("request-a").initialPlanContextFingerprint, retry.planningContextFingerprint);
+  const authorization = f.row("request-a").initialPlanOwnerRetry as Row;
+  assert.equal(authorization.previousPlanningContextFingerprint, retryArgs().expectedPlanningContextFingerprint);
+  assert.equal(authorization.planningContextFingerprint, retry.planningContextFingerprint);
+  assert.deepEqual(f.row("job-a"), oldJob);
 });
 
 test("repeated distinct owner retries retain the daily envelope and reject corrupted counters", async () => {

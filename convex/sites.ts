@@ -2566,6 +2566,7 @@ export const getOneSetupReadiness = query({
     );
     let initialPlanRetry: {
       planJobId: Id<"jobs">; planGeneration: number; eligibleAt: number;
+      planningContextFingerprint: string;
     } | null = null;
     if (requestValid && currentExecutionValid && currentExecution!.status === "blocked" &&
       !request!.initialPlanQuarantineCode && currentExecution!.planJobId &&
@@ -2575,16 +2576,19 @@ export const getOneSetupReadiness = query({
       (request!.initialPlanGeneration ?? 0) < Number.MAX_SAFE_INTEGER) {
       const job = await ctx.db.get(currentExecution!.planJobId);
       const now = Date.now();
+      const currency = job ? await oneSetupInitialPlanCurrency(ctx, { site, job }) : null;
       if (job?.siteId === site._id && job.status === "failed" &&
         (job.leaseExpiresAt ?? 0) <= now &&
         Number.isSafeInteger(job.updatedAt) && job.updatedAt > 0 &&
         (job.cadenceFailure?.eligibleAt === undefined ||
           Number.isSafeInteger(job.cadenceFailure.eligibleAt)) &&
-        (await oneSetupInitialPlanCurrency(ctx, { site, job })).kind === "current") {
+        (currency?.kind === "current" ||
+          (currency?.kind === "stale" && currency.reason === "planning_context_changed"))) {
         try {
           const retryWindow = oneSetupOwnerRetryWindow(request!.initialPlanOwnerRetry, now);
           initialPlanRetry = { planJobId: job._id,
             planGeneration: request!.initialPlanGeneration!,
+            planningContextFingerprint: oneSetupInitialPlanContextFingerprint(site),
             eligibleAt: Math.max(retryWindow.eligibleAt,
               job.updatedAt + ONE_SETUP_OWNER_RETRY_COOLDOWN_MS,
               job.cadenceFailure?.eligibleAt ?? 0) };
@@ -2739,7 +2743,7 @@ export const getOneSetupReadiness = query({
           : undefined,
         actionMessage: contentPlanActionRequired
           ? initialPlanRetry
-            ? "The previous content plan failed. Retry starts one new planning attempt under current limits; the old paid receipt is preserved. New work may consume provider capacity."
+            ? "The previous content plan failed. Retry starts one new planning attempt using your current business settings and limits; the old paid receipt is preserved. New work may consume provider capacity."
             : persistentProviderRecovery
             ? "Pentra is continuing bounded provider reinspection; persistent funding or provider availability needs operator attention."
             : "The exact setup execution stopped safely and requires attention; no paid plan receipt was replayed."

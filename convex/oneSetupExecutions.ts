@@ -571,6 +571,7 @@ export const getOperatorSnapshot = internalQuery({
         initialPlanJobId: request.initialPlanJobId,
         initialPlanGeneration: request.initialPlanGeneration,
         initialPlanRecoveryCount: request.initialPlanRecoveryCount ?? 0,
+        initialPlanQuarantineCode: request.initialPlanQuarantineCode,
         initialPlanOwnerRetry: request.initialPlanOwnerRetry,
         fulfillmentState: request.fulfillmentState,
         fulfillmentAttempt: request.fulfillmentAttempt,
@@ -589,6 +590,9 @@ export const getOperatorSnapshot = internalQuery({
       } : null,
       boundPlan: boundJob ? {
         jobId: boundJob._id,
+        planningCurrency: await oneSetupInitialPlanCurrency(ctx, {
+          site: context.site, job: boundJob,
+        }),
         status: boundJob.status,
         workerAttempts: boundJob.workerAttempts,
         resultCount: Number.isSafeInteger(result.count) ? result.count as number : undefined,
@@ -610,6 +614,7 @@ export const requestFailedPlanRetry = mutation({
     expectedPlanJobId: v.id("jobs"),
     expectedPlanGeneration: v.number(),
     expectedConfigurationRevision: v.number(),
+    expectedPlanningContextFingerprint: v.string(),
   },
   handler: async (ctx, args) => {
     const [identity, site] = await Promise.all([
@@ -622,6 +627,10 @@ export const requestFailedPlanRetry = mutation({
       args.expectedPlanGeneration >= Number.MAX_SAFE_INTEGER ||
       !Number.isSafeInteger(args.expectedConfigurationRevision) || args.expectedConfigurationRevision <= 0) {
       throw new Error("Invalid setup retry identity");
+    }
+    const currentPlanningFingerprint = oneSetupInitialPlanContextFingerprint(site);
+    if (args.expectedPlanningContextFingerprint !== currentPlanningFingerprint) {
+      throw new Error("The business or planning settings changed. Refresh before authorizing a new plan.");
     }
     const request = await ctx.db.query("managed_provisioning_requests")
       .withIndex("by_site", q => q.eq("siteId", args.siteId)).unique();
@@ -646,9 +655,13 @@ export const requestFailedPlanRetry = mutation({
       request.initialPlanGeneration !== args.expectedPlanGeneration ||
       !requestMatchesExecution(request, execution, site) ||
       !job || job.status !== "failed" || (job.leaseExpiresAt ?? 0) > now ||
-      !planBindingMatches(request, execution, job, site) ||
-      (await oneSetupInitialPlanCurrency(ctx, { site, job })).kind !== "current") {
+      !planBindingMatches(request, execution, job, site)) {
       throw new Error("Only the exact current terminal failed plan can authorize a new attempt");
+    }
+    const planningCurrency = await oneSetupInitialPlanCurrency(ctx, { site, job });
+    if (planningCurrency.kind !== "current" &&
+      !(planningCurrency.kind === "stale" && planningCurrency.reason === "planning_context_changed")) {
+      throw new Error("The failed plan lost its stable tenant or generation receipt");
     }
     if (!Number.isSafeInteger(job.updatedAt) || job.updatedAt <= 0 ||
       (job.cadenceFailure?.eligibleAt !== undefined &&
@@ -662,6 +675,9 @@ export const requestFailedPlanRetry = mutation({
     if (eligibleAt > now) return { state: "waiting" as const, eligibleAt };
     await ctx.db.patch(request._id, {
       initialPlanGeneration: args.expectedPlanGeneration + 1,
+      // The owner explicitly authorized a NEW attempt using the exact current
+      // business-input fingerprint returned by readiness. Never retag the old job.
+      initialPlanContextFingerprint: currentPlanningFingerprint,
       initialPlanJobId: undefined,
       initialPlanBoundAt: undefined,
       initialPlanRecoveryCount: 0,
@@ -669,6 +685,8 @@ export const requestFailedPlanRetry = mutation({
         previousJobId: job._id,
         previousGeneration: args.expectedPlanGeneration,
         configurationRevision: args.expectedConfigurationRevision,
+        previousPlanningContextFingerprint: request.initialPlanContextFingerprint,
+        planningContextFingerprint: currentPlanningFingerprint,
         requestedAt: now,
         windowStartAt: window.windowStartAt,
         attemptInWindow: window.attemptInWindow,

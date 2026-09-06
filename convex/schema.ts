@@ -245,6 +245,8 @@ export default defineSchema({
       previousJobId: v.id("jobs"),
       previousGeneration: v.number(),
       configurationRevision: v.number(),
+      previousPlanningContextFingerprint: v.optional(v.string()),
+      planningContextFingerprint: v.optional(v.string()),
       requestedAt: v.number(),
       windowStartAt: v.number(),
       attemptInWindow: v.number(),
