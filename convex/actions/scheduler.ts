@@ -362,13 +362,8 @@ export const scheduleCadence = internalAction({
     const articlePublishedAt = state.latestPublished
       ? effectivePublishedAt(state.latestPublished)
       : undefined;
-    const latestRevision = await ctx.runQuery(
-      internal.publishedRevisions.getLatestVerifiedRevisionAtInternal,
-      { siteId },
-    );
     const lastPublishedAt = effectiveCadencePublicationAt({
       articlePublishedAt,
-      verifiedRevisionAt: latestRevision?.verifiedAt,
     });
     const publicationDue = !lastPublishedAt || now >= lastPublishedAt + cadenceMs;
 
@@ -504,25 +499,9 @@ export const scheduleCadence = internalAction({
         message:
           "Publication is due but no strict-quality sealed article is buffered.",
       });
-      const revision = await ctx.runMutation(
-        internal.publishedRevisions.prepareForCadenceRecovery,
-        { siteId, dueAt: (lastPublishedAt ?? site.createdAt) + cadenceMs },
-      );
-      if (
-        revision.revisionId &&
-        (revision.status === "prepared" || revision.status === "existing")
-      ) {
-        await ctx.scheduler.runAfter(
-          0,
-          internal.publisher.executePublishedRevisionInternal,
-          { revisionId: revision.revisionId },
-        );
-        return {
-          scheduled: 1,
-          mode: "cadence_revision",
-          bufferCount: buffer.length,
-        };
-      }
+      // Keep the deadline outstanding and continue into topic/article refill.
+      // Existing-page revisions belong to the separate growth-improvement
+      // workflow and cannot substitute for a customer's new article.
     }
 
     // Growth inventory must never delay an already-due sealed publication.
@@ -661,10 +640,9 @@ export const scheduleCadence = internalAction({
         siteId,
         reason: portfolioReplenishmentReason,
         since: now - DAY_MS,
-        maximumRecent: Math.min(
-          topicReplenishmentBudget(site.cadencePerWeek ?? 1),
-          MAX_CLICK_GOAL_REPLENISHMENTS_PER_DAY,
-        ),
+        maximumRecent: buffer.length < bufferPolicy.target
+          ? topicReplenishmentBudget(cadence)
+          : MAX_CLICK_GOAL_REPLENISHMENTS_PER_DAY,
       },
     );
 
@@ -1138,7 +1116,7 @@ export const scheduleCadence = internalAction({
         : available.length === 0
           ? "topic_evidence_replenishment"
           : "topic_overlap_replenishment";
-      const maximumTopicReplenishments = replenishmentReason.startsWith("topic_portfolio_")
+      const maximumTopicReplenishments = buffer.length >= bufferPolicy.target && replenishmentReason.startsWith("topic_portfolio_")
         ? Math.min(
             topicReplenishmentBudget(site.cadencePerWeek ?? 1),
             MAX_CLICK_GOAL_REPLENISHMENTS_PER_DAY,

@@ -8,6 +8,7 @@ import {
   AUTOMATIC_PLAN_TOPIC_CAPACITY,
 } from "./planProviderBudget.ts";
 import { planCheckpointTopicExecutionLocked } from "./planCandidateCheckpoint.ts";
+export { topicReplenishmentBudget } from "./cadenceRefill.ts";
 
 export const MIN_APPROVED_BUFFER = 2;
 export const TARGET_APPROVED_BUFFER = 3;
@@ -48,19 +49,6 @@ export function approvedBufferPolicy(cadencePerWeek: number): {
     minimum,
     target: Math.max(TARGET_APPROVED_BUFFER, minimum + onePublishingDay),
   };
-}
-
-/**
- * Bound paid topic recovery to the tenant's configured publishing pressure.
- * A fixed two-plan allowance cannot sustain a tenant that publishes three
- * times a day, while giving every tenant an arbitrary large allowance would
- * hide a broken discovery loop and waste provider credits.
- */
-export function topicReplenishmentBudget(cadencePerWeek: number): number {
-  const dailyDemand = Number.isFinite(cadencePerWeek) && cadencePerWeek > 0
-    ? Math.ceil(cadencePerWeek / 7)
-    : 1;
-  return Math.max(2, Math.min(8, dailyDemand + 2));
 }
 
 /**
@@ -785,6 +773,24 @@ export function filterNonCannibalizingIntentTopics<
     if (accepted.length >= limit) break;
   }
   return accepted;
+}
+
+/**
+ * Missing historical SERPs force the final admission gate to use its lexical
+ * fallback even after buying a fresh candidate SERP. Apply that exact known
+ * constraint before scarce candidate slots are selected. Fully fingerprinted
+ * coverage is NOT rejected lexically here: fresh SERPs can prove adjacent
+ * topics have different intent. This is preselection, not a weaker gate or a
+ * permanent terminal verdict on unmeasured keywords.
+ */
+export function blockedByUnfingerprintedCoverage(
+  primaryKeyword: string,
+  coveredTopics: readonly SerpCoverageTopic[],
+): boolean {
+  return coveredTopics.some((covered) =>
+    !hasReliableSerpFingerprint(covered.serpTopUrls) &&
+    !selectNonCannibalizingTopic([{ primaryKeyword }], [covered.primaryKeyword], 0.35)
+  );
 }
 
 function circularTake<T>(values: T[], start: number, count: number): T[] {

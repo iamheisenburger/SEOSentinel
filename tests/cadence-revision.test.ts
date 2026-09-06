@@ -113,29 +113,32 @@ test("cadence revision fails closed on provider, epoch, or schedule ambiguity", 
   }
 });
 
-test("a verified revision advances the cadence clock without rewriting article history", () => {
+test("only a new article advances the cadence clock; revisions cannot hide a missed slot", () => {
   assert.equal(effectiveCadencePublicationAt({
     articlePublishedAt: 100,
     verifiedRevisionAt: 200,
-  }), 200);
+  }), 100);
   assert.equal(effectiveCadencePublicationAt({
     articlePublishedAt: 300,
     verifiedRevisionAt: 200,
   }), 300);
   assert.equal(effectiveCadencePublicationAt({}), undefined);
+  assert.equal(effectiveCadencePublicationAt({ verifiedRevisionAt: 200 }), undefined);
+  for (const articlePublishedAt of [NaN, Infinity, -1, 1.5]) {
+    assert.equal(effectiveCadencePublicationAt({
+      articlePublishedAt,
+      verifiedRevisionAt: 200,
+    }), undefined);
+  }
 });
 
-test("the natural scheduler gives sealed articles priority then uses the due revision lane", () => {
+test("the natural scheduler publishes sealed articles and never substitutes an old-page revision", () => {
   const scheduler = readFileSync("convex/actions/scheduler.ts", "utf8");
   const delivery = scheduler.indexOf(
     "autonomousDelivery && publicationDue && buffer.length > 0",
   );
-  const recovery = scheduler.indexOf("prepareForCadenceRecovery");
-  assert.ok(delivery >= 0 && recovery > delivery);
-  assert.match(
-    scheduler,
-    /prepareForCadenceRecovery[\s\S]*executePublishedRevisionInternal[\s\S]*mode: "cadence_revision"/,
-  );
+  assert.ok(delivery >= 0);
+  assert.doesNotMatch(scheduler, /prepareForCadenceRecovery|mode: "cadence_revision"/);
 
   const revisions = readFileSync("convex/publishedRevisions.ts", "utf8");
   assert.match(

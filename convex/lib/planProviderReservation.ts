@@ -6,7 +6,7 @@ import {
 } from "../planLimits";
 import {
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD,
-  AUTOMATIC_PLAN_PROVIDER_DAILY_CEILING_MICRO_USD,
+  automaticPlanDailyCeilingMicroUsd,
   EXPECTED_CLICK_PLAN_MIGRATION_VERSION,
   evaluatePlanProviderReservationCapacity,
   hasExplicitPlanProviderReservation,
@@ -240,6 +240,10 @@ export async function reservePlanProviderBudget(
     );
   const capacity = evaluatePlanProviderReservationCapacity({
     remainingArticles,
+    // Count plans against the purchased monthly allocation, not a shrinking
+    // remainder that double-charges every article already delivered.
+    monthlyArticleAllowance: limits.maxArticles,
+    cadencePerWeek: site.cadencePerWeek ?? 4,
     budgetedPlansThisMonth,
     reservedTodayMicroUsd,
   });
@@ -254,7 +258,7 @@ export async function reservePlanProviderBudget(
         ? capacity.monthlyPlanAllowance
         : undefined,
       reservedMicroUsd: reservedTodayMicroUsd,
-      ceilingMicroUsd: AUTOMATIC_PLAN_PROVIDER_DAILY_CEILING_MICRO_USD,
+      ceilingMicroUsd: automaticPlanDailyCeilingMicroUsd(site.cadencePerWeek ?? 4),
     };
   }
 

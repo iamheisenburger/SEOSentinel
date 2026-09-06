@@ -60,6 +60,7 @@ import {
   evaluateTopicBusinessFit,
   evergreenTopicLabel,
   filterNonCannibalizingIntentTopics,
+  blockedByUnfingerprintedCoverage,
   hasReliableSerpFingerprint,
   isUnderfilledPlanContinuationPayload,
   keywordDifficultyCeiling,
@@ -2526,6 +2527,22 @@ async function handlePlan(
     { siteId },
   );
   const existingKeywords = existingTopics.map((t: { primaryKeyword: string }) => t.primaryKeyword);
+  const discoveryCoverage = coveredIntentTopics(
+    existingTopics.map((topic) => ({
+      _id: String(topic._id),
+      status: topic.status ?? "planned",
+      primaryKeyword: topic.primaryKeyword,
+      serpTopUrls: topic.serpTopUrls,
+    })),
+    existingArticleSummaries.map((article) => ({
+      topicId: article.topicId ? String(article.topicId) : undefined,
+      slug: article.slug,
+      status: article.status,
+      publicationGateStatus: article.publicationGateStatus,
+      publicationAuditVersion: article.publicationAuditVersion,
+      auditedContentHash: article.auditedContentHash,
+    })),
+  );
   const rawSearchDemandSignals = await ctx.runQuery(
     internal.searchPerformance.getDiscoverySignalsInternal,
     { siteId, limit: 12 },
@@ -3014,6 +3031,7 @@ async function handlePlan(
 
     // Dedup — keep a large pool so AI has plenty to choose from
     for (const kw of raw) {
+      if (blockedByUnfingerprintedCoverage(kw.keyword, discoveryCoverage)) continue;
       if (!candidates.some(c => isTooSimilar(c.keyword, kw.keyword))) {
         candidates.push(kw);
       }

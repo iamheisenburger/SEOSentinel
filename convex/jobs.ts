@@ -51,6 +51,11 @@ import {
 } from "./lib/planProviderBudget";
 import { reservePlanProviderBudget } from "./lib/planProviderReservation";
 import {
+  cadencePlanDailyLimit,
+  cadencePlanFailureEligibleAt,
+  nextPlanWindowSlotAt,
+} from "./lib/cadenceRefill";
+import {
   EXPECTED_CLICK_PLAN_MIGRATION_RECOVERY_VERSION,
   isExpectedClickZeroInsertTerminalError,
 } from "./lib/expectedClickMigrationRecovery";
@@ -2020,19 +2025,39 @@ export const queuePlanIfAbsent = internalMutation({
       planYieldTarget = snapshot.target;
     }
 
+    const scheduleRefillWake = async (dueAt: number | undefined) => {
+      if (dueAt === undefined || dueAt <= timestamp) return;
+      await ctx.scheduler.runAfter(0, internal.autopilot.scheduleEligibilityDeadline, {
+        siteId: args.siteId,
+        dueAt,
+        trigger: "cadence_refill_deadline",
+        reason: "Reconsider current article-buffer shortfall under ordinary queue and spend limits.",
+      });
+    };
+    const recentSince = automaticTopicPlan
+      ? timestamp - 24 * 60 * 60 * 1000
+      : args.since;
+    const maximumRecent = automaticTopicPlan
+      ? site.expectedClickSchedulingEnabled === true
+        ? cadencePlanDailyLimit(site.cadencePerWeek ?? 4, planYieldTarget?.targetBufferShortfall ?? 0)
+        : Math.min(
+            args.maximumRecent ?? cadencePlanDailyLimit(site.cadencePerWeek ?? 4, 1),
+            cadencePlanDailyLimit(site.cadencePerWeek ?? 4, 1),
+          )
+      : args.maximumRecent;
     let recentCount = 0;
-    if (args.reason && args.since !== undefined && args.maximumRecent !== undefined) {
+    if (args.reason && recentSince !== undefined && maximumRecent !== undefined) {
       const recentRows = await ctx.db
         .query("jobs")
         .withIndex("by_site_type_created", (q) =>
-          q.eq("siteId", args.siteId).eq("type", "plan").gte("createdAt", args.since!),
+          q.eq("siteId", args.siteId).eq("type", "plan").gte("createdAt", recentSince),
         )
         .order("desc")
         .take(TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT + 1);
       recentTopicPlans = recentRows.slice(0, 12);
       const recentWindow = evaluateBoundedRecentPlanWindow({
         rows: recentRows,
-        maximumRecent: args.maximumRecent,
+        maximumRecent,
         isCounted: (job) => {
           if (!countsTowardTopicPlanRecentLimit(job)) return false;
           const payload = job.payload && typeof job.payload === "object"
@@ -2067,6 +2092,12 @@ export const queuePlanIfAbsent = internalMutation({
         };
       }
       if (recentWindow.decision === "limited") {
+        // Preserve legacy receipt settlement, but also wake at the first
+        // newly available slot. Waiting for the newest row to age out throws
+        // away capacity when a cadence now permits several plans per day.
+        if (automaticTopicPlan && (planYieldTarget?.targetBufferShortfall ?? 0) > 0) {
+          await scheduleRefillWake(nextPlanWindowSlotAt(countedRecent, maximumRecent));
+        }
         const latestPlan: Doc<"jobs"> | undefined = countedRecent[0];
         let cooldownWake:
           | { scheduled: boolean; runId: Id<"autopilot_runs">; dueAt: number }
@@ -2166,7 +2197,7 @@ export const queuePlanIfAbsent = internalMutation({
     // A provider/budget failure with an exact future eligibility receipt must
     // not be turned into a tight release/requeue loop by the scheduler. The
     // mutation that recorded the failure also armed this exact deadline.
-    const latestCadenceFailure = recentTopicPlans.find((job) => {
+    const latestCadencePlan = recentTopicPlans.find((job) => {
       const payload = job.payload && typeof job.payload === "object"
         ? job.payload as Record<string, unknown>
         : {};
@@ -2174,17 +2205,24 @@ export const queuePlanIfAbsent = internalMutation({
         typeof payload.reason === "string" &&
         payload.reason.startsWith("topic_") &&
         payload.growthParentArticleId === undefined;
-    })?.cadenceFailure;
+    });
+    const latestCadenceFailure = latestCadencePlan?.cadenceFailure;
+    const cadenceFailureEligibleAt = cadencePlanFailureEligibleAt({
+      failure: latestCadenceFailure,
+      planCreatedAt: latestCadencePlan?.createdAt ?? NaN,
+      targetBufferShortfall: planYieldTarget?.targetBufferShortfall ?? 0,
+    });
     if (
       automaticTopicPlan &&
-      latestCadenceFailure?.eligibleAt !== undefined &&
-      latestCadenceFailure.eligibleAt > timestamp
+      cadenceFailureEligibleAt !== undefined &&
+      cadenceFailureEligibleAt > timestamp
     ) {
+      await scheduleRefillWake(cadenceFailureEligibleAt);
       return {
         queued: false,
         reason: "cadence_failure_cooldown" as const,
-        failureCode: latestCadenceFailure.code,
-        eligibleAt: latestCadenceFailure.eligibleAt,
+        failureCode: latestCadenceFailure?.code,
+        eligibleAt: cadenceFailureEligibleAt,
       };
     }
 
@@ -4459,6 +4497,21 @@ export const markFailed = internalMutation({
     if (job.type === "plan") {
       await terminallyClosePlanCheckpoints(ctx, jobId, currentTime);
       await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
+      const refillAt = cadencePlanFailureEligibleAt({
+        failure: cadenceFailure,
+        planCreatedAt: job.createdAt,
+        targetBufferShortfall: automaticSingleExecutionCheckpointTargetFromPayload(job.payload)?.targetBufferShortfall ?? 0,
+      });
+      if (semanticPlanEligibleAt !== undefined && refillAt !== undefined && job.siteId) {
+        // This wakes the scheduler, not this failed job. All admission and
+        // current-buffer checks run again before a new reservation is made.
+        await ctx.scheduler.runAfter(0, internal.autopilot.scheduleEligibilityDeadline, {
+          siteId: job.siteId,
+          dueAt: Math.max(currentTime + 1_000, refillAt),
+          trigger: "cadence_refill_deadline",
+          reason: "A terminal zero-yield plan left the article buffer short; consider a distinct bounded discovery strategy.",
+        });
+      }
     }
     // A strict zero-yield checkpoint is terminal for this paid job. Arm the
     // next strategy only at the original 24-hour window boundary; the exact

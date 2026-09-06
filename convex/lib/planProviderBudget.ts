@@ -18,6 +18,8 @@
  * one another's spend limit.
  */
 
+import { topicReplenishmentBudget } from "./cadenceRefill.ts";
+
 export const AUTOMATIC_PLAN_TOPIC_CAPACITY = 10;
 // The scheduler protects seven verified topics, one week of inventory for a
 // daily tenant. A successful first execution below that horizon may use the
@@ -606,13 +608,18 @@ export function hasExplicitPlanProviderReservation(
 }
 
 /**
- * One autonomous paid plan per tenant/site/day, regardless of reason. The
- * reservation covers the initial bounded execution and its single permitted
- * second execution, so retry/underfill recovery cannot silently exceed the
- * per-job ceiling.
+ * Legacy default for callers without a cadence. Runtime reservations use the
+ * bounded cadence allowance below, then the unchanged account/fleet ledger.
+ * The per-job envelope still covers at most two executions; more capacity
+ * never authorizes replay of a terminal or ambiguous provider request.
  */
 export const AUTOMATIC_PLAN_PROVIDER_DAILY_CEILING_MICRO_USD =
   AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD;
+
+export function automaticPlanDailyCeilingMicroUsd(cadencePerWeek?: number): number {
+  return AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD *
+    (cadencePerWeek === undefined ? 1 : topicReplenishmentBudget(cadencePerWeek));
+}
 
 export function automaticPlanAllowanceForArticleHeadroom(
   remainingArticles: number,
@@ -636,13 +643,15 @@ export type PlanProviderCapacityDecision =
 
 export function evaluatePlanProviderReservationCapacity(args: {
   remainingArticles: number;
+  monthlyArticleAllowance?: number;
+  cadencePerWeek?: number;
   budgetedPlansThisMonth: number;
   reservedTodayMicroUsd: number;
 }): PlanProviderCapacityDecision {
   const monthlyPlanAllowance = automaticPlanAllowanceForArticleHeadroom(
-    args.remainingArticles,
+    args.monthlyArticleAllowance ?? args.remainingArticles,
   );
-  if (monthlyPlanAllowance === 0) {
+  if (!Number.isFinite(args.remainingArticles) || args.remainingArticles < 1 || monthlyPlanAllowance === 0) {
     return {
       allowed: false,
       reason: "article_quota_no_headroom",
@@ -659,7 +668,7 @@ export function evaluatePlanProviderReservationCapacity(args: {
   if (
     args.reservedTodayMicroUsd +
       AUTOMATIC_PLAN_PROVIDER_COST_CEILING_MICRO_USD >
-    AUTOMATIC_PLAN_PROVIDER_DAILY_CEILING_MICRO_USD
+    automaticPlanDailyCeilingMicroUsd(args.cadencePerWeek)
   ) {
     return {
       allowed: false,

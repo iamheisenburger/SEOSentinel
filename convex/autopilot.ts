@@ -81,31 +81,6 @@ const PUBLIC_URL_VERIFIED_RECOVERY_PREFIX =
 const PUBLIC_URL_VERIFIED_RECOVERY_HEADROOM_MS = 60_000;
 const TOPIC_PLAN_COOLDOWN_ACTIVE_JOB_READ_LIMIT = 50;
 
-async function latestVerifiedRevisionPublicationAt(
-  ctx: MutationCtx | QueryCtx,
-  site: Doc<"sites">,
-): Promise<number | undefined> {
-  const revisions = await ctx.db
-    .query("published_article_revisions")
-    .withIndex("by_site_status", (q) =>
-      q.eq("siteId", site._id).eq("status", "verified")
-    )
-    .order("desc")
-    .take(50);
-  let latest: number | undefined;
-  for (const revision of revisions) {
-    if (!Number.isSafeInteger(revision.liveVerifiedAt)) continue;
-    const article = await ctx.db.get(revision.articleId);
-    if (
-      !article ||
-      article.siteId !== site._id ||
-      !articleMatchesCurrentDomain(site, article)
-    ) continue;
-    latest = Math.max(latest ?? 0, revision.liveVerifiedAt!);
-  }
-  return latest;
-}
-
 async function publicationCommitBlocksRolloutTransition(
   ctx: MutationCtx,
   site: Doc<"sites">,
@@ -1041,6 +1016,7 @@ export const scheduleEligibilityDeadline = internalMutation({
     if (![
       "quality_budget_deadline",
       "generation_quota_deadline",
+      "cadence_refill_deadline",
     ].includes(trigger)) {
       throw new Error("Unsupported cadence eligibility deadline");
     }
@@ -2454,10 +2430,6 @@ export const auditSla = internalMutation({
         : undefined;
       const lastPublishedAt = effectiveCadencePublicationAt({
         articlePublishedAt,
-        verifiedRevisionAt: await latestVerifiedRevisionPublicationAt(
-          ctx,
-          site,
-        ),
       });
       const nextPublicationDueAt =
         (lastPublishedAt ?? site.createdAt) + cadenceMs;
@@ -2659,7 +2631,6 @@ export const refreshSiteCadenceHealth = internalMutation({
       : undefined;
     const lastPublishedAt = effectiveCadencePublicationAt({
       articlePublishedAt,
-      verifiedRevisionAt: await latestVerifiedRevisionPublicationAt(ctx, site),
     });
     const cadence = site.cadencePerWeek ?? 4;
     const cadenceMs = cadenceIntervalMs(cadence);

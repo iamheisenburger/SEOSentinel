@@ -715,6 +715,7 @@ export function operatorContinuationRunReceipt(
               "cadence_deadline",
               "quality_budget_deadline",
               "generation_quota_deadline",
+              "cadence_refill_deadline",
             ].includes(run.trigger)
             ? "deadline" as const
             : "followup" as const;

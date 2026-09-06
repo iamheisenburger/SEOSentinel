@@ -175,7 +175,11 @@ export function effectiveCadencePublicationAt(args: {
   articlePublishedAt?: number;
   verifiedRevisionAt?: number;
 }): number | undefined {
-  const candidates = [args.articlePublishedAt, args.verifiedRevisionAt]
-    .filter((value): value is number => safeTimestamp(value));
-  return candidates.length > 0 ? Math.max(...candidates) : undefined;
+  // A revision improves an existing URL. It does not deliver the new article
+  // purchased for this cadence slot, even when its live verification succeeds.
+  // Retain the historical argument for callers reading old receipts, but never
+  // let it postpone the new-article deadline or clear a missed-publication SLA.
+  return safeTimestamp(args.articlePublishedAt)
+    ? args.articlePublishedAt
+    : undefined;
 }
