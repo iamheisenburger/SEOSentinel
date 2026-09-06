@@ -33,6 +33,8 @@ function providerStatus(error: unknown): number | undefined {
 function providerText(error: unknown): string {
   const outer = record(error);
   const nested = record(outer?.error);
+  const cause = record(outer?.cause);
+  const rootCause = record(cause?.cause);
   return [
     error instanceof Error ? error.message : String(error ?? ""),
     outer?.code,
@@ -40,6 +42,11 @@ function providerText(error: unknown): string {
     nested?.code,
     nested?.type,
     nested?.message,
+    outer?.name,
+    cause?.name,
+    cause?.message,
+    rootCause?.name,
+    rootCause?.message,
   ]
     .filter((value): value is string => typeof value === "string")
     .join(" ")
@@ -114,7 +121,7 @@ export function classifyArticleProviderFailure(
   if (
     status === 429 ||
     (status !== undefined && status >= 500 && status <= 599) ||
-    /\b(?:econnreset|econnrefused|etimedout|eai_again|enetwork)\b|socket hang up|fetch failed|network request failed|request timed out|request timeout|temporarily unavailable|service unavailable|gateway timeout|bad gateway|rate limit|overloaded/.test(
+    /\b(?:econnreset|econnrefused|etimedout|eai_again|enetwork|timeouterror|apiconnectiontimeouterror)\b|socket hang up|fetch failed|network request failed|request timed out|request timeout|temporarily unavailable|service unavailable|gateway timeout|bad gateway|rate limit|overloaded/.test(
       text,
     )
   ) {

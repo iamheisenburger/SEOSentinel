@@ -8,6 +8,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
 import { randomUUID } from "crypto";
+import {
+  articleProviderTransportOptions,
+  withArticleExecutionBudget,
+} from "../lib/articleExecutionBudget";
 import { z } from "zod";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
@@ -519,14 +523,14 @@ const buildSlug = (title: string) =>
 const anthropicClient = () => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-  return new Anthropic({ apiKey });
+  return new Anthropic({ apiKey, ...articleProviderTransportOptions() });
 };
 
 // Keep OpenAI client for web search (Claude doesn't have built-in web search)
 const openaiClient = () => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set (needed for web research)");
-  return new OpenAI({ apiKey });
+  return new OpenAI({ apiKey, ...articleProviderTransportOptions() });
 };
 
 const UNTRUSTED_EVIDENCE_INSTRUCTION =
@@ -4842,6 +4846,36 @@ async function handleArticle(
     ? sha256Hex(productEvidence)
     : undefined;
 
+  // The writer has already consumed paid work. Persist its exact prose and
+  // hash-bound evidence before slower reviews/media can hit the action limit.
+  // A replacement worker resumes this draft; it must not buy another article.
+  const generatedStats = calculateArticleStats(article.markdown);
+  const generatedSlug = article.slug || buildSlug(article.title);
+  const checkpointId = jobId && workerToken
+    ? await ctx.runMutation(internal.articles.createDraftForJob, {
+        jobId, workerToken, siteId, topicId,
+        articleType: effectiveArticleType,
+        title: article.title,
+        slug: generatedSlug.startsWith("/") ? generatedSlug : `/${generatedSlug}`,
+        markdown: article.markdown,
+        metaTitle: article.metaTitle,
+        metaDescription: article.metaDescription,
+        metaKeywords: article.metaKeywords,
+        language: site.language,
+        sources: dedupedSources,
+        researchEvidenceSummary: preservedResearchEvidenceSnapshot(dedupedSources),
+        productEvidenceSnapshot: productEvidence || undefined,
+        productEvidenceHash,
+        ...generatedStats,
+      })
+    : undefined;
+  const generatedCheckpoint = checkpointId
+    ? await ctx.runQuery(internal.articles.getInternal, { articleId: checkpointId })
+    : null;
+  if (checkpointId && !generatedCheckpoint) {
+    throw new Error("Generated draft checkpoint disappeared before review");
+  }
+
   try {
     console.log("Running fact check...");
     const reviewed = await factCheckArticle(
@@ -5018,6 +5052,7 @@ async function handleArticle(
   }
 
   // ── Step 5b: Final people-first editorial review ──
+  await reportProgress(10, "Reviewing editorial quality...");
   let editorialQualityScore: number | undefined;
   let editorialQualityNotes: string[] = [];
   let editorialReviewCompleted = false;
@@ -5080,6 +5115,7 @@ async function handleArticle(
   // The editorial rewrite can remove or rephrase claims, so the final factual
   // review must run on the exact prose that will be stored.
   if (editorialReviewCompleted) {
+    await reportProgress(10, "Checking the reviewed article's factual claims...");
     try {
       const reviewed = await factCheckArticle(
         finalMarkdown,
@@ -5108,6 +5144,7 @@ async function handleArticle(
   // the exact prose that will be stored so the editorial score cannot describe
   // an earlier version of the article.
   if (isStrictPublication && editorialReviewCompleted) {
+    await reportProgress(10, "Auditing exact article evidence...");
     try {
       const maxWords = articleWordCeiling(effectiveArticleType);
       const auditArgs = {
@@ -5189,6 +5226,7 @@ async function handleArticle(
       );
 
       if (initialAuditScore < 85 || initialEvidenceDefectCount > 0) {
+        await reportProgress(10, "Repairing the exact audit findings...");
         try {
           console.log("Running one bounded remediation pass from the exact audit notes...");
           const remediated = await remediateFinalArticle({
@@ -5333,6 +5371,7 @@ async function handleArticle(
     );
 
   if (enableImages && isStrictPublication && strictProsePassed) {
+    await reportProgress(10, "Preparing reviewed article media...");
     for (let heroAttempt = 0; heroAttempt < 2; heroAttempt++) {
       try {
         featuredImage = await generateHeroImage(
@@ -5526,6 +5565,7 @@ async function handleArticle(
 
   // Metadata is generated from the final edited prose. Earlier metadata may no
   // longer describe the article after factual corrections and compression.
+  await reportProgress(11, "Finalizing article metadata and saved checkpoint...");
   try {
     const metadata = await generateFinalMetadata({
       title: article.title,
@@ -5582,7 +5622,7 @@ async function handleArticle(
   }
 
   // ── Step 7: Create Draft ──
-  const slug = article.slug || buildSlug(article.title);
+  const slug = generatedCheckpoint?.slug ?? (article.slug || buildSlug(article.title));
   const preservedResearchEvidence =
     preservedResearchEvidenceSnapshot(finalSources);
 
@@ -5618,6 +5658,10 @@ async function handleArticle(
         ...draftArgs,
         jobId,
         workerToken,
+        ...(generatedCheckpoint ? {
+          expectedCheckpointHash: publicationArtifactHash(generatedCheckpoint),
+          expectedCheckpointUpdatedAt: generatedCheckpoint.updatedAt,
+        } : {}),
       })
     : await ctx.runMutation(internal.articles.createDraft, draftArgs);
 
@@ -8747,7 +8791,7 @@ export const processNextJob = internalAction({
             )
           : await reviewExistingArticleHandler(ctx, {
               siteId: args.siteId,
-              articleId: payload.articleId,
+              articleId: checkpoint._id,
               incrementRevision: true,
               qualityRecoveryVersion:
                 qualityRecoveryAttemptVersionFromJob(job),
@@ -9412,7 +9456,12 @@ export const processNextJob = internalAction({
     };
 
     try {
-      const result = await execute();
+      const budgetCandidate = await ctx.runQuery(internal.jobs.getInternal, {
+        jobId: args.jobId,
+      });
+      const result = budgetCandidate?.type === "article"
+        ? await withArticleExecutionBudget(execute)
+        : await execute();
       if (result.checkpointContinuationScheduled) {
         return result;
       }

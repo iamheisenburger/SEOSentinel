@@ -161,3 +161,48 @@ Markdown boundaries, so literal code cannot become a phantom citation or pass
 as evidence. Tests cover native and bundled execution, escaped literals,
 reference and inline links, adjacent/mixed slots, idempotence and malformed
 source counts. This change does not lower any publication-quality threshold.
+
+The Markdown repair deployed as `5eb08de2d5b1cc86f5e777c08f46893da375dcab`:
+GitHub quality run `34031325869` succeeded (1,226 tests), Convex deployment
+succeeded, and production deployment `6292569901` / Vercel
+`HQLnUXxfs6pADZR9vwpt9GtNebjV` completed successfully.
+
+### Preserve paid drafts before long reviews
+
+LeadPilot job `j970z8gpkbqm702msz6q10mp0h8dx78e` started around 11:27 UTC
+and retained its 11:33:59 scoring-step heartbeat without an article checkpoint
+through the 12:00 natural cadence. Its lease did not expire until 12:03:59.
+The application lease alone therefore could not establish live execution.
+Convex documents a ten-minute Node action ceiling:
+https://docs.convex.dev/production/state/limits.
+
+Local inspection exposed two unsafe boundaries: the writer's output was not
+persisted until all review/media/metadata requests finished, and both provider
+SDKs inherited ten-minute request timeouts plus two transport retries. The
+repair saves the exact writer output and verified source/product snapshots
+before factual review. Later updates require the same current worker, tenant,
+configuration epoch, unexpired lease, unchanged draft timestamp and artifact
+hash. Edited, sealed or published content cannot be overwritten. Generation
+quota settles once; interrupted review resumes the existing draft.
+
+Provider requests now have a three-minute, no-transport-retry bound, and each
+article worker shares an eight-minute provider budget including response-body
+consumption. Concurrent workers have isolated deadlines; nested work cannot
+extend its deadline. The remaining Node window is reserved for checkpointing,
+settlement and durable continuation. Timeout classification preserves bounded
+job recovery without using an ambiguous paid timeout to fan out to a second
+provider. Actual editorial stages renew progress only when that stage starts.
+
+Runtime tests exercise the registered draft mutation, stale-token/configuration
+and content fences, one-time usage settlement, concurrent deadline isolation,
+stalled response bodies, cancellation and both installed provider SDKs. None
+of these changes lower publication gates or make unreviewed drafts publishable.
+Production recovery and sustained next-deadline acceptance remain pending.
+
+Local release gates passed: 1,235 tests, type-check, additive schema (59 tables,
+289 indexes), dependency audit, production build, and 10 public Playwright
+checks. Two authenticated harness checks remain skipped; the separate signed-in
+production settings acceptance is recorded above. Lint remains at zero errors
+and 159 pre-existing warnings. Running the new registered-handler tests against
+the previous mutation reproduced two failures; the repaired mutation passes all
+three runtime cases.

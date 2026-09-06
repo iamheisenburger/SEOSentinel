@@ -964,6 +964,8 @@ export const createDraftForJob = internalMutation({
   args: {
     jobId: v.id("jobs"),
     workerToken: v.string(),
+    expectedCheckpointHash: v.optional(v.string()),
+    expectedCheckpointUpdatedAt: v.optional(v.number()),
     siteId: v.id("sites"),
     topicId: v.optional(v.id("topic_clusters")),
     articleType: v.optional(v.string()),
@@ -1001,8 +1003,12 @@ export const createDraftForJob = internalMutation({
     productEvidenceStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const {
+      jobId, workerToken, expectedCheckpointHash, expectedCheckpointUpdatedAt,
+      ...draftFields
+    } = args;
     const [job, site, topic] = await Promise.all([
-      ctx.db.get(args.jobId),
+      ctx.db.get(jobId),
       ctx.db.get(args.siteId),
       args.topicId ? ctx.db.get(args.topicId) : Promise.resolve(null),
     ]);
@@ -1018,7 +1024,8 @@ export const createDraftForJob = internalMutation({
       !site ||
       job.siteId !== args.siteId ||
       job.status !== "running" ||
-      job.workerToken !== args.workerToken ||
+      job.workerToken !== workerToken ||
+      !job.leaseExpiresAt || job.leaseExpiresAt <= now() ||
       !executionAuthorized ||
       !jobAuthorizedForExecution(site, job) ||
       jobTopicId !== (args.topicId ? String(args.topicId) : undefined) ||
@@ -1029,7 +1036,32 @@ export const createDraftForJob = internalMutation({
     ) {
       throw new Error("Worker lease lost before generated draft checkpoint");
     }
-    if (job.articleId) return job.articleId;
+    if (job.articleId) {
+      if (expectedCheckpointHash === undefined &&
+          expectedCheckpointUpdatedAt === undefined) return job.articleId;
+      const checkpoint = await ctx.db.get(job.articleId);
+      if (!checkpoint || checkpoint.siteId !== args.siteId ||
+          checkpoint.topicId !== args.topicId || checkpoint.status !== "draft" ||
+          checkpoint.auditedContentHash || checkpoint.publishedContentHash ||
+          checkpoint.publicationGateStatus === "passed" ||
+          checkpoint.publicationLeaseOwner || checkpoint.publicationAttemptedAt ||
+          !articleMatchesCurrentDomain(site, checkpoint) ||
+          checkpoint.updatedAt !== expectedCheckpointUpdatedAt ||
+          publicationArtifactHash(checkpoint) !== expectedCheckpointHash) {
+        throw new Error("Generated draft checkpoint changed before reviewed update");
+      }
+      // Upgrade only the exact unsealed checkpoint owned by this execution.
+      // Never overwrite a recovered, edited, approved or published artifact.
+      await ctx.db.patch(checkpoint._id, {
+        ...draftFields, slug: checkpoint.slug, updatedAt: now(),
+      });
+      await syncSummary(ctx, checkpoint._id);
+      return checkpoint._id;
+    }
+    if (args.expectedCheckpointHash !== undefined ||
+        args.expectedCheckpointUpdatedAt !== undefined) {
+      throw new Error("Expected generated draft checkpoint is missing");
+    }
     const canonicalDomain = siteCanonicalDomain(site);
     if (!canonicalDomain) throw new Error("This site domain is invalid");
 
