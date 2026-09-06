@@ -164,6 +164,9 @@ export const AUTOPILOT_OPERATOR_HEALTH_STATUSES: ReadonlySet<string> = new Set([
   "job_lease_exhausted",
   "rollout_conflict",
   "rollout_buffer_ready",
+  // Publication completion persists this wait directly, outside the outcome
+  // classifier, until the ordinary live-URL verifier finishes.
+  "public_url_pending",
   "topic_portfolio_below_goal",
   "topic_portfolio_evidence_missing",
   ...Object.entries(JOB_RUN_OUTCOME_HEALTH)

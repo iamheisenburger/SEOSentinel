@@ -660,3 +660,51 @@ the established environment setup; rerunning with the correct non-secret
 build settings and silently sourced deployment environment passed. They were
 local invocation failures, not production or funding failures. No production
 deployment has occurred during the pending LeadPilot cadence observation.
+
+### Natural LeadPilot delivery, September 6 at 14:14 UTC
+
+Production remained on `768b1d8` throughout this observation. The existing
+deadline `kd71xdrvjr666kj90g2pxshdgx8dxd2f`, due at 14:14:43.010 UTC, started
+at 14:14:43.217 (207 ms after its deadline), without a manual trigger or
+cadence change. Publication job `j97ap5k350fmhj07nhqfqsey7n8dx9f3` delivered
+article `j575s99b83e35dv83c4b65vms58dxm07`, “Lead Scoring Software: 6
+Requirements for Website Conversations”. Its publication time was
+14:14:51.187 UTC, 8.177 seconds after the deadline, not zero-latency delivery.
+
+GitHub commit `4e4304b56be09e0830d7237cce1aa4ca78fcad32` adds exactly one
+new file, `content/blog/lead-scoring-software-website-conversations.md`;
+this is a new article, not an existing-page revision. The committed Markdown
+body matches the sealed article after the normal leading-title transformation.
+The committed front matter contains the exact delivery key and audited hash.
+The audit, publication and receipt hashes agree:
+`0178c6ef59d45a279eede2fe511e664f73ebae3a8cdaa7144d930ab38900232d`.
+
+The public URL initially returned 404 while Vercel built the deployment.
+After Vercel reported success, it returned HTTP 200 with the expected canonical,
+title and final section. The ordinary verifier durably recorded `verified`
+at 14:17:23.538 UTC. Live artifact:
+https://leadpilot.chat/blog/lead-scoring-software-website-conversations.
+Its follow-up automatically armed deadline `kd7a3dmf1bk4n5et6s0hej2p398dxv11`
+for 22:14:51.187 UTC. No manual verifier, scheduler, or deadline mutation was
+needed. Native Chrome remains accessible and signed in; no reconnect action,
+password sharing or account sign-out is needed from the owner.
+
+LeadPilot now has four sealed articles, below its minimum of nine and target
+of twelve. Its daily replenishment allowance remains exhausted until the
+already-scheduled September 7 wake. Pentra retains three sealed articles and
+its September 7 11:45:12.262 UTC deadline. Sustained replenishment, clean generic
+new-user onboarding, the previously identified public-article correction,
+and measured SEO growth remain unproven. This publication does not complete
+the goal or establish universal reliability.
+
+The publication also reproduced a read-only reporting defect: the ordinary
+completion writer stores `public_url_pending`, but the operator health
+allowlist replaced it with `unclassified`. A failing runtime projection test
+was added, then the explicit legitimate status was included in the shared
+allowlist. Unknown free-form status strings and private details remain
+redacted. This changes reporting only; no delivery, timing, or quality gate
+was relaxed. All 1,275 tests, type-check, zero-error lint (157 existing
+warnings), additive schema check, secret scan, dependency audit, production
+build and Convex deployment dry-run passed. Ten public Playwright checks also
+passed; the two authenticated harness tests remained skipped and are not
+counted as passes. The signed-in native Chrome check is separate evidence.

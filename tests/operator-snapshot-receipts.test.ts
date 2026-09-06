@@ -37,6 +37,25 @@ const operatorProjection = readFileSync(
 );
 const schema = readFileSync("convex/schema.ts", "utf8");
 
+test("operator health preserves public URL verification waits without exposing free-form details", () => {
+  for (const siteId of ["tenant-one", "tenant-two"]) {
+    const receipt = operatorHealthReceipt({
+      siteId,
+      status: "public_url_pending",
+      heartbeatAt: 100,
+      updatedAt: 101,
+      detail: "private-publication-detail",
+    } as never);
+    assert.equal(receipt?.status, "public_url_pending");
+    assert.equal(receipt?.heartbeatAt, 100);
+    assert.equal(receipt?.updatedAt, 101);
+    assertNoForbiddenStrings(receipt, [siteId, "private-publication-detail"]);
+  }
+  assert.equal(operatorHealthReceipt({
+    status: "private-unknown-status",
+  } as never)?.status, "unclassified");
+});
+
 function assertNoForbiddenStrings(
   value: unknown,
   forbidden: readonly string[],
