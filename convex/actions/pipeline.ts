@@ -7003,7 +7003,16 @@ async function reviewExistingArticleHandler(
         sources,
         minWords: minimumWords,
         maxWords,
-        auditNotes: storedDefects.slice(0, 20),
+        // Prioritize explicit corrections before the existing prompt bound.
+        // General observations and gate summaries may outnumber the actual
+        // repair instructions; their order must not silence the latter.
+        auditNotes: [...new Set(storedDefects)].sort((left, right) => {
+          const priority = (note: string) =>
+            /^(?:Remaining )?Material editorial defect\b/i.test(note) ? 0
+              : /^(?:Remaining )?(?:Deterministic )?(?:Uncited evidence defect|Claim-ledger defect|Unsupported claim|Evidence defect)\b/i.test(note) ? 1
+              : 2;
+          return priority(left) - priority(right);
+        }).slice(0, 20),
       });
       reviewMarkdown = remediated.markdown;
     }
@@ -7160,7 +7169,6 @@ async function reviewExistingArticleHandler(
     ) {
       try {
         const exactAuditNotes = [
-          ...audit.notes,
           ...audit.materialDefects,
           ...auditState.evidenceDefects.map(
             (claim, index) =>
@@ -7173,6 +7181,7 @@ async function reviewExistingArticleHandler(
             (claim, index) =>
               `Unsupported claim ${index + 1}: ${claim.claim} (${claim.reason})`,
           ),
+          ...audit.notes,
         ];
         const remediated = await remediateFinalArticle({
           markdown: exactReviewedMarkdown,
@@ -7572,6 +7581,12 @@ async function reviewExistingArticleHandler(
       editorialQualityScore,
       editorialQualityNotes: [
         `Existing draft exact-prose audit: ${editorialQualityScore}/100.`,
+        // Persist the selected exact artifact's unresolved corrections, not
+        // only the auditor's general observations or a rejected candidate's
+        // notes. The next separately bounded attempt needs this feedback.
+        ...audit.materialDefects.map(
+          (defect, index) => `Material editorial defect ${index + 1}: ${defect}`,
+        ),
         ...postAuditRemediationNotes,
         ...audit.notes,
         ...evidenceDefects.map(
