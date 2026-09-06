@@ -6,9 +6,39 @@ import {
   AUTOPILOT_OPERATOR_HEALTH_STATUSES,
   AUTOPILOT_OPERATOR_RUN_OUTCOMES,
   classifyAutopilotRunOutcome,
+  classifyProcessedJobOutcome,
   JOB_RUN_OUTCOME_HEALTH,
   SCHEDULER_RUN_OUTCOME_HEALTH,
 } from "../convex/lib/autopilotRunOutcome.ts";
+import { autopilotHealthStatus } from "../convex/lib/autopilotBuffer.ts";
+
+test("durable provider pauses remain distinct from failed jobs and green buffer outcomes", () => {
+  for (const failureKind of ["provider_funding_paused", "provider_allowance_paused"] as const) {
+    const outcome = classifyProcessedJobOutcome({ processed: true, error: "unavailable", failureKind });
+    assert.equal(outcome, failureKind);
+    for (const approvedBufferCount of [0, 4, 12]) {
+      assert.equal(classifyAutopilotRunOutcome({ outcome, approvedBufferCount }).status, failureKind);
+      assert.equal(autopilotHealthStatus({ schedulerStale: false, publicationMissed: false,
+        bufferCount: approvedBufferCount, lastOutcome: outcome }), failureKind);
+    }
+    assert.equal(classifyProcessedJobOutcome({ processed: false, error: "handoff lost", failureKind }), "job_failed");
+    assert.equal(classifyProcessedJobOutcome({ processed: false, failureKind }), "claim_lost");
+  }
+  assert.equal(classifyProcessedJobOutcome({ processed: true, error: "busy", failureKind: "provider_capacity_deferred" }), "provider_capacity_deferred");
+  assert.equal(classifyAutopilotRunOutcome({ outcome: "provider_capacity_deferred", approvedBufferCount: 12 }).status, "recovering");
+  assert.equal(autopilotHealthStatus({ schedulerStale: false, publicationMissed: true,
+    bufferCount: 12, lastOutcome: "provider_funding_paused" }), "missed");
+});
+
+test("provider deferral classification does not conceal unrelated or terminal errors", () => {
+  assert.equal(classifyProcessedJobOutcome({ processed: true, error: "unexpected", failureKind: "unknown" }), "job_failed");
+  assert.equal(classifyProcessedJobOutcome({ processed: true, error: "publication", failureKind: "publication_failed" }), "publication_failed");
+  assert.equal(classifyProcessedJobOutcome({ processed: true, buffered: true }), "buffer_ready");
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.match(pipeline, /return classifyProcessedJobOutcome\(processed\)/);
+  assert.match(pipeline, /deferArticleProviderMonthlyAllowance[\s\S]*?failureKind: "provider_allowance_paused"/);
+  assert.match(pipeline, /deferArticleProviderFunding[\s\S]*?failureKind: "provider_funding_paused"/);
+});
 
 test("every declared scheduler outcome has an explicit health decision", () => {
   for (const outcome of Object.keys(SCHEDULER_RUN_OUTCOME_HEALTH)) {

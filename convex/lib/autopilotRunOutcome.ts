@@ -66,6 +66,9 @@ export function schedulerWorkIsBound(
 export const JOB_RUN_OUTCOME_HEALTH = {
   claim_lost: "waiting",
   retry_scheduled: "waiting",
+  provider_capacity_deferred: "waiting",
+  provider_funding_paused: "blocked",
+  provider_allowance_paused: "blocked",
   plan_continuation_queued: "waiting",
   buffer_ready: "buffer_protected",
   quality_recovered: "buffer_protected",
@@ -76,6 +79,37 @@ export const JOB_RUN_OUTCOME_HEALTH = {
   job_failed: "blocked",
   site_parked: "blocked",
 } as const;
+
+/** The worker's durable deferral is not a failed article or successful work.
+ * Only a confirmed handoff may emit a paused/retry outcome; failed handoffs
+ * retain the original error path. */
+export function classifyProcessedJobOutcome(processed: {
+  processed: boolean;
+  error?: string;
+  failureKind?: string;
+  planContinuationQueued?: boolean;
+  qualityQuarantined?: boolean;
+  publicationSucceeded?: boolean;
+  buffered?: boolean;
+  qualityRecovered?: boolean;
+}): keyof typeof JOB_RUN_OUTCOME_HEALTH {
+  if (!processed.processed && !processed.error) return "claim_lost";
+  if (processed.planContinuationQueued) return "plan_continuation_queued";
+  if (processed.qualityQuarantined) return "quality_quarantined";
+  if (processed.failureKind === "publication_failed") return "publication_failed";
+  if (processed.failureKind === "retry_scheduled") return "retry_scheduled";
+  if (processed.processed) {
+    switch (processed.failureKind) {
+      case "provider_capacity_deferred": return "provider_capacity_deferred";
+      case "provider_funding_paused": return "provider_funding_paused";
+      case "provider_allowance_paused": return "provider_allowance_paused";
+    }
+  }
+  if (processed.publicationSucceeded) return "publication_succeeded";
+  if (processed.buffered) return "buffer_ready";
+  if (processed.qualityRecovered) return "quality_recovered";
+  return processed.error ? "job_failed" : "job_processed";
+}
 
 /**
  * Outcomes written outside the scheduler/job classifiers (for example by

@@ -71,12 +71,16 @@ export function decideArticleProviderAdmission(input: {
   activeFleetAttempts: number;
 }): ArticleProviderAdmissionDecision {
   if (input.existingStatus !== undefined) {
-    return ["reserved", "funding_paused"].includes(input.existingStatus) &&
-        input.existingOwnedByAccount === true
-      ? { status: "reuse" }
-      : { status: "reject", reason: "attempt_already_settled" };
+    if (input.existingOwnedByAccount !== true ||
+        !["reserved", "funding_paused"].includes(input.existingStatus)) {
+      return { status: "reject", reason: "attempt_already_settled" };
+    }
+    // A live reservation already occupies a concurrency slot. Funding pauses
+    // release that slot, so resuming one must compete with current workers.
+    // It remains the same monthly attempt, even after the allowance fills.
+    if (input.existingStatus === "reserved") return { status: "reuse" };
   }
-  if (input.attemptsUsed >= input.attemptAllowance) {
+  if (input.existingStatus === undefined && input.attemptsUsed >= input.attemptAllowance) {
     return { status: "reject", reason: "monthly_attempt_limit" };
   }
   if (input.activeAccountAttempts >= ARTICLE_PROVIDER_ACCOUNT_CONCURRENCY) {
@@ -85,5 +89,5 @@ export function decideArticleProviderAdmission(input: {
   if (input.activeFleetAttempts >= ARTICLE_PROVIDER_FLEET_CONCURRENCY) {
     return { status: "reject", reason: "fleet_concurrency" };
   }
-  return { status: "reserve" };
+  return { status: input.existingStatus === "funding_paused" ? "reuse" : "reserve" };
 }

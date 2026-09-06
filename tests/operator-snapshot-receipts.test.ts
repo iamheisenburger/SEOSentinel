@@ -57,6 +57,18 @@ function assertNoForbiddenStrings(
   }
 }
 
+test("operator job projections expose a valid pending retry timestamp but no provider messages", () => {
+  const base = { _id: "job", type: "article", status: "pending", createdAt: 10, updatedAt: 20,
+    nextAttemptAt: 40, error: "provider-secret", workerToken: "worker-secret" };
+  assert.equal(operatorActiveJobReceipt(base as never).nextAttemptAt, 40);
+  for (const patch of [{ status: "running" }, { status: "failed" },
+    { nextAttemptAt: 20 }, { nextAttemptAt: -1 }, { nextAttemptAt: NaN },
+    { nextAttemptAt: Infinity }, { nextAttemptAt: "secret" }]) {
+    assert.equal(operatorActiveJobReceipt({ ...base, ...patch } as never).nextAttemptAt, undefined);
+  }
+  assertNoForbiddenStrings(operatorActiveJobReceipt(base as never), ["provider-secret", "worker-secret"]);
+});
+
 test("operator plan receipts are bounded before projection", () => {
   assert.equal(OPERATOR_PLAN_RECEIPT_LIMIT, 8);
   assert.equal(OPERATOR_PLAN_CHECKPOINT_READ_LIMIT, 2);

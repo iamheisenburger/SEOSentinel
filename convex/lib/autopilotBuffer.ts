@@ -456,6 +456,8 @@ export function autopilotHealthStatus(args: {
     "topic_replenishment_exhausted",
     "opportunity_space_exhausted",
     "planning_blocked",
+    "provider_funding_paused",
+    "provider_allowance_paused",
     "topic_admission_blocked",
     "scheduler_state_conflict",
     "job_lease_exhausted",

@@ -3532,7 +3532,7 @@ export const deferArticleProviderFunding = internalMutation({
       ctx,
       job.siteId,
       "article_provider_funding_unavailable",
-      "Article production is paused because neither configured article provider has funded capacity.",
+      "Article production is paused after a configured article provider reported insufficient funded capacity. Check provider billing and configuration.",
       { jobId, articleId: job.articleId, nextAttemptAt, workerAttempts },
     );
     await ctx.scheduler.runAt(

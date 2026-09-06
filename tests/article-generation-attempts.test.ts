@@ -49,7 +49,7 @@ test("one worker execution is idempotent while each paid retry gets a new receip
   );
 });
 
-test("admission reuses the exact live receipt before applying account or fleet limits", () => {
+test("admission reuses the exact live receipt without counting its slot twice", () => {
   assert.deepEqual(
     decideArticleProviderAdmission({
       existingStatus: "reserved",
@@ -67,8 +67,8 @@ test("admission reuses the exact live receipt before applying account or fleet l
       existingOwnedByAccount: true,
       attemptsUsed: 170,
       attemptAllowance: 170,
-      activeAccountAttempts: 2,
-      activeFleetAttempts: 3,
+      activeAccountAttempts: 0,
+      activeFleetAttempts: 0,
     }),
     { status: "reuse" },
   );
@@ -94,6 +94,24 @@ test("admission reuses the exact live receipt before applying account or fleet l
     }),
     { status: "reject", reason: "attempt_already_settled" },
   );
+});
+
+test("funding-paused attempts must reacquire concurrency without consuming another monthly attempt", () => {
+  const paused = {
+    existingStatus: "funding_paused" as const,
+    existingOwnedByAccount: true,
+    attemptsUsed: 170,
+    attemptAllowance: 170,
+    activeAccountAttempts: 0,
+    activeFleetAttempts: 0,
+  };
+  assert.deepEqual(decideArticleProviderAdmission(paused), { status: "reuse" });
+  assert.deepEqual(decideArticleProviderAdmission({ ...paused, activeAccountAttempts: 2 }),
+    { status: "reject", reason: "account_concurrency" });
+  assert.deepEqual(decideArticleProviderAdmission({ ...paused, activeFleetAttempts: 3 }),
+    { status: "reject", reason: "fleet_concurrency" });
+  assert.deepEqual(decideArticleProviderAdmission({ ...paused, existingOwnedByAccount: false }),
+    { status: "reject", reason: "attempt_already_settled" });
 });
 
 test("monthly, account-concurrency, and fleet-concurrency breakers fail closed", () => {

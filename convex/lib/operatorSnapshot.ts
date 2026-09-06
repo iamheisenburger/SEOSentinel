@@ -811,6 +811,11 @@ export function operatorActiveJobReceipt(job: Doc<"jobs">) {
     retries: job.retries,
     workerAttempts: job.workerAttempts,
     publicationAttempts: job.publicationAttempts,
+    nextAttemptAt: job.status === "pending" &&
+        Number.isSafeInteger(job.nextAttemptAt) &&
+        (job.nextAttemptAt ?? 0) > job.updatedAt
+      ? job.nextAttemptAt
+      : undefined,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };

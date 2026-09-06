@@ -74,6 +74,7 @@ import {
 } from "../lib/autopilotBuffer";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
 import {
+  classifyProcessedJobOutcome,
   schedulerWorkIsBound,
   type SchedulerRunOutcome,
 } from "../lib/autopilotRunOutcome.ts";
@@ -7780,25 +7781,7 @@ type ProcessedJobResult = {
 };
 
 function processedJobOutcome(processed: ProcessedJobResult): string {
-  return !processed.processed && !processed.error
-    ? "claim_lost"
-    : processed.planContinuationQueued
-      ? "plan_continuation_queued"
-      : processed.qualityQuarantined
-        ? "quality_quarantined"
-        : processed.failureKind === "publication_failed"
-          ? "publication_failed"
-          : processed.failureKind === "retry_scheduled"
-            ? "retry_scheduled"
-            : processed.publicationSucceeded
-              ? "publication_succeeded"
-              : processed.buffered
-                ? "buffer_ready"
-                : processed.qualityRecovered
-                  ? "quality_recovered"
-                  : processed.error
-                    ? "job_failed"
-                    : "job_processed";
+  return classifyProcessedJobOutcome(processed);
 }
 
 function processedJobDetail(processed: ProcessedJobResult): string | undefined {
@@ -9300,7 +9283,7 @@ export const processNextJob = internalAction({
             jobId: job._id,
             articleId: job.articleId,
             error: message,
-            failureKind: "provider_capacity_deferred",
+            failureKind: "provider_allowance_paused",
           };
         }
         const failed = await ctx.runMutation(internal.jobs.markFailed, {
@@ -9335,7 +9318,7 @@ export const processNextJob = internalAction({
             jobId: job._id,
             articleId: job.articleId,
             error: message,
-            failureKind: "provider_capacity_deferred",
+            failureKind: "provider_funding_paused",
           };
         }
         const failed = await ctx.runMutation(internal.jobs.markFailed, {
