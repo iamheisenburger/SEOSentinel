@@ -1,3 +1,5 @@
+"use node";
+
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // Leave two minutes of the Node action's ten-minute window for checkpoint,

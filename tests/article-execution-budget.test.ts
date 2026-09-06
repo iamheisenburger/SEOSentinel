@@ -12,6 +12,7 @@ import {
 import { classifyArticleProviderFailure } from "../convex/lib/articleProviderFailure.ts";
 
 test("provider requests have a no-retry limit below the action checkpoint budget", () => {
+  assert.match(readFileSync("convex/lib/articleExecutionBudget.ts", "utf8"), /^"use node";/);
   const options = articleProviderTransportOptions();
   assert.equal(options.maxRetries, 0);
   assert.equal(options.timeout, ARTICLE_PROVIDER_REQUEST_TIMEOUT_MS);
