@@ -1098,6 +1098,86 @@ test("bibliography metadata is not reclassified as an evidence claim", () => {
   assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
+test("a contiguous bibliography block is metadata only when every line is a reference", () => {
+  const rows = [
+    '[1] Researcher, A. "A Study of 12 Writers." https://research.example/writers',
+    '[2] Authoring Tools 2.0 — https://standards.example/tools',
+    '[3] Accessible Output — https://standards.example/output',
+  ];
+  for (const separator of ["\n", "\r\n", "\n\n"]) {
+    const bibliography = rows.join(separator);
+    assert.deepEqual(evidenceRequiredParagraphs(bibliography, ""), []);
+    const result = validateClaimEvidenceLedger({ markdown: bibliography,
+      sources: [], researchEvidence: "", productEvidence: "",
+      claimEvidence: [{ claim: bibliography, citationNumbers: [1, 2, 3], supported: true,
+        reason: "These are reference metadata rows, not assertions from their source bodies." }],
+    });
+    assert.equal(result.passed, true, result.issues.join("\n"));
+  }
+  for (const markdown of [
+    `${rows[0]}\nResearch found that software increases conversion by 99%.`,
+    '- https://research.example/writers\nResearch found that software increases conversion by 99%.',
+    '- https://research.example/writers Research found that software increases conversion by 99%.',
+  ]) {
+    assert.equal(evidenceRequiredParagraphs(markdown, "").length, 1);
+    const result = validateClaimEvidenceLedger({ markdown, sources: [], researchEvidence: "",
+      productEvidence: "", claimEvidence: [{ claim: markdown, citationNumbers: [1], supported: true,
+        reason: "A source-looking prefix must not excuse the unsupported assertion that follows." }],
+    });
+    assert.equal(result.passed, false);
+  }
+});
+
+function auditCitedParagraph(claim: string, excerpts: string[]) {
+  const sources = excerpts.map((excerpt, index) => ({ url: `https://research.example/source-${index + 1}`,
+    excerpt, contentHash: sha256Hex(excerpt) }));
+  return validateClaimEvidenceLedger({ markdown: claim, sources,
+    researchEvidence: preservedResearchEvidenceSnapshot(sources), productEvidence: "",
+    claimEvidence: [{ claim, citationNumbers: inlineCitationNumbers(claim), supported: true,
+      reason: "The independent audit binds each stated proposition to its inline preserved source." }],
+  });
+}
+
+const writerExcerpt = "The study surveyed 12 writers about hierarchical planning tools and documented their experiences with long-form documents. The source preserves the complete study methodology and enough surrounding context to inspect its findings.";
+const editorExcerpt = "The study surveyed 8 editors about reflective writing assistants and documented their experiences with goal setting. The source preserves the complete study methodology and enough surrounding context to inspect its findings.";
+
+test("distinct inline citations bind distinct propositions without borrowing earlier numbers", () => {
+  for (const conjunction of [", while", ";", ", and"]) {
+    const claim = `The study surveyed 12 writers [1]${conjunction} the study surveyed 8 editors [2].`;
+    const result = auditCitedParagraph(claim, [writerExcerpt, editorExcerpt]);
+    assert.equal(result.passed, true, result.issues.join("\n"));
+  }
+});
+
+test("every repeated source marker is audited rather than accepting only its first proposition", () => {
+  const result = auditCitedParagraph(
+    "The study surveyed 12 writers [1], and the study surveyed 999 writers [1].", [writerExcerpt]);
+  assert.equal(result.passed, false);
+  assert.match(result.issues.join("\n"), /number absent from excerpt: "999"/);
+});
+
+test("adjacent citations still bind the same complete proposition to each source", () => {
+  for (const citations of ["[1][2]", "[1] [2]", "[1], [2]", "[1] and [2]", "[1, 2]"]) {
+    const claim = `The study surveyed 12 writers ${citations}.`;
+    const valid = auditCitedParagraph(claim, [writerExcerpt, writerExcerpt]);
+    assert.equal(valid.passed, true, valid.issues.join("\n"));
+    const invalid = auditCitedParagraph(claim, [writerExcerpt, editorExcerpt]);
+    assert.equal(invalid.passed, false, "A neighboring citation must not erase the unsupported number");
+    assert.match(invalid.issues.join("\n"), /number absent from excerpt: "12"/);
+  }
+});
+
+test("a trailing uncited factual clause cannot hide behind a preceding citation", () => {
+  const invalid = auditCitedParagraph(
+    "The study surveyed 12 writers [1], and software increases conversion by 99%.", [writerExcerpt]);
+  assert.equal(invalid.passed, false);
+  assert.match(invalid.issues.join("\n"), /uncited factual/);
+  assert.match(invalid.issues.join("\n"), /Uncited text: "and software increases conversion by 99%\."/);
+  const advice = auditCitedParagraph(
+    "The study surveyed 12 writers [1] — compare the study's context with your own workflow before deciding.", [writerExcerpt]);
+  assert.equal(advice.passed, true, advice.issues.join("\n"));
+});
+
 test("comma-list inline citations bind every ordinal to the exact claim ledger", () => {
   assert.deepEqual(inlineCitationNumbers("Supported result [1, 2] and method [3]."), [1, 2, 3]);
   const claim = "Research found that faster responses improved follow-up consistency.";

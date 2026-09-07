@@ -393,17 +393,24 @@ function claimSentenceSegments(value: string): string[] {
 
 function citationBoundClaimSegments(value: string, citation: number): string[] {
   return claimSentenceSegments(value).flatMap((segment) => {
+    const claims: string[] = [];
+    let start = 0;
+    let previousProposition = "";
     for (const marker of markdownCitationMarkers(segment)) {
+      const between = segment.slice(start, marker.start);
+      const adjacent = previousProposition.length > 0 &&
+        /^(?:\s|[,;]|\band\b|\bor\b|&)*$/i.test(between);
+      const proposition = adjacent ? previousProposition : between.trim();
       if (marker.numbers.includes(citation)) {
-        // A citation closes the sourced proposition. Conditional advice often
-        // follows after the marker in the same typographic sentence (for
-        // example, an em-dash followed by "check this yourself"). Exclude that
-        // trailing advice from source-similarity math while separately auditing
-        // every citation-free factual sentence below.
-        return [segment.slice(0, marker.end).trim()];
+        // Each marker closes its own proposition. Adjacent markers share one
+        // proposition, but a later clause must not inherit earlier numbers or
+        // entities. Inspect every occurrence, including a repeated ordinal.
+        claims.push(`${proposition} ${segment.slice(marker.start, marker.end)}`.trim());
       }
+      previousProposition = proposition;
+      start = marker.end;
     }
-    return [];
+    return claims;
   });
 }
 
@@ -631,10 +638,10 @@ function isStandaloneCallToActionLink(paragraph: string): boolean {
 }
 
 function isSourceBibliographyEntry(paragraph: string): boolean {
-  return (
-    /^\s*[-*]\s+https?:\/\//i.test(paragraph) ||
-    /^\s*\[\d+\]\s+[^\n]+https:\/\/\S+\s*$/i.test(paragraph)
-  );
+  const rows = paragraph.split(/\r?\n/).map(row => row.trim()).filter(Boolean);
+  return rows.length > 0 && rows.every(row =>
+    /^[-*]\s+https?:\/\/\S+$/i.test(row) ||
+    /^\[\d+\]\s+[^\n]+https:\/\/\S+$/i.test(row));
 }
 
 function referencesNamedProduct(value: string, productEvidence: string): boolean {
@@ -802,16 +809,27 @@ export function validateClaimEvidenceLedger(args: {
         (claim) => inlineCitationNumbers(claim).length > 0,
       );
       const uncitedEvidenceClaims = entryHasInlineCitation
-        ? claimSentenceSegments(entry.claim).filter(
+        ? claimSentenceSegments(entry.claim).map((claim) => {
+            const markers = markdownCitationMarkers(claim);
+            // A cited proposition cannot certify an uncited assertion after
+            // its final marker, even when both share a typographic sentence.
+            return markers.length > 0
+              ? claim.slice(markers[markers.length - 1].end)
+                .replace(/^[\s,;:.!?—–-]+/, "").trim()
+              : claim;
+          }).filter(
             (claim) =>
+              claim.length > 0 &&
               inlineCitationNumbers(claim).length === 0 &&
               requiresClaimEvidence(claim, args.productEvidence) &&
               !productSnapshotSupports(claim),
           )
         : [];
       if (uncitedEvidenceClaims.length > 0) {
+        const excerpts = uncitedEvidenceClaims.slice(0, 3)
+          .map(claim => JSON.stringify(claim.length > 420 ? `${claim.slice(0, 420)}…` : claim));
         issues.push(
-          `Claim ledger entry ${index + 1} contains ${uncitedEvidenceClaims.length} uncited factual sentence(s) without matched first-party evidence.`,
+          `Claim ledger entry ${index + 1} contains ${uncitedEvidenceClaims.length} uncited factual sentence(s) without matched first-party evidence. Uncited text: ${excerpts.join("; ")}.`,
         );
       }
     } else {
