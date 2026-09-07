@@ -1431,6 +1431,60 @@ test("source mismatch feedback identifies the exact cited sentence and failed ev
   }
 });
 
+test("first-party mismatch feedback distinguishes navigation numbers and unsupported product details", () => {
+  for (const brand of ["Harbor", "Cedar"]) {
+    const productEvidence = `Name: ${brand}\n${brand} publishes reviewed articles and tracks page impressions and clicks.`;
+    const check = (claim: string) => validateClaimEvidenceLedger({
+      markdown: claim, sources: [], researchEvidence: "", productEvidence,
+      productEvidenceHash: sha256Hex(productEvidence),
+      claimEvidence: [{ claim, citationNumbers: [], supported: true,
+        reason: "The auditor asserts that the preserved product snapshot supports this prose." }],
+    });
+    const navigation = check(`${brand} publishes reviewed articles — see Step 5.`);
+    assert.equal(navigation.passed, false);
+    assert.match(navigation.issues.join("\n"), /Product claim:/);
+    assert.match(navigation.issues.join("\n"), /number absent from excerpt: "5"/);
+    const quantity = check(`${brand} publishes 900 reviewed articles each month.`);
+    assert.equal(quantity.passed, false);
+    assert.match(quantity.issues.join("\n"), /number absent from excerpt: "900"/);
+    const alias = check(`${brand} Search Suite tracks page impressions and clicks.`);
+    assert.equal(alias.passed, false);
+    assert.ok(alias.issues.join("\n").includes(`named phrase absent from excerpt: "${brand.toLowerCase()} search suite"`));
+    const corrected = check(`${brand} publishes reviewed articles and tracks page impressions and clicks.`);
+    assert.equal(corrected.passed, true, corrected.issues.join("\n"));
+  }
+});
+
+test("first-party diagnostic reports invalid provenance without pretending wording can repair it", () => {
+  const claim = "Cedar publishes reviewed articles and tracks page impressions and clicks.";
+  const productEvidence = `Name: Cedar\n${claim}`;
+  for (const productEvidenceHash of [undefined, sha256Hex("different snapshot")]) {
+    const result = validateClaimEvidenceLedger({
+      markdown: claim, sources: [], researchEvidence: "", productEvidence, productEvidenceHash,
+      claimEvidence: [{ claim, citationNumbers: [], supported: true,
+        reason: "The auditor asserts support without an exact valid first-party snapshot." }],
+    });
+    assert.equal(result.passed, false);
+    assert.match(result.issues.join("\n"), /snapshot is missing or its content hash is invalid/);
+    assert.doesNotMatch(result.issues.join("\n"), /number absent|wording overlap/);
+  }
+});
+
+test("first-party diagnostic exposes a late unmatched detail while keeping feedback bounded", () => {
+  const evidence = "Name: Cedar\nCedar publishes reviewed articles and tracks page impressions and clicks.";
+  const claim = `Cedar publishes reviewed articles. ${"Readers can inspect their own pages before deciding what to do next. ".repeat(24)} Cedar tracks 900 page impressions.`;
+  const result = validateClaimEvidenceLedger({
+    markdown: claim, sources: [], researchEvidence: "", productEvidence: evidence,
+    productEvidenceHash: sha256Hex(evidence),
+    claimEvidence: [{ claim, citationNumbers: [], supported: true,
+      reason: "The auditor incorrectly asserts support for the complete product paragraph." }],
+  });
+  assert.equal(result.passed, false);
+  const issue = result.issues.find(issue => issue.includes("neither a matched source"))!;
+  assert.match(issue, /number absent from excerpt: "900"/);
+  assert.ok(issue.length < 1200);
+});
+
 test("source mismatch diagnostics are bounded without dropping additional failing sentences", () => {
   const excerpt = "The measurement report describes clicks, impressions, and position. ".repeat(4);
   const claim = Array.from({ length: 8 }, (_, i) =>

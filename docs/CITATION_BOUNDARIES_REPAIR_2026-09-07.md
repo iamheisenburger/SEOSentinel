@@ -75,3 +75,61 @@ browser checks. Two credential-dependent automated checks remain skipped.
 LeadPilot's new planning execution remains behind its existing cooldowns.
 Sustained replenishment, every supported onboarding path, autonomous backlink
 outcomes, and attributable SEO growth are not established by these repairs.
+
+## Bound production deployment
+
+- Source commit `0dc898e` was normally merged with Pentra's independent natural
+  article publication, preserving both changes. Final pushed release:
+  `24183313b98fdea47c04a2904e94d19fbefeb9fb`.
+- GitHub quality run `34119997540`: succeeded, including all 1,402 tests.
+- GitHub production deployment `6308301231`: success at September 7
+  12:06:08 UTC.
+- Convex deployment to `wary-starfish-773`: succeeded before September 7
+  12:10:35 UTC, with type-check and schema validation and no deleted indexes.
+- The unrelated provider-diagnosis note was not staged or committed.
+  `.codex-convex-prod.env` remained untracked and was not printed.
+
+At 12:10 UTC Pentra retained two sealed ready articles after publication; its
+ordinary refill job `j9773cy9jkppbcqp2549bnff6x8dywwn` was reviewing saved draft
+`j57001e1fe3a93x7em70dmcybh8dy0wf`. Factual score 94 alone is not a final
+quality seal. Its next configured publication deadline was September 8
+12:00:19.580 UTC. LeadPilot retained two sealed ready articles with its next
+deadline September 7 14:15:15.201 UTC.
+
+A bounded, owner-requested LeadPilot plan queue request was denied before
+dispatch: `plan_headroom_exhausted`, 18 counted plans against maximum 15.
+No job or provider call was started by that request. This is the manual plan
+allowance, not evidence that the topped-up provider balance failed. The
+existing automatic plan cooldowns and reservations were left intact; the
+earliest observed automatic eligibility remains September 8 00:01:30.615 UTC.
+
+## Follow-on first-party repair feedback
+
+The ordinary Pentra refill above completed at 12:13:24.171 UTC as quarantined,
+not ready. Its independent factual score was 93, while two deterministic
+first-party ledger mismatches capped its editorial score at 84. Both complete
+product paragraphs included navigation to the article's own Step 5, Step 6,
+or Step 7. Those numbers were not in the product snapshot. The old generic
+error quoted only the first 220 characters, so the editor could not see the
+actual mismatching detail and repeated the paragraphs across its bounded edits.
+
+A read-only replay confirmed that the stored product snapshot hash was valid.
+Removing only the three article-local cross-reference clauses in a local copy
+of the prose and its matching ledger changed the existing validation result
+from two failures to passed. No production prose or ledger was modified.
+
+The follow-on repair reuses the existing bounded number, named-phrase and
+overlap diagnostics for first-party claims. Missing or invalid product hashes
+are reported separately as provenance failures that prose edits cannot fix.
+The normal remediation prompt now tells the editor to separate numbered
+reader navigation from evidence-bound product facts, without relabeling or
+altering a factual quantity to evade validation. The evidence predicates,
+quality thresholds, paid retry allowances and stored audits are unchanged.
+
+Three regression cases failed before the feedback change and pass afterward:
+two generic products with navigation/quantity/alias mismatches, missing and
+invalid snapshot hashes, and a late unmatched number beyond the old quote
+limit with bounded feedback. All 1,405 tests, type-check, lint (zero errors;
+unchanged 157 warnings), schema check, dependency audit and secret scan passed.
+The production build and public browser acceptance command also passed.
+The final deployment result follows separately.

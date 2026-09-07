@@ -458,7 +458,11 @@ function exactClaimDetailsPresent(claim: string, evidence: string): boolean {
 // A paragraph number alone made the editor guess which cited sentence failed,
 // spending its bounded repair on a different proposition. Never interpret a
 // matching diagnostic as semantic proof; the independent audit still applies.
-function sourceClaimMismatchDiagnostic(claim: string, excerpt: string): string {
+function sourceClaimMismatchDiagnostic(
+  claim: string,
+  excerpt: string,
+  label = "Cited sentence",
+): string {
   const evidenceNumbers = normalizedEvidenceNumbers(excerpt);
   const normalizedExcerpt = excerpt.toLowerCase();
   const reasons = [
@@ -473,7 +477,7 @@ function sourceClaimMismatchDiagnostic(claim: string, excerpt: string): string {
     ...(overlapRatio(claim, excerpt) < 0.3 ? ["insufficient source wording overlap"] : []),
   ];
   const quoted = claim.length > 420 ? `${claim.slice(0, 420)}…` : claim;
-  return `Cited sentence: ${JSON.stringify(quoted)}; ${reasons.join("; ")}.`;
+  return `${label}: ${JSON.stringify(quoted)}; ${reasons.join("; ") || "numeric, named-phrase and wording checks match; inspect the remaining claim-authority requirements"}.`;
 }
 
 export function inlineCitationNumbers(value: string): number[] {
@@ -838,7 +842,10 @@ export function validateClaimEvidenceLedger(args: {
         requiresClaimEvidence(entry.claim, args.productEvidence)
       ) {
         issues.push(
-          `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot.`,
+          `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot. ` +
+          (productSnapshotValid
+            ? sourceClaimMismatchDiagnostic(entry.claim, args.productEvidence, "Product claim")
+            : "The first-party snapshot is missing or its content hash is invalid; prose editing cannot repair that provenance failure."),
         );
       }
     }
