@@ -2911,7 +2911,8 @@ async function handlePlan(
         // Keep what this tenant can actually win. Without its measured
         // authority the shortlist collapses to the highest-volume head terms,
         // which on a weak domain is an inventory with no reachable SERP.
-        tenantAuthority: site.seoAuthorityDomainRank,
+        tenantAuthority: domainMetrics?.domainRank,
+        maximumDifficulty: maxKD,
         excludeKeyword: (keyword) => {
           if (existingSet.has(keyword.trim().toLowerCase())) return "already_known";
           if (!evaluateTopicBusinessFit({

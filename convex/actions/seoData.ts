@@ -15,6 +15,7 @@ import OpenAI from "openai";
 import { orderDiscoveryByWinnability } from "../lib/winnableDiscovery.ts";
 import { dataForSeoLanguageCode } from "../lib/dataForSeoLocale.ts";
 import { topicDiscoverySeedBatches } from "../lib/autopilotBuffer.ts";
+import { keywordDiscoveryLabsFilters } from "../lib/keywordDiscoveryFilters.ts";
 import { computeAuthorityKeywordDifficultyCeiling } from
   "../lib/authorityDifficulty.ts";
 import { safeFetchPublicText } from "../lib/safeOutbound.ts";
@@ -124,6 +125,9 @@ export interface KeywordDiscoveryOptions {
    * head terms, which are owned by incumbents a weak domain cannot displace.
    */
   tenantAuthority?: number;
+  /** Actual planner ceiling derived from fresh authority and referring-domain
+   * evidence, not raw domain rank. Applied before Labs result truncation. */
+  maximumDifficulty?: number;
   targetDomain?: string;
   minimumResults?: number;
   maxGoogleAdsBatches?: number;
@@ -806,6 +810,9 @@ export async function discoverKeywords(
   options: KeywordDiscoveryOptions = {},
 ): Promise<KeywordMetrics[]> {
   languageCode = dataForSeoLanguageCode(languageCode);
+  // Validate before any paid boundary, including Google Ads.
+  const labsFilters = keywordDiscoveryLabsFilters(options.maximumDifficulty);
+  const relatedFilters = keywordDiscoveryLabsFilters(options.maximumDifficulty, "keyword_data.");
   const creds = getDataForSEOCredentials();
   if (!creds && !options.request) return []; // No DataForSEO = no discovery
 
@@ -1019,7 +1026,7 @@ export async function discoverKeywords(
             language_code: languageCode,
             include_seed_keyword: true,
             include_serp_info: false,
-            filters: ["keyword_info.search_volume", ">=", 10],
+            filters: labsFilters,
             order_by: ["keyword_info.search_volume,desc"],
             limit: Math.min(limit, 100),
           }],
@@ -1072,7 +1079,7 @@ export async function discoverKeywords(
             depth: 2,
             include_seed_keyword: true,
             include_serp_info: false,
-            filters: ["keyword_data.keyword_info.search_volume", ">=", 10],
+            filters: relatedFilters,
             order_by: ["keyword_data.keyword_info.search_volume,desc"],
             limit: Math.min(limit, 72),
           }],
@@ -1111,7 +1118,7 @@ export async function discoverKeywords(
           language_code: languageCode,
           closely_variants: false,
           include_serp_info: false,
-          filters: ["keyword_info.search_volume", ">=", 10],
+          filters: labsFilters,
           order_by: [
             "relevance,desc",
             "keyword_info.search_volume,desc",

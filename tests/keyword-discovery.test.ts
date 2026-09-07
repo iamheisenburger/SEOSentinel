@@ -8,6 +8,108 @@ import {
   type KeywordDiscoveryRequest,
   type KeywordDiscoveryDiagnostics,
 } from "../convex/actions/seoData.ts";
+import { keywordDifficultyCeiling } from "../convex/lib/autopilotBuffer.ts";
+import { keywordDiscoveryLabsFilters, type KeywordDiscoveryFilter } from "../convex/lib/keywordDiscoveryFilters.ts";
+
+// Simulate provider filtering BEFORE its result limit. Returning a hand-picked
+// easy row regardless of the request would miss the starvation regression.
+function matchesDiscoveryFilter(row: Record<string, unknown>, expression: KeywordDiscoveryFilter): boolean {
+  if (typeof expression[0] === "string") {
+    const value = expression[0].split(".").reduce<unknown>((part, key) =>
+      part && typeof part === "object" ? (part as Record<string, unknown>)[key] : undefined, row);
+    if (typeof value !== "number" || !Number.isFinite(value)) return false;
+    if (expression[1] === ">=") return value >= (expression[2] as number);
+    if (expression[1] === "<=") return value <= (expression[2] as number);
+    throw new Error(`Unexpected filter operator: ${expression[1]}`);
+  }
+  const left = matchesDiscoveryFilter(row, expression[0]);
+  const right = matchesDiscoveryFilter(row, expression[2] as KeywordDiscoveryFilter);
+  if (expression[1] === "and") return left && right;
+  if (expression[1] === "or") return left || right;
+  throw new Error("Unexpected logical operator");
+}
+
+for (const [source, endpoint, related] of [
+  ["suggestions", "dataforseo_labs/google/keyword_suggestions/live", false],
+  ["related", "dataforseo_labs/google/related_keywords/live", true],
+  ["ideas", "dataforseo_labs/google/keyword_ideas/live", false],
+] as const) {
+  test(`${source} searches beyond unreachable head terms before the provider truncates results`, async () => {
+    const calls: string[] = [];
+    const rows = [
+      ...Array.from({ length: 110 }, (_, index) => ({
+        keyword: `competitive head ${index}`, searchVolume: 20_000 - index, difficulty: 70,
+      })),
+      { keyword: "reachable larger demand", searchVolume: 1_000, difficulty: 25 },
+      { keyword: "too hard small demand", searchVolume: 999, difficulty: 25 },
+      { keyword: "reachable specific workflow", searchVolume: 140, difficulty: 15 },
+      { keyword: "measured zero difficulty", searchVolume: 10, difficulty: 0 },
+    ];
+    const output = await discoverKeywords(["example workflow"], 2276, "de", 100, {
+      maximumDifficulty: 15,
+      tenantAuthority: 4,
+      maxGoogleAdsBatches: 1,
+      maxLabsSeeds: source === "suggestions" ? 1 : 0,
+      maxRelatedSeeds: source === "related" ? 1 : 0,
+      useKeywordIdeas: source === "ideas",
+      expandProductAnchors: true,
+      request: async (path, body) => {
+        calls.push(path);
+        assert.equal(body[0].location_code, 2276);
+        assert.equal(body[0].language_code, "de");
+        if (path.includes("google_ads")) return { tasks: [{ result: [] }] };
+        if (path === endpoint) {
+          const items = rows.map((row) => {
+            const value = { keyword: row.keyword, keyword_info: { search_volume: row.searchVolume }, keyword_properties: { keyword_difficulty: row.difficulty } };
+            return related ? { keyword_data: value } : value;
+          }).filter((row) => matchesDiscoveryFilter(row, body[0].filters)).slice(0, body[0].limit);
+          return { tasks: [{ result: [{ items }] }] };
+        }
+        if (path.endsWith("bulk_keyword_difficulty/live")) {
+          return { tasks: [{ result: [{ items: body[0].keywords.map((keyword: string) => ({ keyword, keyword_difficulty: rows.find((row) => row.keyword === keyword)!.difficulty })) }] }] };
+        }
+        throw new Error(`Unexpected extra provider request: ${path}`);
+      },
+    });
+    assert.deepEqual(new Set(output.map((row) => row.keyword)), new Set([
+      "reachable larger demand", "reachable specific workflow", "measured zero difficulty",
+    ]));
+    assert.ok(output.every((row) => row.difficultyMeasured && row.difficulty <= keywordDifficultyCeiling(15, row.searchVolume)));
+    assert.equal(calls.length, 3, "one Ads request, one discovery request, one exact KD request; no larger fan-out");
+  });
+}
+
+test("planner supplies its actual measured difficulty ceiling to provider discovery", () => {
+  const source = readFileSync("convex/actions/pipeline.ts", "utf8");
+  assert.ok(/maximumDifficulty:\s*maxKD/.test(source));
+  assert.ok(/tenantAuthority:\s*domainMetrics\?\.domainRank/.test(source));
+});
+
+test("provider filters exactly preserve the planner ceiling across authority and volume boundaries", () => {
+  for (const maximum of [0, 5, 15, 35, 70, 95, 100]) {
+    for (const volume of [0, 9, 10, 140, 999, 1_000, 1_001, 20_000]) {
+      for (let difficulty = 0; difficulty <= 100; difficulty += 1) {
+        const row = { keyword_info: { search_volume: volume }, keyword_properties: { keyword_difficulty: difficulty } };
+        const expected = volume >= 10 && difficulty <= keywordDifficultyCeiling(maximum, volume);
+        assert.equal(matchesDiscoveryFilter(row, keywordDiscoveryLabsFilters(maximum)), expected);
+        assert.equal(matchesDiscoveryFilter({ keyword_data: row }, keywordDiscoveryLabsFilters(maximum, "keyword_data.")), expected);
+      }
+    }
+  }
+  assert.deepEqual(keywordDiscoveryLabsFilters(), ["keyword_info.search_volume", ">=", 10]);
+  assert.equal(matchesDiscoveryFilter({ keyword_info: { search_volume: 100 } }, keywordDiscoveryLabsFilters(15)), false);
+});
+
+test("invalid discovery ceilings fail before any provider request", async () => {
+  for (const maximumDifficulty of [-1, 101, NaN, Infinity, -Infinity]) {
+    let requests = 0;
+    await assert.rejects(discoverKeywords(["example workflow"], 2840, "en", 10, {
+      maximumDifficulty,
+      request: async () => { requests += 1; return {}; },
+    }), /difficulty ceiling/);
+    assert.equal(requests, 0);
+  }
+});
 
 test("mature inventory and unrelated terms cannot crowd usable topics out before KD measurement", async () => {
   let diagnostics: KeywordDiscoveryDiagnostics | undefined;
