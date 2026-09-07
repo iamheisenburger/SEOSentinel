@@ -1213,6 +1213,71 @@ async function jobArtifactsMatchCurrentDomain(
   return true;
 }
 
+/** Only delivery from an immutable ready buffer gets a separate worker lane.
+ * All provider work stays serialized. Every existing worker must be proven
+ * non-publishing and disjoint from the delivered artifact in this transaction;
+ * a second publisher, an unknown target or mixed flags keep the old lock.
+ * The publisher's site/destination lease and content/config seal still apply.
+ */
+async function hasConflictingRunningJob(
+  ctx: MutationCtx,
+  site: Doc<"sites"> | null,
+  job: Doc<"jobs"> | null,
+): Promise<boolean> {
+  if (!site || !job) return true;
+  const running = (await ctx.db.query("jobs")
+    .withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "running"))
+    .collect()).filter(candidate => candidate._id !== job._id &&
+      jobAuthorizedForExecution(site, candidate));
+  if (running.length === 0) return false;
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown> : {};
+  if (job.type !== "article" || payload.publishOnly !== true ||
+    payload.bufferDelivery !== true || payload.qualityRetry || payload.manual ||
+    typeof payload.articleId !== "string" ||
+    (job.articleId !== undefined && job.articleId !== payload.articleId)) return true;
+  const articleId = ctx.db.normalizeId("articles", payload.articleId);
+  const article = articleId ? await ctx.db.get(articleId) : null;
+  if (!article || article.siteId !== site._id ||
+    !articleMatchesCurrentDomain(site, article) || !isSealedReady(article)) return true;
+
+  for (const candidate of running) {
+    const background = candidate.payload && typeof candidate.payload === "object"
+      ? candidate.payload as Record<string, unknown> : {};
+    // The action branches on truthiness, so malformed truthy flags must not be
+    // mistaken for a pure background job here.
+    if (background.publishOnly ||
+      (background.manual !== undefined && typeof background.manual !== "boolean")) return true;
+    const targets = [candidate.articleId, background.articleId,
+      background.growthParentArticleId].filter(value => value !== undefined);
+    if (candidate.type === "article") {
+      if ((background.bufferFill !== true && background.manual !== true) ||
+        (background.qualityRetry && typeof background.articleId !== "string") ||
+        (targets.length === 0 && typeof background.topicId !== "string")) return true;
+    } else if (candidate.type === "links") {
+      if (typeof background.articleId !== "string") return true;
+    } else if (candidate.type !== "plan") {
+      return true;
+    }
+    for (const rawId of targets) {
+      if (typeof rawId !== "string" || rawId === article._id) return true;
+      const targetId = ctx.db.normalizeId("articles", rawId);
+      const target = targetId ? await ctx.db.get(targetId) : null;
+      if (!target || target.siteId !== site._id ||
+        !articleMatchesCurrentDomain(site, target) ||
+        (article.topicId !== undefined && target.topicId === article.topicId)) return true;
+    }
+    if (background.topicId !== undefined) {
+      if (typeof background.topicId !== "string" || !article.topicId ||
+        background.topicId === article.topicId) return true;
+      const topicId = ctx.db.normalizeId("topic_clusters", background.topicId);
+      const topic = topicId ? await ctx.db.get(topicId) : null;
+      if (!topic || topic.siteId !== site._id || !topicMatchesCurrentDomain(site, topic)) return true;
+    }
+  }
+  return false;
+}
+
 // The topic transition and job insert share one serializable mutation. Two
 // overlapping cadence ticks therefore cannot enqueue the same topic twice.
 export const queueTopicArticleIfAbsent = internalMutation({
@@ -3017,6 +3082,7 @@ export const markRunning = internalMutation({
       !executionAuthorized ||
       !topicCurrent ||
       !jobAuthorizedForExecution(site, job) ||
+      await hasConflictingRunningJob(ctx, site, job) ||
       (job.nextAttemptAt !== undefined && job.nextAttemptAt > currentTime)
     ) return null;
     await ctx.db.patch(args.jobId, {
@@ -3047,19 +3113,6 @@ export const claimPending = internalMutation({
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     const topicCurrent = await jobArtifactsMatchCurrentDomain(ctx, site, job);
-    const runningJobs = job
-      ? await ctx.db
-          .query("jobs")
-          .withIndex("by_site_status", (q) =>
-            q.eq("siteId", siteId).eq("status", "running"),
-          )
-          .collect()
-      : [];
-    const otherRunning = runningJobs.find(
-      (candidate) =>
-        candidate._id !== jobId &&
-        jobAuthorizedForExecution(site, candidate),
-    );
     if (
       !job ||
       job.siteId !== siteId ||
@@ -3067,7 +3120,7 @@ export const claimPending = internalMutation({
       !executionAuthorized ||
       !topicCurrent ||
       !jobAuthorizedForExecution(site, job) ||
-      otherRunning !== undefined ||
+      await hasConflictingRunningJob(ctx, site, job) ||
       (job.nextAttemptAt !== undefined && job.nextAttemptAt > updatedAt)
     ) {
       return null;

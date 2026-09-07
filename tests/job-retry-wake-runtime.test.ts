@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { buildSync } from "esbuild";
 import { getFunctionName, type FunctionReference } from "convex/server";
+import { PUBLICATION_AUDIT_VERSION } from "../convex/lib/publicationArtifact.ts";
 
 const source = buildSync({ entryPoints: ["convex/jobs.ts"], bundle: true,
   platform: "node", format: "cjs", packages: "external", write: false }).outputFiles[0].text;
@@ -93,6 +94,117 @@ test("both atomic claim paths arm lease recovery before the worker can disappear
     assert.equal(f.wakes.length, 1);
   }
 });
+
+function deliveryFixture(siteId = "tenant-a") {
+  const f = fixture(siteId);
+  Object.assign(f.job, { status: "pending", rolloutEpoch: 0,
+    payload: { articleId: "sealed", publishOnly: true, bufferDelivery: true } });
+  delete f.job.reservationId;
+  f.tables.articles = [
+    { _id: "sealed", siteId, topicId: "sealed-topic", status: "ready",
+      publicationGateStatus: "passed", publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+      auditedContentHash: "immutable-hash" },
+    { _id: "review-draft", siteId, topicId: "different-topic", status: "review" },
+  ];
+  f.tables.topic_clusters = [
+    { _id: "sealed-topic", siteId }, { _id: "different-topic", siteId },
+  ];
+  f.tables.jobs.push({ _id: "background", siteId, type: "article", status: "running",
+    rolloutEpoch: 0, workerToken: "background-owner", leaseExpiresAt: NOW + 60_000,
+    payload: { qualityRetry: true, bufferFill: true, articleId: "review-draft" } });
+  return f;
+}
+
+for (const claimName of ["claimPending", "markRunning"]) {
+test(`${claimName}: due sealed delivery is independent of disjoint buffered review and generation workers`, async () => {
+  for (const siteId of ["tenant-a", "tenant-b"]) {
+    for (const background of ["review", "generation-checkpoint", "generation-topic", "manual-review", "manual-generation", "plan", "links"]) {
+      const f = deliveryFixture(siteId);
+      const worker = f.tables.jobs[1];
+      if (background === "generation-checkpoint") {
+        worker.articleId = "review-draft"; worker.payload = { bufferFill: true };
+      } else if (background === "generation-topic") {
+        worker.payload = { bufferFill: true, topicId: "different-topic" };
+      } else if (background === "manual-review") {
+        worker.payload = { manual: true, qualityRetry: true, articleId: "review-draft" };
+      } else if (background === "manual-generation") {
+        worker.payload = { manual: true, topicId: "different-topic" };
+      } else if (background === "plan") {
+        worker.type = "plan"; worker.payload = { reason: "topic_buffer_refill" };
+      } else if (background === "links") {
+        worker.type = "links"; worker.payload = { articleId: "review-draft" };
+      }
+      const before = structuredClone(worker);
+      assert.ok(await f.run(claimName, { jobId: "job", siteId, workerToken: "publisher" }), background);
+      assert.equal(f.job.status, "running");
+      assert.deepEqual(worker, before, "Delivery must not interrupt or steal the background lease");
+      assert.equal(f.wakes.length, 1);
+      assert.deepEqual(f.wakes[0].args, { siteId, jobId: "job", expectedWorkerToken: "publisher" });
+      assert.equal(f.tables.article_generation_attempts.length, 1, "Delivery creates no provider admission");
+      assert.equal(await f.run(claimName, { jobId: "job", siteId, workerToken: "duplicate" }), null);
+      assert.equal(f.wakes.length, 1);
+    }
+  }
+});
+
+test(`${claimName}: isolated delivery fails closed for same-artifact, ambiguous and publication-capable workers`, async () => {
+  const cases: Array<[string, (f: ReturnType<typeof deliveryFixture>) => void]> = [
+    ["same payload article", f => { (f.tables.jobs[1].payload as Row).articleId = "sealed"; }],
+    ["same checkpoint article", f => { f.tables.jobs[1].articleId = "sealed"; }],
+    ["same topic", f => { (f.tables.jobs[1].payload as Row).topicId = "sealed-topic"; }],
+    ["auto-publishing review", f => { (f.tables.jobs[1].payload as Row).bufferFill = false; }],
+    ["truthy publish-only", f => { (f.tables.jobs[1].payload as Row).publishOnly = "true"; }],
+    ["ambiguous manual flag", f => { (f.tables.jobs[1].payload as Row).manual = "true"; }],
+    ["unknown generation target", f => { f.tables.jobs[1].payload = { bufferFill: true }; }],
+    ["foreign draft", f => { f.tables.articles[1].siteId = "tenant-b"; }],
+    ["missing draft", f => { f.tables.articles.pop(); }],
+    ["old-domain draft", f => { f.tables.articles[1].canonicalDomain = "old.example"; f.tables.articles[1].domainRevision = 1; }],
+    ["plan on publication target", f => { f.tables.jobs[1].type = "plan"; f.tables.jobs[1].payload = { growthParentArticleId: "sealed" }; }],
+    ["links on publication target", f => { f.tables.jobs[1].type = "links"; f.tables.jobs[1].payload = { articleId: "sealed" }; }],
+    ["unknown worker", f => { f.tables.jobs[1].type = "onboarding"; }],
+    ["another publisher", f => { f.tables.jobs[1].payload = { publishOnly: true, articleId: "review-draft" }; }],
+    ["one safe and one unsafe worker", f => { f.tables.jobs.push({ ...f.tables.jobs[1], _id: "unsafe", payload: { articleId: "sealed", bufferFill: true } }); }],
+  ];
+  for (const [label, change] of cases) {
+    const f = deliveryFixture(); change(f);
+    assert.equal(await f.run(claimName, { jobId: "job", siteId: "tenant-a", workerToken: "publisher" }), null, label);
+    assert.equal(f.writes.length, 0, label); assert.equal(f.wakes.length, 0, label);
+  }
+});
+
+test(`${claimName}: the delivery lane never bypasses seal, tenant, rollout, retry or payload admission`, async () => {
+  const cases: Array<[string, (f: ReturnType<typeof deliveryFixture>) => void]> = [
+    ["unsealed", f => { f.tables.articles[0].publicationGateStatus = "blocked"; }],
+    ["stale audit", f => { f.tables.articles[0].publicationAuditVersion = -1; }],
+    ["missing hash", f => { delete f.tables.articles[0].auditedContentHash; }],
+    ["not ready", f => { f.tables.articles[0].status = "review"; }],
+    ["foreign publication", f => { f.tables.articles[0].siteId = "tenant-b"; }],
+    ["rollout changed", f => { f.tables.sites[0].autopilotRolloutEpoch = 1; }],
+    ["disabled", f => { f.tables.sites[0].autopilotEnabled = false; }],
+    ["retry not due", f => { f.job.nextAttemptAt = NOW + 1; }],
+    ["mixed review/delivery flags", f => { (f.job.payload as Row).qualityRetry = true; }],
+    ["truthy mixed review flag", f => { (f.job.payload as Row).qualityRetry = "true"; }],
+    ["manual", f => { (f.job.payload as Row).manual = true; }],
+    ["non-buffer publication", f => { (f.job.payload as Row).bufferDelivery = false; }],
+    ["divergent checkpoint", f => { f.job.articleId = "review-draft"; }],
+  ];
+  for (const [label, change] of cases) {
+    const f = deliveryFixture(); change(f);
+    assert.equal(await f.run(claimName, { jobId: "job", siteId: "tenant-a", workerToken: "publisher" }), null, label);
+    assert.equal(f.writes.length, 0, label); assert.equal(f.wakes.length, 0, label);
+  }
+});
+
+test(`${claimName}: delivery priority does not open concurrent provider work or permit a second publisher`, async () => {
+  const f = deliveryFixture();
+  assert.ok(await f.run(claimName, { jobId: "job", siteId: "tenant-a", workerToken: "publisher" }));
+  f.tables.jobs.push({ ...structuredClone(f.job), _id: "second-publication", status: "pending" });
+  assert.equal(await f.run(claimName, { jobId: "second-publication", siteId: "tenant-a", workerToken: "second" }), null);
+  f.tables.jobs.push({ ...structuredClone(f.tables.jobs[1]), _id: "second-review", status: "pending" });
+  assert.equal(await f.run(claimName, { jobId: "second-review", siteId: "tenant-a", workerToken: "reviewer" }), null);
+  assert.equal(f.wakes.length, 1);
+});
+}
 
 test("exact lease observer follows real heartbeat renewal then recovers only the expired execution", async () => {
   for (const checkpoint of [false, true]) {

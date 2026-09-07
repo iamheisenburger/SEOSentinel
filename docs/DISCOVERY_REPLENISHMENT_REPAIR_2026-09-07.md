@@ -74,6 +74,15 @@ and [available filters](https://docs.dataforseo.com/v3/dataforseo_labs-filters/)
 - Secret scan passed for the then-tracked files; re-scan after staging includes
   this document and the new policy module.
 
-Deployment and post-deployment refill outcomes are not yet claimed. Sustained
-new-article delivery, clean generic onboarding, autonomous outreach, and SEO
-growth remain separate open requirements.
+## Bound deployment
+
+- Commit `35215718ce89e0cb2eb47df335f82244f786f417`.
+- GitHub quality run `34118608916`: succeeded.
+- GitHub production deployment `6308048850`: success.
+- Convex deployment to `wary-starfish-773`: completed before September 7
+  11:54:15 UTC, with type-check and schema validation and no deleted indexes.
+
+Post-deployment refill success is not yet claimed. Sustained new-article
+delivery, clean generic onboarding, autonomous outreach, and SEO growth remain
+separate open requirements. Existing paid attempts and cooldown receipts were
+preserved, not reset to manufacture a new discovery test.

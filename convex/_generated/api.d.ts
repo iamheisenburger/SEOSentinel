@@ -74,6 +74,7 @@ import type * as lib_gscSearchAnalytics from "../lib/gscSearchAnalytics.js";
 import type * as lib_internalHttpAuth from "../lib/internalHttpAuth.js";
 import type * as lib_internalLinks from "../lib/internalLinks.js";
 import type * as lib_jobRollout from "../lib/jobRollout.js";
+import type * as lib_keywordDiscoveryFilters from "../lib/keywordDiscoveryFilters.js";
 import type * as lib_linkReceipts from "../lib/linkReceipts.js";
 import type * as lib_linkRelevance from "../lib/linkRelevance.js";
 import type * as lib_managedOutreachMailbox from "../lib/managedOutreachMailbox.js";
@@ -232,6 +233,7 @@ declare const fullApi: ApiFromModules<{
   "lib/internalHttpAuth": typeof lib_internalHttpAuth;
   "lib/internalLinks": typeof lib_internalLinks;
   "lib/jobRollout": typeof lib_jobRollout;
+  "lib/keywordDiscoveryFilters": typeof lib_keywordDiscoveryFilters;
   "lib/linkReceipts": typeof lib_linkReceipts;
   "lib/linkRelevance": typeof lib_linkRelevance;
   "lib/managedOutreachMailbox": typeof lib_managedOutreachMailbox;
