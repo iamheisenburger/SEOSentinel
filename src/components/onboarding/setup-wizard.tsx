@@ -180,6 +180,7 @@ export function SetupWizard({
   const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
   const cadenceInputReady = Boolean(
     capacity?.ready &&
+      Number.isInteger(cadence) &&
       cadenceFitsOperationalLimit(cadence),
   );
   const physicalAddressError = postalAddressError(managedPhysicalAddress);
@@ -672,7 +673,7 @@ export function SetupWizard({
                 min={1}
                 max={MAX_AUTOPILOT_CADENCE_PER_WEEK}
                 step={1}
-                value={Number.isInteger(cadence) ? cadence : ""}
+                value={Number.isFinite(cadence) ? cadence : ""}
                 onChange={(event) => setCadence(Number(event.target.value))}
                 className="w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
               />
@@ -682,7 +683,7 @@ export function SetupWizard({
               ? "Verifying your plan and monthly article allowance…"
               : cadenceInputReady
                 ? `${cadenceLabel(cadence)} is the target pace (up to ${cadenceMonthlyCost} articles in a 31-day month). ${capacity.availableMonthlyArticles} of ${capacity.maxArticles} account credits remain this UTC month. Pentra pauses automatically when the allowance is used and resumes after it renews.`
-                : `Choose 1–${MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week. Cadence controls pace; your ${capacity.maxArticles}-article monthly plan controls total usage.`}
+                : `Choose a whole number from 1–${MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week. Cadence controls pace; your ${capacity.maxArticles}-article monthly plan controls total usage.`}
           </p>
         </div>
 

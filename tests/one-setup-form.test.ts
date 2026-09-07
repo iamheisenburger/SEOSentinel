@@ -62,3 +62,13 @@ test("a valid target cadence may exceed the remaining monthly allowance", () => 
     true,
   );
 });
+
+test("the whole-article setup control cannot submit a hidden fractional target", () => {
+  for (const cadence of [0, -1, 1.5, 21.1, 22, NaN, Infinity]) {
+    assert.ok(oneSetupFormBlockers({ ...readyInput, cadence }).some(
+      blocker => blocker.key === "cadence"));
+  }
+  for (let cadence = 1; cadence <= 21; cadence++) {
+    assert.deepEqual(oneSetupFormBlockers({ ...readyInput, cadence }), []);
+  }
+});

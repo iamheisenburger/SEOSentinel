@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  useId,
   type InputHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
@@ -15,14 +16,20 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, className = "", ...props }, ref) => {
+  ({ label, error, className = "", id, "aria-describedby": describedBy,
+    "aria-invalid": invalid, ...props }, ref) => {
+    const generatedId = useId();
+    const inputId = id ?? generatedId;
+    const errorId = `${generatedId}-error`;
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
-          <label className="text-[12px] font-medium text-[#8B8FA3]">{label}</label>
+          <label htmlFor={inputId} className="text-[12px] font-medium text-[#8B8FA3]">{label}</label>
         )}
-        <input ref={ref} className={`${baseStyles} ${className}`} {...props} />
-        {error && <p className="text-[11px] text-[#EF4444]">{error}</p>}
+        <input ref={ref} id={inputId} className={`${baseStyles} ${className}`}
+          aria-describedby={[describedBy, error ? errorId : undefined].filter(Boolean).join(" ") || undefined}
+          aria-invalid={invalid ?? (error ? true : undefined)} {...props} />
+        {error && <p id={errorId} className="text-[11px] text-[#EF4444]">{error}</p>}
       </div>
     );
   },
@@ -35,18 +42,25 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
 }
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ label, error, className = "", ...props }, ref) => {
+  ({ label, error, className = "", id, "aria-describedby": describedBy,
+    "aria-invalid": invalid, ...props }, ref) => {
+    const generatedId = useId();
+    const inputId = id ?? generatedId;
+    const errorId = `${generatedId}-error`;
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
-          <label className="text-[12px] font-medium text-[#8B8FA3]">{label}</label>
+          <label htmlFor={inputId} className="text-[12px] font-medium text-[#8B8FA3]">{label}</label>
         )}
         <textarea
           ref={ref}
+          id={inputId}
+          aria-describedby={[describedBy, error ? errorId : undefined].filter(Boolean).join(" ") || undefined}
+          aria-invalid={invalid ?? (error ? true : undefined)}
           className={`${baseStyles} min-h-[80px] resize-y ${className}`}
           {...props}
         />
-        {error && <p className="text-[11px] text-[#EF4444]">{error}</p>}
+        {error && <p id={errorId} className="text-[11px] text-[#EF4444]">{error}</p>}
       </div>
     );
   },

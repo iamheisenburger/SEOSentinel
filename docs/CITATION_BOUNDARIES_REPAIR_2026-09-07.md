@@ -133,3 +133,47 @@ limit with bounded feedback. All 1,405 tests, type-check, lint (zero errors;
 unchanged 157 warnings), schema check, dependency audit and secret scan passed.
 The production build and public browser acceptance command also passed.
 The final deployment result follows separately.
+
+## Autonomous refill observed at 12:18 UTC
+
+Pentra's distinct, normal quality retry `j97cbsx1hxtzp4x79t4d27k2qs8dzyh3`
+started from the saved draft, with `manual: false`, `bufferFill: true` and
+`qualityRetry: true`. It completed at 12:18:25.537 UTC with
+`readyForPublication: true`, no remaining issues, and revision count 1.
+The same article `j57001e1fe3a93x7em70dmcybh8dy0wf` became sealed ready at
+12:18:25.212 UTC: editorial 94, factual 100, passed claim evidence and
+publication gate, audit version 7, exact audited content hash
+`3e2ba16ceef80de9bdbb9e4942973bd9b9e7709336ea38c6e5738edd6745c5bd`.
+Its title is now “Search Engine Optimization Content Writing: A Practical
+Guide.” A local replay against its unchanged stored prose, sources and product
+snapshot also passed with zero issues and 14 required claims.
+
+The normal editor removed the unsupported product-workflow framing and
+preserved useful reader guidance. Ready inventory returned to three, meeting
+Pentra's minimum of three but below its target of four. This is one genuine
+fresh-article refill through ordinary generation and automatic review, not a
+new discovery success or sustained delivery proof. It completed before the
+follow-on first-party feedback patch was deployed and is not attributed to
+that patch. LeadPilot replenishment, subsequent cadence deadlines, generic
+onboarding, third-party backlinks and attributable growth remain unproven.
+
+### Final feedback deployment and handoff
+
+- Release `cce110eedd17252ac242025dbed2cfc9a6e93653`.
+- GitHub quality run `34121273719`: succeeded; 1,405 repository tests and
+  ten public browser checks passed, with two credential-dependent automated
+  checks explicitly skipped.
+- GitHub production deployment `6308537688`: success at 12:20:29 UTC,
+  for the same exact commit.
+- Convex deployment to `wary-starfish-773`: succeeded before 12:24:08 UTC,
+  with type-check and schema validation and no deleted indexes.
+- Independent post-deployment reads of the Pentra product-marketing article
+  and LeadPilot lead-scoring-examples article both returned HTTP 200 with the
+  expected visible heading and exact canonical URL.
+
+No quality threshold or production acceptance result was overwritten, no
+provider failure history or budget was reset, no real prospect was contacted,
+and no Codex scheduled task was created. The preserved provider-diagnosis note
+remained outside these commits and the production env file remained untracked.
+The full autonomous-growth vision and sustained all-user cadence acceptance
+are still incomplete; this note is not a GrowthLoopReleaseReceipt.

@@ -77,10 +77,13 @@ export function oneSetupFormBlockers(
       message: "Explain how customers use the product in at least 10 characters.",
     });
   }
-  if (!cadenceFitsOperationalLimit(input.cadence)) {
+  // This form advertises whole articles/week (step=1). Keep its submit
+  // predicate aligned with that control, without changing legacy fractional
+  // schedules accepted by the backend's operational-rate predicate.
+  if (!Number.isInteger(input.cadence) || !cadenceFitsOperationalLimit(input.cadence)) {
     blockers.push({
       key: "cadence",
-      message: "Choose a target cadence from 1 to 21 articles per week.",
+      message: "Choose a whole-number target cadence from 1 to 21 articles per week.",
     });
   }
   if (input.fullAutopilot && !input.autopublishConsentAccepted) {
