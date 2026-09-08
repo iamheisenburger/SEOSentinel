@@ -13,6 +13,12 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 37 also keeps compound audience labels intact. The first production
+// v36 receipt proved that an explicit "small & mid-sized businesses" segment
+// could still emit "small mid", while "professional service providers" could
+// emit the dangling qualifier "professional". Complete canonical audience
+// labels now replace those fragments; all downstream gates and bounded spend
+// contracts remain unchanged.
 // Version 36 builds audience-qualified probes from complete capability clauses
 // instead of arbitrary adjacent word pairs. Production v35 receipts proved
 // that otherwise-valid tenant phrases such as "AI-powered article writer" and
@@ -122,7 +128,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 36;
+export const CADENCE_MICRO_SEED_VERSION = 37;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -573,10 +579,21 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
       words.some((word) => word === "business" || word === "businesses")
     ) addMarketQualifier(["small", "business"]);
     if (
+      words[0] === "professional" &&
+      words.some((word) =>
+        ["provider", "providers", "service", "services"].includes(word)
+      )
+    ) addMarketQualifier(["professional", "services"]);
+    if (
       words.length > 0 &&
-      !["small", "business", "businesses"].includes(words[0]!)
+      ["b2b", "b2c", "enterprise", "saas", "smb"].includes(words[0]!)
     ) addMarketQualifier(words.slice(0, 1));
-    if (words.length > 1) addMarketQualifier(words.slice(0, 2));
+    const leadingPair = words.slice(0, 2);
+    if (
+      leadingPair.length > 1 &&
+      !leadingPair.some((word) => ["mid", "sized"].includes(word)) &&
+      !(leadingPair[0] === "small" && leadingPair[1] !== "business")
+    ) addMarketQualifier(leadingPair);
     if (marketQualifiers.length >= 8) break;
   }
   const productCores: string[] = [];

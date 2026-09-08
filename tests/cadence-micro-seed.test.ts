@@ -470,13 +470,18 @@ test("audience probes preserve complete capabilities and reject dangling fragmen
       "24/7 visitor engagement",
       "Natural conversation flows",
     ],
-    targetAudienceSummary: "Small businesses with websites",
+    targetAudienceSummary:
+      "Small & mid-sized businesses and professional service providers with websites",
   });
   assert.ok(leadProbes.includes("small business sales agent"));
   assert.ok(leadProbes.includes("sales agent for small business"));
   assert.ok(leadProbes.includes("small business booking link integration"));
   assert.ok(leadProbes.includes("conversation flows for small business"));
+  assert.ok(leadProbes.includes("professional services sales agent"));
+  assert.ok(leadProbes.includes("sales agent for professional services"));
   assert.equal(leadProbes.some((probe) => /^small (?!business\b)/.test(probe)), false);
+  assert.equal(leadProbes.some((probe) => /\bsmall mid\b/.test(probe)), false);
+  assert.equal(leadProbes.some((probe) => /\bfor professional$/.test(probe)), false);
   assert.equal(leadProbes.some((probe) =>
     /small business (?:24|7)(?: |$)/.test(probe)
   ), false);
@@ -767,7 +772,7 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
-  assert.equal(CADENCE_MICRO_SEED_VERSION, 36);
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 37);
   assert.equal(CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION, 30);
   assert.ok(
     CADENCE_MICRO_SEED_VERSION >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
