@@ -13,6 +13,15 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
  * It is intentionally much smaller than a topic plan and never reuses the
  * source plan's provider reservation.
  */
+// Version 36 builds audience-qualified probes from complete capability clauses
+// instead of arbitrary adjacent word pairs. Production v35 receipts proved
+// that otherwise-valid tenant phrases such as "AI-powered article writer" and
+// "24/7 visitor engagement" could degrade into low-intent fragments such as
+// "powered article" or numeric pairs, while "small business" was also emitted
+// as the dangling qualifier "small". The provider, spend, demand, difficulty,
+// business-fit, SERP, overlap, expected-click, article-quality and publication
+// gates are unchanged; only the bounded tenant-derived probe composition is
+// repaired.
 // Version 35 round-robins every explicit product capability before expanding
 // another phrase from the same capability. Production v34 proved that short
 // audience-shaped queries returned measurable demand, but an early break let
@@ -113,7 +122,7 @@ import { preSerpReachCeiling } from "./winnableDiscovery.ts";
 // still content-addressed and the policy boundary preserves v29 as no-replay
 // history instead of spending against the same provider attempt again.
 export const CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION = 30;
-export const CADENCE_MICRO_SEED_VERSION = 35;
+export const CADENCE_MICRO_SEED_VERSION = 36;
 export const CADENCE_MICRO_SEED_ANCHOR_AUDIT_VERSION = 1;
 // The cadence handoff is a distinct, provider-free boundary. A topic that
 // already paid for and persisted current evidence must not be counted as a
@@ -539,6 +548,7 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     if (
       words.length === 0 ||
       words.length > 2 ||
+      words.some((word) => /^\d+$/.test(word)) ||
       qualifier.length > 28 ||
       seenQualifiers.has(qualifier)
     ) return;
@@ -556,12 +566,16 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
         word.length >= 2 &&
         !qualifierNoise.has(word) &&
         !["the", "this", "that", "these", "those", "to", "of"].includes(word)
-      );
+      )
+      .map((word) => word === "businesses" ? "business" : word);
     if (
       words.includes("small") &&
       words.some((word) => word === "business" || word === "businesses")
     ) addMarketQualifier(["small", "business"]);
-    if (words.length > 0) addMarketQualifier(words.slice(0, 1));
+    if (
+      words.length > 0 &&
+      !["small", "business", "businesses"].includes(words[0]!)
+    ) addMarketQualifier(words.slice(0, 1));
     if (words.length > 1) addMarketQualifier(words.slice(0, 2));
     if (marketQualifiers.length >= 8) break;
   }
@@ -578,27 +592,36 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     seenProductCores.add(core);
     productCores.push(core);
   };
-  const productWordRows = productAnchors.map((anchor) =>
-    normalizeCadenceMicroSeedText(anchor)
-      .replace(/[^a-z0-9+]+/g, " ")
-      .split(" ")
-      .filter((word) =>
-        word.length >= 2 &&
-        !["and", "for", "the", "with"].includes(word)
-      )
-  );
-  const maximumPairOffset = Math.max(
-    0,
-    ...productWordRows.map((words) => words.length - 1),
-  );
-  for (let pairOffset = 0; pairOffset < maximumPairOffset; pairOffset += 1) {
-    for (const words of productWordRows) {
-      if (pairOffset + 1 >= words.length) continue;
-      const pair = words.slice(pairOffset, pairOffset + 2);
-      appendProductCore(pair);
-      if (
-        ["automated", "automatic", "autonomous"].includes(pair[0]!)
-      ) appendProductCore([pair[1]!, "automation"]);
+  const productCoreModifiers = new Set([
+    "ai", "automated", "automatic", "autonomous", "checked", "natural",
+    "powered", "predictive", "real", "time",
+  ]);
+  const trailingProductWrappers = new Set([
+    "app", "apps", "application", "applications", "platform", "platforms",
+    "software", "solution", "solutions", "system", "systems", "tool", "tools",
+  ]);
+  for (const anchor of productAnchors) {
+    const clauses = normalizeCadenceMicroSeedText(anchor)
+      .split(/\b(?:and|for|with|by|via|using)\b|[/|;,]+/g);
+    for (const clause of clauses) {
+      let words = clause
+        .replace(/[^a-z0-9+]+/g, " ")
+        .split(" ")
+        .filter((word) => word.length >= 2 && !/^\d+$/.test(word));
+      if (words[0] === "fact" && words[1] === "checked") {
+        words = words.slice(2);
+      }
+      words = words.filter((word) => !productCoreModifiers.has(word));
+      while (
+        words.length > 2 &&
+        trailingProductWrappers.has(words[words.length - 1]!)
+      ) words.pop();
+      if (words.length <= 3) {
+        appendProductCore(words);
+      } else {
+        appendProductCore(words.slice(0, 3));
+        appendProductCore(words.slice(-3));
+      }
       if (productCores.length >= 32) break;
     }
     if (productCores.length >= 32) break;

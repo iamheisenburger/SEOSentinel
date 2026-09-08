@@ -395,9 +395,9 @@ test("recovery measures tenant-owned product and audience intersections", () => 
       "Primary target audience includes SaaS founders, B2B marketing managers, and dental practices.",
   });
   assert.ok(anchors.includes("lead qualification chatbot"));
-  assert.ok(anchors.includes("saas lead qualification"));
-  assert.ok(anchors.includes("lead qualification for saas"));
-  assert.ok(anchors.includes("b2b website lead"));
+  assert.ok(anchors.includes("saas lead qualification chatbot"));
+  assert.ok(anchors.includes("lead qualification chatbot for saas"));
+  assert.ok(anchors.includes("b2b website lead generation"));
   assert.ok(anchors.some((anchor) =>
     anchor.includes("dental practices") && anchor.includes("lead qualification")
   ));
@@ -420,9 +420,9 @@ test("recovery turns verbose mature-site audiences into search-shaped probes", (
       "SaaS founders, B2B marketing managers, SEO professionals, and small businesses that want to scale SEO without hiring in-house staff.",
   });
 
-  assert.ok(anchors.includes("saas automated seo"));
-  assert.ok(anchors.includes("automated seo for saas"));
-  assert.ok(anchors.includes("b2b seo content"));
+  assert.ok(anchors.includes("saas seo content generator"));
+  assert.ok(anchors.includes("seo content generator for saas"));
+  assert.ok(anchors.includes("b2b seo content generator"));
   assert.equal(
     anchors.some((anchor) =>
       /hiring staff|scale seo efforts|in house seo/.test(anchor)
@@ -452,8 +452,54 @@ test("recovery gives later explicit product capabilities equal probe coverage", 
 
   assert.ok(anchors.includes("saas fact checking"));
   assert.ok(anchors.includes("saas ranking monitoring"));
-  assert.ok(anchors.includes("saas content refresh"));
-  assert.ok(anchors.includes("saas backlink building"));
+  assert.ok(anchors.includes("saas content refresh automation"));
+  assert.ok(anchors.includes("saas backlink building automation"));
+});
+
+test("audience probes preserve complete capabilities and reject dangling fragments", () => {
+  const leadProbes = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "AI sales agent for websites",
+      "lead qualification chatbot",
+      "website lead generation automation",
+      "24/7 sales agent",
+    ],
+    keyFeatures: [
+      "Contact detail capture",
+      "Booking link integration",
+      "24/7 visitor engagement",
+      "Natural conversation flows",
+    ],
+    targetAudienceSummary: "Small businesses with websites",
+  });
+  assert.ok(leadProbes.includes("small business sales agent"));
+  assert.ok(leadProbes.includes("sales agent for small business"));
+  assert.ok(leadProbes.includes("small business booking link integration"));
+  assert.ok(leadProbes.includes("conversation flows for small business"));
+  assert.equal(leadProbes.some((probe) => /^small (?!business\b)/.test(probe)), false);
+  assert.equal(leadProbes.some((probe) =>
+    /small business (?:24|7)(?: |$)/.test(probe)
+  ), false);
+
+  const seoProbes = cadenceMicroSeedRecoveryAnchors({
+    anchorKeywords: [
+      "AI SEO content generator",
+      "AI-powered article writer for SEO",
+      "keyword research and content automation",
+    ],
+    keyFeatures: [
+      "Fact-checked content generation",
+      "Autonomous site crawling and niche detection",
+    ],
+    targetAudienceSummary: "SaaS founders and B2B marketing managers",
+  });
+  assert.ok(seoProbes.includes("saas seo content generator"));
+  assert.ok(seoProbes.includes("saas article writer"));
+  assert.ok(seoProbes.includes("content generation for saas"));
+  assert.ok(seoProbes.includes("saas site crawling"));
+  assert.ok(seoProbes.includes("niche detection for saas"));
+  assert.equal(seoProbes.includes("saas powered article"), false);
+  assert.equal(seoProbes.includes("saas checked content"), false);
 });
 
 test("recovery never lets clipped feature prose displace mature search anchors", () => {
@@ -721,7 +767,7 @@ test("legacy unpublished inventory remains eligible only with exact current anch
 });
 
 test("fallback is a distinct bounded receipt after an exact terminal primary miss", () => {
-  assert.equal(CADENCE_MICRO_SEED_VERSION, 35);
+  assert.equal(CADENCE_MICRO_SEED_VERSION, 36);
   assert.equal(CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION, 30);
   assert.ok(
     CADENCE_MICRO_SEED_VERSION >= CADENCE_MICRO_SEED_COMPACT_RECEIPT_VERSION,
