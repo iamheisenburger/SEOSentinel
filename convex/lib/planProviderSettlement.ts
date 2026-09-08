@@ -42,10 +42,29 @@ export async function retireSingleExecutionPlanContingencies(
     )) continue;
     const checkpoints = await ctx.db.query("plan_candidate_checkpoints")
       .withIndex("by_plan_job", q => q.eq("planJobId", job._id)).take(2);
+    // stage() also closes zero-candidate manifests as `empty`. They consumed
+    // their first discovery execution but can never use the reserved second
+    // execution. Require the complete empty-manifest/ledger binding rather
+    // than treating any terminal-looking checkpoint as a refund receipt.
+    const emptyExecutionClosed = (checkpoint: Doc<"plan_candidate_checkpoints">) =>
+      job.status === "failed" && checkpoint.status === "empty" &&
+      checkpoint.userId === site.userId &&
+      checkpoint.providerSpendReservationId === job.providerSpendReservationId &&
+      checkpoint.providerCostReservedMicroUsd === job.providerCostReservedMicroUsd &&
+      checkpoint.providerCostCeilingMicroUsd === job.providerCostCeilingMicroUsd &&
+      checkpoint.reservationDay === job.providerCostReservationDay &&
+      checkpoint.candidateTopicIds.length === 0 && checkpoint.candidateFingerprints.length === 0 &&
+      (checkpoint.inlineCompletedTopicIds?.length ?? 0) === 0 &&
+      (checkpoint.terminallyExcludedTopicIds?.length ?? 0) === 0 &&
+      (checkpoint.activatedTopicIds?.length ?? 0) === 0 &&
+      checkpoint.activatedAt === undefined && checkpoint.activationScheduledAt === undefined &&
+      checkpoint.completedAt !== undefined && Number.isFinite(checkpoint.completedAt) &&
+      checkpoint.completedAt >= job.createdAt && checkpoint.completedAt <= job.updatedAt;
     if (checkpoints.length > 1 || (job.status === "done" && checkpoints.length !== 1) ||
         checkpoints.some(checkpoint => checkpoint.siteId !== site._id ||
           checkpoint.planJobId !== job._id || checkpoint.workerExecution !== 1 ||
-          checkpoint.status !== (job.status === "done" ? "inline_completed" : "terminal_blocked"))) continue;
+          (checkpoint.status !== (job.status === "done" ? "inline_completed" : "terminal_blocked") &&
+            !emptyExecutionClosed(checkpoint)))) continue;
     const reservation = await ctx.db.get(job.providerSpendReservationId);
     if (!reservation || reservation.siteId !== site._id || reservation.userId !== site.userId ||
         reservation.purpose !== "topic_plan" || reservation.trigger !== "topic_plan" ||

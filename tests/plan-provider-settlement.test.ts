@@ -72,6 +72,37 @@ test("successful single-execution plan requires an exact terminal checkpoint", a
   assert.equal((await f.run()).retired, 1);
 });
 
+test("a conclusively empty failed single-execution checkpoint retires only its unused second execution", async () => {
+  const f = fixture();
+  f.checkpoints.push({ siteId: "site", userId: "owner", planJobId: "job", workerExecution: 1,
+    status: "empty", providerSpendReservationId: "reservation", providerCostReservedMicroUsd: 2_000_000,
+    providerCostCeilingMicroUsd: 2_000_000, reservationDay: "2026-09-06",
+    candidateTopicIds: [], candidateFingerprints: [], completedAt: now - 1_000 });
+  assert.equal((await f.run()).retired, 1);
+  assert.equal(f.reservation.reservedMicroUsd, 2_000_000);
+  assert.equal(f.reservation.settledMicroUsd, 1_000_000);
+  assert.equal(f.reservation.releasedAt, undefined);
+  assert.equal((await f.run()).retired, 0);
+});
+
+test("empty checkpoint contradictions, partial manifests and subsequent work cannot retire capacity", async () => {
+  for (const patch of [{ userId: "other" }, { providerSpendReservationId: "other" },
+    { providerCostReservedMicroUsd: 1_000_000 }, { providerCostCeilingMicroUsd: 1_000_000 },
+    { reservationDay: "2026-09-05" }, { candidateTopicIds: ["topic"] },
+    { candidateFingerprints: ["fingerprint"] }, { inlineCompletedTopicIds: ["topic"] },
+    { activatedTopicIds: ["topic"] }, { terminallyExcludedTopicIds: ["topic"] },
+    { completedAt: undefined }, { completedAt: now }, { completedAt: now - 100_000 },
+    { activatedAt: now - 1_000 }, { activationScheduledAt: now - 1_000 }]) {
+    const f = fixture();
+    f.checkpoints.push({ siteId: "site", userId: "owner", planJobId: "job", workerExecution: 1,
+      status: "empty", providerSpendReservationId: "reservation", providerCostReservedMicroUsd: 2_000_000,
+      providerCostCeilingMicroUsd: 2_000_000, reservationDay: "2026-09-06",
+      candidateTopicIds: [], candidateFingerprints: [], completedAt: now - 1_000, ...patch });
+    assert.equal((await f.run()).retired, 0, JSON.stringify(patch));
+    assert.equal(f.patches.length, 0);
+  }
+});
+
 test("a prospective one-execution envelope has no unused contingency to retire", async () => {
   const f = fixture();
   Object.assign(f.job, { providerCostCeilingMicroUsd: 1_000_000, providerCostReservedMicroUsd: 1_000_000,

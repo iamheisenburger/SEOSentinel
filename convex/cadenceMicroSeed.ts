@@ -9,6 +9,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import { releaseClosedMicroSeedBeforeProvider } from "./lib/cadenceMicroSeedSettlement.ts";
+import { retireSingleExecutionPlanContingencies } from "./lib/planProviderSettlement.ts";
 import {
   planProviderAmountsMatch,
   topicPlanProviderReservationTriggerFromPayload,
@@ -2969,7 +2970,12 @@ export const reserveAndQueue = internalMutation({
       timestamp,
     });
     if (!reservation.ok) {
-      return { queued: false as const, reason: reservation.reason };
+      return { queued: false as const, reason: reservation.reason,
+        // Preserve the admission guard's safe aggregate; never return owner
+        // identifiers or another site's ledger rows to diagnose this refusal.
+        budget: { consumedMicroUsd: reservation.reservedMicroUsd,
+          ceilingMicroUsd: reservation.ceilingMicroUsd,
+          requestedMicroUsd: inspected.providerCostCeilingMicroUsd } };
     }
     const jobId = await ctx.db.insert("cadence_micro_seed_jobs", {
       siteId: args.siteId,
@@ -3032,6 +3038,13 @@ export const reserveAndQueue = internalMutation({
     return {
       queued: true as const,
       jobId,
+      accountBudget: {
+        monthlyConsumedMicroUsd: reservation.accountReservedThisMonthMicroUsd,
+        monthlyCeilingMicroUsd: reservation.accountMonthlyCeilingMicroUsd,
+        monthlyHeadroomMicroUsd: reservation.accountMonthlyCeilingMicroUsd - reservation.accountReservedThisMonthMicroUsd,
+        dailyConsumedMicroUsd: reservation.accountReservedTodayMicroUsd,
+        resetAt: Date.UTC(new Date(timestamp).getUTCFullYear(), new Date(timestamp).getUTCMonth() + 1, 1),
+      },
       seed: inspected.seed,
       providerSeeds: inspected.providerSeeds,
       sourcePlanId: inspected.sourcePlanId,
@@ -4289,9 +4302,11 @@ export const reconcileVerifiedProviderCosts = internalMutation({
       .order("desc")
       .paginate({ cursor: cursor ?? null, numItems: 16 });
     const jobs = page.page;
-    let settled = 0;
+    const planContingencies = cursor ? { retired: 0, reclaimedMicroUsd: 0 }
+      : await retireSingleExecutionPlanContingencies(ctx, site, Date.now());
+    let settled = planContingencies.retired;
     let releasedBeforeProvider = 0;
-    let reclaimedMicroUsd = 0;
+    let reclaimedMicroUsd = planContingencies.reclaimedMicroUsd;
     for (const job of jobs) {
       const closed = await releaseClosedMicroSeedBeforeProvider(ctx, site, job._id, Date.now());
       if (closed.released) {
