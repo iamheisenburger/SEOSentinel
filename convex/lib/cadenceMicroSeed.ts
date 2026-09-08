@@ -578,12 +578,14 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
       words.includes("small") &&
       words.some((word) => word === "business" || word === "businesses")
     ) addMarketQualifier(["small", "business"]);
-    if (
+    const professionalServicesAudience =
       words[0] === "professional" &&
       words.some((word) =>
         ["provider", "providers", "service", "services"].includes(word)
-      )
-    ) addMarketQualifier(["professional", "services"]);
+      );
+    if (professionalServicesAudience) {
+      addMarketQualifier(["professional", "services"]);
+    }
     if (
       words.length > 0 &&
       ["b2b", "b2c", "enterprise", "saas", "smb"].includes(words[0]!)
@@ -591,6 +593,7 @@ export function cadenceMicroSeedRecoveryAnchors(args: {
     const leadingPair = words.slice(0, 2);
     if (
       leadingPair.length > 1 &&
+      !professionalServicesAudience &&
       !leadingPair.some((word) => ["mid", "sized"].includes(word)) &&
       !(leadingPair[0] === "small" && leadingPair[1] !== "business")
     ) addMarketQualifier(leadingPair);

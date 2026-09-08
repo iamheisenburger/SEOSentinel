@@ -482,6 +482,7 @@ test("audience probes preserve complete capabilities and reject dangling fragmen
   assert.equal(leadProbes.some((probe) => /^small (?!business\b)/.test(probe)), false);
   assert.equal(leadProbes.some((probe) => /\bsmall mid\b/.test(probe)), false);
   assert.equal(leadProbes.some((probe) => /\bfor professional$/.test(probe)), false);
+  assert.equal(leadProbes.some((probe) => /\bprofessional service\b/.test(probe)), false);
   assert.equal(leadProbes.some((probe) =>
     /small business (?:24|7)(?: |$)/.test(probe)
   ), false);
