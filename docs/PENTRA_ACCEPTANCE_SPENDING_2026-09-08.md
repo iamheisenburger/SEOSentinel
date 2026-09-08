@@ -1,6 +1,6 @@
 # September acceptance: authority, evidence, and spending boundaries
 
-Updated: 2026-09-08 14:00 UTC. Only Pentra and LeadPilot are in scope.
+Updated: 2026-09-08 14:11 UTC. Only Pentra and LeadPilot are in scope.
 
 ## Approved discovery increase
 
@@ -24,7 +24,37 @@ fail closed. Expired approvals, account/plan mismatches, invalid dates and
 oversized amounts cannot raise the default. Concurrent admission tests model
 Convex serializable OCC retries across two sites sharing one account.
 
-Approval installation/deployment receipts are recorded below when verified.
+Installed at **2026-09-08 14:01:35.681 UTC**, receipt
+`sn756ejbtp5marqw1chdpdskp58e0j8y`, reference
+`owner-approved-20260908-019fec9f`. Post-deployment exact-site audits at
+14:01:58–14:02:00 confirmed the same approval on both tenants, $32 effective
+cap, $28 unchanged base, $4 incremental fence, and the October 1 expiry.
+Both complete site/source windows reported zero invalid settlements, duplicate
+source references, source-less reservations or active jobs. The allowed
+ledgers remain **$27.921120** consumed ($2.871120 verified actual + $12 spent
+execution ceilings + $13.05 retained ceilings). New approved-window consumption
+is **$0**. Monthly headroom from these allowed rows is at most $4.078880;
+the separate incremental fence limits newly approved testing to **at most $4**.
+Other tenants/account rows were not inspected; these are scoped upper bounds,
+not a fresh fleet-capacity or provider-wallet balance assertion.
+An exact production replay of the approval returned `created: false`, the same
+receipt and original approval timestamp, the same ceilings, and the same expiry.
+It did not restart the incremental spending window or add another authorization.
+
+Functional release **dcdd93183acf03850619a294a892c88d29ee7589** is pushed and
+deployed to Convex `wary-starfish-773`. Vercel Production deployment
+**6329350578** succeeded at 14:01:26 UTC. Local gates: 1,430 tests passed,
+typecheck/build/schema (61 tables, 292 indexes)/secret scan (602 tracked files)
+passed; dependency audit: 0 vulnerabilities; lint: 0 errors/157 existing warnings;
+browser: 16 pass/2 explicit authenticated skips. [CI run 34235513786](https://github.com/iamheisenburger/SEOSentinel/actions/runs/34235513786)
+completed successfully at 14:10:12 UTC, including the hosted browser checks.
+The repaired preselection-empty execution remains
+prospective: it was exercised locally, not by replaying a historical paid job.
+Post-deploy `recoverCadenceGap` inspections on both tenants returned
+`source_plan_fallback_already_attempted`, with **0 provider calls, 0 new
+reservations, 0 refunds and 0 settlements**. Pentra examined 53 micro-seed rows;
+LeadPilot 52. The budget configuration is installed, but these exhausted source
+attempts have not been reopened and fresh admission has not been proven.
 
 ## Receipt-led zero-yield diagnosis; no new paid searches
 
@@ -66,9 +96,9 @@ Two evidenced generic repairs:
 Read-only replay against current allowed-tenant inventory found **zero
 survivors after either repair**. The offering repair moved four LeadPilot
 candidates past fit, but three were duplicates and one overlapped coverage.
-Result: LeadPilot fit133 / duplicate6 / overlap10; Pentra fit43 / duplicate3 /
-overlap12. Other rejection categories were unchanged. Current inventory read:
-LeadPilot243 topics/134 article summaries; Pentra143/126. This is diagnostic
+Result: LeadPilot fit 133 / duplicate 6 / overlap 10; Pentra fit 43 / duplicate 3 /
+overlap 12. Other rejection categories were unchanged. Current inventory read:
+LeadPilot 243 topics/134 article summaries; Pentra 143/126. This is diagnostic
 re-evaluation, not a new paid execution, a persisted shortlist, or acceptance.
 
 ## Generation authority is separate
@@ -109,8 +139,8 @@ receipt or guaranteed success. Correction/fallback usage can consume the
 budget sooner. A hard cumulative enforcement boundary would have been required
 before any generation/revision test against that envelope; it is not active.
 
-The proposed proof scope is up to 16 successful fresh articles: 2 to restore
-Pentra from2 to target4, 12 to establish LeadPilot's target12, then 1 replacement
+The proposed proof would require 16 successful fresh articles: 2 to restore
+Pentra from 2 to target 4, 12 to establish LeadPilot's target 12, then 1 replacement
 per tenant after consuming a newly generated scheduled article. Existing
 sealed inventory publishing alone does not qualify. Any failed generation or
 revision consumes the same financial allowance; no attempt resets, valid
@@ -119,12 +149,12 @@ before this proof, report the shortfall rather than silently spending more.
 
 ## Still not accepted
 
-Pentra: sealed buffer2/minimum3/target4. September 8 publication deadline
-12:00:19.580 UTC; actual12:00:27.426, verified live12:00:29.554 (7.846s late).
-Next exact deadline September9 12:00:27.426 UTC. LeadPilot: sealed0/minimum9/
-target12; last publication September7 22:15:34.409; September8 06:15:34.409
-deadline missed. Its 13:42:37.322 refill check finished13:42:47.893 with
-`planning_blocked`. Next legitimate plan reconsideration September9
+Pentra: sealed buffer 2/minimum 3/target 4. September 8 publication deadline
+12:00:19.580 UTC; actual 12:00:27.426, verified live 12:00:29.554 (7.846s late).
+Next exact deadline September 9 12:00:27.426 UTC. LeadPilot: sealed 0/minimum 9/
+target 12; last publication September 7 22:15:34.409; September 8 06:15:34.409
+deadline missed. Its 13:42:37.322 refill check finished 13:42:47.893 with
+`planning_blocked`. Next legitimate plan reconsideration September 9
 13:27:38.322 UTC. Current exhausted source attempts remain exhausted.
 
 No new generation, publication or post-consumption refill is proven by these

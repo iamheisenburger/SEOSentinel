@@ -1,6 +1,6 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-08 13:32 UTC**. Start here and refresh production before
+Updated: **2026-09-08 14:11 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
@@ -26,9 +26,11 @@ attempts, raise spend limits for a passing result, or add tenant-specific fixes.
   - Pentra: `jh74txye54jna4t85m6y7p4d6h82v9ab`, `pentra.dev`.
   - LeadPilot: `jh7cccny67df67rdm4jp65tmtn8am982`, `leadpilot.chat`.
 - Never inspect, enumerate, activate, or use Estiflow or any other tenant.
-- Bounded article tests on the two allowed sites are authorized, using existing
-  credentials/resources. Preserve quotas, monetary reservations, retry bounds,
-  ownership, idempotency, and duplicate-write protection.
+- Earlier bounded article tests used existing credentials/resources. The
+  September8 decision below authorizes only the new $4 discovery allowance,
+  not additional operator generation/revision tests. Regular product-owned
+  schedules remain intact. Preserve quotas, monetary reservations, retry
+  bounds, ownership, idempotency, and duplicate-write protection.
 - No purchases and no real-prospect contact. Outreach remains approval-only.
 - Do not create Codex automations. Product-owned crons remain operational.
 - Do not use subagents unless explicitly requested. Preserve unrelated changes;
@@ -38,7 +40,30 @@ attempts, raise spend limits for a passing result, or add tenant-specific fixes.
 
 ## Release and repository
 
-Functional HEAD/pushed main: **`2985b44dad237aa6f559b2d4a0ed2ad5c83787d1`**.
+Latest functional release/pushed main: **`dcdd93183acf03850619a294a892c88d29ee7589`**.
+
+- Read `docs/PENTRA_ACCEPTANCE_SPENDING_2026-09-08.md` for the current approval,
+  zero-yield diagnosis, repairs, cost estimate and explicit generation decision.
+- User approved September-only shared-owner **$28→$32**, with a separate $4
+  incremental planning/discovery/evidence fence. Installed14:01:35.681 UTC,
+  receipt `sn756ejbtp5marqw1chdpdskp58e0j8y`; expiresOctober1 00:00 UTC.
+  Base/default28 and monthly fleet35 remain unchanged. Post-install spend0.
+- User explicitly declined the separate $60 all-in proposal and selected
+  **"Keep only the approved $4 discovery allowance."** Do not start additional
+  generation/revision tests against that rejected envelope or ask again in this
+  run. Existing product-owned publication schedules remain intact.
+- Generic business-fit v10 fixes plural offering matching; no micro-seed
+  attempt-policy bump (stillv37). Four LeadPilot receipt candidates recover at
+  fit but then fail duplicate/overlap checks. Both replayed shortlists remain0.
+- Future measured preselection-empty plans now persist their normal empty
+  checkpoint before failing, without further paid calls. Same-worker empty
+  checkpoint replay is idempotent; closed jobs cannot be reopened. Old missing
+  checkpoints were not fabricated or backfilled.
+- Convex deployment succeeded; Vercel production6329350578 succeeded14:01:26.
+  Local1,430 tests pass; typecheck/build/schema61 tables292 indexes/secret scan
+  602 tracked files/audit0 vulnerabilities pass; lint0errors157existingwarnings;
+  browsers16pass2explicit authenticated skips. CI34235513786 completed
+  **successfully at14:10:12 UTC**, including hosted browser acceptance.
 
 - Budget audit and exact receipts: `docs/PROVIDER_BUDGET_AUDIT_2026-09-08.md`.
 - `40083f6`: audited and repaired terminal no-call micro-seed reservation leak.
@@ -69,7 +94,7 @@ Functional HEAD/pushed main: **`2985b44dad237aa6f559b2d4a0ed2ad5c83787d1`**.
 
 ## Verified production state
 
-Last bounded refresh: **2026-09-08 13:29–13:32 UTC**.
+Last bounded refresh: **2026-09-08 14:01–14:02 UTC**.
 
 ### Pentra
 
@@ -82,7 +107,8 @@ Last bounded refresh: **2026-09-08 13:29–13:32 UTC**.
   - editorial 88, factual 87, publication gate passed, audit v7;
   - audited/published hash
     `b0e6677cd10194f3af39293be6c49921212a9febceb4d0b719b30c25f0aecf8d`.
-- Public read returned HTTP 200 with the exact canonical URL and H1.
+- Public read at14:00:52.681 UTC returned HTTP200 with the exact canonical URL
+  and H1. This remains the stored-buffer publication, not new replenishment.
 - Buffer is now **2 sealed / minimum 3 / target 4**. Next deadline is
   **2026-09-09 12:00:27.426 UTC**. Health remains `planning_blocked` because
   fresh replenishment has not succeeded.
@@ -121,6 +147,9 @@ Last bounded refresh: **2026-09-08 13:29–13:32 UTC**.
   ceiling is valid, not refundable; no article/topic resulted. Normal plan
   reconsideration: **September 9, 13:27:38.322 UTC**. Scheduled refill check:
   **September 8, 13:42:37.322 UTC**. No active job remains.
+- That exact refill check finished at13:42:47.893 with `planning_blocked`.
+  At14:02 health is `missed`, ready0 and no active jobs; the same September9
+  13:27:38.322 cooldown remains scheduled. Money is no longer the only blocker.
 
 ### Growth evidence
 
@@ -144,24 +173,29 @@ returned strict zero yield. Article acceptance remains blocked.
 
 Permitted same-account ledgers now consume **$27.921120**: $2.871120 actual-cost
 settlements + $12 spent-execution-ceiling settlements + $13.05 retained ceilings.
-Headroom is **at most $0.078880**, below the next $0.10 reservation. Current
-source fallbacks are also exhausted. Reset: **October 1, 00:00 UTC**. Never
+Before approval headroom was **at most $0.078880**, below a $0.10 reservation.
+After the approved32 cap, allowed-site headroom is at most$4.078880 and the
+new approval's separate $4 fence is the tighter testing bound. New-window
+spend remains0. Current source fallbacks are also exhausted. Reset/reversion:
+**October1, 00:00 UTC**. Never
 refund paid/ambiguous work, reset attempts or loosen gates to force success.
 
-One approval is being requested: a September-only **$28→$32 (+$4)** shared-owner
-cap, preserving the $35 fleet cap, daily limits and other accounts. The $4 is a
-bounded discovery/planning/evidence envelope, not an all-provider generation
-bill estimate. See the audit for its exact allocation and verification scope.
-It is **not approved**. Do not implement or spend against it without a reply.
+The **$28→$32 (+$4)** September shared-owner increase is now **approved and
+installed**, with unchanged fleet/daily/default limits and immutable account/
+month scope. The separate all-provider generation/testing proposal was
+**declined**. The $4 must not be presented as covering those model/media costs.
 
 Next work:
 
-1. Obtain the user's budget decision; no more operator-paid tests in this
-   envelope. Refresh only the two permitted snapshots. Reconciliation is now
-   idempotent and frees zero further capacity. Preserve product-owned schedules.
+1. Respect the approved discovery-only envelope and explicit no-generation-test
+   decision. No exhausted attempt replays, policy bumps for extra attempts,
+   forced plans during the cooldown or retrospective checkpoint fabrication.
+   Further discovery must have a meaningful new query/evidence hypothesis.
 2. Require a genuinely new strict candidate, live evidence, a sealed article,
-   and subsequent natural delivery before signing article acceptance.
-3. Keep measuring deadline timing: Pentra's new delivery is real and near-time,
+   scheduled new publication and subsequent replenishment after consumption
+   before signing article acceptance. The current run has not proved this and
+   the all-in paid test is not authorized. Preserve product-owned schedules.
+3. Keep measuring deadline timing: Pentra's existing-buffer delivery is real and near-time,
    but LeadPilot remains missed and sustained fresh refill is unproven.
 4. Only after article acceptance, audit/build backlinks. The controlled
    user-owned Pentra link on LeadPilot is not an earned third-party backlink.
