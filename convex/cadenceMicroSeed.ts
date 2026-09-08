@@ -8,6 +8,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
+import { releaseClosedMicroSeedBeforeProvider } from "./lib/cadenceMicroSeedSettlement.ts";
 import {
   planProviderAmountsMatch,
   topicPlanProviderReservationTriggerFromPayload,
@@ -4289,8 +4290,15 @@ export const reconcileVerifiedProviderCosts = internalMutation({
       .paginate({ cursor: cursor ?? null, numItems: 16 });
     const jobs = page.page;
     let settled = 0;
+    let releasedBeforeProvider = 0;
     let reclaimedMicroUsd = 0;
     for (const job of jobs) {
+      const closed = await releaseClosedMicroSeedBeforeProvider(ctx, site, job._id, Date.now());
+      if (closed.released) {
+        releasedBeforeProvider++;
+        reclaimedMicroUsd += closed.reclaimedMicroUsd;
+        continue;
+      }
       const jobKind = cadenceMicroSeedAttemptKind(job.attemptKind);
       const actualMicroUsd = typeof job.providerTaskCostUsd === "number"
         ? Math.ceil(job.providerTaskCostUsd * 1_000_000)
@@ -4338,6 +4346,7 @@ export const reconcileVerifiedProviderCosts = internalMutation({
     return {
       examined: jobs.length,
       settled,
+      releasedBeforeProvider,
       reclaimedMicroUsd,
       isDone: page.isDone,
       continueCursor: page.isDone ? undefined : page.continueCursor,
@@ -4409,7 +4418,7 @@ export const markProviderResponseUnverified = internalMutation({
     errorCode: v.string(),
   },
   handler: async (ctx, args) => {
-    const { job } = await requireWorker(ctx, args);
+    const { site, job } = await requireWorker(ctx, args);
     const timestamp = Date.now();
     await ctx.db.patch(job._id, {
       status: job.providerCallAttempted && !job.providerCallCompleted
@@ -4421,6 +4430,7 @@ export const markProviderResponseUnverified = internalMutation({
       completedAt: timestamp,
       updatedAt: timestamp,
     });
+    await releaseClosedMicroSeedBeforeProvider(ctx, site, job._id, timestamp);
     return {
       terminal: true,
       providerAttemptAmbiguous:
@@ -4459,7 +4469,10 @@ export const reconcileWatchdog = internalMutation({
         "provider_balance_unavailable",
         "provider_response_unverified",
       ].includes(job.status)
-    ) return { reconciled: false as const, reason: "terminal" as const };
+    ) {
+      await releaseClosedMicroSeedBeforeProvider(ctx, site, job._id, Date.now());
+      return { reconciled: false as const, reason: "terminal" as const };
+    }
 
     const timestamp = Date.now();
     const executionFenceActive = siteExecutionActive(site) &&
@@ -4512,6 +4525,7 @@ export const reconcileWatchdog = internalMutation({
         completedAt: timestamp,
         updatedAt: timestamp,
       });
+      await releaseClosedMicroSeedBeforeProvider(ctx, site, job._id, timestamp);
       return {
         reconciled: true as const,
         action: "terminal_execution_fence_changed" as const,
@@ -4553,6 +4567,7 @@ export const reconcileWatchdog = internalMutation({
         leaseExpiresAt: undefined,
         completedAt: timestamp,
       });
+      await releaseClosedMicroSeedBeforeProvider(ctx, site, job._id, timestamp);
       return {
         reconciled: true as const,
         action: "terminal_watchdog_exhausted" as const,

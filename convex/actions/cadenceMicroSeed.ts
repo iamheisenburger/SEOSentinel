@@ -91,6 +91,7 @@ type MaterializedMicroSeed = {
 type ReconciledProviderCosts = {
   examined: number;
   settled: number;
+  releasedBeforeProvider?: number;
   reclaimedMicroUsd: number;
 };
 
@@ -199,6 +200,7 @@ async function reconcileVerifiedProviderCostPages(
   const aggregate: ReconciledProviderCosts = {
     examined: 0,
     settled: 0,
+    releasedBeforeProvider: 0,
     reclaimedMicroUsd: 0,
   };
   let cursor: string | undefined;
@@ -216,6 +218,7 @@ async function reconcileVerifiedProviderCostPages(
     };
     aggregate.examined += page.examined;
     aggregate.settled += page.settled;
+    aggregate.releasedBeforeProvider = (aggregate.releasedBeforeProvider ?? 0) + (page.releasedBeforeProvider ?? 0);
     aggregate.reclaimedMicroUsd += page.reclaimedMicroUsd;
     if (page.isDone) return aggregate;
     if (!page.continueCursor || page.continueCursor === cursor) {

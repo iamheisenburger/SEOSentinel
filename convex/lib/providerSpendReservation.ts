@@ -81,6 +81,7 @@ export type ProviderReservationReleaseReason =
   | "provider_balance_preflight_unavailable"
   | "plan_cancelled_before_execution"
   | "plan_reservation_day_expired_before_execution"
+  | "micro_seed_closed_before_provider_execution"
   | "one_setup_planning_context_superseded_before_execution";
 
 export type ProviderReservationSettlementReason =
