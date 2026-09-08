@@ -59,7 +59,7 @@ Functional HEAD/pushed main: **`7fbc2967175da3c0f4c41f0bd59547b9ea9d2478`**.
 
 ## Verified production state
 
-Last bounded refresh: **2026-09-08 12:19 UTC**.
+Last bounded refresh: **2026-09-08 12:27 UTC**.
 
 ### Pentra
 
@@ -100,7 +100,7 @@ Last bounded refresh: **2026-09-08 12:19 UTC**.
   and current-policy readiness; attempt kind `primary`; no existing v37 job.
   It made zero provider calls/reservations.
 - One authorized, exact-site controlled apply at **12:21 UTC** failed before a
-  job or provider call with **`provider_account_monthly_budget_reserved`**.
+  job or paid discovery call with **`provider_account_monthly_budget_reserved`**.
   Cost reconciliation examined 50 receipts and settled/reclaimed zero, so no
   stale reservation was available to release.
 
