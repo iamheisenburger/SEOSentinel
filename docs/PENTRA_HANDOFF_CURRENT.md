@@ -1,6 +1,6 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-08 12:22 UTC**. Start here and refresh production before
+Updated: **2026-09-08 13:32 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
@@ -38,7 +38,17 @@ attempts, raise spend limits for a passing result, or add tenant-specific fixes.
 
 ## Release and repository
 
-Functional HEAD/pushed main: **`7fbc2967175da3c0f4c41f0bd59547b9ea9d2478`**.
+Functional HEAD/pushed main: **`2985b44dad237aa6f559b2d4a0ed2ad5c83787d1`**.
+
+- Budget audit and exact receipts: `docs/PROVIDER_BUDGET_AUDIT_2026-09-08.md`.
+- `40083f6`: audited and repaired terminal no-call micro-seed reservation leak.
+- `2985b44`: audited and repaired unused second-execution contingency retained
+  by an `empty` terminal checkpoint. Production reclaimed exactly **$1.10**.
+- Both passed CI; latest **34231769293**, production deployment **6328639443**,
+  Convex `wary-starfish-773` successful. Latest tests **1,423**, browser16 pass /
+  2 explicit auth skips, lint0 errors /157 existing warnings; type-check, build,
+  schema, secret scan598 tracked files and dependency audit all pass.
+- Earlier v37 releases below remain historical evidence, not latest gates.
 
 - `286ab05`: compose market probes from complete product capability clauses.
 - `222ea10`: preserve compound audience labels and remove `small mid` /
@@ -59,7 +69,7 @@ Functional HEAD/pushed main: **`7fbc2967175da3c0f4c41f0bd59547b9ea9d2478`**.
 
 ## Verified production state
 
-Last bounded refresh: **2026-09-08 12:27 UTC**.
+Last bounded refresh: **2026-09-08 13:29–13:32 UTC**.
 
 ### Pentra
 
@@ -79,8 +89,9 @@ Last bounded refresh: **2026-09-08 12:27 UTC**.
 - Remaining ready articles:
   - `j57001e1fe3a93x7em70dmcybh8dy0wf`, editorial 94/factual 100;
   - `j57cbdpkn5z37vqd3m27wq00xd8dwxhp`, editorial 85/factual 86.
-- v37 topic/operational/source/current-ledger inspection is ready with no v37
-  job and no scheduler topic. Do not claim the reduced buffer is refilled.
+- v37 primary and fallback have now run and settled to actual costs $0.012960
+  and $0.048000; received 8 and 300 candidates, accepted zero. The source's
+  fallback is exhausted. Do not replay it or claim the reduced buffer refilled.
 
 ### LeadPilot
 
@@ -99,10 +110,17 @@ Last bounded refresh: **2026-09-08 12:27 UTC**.
 - Full v37 inspect at 12:19 reported topic, operational, source, prior-policy,
   and current-policy readiness; attempt kind `primary`; no existing v37 job.
   It made zero provider calls/reservations.
-- One authorized, exact-site controlled apply at **12:21 UTC** failed before a
-  job or paid discovery call with **`provider_account_monthly_budget_reserved`**.
-  Cost reconciliation examined 50 receipts and settled/reclaimed zero, so no
-  stale reservation was available to release.
+- The **12:21 UTC** budget refusal was investigated: the older reconciliation
+  only checked actual-cost micro-seed receipts and had missed two proven
+  accounting defects. Do not repeat its claim that no stale capacity existed.
+- After the $1.10 repair, v37 primary at **13:25:10.392–13:25:11.202** spent
+  $0.012 with zero candidates; fallback **13:26:01.030–13:26:17.089** spent
+  $0.048 with 300 candidates, none accepted. Both are terminal, no replay.
+- Normal follow-up plan `j97f61bthmsffykjztccrs4t9h8e0m0x`, **13:27:37.322–
+  13:28:07.971**, failed `strict_zero_yield`. Its new $1 single-execution
+  ceiling is valid, not refundable; no article/topic resulted. Normal plan
+  reconsideration: **September 9, 13:27:38.322 UTC**. Scheduled refill check:
+  **September 8, 13:42:37.322 UTC**. No active job remains.
 
 ### Growth evidence
 
@@ -118,17 +136,29 @@ release.
 
 ## Exact blocker and next action
 
-The immediate fresh-refill blocker is the unchanged shared application monthly
-provider budget, not the external provider wallet. Do not raise the ceiling,
-reset attempts, bump the policy again, or replay old plans merely to force a
-result. Natural maintenance may retry only when the canonical ledger permits;
-the v37 atomic reservation will remain fail-closed meanwhile.
+Two accounting defects were reproduced, repaired generically, released, and
+verified in production; $1.10 was restored. The normal admission then succeeded
+with the exact $28 account cap unchanged and a successful free $0.40 provider
+wallet preflight. Four fresh micro-seed calls plus a new ordinary plan all
+returned strict zero yield. Article acceptance remains blocked.
+
+Permitted same-account ledgers now consume **$27.921120**: $2.871120 actual-cost
+settlements + $12 spent-execution-ceiling settlements + $13.05 retained ceilings.
+Headroom is **at most $0.078880**, below the next $0.10 reservation. Current
+source fallbacks are also exhausted. Reset: **October 1, 00:00 UTC**. Never
+refund paid/ambiguous work, reset attempts or loosen gates to force success.
+
+One approval is being requested: a September-only **$28→$32 (+$4)** shared-owner
+cap, preserving the $35 fleet cap, daily limits and other accounts. The $4 is a
+bounded discovery/planning/evidence envelope, not an all-provider generation
+bill estimate. See the audit for its exact allocation and verification scope.
+It is **not approved**. Do not implement or spend against it without a reply.
 
 Next work:
 
-1. Refresh the two bounded operator snapshots and v37 status. Observe whether
-   normal cost settlement/month rollover makes the primary reservation
-   admissible; do not manually repeat the failed apply.
+1. Obtain the user's budget decision; no more operator-paid tests in this
+   envelope. Refresh only the two permitted snapshots. Reconciliation is now
+   idempotent and frees zero further capacity. Preserve product-owned schedules.
 2. Require a genuinely new strict candidate, live evidence, a sealed article,
    and subsequent natural delivery before signing article acceptance.
 3. Keep measuring deadline timing: Pentra's new delivery is real and near-time,
