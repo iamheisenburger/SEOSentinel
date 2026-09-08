@@ -603,11 +603,27 @@ export default defineSchema({
     remainingArticleAllowance: v.optional(v.number()),
     allocatedMonthlyArticles: v.optional(v.number()),
     cadenceAllocationVersion: v.optional(v.number()),
+    providerBudgetAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_user", ["userId"])
     .index("by_status_updated", ["status", "updatedAt"]),
+
+  // Immutable operator approval, scoped to an account hash and one UTC month.
+  // No site reference or raw user identity is retained; deleting/recreating a
+  // site cannot reset this approval or its post-approval spending window.
+  provider_budget_authorizations: defineTable({
+    accountKey: v.string(),
+    month: v.string(),
+    windowStartAt: v.number(),
+    expiresAt: v.number(),
+    approvedAt: v.number(),
+    baseMonthlyCeilingMicroUsd: v.number(),
+    monthlyCeilingMicroUsd: v.number(),
+    incrementalLimitMicroUsd: v.number(),
+    approvalReference: v.string(),
+  }).index("by_account_month", ["accountKey", "month"]),
 
   // Durable, PII-minimized lifecycle for a verified Clerk user deletion.
   // Raw userId exists only while bounded revocation/purge work is unfinished;

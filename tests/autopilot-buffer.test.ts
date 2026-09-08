@@ -984,6 +984,25 @@ test("LeadPilot topic fit preserves specific product and buyer-problem queries",
   }
 });
 
+test("generic offering fit treats measured plural tools like singular tool without weakening product or title fit", () => {
+  const signals = ["website lead generation automation", "lead scoring and qualification tool", "sales automation chat widget"];
+  const evaluate = (keyword: string, label = keyword) => evaluateTopicBusinessFit({
+    keyword, label, coreBusinessSignals: signals, productAnchorSignals: signals,
+    businessModelSignals: ["SaaS Product", "AI lead generation software for business websites"],
+  });
+  for (const keyword of ["sales lead generation tools", "sales tools for lead generation", "tool for lead generation"]) {
+    assert.equal(evaluate(keyword).eligible, true, keyword);
+    assert.equal(evaluate(keyword, `How to Choose ${keyword} for Your Website`).eligible, true, keyword);
+  }
+  assert.equal(evaluate("sales lead generation tools", "Website Visitor Engagement Guide").eligible, false);
+  for (const keyword of ["power tools", "construction tools", "tools", "tool", "consultation tools", "lead generation professional services"]) {
+    assert.equal(evaluate(keyword).eligible, false, keyword);
+  }
+  // Matching cannot borrow a tool from a different product or omit the second shared concept.
+  assert.equal(businessSignalMatch("sales tools", ["construction tools"]).eligible, false);
+  assert.equal(businessSignalMatch("lead generation tools", ["lead generation software"]).eligible, false);
+});
+
 test("business-fit stemming does not confuse consultation with consuming", () => {
   const fit = evaluateTopicBusinessFit({
     keyword: "sales consultation",

@@ -3242,11 +3242,18 @@ async function handlePlan(
     }));
     console.log(`Deterministically selected ${plan.length} measured topic(s).`);
   } else if (requireVerifiedKeywordData) {
-    throw new Error(
+    const emptyDiscoveryMessage =
       "Verified discovery returned no measured, authority-attainable, tenant-product-fit keyword; rotating the bounded seed window instead of paying a model to invent one." +
       (discoveryDiagnostics ? ` Discovery inventory: ${JSON.stringify(discoveryDiagnostics)}` : "") +
-      (discoveryFunnel ? ` Funnel: ${JSON.stringify(discoveryFunnel)}` : ""),
-    );
+      (discoveryFunnel ? ` Funnel: ${JSON.stringify(discoveryFunnel)}` : "");
+    if (!checkpointPlanningEnabled) throw new Error(emptyDiscoveryMessage);
+    // Carry the measured empty result through the normal, lease-bound stage
+    // mutation. Throwing here lost the immutable seed/execution receipt, so
+    // ordinary recovery could not distinguish a completed empty search from
+    // an unverified provider failure. An empty plan makes no model, metric or
+    // SERP call below; stage records an empty checkpoint and then fails closed.
+    console.log(emptyDiscoveryMessage);
+    plan = [];
   } else {
     // ── AI-FIRST: no DataForSEO data, let AI generate keywords ──
     const prompt = [

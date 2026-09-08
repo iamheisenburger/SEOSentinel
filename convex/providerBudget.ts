@@ -1,7 +1,11 @@
 import { v } from "convex/values";
-import { internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { automaticSingleExecutionCheckpointTargetFromPayload } from "./lib/planProviderBudget.ts";
+import { accountDeletionKey } from "./lib/accountDeletion.ts";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
+import { activeProviderBudgetAuthorization, MAX_APPROVED_PROVIDER_MONTHLY_CEILING_MICRO_USD, providerBudgetMonth,
+  readProviderBudgetAuthorization } from "./lib/providerBudgetAuthorization.ts";
 import { resolvePlanFromFeatures } from "./planLimits.ts";
 import {
   PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
@@ -32,8 +36,12 @@ export const getSiteReservationSnapshot = internalQuery({
         .order("desc").take(SITE_RESERVATION_READ_LIMIT + 1),
     ]);
     const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
-    const monthlyCeilingMicroUsd = providerAccountMonthlyCeilingMicroUsd(tier);
+    const baseMonthlyCeilingMicroUsd = providerAccountMonthlyCeilingMicroUsd(tier);
+    const authorization = await readProviderBudgetAuthorization(ctx, entitlement, site.userId,
+      baseMonthlyCeilingMicroUsd, snapshotAt);
+    const monthlyCeilingMicroUsd = authorization?.monthlyCeilingMicroUsd ?? baseMonthlyCeilingMicroUsd;
     let monthlyConsumedMicroUsd = 0;
+    let approvedWindowConsumedMicroUsd = 0;
     let dailyConsumedMicroUsd = 0;
     let monthlyOriginalMicroUsd = 0;
     let settledCount = 0;
@@ -45,6 +53,7 @@ export const getSiteReservationSnapshot = internalQuery({
       const consumed = providerReservationConsumedMicroUsd(row);
       monthlyOriginalMicroUsd += row.reservedMicroUsd;
       monthlyConsumedMicroUsd += consumed;
+      if (authorization && row.createdAt >= authorization.approvedAt) approvedWindowConsumedMicroUsd += consumed;
       if (row.createdAt >= dayStartAt) dailyConsumedMicroUsd += consumed;
       if (row.settledAt !== undefined) settledCount++;
     }
@@ -58,11 +67,17 @@ export const getSiteReservationSnapshot = internalQuery({
       monthlyOriginalMicroUsd, monthlyConsumedMicroUsd, dailyConsumedMicroUsd,
       accountDailyCeilingMicroUsd: PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
       accountMonthlyCeilingMicroUsd: monthlyCeilingMicroUsd,
+      baseMonthlyCeilingMicroUsd,
+      approvedIncrementalLimitMicroUsd: authorization?.incrementalLimitMicroUsd,
+      approvalStartedAt: authorization?.approvedAt,
+      approvedWindowConsumedMicroUsd: authorization ? approvedWindowConsumedMicroUsd : undefined,
+      approvalExpiresAt: authorization?.expiresAt,
       // Upper bounds only: the account may have reservations at other sites.
       accountDailyHeadroomAtMostMicroUsd: Math.max(0,
         PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD - dailyConsumedMicroUsd),
-      accountMonthlyHeadroomAtMostMicroUsd: Math.max(0,
-        monthlyCeilingMicroUsd - monthlyConsumedMicroUsd),
+      accountMonthlyHeadroomAtMostMicroUsd: Math.max(0, Math.min(
+        monthlyCeilingMicroUsd - monthlyConsumedMicroUsd,
+        authorization ? authorization.incrementalLimitMicroUsd - approvedWindowConsumedMicroUsd : Infinity)),
     };
   },
 });
@@ -108,6 +123,9 @@ export const getSiteReservationAudit = internalQuery({
         .order("desc").take(SITE_RESERVATION_READ_LIMIT + 1),
     ]);
     const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
+    const baseMonthlyCeilingMicroUsd = providerAccountMonthlyCeilingMicroUsd(tier);
+    const authorization = await readProviderBudgetAuthorization(ctx, entitlement, site.userId,
+      baseMonthlyCeilingMicroUsd, snapshotAt);
     const sourceWindows = [plans, onboardings, microSeeds, demand, evidence, authority];
     const planProofs = new Map(await Promise.all(plans.slice(0, SITE_RESERVATION_READ_LIMIT)
       .filter(job => job.siteId === siteId).map(async job => {
@@ -180,7 +198,12 @@ export const getSiteReservationAudit = internalQuery({
             planProof: planProofs.get(s.jobId as Id<"jobs">) })) };
       });
     return { siteId, snapshotAt, monthStartAt, resetAt, tier,
-      accountMonthlyCeilingMicroUsd: providerAccountMonthlyCeilingMicroUsd(tier),
+      accountMonthlyCeilingMicroUsd: authorization?.monthlyCeilingMicroUsd ?? baseMonthlyCeilingMicroUsd,
+      baseMonthlyCeilingMicroUsd, approvedIncrementalLimitMicroUsd: authorization?.incrementalLimitMicroUsd,
+      approvalStartedAt: authorization?.approvedAt,
+      approvedWindowConsumedMicroUsd: authorization ? rows.filter(r => r.createdAt >= authorization.approvedAt)
+        .reduce((sum, r) => sum + r.consumedMicroUsd, 0) : undefined,
+      approvalExpiresAt: authorization?.expiresAt,
       sameAccountAsComparison: comparisonSiteId ? Boolean(comparison?.userId && comparison.userId === site.userId) : null,
       scope: "exact_site_current_owner_only" as const, accountAndFleetCapacity: "not_inspected" as const,
       siteWindowComplete: reservations.length <= SITE_RESERVATION_READ_LIMIT,
@@ -188,5 +211,54 @@ export const getSiteReservationAudit = internalQuery({
       verifiedSettledMicroUsd, contingencySettledMicroUsd, retainedMicroUsd, releasedOriginalMicroUsd,
       monthlyConsumedMicroUsd: verifiedSettledMicroUsd + contingencySettledMicroUsd + retainedMicroUsd,
       invalidSettlementCount, rows };
+  },
+});
+
+/** Internal operator boundary: call only for an explicit spending approval.
+ * The two supplied sites must share an owner; no account/site enumeration.
+ * One immutable approval per month. Replays return the original receipt and
+ * never restart its clock or enlarge its incremental spending allowance. */
+export const approveAccountMonthBudget = internalMutation({
+  args: { siteId: v.id("sites"), comparisonSiteId: v.id("sites"), month: v.string(),
+    expectedBaseMonthlyCeilingMicroUsd: v.number(), monthlyCeilingMicroUsd: v.number(),
+    incrementalLimitMicroUsd: v.number(), approvalReference: v.string() },
+  handler: async (ctx, args) => {
+    const [site, comparison] = await Promise.all([ctx.db.get(args.siteId), ctx.db.get(args.comparisonSiteId)]);
+    if (!site?.userId || comparison?.userId !== site.userId ||
+        !(await siteExecutionAuthorized(ctx, site)) || !(await siteExecutionAuthorized(ctx, comparison))) {
+      throw new Error("Budget approval scope is unavailable");
+    }
+    const entitlement = await ctx.db.query("account_plan_entitlements")
+      .withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
+    if (!entitlement || entitlement.status !== "completed") throw new Error("Canonical account entitlement required");
+    const timestamp = Date.now(); const window = providerBudgetMonth(timestamp);
+    const base = providerAccountMonthlyCeilingMicroUsd(resolvePlanFromFeatures(entitlement.planFeatures).tier);
+    if (args.month !== window.month || args.expectedBaseMonthlyCeilingMicroUsd !== base ||
+        !Number.isSafeInteger(args.monthlyCeilingMicroUsd) || args.monthlyCeilingMicroUsd <= base ||
+        args.monthlyCeilingMicroUsd > MAX_APPROVED_PROVIDER_MONTHLY_CEILING_MICRO_USD ||
+        !Number.isSafeInteger(args.incrementalLimitMicroUsd) || args.incrementalLimitMicroUsd <= 0 ||
+        args.incrementalLimitMicroUsd > args.monthlyCeilingMicroUsd - base ||
+        !/^[a-zA-Z0-9_-]{8,128}$/.test(args.approvalReference)) throw new Error("Budget approval contract is invalid");
+    const accountKey = accountDeletionKey(site.userId);
+    const existing = await ctx.db.query("provider_budget_authorizations")
+      .withIndex("by_account_month", q => q.eq("accountKey", accountKey).eq("month", window.month)).unique();
+    if (existing && (existing.approvalReference !== args.approvalReference ||
+        existing.baseMonthlyCeilingMicroUsd !== base || existing.monthlyCeilingMicroUsd !== args.monthlyCeilingMicroUsd ||
+        existing.incrementalLimitMicroUsd !== args.incrementalLimitMicroUsd)) throw new Error("A different monthly budget approval already exists");
+    if (existing && !activeProviderBudgetAuthorization(existing, site.userId, base, timestamp)) {
+      throw new Error("Existing monthly budget approval is invalid");
+    }
+    const authorizationId = existing?._id ?? await ctx.db.insert("provider_budget_authorizations", {
+      accountKey, month: window.month, windowStartAt: window.startAt, expiresAt: window.endAt,
+      approvedAt: timestamp, baseMonthlyCeilingMicroUsd: base,
+      monthlyCeilingMicroUsd: args.monthlyCeilingMicroUsd, incrementalLimitMicroUsd: args.incrementalLimitMicroUsd,
+      approvalReference: args.approvalReference,
+    });
+    if (entitlement.providerBudgetAuthorizationId !== authorizationId) {
+      await ctx.db.patch(entitlement._id, { providerBudgetAuthorizationId: authorizationId });
+    }
+    return { authorizationId, created: !existing, approvedAt: existing?.approvedAt ?? timestamp,
+      expiresAt: window.endAt, baseMonthlyCeilingMicroUsd: base,
+      monthlyCeilingMicroUsd: args.monthlyCeilingMicroUsd, incrementalLimitMicroUsd: args.incrementalLimitMicroUsd };
   },
 });

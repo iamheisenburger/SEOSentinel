@@ -1,5 +1,6 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { readProviderBudgetAuthorization } from "./providerBudgetAuthorization.ts";
 import {
   resolvePlanFromFeatures,
   type CanonicalPlanTier,
@@ -132,6 +133,7 @@ export type SharedProviderReservationResult =
       reservedMicroUsd: number;
       ceilingMicroUsd: number;
       retryAfterMs?: number;
+      budgetScope?: "approved_incremental_window";
     };
 
 export type SharedProviderCapacityDecision =
@@ -388,8 +390,10 @@ export async function reserveSharedProviderBudget(
   const plan = resolvePlanFromFeatures(
     accountEntitlement?.planFeatures ?? site.planFeatures ?? [],
   );
-  const accountMonthlyCeilingMicroUsd =
-    providerAccountMonthlyCeilingMicroUsd(plan.tier);
+  const baseMonthlyCeilingMicroUsd = providerAccountMonthlyCeilingMicroUsd(plan.tier);
+  const authorization = await readProviderBudgetAuthorization(ctx, accountEntitlement,
+    site.userId, baseMonthlyCeilingMicroUsd, args.timestamp);
+  const accountMonthlyCeilingMicroUsd = authorization?.monthlyCeilingMicroUsd ?? baseMonthlyCeilingMicroUsd;
   const monthRows = await ctx.db
     .query("provider_spend_reservations")
     .withIndex("by_created", (q) =>
@@ -401,6 +405,16 @@ export async function reserveSharedProviderBudget(
     site.userId,
     args.timestamp,
   );
+  if (authorization) {
+    const approvedWindowConsumed = monthRows.filter(row => row.userId === site.userId &&
+      row.createdAt >= authorization.approvedAt && row.releasedAt === undefined)
+      .reduce((sum, row) => sum + providerReservationConsumedMicroUsd(row), 0);
+    if (approvedWindowConsumed + args.reservedMicroUsd > authorization.incrementalLimitMicroUsd) {
+      return { ok: false, reason: "provider_account_monthly_budget_reserved",
+        budgetScope: "approved_incremental_window",
+        reservedMicroUsd: approvedWindowConsumed, ceilingMicroUsd: authorization.incrementalLimitMicroUsd };
+    }
+  }
   const accountCapacity = evaluateProviderAccountCapacity({
     accountReservedTodayMicroUsd: ledger.accountReservedTodayMicroUsd,
     accountReservedThisMonthMicroUsd:

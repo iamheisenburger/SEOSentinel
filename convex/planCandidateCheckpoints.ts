@@ -426,11 +426,16 @@ export const stage = internalMutation({
       throw new Error("Plan checkpoint seed manifest is incompatible");
     }
     if (existingCheckpoint) {
+      const emptyReplay = existingCheckpoint.status === "empty" &&
+        args.candidates.length === 0 && existingCheckpoint.candidateTopicIds.length === 0 &&
+        existingCheckpoint.candidateFingerprints.length === 0 &&
+        Number.isSafeInteger(existingCheckpoint.completedAt) &&
+        existingCheckpoint.completedAt! <= timestamp;
       const exactReplay = existingCheckpoint.siteId === args.siteId &&
         existingCheckpoint.userId === site.userId &&
         existingCheckpoint.planJobId === args.jobId &&
         existingCheckpoint.workerExecution === args.workerExecution &&
-        existingCheckpoint.status === "active" &&
+        (existingCheckpoint.status === "active" || emptyReplay) &&
         existingCheckpoint.policyVersion ===
           PLAN_CANDIDATE_CHECKPOINT_VERSION &&
         existingCheckpoint.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
@@ -493,7 +498,7 @@ export const stage = internalMutation({
           candidateOrdinal:
             replayTopics[index]?.planCheckpointCandidateOrdinal ?? index,
         })),
-        active: true,
+        active: existingCheckpoint.status === "active",
         replay: true,
       };
     }

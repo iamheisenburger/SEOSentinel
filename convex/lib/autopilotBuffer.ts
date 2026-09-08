@@ -1103,8 +1103,13 @@ function genericOfferingAlignment(
   for (const root of keywordRoots) {
     if (signalRoots.has(root)) sharedRoots += 1;
   }
-  const sharedOffering = keywordWords.some((word) =>
-    PRODUCT_OFFERING_WORDS.has(word) && signalWords.includes(word)
+  // Use the same inflection roots as the concept comparison. Exact surface
+  // words made "tools" fail even against an identical measured-query title,
+  // while "tool" passed. This still requires a shared offering AND a second
+  // shared concept; it does not substitute one kind of product for another.
+  const offeringRoots = new Set([...PRODUCT_OFFERING_WORDS].map(relevanceRoot));
+  const sharedOffering = [...keywordRoots].some((root) =>
+    offeringRoots.has(root) && signalRoots.has(root)
   );
   return sharedOffering && sharedRoots >= 2;
 }
@@ -1231,7 +1236,7 @@ export function keywordMatchesBusinessModel(
   return true;
 }
 
-export const TOPIC_BUSINESS_FIT_VERSION = 9;
+export const TOPIC_BUSINESS_FIT_VERSION = 10;
 
 export type TopicBusinessFitEvaluation = {
   eligible: boolean;
