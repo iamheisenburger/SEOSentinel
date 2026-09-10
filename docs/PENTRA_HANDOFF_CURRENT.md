@@ -1,8 +1,49 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-08 14:11 UTC**. Start here and refresh production before
+Updated: **2026-09-10 20:03 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Current September 10 priority — platform outage
+
+Read `docs/PENTRA_SUPERVISOR_REFRESH_2026-09-10.md` first. The sections explicitly
+dated September 8 below are historical and must not be reported as today's state.
+
+- **Convex production is disabled for exceeding free-plan limits.** Exact-site
+  reads for Pentra and LeadPilot fail before returning any records. This is a
+  platform quota failure, not a newly observed provider-budget rejection.
+  Exhausted resource, quota total, disable time, and reset are unknown; do not
+  enumerate other tenants or infer the Convex reset from the October 1 internal
+  budget expiry. Owner/platform restoration is the external prerequisite.
+- Pentra's September 9 deadline was **12:00:27.426 UTC**. New Git artifact
+  `digital-marketing-keyword-guide.md` records **12:00:29.865** (+2.439s), commit
+  `f3e0334bcc24a84bd79ab71bb1d9590f97c87484` at 12:00:31. Vercel 6349187733
+  succeeded at 12:01:06. The authoritative backend publication/live receipt cannot
+  be read; artifact timestamp alone is not that receipt.
+- On September 10 at **19:52:26.521 / 19:52:26.883**, the new article and earlier
+  `intelligent-content-automation` URL both returned **HTTP 500**. Pentra's
+  dynamic blog route depends on the disabled backend. No unverified static
+  fallback was added.
+- LeadPilot's **September 9 13:27:38.322** planning wake and subsequent deadlines,
+  both tenants' September 9/10 natural demand/evidence receipts, current sealed
+  buffers, and post-consumption refill are **unverified**. Old LeadPilot pages
+  still return 200; they do not establish current new-article delivery.
+- **$0 incremental operator provider spend** in this refresh. Current remaining
+  allowance is unknown because natural-job ledgers are inaccessible. Preserve
+  the previously approved $32 monthly account cap plus separate $4 discovery-only
+  fence, $35 fleet cap, all quality/attempt/lease guards, and the explicit rejection
+  of additional generation/revision tests. No new spending request.
+- September 9 CI 34348571008 failed on genuine dependency advisories. Narrow
+  dependency patch `707748b` is pushed; 1,430 local tests and 16 browser checks
+  pass, with 2 explicit auth skips. Vercel 6380017618 succeeded at 20:00:46 UTC;
+  CI 34523644575 passed at 20:03:03 UTC. Post-deploy article checks at 20:01:11.717
+  and 20:01:12.304 remain HTTP 500. See the refresh for exact gate receipts.
+  The backend functional release
+  remains `dcdd931` until a successful new Convex deployment is verified; the
+  backend dependency update is not claimed live during the outage.
+- Do not create an automation or recurring follow-up; the supervisor owns the
+  loop. No backlinks or acceptance/growth claims. Safest next check is after
+  confirmed legitimate Convex restoration, not repeated disabled queries.
 
 ## Mission and completion rule
 
@@ -32,15 +73,16 @@ attempts, raise spend limits for a passing result, or add tenant-specific fixes.
   schedules remain intact. Preserve quotas, monetary reservations, retry
   bounds, ownership, idempotency, and duplicate-write protection.
 - No purchases and no real-prospect contact. Outreach remains approval-only.
-- Do not create Codex automations. Product-owned crons remain operational.
+- Do not create Codex automations. Product-owned crons remain configured, but
+  execution is not established while Convex is disabled.
 - Do not use subagents unless explicitly requested. Preserve unrelated changes;
   do not force-push, reset, or checkout over user work.
 - `.codex-convex-prod.env` is secret and must remain untracked and unprinted.
 - Do not sign out of Google or repeat disruptive mailbox recovery.
 
-## Release and repository
+## Historical September 8 release and repository
 
-Latest functional release/pushed main: **`dcdd93183acf03850619a294a892c88d29ee7589`**.
+September 8 functional release: **`dcdd93183acf03850619a294a892c88d29ee7589`**.
 
 - Read `docs/PENTRA_ACCEPTANCE_SPENDING_2026-09-08.md` for the current approval,
   zero-yield diagnosis, repairs, cost estimate and explicit generation decision.
@@ -92,7 +134,7 @@ Latest functional release/pushed main: **`dcdd93183acf03850619a294a892c88d29ee75
 - Preserve the unrelated 22-line modification in
   `docs/PROVIDER_RESERVATION_DIAGNOSIS_2026-09-06.md`.
 
-## Verified production state
+## Historical verified production state — September 8, not current
 
 Last bounded refresh: **2026-09-08 14:01–14:02 UTC**.
 
@@ -163,7 +205,7 @@ Latest Search Console data is through **2026-09-04** (Aug 8–Sep 4 window):
 This does **not** prove attributable organic/nonbrand growth from the current
 release.
 
-## Exact blocker and next action
+## Historical September 8 blocker and next action
 
 Two accounting defects were reproduced, repaired generically, released, and
 verified in production; $1.10 was restored. The normal admission then succeeded
