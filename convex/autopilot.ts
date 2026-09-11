@@ -76,6 +76,7 @@ import {
   takeCurrentDomainArticles,
 } from "./lib/siteDomainBinding";
 import { effectiveCadencePublicationAt } from "./lib/cadenceRevision";
+import { AUTOPILOT_HEALTH_DETAILS, autopilotHealthDetail } from "./lib/autopilotHealthDetail.ts";
 import {
   ORDINARY_RUN_INTERRUPTION_GRACE_MS,
   ordinaryArticleReviewInterruptionDeadline,
@@ -2440,8 +2441,7 @@ export const auditSla = internalMutation({
         await upsertHealth(ctx, site._id, {
           heartbeatAt: health?.heartbeatAt ?? now,
           status: "cadence_paused",
-          detail:
-            "Cadence is intentionally paused; SEO measurement remains available.",
+          detail: autopilotHealthDetail({ status: "cadence_paused" }),
         });
         continue;
       }
@@ -2456,7 +2456,7 @@ export const auditSla = internalMutation({
         await upsertHealth(ctx, site._id, {
           heartbeatAt: health?.heartbeatAt ?? now,
           status: "rollout_observe",
-          detail: "Observe mode: automation is intentionally blocked.",
+          detail: autopilotHealthDetail({ status: "rollout_observe" }),
         });
         continue;
       }
@@ -2481,7 +2481,7 @@ export const auditSla = internalMutation({
           await upsertHealth(ctx, site._id, {
             heartbeatAt: health?.heartbeatAt ?? now,
             status: "migration_pending",
-            detail: "Waiting for the resumable legacy article migration.",
+            detail: autopilotHealthDetail({ status: "migration_pending" }),
           });
           continue;
         }
@@ -2585,7 +2585,7 @@ export const auditSla = internalMutation({
           ...publicationInventoryHealthFields(readySummaries.inventory),
           bufferMinimum: bufferPolicy.minimum, bufferTarget: bufferPolicy.target,
           status: "publication_inventory_incomplete",
-          detail: `${publicationMissed ? "Publication cadence deadline missed. " : ""}${publicationInventoryDetail(readySummaries.inventory)}`,
+          detail: autopilotHealthDetail({ status: "publication_inventory_incomplete", inventory: readySummaries.inventory, publicationMissed }),
         });
         continue;
       }
@@ -2653,26 +2653,7 @@ export const auditSla = internalMutation({
         bufferMinimum: bufferPolicy.minimum,
         bufferTarget: bufferPolicy.target,
         status,
-        detail:
-          status === "scheduler_stale"
-            ? "Natural dispatcher heartbeat is stale."
-            : status === "missed"
-              ? "Publication cadence deadline missed."
-              : status === "buffer_empty"
-                ? "No strict-quality sealed article is buffered."
-                : status === "buffer_low"
-                  ? "Strict-quality future buffer is below minimum."
-                  : status === "quality_quarantined"
-                    ? "The latest candidate was quarantined by the strict quality gate."
-                    : status === "publication_failed"
-                      ? "The latest external publication attempt failed."
-                      : status === "job_failed"
-                        ? "The latest content or plan worker failed."
-                        : status === "topic_portfolio_below_goal"
-                          ? "Cadence is healthy, but measured topic demand is below the organic-click goal."
-                          : status === "topic_portfolio_evidence_missing"
-                            ? "Cadence is healthy, but the topic portfolio lacks fresh outcome evidence."
-                      : "Scheduler, quality buffer, and cadence are healthy.",
+        detail: autopilotHealthDetail({ status, inventory: readySummaries.inventory, publicationMissed }),
       });
     }
 
@@ -2712,8 +2693,7 @@ export const refreshSiteCadenceHealth = internalMutation({
       await upsertHealth(ctx, siteId, {
         heartbeatAt: health?.heartbeatAt ?? pausedAt,
         status: "cadence_paused",
-        detail:
-          "Cadence is intentionally paused; no generation or publication is due.",
+        detail: autopilotHealthDetail({ status: "cadence_paused" }),
       });
       return { siteId, status: "cadence_paused" };
     }
@@ -2795,25 +2775,8 @@ export const refreshSiteCadenceHealth = internalMutation({
         : "topic_portfolio_evidence_missing";
     }
     if (ready.inventory.status !== "complete") status = "publication_inventory_incomplete";
-    const detail = ready.inventory.status !== "complete"
-      ? `${now > nextPublicationDueAt ? "Publication cadence deadline missed. " : ""}${publicationInventoryDetail(ready.inventory)}`
-      : status === "recovering"
-        ? "Autopilot is actively replenishing the strict-quality buffer."
-        : status === "buffer_empty"
-          ? "No strict-quality sealed article is buffered."
-          : status === "buffer_low"
-            ? "Strict-quality future buffer is below minimum."
-            : status === "missed"
-              ? "Publication cadence deadline missed."
-            : status === "scheduler_stale"
-              ? "Natural dispatcher heartbeat is stale."
-              : status === "job_failed"
-                ? "The latest content or plan worker failed."
-                : status === "topic_portfolio_below_goal"
-                  ? "Cadence is healthy, but measured topic demand is below the organic-click goal."
-                  : status === "topic_portfolio_evidence_missing"
-                    ? "Cadence is healthy, but the topic portfolio lacks fresh outcome evidence."
-                : "Scheduler, quality buffer, and cadence are healthy.";
+    const detail = autopilotHealthDetail({ status, inventory: ready.inventory,
+      publicationMissed: now > nextPublicationDueAt });
     await reconcilePublicationInventoryAlert(ctx, siteId, ready.inventory);
     await upsertHealth(ctx, siteId, {
       lastPublishedAt,
@@ -3191,7 +3154,14 @@ export const getHealthForSite = query({
       autopilotAlertRequiresAttention(alert, health),
     );
     return {
-      health,
+      // Old fallback rows must not contradict their status until the next
+      // ordinary audit. Preserve all other operational detail and timestamps;
+      // this query never repairs records.
+      health: health && health.status !== "healthy" && health.detail === AUTOPILOT_HEALTH_DETAILS.healthy
+        ? { ...health, detail: autopilotHealthDetail({ status: health.status, inventory: health.bufferInventory,
+            publicationMissed: Number.isFinite(health.nextPublicationDueAt) &&
+              Date.now() > (health.nextPublicationDueAt ?? Infinity) }) }
+        : health,
       alerts,
       nonBlockingAlerts: activeAlerts.filter(
         (alert) => !autopilotAlertRequiresAttention(alert, health),

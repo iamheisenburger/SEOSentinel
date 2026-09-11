@@ -49,6 +49,7 @@ import type * as lib_authorityDiscoveryBudget from "../lib/authorityDiscoveryBud
 import type * as lib_autopilotAlerts from "../lib/autopilotAlerts.js";
 import type * as lib_autopilotBuffer from "../lib/autopilotBuffer.js";
 import type * as lib_autopilotCadence from "../lib/autopilotCadence.js";
+import type * as lib_autopilotHealthDetail from "../lib/autopilotHealthDetail.js";
 import type * as lib_autopilotReadiness from "../lib/autopilotReadiness.js";
 import type * as lib_autopilotRunLease from "../lib/autopilotRunLease.js";
 import type * as lib_autopilotRunOutcome from "../lib/autopilotRunOutcome.js";
@@ -138,6 +139,7 @@ import type * as lib_searchPerformance from "../lib/searchPerformance.js";
 import type * as lib_seoGrowth from "../lib/seoGrowth.js";
 import type * as lib_serpAttainability from "../lib/serpAttainability.js";
 import type * as lib_siteDomainBinding from "../lib/siteDomainBinding.js";
+import type * as lib_siteJobActivity from "../lib/siteJobActivity.js";
 import type * as lib_siteSecurity from "../lib/siteSecurity.js";
 import type * as lib_smartlead from "../lib/smartlead.js";
 import type * as lib_smartleadNode from "../lib/smartleadNode.js";
@@ -214,6 +216,7 @@ declare const fullApi: ApiFromModules<{
   "lib/autopilotAlerts": typeof lib_autopilotAlerts;
   "lib/autopilotBuffer": typeof lib_autopilotBuffer;
   "lib/autopilotCadence": typeof lib_autopilotCadence;
+  "lib/autopilotHealthDetail": typeof lib_autopilotHealthDetail;
   "lib/autopilotReadiness": typeof lib_autopilotReadiness;
   "lib/autopilotRunLease": typeof lib_autopilotRunLease;
   "lib/autopilotRunOutcome": typeof lib_autopilotRunOutcome;
@@ -303,6 +306,7 @@ declare const fullApi: ApiFromModules<{
   "lib/seoGrowth": typeof lib_seoGrowth;
   "lib/serpAttainability": typeof lib_serpAttainability;
   "lib/siteDomainBinding": typeof lib_siteDomainBinding;
+  "lib/siteJobActivity": typeof lib_siteJobActivity;
   "lib/siteSecurity": typeof lib_siteSecurity;
   "lib/smartlead": typeof lib_smartlead;
   "lib/smartleadNode": typeof lib_smartleadNode;

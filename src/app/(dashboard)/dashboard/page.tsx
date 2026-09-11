@@ -37,6 +37,7 @@ import { GrowthLoopStatus } from "@/components/growth-loop/growth-loop-status";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
+import { dashboardActivityView } from "@/lib/dashboard-activity";
 import {
   autopilotHealthRequiresAttention,
   dashboardAutopilotRequiresAttention,
@@ -59,7 +60,8 @@ export default function DashboardPage() {
     api.articles.listBySite,
     site?._id ? { siteId: site._id } : "skip",
   );
-  const jobs = useQuery(api.jobs.listAll);
+  const jobActivity = useQuery(api.jobs.getDashboardActivity,
+    site?._id ? { siteId: site._id } : "skip");
   const gscSummary = useQuery(
     api.searchPerformance.getSummary,
     site?._id ? { siteId: site._id } : "skip",
@@ -102,10 +104,8 @@ export default function DashboardPage() {
     topics?.filter(
       (t) => t.status !== "used" && t.status !== "queued",
     ).length ?? 0;
-  const runningJobs =
-    jobs?.filter((j) => j.status === "running" || j.status === "pending")
-      .length ?? 0;
-  const recentJobs = jobs?.slice(0, 8) ?? [];
+  const activity = dashboardActivityView(site?._id, jobActivity);
+  const recentJobs = activity.recent?.jobs ?? [];
   const recentArticles = articles?.slice(0, 5) ?? [];
   const decayCount = decayingArticles?.length ?? 0;
   const activeAutopilotAlerts = autopilotHealth?.alerts ?? [];
@@ -178,13 +178,13 @@ export default function DashboardPage() {
             <span className="text-[13px] text-[#565A6E]">
               {site.domain}
             </span>
-            <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${
-              runningJobs > 0 ? "text-[#0EA5E9]" : "text-[#22C55E]"
+            <span role="status" title={activity.detail} className={`inline-flex items-center gap-1 text-[11px] font-medium ${
+              activity.state === "running" ? "text-[#0EA5E9]" : "text-[#8B8FA3]"
             }`}>
               <span className={`h-1.5 w-1.5 rounded-full ${
-                runningJobs > 0 ? "bg-[#0EA5E9] animate-pulse" : "bg-[#22C55E]"
+                activity.state === "running" ? "bg-[#0EA5E9] animate-pulse" : "bg-[#565A6E]"
               }`} />
-              {runningJobs > 0 ? "Pipeline active" : "Idle"}
+              {activity.label}
             </span>
           </div>
         </div>
@@ -594,7 +594,9 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        {recentJobs.length > 0 ? (
+        {activity.state === "loading" ? (
+          <p role="status" className="text-center py-6 text-[12px] text-[#565A6E]">{activity.detail}</p>
+        ) : recentJobs.length > 0 ? (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {recentJobs.map((job) => (
               <div
@@ -628,7 +630,7 @@ export default function DashboardPage() {
                     {jobLabel(job.type)}
                   </p>
                   <p className="text-[10px] text-[#565A6E]">
-                    {formatDistanceToNow(job.updatedAt, { addSuffix: true })}
+                    {job.updatedAt === undefined ? "Update time unavailable" : formatDistanceToNow(job.updatedAt, { addSuffix: true })}
                   </p>
                 </div>
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -647,6 +649,9 @@ export default function DashboardPage() {
           <p className="text-center py-6 text-[12px] text-[#565A6E]">
             No pipeline activity yet.
           </p>
+        )}
+        {activity.recent?.status === "truncated" && (
+          <p className="mt-3 text-[11px] text-[#565A6E]">Showing the 8 newest jobs for this site; older activity is not shown.</p>
         )}
       </div>
     </div>

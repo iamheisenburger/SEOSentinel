@@ -1,0 +1,379 @@
+{
+  "assignment": "supervisor-20260911-truthful-tenant-dashboard-15",
+  "parentCommit": "20ea655a15cc1421b39109b992abff30a27fad23",
+  "productionCommit": "3b806c6b867ae94cb160a14b7c2c45a47ca2291d",
+  "pushed": false,
+  "deployed": false,
+  "verification": {
+    "targetedTests": 18,
+    "fullTests": {
+      "tests": 1527,
+      "passed": 1527,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 70354.199667,
+      "confirmedByUtc": "2026-09-11T15:01:02Z"
+    },
+    "build": "passed with hosted-CI non-secret configuration",
+    "typecheck": "passed",
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 157
+    },
+    "schema": {
+      "tables": 61,
+      "indexes": 293,
+      "unchanged": true
+    },
+    "productionDependencyVulnerabilities": 0,
+    "secretScan": { "passed": true, "trackedFiles": 643 },
+    "stagedDiffCheck": "passed",
+    "publicBrowser": {
+      "passed": 16,
+      "skipped": 2,
+      "skipReason": "No authenticated acceptance state supplied; no credentials obtained or login performed"
+    },
+    "productionRepairedUi": "not_verified_until_reviewed_deployment",
+    "dormantSpendAncestor": false
+  },
+  "scope": {
+    "productionCalls": [
+      {
+        "function": "autopilot:getOperatorSnapshot",
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab"
+      },
+      {
+        "function": "autopilot:getOperatorSnapshot",
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982"
+      }
+    ],
+    "readOnly": true,
+    "operatorProviderCalls": 0,
+    "productionWrites": 0,
+    "budgetChanges": 0,
+    "reservationChanges": 0,
+    "manualSchedulerCalls": 0,
+    "foreignTenantInspection": false
+  },
+  "naturalObservations": [
+    {
+      "tenant": "Pentra",
+      "snapshotAt": 1789138854475,
+      "site": {
+        "autopilotEnabled": true,
+        "rolloutEpoch": 6,
+        "rolloutMode": "live",
+        "rolloutStartedAt": 1788493316537,
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab"
+      },
+      "health": {
+        "approvedBufferCount": 1,
+        "bufferInventory": {
+          "blockers": [],
+          "inspectedCandidates": 1,
+          "status": "complete",
+          "usableCountLowerBound": 1
+        },
+        "bufferMinimum": 3,
+        "bufferTarget": 4,
+        "heartbeatAt": 1789138835390,
+        "lastNaturalCompletedAt": 1789138835390,
+        "lastNaturalScheduledAt": 1789138829025,
+        "lastNaturalStartedAt": 1789138831408,
+        "lastPublishedAt": 1789122242469,
+        "lastRunId": "kd72k73485kq0wvm5nqkmagvpd8e64ka",
+        "nextPublicationDueAt": 1789208642469,
+        "portfolioClickDeficit": 100,
+        "portfolioDecision": "flag",
+        "portfolioEvaluatedAt": 1789138832307,
+        "portfolioEvidenceMissing": 1,
+        "portfolioExpectedClicksMonthly": 0,
+        "portfolioGoalMonthly": 100,
+        "portfolioStatus": "insufficient_evidence",
+        "portfolioSupportsGoal": false,
+        "portfolioVersion": 1,
+        "status": "planning_blocked",
+        "updatedAt": 1789138835390
+      },
+      "bufferInventory": {
+        "blockers": [],
+        "inspectedCandidates": 1,
+        "status": "complete",
+        "usableCountLowerBound": 1
+      },
+      "cadenceDeadline": {
+        "deadlineKind": "cadence_deadline",
+        "heartbeatAt": 1789122258483,
+        "runId": "kd7f0ggjnq6vgdz291gsqht73x8e675v",
+        "scheduledAt": 1789208642469,
+        "status": "scheduled",
+        "trigger": "deadline"
+      },
+      "upcomingRuns": [
+        {
+          "deadlineKind": "cadence_deadline",
+          "heartbeatAt": 1789122258483,
+          "runId": "kd7f0ggjnq6vgdz291gsqht73x8e675v",
+          "scheduledAt": 1789208642469,
+          "status": "scheduled",
+          "trigger": "deadline"
+        }
+      ],
+      "activeJobs": [],
+      "latestPlan": {
+        "cadenceFailureState": "none",
+        "checkpoint": {
+          "activatedCount": 0,
+          "candidateCapacity": 7,
+          "candidateCount": 1,
+          "completedAt": 1788881338565,
+          "excludedCount": 0,
+          "inlineCompletedCount": 1,
+          "requiredVerifiedYield": 7,
+          "status": "inline_completed",
+          "updatedAt": 1788881338565,
+          "usableTopicCount": 1,
+          "workerExecution": 1
+        },
+        "checkpointState": "single",
+        "createdAt": 1788879717230,
+        "domainBinding": "current",
+        "jobId": "j97424bc4zey6wwkqhnrh875an8e0h2t",
+        "persistedTopicCount": 1,
+        "persistedTopicCountState": "recorded",
+        "providerReservationState": "retained_no_replay",
+        "status": "done",
+        "updatedAt": 1788881338565,
+        "workerAttempts": 0
+      },
+      "naturalRuns": [
+        {
+          "bufferInventory": {
+            "blockers": [],
+            "inspectedCandidates": 1,
+            "status": "complete",
+            "usableCountLowerBound": 1
+          },
+          "completedAt": 1789138835390,
+          "heartbeatAt": 1789138835390,
+          "outcome": "planning_blocked",
+          "runId": "kd72k73485kq0wvm5nqkmagvpd8e64ka",
+          "scheduledAt": 1789138829025,
+          "startedAt": 1789138831408,
+          "status": "completed",
+          "trigger": "natural"
+        }
+      ],
+      "backfillReservation": {
+        "demand": {
+          "candidateCounts": {
+            "alreadyAttempted": 39,
+            "artifactEligible": 0,
+            "businessFitBlocked": 50,
+            "covered": 117,
+            "currentDemand": 28,
+            "eligible": 0,
+            "plannedGateBlocked": 28,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "pentra.dev",
+          "decision": "skipped",
+          "evaluatedAt": 1789122255646,
+          "kind": "demand",
+          "policyVersion": 2,
+          "reason": "no_eligible_legacy_topics",
+          "rolloutEpoch": 6,
+          "selectedCandidateCount": 0,
+          "version": 1
+        },
+        "evidence": {
+          "candidateCounts": {
+            "alreadyAttempted": 0,
+            "artifactEligible": 0,
+            "businessFitBlocked": 0,
+            "covered": 117,
+            "eligible": 0,
+            "plannedGateBlocked": 28,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "pentra.dev",
+          "decision": "skipped",
+          "evaluatedAt": 1789122255939,
+          "kind": "evidence",
+          "policyVersion": 2,
+          "reason": "no_current_demand_candidates",
+          "rolloutEpoch": 6,
+          "selectedCandidateCount": 0,
+          "version": 1
+        }
+      }
+    },
+    {
+      "tenant": "LeadPilot",
+      "snapshotAt": 1789138856234,
+      "site": {
+        "autopilotEnabled": true,
+        "rolloutEpoch": 9,
+        "rolloutMode": "live",
+        "rolloutStartedAt": 1784675682861,
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982"
+      },
+      "health": {
+        "approvedBufferCount": 0,
+        "bufferInventory": {
+          "blockers": [],
+          "inspectedCandidates": 0,
+          "status": "complete",
+          "usableCountLowerBound": 0
+        },
+        "bufferMinimum": 9,
+        "bufferTarget": 12,
+        "heartbeatAt": 1789138841873,
+        "lastNaturalCompletedAt": 1789138841873,
+        "lastNaturalScheduledAt": 1789138829025,
+        "lastNaturalStartedAt": 1789138834521,
+        "lastPublishedAt": 1788819334409,
+        "lastRunId": "kd7e86sw5ya5hc2k5stcfkzbyh8e733k",
+        "nextPublicationDueAt": 1788848134409,
+        "portfolioClickDeficit": 400,
+        "portfolioDecision": "flag",
+        "portfolioEvaluatedAt": 1789138835572,
+        "portfolioEvidenceMissing": 6,
+        "portfolioExpectedClicksMonthly": 0,
+        "portfolioGoalMonthly": 400,
+        "portfolioStatus": "insufficient_evidence",
+        "portfolioSupportsGoal": false,
+        "portfolioVersion": 1,
+        "status": "planning_blocked",
+        "updatedAt": 1789138841873
+      },
+      "bufferInventory": {
+        "blockers": [],
+        "inspectedCandidates": 0,
+        "status": "complete",
+        "usableCountLowerBound": 0
+      },
+      "cadenceDeadline": {
+        "completedAt": 1788848144386,
+        "deadlineKind": "cadence_deadline",
+        "heartbeatAt": 1788848144386,
+        "outcome": "planning_blocked",
+        "runId": "kd73v5sa5rgdz6jmzz0da695wh8dzsyy",
+        "scheduledAt": 1788848134409,
+        "startedAt": 1788848134802,
+        "status": "completed",
+        "trigger": "deadline"
+      },
+      "upcomingRuns": [],
+      "activeJobs": [],
+      "latestPlan": {
+        "cadenceFailure": {
+          "category": "semantic_zero_yield",
+          "code": "strict_zero_yield",
+          "eligibleAt": 1788966045299,
+          "terminal": true
+        },
+        "cadenceFailureState": "recorded",
+        "checkpoint": {
+          "activatedCount": 0,
+          "candidateCapacity": 10,
+          "candidateCount": 0,
+          "completedAt": 1788879725906,
+          "excludedCount": 0,
+          "inlineCompletedCount": 0,
+          "requiredVerifiedYield": 10,
+          "status": "empty",
+          "updatedAt": 1788879725906,
+          "usableTopicCount": 0,
+          "workerExecution": 1
+        },
+        "checkpointState": "single",
+        "createdAt": 1788879644299,
+        "domainBinding": "current",
+        "jobId": "j978nhrc6f7ax2z3wntx2n7z6n8e0fc5",
+        "persistedTopicCountState": "missing",
+        "providerReservationState": "retained_no_replay",
+        "status": "failed",
+        "updatedAt": 1788879726333,
+        "workerAttempts": 0
+      },
+      "naturalRuns": [
+        {
+          "bufferInventory": {
+            "blockers": [],
+            "inspectedCandidates": 0,
+            "status": "complete",
+            "usableCountLowerBound": 0
+          },
+          "completedAt": 1789138841873,
+          "heartbeatAt": 1789138841873,
+          "outcome": "planning_blocked",
+          "runId": "kd7e86sw5ya5hc2k5stcfkzbyh8e733k",
+          "scheduledAt": 1789138829025,
+          "startedAt": 1789138834521,
+          "status": "completed",
+          "trigger": "natural"
+        }
+      ],
+      "backfillReservation": {
+        "demand": {
+          "candidateCounts": {
+            "alreadyAttempted": 0,
+            "artifactEligible": 0,
+            "businessFitBlocked": 29,
+            "covered": 67,
+            "currentDemand": 38,
+            "eligible": 0,
+            "plannedGateBlocked": 170,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "leadpilot.chat",
+          "decision": "skipped",
+          "evaluatedAt": 1789122368065,
+          "kind": "demand",
+          "policyVersion": 2,
+          "reason": "no_eligible_legacy_topics",
+          "rolloutEpoch": 9,
+          "selectedCandidateCount": 0,
+          "version": 1
+        },
+        "evidence": {
+          "candidateCounts": {
+            "alreadyAttempted": 5,
+            "artifactEligible": 0,
+            "businessFitBlocked": 0,
+            "covered": 67,
+            "eligible": 0,
+            "plannedGateBlocked": 170,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "leadpilot.chat",
+          "decision": "skipped",
+          "evaluatedAt": 1789122368806,
+          "kind": "evidence",
+          "policyVersion": 2,
+          "reason": "no_current_demand_candidates",
+          "rolloutEpoch": 9,
+          "selectedCandidateCount": 0,
+          "version": 1
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "freshDiscovery": false,
+    "freshGeneration": false,
+    "newArticleQualityApproval": false,
+    "freshScheduledPublication": false,
+    "postConsumptionReplacement": false,
+    "attributableSeoGrowth": "not_established",
+    "cutoffUtc": "2026-09-12T07:00:00Z"
+  },
+  "amendmentDesign": {
+    "file": "docs/PROVIDER_MONTHLY_AMENDMENT_DESIGN_2026-09-11.md",
+    "implemented": false,
+    "liveApproval": false,
+    "additionalGenerationResearchMediaAuthority": false,
+    "exactSharedAccountAndFleetCapacity": "unknown"
+  }
+}

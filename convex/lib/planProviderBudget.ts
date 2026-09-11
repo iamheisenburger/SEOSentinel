@@ -615,6 +615,27 @@ export function countsTowardTopicPlanRecentLimit(
   );
 }
 
+/** Shared by atomic admission and the read-only window receipt. Historical
+ * statuses are intentionally not filtered; only a proven pre-paid release
+ * stops counting. Manual topic_* rows still share this same reason window. */
+export function countsTowardPlanReasonWindow(job: PlanProviderReservationEvidence, reason: string | undefined): boolean {
+  if (!countsTowardTopicPlanRecentLimit(job)) return false;
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown> : {};
+  const payloadReason = typeof payload.reason === "string" ? payload.reason : "";
+  return reason?.startsWith("topic_") === true
+    ? payloadReason.startsWith("topic_") : payloadReason === reason;
+}
+
+/** The failure observer deliberately excludes manual and growth-parent work,
+ * unlike the shared rolling count above. Do not conflate the two predicates. */
+export function isOrdinaryCadencePlan(job: { payload?: unknown }): boolean {
+  const payload = job.payload && typeof job.payload === "object"
+    ? job.payload as Record<string, unknown> : {};
+  return payload.manual !== true && typeof payload.reason === "string" &&
+    payload.reason.startsWith("topic_") && payload.growthParentArticleId === undefined;
+}
+
 /**
  * Legacy plan rows predate the shared reservation ledger. They remain in the
  * audit history and conservatively block ordinary autonomous planning, but

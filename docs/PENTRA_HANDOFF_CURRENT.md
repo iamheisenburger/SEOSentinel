@@ -1,8 +1,44 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 14:41 UTC**. Start here and refresh production before
+Updated: **2026-09-11 15:02 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Truthful tenant dashboard — assignment15, review required
+
+Read `docs/PENTRA_TRUTHFUL_DASHBOARD_REPAIR_2026-09-11.md` and its safe JSON first.
+Local candidate based on20ea655; **NOT pushed/deployed**, production remains3b806c6.
+One exhaustive health-detail presenter fixes the two real audit/refresh fallbacks;
+status precedence, quality, cadence, deadlines and recovery stay unchanged.
+Owner health reads also correct only the legacy contradictory healthy sentence,
+without writing records or erasing other exact operational detail. The dashboard
+uses a new owner-authorized exact-site bounded job DTO, independent running/
+pending sentinel counts, and selected-response binding instead of account-wide
+activity. Loading, stale, incomplete and unknown states cannot become Idle/zero.
+
+A small internal read-only ordinary-plan window receipt reuses the actual count/
+release/failure/expiry predicates, with capped exact-site reads and explicit
+incompleteness. It does not select, fund or authorize work and has not run live.
+No new table/index/budget/attempt/provider behavior.18 focused tests; full1,527
+tests pass, build/types/schema/dependency/secrets pass, lint0errors/157existing
+warnings, public browser16pass/2explicit authenticated skips. Signed-in repaired-
+UI verification awaits approved deployment. Add the backend query before the
+changed frontend in any subsequently approved release.
+
+One real ordinary-slot observation15:00:54.475/56.234 UTC: Pentra's run completed
+15:00:35.390 and LeadPilot's15:00:41.873, both `planning_blocked`. Exact buffers
+still1/min3/target4 and0/min9/target12; no active jobs, old Sep8 latest plans and
+old backfill skips. No new plan/article/publication/replacement was evidenced.
+LeadPilot remains overdue since Sep8 06:15:34.409; Pentra's next exact deadline
+Sep12 10:24:02.469 remains beyond today's07:00 UTC cutoff. No funding audit was
+repeated;14:38 is the latest financial evidence. No acceptance/SEO-growth claim.
+
+`docs/PROVIDER_MONTHLY_AMENDMENT_DESIGN_2026-09-11.md` is a one-page review-only
+append-only design preserving original clock/receipt/spend, with reference/OCC/
+replay/scope protections. NO endpoint, amendment or cap change implemented. Exact
+shared account/fleet capacity and additional generation/research/media authority
+remain unresolved; no numeric expenditure approval is requested. Supervisor
+review/retask is required before deployment or any amendment implementation.
 
 ## Next ordinary source / funding preflight — assignment14
 

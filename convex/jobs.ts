@@ -49,7 +49,8 @@ import {
   automaticSingleExecutionCheckpointTargetFromPayload,
   PLAN_CHECKPOINT_SINGLE_EXECUTION_VERSION,
   type AutomaticPlanYieldTarget,
-  countsTowardTopicPlanRecentLimit,
+  countsTowardPlanReasonWindow,
+  isOrdinaryCadencePlan,
   evaluateBoundedRecentPlanWindow,
   evaluateAutomaticPlanContinuation,
   planRetryUsesCurrentReservationDay,
@@ -156,6 +157,8 @@ import { EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION } from
   "./lib/expectedClickEvidenceBackfill.ts";
 import { verifiedKeywordPlanningActive } from
   "./lib/plannedTopicEvidenceRecovery.ts";
+import { SITE_ACTIVITY_RECENT_LIMIT, SITE_ACTIVITY_STATUS_LIMIT,
+  siteActivityCount, siteActivityJob, type SiteJobActivity } from "./lib/siteJobActivity.ts";
 
 const now = () => Date.now();
 export const JOB_LEASE_MS = 30 * 60 * 1000;
@@ -344,6 +347,10 @@ async function accountArticleHeadroom(
 
 const PLAN_TARGET_INVENTORY_READ_LIMIT = 2_000;
 
+function planTargetBufferShortfall(cadencePerWeek: number, sealedBufferCount: number) {
+  return Math.max(0, approvedBufferPolicy(cadencePerWeek).target - sealedBufferCount);
+}
+
 /** Queue-time source of truth for cadence planning. This uses the same sealed
  * artifact, portfolio, fit, attainability and coverage helpers as the
  * scheduler, then freezes the result on the job before any reservation is
@@ -376,7 +383,6 @@ async function currentAutomaticPlanYieldTarget(
     summaries.length > PLAN_TARGET_INVENTORY_READ_LIMIT
   ) return { ready: false as const, reason: "planning_snapshot_read_limit" as const };
   const sealedBufferCount = summaries.filter(isSealedReady).length;
-  const bufferTarget = approvedBufferPolicy(site.cadencePerWeek ?? 4).target;
   const schedulerReadiness = evaluateSchedulerReadyTopicInventory({
     topics,
     site,
@@ -415,10 +421,7 @@ async function currentAutomaticPlanYieldTarget(
   return {
     ready: true as const,
     target: automaticPlanYieldTarget({
-      targetBufferShortfall: Math.max(
-        0,
-        bufferTarget - sealedBufferCount,
-      ),
+      targetBufferShortfall: planTargetBufferShortfall(site.cadencePerWeek ?? 4, sealedBufferCount),
       verifiedHorizonShortfall: Math.max(
         0,
         MIN_VERIFIED_TOPIC_HORIZON - verifiedHorizon,
@@ -738,6 +741,100 @@ export const countRecentTopicReplenishments = internalQuery({
         : undefined;
       return payload?.reason === "topic_overlap_replenishment";
     }).length;
+  },
+});
+
+/** Exact selected-site dashboard feed. The sentinel reads distinguish exact
+ * zero from a bounded lower bound; another site's newer jobs cannot starve it. */
+export const getDashboardActivity = query({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<SiteJobActivity> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authorized to view this site's activity");
+    const site = await ctx.db.get(siteId);
+    if (!site?.userId || identity.subject !== site.userId) {
+      throw new Error("Not authorized to view this site's activity");
+    }
+    const [recent, pending, running] = await Promise.all([
+      ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", siteId))
+        .order("desc").take(SITE_ACTIVITY_RECENT_LIMIT + 1),
+      ctx.db.query("jobs").withIndex("by_site_status", q =>
+        q.eq("siteId", siteId).eq("status", "pending")).take(SITE_ACTIVITY_STATUS_LIMIT + 1),
+      ctx.db.query("jobs").withIndex("by_site_status", q =>
+        q.eq("siteId", siteId).eq("status", "running")).take(SITE_ACTIVITY_STATUS_LIMIT + 1),
+    ]);
+    if ([...recent, ...pending, ...running].some(job => job.siteId !== siteId)) {
+      throw new Error("Site activity binding is unavailable");
+    }
+    return { siteId, observedAt: now(),
+      recent: { status: recent.length > SITE_ACTIVITY_RECENT_LIMIT ? "truncated" : "complete",
+        jobs: recent.slice(0, SITE_ACTIVITY_RECENT_LIMIT).map(siteActivityJob) },
+      pending: siteActivityCount(pending), running: siteActivityCount(running) };
+  },
+});
+
+/** Only the ordinary plan's count/cooldown window, NOT scheduler selection,
+ * entitlement, provider capacity, or authorization to queue/execute anything. */
+export const inspectOrdinaryPlanWindow = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site) throw new Error("Site not found");
+    const observedAt = now(), since = observedAt - 24 * 60 * 60 * 1000;
+    const scope = "ordinary_topic_plan_window_only" as const;
+    if (site.expectedClickSchedulingEnabled !== true) {
+      return { siteId, observedAt, scope, complete: false as const,
+        reason: "checkpoint_scheduling_disabled" as const, selectionAndFunding: "not_evaluated" as const };
+    }
+    const [recent, history, ready] = await Promise.all([
+      ctx.db.query("jobs").withIndex("by_site_type_created", q =>
+        q.eq("siteId", siteId).eq("type", "plan").gte("createdAt", since))
+        .order("desc").take(TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT + 1),
+      ctx.db.query("jobs").withIndex("by_site_type_created", q =>
+        q.eq("siteId", siteId).eq("type", "plan")).order("desc").take(13),
+      ctx.db.query("article_summaries").withIndex("by_site_status", q =>
+        q.eq("siteId", siteId).eq("status", "ready")).take(201),
+    ]);
+    if ([...recent, ...history, ...ready].some(row => row.siteId !== siteId)) {
+      throw new Error("Planning window binding is unavailable");
+    }
+    if (ready.length > 200) {
+      return { siteId, observedAt, scope, complete: false as const,
+        reason: "buffer_count_incomplete" as const, selectionAndFunding: "not_evaluated" as const };
+    }
+    if ([...recent, ...history].some(job => topicPlanCooldownWakeAt(job.createdAt) === null)) {
+      return { siteId, observedAt, scope, complete: false as const,
+        reason: "plan_timestamps_unverified" as const, selectionAndFunding: "not_evaluated" as const };
+    }
+    const targetBufferShortfall = planTargetBufferShortfall(site.cadencePerWeek ?? 4,
+      ready.filter(row => articleMatchesCurrentDomain(site, row) && isSealedReady(row)).length);
+    const maximumRecent = cadencePlanDailyLimit(site.cadencePerWeek ?? 4, targetBufferShortfall);
+    const isCounted = (job: Doc<"jobs">) => countsTowardPlanReasonWindow(job, "topic_");
+    const window = evaluateBoundedRecentPlanWindow({ rows: recent, maximumRecent, isCounted });
+    const historyPrefix = history.slice(0, 12);
+    const latestCounted = historyPrefix.find(isCounted);
+    const latestCadence = historyPrefix.find(isOrdinaryCadencePlan);
+    const latestCountedComplete = Boolean(latestCounted) || history.length <= 12;
+    const failureHistoryComplete = Boolean(latestCadence) || history.length <= 12;
+    const windowComplete = recent.length <= TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT;
+    const failureEligibleAt = cadencePlanFailureEligibleAt({ failure: latestCadence?.cadenceFailure,
+      planCreatedAt: latestCadence?.createdAt ?? NaN, targetBufferShortfall });
+    const planReceipt = (job: Doc<"jobs"> | undefined) => job ? {
+      jobId: job._id, createdAt: job.createdAt,
+      windowExpiresAt: topicPlanCooldownWakeAt(job.createdAt),
+    } : null;
+    return { siteId, observedAt, scope, selectionAndFunding: "not_evaluated" as const,
+      complete: windowComplete && latestCountedComplete && failureHistoryComplete,
+      since, maximumRecent, targetBufferShortfall,
+      window: { complete: windowComplete, decision: window.decision,
+        ...(windowComplete ? { counted: window.counted.length } : { countedLowerBound: window.counted.length }),
+        nextSlotAt: window.decision === "limited" ? nextPlanWindowSlotAt(window.counted, maximumRecent) : undefined },
+      latestCounted: { complete: latestCountedComplete, plan: planReceipt(latestCounted) },
+      failureCooldown: { complete: failureHistoryComplete, plan: planReceipt(latestCadence),
+        eligibleAt: Number.isFinite(failureEligibleAt) ? failureEligibleAt : undefined,
+        blocked: failureHistoryComplete ? failureEligibleAt !== undefined && failureEligibleAt > observedAt : undefined },
+      readBounds: { recent: recent.length, recentLimit: TOPIC_PLAN_RECENT_HISTORY_READ_LIMIT,
+        history: history.length, failureHistoryLimit: 12, ready: ready.length, readyLimit: 200 } };
   },
 });
 
@@ -2189,22 +2286,7 @@ export const queuePlanIfAbsent = internalMutation({
       const recentWindow = evaluateBoundedRecentPlanWindow({
         rows: recentRows,
         maximumRecent,
-        isCounted: (job) => {
-          if (!countsTowardTopicPlanRecentLimit(job)) return false;
-          const payload = job.payload && typeof job.payload === "object"
-            ? (job.payload as Record<string, unknown>)
-            : {};
-          const payloadReason = typeof payload.reason === "string"
-            ? payload.reason
-            : "";
-          // All automatic topic-plan reasons share one tenant budget. Counting
-          // only the exact reason allowed business-fit, evidence, overlap, and
-          // horizon requests to bypass one another's paid recovery limit, while
-          // also giving each reason an artificially tiny independent window.
-          return args.reason?.startsWith("topic_") === true
-            ? payloadReason.startsWith("topic_")
-            : payloadReason === args.reason;
-        },
+        isCounted: job => countsTowardPlanReasonWindow(job, args.reason),
       });
       if (recentWindow.decision === "invalid_limit") {
         return { queued: false, reason: "invalid_recent_limit" as const };
@@ -2328,15 +2410,7 @@ export const queuePlanIfAbsent = internalMutation({
     // A provider/budget failure with an exact future eligibility receipt must
     // not be turned into a tight release/requeue loop by the scheduler. The
     // mutation that recorded the failure also armed this exact deadline.
-    const latestCadencePlan = recentTopicPlans.find((job) => {
-      const payload = job.payload && typeof job.payload === "object"
-        ? job.payload as Record<string, unknown>
-        : {};
-      return payload.manual !== true &&
-        typeof payload.reason === "string" &&
-        payload.reason.startsWith("topic_") &&
-        payload.growthParentArticleId === undefined;
-    });
+    const latestCadencePlan = recentTopicPlans.find(isOrdinaryCadencePlan);
     const latestCadenceFailure = latestCadencePlan?.cadenceFailure;
     const cadenceFailureEligibleAt = cadencePlanFailureEligibleAt({
       failure: latestCadenceFailure,

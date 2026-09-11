@@ -51,6 +51,7 @@ function source(name: string) {
  * queries use the real schema's field ordering, never a canned result. */
 export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>) {
   let now = START, serial = 0;
+  let identitySubject: string | null = null;
   let mutationTail: Promise<unknown> = Promise.resolve();
   const tables: Record<string, Row[]> = { _scheduled_functions: [] };
   const modules = new Map<string, Exported>();
@@ -142,7 +143,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     not: (arg: Dynamic): Expr => row => !expression(arg)(row),
   };
   const context: Dynamic = {
-    auth: { getUserIdentity: async () => null },
+    auth: { getUserIdentity: async () => identitySubject === null ? null : { subject: identitySubject } },
     db: {
       system: { get: async (id: string) => copy(get(id)) },
       get: async (id: string) => copy(get(id)),
@@ -229,6 +230,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   };
   for (const kind of ["runQuery", "runMutation", "runAction"]) context[kind] = (ref: Parameters<typeof getFunctionName>[0], args: Fields) => invoke(getFunctionName(ref), args);
   const api = { tables, trace, queryReads, logs, unexpected, stored, add, get, invoke,
+    setIdentity(subject: string | null) { identitySubject = subject; },
     failReads(table: string, error?: Error) { if (error) readFailures.set(table, error); else readFailures.delete(table); },
     now: () => now, setTime: (value: number) => { assert.ok(value >= now); now = value; },
     async runNextScheduled() {

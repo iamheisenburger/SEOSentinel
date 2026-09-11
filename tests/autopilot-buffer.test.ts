@@ -90,7 +90,8 @@ test("topic recovery capacity scales with tenant cadence but stays bounded", () 
   assert.equal(topicReplenishmentBudget(Number.NaN), 3);
   const jobs = readFileSync("convex/jobs.ts", "utf8");
   assert.match(jobs, /args\.reason\?\.startsWith\("topic_"\)/);
-  assert.match(jobs, /payloadReason\.startsWith\("topic_"\)/);
+  assert.match(jobs, /countsTowardPlanReasonWindow\(job, args\.reason\)/);
+  assert.match(readFileSync("convex/lib/planProviderBudget.ts", "utf8"), /payloadReason\.startsWith\("topic_"\)/);
 });
 
 test("terminal inventory cannot strand an active tenant below cadence minimum", () => {

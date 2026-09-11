@@ -386,7 +386,9 @@ test("automatic queue and worker enforce entitlement, headroom, reservation, and
   assert.doesNotMatch(jobs, /operatorBudgetBypass/);
   assert.match(jobs, /providerCostReservedMicroUsd/);
   assert.match(jobs, /AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES/);
-  assert.match(jobs, /countsTowardTopicPlanRecentLimit\(job\)/);
+  assert.match(jobs, /countsTowardPlanReasonWindow\(job, args\.reason\)/);
+  assert.match(readFileSync("convex/lib/planProviderBudget.ts", "utf8"),
+    /countsTowardPlanReasonWindow[\s\S]*?countsTowardTopicPlanRecentLimit\(job\)/);
   assert.match(jobs, /continueSuccessfulUnderfilledPlan/);
   assert.match(jobs, /authorizeUnderfilledPlanContinuationExecution/);
   assert.match(jobs, /recoverCompletedUnderfilledPlanContinuation/);
