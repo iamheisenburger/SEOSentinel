@@ -1139,8 +1139,10 @@ test("the scheduler revalidates stale topics and the queue fails closed", () => 
     readFileSync("convex/topics.ts", "utf8"),
     /Recovery article failed the current tenant product-fit gate:[\s\S]*publicationGateIssues: \[issue\][\s\S]*article_summaries/,
   );
+  const qualityRetryStart = pipeline.indexOf('if (payload?.qualityRetry && !payload.publishOnly) {');
+  assert.ok(qualityRetryStart >= 0, "Publish-only checkpoints must not re-enter quality recovery");
   const qualityRetryBranch = pipeline.slice(
-    pipeline.indexOf('if (payload?.qualityRetry) {'),
+    qualityRetryStart,
     pipeline.indexOf('if (payload?.publishOnly) {'),
   );
   assert.ok(

@@ -1,10 +1,40 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 12:30 UTC**. Start here and refresh production before
+Updated: **2026-09-11 12:55 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
-## Latest isolated core handoff release — assignment07
+## Offline publication contention candidate — assignment08, review required
+
+Read `docs/PENTRA_PUBLICATION_CONTENTION_REPAIR_2026-09-11.md`. Branch
+`codex/publication-contention-repair` starts at doc-only8a26176 (deployed runtime
+8e9e147). **Not pushed or deployed.** No dormant spending framework/ancestors.
+
+The original connected regression reproduced one real failed write counted as
+two failed deliveries after a pure5-minute lock collision. Structured contention
+now durably defers the owned job to the existing lease expiry, coalescing a
+generation-bound callback without modifying that lease or failure counts.
+Separate wait limits are4 scheduled deferrals and60minutes from the first wait;
+terminal receipts prevent requeue of the same sealed artifact. A lost external
+commit response reconciles to one visible commit. Pristine pre-write worker
+death rechecks the current seal after proven cleanup without charging a failure.
+Publish-only checkpoints take precedence over retained quality-retry provenance;
+they cannot re-enter paid review or mutate the sealed article. All quality,
+quota, actual-failure, ownership and ambiguity fences remain in force.
+
+Schema change is additive: one optional job deferral receipt and one exact
+site/article job index (**61 tables /293 indexes**, +1 index). This needs review
+and an actual future deployment; do not claim it live. Final gate receipts are
+in the report: **1,465 tests**, including21 connected/continuation cases, all
+type/build/schema/secret/dependency gates pass; lint0errors/157existingwarnings,
+browser16pass/2explicit authenticated skips. Existing production still has the
+retry weakness described below.
+No production/provider-backed calls, budgets, attempts or valid reservations
+were changed in assignment08. The13:15 fleet was not run or polled early.
+Live evidence/topic/financial prerequisites and **NOT READY** verdict remain
+those of assignment07; this candidate is not fresh tenant article acceptance.
+
+## Latest deployed isolated core handoff release — assignment07
 
 Read `docs/PENTRA_CORE_HANDOFF_RELEASE_2026-09-11.md`. Runtime release
 **8e9e14739b2d4c217dccf40a3efcbfd37c548fe7** is deployed to Convex (successful

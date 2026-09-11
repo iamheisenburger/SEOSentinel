@@ -7837,10 +7837,13 @@ export const publishApproved = action({
         };
       }
     }
-    await ctx.runAction(internal.publisher.publishArticleInternal, {
+    const publication = await ctx.runAction(internal.publisher.publishArticleInternal, {
       siteId,
       articleId,
     });
+    if ("outcome" in publication) {
+      throw new Error(`Publication is waiting for an existing destination lease; retry after ${new Date(publication.retryAt).toISOString()}.`);
+    }
 
     return { published: true, articleId };
   },
@@ -8483,6 +8486,8 @@ export const autopilotTick = internalAction({
         : "Topic admission was denied without creating a job.",
       scheduler_state_conflict:
         "The scheduler reported work without an exact active job receipt.",
+      publication_deferral_exhausted:
+        "Publication stopped at its finite contention limit or changed immutable boundary; existing failures and ambiguity fences remain intact.",
       cadence_failure_cooldown: cadenceSchedule.eligibleAt
         ? `Cadence recovery is blocked until ${new Date(cadenceSchedule.eligibleAt).toISOString()}.`
         : "Cadence recovery is blocked by an exact durable eligibility receipt.",
@@ -8645,12 +8650,28 @@ export const processNextJob = internalAction({
       });
       if (!completion.updated) throw new Error("Worker lease lost before completion");
     };
-    const publish = async (articleId: Id<"articles">) => {
+    const publish = async (articleId: Id<"articles">): Promise<ProcessedJobResult | undefined> => {
       await heartbeat();
-      await ctx.runAction(internal.publisher.publishArticleInternal, {
+      const publication = await ctx.runAction(internal.publisher.publishArticleInternal, {
         siteId: args.siteId,
         articleId,
+        jobClaim: { jobId: job._id, workerToken },
       });
+      if ("outcome" in publication && publication.outcome === "publication_lease_contention") {
+        const deferred = await ctx.runMutation(internal.jobs.markPublicationDeferred, {
+          siteId: args.siteId, jobId: job._id, workerToken,
+          boundary: publication.boundary,
+        });
+        return {
+          processed: deferred.updated, jobId: job._id, articleId,
+          ...(deferred.updated ? {
+            failureKind: deferred.terminal ? "publication_deferral_exhausted" : "publication_deferred",
+            error: deferred.terminal
+              ? "Publication waiting ended at its immutable boundary or finite contention limit."
+              : "Publication is waiting for the existing destination lease; no external write or failure attempt was consumed.",
+          } : {}),
+        };
+      }
     };
     const failPublication = async (
       articleId: Id<"articles">,
@@ -8992,7 +9013,10 @@ export const processNextJob = internalAction({
         };
       };
 
-      if (payload?.qualityRetry) {
+      // A delivery checkpoint takes precedence over its quality-recovery
+      // provenance. Retrying a sealed publication must never re-enter paid
+      // review or try to edit an artifact locked by an ambiguous write.
+      if (payload?.qualityRetry && !payload.publishOnly) {
         if (!payload.articleId) throw new Error("Quality retry is missing its articleId");
         const checkpoint = await ctx.runQuery(internal.articles.getInternal, {
           articleId: payload.articleId,
@@ -9136,7 +9160,8 @@ export const processNextJob = internalAction({
             });
           } else {
             try {
-              await publish(payload.articleId);
+              const deferred = await publish(payload.articleId);
+              if (deferred) return deferred;
               publicationSucceeded = true;
             } catch (error) {
               const message = error instanceof Error
@@ -9190,7 +9215,8 @@ export const processNextJob = internalAction({
           };
         }
         try {
-          await publish(payload.articleId);
+          const deferred = await publish(payload.articleId);
+          if (deferred) return deferred;
         } catch (error) {
           const message = error instanceof Error
             ? error.message
@@ -9477,7 +9503,8 @@ export const processNextJob = internalAction({
         });
       } else {
         try {
-          await publish(articleId);
+          const deferred = await publish(articleId);
+          if (deferred) return deferred;
           publicationSucceeded = true;
         } catch (error) {
           const message = error instanceof Error

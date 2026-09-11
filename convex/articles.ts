@@ -69,6 +69,7 @@ import {
   cadenceMicroSeedLegacyAnchorReceiptEligible,
 } from "./lib/cadenceMicroSeed";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
+import { assertPublicationJobClaim, publicationContentionUntil, publicationJobClaimValidator } from "./lib/publicationDeferral";
 import {
   executionLeasePredatesPlanTransition,
   siteExecutionActive,
@@ -1672,6 +1673,7 @@ export const beginPublication = internalMutation({
     expectedConfigHash: v.string(),
     expectedRolloutEpoch: v.number(),
     leaseOwner: v.string(),
+    jobClaim: v.optional(publicationJobClaimValidator),
   },
   handler: async (
     ctx,
@@ -1681,6 +1683,7 @@ export const beginPublication = internalMutation({
       expectedConfigHash,
       expectedRolloutEpoch,
       leaseOwner,
+      jobClaim,
     },
   ) => {
     const article = await ctx.db.get(articleId);
@@ -1712,6 +1715,7 @@ export const beginPublication = internalMutation({
     ) {
       throw new Error("Publication blocked by the current rollout epoch");
     }
+    await assertPublicationJobClaim(ctx, site, article, jobClaim);
     if (!deliveryPreviouslyAttempted && article.topicId) {
       const topic = await ctx.db.get(article.topicId);
       if (
@@ -1722,9 +1726,6 @@ export const beginPublication = internalMutation({
         throw new Error("Publication blocked by an earlier-domain topic");
       }
     }
-    // Initial articles and immutable revisions share one external destination.
-    // Neither workflow may start while the other has an unresolved write.
-    await assertNoUnresolvedPublishedRevision(ctx, site._id);
     const currentConfigHash = publicationDeliveryConfigHash(
       publicationDeliveryConfig(site),
     );
@@ -1740,17 +1741,18 @@ export const beginPublication = internalMutation({
     ) {
       throw new Error("Publication destination changed after quality audit");
     }
-    if (site.publicationLeaseOwner) {
-      const sameRecoverableArticle =
-        article.publicationLeaseOwner === site.publicationLeaseOwner &&
-        article.publicationLeaseHash === expectedContentHash;
-      if (
-        (site.publicationLeaseExpiresAt ?? 0) > Date.now() ||
-        !sameRecoverableArticle
-      ) {
-        throw new Error("Another publication is already in progress for this site");
-      }
+    if (article.auditedContentHash !== expectedContentHash) {
+      throw new Error("Publication artifact no longer matches its completed audit");
     }
+    const contentionUntil = publicationContentionUntil(site, article, Date.now());
+    if (contentionUntil !== null) return {
+      outcome: "publication_lease_contention" as const,
+      retryAt: contentionUntil,
+    };
+    // Initial articles and immutable revisions share one external destination.
+    // Active shared leases above are structured contention; an unresolved
+    // revision without a usable lease remains a fail-closed policy rejection.
+    await assertNoUnresolvedPublishedRevision(ctx, site._id);
     const lease = acquirePublicationLease(article, {
       expectedContentHash,
       leaseOwner,
@@ -1857,6 +1859,7 @@ export const recordPublicationAttempted = internalMutation({
     articleId: v.id("articles"),
     expectedContentHash: v.string(),
     leaseOwner: v.string(),
+    jobClaim: v.optional(publicationJobClaimValidator),
   },
   handler: async (ctx, args) => {
     const article = await ctx.db.get(args.articleId);
@@ -1873,6 +1876,9 @@ export const recordPublicationAttempted = internalMutation({
     if (
       !site ||
       site.publicationLeaseOwner !== args.leaseOwner ||
+      (site.publicationLeaseExpiresAt ?? 0) <= now() ||
+      !article.publicationLeaseStartedAt ||
+      article.publicationLeaseStartedAt + PUBLICATION_LEASE_MS <= now() ||
       !articleMatchesCurrentDomain(site, article) ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       !site.autopilotEnabled ||
@@ -1882,6 +1888,7 @@ export const recordPublicationAttempted = internalMutation({
     ) {
       throw new Error("Publication attempt lost its immutable site lease");
     }
+    await assertPublicationJobClaim(ctx, site, article, args.jobClaim);
     if (
       !article.publicationDate ||
       !article.publicationDeliveryHash ||

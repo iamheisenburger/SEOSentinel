@@ -142,6 +142,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   const context: Dynamic = {
     auth: { getUserIdentity: async () => null },
     db: {
+      system: { get: async (id: string) => copy(get(id)) },
       get: async (id: string) => copy(get(id)),
       normalizeId: (table: string, id: string) => id.startsWith(`${table}:`) ? id : null,
       insert: async (table: string, values: Fields) => add(table, values),

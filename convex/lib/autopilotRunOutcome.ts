@@ -17,6 +17,7 @@ export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   planning_blocked: "blocked",
   topic_admission_blocked: "blocked",
   scheduler_state_conflict: "blocked",
+  publication_deferral_exhausted: "blocked",
   cadence_failure_cooldown: "blocked",
   public_url_pending: "waiting",
   automatic_live_promotion: "waiting",
@@ -76,6 +77,8 @@ export const JOB_RUN_OUTCOME_HEALTH = {
   publication_succeeded: "waiting",
   quality_quarantined: "blocked",
   publication_failed: "blocked",
+  publication_deferred: "waiting",
+  publication_deferral_exhausted: "blocked",
   job_failed: "blocked",
   site_parked: "blocked",
 } as const;
@@ -100,6 +103,8 @@ export function classifyProcessedJobOutcome(processed: {
   if (processed.failureKind === "retry_scheduled") return "retry_scheduled";
   if (processed.processed) {
     switch (processed.failureKind) {
+      case "publication_deferred": return "publication_deferred";
+      case "publication_deferral_exhausted": return "publication_deferral_exhausted";
       case "provider_capacity_deferred": return "provider_capacity_deferred";
       case "provider_funding_paused": return "provider_funding_paused";
       case "provider_allowance_paused": return "provider_allowance_paused";

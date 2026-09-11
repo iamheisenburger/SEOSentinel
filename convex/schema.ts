@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { publicationDeferralBoundaryValidator } from "./lib/publicationDeferral";
 
 export default defineSchema({
   sites: defineTable({
@@ -1219,6 +1220,17 @@ export default defineSchema({
     rolloutEpoch: v.optional(v.number()),
     workerAttempts: v.optional(v.number()),
     publicationAttempts: v.optional(v.number()),
+    // A lock collision is not a failed external delivery. Preserve its exact
+    // immutable boundary and finite wake budget independently of attempts.
+    publicationDeferral: v.optional(v.object({
+      boundary: publicationDeferralBoundaryValidator,
+      startedAt: v.number(),
+      deadlineAt: v.number(),
+      generation: v.number(),
+      state: v.union(v.literal("waiting"), v.literal("resumed"), v.literal("terminal")),
+      wakeAt: v.optional(v.number()),
+      wakeId: v.optional(v.id("_scheduled_functions")),
+    })),
     stepProgress: v.optional(
       v.object({
         current: v.number(),
@@ -1233,6 +1245,7 @@ export default defineSchema({
     .index("by_site", ["siteId"])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_status_attempt", ["siteId", "status", "nextAttemptAt"])
+    .index("by_site_article", ["siteId", "articleId"])
     .index("by_status_heartbeat", ["status", "heartbeatAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
     .index("by_site_type_status_created", [

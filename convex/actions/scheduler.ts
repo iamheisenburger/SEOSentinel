@@ -487,7 +487,9 @@ export const scheduleCadence = internalAction({
       );
       return {
         scheduled: delivery.queued ? 1 : 0,
-        mode: delivery.queued ? "buffer_delivery" : "buffer_delivery_pending",
+        mode: "reason" in delivery && delivery.reason === "publication_deferral_terminal"
+          ? "publication_deferral_exhausted"
+          : delivery.queued ? "buffer_delivery" : "buffer_delivery_pending",
         bufferCount: buffer.length,
       };
     }

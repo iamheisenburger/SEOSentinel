@@ -6,6 +6,13 @@ import { v } from "convex/values";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import {
+  MAX_PUBLICATION_DEFERRALS,
+  MAX_PUBLICATION_DEFERRAL_MS,
+  publicationContentionUntil,
+  publicationDeferralBoundaryMatches,
+  publicationDeferralBoundaryValidator,
+} from "./lib/publicationDeferral";
+import {
   DETERMINISTIC_QUALITY_REPAIR_VERSION,
   hasAttemptedVersionedQualityRecovery,
   MAX_QUALITY_REVISIONS,
@@ -3022,8 +3029,19 @@ export const queuePublicationIfAbsent = internalMutation({
       return payload?.publishOnly === true;
     });
     if (duplicate) return { queued: false, jobId: duplicate._id };
+    const priorDeliveries = await ctx.db.query("jobs")
+      .withIndex("by_site_article", q => q.eq("siteId", siteId).eq("articleId", articleId))
+      .take(101);
+    const closedDeferral = priorDeliveries.find(job => job.status === "failed" &&
+      job.publicationDeferral?.boundary.contentHash === article.auditedContentHash &&
+      job.publicationDeferral?.boundary.configHash === article.publicationConfigHash);
+    if (closedDeferral || priorDeliveries.length > 100) return {
+      queued: false, reason: "publication_deferral_terminal" as const,
+      jobId: closedDeferral?._id,
+    };
     const jobId = await ctx.db.insert("jobs", {
       siteId,
+      articleId,
       type: "article",
       status: "pending",
       payload: {
@@ -3075,6 +3093,8 @@ export const markRunning = internalMutation({
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     const topicCurrent = await jobArtifactsMatchCurrentDomain(ctx, site, job);
+    if (job?.siteId === args.siteId && job.status === "pending" &&
+      !(await validatePublicationDeferralForClaim(ctx, job, site))) return null;
     if (
       !job ||
       job.siteId !== args.siteId ||
@@ -3113,6 +3133,8 @@ export const claimPending = internalMutation({
     const site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     const executionAuthorized = await siteExecutionAuthorized(ctx, site);
     const topicCurrent = await jobArtifactsMatchCurrentDomain(ctx, site, job);
+    if (job?.siteId === siteId && job.status === "pending" &&
+      !(await validatePublicationDeferralForClaim(ctx, job, site))) return null;
     if (
       !job ||
       job.siteId !== siteId ||
@@ -4581,6 +4603,7 @@ export const markDone = internalMutation({
     }
     const currentTime = now();
     await settleArticleProviderAttempt(ctx, job, "completed", currentTime);
+    await cancelPublicationDeferralWake(ctx, job.publicationDeferral);
     await ctx.db.patch(jobId, {
       status: "done",
       result,
@@ -4592,6 +4615,9 @@ export const markDone = internalMutation({
       heartbeatAt: undefined,
       leaseExpiresAt: undefined,
       nextAttemptAt: undefined,
+      ...(job.publicationDeferral ? { publicationDeferral: {
+        ...job.publicationDeferral, state: "resumed" as const, wakeAt: undefined, wakeId: undefined,
+      } } : {}),
       updatedAt: currentTime,
     });
     await reconcileJobTopicLifecycle(ctx, job);
@@ -5027,7 +5053,7 @@ export const markPublishFailed = internalMutation({
   handler: async (ctx, { jobId, workerToken, articleId, error }) => {
     const job = await ctx.db.get(jobId);
     if (!job) throw new Error("Job not found");
-    if (!ownsJob(job, workerToken)) return { updated: false, willRetry: false, attempts: job.publicationAttempts ?? 0, maxAttempts: MAX_PUBLICATION_ATTEMPTS };
+    if (!ownsJob(job, workerToken) || (job.leaseExpiresAt ?? 0) <= now()) return { updated: false, willRetry: false, attempts: job.publicationAttempts ?? 0, maxAttempts: MAX_PUBLICATION_ATTEMPTS };
     const article = await ctx.db.get(articleId);
     if (!job.siteId || !article || article.siteId !== job.siteId) {
       throw new Error("Article does not belong to the job site");
@@ -5041,6 +5067,10 @@ export const markPublishFailed = internalMutation({
     );
     const currentTime = now();
     await settleArticleProviderAttempt(ctx, job, "completed", currentTime);
+    await cancelPublicationDeferralWake(ctx, job.publicationDeferral);
+    const publicationDeferral = job.publicationDeferral ? {
+      ...job.publicationDeferral, state: "resumed" as const, wakeAt: undefined, wakeId: undefined,
+    } : undefined;
     const [site, topic] = await Promise.all([
       ctx.db.get(job.siteId),
       article.topicId ? ctx.db.get(article.topicId) : Promise.resolve(null),
@@ -5068,6 +5098,7 @@ export const markPublishFailed = internalMutation({
         error:
           `Terminal publication product-fit rejection: ${topicFit.reasons.join("; ")}`,
         publicationAttempts: attempts,
+        publicationDeferral,
         articleId,
         cadenceFailure: undefined,
         nextAttemptAt: undefined,
@@ -5091,6 +5122,7 @@ export const markPublishFailed = internalMutation({
         ? `Publication attempt ${attempts}/${MAX_PUBLICATION_ATTEMPTS} failed: ${error}`
         : `Publication retry exhausted after ${attempts}/${MAX_PUBLICATION_ATTEMPTS} attempts: ${error}`,
       publicationAttempts: attempts,
+      publicationDeferral,
       payload: {
         ...existingPayload,
         articleId,
@@ -5123,6 +5155,140 @@ export const markPublishFailed = internalMutation({
       attempts,
       maxAttempts: MAX_PUBLICATION_ATTEMPTS,
     };
+  },
+});
+
+type PublicationDeferral = NonNullable<Doc<"jobs">["publicationDeferral"]>;
+
+async function cancelPublicationDeferralWake(ctx: MutationCtx, record?: PublicationDeferral) {
+  if (!record?.wakeId) return;
+  const wake = await ctx.db.system.get(record.wakeId);
+  if (wake?.state.kind === "pending") await ctx.scheduler.cancel(record.wakeId);
+}
+
+async function terminalPublicationDeferral(
+  ctx: MutationCtx, job: Doc<"jobs">, record: PublicationDeferral, reason: string,
+) {
+  await cancelPublicationDeferralWake(ctx, record);
+  await ctx.db.patch(job._id, {
+    status: "failed", articleId: record.boundary.articleId,
+    publicationDeferral: { ...record, state: "terminal", wakeAt: undefined, wakeId: undefined },
+    error: `Publication contention stopped: ${reason}. Existing delivery failures and ambiguity fences are retained.`,
+    nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined,
+    leaseExpiresAt: undefined, updatedAt: now(),
+  });
+}
+
+async function validatePublicationDeferralForClaim(
+  ctx: MutationCtx, job: Doc<"jobs">, site: Doc<"sites"> | null,
+): Promise<boolean> {
+  const record = job.publicationDeferral;
+  if (!record) return true;
+  const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+  const article = await ctx.db.get(record.boundary.articleId);
+  if (record.state === "terminal" ||
+    job.articleId !== record.boundary.articleId || payload.articleId !== record.boundary.articleId ||
+    !publicationDeferralBoundaryMatches(site, article, record.boundary) ||
+    !jobAuthorizedForExecution(site, job) || !(await siteExecutionAuthorized(ctx, site)) ||
+    (record.state === "waiting" && now() >= record.deadlineAt)) {
+    await terminalPublicationDeferral(ctx, job, record, "immutable boundary changed or bounded wait expired");
+    return false;
+  }
+  return true;
+}
+
+async function armPublicationDeferral(
+  ctx: MutationCtx, job: Doc<"jobs">, record: PublicationDeferral, retryAt: number,
+): Promise<{ updated: true; deferred: boolean; terminal: boolean; retryAt?: number }> {
+  const timestamp = now();
+  if (record.generation >= MAX_PUBLICATION_DEFERRALS || timestamp >= record.deadlineAt) {
+    await terminalPublicationDeferral(ctx, job, record, "finite contention allowance exhausted");
+    return { updated: true, deferred: false, terminal: true };
+  }
+  await cancelPublicationDeferralWake(ctx, record);
+  const generation = record.generation + 1;
+  const wakeAt = Math.min(record.deadlineAt, Math.max(timestamp + 1_000, retryAt));
+  const wakeId = await ctx.scheduler.runAt(wakeAt, internal.jobs.resumePublicationAfterContention, {
+    siteId: job.siteId!, jobId: job._id, generation,
+  });
+  const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+  await ctx.db.patch(job._id, {
+    status: "pending", articleId: record.boundary.articleId,
+    payload: { ...payload, articleId: record.boundary.articleId, publishOnly: true },
+    publicationDeferral: { ...record, generation, state: "waiting", wakeAt, wakeId },
+    error: "Publication deferred until the existing destination lease can be rechecked; no external write attempted.",
+    nextAttemptAt: wakeAt, workerToken: undefined, heartbeatAt: undefined,
+    leaseExpiresAt: undefined, updatedAt: timestamp,
+  });
+  return { updated: true, deferred: true, terminal: false, retryAt: wakeAt };
+}
+
+/** Only the owned worker may convert a STRUCTURED no-write result into a
+ * durable wait. Re-read the real fence in this transaction: action results can
+ * race another worker's completion/renewal, but cannot clear or extend it. */
+export const markPublicationDeferred = internalMutation({
+  args: {
+    siteId: v.id("sites"), jobId: v.id("jobs"), workerToken: v.string(),
+    boundary: publicationDeferralBoundaryValidator,
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.siteId !== args.siteId || !ownsJob(job, args.workerToken) ||
+      (job.leaseExpiresAt ?? 0) <= now()) return { updated: false, deferred: false, terminal: false };
+    const [site, article] = await Promise.all([
+      ctx.db.get(args.siteId), ctx.db.get(args.boundary.articleId),
+    ]);
+    const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+    if (job.type !== "article" || !article || article.siteId !== args.siteId ||
+      (job.articleId !== undefined && job.articleId !== article._id) ||
+      (payload.articleId !== undefined && payload.articleId !== article._id) ||
+      (job.articleId !== article._id && payload.articleId !== article._id)) {
+      throw new Error("Publication deferral does not belong to this job's article");
+    }
+    const record: PublicationDeferral = job.publicationDeferral ?? {
+      boundary: args.boundary, startedAt: now(), deadlineAt: now() + MAX_PUBLICATION_DEFERRAL_MS,
+      generation: 0, state: "waiting",
+    };
+    await settleArticleProviderAttempt(ctx, job, "completed", now());
+    if (!publicationDeferralBoundaryMatches(site, article, args.boundary) ||
+      !publicationDeferralBoundaryMatches(site, article, record.boundary) ||
+      !jobAuthorizedForExecution(site, job) || !(await siteExecutionAuthorized(ctx, site))) {
+      await terminalPublicationDeferral(ctx, job, record, "immutable boundary changed before deferral");
+      return { updated: true, deferred: false, terminal: true };
+    }
+    return armPublicationDeferral(ctx, job, record,
+      publicationContentionUntil(site!, article, now()) ?? now() + 1_000);
+  },
+});
+
+/** One exact-generation callback. Early, duplicated or stale callbacks are
+ * no-ops. Renewed leases consume the separate finite WAIT budget, never a
+ * publication failure, and normal admission still owns every external call. */
+export const resumePublicationAfterContention = internalMutation({
+  args: { siteId: v.id("sites"), jobId: v.id("jobs"), generation: v.number() },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    const record = job?.publicationDeferral;
+    if (!job || job.siteId !== args.siteId || job.status !== "pending" ||
+      !record || record.state !== "waiting" || record.generation !== args.generation ||
+      record.wakeAt === undefined || record.wakeAt > now()) return { status: "stale" as const };
+    const site = await ctx.db.get(args.siteId);
+    if (!(await validatePublicationDeferralForClaim(ctx, job, site))) return { status: "terminal" as const };
+    const article = await ctx.db.get(record.boundary.articleId);
+    const until = publicationContentionUntil(site!, article!, now());
+    if (until !== null) {
+      const armed = await armPublicationDeferral(ctx, job, record, until);
+      return { status: armed.terminal ? "terminal" as const : "deferred" as const, retryAt: armed.retryAt };
+    }
+    await cancelPublicationDeferralWake(ctx, record);
+    await ctx.db.patch(job._id, {
+      publicationDeferral: { ...record, state: "resumed", wakeAt: undefined, wakeId: undefined },
+      nextAttemptAt: now(), updatedAt: now(),
+    });
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, {
+      siteId: args.siteId, jobId: args.jobId,
+    });
+    return { status: "resumed" as const };
   },
 });
 

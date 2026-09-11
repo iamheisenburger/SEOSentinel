@@ -4,6 +4,13 @@ import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import {
+  publicationContentionUntil,
+  publicationDeferralBoundary,
+  publicationJobClaimValidator,
+  type PublicationJobClaim,
+  type PublicationContentionResult,
+} from "./lib/publicationDeferral";
 import { internal } from "./_generated/api";
 import { createHmac, randomUUID } from "crypto";
 import {
@@ -2262,17 +2269,18 @@ type PublishArgs = {
 async function publishArticleHandler(
   ctx: ActionCtx,
   args: PublishArgs,
-  options?: { readOnlyRecoveryOnly?: boolean },
-): Promise<PublishResult> {
+  options?: { readOnlyRecoveryOnly?: boolean; jobClaim?: PublicationJobClaim },
+): Promise<PublishResult | PublicationContentionResult> {
     const site = await ctx.runQuery(
       internal.sites.getPublicationRecoverySite,
       { siteId: args.siteId },
     );
     if (!site) throw new Error("Site not found");
-    const article = await ctx.runQuery(internal.articles.getInternal, {
+    const initialArticle = await ctx.runQuery(internal.articles.getInternal, {
       articleId: args.articleId,
     });
-    if (!article) throw new Error("Article not found");
+    if (!initialArticle) throw new Error("Article not found");
+    let article: Doc<"articles"> = initialArticle;
 
     if (
       article.siteId !== args.siteId ||
@@ -2280,14 +2288,6 @@ async function publishArticleHandler(
     ) {
       throw new Error("Article does not belong to this site");
     }
-    const recoveringUnverifiedPublication = Boolean(
-      article.publicationAttemptedAt &&
-      article.publicationLeaseOwner &&
-      article.publicationLeaseHash &&
-      article.publicationDate &&
-      article.publicationDeliveryHash &&
-      Number.isSafeInteger(article.publicationRolloutEpoch),
-    );
     const retainedPristinePublication = Boolean(
       !article.publicationAttemptedAt &&
       !article.publicationOutcomeUnverifiedAt &&
@@ -2306,12 +2306,25 @@ async function publishArticleHandler(
           expectedLeaseOwner: article.publicationLeaseOwner!,
         },
       );
-      throw new Error(
-        released.released
-          ? "An expired pre-provider publication lease was safely released; retry after the current audit is rechecked."
-          : "The publication lease is still active before its provider boundary.",
-      );
+      if (!released.released) return {
+          method: "deferred", outcome: "publication_lease_contention",
+          retryAt: publicationContentionUntil(site, article, Date.now()) ?? Date.now() + PUBLICATION_LEASE_MS,
+          boundary: publicationDeferralBoundary(site, article),
+        };
+      // Proven pre-write death is cleanup, not a failed delivery. Re-read the
+      // artifact and run every ordinary audit/config/claim gate below; never
+      // recurse, charge a failure, or reuse the just-released lease snapshot.
+      const refreshed = await ctx.runQuery(internal.articles.getInternal, { articleId: args.articleId });
+      if (!refreshed || refreshed.siteId !== args.siteId || !articleMatchesCurrentDomain(site, refreshed)) {
+        throw new Error("Publication artifact changed during pristine lease recovery");
+      }
+      article = refreshed;
     }
+    const recoveringUnverifiedPublication = Boolean(
+      article.publicationAttemptedAt && article.publicationLeaseOwner &&
+      article.publicationLeaseHash && article.publicationDate &&
+      article.publicationDeliveryHash && Number.isSafeInteger(article.publicationRolloutEpoch),
+    );
     const recoveryAuthorization = recoveringUnverifiedPublication
       ? await ctx.runQuery(
           internal.articles.getPublicationRecoveryAuthorization,
@@ -2509,7 +2522,12 @@ async function publishArticleHandler(
       expectedConfigHash: article.publicationConfigHash,
       expectedRolloutEpoch: rolloutEpoch,
       leaseOwner,
+      jobClaim: options?.jobClaim,
     });
+    if ("outcome" in lease && lease.outcome === "publication_lease_contention") {
+      return { method: "deferred", outcome: lease.outcome, retryAt: lease.retryAt,
+        boundary: publicationDeferralBoundary(site, article) };
+    }
     if (lease.alreadyPublished) {
       return { method: "already_published" };
     }
@@ -2601,6 +2619,7 @@ async function publishArticleHandler(
         articleId: article._id,
         expectedContentHash: contentHash,
         leaseOwner,
+        jobClaim: options?.jobClaim,
       });
       attemptMarkedForLease = true;
       deliveryAttempted = true;
@@ -2806,8 +2825,9 @@ export const verifyPublicPublicationInternal = internalAction({
 });
 
 export const publishArticleInternal = internalAction({
-  args: publishArgs,
-  handler: publishArticleHandler,
+  args: { ...publishArgs, jobClaim: v.optional(publicationJobClaimValidator) },
+  handler: (ctx, args): Promise<PublishResult | PublicationContentionResult> =>
+    publishArticleHandler(ctx, args, { jobClaim: args.jobClaim }),
 });
 
 /** Exact-generation watchdog armed by the first publication lease. It is
@@ -2861,12 +2881,12 @@ export const recoverInitialPublicationLeaseInternal = internalAction({
     }
 
     try {
-      await publishArticleHandler(
+      const result = await publishArticleHandler(
         ctx,
         { siteId: args.siteId, articleId: article._id },
         { readOnlyRecoveryOnly: true },
       );
-      return { status: "settled" };
+      return { status: "outcome" in result ? "active" : "settled" };
     } catch {
       // The handler durably retains an unverified attempted envelope when no
       // exact receipt exists. Owner-reviewed disposition remains available
@@ -2886,6 +2906,10 @@ export const publishArticle = action({
     if (!site?.userId || !identity || identity.subject !== site.userId) {
       throw new Error("Not authorized to publish this site");
     }
-    return publishArticleHandler(ctx, args);
+    const result = await publishArticleHandler(ctx, args);
+    // Public callers need timing, not the internal immutable-owner binding.
+    return "outcome" in result
+      ? { method: result.method, outcome: result.outcome, retryAt: result.retryAt }
+      : result;
   },
 });
