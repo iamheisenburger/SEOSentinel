@@ -1,12 +1,58 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-10 20:03 UTC**. Start here and refresh production before
+Updated: **2026-09-11 10:32 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
-## Current September 10 priority — platform outage
+## Current September 11 priority — restored platform, unfinished replenishment
 
-Read `docs/PENTRA_SUPERVISOR_REFRESH_2026-09-10.md` first. The sections explicitly
+Read `docs/PENTRA_RECOVERY_2026-09-11.md` for current evidence. Do not repeat the
+free-plan diagnosis: signed-in billing proved an existing **Starter $15/month
+team spending disable threshold**. Owner approved the exact increase to **$20**;
+saved successfully, $10 warning unchanged, backend reads restored at 10:24 UTC.
+No subscription upgrade. Convex billing displays renewal September 20 and usage
+window ending September 21; precise UTC dollar-limit reset remains unconfirmed.
+
+- Exact-site provider audits: **$31.042560** allowed subtotal ($2.992560 verified
+  actual + $12 spent-execution ceilings + $16.05 retained ceilings). No new
+  invalid settlements found. Account cap **$32**, separate incremental **$4**
+  fence and fleet **$35** unchanged. Incremental consumption **$3.121440**;
+  at most **$0.878560** remains. A new $1 plan cannot fit. Reset/expiry October 1
+  00:00 UTC. Never read other tenants to turn these upper bounds into totals.
+- DataForSEO's free balance preflight at 10:29:27.120 reports **$26.720668**;
+  this is internal admission exhaustion for $1 plans, not provider credit loss.
+  No operator-paid search/generation/revision call in this pass. The earlier
+  $60 generation acceptance proposal remains declined; the new approval was
+  specifically $5 additional Convex infrastructure headroom.
+- Backend repair **f1e881d1d3314bf1abd9fb7860654e6b08377ece** deployed at
+  **10:29:23.818 UTC**, including September 10 dependency updates. It eliminates
+  unnecessary full article-body reads in status and no-candidate legacy repair,
+  and makes the sitemap recover from outages without a redeploy or stale cache.
+  Local gates: **1,438 tests**, typecheck/build/schema/secret/audit pass;
+  lint 0 errors/157 existing warnings; browsers 16 pass/2 explicit auth skips.
+  Deployed exact-owner CLI status and exact-site legacy queries succeed on both
+  tenants. Hosted CI/frontend release status is recorded in the current report.
+- Pentra's natural recovery published the SEO-content-writing guide at
+  **September 11 10:24:02.469 UTC**, live verified **10:24:15.343**, factual100 /
+  editorial94 with matching sealed/published hash. Independent HTTP200 at
+  10:27:40.038. Buffer **1/minimum3/target4**. Exact next deadline
+  **September 12 10:24:02.469 UTC**. Still planning blocked. One fresh
+  September8 topic→generated→sealed article is now proven after that day's
+  consumption, but no full buffer or refill after today's consumption.
+- LeadPilot remains **0/minimum9/target12**. Last actual publication
+  **September 7 22:15:34.409**, exact missed deadline **September 8
+  06:15:34.409 UTC**. Natural resumed run at10:24:27.317 is still planning blocked.
+  No active article job, new article, or fresh refill. An old page's HTTP200 is
+  not acceptance. Do not reset exhausted discovery/quality attempts.
+- Corrected September9 Pentra actual publication is **12:00:32.637**, verified
+  **12:00:34.113**: the prior Git artifact time12:00:29.865 was not DB completion.
+- Article acceptance and SaaS monetisation-readiness are **not signed off**.
+  No backlinks work or SEO-growth claims. The supervisor owns recurring work;
+  do not create another automation or repeatedly spend on unchanged blockers.
+
+## Historical September 10 outage diagnosis — superseded above
+
+`docs/PENTRA_SUPERVISOR_REFRESH_2026-09-10.md` is historical. The sections explicitly
 dated September 8 below are historical and must not be reported as today's state.
 
 - **Convex production is disabled for exceeding free-plan limits.** Exact-site
@@ -72,7 +118,8 @@ attempts, raise spend limits for a passing result, or add tenant-specific fixes.
   not additional operator generation/revision tests. Regular product-owned
   schedules remain intact. Preserve quotas, monetary reservations, retry
   bounds, ownership, idempotency, and duplicate-write protection.
-- No purchases and no real-prospect contact. Outreach remains approval-only.
+- No purchases beyond the explicitly approved September11 Convex $15→$20
+  spending threshold; no real-prospect contact. Outreach remains approval-only.
 - Do not create Codex automations. Product-owned crons remain configured, but
   execution is not established while Convex is disabled.
 - Do not use subagents unless explicitly requested. Preserve unrelated changes;
