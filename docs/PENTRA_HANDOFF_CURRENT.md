@@ -1,15 +1,65 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 11:00 UTC**. Start here and refresh production before
+Updated: **2026-09-11 12:30 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
-## Latest same-day implementation pass
+## Latest isolated core handoff release — assignment07
+
+Read `docs/PENTRA_CORE_HANDOFF_RELEASE_2026-09-11.md`. Runtime release
+**8e9e14739b2d4c217dccf40a3efcbfd37c548fe7** is deployed to Convex (successful
+push confirmed **12:24:31 UTC**) and Vercel (deployment6392928166 succeeded
+**12:22:04**). Hosted CI34598480701 passed **12:24:56**. The ordinary terminal
+plan handoff repair was isolated onto production/main, without the dormant
+spending framework. Local1,454 tests,10 connected/continuation tests and all
+release gates pass; browser16 pass/2 explicit authenticated skips. A new
+empty-discovery regression proves bounded stopping, no exhausted replay, and
+no additional reservations under concurrent later wakes.
+
+**NOT READY:** postdeploy operator snapshots12:25:03.911/04.633 still show
+Pentra **1/minimum3/target4**, LeadPilot **0/minimum9/target12**, no active jobs.
+Exact-site topic audits12:28/12:29 show **zero scheduler-evidence-ready topics
+on both sites** (Pentra1 planned, LeadPilot6 planned, all missing eligibility
+evidence). Both use expected-click scheduling. The repaired ordinary-path
+scenario requires valid waiting topics; it is not demonstrated as the present
+live blocker or as live replenishment success. Latest natural runs completed
+`planning_blocked` at12:00:18.112/12:00:24.739, before this deployment.
+
+Pentra last actual publication remains **September11 10:24:02.469 UTC**, next
+scheduled deadline **September12 10:24:02.469 UTC** (after today's cutoff).
+LeadPilot last actual publication remains **September7 22:15:34.409 UTC**;
+missed deadline **September8 06:15:34.409 UTC**, with no future site run in the
+bounded upcoming projection. Next configured fleet cadence is15:00UTC;
+legacy demand/evidence13:15UTC. Micro-seed recovery is every15minutes; its exact
+next execution timestamp was not read. Existing fallback attempts remain
+`missed/no_strict_candidate`; no manually forced or replayed provider work.
+
+Fresh complete scoped accounting audits **12:29:40.385/41.892** confirm the same
+**$31.042560** permitted subtotal: $2.992560 verified actual, $12 settled
+spent-execution ceilings and $16.05 retained ceilings. Zero invalid settlements,
+orphans, duplicate source bindings, amount mismatches, retained cancelled/expired
+sources or retained expired leases. Account32/incremental4/fleet35 unchanged.
+At most **$0.878560** incremental headroom; another $1 plan cannot fit, even
+before the independent32 account cap. Reset **October1 00:00 UTC**. No other
+tenant records read. **$0 additional operator provider spend** in assignment07.
+
+The old $12 testing request is **withdrawn**, not awaiting approval. The $60
+proposal remains declined; the infrastructure15→20 approval did not authorize
+extra operator generation/revision. The dormant spending feature stays inactive
+and unpushed. No new funding request is part of assignment07. Supervisor owns
+further bounded work and recurring checks; do not create duplicate automations.
+One remaining generic defect: a5-minute publication retry collides with the
+retained15-minute ambiguity lease and consumes another attempt. This release
+does not fix it; preserve the lease while designing a bounded contention deferral.
+No live fresh full-buffer/refill acceptance, monetisation sign-off, backlinks
+work or attributable SEO-growth claim.
+
+## Prior 11:00 same-day implementation pass — superseded above
 
 Read `docs/PENTRA_SAME_DAY_ACCEPTANCE_2026-09-11.md` first. Today's cutoff is
 September12 **07:00 UTC** (end September11 America/Los_Angeles), not October's
-budget reset. Verdict remains **NOT READY**. A new **$12** bounded all-in
-LeadPilot publish/refill test was requested; **no reply/approval yet**. It asks
+budget reset. Verdict remains **NOT READY**. A **$12** bounded all-in
+LeadPilot publish/refill test was requested and subsequently **withdrawn**. It asked
 for account32→34 and incremental4→6 with fleet35 unchanged. Do not spend or
 change caps absent that decision, and implement the all-in dollar boundary
 before paid calls even if approved. The old $60 proposal remains declined.
@@ -29,7 +79,7 @@ auth skips. Actual signed-in detail→dashboard handoff now preserves each
 tenant. Post-deploy inventory10:57:41/43 remains Pentra1/4 and LeadPilot0/12;
 latest failed attempts/history are unchanged. No operator paid-provider calls.
 The new live discovery→generation→publication→replacement chain is still
-unverified and blocked by the pending bounded funding decision. Do not claim
+unverified; extra operator generation/revision remains unapproved. Do not claim
 article acceptance, expand into backlinks, or keep retrying the same blocker.
 
 ## Prior 10:37 recovery snapshot — restored platform, unfinished replenishment
