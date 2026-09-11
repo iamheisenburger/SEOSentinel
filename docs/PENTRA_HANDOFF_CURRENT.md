@@ -1,6 +1,6 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 10:32 UTC**. Start here and refresh production before
+Updated: **2026-09-11 10:37 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
@@ -31,7 +31,11 @@ window ending September 21; precise UTC dollar-limit reset remains unconfirmed.
   Local gates: **1,438 tests**, typecheck/build/schema/secret/audit pass;
   lint 0 errors/157 existing warnings; browsers 16 pass/2 explicit auth skips.
   Deployed exact-owner CLI status and exact-site legacy queries succeed on both
-  tenants. Hosted CI/frontend release status is recorded in the current report.
+  tenants. Hosted CI **34589663799** passed **10:36:04 UTC** for follow-up
+  **9e52d80** (same runtime + generated type bindings/handoff). Frontend
+  **6391273907** succeeded **10:32:29**. Production sitemap HTTP200 at10:31:50.826
+  includes the recovered article. The superseded f1e881d CI was cancelled,
+  not failed; its replacement passed every required gate.
 - Pentra's natural recovery published the SEO-content-writing guide at
   **September 11 10:24:02.469 UTC**, live verified **10:24:15.343**, factual100 /
   editorial94 with matching sealed/published hash. Independent HTTP200 at
@@ -49,6 +53,12 @@ window ending September 21; precise UTC dollar-limit reset remains unconfirmed.
 - Article acceptance and SaaS monetisation-readiness are **not signed off**.
   No backlinks work or SEO-growth claims. The supervisor owns recurring work;
   do not create another automation or repeatedly spend on unchanged blockers.
+  Both closing recovery inspections report `source_plan_fallback_already_attempted`
+  with zero calls/reservations/refunds. Next nominal natural run is September11
+  12:00 UTC, but unchanged funding/source exhaustion is not expected to clear
+  merely with time. Do not promise a paid acceptance result or reopen declined
+  operator generation authority. Further paid acceptance requires a new explicit
+  owner decision; the infrastructure approval did not supply it.
 
 ## Historical September 10 outage diagnosis — superseded above
 

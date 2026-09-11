@@ -1,6 +1,6 @@
 # September 11 recovery and acceptance evidence
 
-Updated 2026-09-11 10:30 UTC. Only Pentra
+Updated 2026-09-11 10:37 UTC. Only Pentra
 `jh74txye54jna4t85m6y7p4d6h82v9ab` and LeadPilot
 `jh7cccny67df67rdm4jp65tmtn8am982` were queried. No other tenant records,
 execution logs, or project data were inspected. Shared infrastructure billing
@@ -138,6 +138,38 @@ published URLs, LeadPilot 134 / 32. Both correctly retain planning/buffer blocke
 Deployed legacy repair queries returned empty topic IDs for both sites.
 These are read-only CLI diagnostics, not authenticated browser acceptance or
 proof of newly restored buffers. Hosted CI/frontend deployment receipts follow.
+
+[Hosted quality run 34589663799](https://github.com/iamheisenburger/SEOSentinel/actions/runs/34589663799)
+passed at **10:36:04 UTC** for **9e52d80ab52ab924b92319a80e7f5c2e5c073525**,
+which contains the same runtime repair plus generated type bindings and the
+handoff. All required gates passed, including hosted browser acceptance (16
+passed / 2 explicit authenticated skips). The earlier f1e881d run34589422208
+was superseded/cancelled by this follow-up push, not claimed as successful.
+Frontend deployment **6391273907** for 9e52d80 succeeded at **10:32:29 UTC**,
+receipt `https://seo-sentinel-c71ant8hf-arshads-projects-836ebfbd.vercel.app`.
+Final evidence-only documentation updates do not change the deployed runtime.
+
+Production frontend deployment **6391231526** for f1e881d succeeded at
+**10:29:41 UTC**, receipt
+`https://seo-sentinel-kpr0el83d-arshads-projects-836ebfbd.vercel.app`.
+The production sitemap returned **HTTP 200 at 10:31:50.826**, 121 URLs,
+including the exact recovered guide URL, no double-slash blog paths and a
+Vercel cache MISS. This verifies the deployed sitemap, not simulated outage
+recovery in production (no outage was deliberately induced).
+
+Normal deployed recovery inspections at **10:32:14.886 / 10:32:18.867**
+returned `source_plan_fallback_already_attempted` for Pentra / LeadPilot.
+They examined 55 / 54 micro-seed rows and made **0 provider calls, 0 new
+reservations, 0 refunds and 0 settlements**. Legitimate remaining discovery
+headroom does not reopen exhausted source attempts.
+
+Closing audits at **10:33:27.913 / 10:33:29.529** confirmed unchanged money
+totals across 84 / 95 reservations, complete windows, **zero** invalid
+settlements, duplicate source references, orphan reservations, amount
+mismatches, expired leases, active sources, or unreleased cancelled/expired
+sources. A local replay of the actual account-capacity function with only the
+permitted $31.042560 subtotal rejected a $1 request against $32, without a
+production mutation.
 
 ## Exact article evidence; acceptance remains open
 
