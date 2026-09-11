@@ -8027,6 +8027,7 @@ type ProcessedJobResult = {
   qualityRecovered?: boolean;
   buffered?: boolean;
   planCompleted?: boolean;
+  planFailed?: boolean;
   planContinuationQueued?: boolean;
   planContinuationSettled?: boolean;
   checkpointContinuationScheduled?: boolean;
@@ -8056,6 +8057,7 @@ async function continueAutopilotAfterProcessedJob(
   const ordinarySchedulerContinuation =
     processed.buffered ||
     processed.planCompleted ||
+    (processed.processed && processed.planFailed) ||
     processed.planContinuationSettled ||
     processed.qualityQuarantined ||
     processed.publicationSucceeded;
@@ -8073,9 +8075,11 @@ async function continueAutopilotAfterProcessedJob(
   }
   // Every quality-bearing terminal state and successful delivery must
   // immediately re-enter the bounded scheduler. Otherwise a quarantined
-  // candidate, a completed topic plan, a partially filled buffer, or a newly
+  // candidate, a settled topic plan, a partially filled buffer, or a newly
   // emptied post-publication buffer waits for the next fleet cron even though
   // the scheduler has already authorized one safe next step.
+  // A failed horizon plan may leave valid planned topics ready to consume.
+  // Re-enter admission, never retry that terminal plan or bypass its guards.
   const schedule = await ctx.runAction(
     internal.actions.scheduler.scheduleCadence,
     { siteId },
@@ -9630,6 +9634,7 @@ export const processNextJob = internalAction({
             articleId: job.articleId,
             error: message,
             failureKind: "job_failed",
+            planFailed: failed.updated,
             planContinuationSettled,
           };
         }
@@ -9647,6 +9652,7 @@ export const processNextJob = internalAction({
         articleId: job.articleId,
         error: message,
         failureKind: retry.willRetry ? "retry_scheduled" : "job_failed",
+        planFailed: job.type === "plan" && retry.updated && !retry.willRetry,
         planContinuationSettled:
           planContinuationSettled && !retry.willRetry,
       };

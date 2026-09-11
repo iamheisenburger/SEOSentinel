@@ -18,10 +18,17 @@ function fixture(siteId: string, schedule: Row) {
     console, process: { env: {} },
   });
   const dispatches: Row[] = [];
+  let schedules = 0;
   const ctx = {
+    async runQuery(ref: Parameters<typeof getFunctionName>[0], args: Row) {
+      assert.equal(getFunctionName(ref), "jobs:listActiveBySite");
+      assert.equal(args.siteId, siteId);
+      return [];
+    },
     async runAction(ref: Parameters<typeof getFunctionName>[0], args: Row) {
       assert.equal(getFunctionName(ref), "actions/scheduler:scheduleCadence");
       assert.equal(args.siteId, siteId);
+      schedules++;
       return schedule;
     },
     async runMutation(ref: Parameters<typeof getFunctionName>[0], args: Row) {
@@ -30,13 +37,13 @@ function fixture(siteId: string, schedule: Row) {
       dispatches.push(structuredClone(args));
     },
   };
-  return { dispatches, run: (processed: Row) => runtime.exports.continueAutopilotAfterProcessedJob(ctx, siteId, processed) };
+  return { dispatches, schedules: () => schedules, run: (processed: Row) => runtime.exports.continueAutopilotAfterProcessedJob(ctx, siteId, processed) };
 }
 
 test("actual terminal article continuation immediately dispatches each admitted topic-plan mode", async () => {
   for (const siteId of ["tenant-a", "tenant-b"]) {
     for (const mode of ["topic_replenishment", "topic_portfolio_goal_replenishment", "topic_portfolio_evidence_replenishment"]) {
-      for (const outcome of ["buffered", "planCompleted", "planContinuationSettled", "qualityQuarantined", "publicationSucceeded"]) {
+      for (const outcome of ["buffered", "planCompleted", "planFailed", "planContinuationSettled", "qualityQuarantined", "publicationSucceeded"]) {
         const f = fixture(siteId, { scheduled: 1, mode, planJobId: "admitted-job" });
         await f.run({ processed: true, [outcome]: true });
         assert.equal(f.dispatches.length, 1, `${mode} after ${outcome}`);
@@ -58,6 +65,21 @@ test("actual continuation cannot bypass a denied or unrecognized scheduler resul
   ]) {
     const f = fixture("tenant", schedule);
     await f.run({ processed: true, qualityQuarantined: true });
+    assert.equal(f.dispatches.length, 0);
+    await f.run({ processed: true, planFailed: true });
+    assert.equal(f.dispatches.length, 0);
+  }
+});
+
+test("terminal plan handoff excludes a lost claim, a pending retry and a preflight abort", async () => {
+  for (const result of [
+    { processed: false, planFailed: true, failureKind: "job_failed" },
+    { processed: true, failureKind: "retry_scheduled" },
+    { processed: true, failureKind: "job_failed" },
+  ]) {
+    const f = fixture("arbitrary-owner", { scheduled: 1, mode: "buffer_fill" });
+    await f.run(result);
+    assert.equal(f.schedules(), 0);
     assert.equal(f.dispatches.length, 0);
   }
 });
