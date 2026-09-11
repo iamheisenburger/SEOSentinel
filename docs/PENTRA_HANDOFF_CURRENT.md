@@ -1,8 +1,30 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 10:37 UTC**. Start here and refresh production before
+Updated: **2026-09-11 10:56 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Latest same-day implementation pass
+
+Read `docs/PENTRA_SAME_DAY_ACCEPTANCE_2026-09-11.md` first. Today's cutoff is
+September12 **07:00 UTC** (end September11 America/Los_Angeles), not October's
+budget reset. Verdict remains **NOT READY**. A new **$12** bounded all-in
+LeadPilot publish/refill test was requested; **no reply/approval yet**. It asks
+for account32→34 and incremental4→6 with fleet35 unchanged. Do not spend or
+change caps absent that decision, and implement the all-in dollar boundary
+before paid calls even if approved. The old $60 proposal remains declined.
+
+Offline replay of the exact saved LeadPilot fallback reproduced zero selected
+and found eight premature lexical-overlap exclusions against fingerprinted
+coverage. The generic pre-SERP rule now matches ordinary planning; all final
+SERP/quality gates, policy37 and exhausted attempts remain unchanged. Eight
+pre-SERP survivors are not eight eligible topics and the old job stays closed.
+Signed-in exact-site pages work. A second reproduced defect (LeadPilot detail
+route retained Pentra in global actions) is repaired with an ownership-checked
+route-aware selection. Pentra setup7/7; LeadPilot legacy setup3/7.
+Local1,446 tests pass, browser16 pass/2 auth skips, typecheck/build/schema/audit
+pass. Deployment receipts are pending below; do not claim this repair deployed
+until the evidence file records them. No operator paid-provider calls.
 
 ## Current September 11 priority — restored platform, unfinished replenishment
 

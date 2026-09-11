@@ -1,5 +1,5 @@
 import {
-  filterNonCannibalizingIntentTopics,
+  blockedByUnfingerprintedCoverage,
   filterNonCannibalizingTopics,
   keywordDifficultyCeiling,
   tenantDiscoveryAnchors,
@@ -1352,14 +1352,12 @@ export function selectCadenceMicroSeedCandidate<
       continue;
     }
     seen.add(keyword);
-    const clearsCoverage = filterNonCannibalizingIntentTopics(
-      [{ primaryKeyword: keyword }],
-      args.coveredTopics,
-      0.4,
-      0.35,
-      1,
-    ).length === 1;
-    if (!clearsCoverage) {
+    // Candidate SERPs do not exist yet. Match ordinary discovery: reject
+    // lexical conflicts early only when historical coverage lacks a reliable
+    // fingerprint. Otherwise fresh evidence may prove distinct intent. The
+    // evidence persistence and scheduling gates still perform the full
+    // SERP/lexical comparison before any article generation is admitted.
+    if (blockedByUnfingerprintedCoverage(keyword, args.coveredTopics)) {
       rejected.overlap += 1;
       continue;
     }
