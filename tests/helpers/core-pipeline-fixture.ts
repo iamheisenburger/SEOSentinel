@@ -55,6 +55,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   const tables: Record<string, Row[]> = { _scheduled_functions: [] };
   const modules = new Map<string, Exported>();
   const trace: Trace[] = [], logs: string[] = [], unexpected: string[] = [];
+  const queryReads: Array<{ table: string; index?: string; range: Fields[]; limit?: number; rows: number; bytes: number }> = [];
   const indexes: Record<string, Record<string, string[]>> = {};
   const stored = new Map<string, Blob>();
   const die = (message: string): never => { unexpected.push(message); throw new Error(message); };
@@ -160,7 +161,10 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
         assert.ok(tables[table], `Unknown table ${table}`);
         if (table === "provider_spend_approvals") die("Dormant all-in feature entered ordinary core test");
         const predicates: Expr[] = []; let sortFields = ["_creationTime"], direction = 1;
+        let indexName: string | undefined;
+        const indexRange: Fields[] = [];
         const range: Dynamic = Object.fromEntries(["eq", "gt", "gte", "lt", "lte"].map(op => [op, (key: string, value: Dynamic) => {
+          indexRange.push({ op, key, value });
           predicates.push(filterBuilder[op as "eq"](filterBuilder.field(key), value)); return range;
         }]));
         const rows = () => copy(tables[table].filter(row => predicates.every(p => p(row))).sort((a, b) => {
@@ -171,12 +175,18 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
         }));
         const chain: Dynamic = {
           withIndex: (name: string, fn?: (q: Dynamic) => unknown) => {
+            indexName = name;
             sortFields = name === "by_creation_time" ? ["_creationTime"] : indexes[table]?.[name];
             assert.ok(sortFields, `Unknown index ${table}.${name}`); fn?.(range); return chain;
           },
           filter: (fn: (q: typeof filterBuilder) => Expr) => { predicates.push(fn(filterBuilder)); return chain; },
           order: (order: string) => { direction = order === "desc" ? -1 : 1; return chain; },
-          collect: async () => rows(), take: async (limit: number) => rows().slice(0, limit),
+          collect: async () => rows(), take: async (limit: number) => {
+            const result = rows().slice(0, limit);
+            queryReads.push({ table, index: indexName, range: copy(indexRange), limit, rows: result.length,
+              bytes: result.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row)), 0) });
+            return result;
+          },
           first: async () => rows()[0] ?? null,
           unique: async () => { const found = rows(); assert.ok(found.length <= 1); return found[0] ?? null; },
           paginate: async ({ numItems, cursor }: { numItems: number; cursor?: string }) => {
@@ -216,7 +226,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     const pending = mutationTail.then(execute); mutationTail = pending.catch(() => {}); return pending;
   };
   for (const kind of ["runQuery", "runMutation", "runAction"]) context[kind] = (ref: Parameters<typeof getFunctionName>[0], args: Fields) => invoke(getFunctionName(ref), args);
-  const api = { tables, trace, logs, unexpected, stored, add, get, invoke,
+  const api = { tables, trace, queryReads, logs, unexpected, stored, add, get, invoke,
     now: () => now, setTime: (value: number) => { assert.ok(value >= now); now = value; },
     async runNextScheduled() {
       const next = tables._scheduled_functions.filter(row => row.state.kind === "pending" && row.at <= now).sort((a, b) => a.at - b.at || a._creationTime - b._creationTime)[0];

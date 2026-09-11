@@ -8488,6 +8488,10 @@ export const autopilotTick = internalAction({
         "The scheduler reported work without an exact active job receipt.",
       publication_deferral_exhausted:
         "Publication stopped at its finite contention limit or changed immutable boundary; existing failures and ambiguity fences remain intact.",
+      publication_delivery_terminal:
+        "The exact article delivery history is closed or incomplete; no new delivery attempts were granted.",
+      publication_destination_contended:
+        "A closed article was excluded, but another workflow still owns the destination fence; no replacement delivery or generation was started.",
       cadence_failure_cooldown: cadenceSchedule.eligibleAt
         ? `Cadence recovery is blocked until ${new Date(cadenceSchedule.eligibleAt).toISOString()}.`
         : "Cadence recovery is blocked by an exact durable eligibility receipt.",

@@ -222,6 +222,7 @@ export function autopilotCandidateWindowStart(args: {
 
 export type BufferArticle = {
   status: string;
+  publicationDeliveryBlocker?: { reason: string };
   publicationGateStatus?: string;
   publicationAuditVersion?: number;
   auditedContentHash?: string;
@@ -330,6 +331,7 @@ export function effectivePublishedAt(
 export function isSealedReady(article: BufferArticle): boolean {
   return (
     article.status === "ready" &&
+    !article.publicationDeliveryBlocker &&
     article.publicationGateStatus === "passed" &&
     article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION &&
     typeof article.auditedContentHash === "string" &&

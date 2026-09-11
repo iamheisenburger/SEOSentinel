@@ -29,7 +29,8 @@ function runtime(cadence: number, overdue: boolean, ready: boolean, readiness = 
     publicationGateStatus: "passed", publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
     auditedContentHash: "a".repeat(64),
   };
-  const call = (ref: FunctionReference<"query" | "mutation">, args: Record<string, unknown>) => {
+  // Match the actual ActionCtx promise contract, including rejected queries.
+  const call = async (ref: FunctionReference<"query" | "mutation">, args: Record<string, unknown>) => {
     const name = getFunctionName(ref);
     calls.push({ name, args });
     assert.equal(args.siteId, siteId);

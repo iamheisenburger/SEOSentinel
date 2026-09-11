@@ -1,8 +1,28 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 12:55 UTC**. Start here and refresh production before
+Updated: **2026-09-11 13:24 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Publication review amendments — assignment09, review required
+
+Read `docs/PENTRA_PUBLICATION_REVIEW_AMENDMENTS_2026-09-11.md` first. The two
+supervisor findings were reproduced and repaired locally: terminal head-of-line
+starvation, and new attempt-zero jobs after three real failures without a
+deferral receipt. Eligibility now uses exact-site/article/failed history, with
+bounded truthful buffer projections and explicit history/candidate saturation.
+The amended candidate retains all08 wait/failure/quality/fence protections.
+Final gates:1,474 tests pass, type/build/schema/secret/dependency checks pass,
+lint0 errors/157 existing warnings, browser16 pass/2 authenticated skips.
+**Not pushed or deployed.** Do not deploy08 alone:09 addresses its independently
+reproduced gaps. The09 report includes the final legacy-domain-window guard.
+
+One allowed scoped production observation at13:15:42–47 UTC still shows Pentra
+1/4 target and LeadPilot0/12, no active jobs, missing topic evidence and no new
+observed natural completion. LeadPilot remains overdue since Sep8 06:15:34.409;
+Pentra's next exact deadline Sep12 10:24:02.469 is after today's07:00 UTC cutoff.
+There is no fresh live acceptance or new spend authorization. Full evidence,
+read-cost limits, prior financial audit timestamps, and residual risks are in09.
 
 ## Offline publication contention candidate — assignment08, review required
 

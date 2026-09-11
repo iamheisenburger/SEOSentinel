@@ -1,4 +1,5 @@
 import { internal } from "./_generated/api";
+import { readPublicationBufferSummaries } from "./lib/publicationEligibility";
 import { sanitizeSkipReceiptForOperator } from "./lib/expectedClickSkipReceipt";
 import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -890,12 +891,7 @@ export const promoteWarmSiteIfReady = internalMutation({
       ready: baseReadiness.ready && setupBlockers.length === 0,
       blockers: [...baseReadiness.blockers, ...setupBlockers],
     };
-    const ready = await takeCurrentDomainArticleSummariesByStatus(
-      ctx,
-      site,
-      "ready",
-      25,
-    );
+    const ready = await readPublicationBufferSummaries(ctx, site);
     const sealedCount = ready.filter(isSealedReady).length;
     const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
     const blockers = [...readiness.blockers];
@@ -2090,12 +2086,7 @@ export const markRunFinished = internalMutation({
       jobId: args.jobId,
       articleId: args.articleId,
     });
-    const currentReady = await takeCurrentDomainArticleSummariesByStatus(
-      ctx,
-      runSite,
-      "ready",
-      25,
-    );
+    const currentReady = await readPublicationBufferSummaries(ctx, runSite);
     const approvedBufferCount = currentReady.filter(isSealedReady).length;
     const bufferPolicy = approvedBufferPolicy(runSite.cadencePerWeek ?? 4);
     const runClassification = classifyAutopilotRunOutcome({
@@ -2477,12 +2468,7 @@ export const auditSla = internalMutation({
               auditedContentHash: a.auditedContentHash,
             }),
         )[0];
-      const readySummaries = await takeCurrentDomainArticleSummariesByStatus(
-        ctx,
-        site,
-        "ready",
-        25,
-      );
+      const readySummaries = await readPublicationBufferSummaries(ctx, site);
 
       const approvedBufferCount = readySummaries.filter(isSealedReady).length;
       const autonomousDelivery =
@@ -2658,7 +2644,7 @@ export const refreshSiteCadenceHealth = internalMutation({
         site,
         PUBLICATION_AUDIT_VERSION,
       ),
-      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
+      readPublicationBufferSummaries(ctx, site),
     ]);
     const [latestModernPublished, latestPublishedByCreation] = published;
     if ((site.cadencePerWeek ?? 0) <= 0) {
@@ -2794,12 +2780,7 @@ export const reconcileSealedBufferCount = internalMutation({
     if (!site || !(await siteExecutionAuthorized(ctx, site))) {
       return { reconciled: false as const, approvedBufferCount: 0 };
     }
-    const ready = await takeCurrentDomainArticleSummariesByStatus(
-      ctx,
-      site,
-      "ready",
-      25,
-    );
+    const ready = await readPublicationBufferSummaries(ctx, site);
     const approvedBufferCount = ready.filter(isSealedReady).length;
     const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
     await upsertHealth(ctx, siteId, {
@@ -2888,7 +2869,7 @@ export const getOperatorSnapshot = internalQuery({
         )
         .order("asc")
         .take(12),
-      takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
+      readPublicationBufferSummaries(ctx, site),
       takeCurrentDomainArticleSummariesByStatus(ctx, site, "review", 8),
       ctx.db
         .query("jobs")
@@ -3060,7 +3041,7 @@ export const getFleetReadiness = internalQuery({
           .query("autopilot_health")
           .withIndex("by_site", (q) => q.eq("siteId", site._id))
           .first(),
-        takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", 25),
+        readPublicationBufferSummaries(ctx, site),
       ]);
       const warm = warmAutopilotReadiness(site, hasCrawledPage);
       const limits = getLimitsFromFeatures(site.planFeatures ?? []);

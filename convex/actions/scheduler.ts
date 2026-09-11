@@ -66,6 +66,7 @@ type ArticleSummary = {
   editorialQualityScore?: number;
   publicationAuditVersion?: number;
   auditedContentHash?: string;
+  publicationDeliveryBlocker?: { reason: string; jobId?: Id<"jobs"> };
   publicUrl?: string;
   publicUrlStatus?: "pending" | "verified" | "failed";
   publicUrlCheckError?: string;
@@ -345,7 +346,14 @@ export const scheduleCadence = internalAction({
     const state = await ctx.runQuery(internal.articles.getAutopilotState, {
       siteId,
       since: candidateWindowStart,
+    }).catch((error: unknown) => {
+      if (String(error).includes("article_summary_domain_window_incomplete")) return null;
+      throw error;
     });
+    if (!state) return {
+      scheduled: 0, mode: "publication_delivery_terminal",
+      blockers: ["article_summary_domain_window_incomplete"],
+    };
     if (state.migrationPending) {
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
@@ -427,6 +435,35 @@ export const scheduleCadence = internalAction({
       kind: "public_publication_unverified",
     });
 
+    const closedDeliveries = (state.ready as ArticleSummary[])
+      .filter(article => article.publicationDeliveryBlocker)
+      .map(article => ({ articleId: article._id, ...article.publicationDeliveryBlocker! }));
+    if (closedDeliveries.length > 0) {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId, kind: "publication_delivery_terminal",
+        message: "Articles with closed or incomplete delivery history are excluded from the usable buffer; their quality seals and delivery history remain unchanged.",
+        details: { articles: closedDeliveries },
+      });
+      if (closedDeliveries.some(a => a.reason === "publication_buffer_scan_incomplete")) return {
+        scheduled: 0, mode: "publication_delivery_terminal", bufferCount: buffer.length,
+        blockers: ["publication_buffer_scan_incomplete"],
+      };
+      if (closedDeliveries.some(a => a.reason === "publication_history_incomplete") &&
+        !(autonomousDelivery && publicationDue && buffer.length > 0)) return {
+        scheduled: 0, mode: "publication_delivery_terminal", bufferCount: buffer.length,
+        blockers: ["publication_history_incomplete"],
+      };
+      // Skipping a terminal artifact grants no authority to take another
+      // workflow's destination fence, including an expired ambiguous fence.
+      // Its real owner/recovery must settle or release it first.
+      if (autonomousDelivery && site.publicationLeaseOwner) return {
+        scheduled: 0, mode: "publication_destination_contended", bufferCount: buffer.length,
+        blockers: ["unresolved_publication_destination_lease", ...closedDeliveries.map(a => `${a.reason}:${a.articleId}`)],
+      };
+    } else {
+      await ctx.runMutation(internal.autopilot.resolveAlertKind, { siteId, kind: "publication_delivery_terminal" });
+    }
+
     const exactWakeupAt = exactCadenceWakeupAt({
       autonomousDelivery,
       sealedBufferCount: buffer.length,
@@ -489,7 +526,9 @@ export const scheduleCadence = internalAction({
         scheduled: delivery.queued ? 1 : 0,
         mode: "reason" in delivery && delivery.reason === "publication_deferral_terminal"
           ? "publication_deferral_exhausted"
+          : "reason" in delivery ? "publication_delivery_terminal"
           : delivery.queued ? "buffer_delivery" : "buffer_delivery_pending",
+        ...("reason" in delivery ? { blockers: [delivery.reason] } : {}),
         bufferCount: buffer.length,
       };
     }

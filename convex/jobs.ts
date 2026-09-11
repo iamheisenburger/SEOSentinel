@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
+import { publicationDeliveryBlocker } from "./lib/publicationEligibility";
 import {
   MAX_PUBLICATION_DEFERRALS,
   MAX_PUBLICATION_DEFERRAL_MS,
@@ -3008,6 +3009,8 @@ export const queuePublicationIfAbsent = internalMutation({
     ) {
       throw new Error("Only a strict-quality sealed ready article can enter the delivery queue");
     }
+    const deliveryBlocker = await publicationDeliveryBlocker(ctx, siteId, article);
+    if (deliveryBlocker) return { queued: false, ...deliveryBlocker };
     const [pending, running] = await Promise.all([
       ctx.db
         .query("jobs")
@@ -3029,16 +3032,6 @@ export const queuePublicationIfAbsent = internalMutation({
       return payload?.publishOnly === true;
     });
     if (duplicate) return { queued: false, jobId: duplicate._id };
-    const priorDeliveries = await ctx.db.query("jobs")
-      .withIndex("by_site_article", q => q.eq("siteId", siteId).eq("articleId", articleId))
-      .take(101);
-    const closedDeferral = priorDeliveries.find(job => job.status === "failed" &&
-      job.publicationDeferral?.boundary.contentHash === article.auditedContentHash &&
-      job.publicationDeferral?.boundary.configHash === article.publicationConfigHash);
-    if (closedDeferral || priorDeliveries.length > 100) return {
-      queued: false, reason: "publication_deferral_terminal" as const,
-      jobId: closedDeferral?._id,
-    };
     const jobId = await ctx.db.insert("jobs", {
       siteId,
       articleId,

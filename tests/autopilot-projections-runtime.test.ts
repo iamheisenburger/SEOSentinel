@@ -77,7 +77,10 @@ test("actual scheduler projection sees the full cadence candidate budget and the
         assert.equal(recent.length, budget);
         assert.deepEqual(Array.from(recent, row => row._id), candidates.slice(0, budget).map(row => row.articleId));
         assert.equal(Math.min(...recent.map(row => Number(row._creationTime))), timestamp - (budget - 1) * 1_000);
-        const recentRead = f.reads.find(read => read.index.endsWith("_created"));
+        // Ready selection now also uses its original-creation index. Inspect
+        // the recent-candidate range specifically, not the first *_created read.
+        const recentRead = f.reads.find(read => read.index ===
+          (modern ? "by_site_domain_revision_created" : "by_site_created"));
         assert.equal(recentRead?.limit, budget);
         assert.ok(budget <= 15);
       }
@@ -121,4 +124,18 @@ test("operator snapshot cannot invent a deadline receipt from health alone", asy
     });
     assert.equal((await f.run("getOperatorSnapshot", { siteId: "tenant" })).cadenceDeadline, null);
   }
+});
+
+test("saturated legacy domain windows cannot masquerade as an empty publication buffer", async () => {
+  const site = { _id: "tenant", domain: "example.org", autopilotRolloutMode: "live", cadencePerWeek: 7 };
+  const f = fixture("articles", site, {
+    article_summaries: Array.from({ length: 51 }, (_, i) => ({
+      _id: `summary-${i}`, articleId: `old-article-${i}`, siteId: site._id,
+      status: "ready", canonicalDomain: "old.example.org", domainRevision: 1,
+      articleCreatedAt: timestamp - 1000 + i,
+    })),
+    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }],
+  });
+  await assert.rejects(f.run("getAutopilotState", { siteId: site._id, since: timestamp - 86400000 }),
+    /article_summary_domain_window_incomplete/);
 });

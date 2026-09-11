@@ -18,6 +18,8 @@ export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   topic_admission_blocked: "blocked",
   scheduler_state_conflict: "blocked",
   publication_deferral_exhausted: "blocked",
+  publication_delivery_terminal: "blocked",
+  publication_destination_contended: "blocked",
   cadence_failure_cooldown: "blocked",
   public_url_pending: "waiting",
   automatic_live_promotion: "waiting",

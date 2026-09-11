@@ -457,6 +457,305 @@ const publicationFence = (f: ReturnType<typeof setup>, siteId: string, articleId
   hash: f.get(articleId)!.publicationLeaseHash, envelope: f.get(articleId)!.publicationDeliveryHash,
 });
 
+async function terminalHeadBehindPristineOwner(attempted = false) {
+  const f = setup(), site = f.sites[0];
+  await f.invoke("articles:migrateLegacyArticles", {});
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "scheduled", reason: "Synthetic terminal-head preparation" });
+  await pumpUntil(f, () => f.tables.articles.filter(a => a.siteId === site.id && a.status === "ready").length === 4);
+  const [a, b, ...rest] = f.tables.articles.filter(a => a.siteId === site.id && a.status === "ready")
+    .sort((x, y) => x.createdAt - y.createdAt);
+  const first = f.tables.articles.find(a => a.siteId === site.id && a.status === "published")!;
+  const dueAt = first.publishedAt + 86_400_000;
+  f.setTime(dueAt);
+  await f.invoke("articles:beginPublication", { articleId: b._id, expectedContentHash: b.auditedContentHash,
+    expectedConfigHash: b.publicationConfigHash, expectedRolloutEpoch: 0, leaseOwner: "distinct-pristine-owner" });
+  if (attempted) await f.invoke("articles:recordPublicationAttempted", { articleId: b._id,
+    expectedContentHash: b.auditedContentHash, leaseOwner: "distinct-pristine-owner" });
+  const queued = await f.invoke("jobs:queuePublicationIfAbsent", { siteId: site.id, articleId: a._id });
+  assert.equal(queued.queued, true);
+  assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: queued.jobId })).failureKind, "publication_deferred");
+  const fence = publicationFence(f, site.id, b._id), models = f.modelCalls.length;
+  for (let i = 0; i < 4; i++) {
+    const record = f.get(queued.jobId)!.publicationDeferral;
+    f.setTime(record.wakeAt);
+    await f.invoke("jobs:resumePublicationAfterContention", { siteId: site.id, jobId: queued.jobId, generation: record.generation });
+  }
+  assert.equal(f.get(queued.jobId)!.publicationDeferral.state, "terminal");
+  assert.equal(f.get(queued.jobId)!.publicationAttempts, 0);
+  assert.deepEqual(publicationFence(f, site.id, b._id), fence);
+  assert.equal(f.modelCalls.length, models);
+  return { ...f, site, a, b, rest, jobId: queued.jobId, dueAt };
+}
+
+test("terminal oldest delivery cannot starve another genuinely sealed article after its real owner releases the destination", async t => {
+  const f = await terminalHeadBehindPristineOwner();
+  const closed = structuredClone(f.get(f.jobId)), hash = f.a.auditedContentHash;
+  // Only the real pristine owner may release this lease. There was no external
+  // attempt; no fixture mutation clears or invents a disposition for ambiguity.
+  await f.invoke("articles:releasePublication", { articleId: f.b._id,
+    expectedContentHash: f.b.auditedContentHash, leaseOwner: "distinct-pristine-owner" });
+  assert.equal(f.get(f.site.id)!.publicationLeaseOwner, undefined);
+  const scheduled = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
+  assert.equal(scheduled.mode, "buffer_delivery");
+  assert.equal(scheduled.bufferCount, 3, "Closed A must not inflate usable inventory");
+  const delivery = f.tables.jobs.find(j => j.status === "pending" && j.payload?.publishOnly && j.articleId === f.b._id);
+  assert.ok(delivery, "Oldest distinct eligible B owns the next delivery");
+  assert.equal((await f.invoke("jobs:queuePublicationIfAbsent", { siteId: f.site.id, articleId: f.a._id })).queued, false);
+  assert.deepEqual(f.get(f.jobId), closed); assert.equal(f.a.auditedContentHash, hash);
+  assert.equal(f.a.status, "ready"); assert.equal(f.a.publicationGateStatus, "passed");
+  assert.equal((await f.invoke("autopilot:reconcileSealedBufferCount", { siteId: f.site.id })).approvedBufferCount, 3);
+  await pumpUntil(f, () => f.get(f.b._id)!.publicUrlStatus === "verified" &&
+    f.tables.articles.some(a => a.siteId === f.site.id && a.status === "ready" && a.createdAt > f.get(f.b._id)!.publishedAt),
+  240, f.now() + 60 * 60_000);
+  const replacement = f.tables.articles.find(a => a.siteId === f.site.id && a.status === "ready" && a.createdAt > f.get(f.b._id)!.publishedAt)!;
+  assert.equal(f.get(f.a._id)!.publishedAt, undefined);
+  assert.deepEqual(f.get(f.jobId), closed);
+  t.diagnostic(JSON.stringify({ scenario: "terminal_head_released", dueAt: f.dueAt, at: f.now(),
+    closedArticle: f.a._id, selectedArticle: f.b._id, failedAttempts: 0, usableBuffer: scheduled.bufferCount,
+    publishedAt: f.get(f.b._id)!.publishedAt, verifiedAt: f.get(f.b._id)!.publicUrlVerifiedAt,
+    replacementCreatedAt: replacement.createdAt, replacementHash: replacement.auditedContentHash }));
+  f.assertOffline();
+});
+
+test("three real writes without any contention record stay terminal across new queue attempts", async t => {
+  const f = await failedPublication({ publisherFailures: 3 });
+  for (let i = 0; i < 2; i++) {
+    f.setTime(f.now() + 16 * 60_000);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: f.site.id, jobId: f.jobId });
+  }
+  assert.equal(f.get(f.jobId)!.publicationAttempts, 3); assert.equal(f.get(f.jobId)!.status, "failed");
+  assert.equal(f.get(f.jobId)!.publicationDeferral, undefined);
+  assert.equal(f.failedPublications.length, 3);
+  const before = structuredClone(f.get(f.jobId)), calls = externalCalls(f);
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await f.invoke("jobs:queuePublicationIfAbsent", { siteId: f.site.id, articleId: f.articleId })).queued, false,
+      "Terminal real-delivery failures cannot mint a replacement attempt-zero job");
+    assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: f.site.id, jobId: f.jobId })).processed, false);
+    const schedule = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
+    assert.equal(schedule.mode, "publication_destination_contended");
+    assert.ok(schedule.blockers.includes(`publication_attempts_exhausted:${f.articleId}`));
+  }
+  assert.deepEqual(f.get(f.jobId), before); assert.equal(externalCalls(f), calls);
+  t.diagnostic(JSON.stringify({ scenario: "three_failures_no_contention", failedAt: f.failedPublications,
+    publicationAttempts: f.get(f.jobId)!.publicationAttempts, deferral: false, visibleCommits: 0 }));
+  f.assertOffline();
+});
+
+test("a terminal head never grants authority to clear another workflow's attempted ambiguous destination", async () => {
+  const f = await terminalHeadBehindPristineOwner(true);
+  const calls = externalCalls(f), models = f.modelCalls.length, fence = publicationFence(f, f.site.id, f.b._id);
+  const jobs = structuredClone(f.tables.jobs);
+  await assert.rejects(f.invoke("articles:releasePublication", { articleId: f.b._id,
+    expectedContentHash: f.b.auditedContentHash, leaseOwner: "distinct-pristine-owner" }), /unresolved external outcome/);
+  for (let i = 0; i < 3; i++) {
+    const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
+    assert.equal(result.mode, "publication_destination_contended");
+    assert.ok(result.blockers.includes("unresolved_publication_destination_lease"));
+    assert.equal(result.bufferCount, 3);
+  }
+  assert.deepEqual(publicationFence(f, f.site.id, f.b._id), fence);
+  assert.deepEqual(f.tables.jobs, jobs); assert.equal(externalCalls(f), calls); assert.equal(f.modelCalls.length, models);
+  f.assertOffline();
+});
+
+test("all historical closed deliveries count as zero usable buffer and allow ordinary bounded fresh refill", async () => {
+  const f = await terminalHeadBehindPristineOwner();
+  await f.invoke("articles:releasePublication", { articleId: f.b._id,
+    expectedContentHash: f.b.auditedContentHash, leaseOwner: "distinct-pristine-owner" });
+  // Focused legacy receipt shapes, attached to genuinely generated/reviewed
+  // articles. The separate transport tests prove the three actual failures.
+  for (const article of [f.b, ...f.rest]) f.add("jobs", { siteId: f.site.id, type: "article",
+    articleId: article._id, payload: { articleId: article._id, publishOnly: true },
+    status: "failed", publicationAttempts: 3, createdAt: f.now(), updatedAt: f.now() });
+  const closed = structuredClone(f.tables.jobs.filter(j => j.status === "failed"));
+  const state = await f.invoke("articles:getAutopilotState", { siteId: f.site.id, since: START });
+  assert.equal(state.ready.length, 4); assert.ok(state.ready.every((a: Fields) => a.publicationDeliveryBlocker));
+  assert.equal((await f.invoke("autopilot:reconcileSealedBufferCount", { siteId: f.site.id })).approvedBufferCount, 0);
+  const scheduled = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
+  assert.equal(scheduled.bufferCount, 0); assert.equal(scheduled.mode, "buffer_fill");
+  assert.equal(f.tables.jobs.filter(j => j.status === "pending" && j.payload?.publishOnly).length, 0);
+  assert.deepEqual(f.tables.jobs.filter(j => j.status === "failed"), closed);
+  const snapshot = await f.invoke("autopilot:getOperatorSnapshot", { siteId: f.site.id });
+  assert.ok(snapshot.ready.every((a: Fields) => a.sealed === false && a.publicationDeliveryBlocker));
+  f.assertOffline();
+});
+
+test("generation-origin deliveries also close after three real writes without contention or a deferral record", async t => {
+  const f = setup({ publisherFailures: 3 }), site = f.sites[0];
+  await f.invoke("articles:migrateLegacyArticles", {});
+  const plan = await f.invoke("jobs:queuePlanIfAbsent", { siteId: site.id, reason: "topic_replenishment" });
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: plan.jobId });
+  const topic = f.tables.topic_clusters.find(a => a.siteId === site.id && a.status === "planned")!;
+  assert.ok(topic);
+  const queue = await f.invoke("jobs:queueTopicArticleIfAbsent", { siteId: site.id, topicId: topic._id, bufferFill: false });
+  assert.equal(queue.queued, true);
+  assert.equal(f.get(queue.jobId)!.payload.publishOnly, undefined);
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: queue.jobId });
+  await pumpUntil(f, () => f.get(queue.jobId)!.publicationAttempts === 1);
+  assert.equal(f.failedPublications.length, 1);
+  for (let i = 1; i < 3; i++) {
+    f.setTime(f.now() + 16 * 60_000);
+    const result = await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: queue.jobId });
+    assert.equal(f.failedPublications.length, i + 1, JSON.stringify({ result, job: f.get(queue.jobId), logs: f.logs.slice(-2) }));
+  }
+  const job = f.get(queue.jobId)!;
+  assert.equal(job.publicationAttempts, 3); assert.equal(job.status, "failed");
+  assert.equal(job.publicationDeferral, undefined); assert.equal(f.failedPublications.length, 3);
+  // This genuine generation-origin shape retains its pre-delivery workflow
+  // status under an unresolved external fence. No status-reset authority is
+  // invented just to force it into the buffer-only admission shape.
+  const article = f.get(job.articleId)!;
+  assert.notEqual(article.status, "ready"); assert.equal(article.publicationGateStatus, "passed");
+  const before = structuredClone(job), calls = externalCalls(f);
+  for (let i = 0; i < 3; i++) {
+    await assert.rejects(f.invoke("jobs:queuePublicationIfAbsent", { siteId: site.id, articleId: job.articleId }), /strict-quality sealed ready/);
+    assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: queue.jobId })).processed, false);
+  }
+  assert.deepEqual(f.get(queue.jobId), before); assert.equal(externalCalls(f), calls);
+  await assert.rejects(f.invoke("jobs:queuePublicationIfAbsent", { siteId: f.sites[1].id, articleId: job.articleId }), /strict-quality sealed ready/);
+  t.diagnostic(JSON.stringify({ scenario: "generation_origin_three_failures", failedAt: f.failedPublications,
+    articleId: job.articleId, workflowStatus: article.status, failedAttempts: job.publicationAttempts, deferral: false, visibleCommits: 0 }));
+  f.assertOffline();
+});
+
+test("history overflow closes only its article and exact-site receipts preserve oldest eligible ordering under concurrent wakes", async () => {
+  const f = await terminalHeadBehindPristineOwner();
+  await f.invoke("articles:releasePublication", { articleId: f.b._id,
+    expectedContentHash: f.b.auditedContentHash, leaseOwner: "distinct-pristine-owner" });
+  for (let i = 0; i < 101; i++) f.add("jobs", { siteId: f.site.id, articleId: f.a._id,
+    type: "article", status: "failed", createdAt: f.now(), updatedAt: f.now() });
+  // Deliberately malformed cross-site historical association is not an excuse
+  // to query the other tenant or make that tenant's receipt control this site.
+  f.add("jobs", { siteId: f.sites[1].id, articleId: f.b._id, type: "article", status: "failed",
+    publicationAttempts: 3, createdAt: f.now(), updatedAt: f.now() });
+  const state = await f.invoke("articles:getAutopilotState", { siteId: f.site.id, since: START });
+  assert.equal(state.ready.find((a: Fields) => a._id === f.a._id).publicationDeliveryBlocker.reason, "publication_history_incomplete");
+  assert.equal(state.ready.find((a: Fields) => a._id === f.b._id).publicationDeliveryBlocker, undefined);
+  const history = structuredClone(f.tables.jobs.filter(j => j.status === "failed"));
+  const scheduled = await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id })));
+  assert.equal(scheduled.filter(r => r.scheduled === 1).length, 1);
+  const pending = f.tables.jobs.filter(j => j.status === "pending" && j.payload?.publishOnly);
+  assert.equal(pending.length, 1); assert.equal(pending[0].articleId, f.b._id);
+  assert.equal((await f.invoke("jobs:queuePublicationIfAbsent", { siteId: f.site.id, articleId: f.a._id })).reason, "publication_history_incomplete");
+  assert.deepEqual(f.tables.jobs.filter(j => j.status === "failed"), history);
+  f.assertOffline();
+});
+
+test("publication eligibility read budgets skip done jobs and bound pathological histories across repeated exact-site views", async t => {
+  const f = await terminalHeadBehindPristineOwner();
+  const summarize = (reads: typeof f.queryReads) => ({ calls: reads.length,
+    rows: reads.reduce((n, r) => n + r.rows, 0), bytes: reads.reduce((n, r) => n + r.bytes, 0) });
+  const eligibilityReads = (start: number) => f.queryReads.slice(start).filter(r => r.table === "jobs" && r.index === "by_site_article");
+  const readyReads = (start: number) => f.queryReads.slice(start).filter(r => r.table === "article_summaries" &&
+    r.range.some(x => x.key === "status" && x.value === "ready"));
+  let start = f.queryReads.length;
+  await f.invoke("articles:getAutopilotState", { siteId: f.site.id, since: START });
+  const typical = eligibilityReads(start);
+  assert.equal(typical.length, 4); assert.equal(typical.reduce((n, r) => n + r.rows, 0), 1);
+  assert.ok(typical.every(r => r.range.some(x => x.key === "status" && x.value === "failed")));
+  start = f.queryReads.length;
+  await f.invoke("autopilot:getOperatorSnapshot", { siteId: f.site.id });
+  assert.equal(eligibilityReads(start).length, 4, "One operator query must not repeat eligibility for each projection");
+  const template = f.tables.article_summaries.find(a => a.articleId === f.b._id)!;
+  const other = f.sites[1], otherDomain = f.get(other.id)!.canonicalDomain ?? other.domain;
+  let cleanFour: ReturnType<typeof summarize> | undefined;
+  let cleanTwelve: ReturnType<typeof summarize> | undefined;
+  for (let i = 0; i < 12; i++) {
+    f.add("article_summaries", { ...template, siteId: other.id, canonicalDomain: otherDomain,
+      articleId: `articles:clean-read-${i}` });
+    if (i === 3 || i === 11) {
+      start = f.queryReads.length;
+      await f.invoke("articles:getAutopilotState", { siteId: other.id, since: START });
+      const totals = summarize(eligibilityReads(start));
+      assert.equal(totals.calls, i + 1); assert.equal(totals.rows, 0); assert.equal(totals.bytes, 0);
+      if (i === 3) cleanFour = totals; else cleanTwelve = totals;
+    }
+  }
+  // Metadata-only load fixture: these rows are never published or treated as
+  // evidence of generated quality. B above is genuinely reviewed by handlers.
+  const candidates = f.tables.article_summaries.filter(a => a.siteId === f.site.id && a.status === "ready");
+  for (let i = candidates.length; i < 25; i++) {
+    const id = f.add("article_summaries", { ...template, articleId: `articles:read-budget-${i}` });
+    candidates.push(f.get(id)!);
+  }
+  const jobTemplate = structuredClone(f.get(f.jobId)!);
+  for (const candidate of candidates) for (let i = 0; i < 101; i++) f.add("jobs", {
+    ...jobTemplate, articleId: candidate.articleId,
+    payload: { ...jobTemplate.payload, articleId: candidate.articleId },
+    publicationDeferral: undefined, publicationAttempts: 0,
+  });
+  const storedHistories = f.tables.jobs.filter(j => j.siteId === f.site.id && j.status === "failed");
+  const naiveBytes = storedHistories.reduce((n, row) => n + Buffer.byteLength(JSON.stringify(row)), 0);
+  start = f.queryReads.length;
+  const state = await f.invoke("articles:getAutopilotState", { siteId: f.site.id, since: START });
+  const worst = eligibilityReads(start), totals = summarize(worst);
+  const readyTwentyFive = summarize(readyReads(start));
+  assert.equal(totals.calls, 25); assert.ok(totals.rows <= 128 + 25);
+  assert.ok(totals.bytes < naiveBytes / 10);
+  assert.ok(state.ready.every((a: Fields) => a.publicationDeliveryBlocker));
+  assert.ok(worst.every(r => r.range.some(x => x.key === "siteId" && x.value === f.site.id) &&
+    r.range.some(x => x.key === "status" && x.value === "failed")));
+  start = f.queryReads.length;
+  await f.invoke("autopilot:getOperatorSnapshot", { siteId: f.site.id });
+  assert.deepEqual(summarize(eligibilityReads(start)), totals);
+  const repeated = summarize(eligibilityReads(start));
+  for (let i = 25; i < 50; i++) {
+    const articleId = `articles:read-budget-${i}`;
+    f.add("article_summaries", { ...template, articleId });
+    for (let j = 0; j < 101; j++) f.add("jobs", { ...jobTemplate, articleId,
+      payload: { ...jobTemplate.payload, articleId }, publicationDeferral: undefined, publicationAttempts: 0 });
+  }
+  start = f.queryReads.length;
+  await f.invoke("articles:getAutopilotState", { siteId: f.site.id, since: START });
+  const fifty = summarize(eligibilityReads(start));
+  assert.equal(fifty.calls, 50); assert.ok(fifty.rows <= 128 + 50);
+  t.diagnostic(JSON.stringify({ scenario: "publication_receipt_read_budget", typicalFourIncludingOneTerminal: summarize(typical),
+    cleanFour, cleanTwelve, twentyFiveBy101RepresentativeStoredBytes: naiveBytes,
+    boundedTwentyFive: totals, readyTwentyFive, repeatedOperatorView: repeated, boundedFifty: fifty,
+    readyFifty: summarize(readyReads(start)) }));
+  f.assertOffline();
+});
+
+test("more than 25 closed metadata receipts do not hide a later real sealed article; candidate saturation is explicit", async () => {
+  for (const closedCount of [25, 51]) {
+    const f = await terminalHeadBehindPristineOwner();
+    await f.invoke("articles:releasePublication", { articleId: f.b._id,
+      expectedContentHash: f.b.auditedContentHash, leaseOwner: "distinct-pristine-owner" });
+    const template = f.tables.article_summaries.find(a => a.articleId === f.a._id)!;
+    for (let i = 0; i < closedCount; i++) {
+      const articleId = `articles:closed-window-${i}`;
+      // Summary creation order is intentionally newer than real B. Selection
+      // must use original articleCreatedAt, not migration/summary insertion.
+      f.add("article_summaries", { ...template, articleId, articleCreatedAt: START - 2000 + i });
+      f.add("jobs", { siteId: f.site.id, articleId, type: "article", status: "failed",
+        publicationAttempts: 3, createdAt: START - 1500 + i, updatedAt: START - 1500 + i });
+    }
+    const start = f.queryReads.length, calls = externalCalls(f);
+    const scheduled = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
+    const reads = f.queryReads.slice(start).filter(r => r.index === "by_site_article");
+    assert.ok(reads.length <= 51, "At most 50 candidate checks plus one atomic selected-article queue recheck");
+    if (closedCount === 25) {
+      assert.equal(scheduled.mode, "buffer_delivery"); assert.equal(scheduled.bufferCount, 3);
+      const queued = f.tables.jobs.find(j => j.status === "pending" && j.payload?.publishOnly);
+      assert.equal(queued?.articleId, f.b._id, "Real B is eligible after the 25 closed metadata rows and closed real A");
+    } else {
+      assert.equal(scheduled.mode, "publication_delivery_terminal");
+      assert.deepEqual(scheduled.blockers, ["publication_buffer_scan_incomplete"]);
+      assert.equal(f.tables.jobs.filter(j => j.status === "pending" && j.payload?.publishOnly).length, 0);
+      assert.equal(externalCalls(f), calls);
+      assert.equal(f.get(f.site.id)!.canonicalDomainRevision ?? 0, 0);
+      for (const summary of f.tables.article_summaries.filter(a => String(a.articleId).startsWith("articles:closed-window-"))) {
+        summary.canonicalDomain = "earlier.example"; summary.domainRevision = 1;
+      }
+      const legacy = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
+      assert.equal(legacy.mode, "publication_delivery_terminal");
+      assert.deepEqual(legacy.blockers, ["article_summary_domain_window_incomplete"]);
+      assert.equal(externalCalls(f), calls);
+    }
+    f.assertOffline();
+  }
+});
+
 test("registered contention deferral coalesces repeated wakes without I/O, failures, fence changes or regeneration", async () => {
   const f = await failedPublication(), record = await deferFailedPublication(f);
   const job = structuredClone(f.get(f.jobId)), fence = publicationFence(f, f.site.id, f.articleId);

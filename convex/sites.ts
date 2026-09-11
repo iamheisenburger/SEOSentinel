@@ -1,3 +1,4 @@
+import { readPublicationBufferSummaries } from "./lib/publicationEligibility";
 import {
   internalMutation,
   internalQuery,
@@ -130,7 +131,6 @@ import {
 } from "./lib/oneSetupCanonical.ts";
 import { oneSetupPromotionBlockers } from "./lib/oneSetupRuntime.ts";
 import {
-  takeCurrentDomainArticleSummariesByStatus,
   takeCurrentDomainTopics,
   contentAnalysisMatchesCurrentDomain,
   gscConnectionMatchesCurrentDomain,
@@ -6590,14 +6590,10 @@ export const setAutopilotRollout = internalMutation({
           `Live rollout prerequisites are incomplete: ${readiness.blockers.join(", ")}`,
         );
       }
-      const ready = await takeCurrentDomainArticleSummariesByStatus(
-        ctx,
-        site,
-        "ready",
-        25,
-      );
+      const ready = await readPublicationBufferSummaries(ctx, site);
       const sealed = ready.filter(
         (article) =>
+          !article.publicationDeliveryBlocker &&
           article.publicationGateStatus === "passed" &&
           article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION &&
           !!article.auditedContentHash,

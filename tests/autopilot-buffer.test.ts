@@ -326,6 +326,7 @@ test("only a current strict-gate sealed ready article enters the buffer", () => 
   assert.equal(isSealedReady({ ...valid, status: "review" }), false);
   assert.equal(isSealedReady({ ...valid, publicationGateStatus: "blocked" }), false);
   assert.equal(isSealedReady({ ...valid, auditedContentHash: undefined }), false);
+  assert.equal(isSealedReady({ ...valid, publicationDeliveryBlocker: { reason: "publication_attempts_exhausted" } }), false);
 });
 
 test("every completed run reconciles the current sealed buffer count", () => {
@@ -336,8 +337,11 @@ test("every completed run reconciles the current sealed buffer count", () => {
   );
   assert.match(
     finishRun,
-    /const currentReady = await takeCurrentDomainArticleSummariesByStatus\([\s\S]*const approvedBufferCount = currentReady\.filter\(isSealedReady\)\.length/,
+    /const currentReady = await readPublicationBufferSummaries\(ctx, runSite\);[\s\S]*const approvedBufferCount = currentReady\.filter\(isSealedReady\)\.length/,
   );
+  const eligibility = readFileSync("convex/lib/publicationEligibility.ts", "utf8");
+  assert.match(eligibility, /takeCurrentDomainArticleSummariesByStatus\(ctx, site, "ready", PUBLICATION_BUFFER_CANDIDATE_LIMIT \+ 1, "asc"\)/);
+  assert.match(eligibility, /publicationDeliveryBlocker\(ctx, siteId/);
   assert.match(finishRun, /approvedBufferCount,/);
   assert.doesNotMatch(
     finishRun,

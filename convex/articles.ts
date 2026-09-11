@@ -22,6 +22,7 @@ import {
   publicationDeliveryKey,
 } from "./lib/publicationArtifact";
 import { validatePublicationReceipt } from "./lib/publicationReceipts";
+import { readPublicationBufferSummaries, type PublicationDeliveryBlocker } from "./lib/publicationEligibility";
 import {
   acquirePublicationLease,
   ownsPublicationLease,
@@ -317,7 +318,7 @@ async function requireSiteOwner(
   return site;
 }
 
-function summaryListItem(summary: ArticleSummaryFields) {
+function summaryListItem(summary: ArticleSummaryFields & { publicationDeliveryBlocker?: PublicationDeliveryBlocker }) {
   return {
     _id: summary.articleId,
     _creationTime: summary.articleCreatedAt,
@@ -348,6 +349,7 @@ function summaryListItem(summary: ArticleSummaryFields) {
     productEvidenceStatus: summary.productEvidenceStatus,
     claimEvidenceStatus: summary.claimEvidenceStatus,
     publicationGateStatus: summary.publicationGateStatus,
+    publicationDeliveryBlocker: summary.publicationDeliveryBlocker,
     publicationGateIssues: summary.publicationGateIssues,
     publicationGateWarnings: summary.publicationGateWarnings,
     publicationCheckedAt: summary.publicationCheckedAt,
@@ -669,7 +671,7 @@ export const getAutopilotState = internalQuery({
         // The highest supported cadence targets twelve sealed articles. Keep
         // this scheduler projection above that ceiling so a genuinely full
         // buffer is never undercounted and needlessly regenerated.
-        takeCurrentSummariesByStatus(ctx, site, "ready", 25),
+        readPublicationBufferSummaries(ctx, site),
         takeCurrentSummariesByStatus(
           ctx,
           site,

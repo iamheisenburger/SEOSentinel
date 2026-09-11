@@ -1,4 +1,5 @@
 import type { Doc } from "../_generated/dataModel";
+import type { PublicationBufferSummary } from "./publicationEligibility.ts";
 import {
   PLAN_CANDIDATE_CHECKPOINT_LIMIT,
   PLAN_CANDIDATE_CHECKPOINT_VERSION,
@@ -80,6 +81,11 @@ const ARTICLE_STATUSES = new Set([
 ]);
 const MEDIA_QUALITY_STATUSES = new Set(["passed", "failed"]);
 const PUBLICATION_GATE_STATUSES = new Set(["passed", "blocked"]);
+const PUBLICATION_DELIVERY_BLOCKERS = new Set([
+  "publication_deferral_terminal", "publication_attempts_exhausted",
+  "publication_history_incomplete", "publication_history_binding_mismatch",
+  "publication_buffer_scan_incomplete",
+]);
 const JOB_TYPES = new Set([
   "onboarding",
   "plan",
@@ -777,7 +783,7 @@ export function operatorHealthReceipt(
 }
 
 export function operatorArticleReceipt(
-  article: Doc<"article_summaries">,
+  article: PublicationBufferSummary,
   sealed: boolean,
 ) {
   return {
@@ -795,6 +801,10 @@ export function operatorArticleReceipt(
     ),
     publicationAuditVersion: article.publicationAuditVersion,
     sealed,
+    ...(article.publicationDeliveryBlocker ? { publicationDeliveryBlocker: {
+      reason: safeOperatorCode(article.publicationDeliveryBlocker.reason, PUBLICATION_DELIVERY_BLOCKERS),
+      jobId: article.publicationDeliveryBlocker.jobId,
+    } } : {}),
     qualityRevisionCount: article.qualityRevisionCount,
     qualityRecoveryVersion: article.qualityRecoveryVersion,
     qualityRecoveryAttemptVersion: article.qualityRecoveryAttemptVersion,

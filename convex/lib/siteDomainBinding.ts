@@ -507,6 +507,7 @@ export async function takeCurrentDomainArticleSummariesByStatus(
   site: Doc<"sites">,
   status: string,
   limit: number,
+  order: "asc" | "desc" = "desc",
 ): Promise<Doc<"article_summaries">[]> {
   const canonicalDomain = siteCanonicalDomain(site);
   const domainRevision = siteCanonicalDomainRevision(site);
@@ -514,25 +515,31 @@ export async function takeCurrentDomainArticleSummariesByStatus(
   if (siteUsesLegacyDomainReceipts(site)) {
     const legacyEpoch = await ctx.db
       .query("article_summaries")
-      .withIndex("by_site_status", (q) =>
+      .withIndex(order === "asc" ? "by_site_status_created" : "by_site_status", (q) =>
         q.eq("siteId", site._id).eq("status", status)
       )
-      .order("desc")
+      .order(order)
       .take(limit);
-    return legacyEpoch.filter((article) =>
+    const current = legacyEpoch.filter((article) =>
       articleMatchesCurrentDomain(site, article)
     );
+    // An oldest-first bounded delivery view cannot call the pool empty after
+    // filtering a full legacy window: a current artifact may be just beyond it.
+    if (order === "asc" && legacyEpoch.length >= limit && current.length < legacyEpoch.length) {
+      throw new Error("article_summary_domain_window_incomplete");
+    }
+    return current;
   }
   return ctx.db
     .query("article_summaries")
-    .withIndex("by_site_domain_revision_status", (q) =>
+    .withIndex(order === "asc" ? "by_site_domain_revision_status_created" : "by_site_domain_revision_status", (q) =>
       q
         .eq("siteId", site._id)
         .eq("canonicalDomain", canonicalDomain)
         .eq("domainRevision", domainRevision)
         .eq("status", status)
     )
-    .order("desc")
+    .order(order)
     .take(limit);
 }
 
