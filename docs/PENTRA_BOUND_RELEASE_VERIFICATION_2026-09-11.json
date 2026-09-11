@@ -1,0 +1,535 @@
+{
+  "schema": "pentra-bound-release-verification-v1",
+  "sourceSha": "55d9f10949221538a364b5c530003c3f58920cfe",
+  "convex": {
+    "deployment": "wary-starfish-773",
+    "url": "https://wary-starfish-773.convex.cloud",
+    "clientSuccessConfirmedAt": "2026-09-11T14:05:17Z",
+    "newIndex": "jobs.by_site_article: siteId,articleId,status,_creationTime",
+    "serverDeploymentIdAvailable": false
+  },
+  "vercel": {
+    "githubDeploymentId": 6394741539,
+    "statusId": 18228228745,
+    "succeededAt": "2026-09-11T14:04:46Z"
+  },
+  "ci": {
+    "runId": 34607929090,
+    "jobId": 103290864500,
+    "conclusion": "success",
+    "completedAt": "2026-09-11T14:08:14Z"
+  },
+  "sites": [
+    {
+      "tenant": "Pentra",
+      "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+      "queryTimes": {
+        "operator": "2026-09-11T14:12:32.095Z",
+        "articles": "2026-09-11T14:12:34.218Z",
+        "topics": "2026-09-11T14:12:36.005Z",
+        "topicPrecheck": "2026-09-11T14:12:37.646Z",
+        "operationalPrecheck": "2026-09-11T14:12:48.603Z",
+        "microSeed": "2026-09-11T14:12:50.140Z"
+      },
+      "snapshotAt": "2026-09-11T14:12:31.466Z",
+      "rolloutMode": "live",
+      "rolloutEpoch": 6,
+      "inventory": {
+        "blockers": [],
+        "inspectedCandidates": 1,
+        "status": "complete",
+        "usableCountLowerBound": 1
+      },
+      "minimum": 3,
+      "target": 4,
+      "operatorHealth": "planning_blocked",
+      "activeJobs": [],
+      "latestNatural": {
+        "runId": "kd75egp7pzv3t51s19tnyfhwc18e6tr5",
+        "completedAt": "2026-09-11T12:00:18.112Z",
+        "outcome": "planning_blocked",
+        "releaseRelation": "predeploy"
+      },
+      "publicationDeadline": {
+        "deadlineKind": "cadence_deadline",
+        "heartbeatAt": "2026-09-11T10:24:18.483Z",
+        "runId": "kd7f0ggjnq6vgdz291gsqht73x8e675v",
+        "scheduledAt": "2026-09-12T10:24:02.469Z",
+        "status": "scheduled",
+        "trigger": "deadline",
+        "releaseRelation": "predeploy-created receipt"
+      },
+      "upcomingRunIds": [
+        "kd7f0ggjnq6vgdz291gsqht73x8e675v"
+      ],
+      "latestPublished": {
+        "_id": "j57001e1fe3a93x7em70dmcybh8dy0wf",
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+        "canonicalDomain": "pentra.dev",
+        "domainRevision": 0,
+        "topicId": "jn7dx927tx3sarpn1nz2fqc68n8dy7vr",
+        "title": "Search Engine Optimization Content Writing: A Practical Guide",
+        "slug": "/search-engine-optimization-content-writing-guide",
+        "status": "published",
+        "createdAt": "2026-09-07T12:02:58.460Z",
+        "publishedAt": "2026-09-11T10:24:02.469Z",
+        "publicationGateStatus": "passed",
+        "publicationAuditVersion": 7,
+        "auditedContentHash": "3e2ba16ceef80de9bdbb9e4942973bd9b9e7709336ea38c6e5738edd6745c5bd",
+        "publishedContentHash": "3e2ba16ceef80de9bdbb9e4942973bd9b9e7709336ea38c6e5738edd6745c5bd",
+        "publicUrl": "https://pentra.dev/blog/search-engine-optimization-content-writing-guide",
+        "publicUrlStatus": "verified",
+        "publicUrlVerifiedAt": "2026-09-11T10:24:15.343Z",
+        "publicUrlLastCheckedAt": "2026-09-11T10:24:15.343Z",
+        "releaseRelation": "predeploy"
+      },
+      "liveHttp": {
+        "tenant": "Pentra",
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+        "articleId": "j57001e1fe3a93x7em70dmcybh8dy0wf",
+        "checkedAt": "2026-09-11T14:13:30.449Z",
+        "url": "https://pentra.dev/blog/search-engine-optimization-content-writing-guide",
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "titleAndFinalUrlVerified": true,
+        "canonicalUrl": "https://pentra.dev/blog/search-engine-optimization-content-writing-guide",
+        "canonicalMatches": true,
+        "htmlSha256": "59041ddd825524dc994b95ea090ba217e9da2b2ab9528de16f5ef848777fc6d2",
+        "auditedContentHash": "3e2ba16ceef80de9bdbb9e4942973bd9b9e7709336ea38c6e5738edd6745c5bd",
+        "publishedContentHash": "3e2ba16ceef80de9bdbb9e4942973bd9b9e7709336ea38c6e5738edd6745c5bd",
+        "storedHashesMatch": true,
+        "publishedHashEmbeddedInHtml": false,
+        "htmlBytes": 70855
+      },
+      "readyArticles": [
+        {
+          "articleId": "j57dwbw5k5qv80tx7w136w52218e0mzz",
+          "createdAt": "2026-09-08T15:31:07.468Z",
+          "editorialQualityScore": 96,
+          "factCheckScore": 100,
+          "mediaQualityStatus": "passed",
+          "publicationAuditVersion": 7,
+          "publicationGateStatus": "passed",
+          "qualityRecoveryAttemptVersion": 16,
+          "qualityRecoveryVersion": 16,
+          "qualityRevisionCount": 1,
+          "sealed": true,
+          "status": "ready",
+          "updatedAt": "2026-09-08T15:41:42.334Z"
+        }
+      ],
+      "recentArticleCountWithinBound": 0,
+      "reviewRowsWithinBound": 5,
+      "migrationPending": false,
+      "topics": {
+        "total": 145,
+        "byStatus": {
+          "cannibalizing": 3,
+          "disqualified": 24,
+          "planned": 1,
+          "used": 117
+        },
+        "schedulerEvidenceReady": 0,
+        "classifications": {
+          "coverage_conflict": 139,
+          "needs_evidence": 1,
+          "too_thin": 5
+        },
+        "unmeasuredPlannedTopics": [
+          {
+            "topicId": "jn73hbdj558sgxp401mh20j8598akb96",
+            "keyword": "automated content calendar SEO",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          }
+        ],
+        "portfolioStatus": "insufficient_evidence"
+      },
+      "topicReadiness": {
+        "ready": true,
+        "contract": "cadence-topic-readiness-v1",
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+        "canonicalDomain": "pentra.dev",
+        "domainRevision": 0,
+        "rolloutEpoch": 6,
+        "schedulerTopicAvailable": false,
+        "coveredKeywordCount": 117
+      },
+      "operationalReadiness": {
+        "canonicalDomain": "pentra.dev",
+        "contract": "cadence-operational-readiness-v1",
+        "domainRevision": 0,
+        "nextCadenceDueAt": "2026-09-12T10:24:02.469Z",
+        "operationalFingerprint": "d40c91c740d96c032d1feadf31acbe97ec4e0923f87ca4e7e8bb0c0a3a5adb06",
+        "ready": true,
+        "remainingArticles": 113,
+        "rolloutEpoch": 6,
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab"
+      },
+      "backfillReceipts": {
+        "demand": {
+          "candidateCounts": {
+            "alreadyAttempted": 39,
+            "artifactEligible": 0,
+            "businessFitBlocked": 50,
+            "covered": 117,
+            "currentDemand": 28,
+            "eligible": 0,
+            "plannedGateBlocked": 28,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "pentra.dev",
+          "decision": "skipped",
+          "evaluatedAt": "2026-09-11T10:24:15.646Z",
+          "kind": "demand",
+          "policyVersion": 2,
+          "reason": "no_eligible_legacy_topics",
+          "rolloutEpoch": 6,
+          "selectedCandidateCount": 0,
+          "version": 1,
+          "releaseRelation": "predeploy"
+        },
+        "evidence": {
+          "candidateCounts": {
+            "alreadyAttempted": 0,
+            "artifactEligible": 0,
+            "businessFitBlocked": 0,
+            "covered": 117,
+            "eligible": 0,
+            "plannedGateBlocked": 28,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "pentra.dev",
+          "decision": "skipped",
+          "evaluatedAt": "2026-09-11T10:24:15.939Z",
+          "kind": "evidence",
+          "policyVersion": 2,
+          "reason": "no_current_demand_candidates",
+          "rolloutEpoch": 6,
+          "selectedCandidateCount": 0,
+          "version": 1,
+          "releaseRelation": "predeploy"
+        }
+      },
+      "latestMicroSeed": {
+        "jobId": "pd7374xpbxq1qg750cntkjx75s8e3cgf",
+        "status": "missed",
+        "sourcePlanId": "j97424bc4zey6wwkqhnrh875an8e0h2t",
+        "attemptKind": "fallback",
+        "reservationDay": "2026-09-09",
+        "seed": "autonomous site crawling niche comparison",
+        "providerSeeds": [
+          "autonomous site crawling niche comparison",
+          "saas niche detection",
+          "backlink building automation examples",
+          "saas founders site crawling",
+          "saas founders web research",
+          "content publishing for saas founders",
+          "ai-powered article writing with web research",
+          "saas article writing automation",
+          "article writer for saas founders",
+          "ranking tracking for saas",
+          "ai-powered article writer seo examples",
+          "automatic article refresh maintenance checklist",
+          "content refresh automation cost",
+          "b2b content generation",
+          "b2b seo article writing",
+          "autonomous content marketing guide",
+          "b2b keyword research",
+          "keyword clustering for saas founders",
+          "seo ranking monitoring optimization guide",
+          "seo content creation for saas"
+        ],
+        "providerCostCeilingMicroUsd": 100000,
+        "providerCallAttempted": true,
+        "providerCallCompleted": true,
+        "providerTaskCostUsd": 0.048,
+        "candidatesReceived": 300,
+        "candidatesAccepted": 0,
+        "errorCode": "no_strict_candidate",
+        "createdAt": "2026-09-09T12:30:37.670Z",
+        "updatedAt": "2026-09-09T12:30:44.390Z",
+        "completedAt": "2026-09-09T12:30:44.390Z",
+        "releaseRelation": "predeploy"
+      },
+      "customerBufferInference": {
+        "directAuthenticatedCheck": false,
+        "expectedState": "waiting_pentra",
+        "expectedBlocker": "sealed_buffer_below_minimum",
+        "basis": "deployed contract plus safe current inventory; operator health overlays current inventory, not a direct raw stored-health/customer API read"
+      }
+    },
+    {
+      "tenant": "LeadPilot",
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "queryTimes": {
+        "operator": "2026-09-11T14:12:53.421Z",
+        "articles": "2026-09-11T14:12:55.270Z",
+        "topics": "2026-09-11T14:12:57.256Z",
+        "topicPrecheck": "2026-09-11T14:12:58.638Z",
+        "operationalPrecheck": "2026-09-11T14:12:59.832Z",
+        "microSeed": "2026-09-11T14:13:00.936Z"
+      },
+      "snapshotAt": "2026-09-11T14:12:51.039Z",
+      "rolloutMode": "live",
+      "rolloutEpoch": 9,
+      "inventory": {
+        "blockers": [],
+        "inspectedCandidates": 0,
+        "status": "complete",
+        "usableCountLowerBound": 0
+      },
+      "minimum": 9,
+      "target": 12,
+      "operatorHealth": "missed",
+      "activeJobs": [],
+      "latestNatural": {
+        "runId": "kd7brnygy6p2pbbetqwtqty9an8e7s69",
+        "completedAt": "2026-09-11T12:00:24.739Z",
+        "outcome": "planning_blocked",
+        "releaseRelation": "predeploy"
+      },
+      "publicationDeadline": {
+        "completedAt": "2026-09-08T06:15:44.386Z",
+        "deadlineKind": "cadence_deadline",
+        "heartbeatAt": "2026-09-08T06:15:44.386Z",
+        "outcome": "planning_blocked",
+        "runId": "kd73v5sa5rgdz6jmzz0da695wh8dzsyy",
+        "scheduledAt": "2026-09-08T06:15:34.409Z",
+        "startedAt": "2026-09-08T06:15:34.802Z",
+        "status": "completed",
+        "trigger": "deadline",
+        "releaseRelation": "predeploy-created receipt"
+      },
+      "upcomingRunIds": [],
+      "latestPublished": {
+        "_id": "j570rhgqhyv3w5gs7keqsa2j158dxg5a",
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+        "canonicalDomain": "leadpilot.chat",
+        "domainRevision": 0,
+        "topicId": "jn7bb9yqbb06c1v5235c6dg3358dw7y5",
+        "title": "SaaS Lead Scoring: An Evidence-Based Framework for Prioritizing Website Leads",
+        "slug": "/saas-lead-scoring-framework",
+        "status": "published",
+        "createdAt": "2026-09-06T12:20:51.366Z",
+        "publishedAt": "2026-09-07T22:15:34.409Z",
+        "publicationGateStatus": "passed",
+        "publicationAuditVersion": 7,
+        "auditedContentHash": "969dae96a850e9fa04184f585ad0b8486ad2d7966c09cd7fa7fd11bd075febdd",
+        "publishedContentHash": "969dae96a850e9fa04184f585ad0b8486ad2d7966c09cd7fa7fd11bd075febdd",
+        "publicUrl": "https://leadpilot.chat/blog/saas-lead-scoring-framework",
+        "publicUrlStatus": "verified",
+        "publicUrlVerifiedAt": "2026-09-07T22:18:06.407Z",
+        "publicUrlLastCheckedAt": "2026-09-07T22:18:06.407Z",
+        "releaseRelation": "predeploy"
+      },
+      "liveHttp": {
+        "tenant": "LeadPilot",
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+        "articleId": "j570rhgqhyv3w5gs7keqsa2j158dxg5a",
+        "checkedAt": "2026-09-11T14:13:32.368Z",
+        "url": "https://leadpilot.chat/blog/saas-lead-scoring-framework",
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "titleAndFinalUrlVerified": true,
+        "canonicalUrl": "https://leadpilot.chat/blog/saas-lead-scoring-framework",
+        "canonicalMatches": true,
+        "htmlSha256": "a98e2ae1818fe939dc3d05a522464178599d05838dd37c004bac4b70b9b4f700",
+        "auditedContentHash": "969dae96a850e9fa04184f585ad0b8486ad2d7966c09cd7fa7fd11bd075febdd",
+        "publishedContentHash": "969dae96a850e9fa04184f585ad0b8486ad2d7966c09cd7fa7fd11bd075febdd",
+        "storedHashesMatch": true,
+        "publishedHashEmbeddedInHtml": false,
+        "htmlBytes": 83082
+      },
+      "readyArticles": [],
+      "recentArticleCountWithinBound": 0,
+      "reviewRowsWithinBound": 25,
+      "migrationPending": false,
+      "topics": {
+        "total": 243,
+        "byStatus": {
+          "cannibalizing": 110,
+          "disqualified": 26,
+          "planned": 6,
+          "used": 101
+        },
+        "schedulerEvidenceReady": 0,
+        "classifications": {
+          "coverage_conflict": 229,
+          "too_thin": 8,
+          "needs_evidence": 6
+        },
+        "unmeasuredPlannedTopics": [
+          {
+            "topicId": "jn7bd5dstwqgmd8nh7mzpc19fn8dsc2d",
+            "keyword": "software sales",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          },
+          {
+            "topicId": "jn7f6sbpk7008c7qhsmw9r15c18ds09e",
+            "keyword": "agent sales representative",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          },
+          {
+            "topicId": "jn797r1jzk106hvy7cm15wvvcs8ds0x2",
+            "keyword": "ai sales automation",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          },
+          {
+            "topicId": "jn73pe80t8sxtvggj6hyn4c1zn8dr46x",
+            "keyword": "sales integration",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          },
+          {
+            "topicId": "jn7e2e7xstcj4747zfzmtx0x5n8drngz",
+            "keyword": "sales conversation example",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          },
+          {
+            "topicId": "jn7f44twfa9svka9zrbfazwaw98dw9k4",
+            "keyword": "sales chatbot",
+            "status": "insufficient_evidence",
+            "reasons": [
+              "Exact-keyword monthly demand is missing, stale, or not auditable.",
+              "Only 0/5 required page-one authority measurements are fresh."
+            ]
+          }
+        ],
+        "portfolioStatus": "insufficient_evidence"
+      },
+      "topicReadiness": {
+        "ready": true,
+        "contract": "cadence-topic-readiness-v1",
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+        "canonicalDomain": "leadpilot.chat",
+        "domainRevision": 0,
+        "rolloutEpoch": 9,
+        "schedulerTopicAvailable": false,
+        "coveredKeywordCount": 67
+      },
+      "operationalReadiness": {
+        "canonicalDomain": "leadpilot.chat",
+        "contract": "cadence-operational-readiness-v1",
+        "domainRevision": 0,
+        "nextCadenceDueAt": "2026-09-08T06:15:34.409Z",
+        "operationalFingerprint": "eb34b204bd5c45d303a5f156ee81f3e3c4c2490ec10913ca611916b941a418ad",
+        "ready": true,
+        "remainingArticles": 113,
+        "rolloutEpoch": 9,
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982"
+      },
+      "backfillReceipts": {
+        "demand": {
+          "candidateCounts": {
+            "alreadyAttempted": 0,
+            "artifactEligible": 0,
+            "businessFitBlocked": 29,
+            "covered": 67,
+            "currentDemand": 38,
+            "eligible": 0,
+            "plannedGateBlocked": 170,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "leadpilot.chat",
+          "decision": "skipped",
+          "evaluatedAt": "2026-09-11T10:26:08.065Z",
+          "kind": "demand",
+          "policyVersion": 2,
+          "reason": "no_eligible_legacy_topics",
+          "rolloutEpoch": 9,
+          "selectedCandidateCount": 0,
+          "version": 1,
+          "releaseRelation": "predeploy"
+        },
+        "evidence": {
+          "candidateCounts": {
+            "alreadyAttempted": 5,
+            "artifactEligible": 0,
+            "businessFitBlocked": 0,
+            "covered": 67,
+            "eligible": 0,
+            "plannedGateBlocked": 170,
+            "plannedUnmaterialized": 0
+          },
+          "canonicalDomain": "leadpilot.chat",
+          "decision": "skipped",
+          "evaluatedAt": "2026-09-11T10:26:08.806Z",
+          "kind": "evidence",
+          "policyVersion": 2,
+          "reason": "no_current_demand_candidates",
+          "rolloutEpoch": 9,
+          "selectedCandidateCount": 0,
+          "version": 1,
+          "releaseRelation": "predeploy"
+        }
+      },
+      "latestMicroSeed": {
+        "jobId": "pd71z1mck1kehvcynqghsk9sfs8e00cm",
+        "status": "missed",
+        "sourcePlanId": "j978nhrc6f7ax2z3wntx2n7z6n8e0fc5",
+        "attemptKind": "fallback",
+        "reservationDay": "2026-09-08",
+        "seed": "contact detail capture cost",
+        "providerSeeds": [
+          "contact detail capture cost",
+          "sales integration guide",
+          "qualification tool for professional services",
+          "hand off for small business",
+          "natural conversation flows",
+          "booking link integration",
+          "sales chatbot for professional services",
+          "qualification tool for small business",
+          "small business qualification tool",
+          "lead qualification chatbot alternatives",
+          "automation chat widget for small business",
+          "sales agent for small business",
+          "lead capture for small business",
+          "website visitor engagement for small business",
+          "intent detection for small business",
+          "small business website lead generation",
+          "lead scoring for small business"
+        ],
+        "providerCostCeilingMicroUsd": 100000,
+        "providerCallAttempted": true,
+        "providerCallCompleted": true,
+        "providerTaskCostUsd": 0.048,
+        "candidatesReceived": 300,
+        "candidatesAccepted": 0,
+        "errorCode": "no_strict_candidate",
+        "createdAt": "2026-09-08T15:30:41.082Z",
+        "updatedAt": "2026-09-08T15:30:56.922Z",
+        "completedAt": "2026-09-08T15:30:56.922Z",
+        "releaseRelation": "predeploy"
+      },
+      "customerBufferInference": {
+        "directAuthenticatedCheck": false,
+        "expectedState": "waiting_pentra",
+        "expectedBlocker": "sealed_buffer_below_minimum",
+        "basis": "deployed contract plus safe current inventory; operator health overlays current inventory, not a direct raw stored-health/customer API read"
+      }
+    }
+  ]
+}

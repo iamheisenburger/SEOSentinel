@@ -1,10 +1,42 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 13:59 UTC**. Start here and refresh production before
+Updated: **2026-09-11 14:15 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
-## Proven-candidate liveness — assignment11, review required
+## Bound release deployed — assignment12
+
+Read `docs/PENTRA_BOUND_RELEASE_VERIFICATION_2026-09-11.md` and its safe JSON
+receipts first. Exact reviewed runtime **55d9f10949221538a364b5c530003c3f58920cfe**
+is now main and deployed: Convex success confirmed **14:05:17 UTC**, additive
+jobs.by_site_article index queryable; Vercel6394741539 succeeded **14:04:46**;
+hosted CI34607929090 passed **14:08:14**. No dormant-spend ancestry or changes
+to budgets, attempts, valid reservations, cadence or authentication.
+
+Postdeploy exact-site snapshots **14:12:31.466/51.039 UTC**: complete inventory
+Pentra **1/min3/target4**, LeadPilot **0/min9/target12**, no active jobs and zero
+scheduler-evidence-ready topics. Both last natural completions remain before
+deployment at12:00, planning_blocked. Old demand/evidence skip receipts and
+terminal zero-yield fallbacks remain old; no new natural success was observed.
+Fresh GETs **14:13:30.449/32.368** verify both latest old publication URLs/titles/
+canonicals; stored hashes match, but rendered HTML does not independently
+reconstruct those artifact seals. Direct authenticated customer UI/API was not
+checked; inferred buffer verdict stays waiting_pentra/below minimum.
+
+**NOT READY.** LeadPilot overdue since **Sep8 06:15:34.409 UTC**, last actual
+publication **Sep7 22:15:34.409**. Pentra last actual publication **Sep11
+10:24:02.469**, next exact deadline **Sep12 10:24:02.469** (after end-of-day
+cutoff Sep12 07:00 UTC). Next configured ordinary slot **Sep11 15:00 UTC** was
+not forced. Next bounded engineering task: trace exact admission of the seven
+planned topics (missing current demand/SERP authority) and reconcile terminal
+micro-seed no-replay ledgers before proposing any repair. Do not replay paid
+discovery, relax fit/quality, or treat operational prechecks as budget approval.
+Financial audit remains07's12:29 scoped evidence, not newly refreshed.
+
+The older sections below are historical; their not-deployed labels describe
+their own assignment timestamps and are superseded by this exact combined release.
+
+## Proven-candidate liveness — assignment11, historical reviewed candidate
 
 Read `docs/PENTRA_PROVEN_CANDIDATE_LIVENESS_2026-09-11.md` first.10's exact-total
 guard was reproduced to freeze26 clean ready entries and a genuinely sealed
