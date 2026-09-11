@@ -591,7 +591,7 @@ async function plannedTopicClearsCurrentCoverage(
   ).length === 1;
 }
 
-function hasCurrentExactDemand(
+export function hasCurrentExactDemand(
   topic: Doc<"topic_clusters">,
   locationCode: number,
   languageCode: string,
@@ -612,7 +612,7 @@ function hasCurrentExactDemand(
   );
 }
 
-function hasCurrentVersionAttempt(topic: Doc<"topic_clusters">): boolean {
+export function hasCurrentVersionAttempt(topic: Doc<"topic_clusters">): boolean {
   return Boolean(
     topic.searchDemandBackfillAttemptVersion ===
       EXPECTED_CLICK_DEMAND_BACKFILL_VERSION &&

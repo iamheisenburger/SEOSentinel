@@ -122,6 +122,8 @@ import type * as lib_providerBudgetAuthorization from "../lib/providerBudgetAuth
 import type * as lib_providerSpendReservation from "../lib/providerSpendReservation.js";
 import type * as lib_publicRevisionProjection from "../lib/publicRevisionProjection.js";
 import type * as lib_publicationArtifact from "../lib/publicationArtifact.js";
+import type * as lib_publicationDeferral from "../lib/publicationDeferral.js";
+import type * as lib_publicationEligibility from "../lib/publicationEligibility.js";
 import type * as lib_publicationLease from "../lib/publicationLease.js";
 import type * as lib_publicationLive from "../lib/publicationLive.js";
 import type * as lib_publicationReceipts from "../lib/publicationReceipts.js";
@@ -153,6 +155,7 @@ import type * as pages from "../pages.js";
 import type * as planCandidateCheckpoints from "../planCandidateCheckpoints.js";
 import type * as planJobs from "../planJobs.js";
 import type * as planLimits from "../planLimits.js";
+import type * as plannedTopicDiagnostics from "../plannedTopicDiagnostics.js";
 import type * as providerBudget from "../providerBudget.js";
 import type * as publishedCorrections from "../publishedCorrections.js";
 import type * as publishedRevisions from "../publishedRevisions.js";
@@ -284,6 +287,8 @@ declare const fullApi: ApiFromModules<{
   "lib/providerSpendReservation": typeof lib_providerSpendReservation;
   "lib/publicRevisionProjection": typeof lib_publicRevisionProjection;
   "lib/publicationArtifact": typeof lib_publicationArtifact;
+  "lib/publicationDeferral": typeof lib_publicationDeferral;
+  "lib/publicationEligibility": typeof lib_publicationEligibility;
   "lib/publicationLease": typeof lib_publicationLease;
   "lib/publicationLive": typeof lib_publicationLive;
   "lib/publicationReceipts": typeof lib_publicationReceipts;
@@ -315,6 +320,7 @@ declare const fullApi: ApiFromModules<{
   planCandidateCheckpoints: typeof planCandidateCheckpoints;
   planJobs: typeof planJobs;
   planLimits: typeof planLimits;
+  plannedTopicDiagnostics: typeof plannedTopicDiagnostics;
   providerBudget: typeof providerBudget;
   publishedCorrections: typeof publishedCorrections;
   publishedRevisions: typeof publishedRevisions;

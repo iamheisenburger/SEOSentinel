@@ -264,7 +264,7 @@ function hasCurrentEvidenceAttempt(topic: Doc<"topic_clusters">): boolean {
   );
 }
 
-function hasAnyExactEvidenceAttempt(topic: Doc<"topic_clusters">): boolean {
+export function hasAnyExactEvidenceAttempt(topic: Doc<"topic_clusters">): boolean {
   return hasExactPlannedEvidenceAttempt(
     topic,
     EXPECTED_CLICK_EVIDENCE_BACKFILL_VERSION,
