@@ -51,7 +51,8 @@ function articlePayload(keyword: string) {
   return { title: titleFor(keyword), slug: slugify(keyword), markdown, metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description,
     metaKeywords: [keyword], sources: [{ url: "https://records.example.gov/specification", title: "Synthetic register specification" }, { url: "https://methods.example.edu/review", title: "Synthetic review methods" }] };
 }
-function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean } = {}) {
+function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
+  evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string } } = {}) {
   const modelCalls: Fields[] = [];
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
@@ -95,8 +96,8 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       const serialized = JSON.stringify(body.input); let value: unknown; let citations: Fields[] = [];
       if (serialized.includes("Search the web for YouTube videos")) value = { videos: [] };
       else if (body.tools?.some((tool: Fields) => tool.type.startsWith("web_search"))) {
-        value = evidenceText;
-        citations = articlePayload("fixture").sources.map((source, index) => ({ type: "url_citation", ...source, start_index: index, end_index: index + 1 }));
+        value = options.evidence?.brief ?? evidenceText;
+        citations = (options.evidence?.sources ?? articlePayload("fixture").sources).map(({ url, title }, index) => ({ type: "url_citation", url, title, start_index: index, end_index: index + 1 }));
       } else if (serialized.includes('"input_image"')) value = { passed: true, score: 95, issues: [], description: "Synthetic image-review result." };
       else if (serialized.includes("strict editorial art director")) value = { include: false, reason: "The decision checklist is represented by its prose." };
       else if (serialized.includes("SEO content analyst")) value = { overallScore: 91, entityCoverage: 90, topicCompleteness: 93, readabilityScore: 89, missingEntities: [], missingTopics: [], recommendations: [] };
@@ -136,6 +137,9 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
     }
     if (url.origin === "https://www.youtube.com" && url.pathname === "/results") return new Response("<html><body>No synthetic video results</body></html>", { headers: { "Content-Type": "text/html" } });
     if (url.hostname.endsWith(".example") || url.hostname.endsWith(".example.gov") || url.hostname.endsWith(".example.edu")) {
+      if (options.evidence?.failed?.includes(url.href)) return new Response("Synthetic rejected capture", { status: 503 });
+      const evidence = options.evidence?.sources.find(source => source.url === url.href);
+      if (evidence) return new Response(`<html><main>${evidence.text}</main></html>`, { headers: { "Content-Type": "text/html" } });
       const business = businesses.find(b => b.domain === url.hostname);
       if (business && url.pathname.startsWith("/blog/")) {
         const content = repositories.get(business.name.toLowerCase())!.files.get(`content/blog/${url.pathname.slice(6)}.md`);
@@ -157,6 +161,7 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       const owner = businesses.find(b => body.keywords.some((keyword: string) => keyword.includes(b.keywords[0].split(" ")[0])));
       assert.ok(owner, JSON.stringify(body)); result = options.emptyDiscovery ? [] : owner.keywords.map(metric);
     } else if (url.pathname.endsWith("/keywords_data/google_ads/keywords_for_site/live")) result = [];
+    else if (url.pathname.endsWith("/dataforseo_labs/google/ranked_keywords/live") && options.evidence?.competitor) result = [{ items: [] }];
     else if (url.pathname.endsWith("/bulk_keyword_difficulty/live")) result = [{ items: body.keywords.map(metric) }];
     else if (/\/(keyword_suggestions|related_keywords|keyword_ideas)\/live$/.test(url.pathname)) result = [{ items: [] }];
     else if (url.pathname.endsWith("/serp/google/organic/live/regular")) result = [{ items: Array.from({ length: 10 }, (_, i) => ({ type: "organic", rank_absolute: i + 1,
@@ -169,6 +174,7 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
     f.add("account_plan_entitlements", { userId: owner, status: "completed", maxSites: 9999, maxArticles: 150, planFeatures: ["max_sites_unlimited", "max_articles_150"] });
     const id = f.add("sites", { userId: owner, siteName: b.name, domain: b.domain, createdAt: START - 1000, updatedAt: START - 1000,
       niche: b.niche, siteSummary: b.niche, blogTheme: b.niche, anchorKeywords: b.keywords,
+      ...(options.evidence?.competitor ? { competitors: [options.evidence.competitor] } : {}),
       keyFeatures: b.keywords, painPoints: b.keywords, productUsage: b.niche,
       targetAudienceSummary: "Operations teams using specialized business software", language: "en", targetCountry: "United States",
       autopilotEnabled: true, autopilotRolloutMode: "live", autopilotRolloutEpoch: 0, cadencePerWeek: b.cadence,
@@ -223,6 +229,106 @@ async function pumpUntil(f: ReturnType<typeof setup>, done: () => boolean, maxim
   }
   assert.fail(`Synthetic scheduler did not converge: ${diagnostic(f)}`);
 }
+
+const extraEvidence = { url: "https://unused.example.edu/extra", title: "Unused synthetic primary candidate",
+  text: "This synthetic appendix concerns document retention headings, not field-register contents or outcomes. Its example fields are a custodian heading and a storage heading. It provides no measurements of commercial performance, resource savings, or the behavior of a product." };
+const primaryEvidence = articlePayload("fixture").sources.map((source, index) => ({ ...source,
+  text: index === 0 ? evidenceText : "The synthetic review manual contains a consent heading and an archive heading. Its proposed procedure asks a reviewer to explain the permissions needed to consult a document. This source describes only its example review manual, not the fields of a register, resource savings, or commercial product capabilities." }));
+const taintedBrief = `${evidenceText}\nREJECTED_ONLY_PRISM_MARKER: a completed valve inspection reduces annual water consumption by 37% [1]. Source: ${extraEvidence.url}`;
+
+async function finishUnoptedEvidenceArticle(options: Parameters<typeof setup>[0]) {
+  const f = setup(options), site = f.sites[0];
+  await f.invoke("articles:migrateLegacyArticles", {});
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "scheduled", reason: "Synthetic unopted evidence safety" });
+  await pumpUntil(f, () => f.tables.articles.some(article => article.status === "ready") ||
+    f.trace.some(row => row.name === "actions/pipeline:processNextJob" && row.result?.qualityQuarantined));
+  const article = f.tables.articles[0];
+  assert.ok(article, diagnostic(f));
+  assert.ok(f.trace.some(row => row.name === "jobs:yieldGeneratedArticleForReview" && row.args.articleId === article._id), "Keep the normal lease/checkpoint review handoff");
+  f.assertOffline();
+  return { ...f, site, article };
+}
+
+test("unopted worker excludes failed unused evidence and its blended claims without losing good snapshots", async () => {
+  const f = await finishUnoptedEvidenceArticle({ evidence: { sources: [...primaryEvidence, extraEvidence], failed: [extraEvidence.url], brief: taintedBrief } });
+  assert.equal(f.article.status, "ready"); assert.equal(f.article.publicationGateStatus, "passed");
+  assert.equal(f.article.claimEvidenceStatus, "passed");
+  assert.equal(f.article.auditedContentHash, publicationArtifactHash({ ...f.article, title: f.article.title, slug: f.article.slug, markdown: f.article.markdown }));
+  assert.deepEqual(f.article.sources.map((source: Fields) => source.url), primaryEvidence.map(source => source.url));
+  for (const [index, source] of f.article.sources.entries()) {
+    assert.equal(source.contentHash, sha256Hex(primaryEvidence[index].text));
+    assert.equal(source.excerpt, primaryEvidence[index].text);
+  }
+  const writer = f.modelCalls.find(body => body.tools?.[0]?.name === "submit_article")!;
+  assert.ok(!JSON.stringify(writer).includes("REJECTED_ONLY_PRISM_MARKER"), "Rejected blended claim reached the actual production-equivalent writer");
+  assert.ok(!JSON.stringify(f.modelCalls).includes(extraEvidence.url));
+  assert.ok(!JSON.stringify(f.modelCalls).includes("REJECTED_ONLY_PRISM_MARKER"));
+  assert.ok(!JSON.stringify(f.article).includes("REJECTED_ONLY_PRISM_MARKER"));
+  assert.ok(!f.article.researchEvidenceSummary.includes(extraEvidence.url));
+  assert.ok(f.article.editorialQualityNotes.some((note: string) => note.includes("Excluded 1 source")));
+  assert.ok(f.article.editorialQualityNotes.some((note: string) => note.startsWith("Discarded the blended research brief")));
+});
+
+test("unopted failed first or middle, competitor and capture-limit exclusions preserve exact citation identity", async () => {
+  const withinLimit = [...primaryEvidence, ...Array.from({ length: 6 }, (_, index) => ({ ...extraEvidence,
+    url: `https://appendix${index}.example.edu/primary`, title: `Synthetic primary appendix ${index}` }))];
+  for (const scenario of [
+    { name: "failed_first", sources: [extraEvidence, ...primaryEvidence], failed: [extraEvidence.url], expected: primaryEvidence },
+    { name: "failed_middle", sources: [primaryEvidence[0], extraEvidence, primaryEvidence[1]], failed: [extraEvidence.url], expected: primaryEvidence },
+    { name: "competitor", sources: [...primaryEvidence, extraEvidence], competitor: "unused.example.edu", expected: primaryEvidence },
+    { name: "capture_limit", sources: [...withinLimit, extraEvidence], expected: withinLimit },
+  ]) {
+    const f = await finishUnoptedEvidenceArticle({ evidence: { ...scenario, brief: taintedBrief } });
+    const article = f.article;
+    assert.equal(article.publicationGateStatus, "passed", scenario.name);
+    assert.equal(article.claimEvidenceStatus, "passed", scenario.name);
+    assert.equal(article.auditedContentHash, publicationArtifactHash({ ...article, title: article.title, slug: article.slug, markdown: article.markdown }));
+    assert.deepEqual(article.sources.map((source: Fields) => source.url), scenario.expected.map(source => source.url));
+    for (const [index, source] of article.sources.entries()) {
+      assert.equal(source.contentHash, sha256Hex(scenario.expected[index].text));
+      assert.equal(source.excerpt, scenario.expected[index].text);
+      assert.ok(article.researchEvidenceSummary.includes(`[${index + 1}] ${source.title}\nURL: ${source.url}`));
+    }
+    const writer = f.modelCalls.find(body => body.tools?.[0]?.name === "submit_article")!;
+    assert.ok(writer.messages[0].content.includes(`[1] ${primaryEvidence[0].title} — ${primaryEvidence[0].url}`));
+    assert.ok(article.claimEvidence.some((claim: Fields) => claim.claim.includes("field register") && JSON.stringify(claim.citationNumbers) === "[1]"));
+    assert.ok(!JSON.stringify(f.modelCalls).includes("REJECTED_ONLY_PRISM_MARKER"), scenario.name);
+    assert.ok(!JSON.stringify(f.modelCalls).includes(extraEvidence.url), scenario.name);
+    assert.ok(!JSON.stringify(article).includes("REJECTED_ONLY_PRISM_MARKER"), scenario.name);
+    assert.ok(!article.researchEvidenceSummary.includes(extraEvidence.url));
+    assert.ok(article.editorialQualityNotes.some((note: string) => note.startsWith("Discarded the blended research brief")));
+    if (scenario.name === "capture_limit" || scenario.name === "competitor") {
+      assert.ok(!f.trace.some(row => row.name === "network" && row.args.url === extraEvidence.url), "Excluded candidate is not fetched");
+    }
+    assert.equal(f.modelCalls.filter(body => JSON.stringify(body.input ?? "").includes("Research this topic thoroughly for an SEO article:")).length,
+      f.modelCalls.filter(body => body.tools?.[0]?.name === "submit_article").length,
+      "One article-evidence research per writer; ordinary other web-search features are not disabled or miscounted as research retries");
+  }
+});
+
+test("unopted all-captured evidence retains its brief and the ordinary media and checkpoint paths", async () => {
+  const marker = "CAPTURED_BRIEF_CONTROL_MARKER";
+  const f = await finishUnoptedEvidenceArticle({ evidence: { sources: [...primaryEvidence, extraEvidence], brief: `${evidenceText}\n${marker}` } });
+  assert.equal(f.article.publicationGateStatus, "passed");
+  assert.equal(f.article.auditedContentHash, publicationArtifactHash({ ...f.article, title: f.article.title, slug: f.article.slug, markdown: f.article.markdown }));
+  assert.equal(f.article.sources.length, 3);
+  assert.ok(f.modelCalls.find(body => body.tools?.[0]?.name === "submit_article")!.messages[0].content.includes(marker));
+  assert.ok(!f.article.editorialQualityNotes.some((note: string) => note.startsWith("Discarded the blended research brief")));
+  assert.ok(f.modelCalls.some(body => JSON.stringify(body.input ?? "").includes("strict editorial art director")), "Ordinary optional media decision is unchanged");
+});
+
+test("unopted actual unsupported reliance remains quarantined after rejected research is excluded", async () => {
+  const f = await finishUnoptedEvidenceArticle({ quality: "unsupported", evidence: {
+    sources: [...primaryEvidence, extraEvidence], failed: [extraEvidence.url], brief: taintedBrief } });
+  assert.notEqual(f.article.claimEvidenceStatus, "passed");
+  assert.notEqual(f.article.publicationGateStatus, "passed");
+  assert.notEqual(f.article.status, "ready"); assert.notEqual(f.article.status, "published");
+  assert.equal(f.repositories.get(f.site.name.toLowerCase())!.writes, 0);
+  assert.ok(!f.article.researchEvidenceSummary.includes("37%"));
+  assert.ok(!f.article.researchEvidenceSummary.includes(extraEvidence.url));
+  assert.ok(!JSON.stringify(f.modelCalls).includes("REJECTED_ONLY_PRISM_MARKER"));
+  assert.ok(!f.modelCalls.find(body => body.tools?.[0]?.name === "submit_article")!.messages[0].content.includes("37%"));
+});
 
 test("real fresh plan, quality seal, due publication, live verification and post-consumption replacement on two cadences", async t => {
   const f = setup();

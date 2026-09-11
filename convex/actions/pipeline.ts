@@ -4520,13 +4520,19 @@ async function handleArticle(
             "Write practical, product-grounded guidance and use only the authoritative sources listed separately for factual mechanics.",
           ].join(" ");
         } else {
+          // A blended brief has no trustworthy per-sentence provenance. Any
+          // excluded, failed or capture-limit-omitted candidate invalidates the
+          // WHOLE brief, not the successful snapshots. Rebuild citation order
+          // once from captured sources before the writer creates any prose.
+          const capturedUrls = new Set(researchSources.map(source => source.url));
+          const completeResearchCapture = [...research.sources, ...verifiedResearchSources]
+            .every(source => capturedUrls.has(source.url));
+          if (!completeResearchCapture) researchQualityNotes.push(
+            "Discarded the blended research brief because not every candidate was captured; only the preserved source excerpts were supplied as evidence.",
+          );
           researchContext = [
             "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
-            // A mixed search brief can contain facts from a rejected secondary
-            // URL. Preserve the prose summary only when every cited source
-            // survived the strict filter; otherwise expose only exact captured
-            // excerpts from accepted sources.
-            strictSources.rejected.length === 0 ? researchContext : "",
+            completeResearchCapture ? researchContext : "",
             "PRESERVED SOURCE EXCERPTS (citation order):",
             ...researchSources.map(
               (source, index) =>
@@ -7689,6 +7695,10 @@ async function reviewExistingArticleHandler(
       editorialQualityScore,
       editorialQualityNotes: [
         `Existing draft exact-prose audit: ${editorialQualityScore}/100.`,
+        // Evidence-selection diagnostics describe this immutable source set,
+        // not stale editorial defects; keep them visible after re-auditing.
+        ...(article.editorialQualityNotes ?? []).filter(note =>
+          /^(?:Excluded \d+ .*source|Discarded the blended research brief)/.test(note)),
         // Persist the selected exact artifact's unresolved corrections, not
         // only the auditor's general observations or a rejected candidate's
         // notes. The next separately bounded attempt needs this feedback.
