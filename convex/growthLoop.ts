@@ -17,6 +17,7 @@ import { takeCurrentGscPageRows } from "./lib/currentGscRows";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { addSearchConsoleDays } from "./lib/searchPerformance";
 import { buildGrowthScorecard } from "./lib/growthScorecard";
+import { growthStatusArticleMetrics } from "./lib/growthStatusArticleMetrics";
 import {
   dataForSeoLanguageCode,
   dataForSeoLocationCode,
@@ -252,13 +253,13 @@ export const getStatus = query({
           endDate: site.gscDataThrough,
         }
       : undefined;
-    const [request, health, growthGoal, topics, articles, actions, inboxes, resources, opportunities, rollups, gscRead] =
+    const [request, health, growthGoal, topics, articleMetrics, actions, inboxes, resources, opportunities, rollups, gscRead] =
       await Promise.all([
         ctx.db.query("managed_provisioning_requests").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
         ctx.db.query("autopilot_health").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
         ctx.db.query("seo_growth_goals").withIndex("by_site", (q) => q.eq("siteId", siteId)).unique(),
         ctx.db.query("topic_clusters").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SCHEDULER_TOPIC_INVENTORY_READ_LIMIT + 1),
-        ctx.db.query("articles").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(500),
+        growthStatusArticleMetrics(ctx, siteId),
         ctx.db.query("seo_growth_actions").withIndex("by_site_priority", (q) => q.eq("siteId", siteId)).take(500),
         ctx.db.query("outreach_inboxes").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(10),
         ctx.db.query("managed_outreach_mailbox_resources").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(20),
@@ -300,19 +301,13 @@ export const getStatus = query({
     const customerAcquiredOpportunities = opportunities.filter(
       (opportunity) => opportunity.type !== "controlled_backlink_canary",
     );
-    const published = articles.filter((article) =>
-      article.status === "published" && article.publicationReceipt &&
-      article.publicUrlStatus === "verified" && article.publicUrlVerifiedAt
-    );
     const measuredConversions = rollups.reduce(
       (sum, row) => sum + (row.signups ?? 0) + (row.activations ?? 0) +
         (row.paidConversions ?? 0) + row.qualifiedActions,
       0,
     );
-    const readyBuffer = health?.approvedBufferCount ?? articles.filter((article) =>
-      article.status === "ready" && article.publicationGateStatus === "passed" &&
-      Boolean(article.auditedContentHash)
-    ).length;
+    const readyBuffer = health?.approvedBufferCount ?? articleMetrics.readyBuffer;
+    const published = articleMetrics.publishedUrls;
     const bufferMinimum = health?.bufferMinimum ?? 2;
     const currentInbox = inboxes.length === 1 ? inboxes[0] : undefined;
     const activeManagedResource = currentInbox
@@ -453,10 +448,10 @@ export const getStatus = query({
       },
       {
         key: "publication",
-        state: published.length > 0 ? "ready" : site.publisherDestinationReceipt?.status === "verified" ? "waiting_pentra" : "waiting_owner",
-        blockerCode: published.length > 0 ? undefined : site.publisherDestinationReceipt?.status === "verified" ? "verified_publication_pending" : "publisher_authorization_required",
-        nextEligibleAt: published.length > 0 ? undefined : publicationWake,
-        automaticWakeAt: published.length > 0 ? undefined : publicationWake,
+        state: published > 0 ? "ready" : site.publisherDestinationReceipt?.status === "verified" ? "waiting_pentra" : "waiting_owner",
+        blockerCode: published > 0 ? undefined : site.publisherDestinationReceipt?.status === "verified" ? "verified_publication_pending" : "publisher_authorization_required",
+        nextEligibleAt: published > 0 ? undefined : publicationWake,
+        automaticWakeAt: published > 0 ? undefined : publicationWake,
       },
       {
         key: "measurement",
@@ -467,8 +462,8 @@ export const getStatus = query({
       },
       {
         key: "improvement",
-        state: actions.some((action) => action.automationStatus === "executed" || action.status === "resolved") ? "ready" : published.length > 0 ? "waiting_pentra" : "waiting_provider",
-        blockerCode: actions.some((action) => action.automationStatus === "executed" || action.status === "resolved") ? undefined : published.length > 0 ? "measured_growth_decision_pending" : "publication_evidence_required",
+        state: actions.some((action) => action.automationStatus === "executed" || action.status === "resolved") ? "ready" : published > 0 ? "waiting_pentra" : "waiting_provider",
+        blockerCode: actions.some((action) => action.automationStatus === "executed" || action.status === "resolved") ? undefined : published > 0 ? "measured_growth_decision_pending" : "publication_evidence_required",
         nextEligibleAt: actions.some((action) => action.automationStatus === "executed" || action.status === "resolved") ? undefined : improvementWake,
         automaticWakeAt: actions.some((action) => action.automationStatus === "executed" || action.status === "resolved") ? undefined : improvementWake,
       },
@@ -521,13 +516,13 @@ export const getStatus = query({
       ready: Object.values(stages).every((stage) => stage.state === "ready"),
       nextEligibleAt: unfinishedTimes.length ? Math.min(...unfinishedTimes) : undefined,
       verifiedOutcomes: {
-        publishedUrls: published.length,
+        publishedUrls: articleMetrics.publishedUrls,
         measuredConversions,
         acquiredBacklinks: customerAcquiredOpportunities.length,
       },
       activity: {
         topics: topics.length,
-        articles: articles.length,
+        articles: articleMetrics.articleCount,
         growthActions: actions.length,
       },
       forecasts: {

@@ -2818,8 +2818,19 @@ export const listLegacyAnchorMismatchRepairsInternal = internalQuery({
       !siteExecutionActive(site) ||
       !(await siteExecutionAuthorized(ctx, site))
     ) return { topicIds: [] as Id<"topic_clusters">[] };
-    const [topics, articles, activeJobs] = await Promise.all([
-      takeCurrentDomainTopics(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
+    const topics = await takeCurrentDomainTopics(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1);
+    if (topics.length > CADENCE_MICRO_SEED_READ_LIMIT) {
+      return { topicIds: [] as Id<"topic_clusters">[], reason: "read_limit" };
+    }
+    const legacyTopics = topics.filter(topic => topic.cadenceMicroSeedJobId &&
+      Number.isInteger(topic.cadenceMicroSeedVersion) &&
+      (topic.cadenceMicroSeedVersion ?? 0) < CADENCE_MICRO_SEED_VERSION &&
+      topic.cadenceMicroSeedAnchorEligible !== false);
+    // This maintenance check runs repeatedly. No eligible legacy topic means
+    // there is nothing to quarantine, so reading article bodies/jobs adds no
+    // safety evidence. Real candidates still take the authoritative path.
+    if (legacyTopics.length === 0) return { topicIds: [] as Id<"topic_clusters">[] };
+    const [articles, activeJobs] = await Promise.all([
       takeCurrentDomainArticles(ctx, site, CADENCE_MICRO_SEED_READ_LIMIT + 1),
       Promise.all(ACTIVE_CONTENT_STATUSES.map((status) =>
         ctx.db.query("jobs").withIndex("by_site_status", (q) =>
@@ -2828,7 +2839,6 @@ export const listLegacyAnchorMismatchRepairsInternal = internalQuery({
       )),
     ]);
     if (
-      topics.length > CADENCE_MICRO_SEED_READ_LIMIT ||
       articles.length > CADENCE_MICRO_SEED_READ_LIMIT ||
       activeJobs.some((rows) => rows.length > CADENCE_MICRO_SEED_READ_LIMIT)
     ) return { topicIds: [] as Id<"topic_clusters">[], reason: "read_limit" };
@@ -2844,7 +2854,7 @@ export const listLegacyAnchorMismatchRepairsInternal = internalQuery({
     }
     const liveJobs = activeJobs.flat();
     const topicIds: Id<"topic_clusters">[] = [];
-    for (const topic of topics) {
+    for (const topic of legacyTopics) {
       if (topicIds.length >= 5) break;
       if (
         !topic.cadenceMicroSeedJobId ||
