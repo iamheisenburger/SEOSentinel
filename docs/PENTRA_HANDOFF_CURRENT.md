@@ -1,6 +1,6 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 10:56 UTC**. Start here and refresh production before
+Updated: **2026-09-11 11:00 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
 
@@ -22,11 +22,17 @@ pre-SERP survivors are not eight eligible topics and the old job stays closed.
 Signed-in exact-site pages work. A second reproduced defect (LeadPilot detail
 route retained Pentra in global actions) is repaired with an ownership-checked
 route-aware selection. Pentra setup7/7; LeadPilot legacy setup3/7.
-Local1,446 tests pass, browser16 pass/2 auth skips, typecheck/build/schema/audit
-pass. Deployment receipts are pending below; do not claim this repair deployed
-until the evidence file records them. No operator paid-provider calls.
+Release **6c67e42fbdf61e81cb2a17c2a7c91ddc9bfbb3ff** is deployed: Convex
+confirmed10:56:40 UTC, frontend6391633561 succeeded10:57:07. Hosted quality
+run34591617181 passed; local1,446 tests and all gates pass, browser16 pass/2
+auth skips. Actual signed-in detail→dashboard handoff now preserves each
+tenant. Post-deploy inventory10:57:41/43 remains Pentra1/4 and LeadPilot0/12;
+latest failed attempts/history are unchanged. No operator paid-provider calls.
+The new live discovery→generation→publication→replacement chain is still
+unverified and blocked by the pending bounded funding decision. Do not claim
+article acceptance, expand into backlinks, or keep retrying the same blocker.
 
-## Current September 11 priority — restored platform, unfinished replenishment
+## Prior 10:37 recovery snapshot — restored platform, unfinished replenishment
 
 Read `docs/PENTRA_RECOVERY_2026-09-11.md` for current evidence. Do not repeat the
 free-plan diagnosis: signed-in billing proved an existing **Starter $15/month

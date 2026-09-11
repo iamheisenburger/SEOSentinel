@@ -1,6 +1,6 @@
 # September 11 same-day acceptance
 
-Updated 2026-09-11 10:56 UTC. Deadline: **September 11, 2026, end of day
+Updated 2026-09-11 11:00 UTC. Deadline: **September 11, 2026, end of day
 America/Los_Angeles** (cutoff September 12, 07:00 UTC). This deadline is not
 moved to the next provider-budget reset. Current verdict: **NOT READY**.
 
@@ -120,4 +120,31 @@ Local: 1,446 tests pass; typecheck/schema/dependency audit pass (61 tables /
 292 indexes; zero dependency findings). Browser16 pass / 2 explicit auth skips.
 Production build passes with the same non-secret example configuration as CI;
 the first config-less local build correctly failed for missing Convex URL.
-Release commit, deployment and post-deployment receipts will be added below.
+Lint: zero errors / 157 pre-existing warnings. Secret scan passed with all
+614 tracked files, including the new tests and evidence. The user-owned
+22-line diagnosis addition and secret/untracked supervisor files were preserved.
+
+Runtime release **6c67e42fbdf61e81cb2a17c2a7c91ddc9bfbb3ff** was pushed to main.
+Convex deployment was confirmed successful at **10:56:40 UTC**, with no index
+deletion, successful type generation and schema validation. Production frontend
+deployment **6391633561** succeeded at **10:57:07 UTC**, receipt
+`https://seo-sentinel-attrdjivt-arshads-projects-836ebfbd.vercel.app`.
+[Hosted quality run 34591617181](https://github.com/iamheisenburger/SEOSentinel/actions/runs/34591617181)
+passed every required gate, including browser16 pass / 2 explicit auth skips.
+
+Post-deployment exact-site projections at **10:57:41.487 / 10:57:43.948 UTC**
+confirmed Pentra1 and LeadPilot0 sealed ready, no newly created articles today,
+unchanged last publication IDs/times, and both latest fallback jobs still
+`missed/no_strict_candidate`. LeadPilot's exact saved job still reports its
+original zero accepted and original $0.048 provider receipt; deploying a new
+selector did not mutate history or reopen the attempt. The fresh live
+provider→SERP→materialization path remains unverified pending legitimate
+funding/admission; successful deployment is not represented as that test.
+
+Real authenticated post-deployment browser checks at approximately10:58 UTC
+loaded LeadPilot with **LeadPilot** selected, then followed Overview and
+retained `leadpilot.chat`. Its dashboard showed the missed cadence deadline,
+coverage conflict, below-minimum sealed buffer and incomplete setup. At11:00
+UTC the reverse Pentra detail→Overview handoff retained **Pentra/pentra.dev**.
+Neither flow clicked Generate, changed setup consent or opened outreach work.
+This closes the reproduced tenant-navigation bug, not article acceptance.
