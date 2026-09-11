@@ -1,0 +1,655 @@
+{
+  "schema": "planned-topic-admission-diagnosis-v1",
+  "sourceSha": "3b806c6b867ae94cb160a14b7c2c45a47ca2291d",
+  "convexClientSuccessConfirmedAt": "2026-09-11T14:25:43Z",
+  "vercel": {
+    "deploymentId": 6395125259,
+    "statusId": 18229131543,
+    "successAt": "2026-09-11T14:25:47Z",
+    "url": "https://seo-sentinel-r3wm9f6eu-arshads-projects-836ebfbd.vercel.app"
+  },
+  "ci": {
+    "runId": 34609981874,
+    "jobId": 103297742904,
+    "status": "success",
+    "completedAt": "2026-09-11T14:29:49Z"
+  },
+  "topicAdmission": [
+    {
+      "tenant": "Pentra",
+      "canonicalDomain": "pentra.dev",
+      "complete": true,
+      "currentLocale": {
+        "languageCode": "en",
+        "locationCode": 2840
+      },
+      "domainRevision": 0,
+      "observedAt": 1789136744756,
+      "readBounds": {
+        "activeJobs": 0,
+        "inventoryLimit": 512,
+        "perStatusJobLimit": 50,
+        "summaries": 128,
+        "topicLimit": 8,
+        "topics": 145
+      },
+      "rolloutEpoch": 6,
+      "siteGate": {
+        "activeArticleUsage": 37,
+        "allowed": true,
+        "maxArticles": 150,
+        "remainingArticles": 113
+      },
+      "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+      "tenantAuthority": {
+        "domainMatches": true,
+        "domainRank": 0,
+        "expiresAt": 1791810856517,
+        "fresh": true,
+        "measuredAt": 1787922856517,
+        "source": "dataforseo:backlinks_bulk_pages_summary:one_hundred"
+      },
+      "topics": [
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceCurrentExact": false
+          },
+          "demand": {
+            "admission": {
+              "eligible": false,
+              "reason": "keyword_difficulty_unverified"
+            },
+            "firstRule": "keyword_difficulty_unverified"
+          },
+          "demandProvenance": {
+            "current": false,
+            "currentPositive": false,
+            "languageMatches": false,
+            "source": "missing"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": false,
+              "reason": "keyword_difficulty_unverified"
+            },
+            "firstRule": "keyword_difficulty_unverified"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 100,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 100,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "automated content calendar SEO",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn73hbdj558sgxp401mh20j8598akb96"
+        }
+      ]
+    },
+    {
+      "tenant": "LeadPilot",
+      "canonicalDomain": "leadpilot.chat",
+      "complete": true,
+      "currentLocale": {
+        "languageCode": "en",
+        "locationCode": 2840
+      },
+      "domainRevision": 0,
+      "observedAt": 1789136747563,
+      "readBounds": {
+        "activeJobs": 0,
+        "inventoryLimit": 512,
+        "perStatusJobLimit": 50,
+        "summaries": 134,
+        "topicLimit": 8,
+        "topics": 243
+      },
+      "rolloutEpoch": 9,
+      "siteGate": {
+        "activeArticleUsage": 37,
+        "allowed": true,
+        "maxArticles": 150,
+        "remainingArticles": 113
+      },
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "tenantAuthority": {
+        "domainMatches": true,
+        "domainRank": 4,
+        "expiresAt": 1791146667329,
+        "fresh": true,
+        "measuredAt": 1787258667329,
+        "source": "dataforseo:backlinks_bulk_pages_summary:one_hundred"
+      },
+      "topics": [
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceAt": 1788485735836,
+            "evidenceCurrentExact": true,
+            "evidenceVersion": 2,
+            "microSeedJobId": "pd7an6debxkev84kk3q7pdbf0d8dsaw2",
+            "microSeedVersion": 9
+          },
+          "demand": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "demand_already_current"
+          },
+          "demandProvenance": {
+            "current": true,
+            "currentPositive": true,
+            "keywordDifficulty": 0,
+            "keywordDifficultyMeasured": true,
+            "languageMatches": true,
+            "locationCode": 2840,
+            "measuredAt": 1788485729522,
+            "searchVolume": 1900,
+            "source": "dataforseo:keyword_metrics"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "exact_evidence_already_attempted"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 70,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 70,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "software sales",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn7bd5dstwqgmd8nh7mzpc19fn8dsc2d"
+        },
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceAt": 1788496472040,
+            "evidenceCurrentExact": true,
+            "evidenceVersion": 2,
+            "microSeedAnchorEligible": true,
+            "microSeedJobId": "pd7apsb58nqwykcvmrw39b1p018dr0cm",
+            "microSeedVersion": 14
+          },
+          "demand": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "demand_already_current"
+          },
+          "demandProvenance": {
+            "current": true,
+            "currentPositive": true,
+            "keywordDifficulty": 0,
+            "keywordDifficultyMeasured": true,
+            "languageMatches": true,
+            "locationCode": 2840,
+            "measuredAt": 1788496467240,
+            "searchVolume": 40,
+            "source": "dataforseo:keyword_metrics"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "exact_evidence_already_attempted"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 70,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 70,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "agent sales representative",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn7f6sbpk7008c7qhsmw9r15c18ds09e"
+        },
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceCurrentExact": false,
+            "microSeedAnchorEligible": true,
+            "microSeedJobId": "pd7abf0xpard46v39453fydjjs8dra22",
+            "microSeedVersion": 22
+          },
+          "demand": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "demand_already_current"
+          },
+          "demandProvenance": {
+            "current": true,
+            "currentPositive": true,
+            "keywordDifficulty": 21,
+            "keywordDifficultyMeasured": true,
+            "languageMatches": true,
+            "locationCode": 2840,
+            "measuredAt": 1788514344638,
+            "searchVolume": 260,
+            "source": "dataforseo:keyword_metrics"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "requires_ordinary_selection"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 85,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 85,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "ai sales automation",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn797r1jzk106hvy7cm15wvvcs8ds0x2"
+        },
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceAt": 1788549802843,
+            "evidenceCurrentExact": true,
+            "evidenceVersion": 2,
+            "microSeedAnchorEligible": true,
+            "microSeedJobId": "pd79vndhf2x5b5dcatmh29parh8dsq3n",
+            "microSeedVersion": 31
+          },
+          "demand": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "demand_already_current"
+          },
+          "demandProvenance": {
+            "current": true,
+            "currentPositive": true,
+            "keywordDifficulty": 3,
+            "keywordDifficultyMeasured": true,
+            "languageMatches": true,
+            "locationCode": 2840,
+            "measuredAt": 1788549658653,
+            "searchVolume": 40,
+            "source": "dataforseo:keyword_metrics"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "exact_evidence_already_attempted"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 85,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 85,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "sales integration",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn73pe80t8sxtvggj6hyn4c1zn8dr46x"
+        },
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceAt": 1788555214589,
+            "evidenceCurrentExact": true,
+            "evidenceVersion": 2,
+            "microSeedAnchorEligible": true,
+            "microSeedJobId": "pd72e3c3csj4atc4yznmm3tc7d8ds8hx",
+            "microSeedVersion": 35
+          },
+          "demand": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "demand_already_current"
+          },
+          "demandProvenance": {
+            "current": true,
+            "currentPositive": true,
+            "keywordDifficulty": 0,
+            "keywordDifficultyMeasured": true,
+            "languageMatches": true,
+            "locationCode": 2840,
+            "measuredAt": 1788554783533,
+            "searchVolume": 30,
+            "source": "dataforseo:keyword_metrics"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "exact_evidence_already_attempted"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 85,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 85,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "sales conversation example",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn7e2e7xstcj4747zfzmtx0x5n8drngz"
+        },
+        {
+          "activeArticleJobCount": 0,
+          "activeArticleJobs": [],
+          "attempts": {
+            "checkpointSerpReceiptPresent": false,
+            "checkpointTerminal": false,
+            "demandCurrentExact": false,
+            "evidenceAt": 1788654669575,
+            "evidenceCurrentExact": true,
+            "evidenceVersion": 2,
+            "microSeedAnchorEligible": true,
+            "microSeedJobId": "pd7d2afy91734gb2q83tytej9d8dx230",
+            "microSeedVersion": 35
+          },
+          "demand": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "demand_already_current"
+          },
+          "demandProvenance": {
+            "current": true,
+            "currentPositive": true,
+            "keywordDifficulty": 7,
+            "keywordDifficultyMeasured": true,
+            "languageMatches": true,
+            "locationCode": 2840,
+            "measuredAt": 1788654663948,
+            "searchVolume": 140,
+            "source": "dataforseo:keyword_metrics"
+          },
+          "domainCurrent": true,
+          "evidence": {
+            "admission": {
+              "eligible": true
+            },
+            "firstRule": "exact_evidence_already_attempted"
+          },
+          "fit": {
+            "currentEligible": true,
+            "currentReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "currentScore": 85,
+            "currentVersion": 10,
+            "disqualified": false,
+            "reasonsMatch": true,
+            "scoreMatches": true,
+            "storedEligible": true,
+            "storedReasonsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "storedScore": 85,
+            "storedVersion": 10,
+            "versionMatches": true
+          },
+          "keyword": "sales chatbot",
+          "linkedArticleCount": 0,
+          "linkedArticles": [],
+          "selectionInspected": false,
+          "serpProvenance": {
+            "authority": [],
+            "authorityCount": 0,
+            "languageMatches": false,
+            "resultCount": 0
+          },
+          "status": "planned",
+          "topicId": "jn7f44twfa9svka9zrbfazwaw98dw9k4"
+        }
+      ]
+    }
+  ],
+  "sourceLedgers": [
+    {
+      "tenant": "Pentra",
+      "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+      "sourcePlanId": "j97424bc4zey6wwkqhnrh875an8e0h2t",
+      "sourcePlanReady": true,
+      "sourceObservedAt": "2026-09-11T14:22:45.621Z",
+      "ledgerObservedAt": "2026-09-11T14:22:47.209Z",
+      "policyVersion": 37,
+      "rolloutEpoch": 6,
+      "ledgerFingerprint": "b41c4a946586647c06ca1cced6bc0156c3309572309b4b298e340e01319f7d26",
+      "jobs": [
+        {
+          "jobId": "pd7af8sk2nve939ksts3xsaefx8e2kne",
+          "status": "missed",
+          "attemptKind": "primary",
+          "providerCallAttempted": true,
+          "providerCallCompleted": true
+        },
+        {
+          "jobId": "pd7374xpbxq1qg750cntkjx75s8e3cgf",
+          "status": "missed",
+          "attemptKind": "fallback",
+          "parentJobId": "pd7af8sk2nve939ksts3xsaefx8e2kne",
+          "providerCallAttempted": true,
+          "providerCallCompleted": true
+        }
+      ]
+    },
+    {
+      "tenant": "LeadPilot",
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "sourcePlanId": "j978nhrc6f7ax2z3wntx2n7z6n8e0fc5",
+      "sourcePlanReady": true,
+      "sourceObservedAt": "2026-09-11T14:22:48.890Z",
+      "ledgerObservedAt": "2026-09-11T14:22:50.077Z",
+      "policyVersion": 37,
+      "rolloutEpoch": 9,
+      "ledgerFingerprint": "130bb858e4ade86561be53e8bb6a5548e7f18f0693660e8f68a9d9b291e4c421",
+      "jobs": [
+        {
+          "jobId": "pd714w0bp882tavxjx6kxvt26s8e1qqp",
+          "status": "missed",
+          "attemptKind": "primary",
+          "providerCallAttempted": true,
+          "providerCallCompleted": true
+        },
+        {
+          "jobId": "pd71z1mck1kehvcynqghsk9sfs8e00cm",
+          "status": "missed",
+          "attemptKind": "fallback",
+          "parentJobId": "pd714w0bp882tavxjx6kxvt26s8e1qqp",
+          "providerCallAttempted": true,
+          "providerCallCompleted": true
+        }
+      ]
+    }
+  ],
+  "selectionChecks": [
+    {
+      "tenant": "LeadPilot",
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "function": "topics:getPlannedRecoveryCoverageAudit",
+      "observedAt": "2026-09-11T14:27:05.818Z",
+      "data": {
+        "conflicts": [
+          {
+            "hasReliableSerpFingerprint": true,
+            "keyword": "sales automation tools"
+          }
+        ],
+        "coverageCount": 67,
+        "readLimitExhausted": false,
+        "targetKeyword": "ai sales automation",
+        "targetTopicId": "jn797r1jzk106hvy7cm15wvvcs8ds0x2"
+      }
+    },
+    {
+      "tenant": "LeadPilot",
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "function": "expectedClickEvidenceBackfill:getFleetReadinessInternal",
+      "observedAt": "2026-09-11T14:27:07.442Z",
+      "data": {
+        "actionable": false,
+        "candidateCount": 0,
+        "candidateCounts": {
+          "alreadyAttempted": 5,
+          "alreadyAudited": 38,
+          "artifactEligible": 0,
+          "businessFitBlocked": 0,
+          "covered": 67,
+          "demandUnavailable": 29,
+          "eligible": 0,
+          "plannedGateBlocked": 170,
+          "plannedUnmaterialized": 0
+        },
+        "continueToCadenceMicroSeed": false,
+        "ready": false,
+        "reason": "no_current_demand_candidates"
+      }
+    },
+    {
+      "tenant": "LeadPilot",
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "function": "expectedClickEvidenceBackfill:getFleetRecoveryInternal",
+      "observedAt": "2026-09-11T14:27:08.591Z",
+      "data": {
+        "action": "none",
+        "reason": "no_fleet_job"
+      }
+    }
+  ],
+  "limitations": [
+    "No paid provider calls or manual generation/scheduler work.",
+    "Exact evidence attempt markers are observed; original provider-response bodies were not retrieved.",
+    "No new complete end-to-end article acceptance or SEO attribution.",
+    "Latest buffer/publication observation remains assignment12 before the diagnostic-only deployment."
+  ]
+}

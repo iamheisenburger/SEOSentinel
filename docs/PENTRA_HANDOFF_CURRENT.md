@@ -1,8 +1,39 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 14:15 UTC**. Start here and refresh production before
+Updated: **2026-09-11 14:30 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Exact planned-topic admission — assignment13
+
+Read `docs/PENTRA_PLANNED_TOPIC_ADMISSION_2026-09-11.md` and its safe JSON first.
+Diagnostic-only runtime **3b806c6b867ae94cb160a14b7c2c45a47ca2291d** is deployed;
+it adds a bounded read-only exact-site/topic reason projection, not a behavioral
+admission/scheduling/spend change. Convex success confirmed14:25:43 UTC,
+Vercel6395125259 succeeded14:25:47; hosted CI34609981874 passed14:29:49.
+Local1,509 tests and all gates pass.
+
+Exact topic observations14:25:44.756/47.563: both site gates and fresh tenant
+authority pass; all seven fit receipts match currentv10; no linked/active work
+or checkpoint blockers. Pentra's `automated content calendar SEO` fails both
+phases on **unverified keyword difficulty**. All SIX LeadPilot topics have
+**current positive exact demand** (assignment12's portfolio wording conflated
+missing SERP locale with missing demand). Five are stopped by existing exact
+evidence-attemptv2 fences. The sixth, `ai sales automation`, clears phase
+admission but the actual pre-SERP coverage audit14:27:05.818 finds a conflict
+with **sales automation tools**. Actual evidence readiness14:27:07.442 selects
+zero; ordinary recovery14:27:08.591 finds no fleet job. Current policy37 source
+ledgers on both tenants already contain attempted/completed primary+fallback.
+
+No stale/circular admission defect is established and no behavioral repair is
+justified. These seven topics provide no lawful new evidence purchase. Fresh
+replenishment requires a genuinely distinct measured candidate from a newly
+admitted ordinary plan; existing one-off discovery/owner budgets and no-replay
+fences still apply. No attempt, reservation, quality, cadence or funding limit
+was changed. Baseline remains Pentra1/4, LeadPilot0/12 overdue, fresh chain and
+replacement unproven: **NOT READY**. Do not treat more diagnostic engineering,
+a version bump or paid replay as replenishment. Exact receipts and limitations
+are in the13 report. The15:00 ordinary slot has not been forced or observed early.
 
 ## Bound release deployed — assignment12
 
