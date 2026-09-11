@@ -1364,6 +1364,9 @@ export default defineSchema({
     // promotion. Later publication may consume the buffer, so the canary
     // cannot truthfully reconstruct this count from current inventory.
     sealedBufferCount: v.optional(v.number()),
+    // Immutable minimum proof at promotion, distinct from the exact total and
+    // from bufferInventory, which is reconciled again when the run completes.
+    sealedBufferCountLowerBound: v.optional(v.number()),
   })
     .index("by_site", ["siteId"])
     .index("by_site_recovery_source", ["siteId", "recoveryOfRunId"])

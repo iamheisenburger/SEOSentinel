@@ -737,6 +737,8 @@ export function operatorContinuationRunReceipt(
     heartbeatAt: run.heartbeatAt,
     completedAt: run.completedAt,
     bufferInventory: run.bufferInventory,
+    sealedBufferCount: run.sealedBufferCount,
+    sealedBufferCountLowerBound: run.sealedBufferCountLowerBound,
     continuationAttempt: run.continuationAttempt,
     topicPlanSettlementAttempt: run.topicPlanSettlementAttempt,
   };

@@ -3,6 +3,7 @@ import {
   readPublicationBufferSummaries,
   publicationInventoryHealthFields,
   publicationInventoryDetail,
+  publicationInventoryProvesMinimum,
   type PublicationInventory,
 } from "./lib/publicationEligibility";
 import { sanitizeSkipReceiptForOperator } from "./lib/expectedClickSkipReceipt";
@@ -913,7 +914,9 @@ export const promoteWarmSiteIfReady = internalMutation({
     const sealedCount = ready.inventory.usableCountLowerBound;
     const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
     const blockers = [...readiness.blockers];
-    if (ready.inventory.status !== "complete") blockers.push("publication_inventory_incomplete", ...ready.inventory.blockers);
+    if (ready.inventory.status !== "complete" && !publicationInventoryProvesMinimum(ready.inventory, bufferPolicy.minimum)) {
+      blockers.push("publication_inventory_incomplete", ...ready.inventory.blockers);
+    }
     if (sealedCount < bufferPolicy.minimum) blockers.push("sealed_buffer_incomplete");
     if (blockers.length > 0) {
       const blockerDetail = describeAutopilotBlockers(blockers);
@@ -949,7 +952,8 @@ export const promoteWarmSiteIfReady = internalMutation({
     const runId = await ctx.db.insert("autopilot_runs", {
       siteId,
       trigger: "automatic_live_promotion",
-      sealedBufferCount: sealedCount,
+      sealedBufferCount: ready.inventory.status === "complete" ? sealedCount : undefined,
+      sealedBufferCountLowerBound: sealedCount,
       scheduledAt: promotedAt,
       heartbeatAt: promotedAt,
       status: "scheduled",
@@ -966,7 +970,8 @@ export const promoteWarmSiteIfReady = internalMutation({
       runId,
       trigger: "automatic_live_promotion",
     });
-    return { promoted: true, blockers: [], sealedCount, rolloutEpoch };
+    return { promoted: true, blockers: [], sealedCount: ready.inventory.status === "complete" ? sealedCount : undefined,
+      bufferInventory: ready.inventory, rolloutEpoch };
   },
 });
 
@@ -3120,7 +3125,8 @@ export const getFleetReadiness = internalQuery({
         hasCrawledPage,
         limits.maxArticles,
       );
-      const inventoryBlockers = ready.inventory.status === "complete" ? []
+      const bufferMinimumMet = publicationInventoryProvesMinimum(ready.inventory, approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum);
+      const inventoryBlockers = ready.inventory.status === "complete" || bufferMinimumMet ? []
         : ["publication_inventory_incomplete", ...ready.inventory.blockers];
       rows.push({
         siteId: site._id,
@@ -3137,11 +3143,12 @@ export const getFleetReadiness = internalQuery({
         liveReady: live.ready && inventoryBlockers.length === 0,
         liveBlockers: [...live.blockers, ...inventoryBlockers],
         sealedBufferCount: publicationInventoryHealthFields(ready.inventory).approvedBufferCount,
+        bufferMinimumMet,
         bufferInventory: ready.inventory,
         health: health
           ? {
-              status: inventoryBlockers.length > 0 ? "publication_inventory_incomplete" : health.status,
-              detail: inventoryBlockers.length > 0 ? publicationInventoryDetail(ready.inventory) : health.detail,
+              status: ready.inventory.status !== "complete" ? "publication_inventory_incomplete" : health.status,
+              detail: ready.inventory.status !== "complete" ? publicationInventoryDetail(ready.inventory) : health.detail,
               heartbeatAt: health.heartbeatAt,
               lastPublishedAt: health.lastPublishedAt,
               nextPublicationDueAt: health.nextPublicationDueAt,

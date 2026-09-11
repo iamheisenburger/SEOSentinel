@@ -17,6 +17,14 @@ export const publicationInventoryValidator = v.object({
   )),
 });
 export type PublicationInventory = Infer<typeof publicationInventoryValidator>;
+/** A lower bound is enough to prove a minimum, never a shortage. Every unit
+ * counted by the reader independently passed its current-domain/seal/history
+ * checks. Scoped failures on other rows cannot invalidate those units. This
+ * proves inventory only, not owner, adapter, cadence or destination authority. */
+export function publicationInventoryProvesMinimum(inventory: PublicationInventory, minimum: number): boolean {
+  return inventory.status !== "unknown" && Number.isSafeInteger(minimum) && minimum > 0 &&
+    Number.isSafeInteger(inventory.usableCountLowerBound) && inventory.usableCountLowerBound >= minimum;
+}
 export function publicationInventoryHealthFields(inventory: PublicationInventory) {
   return { bufferInventory: inventory,
     approvedBufferCount: inventory.status === "complete" ? inventory.usableCountLowerBound : undefined };

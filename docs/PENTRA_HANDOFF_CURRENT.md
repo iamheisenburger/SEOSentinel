@@ -1,8 +1,29 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 13:46 UTC**. Start here and refresh production before
+Updated: **2026-09-11 13:59 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Proven-candidate liveness — assignment11, review required
+
+Read `docs/PENTRA_PROVEN_CANDIDATE_LIVENESS_2026-09-11.md` first.10's exact-total
+guard was reproduced to freeze26 clean ready entries and a genuinely sealed
+article inside a mixed capped prefix. The amendment separates a proven due
+candidate/minimum from an unknown exact total, without increasing read caps or
+allowing refill from incomplete shortage. Actual due scheduling/tick/worker/
+verification now deliver unchanged B with0 additional model calls. Warm
+minimums3 and9, controlled/automatic promotion, customer buffer stage and
+immutable promotion-minimum receipts use the same threshold interpretation.
+Missing prerequisites, ambiguity, selected-history failures, early/manual/
+approval controls and all10 fault-isolation protections remain enforced.
+
+Parent `404bf5fbb5621f6a10244370f68ed6900d0847ac`; **not pushed/deployed**.
+Do not deploy10 alone. Final gates and exact traces are recorded in the11
+report. Final gates:1,502 tests pass, type/build/schema/secrets/dependency checks pass,
+lint0errors/157existingwarnings, browser16pass/2explicit authenticated skips.
+No new production reads or financial authority: runtime8e9e147 and
+09's13:15 snapshots remain the latest live evidence. Pentra1/4, LeadPilot0/12,
+LeadPilot overdue and full fresh refill unproven: **NOT READY**.
 
 ## Publication projection fault isolation — assignment10, review required
 

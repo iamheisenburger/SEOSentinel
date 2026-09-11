@@ -131,21 +131,24 @@ test("authentication and ownership are checked before reading inventory", async 
   }
 });
 
-test("customer buffer readiness cannot replace incomplete health with raw article-summary counts", async () => {
-  for (const status of ["unknown", "partial", "complete"]) {
+test("customer buffer readiness requires a proven minimum, never raw counts or completeness of excess inventory", async () => {
+  for (const [status, lowerBound, minimumMet] of [["unknown", 0, false], ["partial", 2, false],
+    ["partial", 4, true], ["partial", 25, true], ["complete", 4, true]] as const) {
     const f = fixture();
     // Enough raw ready metadata to tempt the old fallback into claiming ready.
     for (const row of f.tables.article_summaries.slice(1, 6)) {
       row.status = "ready"; row.publicationGateStatus = "passed"; row.auditedContentHash = "audited";
     }
-    const inventory = { status, usableCountLowerBound: status === "unknown" ? 0 : 4,
-      inspectedCandidates: 5, blockers: status === "complete" ? [] : ["publication_history_incomplete"] };
+    const inventory = { status, usableCountLowerBound: lowerBound,
+      inspectedCandidates: Math.max(5, lowerBound), blockers: status === "complete" ? []
+        : [lowerBound === 25 ? "publication_buffer_scan_incomplete" : "publication_history_incomplete"] };
     f.tables.autopilot_health = [{ siteId: "site-a", bufferMinimum: 3, bufferInventory: inventory,
       approvedBufferCount: status === "complete" ? 4 : undefined }];
     const result = await f.run();
     const buffer = result.stages.buffer;
-    assert.equal(buffer.state, status === "complete" ? "ready" : "waiting_pentra");
-    assert.equal(buffer.blockerCode, status === "complete" ? undefined : "publication_inventory_incomplete");
+    assert.equal(buffer.state, minimumMet ? "ready" : "waiting_pentra");
+    assert.equal(buffer.blockerCode, minimumMet ? undefined : "publication_inventory_incomplete");
+    assert.equal(result.ready, false, "Proving the buffer minimum is not whole-product readiness");
     assert.deepEqual(structuredClone(result.bufferInventory), inventory);
     assert.equal(f.reads.articleScans, 0);
     assert.deepEqual(f.reads.exactArticleReads, ["article-0"]);

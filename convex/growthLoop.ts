@@ -8,6 +8,7 @@ import {
 } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { sha256Hex } from "./lib/publicationArtifact";
+import { publicationInventoryProvesMinimum } from "./lib/publicationEligibility";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { oneSetupOutreachMailboxReceiptVerified } from
   "./lib/oneSetupCanonical";
@@ -314,7 +315,9 @@ export const getStatus = query({
       : health?.approvedBufferCount ?? articleMetrics.readyBuffer;
     const published = articleMetrics.publishedUrls;
     const bufferMinimum = health?.bufferMinimum ?? 2;
-    const bufferReady = readyBuffer !== undefined && readyBuffer >= bufferMinimum;
+    const bufferReady = bufferInventory
+      ? publicationInventoryProvesMinimum(bufferInventory, bufferMinimum)
+      : readyBuffer !== undefined && readyBuffer >= bufferMinimum;
     const currentInbox = inboxes.length === 1 ? inboxes[0] : undefined;
     const activeManagedResource = currentInbox
       ? resources.find((resource) =>
@@ -1086,7 +1089,7 @@ export const recordCanaryInternal = internalMutation({
         promotionRun.trigger !== "automatic_live_promotion" ||
         promotionRun.status !== "completed" ||
         promotionRun.articleId !== article._id ||
-        (promotionRun.sealedBufferCount ?? 0) < 2 ||
+        (promotionRun.sealedBufferCountLowerBound ?? promotionRun.sealedBufferCount ?? 0) < 2 ||
         !opportunity
       ) {
         throw new Error("Natural-loop source does not prove planning, sealed buffer, and publication");
@@ -1100,6 +1103,7 @@ export const recordCanaryInternal = internalMutation({
         opportunityInputHash: opportunity.inputHash,
         promotionRunId: String(promotionRun._id),
         sealedBufferCount: promotionRun.sealedBufferCount,
+        sealedBufferCountLowerBound: promotionRun.sealedBufferCountLowerBound,
         publicationReceipt: article.publicationReceipt,
         publicUrlVerifiedAt: article.publicUrlVerifiedAt,
       }));

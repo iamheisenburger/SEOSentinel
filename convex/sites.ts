@@ -1,4 +1,4 @@
-import { readPublicationBufferSummaries } from "./lib/publicationEligibility";
+import { readPublicationBufferSummaries, publicationInventoryProvesMinimum } from "./lib/publicationEligibility";
 import {
   internalMutation,
   internalQuery,
@@ -6578,6 +6578,9 @@ export const setAutopilotRollout = internalMutation({
     }
 
     if (mode === "live") {
+      if (!site.userId) {
+        throw new Error("Live rollout prerequisites are incomplete: site_owner_missing");
+      }
       const hasCrawledPage = Boolean(await currentDomainPage(ctx, site));
       const limits = getLimitsFromFeatures(site.planFeatures ?? []);
       const readiness = liveAutopilotReadiness(
@@ -6591,7 +6594,8 @@ export const setAutopilotRollout = internalMutation({
         );
       }
       const ready = await readPublicationBufferSummaries(ctx, site);
-      if (ready.inventory.status !== "complete") {
+      const bufferMinimum = approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum;
+      if (ready.inventory.status !== "complete" && !publicationInventoryProvesMinimum(ready.inventory, bufferMinimum)) {
         throw new Error(`Publication inventory is ${ready.inventory.status}; rollout blocked: ${ready.inventory.blockers.join(", ")}`);
       }
       const sealed = ready.rows.filter(
@@ -6601,9 +6605,6 @@ export const setAutopilotRollout = internalMutation({
           article.publicationAuditVersion === PUBLICATION_AUDIT_VERSION &&
           !!article.auditedContentHash,
       );
-      const bufferMinimum = approvedBufferPolicy(
-        site.cadencePerWeek ?? 4,
-      ).minimum;
       if (sealed.length < bufferMinimum) {
         throw new Error(
           `Live rollout requires at least ${bufferMinimum} sealed articles; found ${sealed.length}`,

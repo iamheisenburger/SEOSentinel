@@ -46,6 +46,15 @@ function readyMetadata(f: Fixture, siteId: string, suffix: string, createdAt = S
     auditedContentHash: "a".repeat(64), publicationConfigHash: "b".repeat(64) });
   return articleId;
 }
+function cleanProjectedPool(f: Fixture, siteId: string, count: number) {
+  for (let i = 0; i < count; i++) {
+    const articleId = readyMetadata(f, siteId, `load-${i}`, START - 500 + i);
+    const summary = f.tables.article_summaries.find(row => row.articleId === articleId)!;
+    // Metadata-only queue/promotion load fixture, NOT article acceptance.
+    const actualId = f.add("articles", { ...summary, createdAt: summary.articleCreatedAt, updatedAt: START - 500 });
+    summary.articleId = actualId;
+  }
+}
 const faultCodes = {
   legacy: "article_summary_domain_window_incomplete",
   candidates: "publication_buffer_scan_incomplete",
@@ -215,20 +224,20 @@ for (const kind of Object.keys(faultCodes) as Array<keyof typeof faultCodes>) {
   });
 }
 
-test("positive lower bounds stay partial: no early delivery, refill, automatic or controlled promotion", async () => {
+test("insufficient positive lower bounds stay partial: no early delivery, refill, automatic or controlled promotion", async () => {
   const f = projectionFixture(), siteId = f.sites[0];
   fault(f, siteId, "history");
-  for (let i = 0; i < 4; i++) readyMetadata(f, siteId, `clean-${i}`);
+  for (let i = 0; i < 2; i++) readyMetadata(f, siteId, `clean-${i}`);
   const expected = deadline(f, siteId, START - 1000);
   const schedule = await f.invoke("actions/scheduler:scheduleCadence", { siteId });
   assert.equal(schedule.mode, "publication_inventory_incomplete"); assert.equal(schedule.bufferCount, undefined);
-  assertInventory(schedule.bufferInventory, "history", 4);
+  assertInventory(schedule.bufferInventory, "history", 2);
   assert.ok(f.trace.some(row => row.name === "autopilot:scheduleCadenceDeadline" && row.args.dueAt === expected.dueAt));
   f.get(siteId)!.autopilotRolloutMode = "warm";
   const before = structuredClone(f.get(siteId));
   const promotion = await f.invoke("autopilot:promoteWarmSiteIfReady", { siteId });
   assert.equal(promotion.promoted, false); assert.equal(promotion.sealedCount, undefined);
-  assertInventory(promotion.bufferInventory, "history", 4);
+  assertInventory(promotion.bufferInventory, "history", 2);
   assert.ok(promotion.blockers.includes("publication_inventory_incomplete"));
   await assert.rejects(f.invoke("sites:setAutopilotRollout", { siteId, mode: "live" }), /Publication inventory is partial.*publication_history_incomplete/);
   assert.deepEqual(f.get(siteId), before);
@@ -294,4 +303,128 @@ test("incomplete completion preserves an existing exact cadence receipt even whe
   assert.equal(snapshot.cadenceDeadline.runId, deadlineId);
   assertInventory(snapshot.bufferInventory, "legacy");
   assert.equal(f.get(runId)!.status, "completed"); f.assertOffline();
+});
+
+test("26 clean projection entries retain a truthful partial total without freezing due admission", async () => {
+  const f = projectionFixture(), siteId = f.sites[0];
+  cleanProjectedPool(f, siteId, 26);
+  const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId });
+  assert.equal(result.mode, "buffer_delivery"); assert.equal(result.scheduled, 1);
+  assert.equal(result.bufferCount, undefined);
+  assert.deepEqual(result.bufferInventory, { status: "partial", usableCountLowerBound: 25,
+    inspectedCandidates: 25, blockers: ["publication_buffer_scan_incomplete"] });
+  assert.equal(f.tables.jobs.length, 1); assert.equal(f.tables.jobs[0].payload.publishOnly, true);
+  assert.equal(f.trace.filter(row => row.name === "network").length, 0);
+  f.assertOffline();
+});
+
+test("26 eligible current projection entries prove the warm minimum for automatic and controlled promotion", async () => {
+  for (const [path, cadence] of [["automatic", 7], ["controlled", 7], ["automatic", 21], ["controlled", 21]] as const) {
+    const f = projectionFixture(), siteId = f.sites[0];
+    f.get(siteId)!.cadencePerWeek = cadence;
+    f.get(siteId)!.autopilotRolloutMode = "warm"; cleanProjectedPool(f, siteId, 26);
+    if (path === "automatic") {
+      const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId });
+      assert.equal(result.mode, "automatic_live_promotion"); assert.equal(result.bufferCount, undefined);
+      const run = f.tables.autopilot_runs.find(row => row.trigger === "automatic_live_promotion")!;
+      assert.equal(run.sealedBufferCount, undefined); assert.equal(run.sealedBufferCountLowerBound, 25);
+      // Test-only metadata evolution: the promotion's minimum proof must not
+      // be replaced by the different completion-time inventory projection.
+      for (const row of f.tables.article_summaries.slice(0, 2)) row.status = "failed";
+      f.get(run._id)!.status = "running";
+      await f.invoke("autopilot:markRunFinished", { runId: run._id, outcome: "buffer_full" });
+      assert.equal(f.get(run._id)!.sealedBufferCountLowerBound, 25);
+      assert.equal(f.get(run._id)!.sealedBufferCount, undefined);
+      assert.equal(f.get(run._id)!.bufferInventory.usableCountLowerBound, 24);
+      const snapshot = await f.invoke("autopilot:getOperatorSnapshot", { siteId });
+      assert.equal(snapshot.runs.find((row: { runId: string }) => row.runId === run._id).sealedBufferCountLowerBound, 25);
+    } else await f.invoke("sites:setAutopilotRollout", { siteId, mode: "live" });
+    assert.equal(f.get(siteId)!.autopilotRolloutMode, "live");
+    assert.equal(f.trace.filter(row => row.name === "network").length, 0);
+    f.assertOffline();
+  }
+});
+
+test("a proven candidate under a capped total does not override not-due, owner, adapter, manual or approval controls", async () => {
+  for (const condition of ["not_due", "owner", "adapter", "manual", "approval"]) {
+    const f = projectionFixture(), siteId = f.sites[0]; cleanProjectedPool(f, siteId, 26);
+    const site = f.get(siteId)!;
+    if (condition === "not_due") deadline(f, siteId, START - 1000);
+    if (condition === "owner") delete site.userId;
+    if (condition === "adapter") delete site.githubToken;
+    if (condition === "manual") site.publishMethod = "manual";
+    if (condition === "approval") site.approvalRequired = true;
+    if (condition === "owner") {
+      await assert.rejects(f.invoke("actions/scheduler:scheduleCadence", { siteId }), /Site not found/);
+      assert.equal(f.tables.jobs.length, 0); f.assertOffline(); continue;
+    }
+    const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId });
+    assert.equal(result.scheduled, 0, condition);
+    assert.notEqual(result.mode, "buffer_delivery", condition);
+    assert.equal(f.tables.jobs.length, 0, condition);
+    assert.equal(f.trace.filter(row => row.name === "network").length, 0);
+    if (condition === "not_due") {
+      assert.equal(result.mode, "publication_inventory_incomplete");
+      const pending = f.add("jobs", { siteId, status: "pending", type: "article", createdAt: START, updatedAt: START });
+      const runId = runningRun(f, siteId); f.get(runId)!.status = "scheduled";
+      await f.invoke("actions/pipeline:autopilotTick", { siteId, runId, trigger: "natural" });
+      assert.equal(f.get(runId)!.status, "completed"); assert.equal(f.get(pending)!.status, "pending");
+      assert.equal(f.tables.jobs.length, 1); assert.equal(f.trace.filter(row => row.name === "network").length, 0);
+    }
+    f.assertOffline();
+  }
+});
+
+test("each scoped incompleteness may coexist with an independently proven warm minimum, but insufficient counts never do", async () => {
+  for (const kind of Object.keys(faultCodes) as Array<keyof typeof faultCodes>) {
+    for (const [cadence, minimum, count] of [[7, 3, 2], [7, 3, 3], [21, 9, 8], [21, 9, 9]]) {
+      const f = projectionFixture(), siteId = f.sites[0];
+      f.get(siteId)!.cadencePerWeek = cadence;
+      f.get(siteId)!.autopilotRolloutMode = "warm";
+      fault(f, siteId, kind);
+      for (let i = 0; i < count; i++) readyMetadata(f, siteId, `minimum-${i}`, START - 2000 + i);
+      const history = structuredClone(f.tables.jobs);
+      const result = await f.invoke("autopilot:promoteWarmSiteIfReady", { siteId });
+      assert.equal(result.promoted, count >= minimum, `${kind}: ${count}/${minimum}`);
+      assert.equal(result.sealedCount, undefined); assertInventory(result.bufferInventory, kind, count);
+      assert.equal(f.get(siteId)!.autopilotRolloutMode, count >= minimum ? "live" : "warm");
+      const fleet = (await f.invoke("autopilot:getFleetReadiness", {})).find((row: { siteId: string }) => row.siteId === siteId);
+      assert.equal(fleet.bufferMinimumMet, count >= minimum); assert.equal(fleet.liveReady, count >= minimum);
+      assert.equal(fleet.sealedBufferCount, undefined); assertInventory(fleet.bufferInventory, kind, count);
+      assert.deepEqual(f.tables.jobs, history); f.assertOffline();
+    }
+  }
+});
+
+test("a proved warm minimum cannot overrule destination ambiguity or missing publishing prerequisites", async () => {
+  for (const condition of ["ambiguity", "adapter", "owner", "approval"]) {
+    const f = projectionFixture(), siteId = f.sites[0];
+    cleanProjectedPool(f, siteId, 26); const site = f.get(siteId)!; site.autopilotRolloutMode = "warm";
+    if (condition === "ambiguity") { site.publicationLeaseOwner = "separate-attempted-owner"; site.publicationLeaseExpiresAt = START - 1; }
+    if (condition === "adapter") delete site.githubToken;
+    if (condition === "owner") delete site.userId;
+    if (condition === "approval") site.approvalRequired = true;
+    const before = structuredClone(site);
+    if (condition === "owner") await assert.rejects(f.invoke("autopilot:promoteWarmSiteIfReady", { siteId }), /Site not found/);
+    else assert.equal((await f.invoke("autopilot:promoteWarmSiteIfReady", { siteId })).promoted, false);
+    await assert.rejects(f.invoke("sites:setAutopilotRollout", { siteId, mode: "live" }), /locked|prerequisites|Site not found/);
+    assert.deepEqual(f.get(siteId), before);
+    assert.equal(f.tables.jobs.length, 0); assert.equal(f.tables.autopilot_runs.length, 0); f.assertOffline();
+  }
+});
+
+test("the exact queue recheck rejects an inspected candidate whose own history becomes incomplete or binding-invalid", async () => {
+  for (const kind of ["history", "binding"]) {
+    const f = projectionFixture(), siteId = f.sites[0]; cleanProjectedPool(f, siteId, 26);
+    const state = await f.invoke("articles:getAutopilotState", { siteId, since: START - DAY });
+    const selected = state.ready[0]; assert.equal(selected.publicationDeliveryBlocker, undefined);
+    for (let i = 0; i < (kind === "history" ? 101 : 1); i++) f.add("jobs", { siteId, articleId: selected._id,
+      type: "article", status: "failed", publicationAttempts: 0, createdAt: START, updatedAt: START,
+      payload: kind === "binding" ? { articleId: "articles:different-bound-artifact" } : { articleId: selected._id } });
+    const history = structuredClone(f.tables.jobs);
+    const result = await f.invoke("jobs:queuePublicationIfAbsent", { siteId, articleId: selected._id });
+    assert.equal(result.queued, false);
+    assert.equal(result.reason, kind === "history" ? "publication_history_incomplete" : "publication_history_binding_mismatch");
+    assert.deepEqual(f.tables.jobs, history); f.assertOffline();
+  }
 });

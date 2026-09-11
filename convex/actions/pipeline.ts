@@ -8300,13 +8300,15 @@ export const autopilotTick = internalAction({
         "Publication-integrity migration is incomplete; all tenant work is fail-closed.",
       );
     }
-    if (cadenceSchedule.mode === "publication_inventory_incomplete") {
+    if (cadenceSchedule.mode === "publication_inventory_incomplete" ||
+      (cadenceSchedule.bufferInventory && cadenceSchedule.bufferInventory.status !== "complete" &&
+        cadenceSchedule.mode !== "buffer_delivery" && cadenceSchedule.mode !== "buffer_delivery_pending")) {
       // A bounded projection is not proof of an empty buffer. Finish this
       // wake-up before onboarding or any pending provider-backed work.
       return finish(
         { processed: 0 },
-        "publication_inventory_incomplete",
-        `Publication inventory is incomplete: ${(cadenceSchedule.blockers ?? []).join(", ")}.`,
+        cadenceSchedule.mode ?? "publication_inventory_incomplete",
+        `Publication inventory is incomplete: ${(cadenceSchedule.blockers ?? cadenceSchedule.bufferInventory?.blockers ?? []).join(", ")}.`,
       );
     }
     if (cadenceSchedule.mode === "cadence_paused") {

@@ -7,6 +7,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
 import { getLimitsFromFeatures } from "../planLimits";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
+import { publicationInventoryProvesMinimum } from "../lib/publicationEligibility";
 import {
   evaluateSerpAttainability,
   evaluateSerpBusinessIntent,
@@ -446,11 +447,12 @@ export const scheduleCadence = internalAction({
         message: "Publication inventory is incomplete; a validated lower bound is not an empty or full buffer.",
         details: inventory,
       });
-      // A saturated A's history may not poison an independently validated B.
-      // Only already-sealed due delivery is allowed; never refill or promotion.
-      const knownDueDelivery = autonomousDelivery && publicationDue && buffer.length > 0 &&
-        inventory.blockers.every(code => code === "publication_history_incomplete");
-      if (!knownDueDelivery) return {
+      // Unknown excess inventory cannot poison a separately proven candidate
+      // or minimum. Neither permission authorizes refill from an unknown deficit.
+      const knownDueDelivery = autonomousDelivery && publicationDue && buffer.length > 0;
+      const knownWarmMinimum = rolloutMode === "warm" &&
+        publicationInventoryProvesMinimum(inventory, bufferPolicy.minimum);
+      if (!knownDueDelivery && !knownWarmMinimum) return {
         scheduled: 0, mode: "publication_inventory_incomplete", bufferInventory: inventory,
         blockers: inventory.blockers,
       };

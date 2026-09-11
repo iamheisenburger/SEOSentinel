@@ -759,6 +759,62 @@ test("more than 25 closed metadata receipts do not hide a later real sealed arti
   }
 });
 
+test("scan-capped mixed prefix delivers its real sealed B despite unknown later rows without regenerating B", async t => {
+  const f = await terminalHeadBehindPristineOwner();
+  await f.invoke("articles:releasePublication", { articleId: f.b._id,
+    expectedContentHash: f.b.auditedContentHash, leaseOwner: "distinct-pristine-owner" });
+  const template = f.tables.article_summaries.find(row => row.articleId === f.a._id)!;
+  for (let i = 0; i < 60; i++) {
+    const articleId = `articles:scan-load-${i}`;
+    // Load-only metadata surrounds real pipeline-produced/reviewed B.
+    f.add("article_summaries", { ...template, articleId,
+      articleCreatedAt: i < 20 ? START - 1000 + i : f.b.createdAt + 1000 + i });
+    for (let j = 0; j < (i === 25 ? 101 : 1); j++) f.add("jobs", { siteId: f.site.id, articleId,
+      type: "article", status: "failed", publicationAttempts: i === 25 ? 0 : 3, createdAt: START, updatedAt: START });
+  }
+  const history = structuredClone(f.tables.jobs.filter(row => row.status === "failed"));
+  const models = f.modelCalls.length, before = structuredClone(f.get(f.b._id));
+  const queued = await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id })));
+  assert.equal(queued.filter(result => result.scheduled === 1).length, 1);
+  assert.ok(queued.every(result => result.bufferInventory.status === "partial" && result.bufferCount === undefined));
+  const job = f.tables.jobs.filter(row => row.status === "pending" && row.payload?.publishOnly);
+  assert.equal(job.length, 1); assert.equal(job[0].articleId, f.b._id);
+  const runId = f.add("autopilot_runs", { siteId: f.site.id, trigger: "natural", status: "scheduled",
+    scheduledAt: f.now(), heartbeatAt: f.now(), rolloutEpoch: 0 });
+  await f.invoke("actions/pipeline:autopilotTick", { siteId: f.site.id, runId, trigger: "natural" });
+  await pumpUntil(f, () => f.get(f.b._id)!.publicUrlStatus === "verified" && f.get(runId)!.status === "completed", 100, f.now() + 60_000);
+  assert.equal(f.get(runId)!.outcome, "publication_inventory_incomplete");
+  const published = f.get(f.b._id)!;
+  assert.equal(published.auditedContentHash, before!.auditedContentHash);
+  assert.equal(published.markdown, before!.markdown); assert.equal(f.modelCalls.length, models);
+  assert.deepEqual(f.tables.jobs.filter(row => row.status === "failed"), history);
+  assert.equal(f.tables.articles.filter(row => row.siteId === f.site.id).length, 5);
+  t.diagnostic(JSON.stringify({ scenario: "scan_capped_proven_B", dueAt: f.dueAt,
+    selectedArticle: f.b._id, inventory: queued[0].bufferInventory,
+    runStatus: f.get(runId)!.status, runOutcome: f.get(runId)!.outcome,
+    publishedAt: published.publishedAt, verifiedAt: published.publicUrlVerifiedAt,
+    hash: published.auditedContentHash, modelCallsAdded: f.modelCalls.length - models }));
+  f.assertOffline();
+});
+
+test("a scan-capped prefix with proven B cannot steal an attempted shared destination or consume a new attempt", async () => {
+  const f = await terminalHeadBehindPristineOwner(true);
+  const template = f.tables.article_summaries.find(row => row.articleId === f.a._id)!;
+  for (let i = 0; i < 51; i++) {
+    const articleId = `articles:ambiguity-scan-load-${i}`;
+    f.add("article_summaries", { ...template, articleId, articleCreatedAt: f.b.createdAt + 1000 + i });
+    f.add("jobs", { siteId: f.site.id, articleId, type: "article", status: "failed", publicationAttempts: 3, createdAt: START, updatedAt: START });
+  }
+  const before = structuredClone(f.tables.jobs), fence = publicationFence(f, f.site.id, f.b._id);
+  const calls = externalCalls(f), models = f.modelCalls.length;
+  for (const result of await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id })))) {
+    assert.equal(result.mode, "publication_destination_contended"); assert.equal(result.scheduled, 0);
+    assert.equal(result.bufferInventory.status, "partial"); assert.equal(result.bufferInventory.usableCountLowerBound, 3);
+  }
+  assert.deepEqual(f.tables.jobs, before); assert.deepEqual(publicationFence(f, f.site.id, f.b._id), fence);
+  assert.equal(externalCalls(f), calls); assert.equal(f.modelCalls.length, models); f.assertOffline();
+});
+
 test("registered contention deferral coalesces repeated wakes without I/O, failures, fence changes or regeneration", async () => {
   const f = await failedPublication(), record = await deferFailedPublication(f);
   const job = structuredClone(f.get(f.jobId)), fence = publicationFence(f, f.site.id, f.articleId);
