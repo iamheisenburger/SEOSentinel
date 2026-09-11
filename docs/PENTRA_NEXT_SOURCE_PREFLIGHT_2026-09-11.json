@@ -1,0 +1,916 @@
+{
+  "assignment": "supervisor-20260911-next-source-funding-preflight-14",
+  "runtimeCommit": "3b806c6b867ae94cb160a14b7c2c45a47ca2291d",
+  "scope": {
+    "siteIds": [
+      "jh74txye54jna4t85m6y7p4d6h82v9ab",
+      "jh7cccny67df67rdm4jp65tmtn8am982"
+    ],
+    "productionCalls": 4,
+    "allReadOnly": true,
+    "providerCalls": 0,
+    "productionWrites": 0,
+    "newReservations": 0,
+    "exactSharedAccountAndFleet": "not_inspected"
+  },
+  "observations": [
+    {
+      "tenant": "Pentra",
+      "function": "providerBudget:getSiteReservationSnapshot",
+      "data": {
+        "accountAndFleetCapacity": "not_inspected",
+        "accountDailyCeilingMicroUsd": 9600000,
+        "accountDailyHeadroomAtMostMicroUsd": 9600000,
+        "accountMonthlyCeilingMicroUsd": 32000000,
+        "accountMonthlyHeadroomAtMostMicroUsd": 1939040,
+        "approvalExpiresAt": 1790812800000,
+        "approvalStartedAt": 1788876095681,
+        "approvedIncrementalLimitMicroUsd": 4000000,
+        "approvedWindowConsumedMicroUsd": 2060960,
+        "baseMonthlyCeilingMicroUsd": 28000000,
+        "dailyConsumedMicroUsd": 0,
+        "dayStartAt": 1789084800000,
+        "examined": 84,
+        "monthStartAt": 1788220800000,
+        "monthlyConsumedMicroUsd": 13686640,
+        "monthlyOriginalMicroUsd": 21850000,
+        "releasedCount": 1,
+        "scope": "exact_site_current_owner_only",
+        "settledCount": 56,
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+        "siteWindowComplete": true,
+        "snapshotAt": 1789137486905,
+        "tier": "enterprise",
+        "unmatchedOwnerCount": 0
+      }
+    },
+    {
+      "tenant": "Pentra",
+      "function": "autopilot:getOperatorSnapshot",
+      "data": {
+        "snapshotAt": 1789137487980,
+        "site": {
+          "autopilotEnabled": true,
+          "rolloutEpoch": 6,
+          "rolloutMode": "live",
+          "rolloutStartedAt": 1788493316537,
+          "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab"
+        },
+        "health": {
+          "approvedBufferCount": 1,
+          "bufferInventory": {
+            "blockers": [],
+            "inspectedCandidates": 1,
+            "status": "complete",
+            "usableCountLowerBound": 1
+          },
+          "bufferMinimum": 3,
+          "bufferTarget": 4,
+          "heartbeatAt": 1789128018112,
+          "lastNaturalCompletedAt": 1789128018112,
+          "lastNaturalScheduledAt": 1789128011038,
+          "lastNaturalStartedAt": 1789128013080,
+          "lastPublishedAt": 1789122242469,
+          "lastRunId": "kd75egp7pzv3t51s19tnyfhwc18e6tr5",
+          "nextPublicationDueAt": 1789208642469,
+          "portfolioClickDeficit": 100,
+          "portfolioDecision": "flag",
+          "portfolioEvaluatedAt": 1789128014008,
+          "portfolioEvidenceMissing": 1,
+          "portfolioExpectedClicksMonthly": 0,
+          "portfolioGoalMonthly": 100,
+          "portfolioStatus": "insufficient_evidence",
+          "portfolioSupportsGoal": false,
+          "portfolioVersion": 1,
+          "status": "planning_blocked",
+          "updatedAt": 1789134909416
+        },
+        "bufferInventory": {
+          "blockers": [],
+          "inspectedCandidates": 1,
+          "status": "complete",
+          "usableCountLowerBound": 1
+        },
+        "cadenceDeadline": {
+          "deadlineKind": "cadence_deadline",
+          "heartbeatAt": 1789122258483,
+          "runId": "kd7f0ggjnq6vgdz291gsqht73x8e675v",
+          "scheduledAt": 1789208642469,
+          "status": "scheduled",
+          "trigger": "deadline"
+        },
+        "upcomingRuns": [
+          {
+            "deadlineKind": "cadence_deadline",
+            "heartbeatAt": 1789122258483,
+            "runId": "kd7f0ggjnq6vgdz291gsqht73x8e675v",
+            "scheduledAt": 1789208642469,
+            "status": "scheduled",
+            "trigger": "deadline"
+          }
+        ],
+        "runs": [
+          {
+            "completedAt": 1789128018112,
+            "heartbeatAt": 1789128018112,
+            "outcome": "planning_blocked",
+            "runId": "kd75egp7pzv3t51s19tnyfhwc18e6tr5",
+            "scheduledAt": 1789128011038,
+            "startedAt": 1789128013080,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "deadlineKind": "cadence_deadline",
+            "heartbeatAt": 1789122258483,
+            "runId": "kd7f0ggjnq6vgdz291gsqht73x8e675v",
+            "scheduledAt": 1789208642469,
+            "status": "scheduled",
+            "trigger": "deadline"
+          },
+          {
+            "completedAt": 1789122262327,
+            "heartbeatAt": 1789122262327,
+            "outcome": "planning_blocked",
+            "runId": "kd793mf601a6mnevmc65vs76358e6gfe",
+            "scheduledAt": 1789122258067,
+            "startedAt": 1789122259049,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122261066,
+            "heartbeatAt": 1789122261066,
+            "outcome": "planning_blocked",
+            "runId": "kd7aptrnyh7r7a8mp1kxz6rmsd8e6eqw",
+            "scheduledAt": 1789122255408,
+            "startedAt": 1789122257597,
+            "status": "completed",
+            "trigger": "followup"
+          },
+          {
+            "completedAt": 1789122261137,
+            "heartbeatAt": 1789122261137,
+            "outcome": "planning_blocked",
+            "runId": "kd783vg67e7t6yhg40r6h7rngs8e76pp",
+            "scheduledAt": 1789122254787,
+            "startedAt": 1789122257365,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122245288,
+            "heartbeatAt": 1789122245288,
+            "outcome": "public_url_pending",
+            "runId": "kd760mpq2fqqncfcjff6kp4sdx8e6y6f",
+            "scheduledAt": 1789122237418,
+            "startedAt": 1789122243744,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122243165,
+            "heartbeatAt": 1789122243165,
+            "outcome": "public_url_pending",
+            "runId": "kd7cpak4f5xkeq1y0cg5nrgmzs8e7ar9",
+            "scheduledAt": 1789122236458,
+            "startedAt": 1789122242385,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122240828,
+            "heartbeatAt": 1789122240828,
+            "outcome": "buffer_delivery_pending",
+            "runId": "kd736dbtffwwv3swyabkkt38798e6npq",
+            "scheduledAt": 1789122236160,
+            "startedAt": 1789122239775,
+            "status": "completed",
+            "trigger": "natural"
+          }
+        ],
+        "planReceipts": [
+          {
+            "cadenceFailureState": "none",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 7,
+              "candidateCount": 1,
+              "completedAt": 1788881338565,
+              "excludedCount": 0,
+              "inlineCompletedCount": 1,
+              "requiredVerifiedYield": 7,
+              "status": "inline_completed",
+              "updatedAt": 1788881338565,
+              "usableTopicCount": 1,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788879717230,
+            "domainBinding": "current",
+            "jobId": "j97424bc4zey6wwkqhnrh875an8e0h2t",
+            "persistedTopicCount": 1,
+            "persistedTopicCountState": "recorded",
+            "providerReservationState": "retained_no_replay",
+            "status": "done",
+            "updatedAt": 1788881338565,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailureState": "none",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 7,
+              "candidateCount": 1,
+              "completedAt": 1788879711265,
+              "excludedCount": 0,
+              "inlineCompletedCount": 1,
+              "requiredVerifiedYield": 7,
+              "status": "inline_completed",
+              "updatedAt": 1788879711265,
+              "usableTopicCount": 1,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788879638520,
+            "domainBinding": "current",
+            "jobId": "j973e551km41ngwn4et0grb6hx8e0j0c",
+            "persistedTopicCount": 1,
+            "persistedTopicCountState": "recorded",
+            "providerReservationState": "retained_no_replay",
+            "status": "done",
+            "updatedAt": 1788879711265,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailureState": "none",
+            "checkpointState": "none",
+            "createdAt": 1788739201912,
+            "domainBinding": "current",
+            "jobId": "j97eyafhq87g6dw1aphp8qpfts8dzyvn",
+            "persistedTopicCount": 2,
+            "persistedTopicCountState": "recorded",
+            "providerReservationState": "retained_no_replay",
+            "status": "done",
+            "updatedAt": 1788739254705,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailureState": "none",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 7,
+              "candidateCount": 2,
+              "completedAt": 1788713883398,
+              "excludedCount": 0,
+              "inlineCompletedCount": 2,
+              "requiredVerifiedYield": 7,
+              "status": "inline_completed",
+              "updatedAt": 1788713883398,
+              "usableTopicCount": 2,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788713809859,
+            "domainBinding": "current",
+            "jobId": "j973g2vmf8eb42erf3jmjczh098dxeg9",
+            "persistedTopicCount": 2,
+            "persistedTopicCountState": "recorded",
+            "providerReservationState": "retained_no_replay",
+            "status": "done",
+            "updatedAt": 1788713883398,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailureState": "none",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 7,
+              "candidateCount": 4,
+              "completedAt": 1788656056364,
+              "excludedCount": 0,
+              "inlineCompletedCount": 4,
+              "requiredVerifiedYield": 7,
+              "status": "inline_completed",
+              "updatedAt": 1788656056364,
+              "usableTopicCount": 4,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788656012276,
+            "domainBinding": "current",
+            "jobId": "j97crpw7ejwk9vdav6jkm21srd8dww3b",
+            "persistedTopicCount": 4,
+            "persistedTopicCountState": "recorded",
+            "providerReservationState": "retained_no_replay",
+            "status": "done",
+            "updatedAt": 1788656056364,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788740966893,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpointState": "none",
+            "createdAt": 1788654565893,
+            "domainBinding": "current",
+            "jobId": "j97cmrscg745tey26jdw6n85218dw1hd",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788654590603,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788680276487,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 7,
+              "candidateCount": 3,
+              "completedAt": 1788593912447,
+              "excludedCount": 3,
+              "inlineCompletedCount": 0,
+              "requiredVerifiedYield": 7,
+              "status": "terminal_blocked",
+              "updatedAt": 1788593912447,
+              "usableTopicCount": 0,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788593875487,
+            "domainBinding": "current",
+            "jobId": "j9754yw7g2gfq63k81ca0ss7kd8dvt02",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788593912447,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788593872424,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 7,
+              "candidateCount": 2,
+              "completedAt": 1788507532602,
+              "excludedCount": 2,
+              "inlineCompletedCount": 0,
+              "requiredVerifiedYield": 7,
+              "status": "terminal_blocked",
+              "updatedAt": 1788507532602,
+              "usableTopicCount": 0,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788507471424,
+            "domainBinding": "current",
+            "jobId": "j977t7vjsb3r43vz40f00jedyd8dr0jg",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788507532602,
+            "workerAttempts": 0
+          }
+        ],
+        "activeJobs": [],
+        "terminalOpportunity": {
+          "admitted": false,
+          "automaticWakeAt": 1788528550689,
+          "classification": "opportunity_space_exhausted",
+          "evaluatedAt": 1788442150528,
+          "evidenceVersion": 2211983564792482,
+          "inputHash": "7dbc98ea0e2a2f343571b50f29ac398f6f8fcee91112ee2553a5f63b5e210ba0",
+          "receiptId": "rx70jzjrwchg3jjykcgm8qvm9n8dpvnt"
+        },
+        "backfillReservation": {
+          "demand": {
+            "candidateCounts": {
+              "alreadyAttempted": 39,
+              "artifactEligible": 0,
+              "businessFitBlocked": 50,
+              "covered": 117,
+              "currentDemand": 28,
+              "eligible": 0,
+              "plannedGateBlocked": 28,
+              "plannedUnmaterialized": 0
+            },
+            "canonicalDomain": "pentra.dev",
+            "decision": "skipped",
+            "evaluatedAt": 1789122255646,
+            "kind": "demand",
+            "policyVersion": 2,
+            "reason": "no_eligible_legacy_topics",
+            "rolloutEpoch": 6,
+            "selectedCandidateCount": 0,
+            "version": 1
+          },
+          "evidence": {
+            "candidateCounts": {
+              "alreadyAttempted": 0,
+              "artifactEligible": 0,
+              "businessFitBlocked": 0,
+              "covered": 117,
+              "eligible": 0,
+              "plannedGateBlocked": 28,
+              "plannedUnmaterialized": 0
+            },
+            "canonicalDomain": "pentra.dev",
+            "decision": "skipped",
+            "evaluatedAt": 1789122255939,
+            "kind": "evidence",
+            "policyVersion": 2,
+            "reason": "no_current_demand_candidates",
+            "rolloutEpoch": 6,
+            "selectedCandidateCount": 0,
+            "version": 1
+          }
+        }
+      }
+    },
+    {
+      "tenant": "LeadPilot",
+      "function": "providerBudget:getSiteReservationSnapshot",
+      "data": {
+        "accountAndFleetCapacity": "not_inspected",
+        "accountDailyCeilingMicroUsd": 9600000,
+        "accountDailyHeadroomAtMostMicroUsd": 9600000,
+        "accountMonthlyCeilingMicroUsd": 32000000,
+        "accountMonthlyHeadroomAtMostMicroUsd": 2939520,
+        "approvalExpiresAt": 1790812800000,
+        "approvalStartedAt": 1788876095681,
+        "approvedIncrementalLimitMicroUsd": 4000000,
+        "approvedWindowConsumedMicroUsd": 1060480,
+        "baseMonthlyCeilingMicroUsd": 28000000,
+        "dailyConsumedMicroUsd": 0,
+        "dayStartAt": 1789084800000,
+        "examined": 95,
+        "monthStartAt": 1788220800000,
+        "monthlyConsumedMicroUsd": 17355920,
+        "monthlyOriginalMicroUsd": 27650000,
+        "releasedCount": 2,
+        "scope": "exact_site_current_owner_only",
+        "settledCount": 59,
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+        "siteWindowComplete": true,
+        "snapshotAt": 1789137489215,
+        "tier": "enterprise",
+        "unmatchedOwnerCount": 0
+      }
+    },
+    {
+      "tenant": "LeadPilot",
+      "function": "autopilot:getOperatorSnapshot",
+      "data": {
+        "snapshotAt": 1789137490730,
+        "site": {
+          "autopilotEnabled": true,
+          "rolloutEpoch": 9,
+          "rolloutMode": "live",
+          "rolloutStartedAt": 1784675682861,
+          "siteId": "jh7cccny67df67rdm4jp65tmtn8am982"
+        },
+        "health": {
+          "approvedBufferCount": 0,
+          "bufferInventory": {
+            "blockers": [],
+            "inspectedCandidates": 0,
+            "status": "complete",
+            "usableCountLowerBound": 0
+          },
+          "bufferMinimum": 9,
+          "bufferTarget": 12,
+          "heartbeatAt": 1789128024739,
+          "lastNaturalCompletedAt": 1789128024739,
+          "lastNaturalScheduledAt": 1789128011038,
+          "lastNaturalStartedAt": 1789128016410,
+          "lastPublishedAt": 1788819334409,
+          "lastRunId": "kd7brnygy6p2pbbetqwtqty9an8e7s69",
+          "nextPublicationDueAt": 1788848134409,
+          "portfolioClickDeficit": 400,
+          "portfolioDecision": "flag",
+          "portfolioEvaluatedAt": 1789128018979,
+          "portfolioEvidenceMissing": 6,
+          "portfolioExpectedClicksMonthly": 0,
+          "portfolioGoalMonthly": 400,
+          "portfolioStatus": "insufficient_evidence",
+          "portfolioSupportsGoal": false,
+          "portfolioVersion": 1,
+          "status": "missed",
+          "updatedAt": 1789134909416
+        },
+        "bufferInventory": {
+          "blockers": [],
+          "inspectedCandidates": 0,
+          "status": "complete",
+          "usableCountLowerBound": 0
+        },
+        "cadenceDeadline": {
+          "completedAt": 1788848144386,
+          "deadlineKind": "cadence_deadline",
+          "heartbeatAt": 1788848144386,
+          "outcome": "planning_blocked",
+          "runId": "kd73v5sa5rgdz6jmzz0da695wh8dzsyy",
+          "scheduledAt": 1788848134409,
+          "startedAt": 1788848134802,
+          "status": "completed",
+          "trigger": "deadline"
+        },
+        "upcomingRuns": [],
+        "runs": [
+          {
+            "completedAt": 1789128024739,
+            "heartbeatAt": 1789128024739,
+            "outcome": "planning_blocked",
+            "runId": "kd7brnygy6p2pbbetqwtqty9an8e7s69",
+            "scheduledAt": 1789128011038,
+            "startedAt": 1789128016410,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122267317,
+            "heartbeatAt": 1789122267317,
+            "outcome": "planning_blocked",
+            "runId": "kd71grv9h7prqcmyvb7rv8jy4x8e7bgc",
+            "scheduledAt": 1789122258067,
+            "startedAt": 1789122263111,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122264566,
+            "heartbeatAt": 1789122264566,
+            "outcome": "planning_blocked",
+            "runId": "kd70xbsas2paysgfafvkwr3z1d8e638e",
+            "scheduledAt": 1789122254787,
+            "startedAt": 1789122260065,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122258375,
+            "heartbeatAt": 1789122258375,
+            "outcome": "planning_blocked",
+            "runId": "kd7288cx0e600td3x5wekd8q818e7vwk",
+            "scheduledAt": 1789122237418,
+            "startedAt": 1789122253598,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122257067,
+            "heartbeatAt": 1789122257067,
+            "outcome": "planning_blocked",
+            "runId": "kd70e31gswvpqvhwmy27ksss398e7p6j",
+            "scheduledAt": 1789122236458,
+            "startedAt": 1789122249298,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122254601,
+            "heartbeatAt": 1789122254601,
+            "outcome": "planning_blocked",
+            "runId": "kd74h73dw7hbe9k6rbg10f5m0x8e6766",
+            "scheduledAt": 1789122236160,
+            "startedAt": 1789122245497,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122253443,
+            "heartbeatAt": 1789122253443,
+            "outcome": "planning_blocked",
+            "runId": "kd75kkxa9wjjy4vzdg4rp0vrmd8e6ga6",
+            "scheduledAt": 1789122233638,
+            "startedAt": 1789122244674,
+            "status": "completed",
+            "trigger": "natural"
+          },
+          {
+            "completedAt": 1789122253893,
+            "heartbeatAt": 1789122253893,
+            "outcome": "planning_blocked",
+            "runId": "kd72ss5mhbpxhrbhqwvj5tp4xd8e6cjw",
+            "scheduledAt": 1789122233423,
+            "startedAt": 1789122244237,
+            "status": "completed",
+            "trigger": "natural"
+          }
+        ],
+        "planReceipts": [
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788966045299,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 10,
+              "candidateCount": 0,
+              "completedAt": 1788879725906,
+              "excludedCount": 0,
+              "inlineCompletedCount": 0,
+              "requiredVerifiedYield": 10,
+              "status": "empty",
+              "updatedAt": 1788879725906,
+              "usableTopicCount": 0,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788879644299,
+            "domainBinding": "current",
+            "jobId": "j978nhrc6f7ax2z3wntx2n7z6n8e0fc5",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788879726333,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788960458322,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpointState": "none",
+            "createdAt": 1788874057322,
+            "domainBinding": "current",
+            "jobId": "j97f61bthmsffykjztccrs4t9h8e0m0x",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788874087971,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788829321222,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 9,
+              "candidateCount": 0,
+              "completedAt": 1788742952489,
+              "excludedCount": 0,
+              "inlineCompletedCount": 0,
+              "requiredVerifiedYield": 9,
+              "status": "empty",
+              "updatedAt": 1788742952489,
+              "usableTopicCount": 0,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788742920222,
+            "domainBinding": "current",
+            "jobId": "j973f54k2y57qytk14hb8nj50n8dynqv",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788742952914,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788828395581,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpointState": "none",
+            "createdAt": 1788741994581,
+            "domainBinding": "current",
+            "jobId": "j97ba3pwtk65amfrdbbkhvp26x8dyk6c",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788742026848,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788827486851,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpoint": {
+              "activatedCount": 0,
+              "candidateCapacity": 9,
+              "candidateCount": 1,
+              "completedAt": 1788741118524,
+              "excludedCount": 1,
+              "inlineCompletedCount": 0,
+              "requiredVerifiedYield": 9,
+              "status": "terminal_blocked",
+              "updatedAt": 1788741118524,
+              "usableTopicCount": 0,
+              "workerExecution": 1
+            },
+            "checkpointState": "single",
+            "createdAt": 1788741085851,
+            "domainBinding": "current",
+            "jobId": "j972n24ws3by1v5p6v7egmcpyn8dyhgs",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788741118524,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788825690615,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpointState": "none",
+            "createdAt": 1788739289615,
+            "domainBinding": "current",
+            "jobId": "j979extdz1qws2nm4ya80c8hps8dy3kq",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788739321037,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailure": {
+              "category": "semantic_zero_yield",
+              "code": "strict_zero_yield",
+              "eligibleAt": 1788742616100,
+              "terminal": true
+            },
+            "cadenceFailureState": "recorded",
+            "checkpointState": "none",
+            "createdAt": 1788656215100,
+            "domainBinding": "current",
+            "jobId": "j978tnfks07g5kk45dst8rkpg58dx291",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "retained_no_replay",
+            "status": "failed",
+            "updatedAt": 1788657061531,
+            "workerAttempts": 0
+          },
+          {
+            "cadenceFailureState": "none",
+            "checkpointState": "none",
+            "createdAt": 1788656077815,
+            "domainBinding": "current",
+            "jobId": "j9742xbb13se1g6gghjdst8fm98dxxwr",
+            "persistedTopicCountState": "missing",
+            "providerReservationState": "released_before_paid_work",
+            "status": "failed",
+            "updatedAt": 1788656202971,
+            "workerAttempts": 0
+          }
+        ],
+        "activeJobs": [],
+        "terminalOpportunity": {
+          "admitted": false,
+          "automaticWakeAt": 1788566433812,
+          "classification": "opportunity_space_exhausted",
+          "evaluatedAt": 1788480033067,
+          "evidenceVersion": 4134648457675461,
+          "inputHash": "eb070dc9742c50e32409de5ef9dbe49651f645aeae8b64c97a9b282a4f7047f3",
+          "receiptId": "rx729jtq0s9k51354vsg2n597d8drkbg"
+        },
+        "backfillReservation": {
+          "demand": {
+            "candidateCounts": {
+              "alreadyAttempted": 0,
+              "artifactEligible": 0,
+              "businessFitBlocked": 29,
+              "covered": 67,
+              "currentDemand": 38,
+              "eligible": 0,
+              "plannedGateBlocked": 170,
+              "plannedUnmaterialized": 0
+            },
+            "canonicalDomain": "leadpilot.chat",
+            "decision": "skipped",
+            "evaluatedAt": 1789122368065,
+            "kind": "demand",
+            "policyVersion": 2,
+            "reason": "no_eligible_legacy_topics",
+            "rolloutEpoch": 9,
+            "selectedCandidateCount": 0,
+            "version": 1
+          },
+          "evidence": {
+            "candidateCounts": {
+              "alreadyAttempted": 5,
+              "artifactEligible": 0,
+              "businessFitBlocked": 0,
+              "covered": 67,
+              "eligible": 0,
+              "plannedGateBlocked": 170,
+              "plannedUnmaterialized": 0
+            },
+            "canonicalDomain": "leadpilot.chat",
+            "decision": "skipped",
+            "evaluatedAt": 1789122368806,
+            "kind": "evidence",
+            "policyVersion": 2,
+            "reason": "no_current_demand_candidates",
+            "rolloutEpoch": 9,
+            "selectedCandidateCount": 0,
+            "version": 1
+          }
+        }
+      }
+    }
+  ],
+  "derivedBudget": {
+    "scope": "sum_of_two_authorized_sites_only_same_owner_established_in_assignment07",
+    "monthlyConsumedLowerBoundMicroUsd": 31042560,
+    "approvedWindowConsumedLowerBoundMicroUsd": 3121440,
+    "accountMonthlyCeilingMicroUsd": 32000000,
+    "approvedIncrementalLimitMicroUsd": 4000000,
+    "accountHeadroomAtMostMicroUsd": 957440,
+    "approvedWindowHeadroomAtMostMicroUsd": 878560,
+    "sharedFleetMonthlyCeilingMicroUsd": 35000000,
+    "sharedFleetHeadroom": "not_verified",
+    "nextOrdinaryPlanReservationMicroUsd": 1000000,
+    "firstFinancialBlocker": "provider_account_monthly_budget_reserved",
+    "firstFinancialBudgetScope": "approved_incremental_window",
+    "inferredFrom": "source_order_plus_authorized_site_lower_bounds_not_a_mutation_attempt",
+    "resetAt": "2026-10-01T00:00:00.000Z",
+    "approvalStartedAt": "2026-09-08T14:01:35.681Z",
+    "sameMonthAmendmentAvailable": false,
+    "ownerSpendingRequest": null
+  },
+  "localVerification": {
+    "healthDetail": "{\"handler\":\"autopilot:refreshSiteCadenceHealth\",\"status\":\"planning_blocked\",\"buffer\":1,\"minimum\":3,\"detail\":\"Scheduler, quality buffer, and cadence are healthy.\"}\n{\"handler\":\"autopilot:auditSla\",\"status\":\"planning_blocked\",\"buffer\":1,\"minimum\":3,\"detail\":\"Scheduler, quality buffer, and cadence are healthy.\"}\nConfirmed in both actual handlers; zero provider calls; no repository edits.\n✔ approval is exact-account, immutable, idempotent and expires without a scheduled mutation (10.792541ms)\n✔ concurrent approval retries cannot restart the window and cross-site admissions cannot overspend it (3.641334ms)\n✔ approved cap preserves incremental, monthly, daily, fleet and expiry guards (0.933666ms)\n✔ scope and contract errors fail before creating an approval (2.723792ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 119.204875\n",
+    "dashboardSelectors": "{\"selectedSite\":\"synthetic-pentra\",\"runningJobs\":1,\"recentJobs\":[\"synthetic-pentra-job\",\"synthetic-lead-job\"],\"oppositeSiteIncluded\":true}\n{\"selectedSite\":\"synthetic-lead\",\"runningJobs\":1,\"recentJobs\":[\"synthetic-pentra-job\",\"synthetic-lead-job\"],\"oppositeSiteIncluded\":true}\nExecuted the actual page selector expressions against two synthetic authorized-site rows; no network or file writes.\n"
+  },
+  "browser": {
+    "observedWindowUtc": "2026-09-11 14:37–14:40 UTC",
+    "session": "existing authenticated Chrome",
+    "Pentra": {
+      "siteRoute": "https://pentra.dev/sites/jh74txye54jna4t85m6y7p4d6h82v9ab",
+      "cadencePerWeek": 7,
+      "autopilot": true,
+      "destination": "iamheisenburger/SEOSentinel",
+      "githubConnected": true,
+      "urlStructure": "/blog/[slug]",
+      "setup": "7/7 complete",
+      "dashboardAttention": "Blocked",
+      "dashboardDetail": "Scheduler, quality buffer, and cadence are healthy.",
+      "bufferStage": "Sealed buffer below minimum",
+      "articleCreditsRemaining": 113,
+      "articleCreditsLimit": 150
+    },
+    "LeadPilot": {
+      "siteRoute": "https://pentra.dev/sites/jh7cccny67df67rdm4jp65tmtn8am982",
+      "cadencePerWeek": 21,
+      "autopilot": true,
+      "destination": "iamheisenburger/LeadPilot",
+      "githubConnected": true,
+      "urlStructure": "/blog/[slug]",
+      "setup": "3/7; current One Setup contract incomplete",
+      "dashboardAttention": "Blocked",
+      "dashboardDetail": "Publication cadence deadline missed.",
+      "bufferStage": "Sealed buffer below minimum",
+      "articleCreditsRemaining": 113,
+      "articleCreditsLimit": 150
+    },
+    "noSaveReconnectConsentOrGenerateActions": true,
+    "isolation": "Site identity/destination/articles/health follow the exact selected site; activity/running selectors demonstrably remain account-wide. No cross-account authorization test or foreign-tenant inspection."
+  },
+  "limitations": [
+    "No read-only ordinary queue admission function exists; queuePlanIfAbsent and reservePlanProviderBudget mutate state even on some rejection paths and were not called.",
+    "Operator terminal plan receipts cover done/failed and active receipts cover pending/running, but do not expose the exact counted-reason/release fields or sentinel completeness of the atomic rolling query. Exact all-status rolling count and latest counted plan are not certified.",
+    "No account/fleet aggregate-only signed capacity projection or same-month amendment route exists in the inspected runtime.",
+    "No new generation/research/image/revision authority is included in discovery-only approval.",
+    "No 15:00 ordinary run was observed before this report; no early/manual run was forced."
+  ]
+}

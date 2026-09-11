@@ -1,8 +1,37 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 14:30 UTC**. Start here and refresh production before
+Updated: **2026-09-11 14:41 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Next ordinary source / funding preflight — assignment14
+
+Read `docs/PENTRA_NEXT_SOURCE_PREFLIGHT_2026-09-11.md` and its safe JSON first.
+Four read-only exact-site observations14:38 confirm Pentra1/4, LeadPilot0/12,
+no active jobs, and unchanged consumed lower bounds: month$31.042560 and
+approved-window$3.121440. A new ordinary$1 single-execution plan fails the$4
+incremental window first and$32 account-month ceiling independently. The next
+configured ordinary slot is15:00; no early/manual invocation or provider call.
+Old source-plan24h boundaries elapsed Sep9; current rolling count/latest counted
+reason cannot be fully certified from existing safe DTOs. Do not call a mutation
+as preflight or substitute the overlap-only count query.
+
+No runnable numeric approval request yet: existing same-month authorizations are
+immutable (verified by4 passing tests), no amendment route exists, and exact
+shared account/fleet aggregate capacity is unavailable under current safe reads.
+Discovery-only$1 is not article-completion authority. Needed before an owner
+quote: bounded actual-predicate count/expiry and aggregate-only capacity receipt,
+then explicit review of any narrow amendment design; none implemented here.
+
+Signed-in Chrome customer UI verified both exact site destinations/cadences:
+Pentra7/week→iamheisenburger/SEOSentinel; LeadPilot21/week→iamheisenburger/LeadPilot.
+No settings/auth/terms were changed. Two reporting bugs were reproduced locally:
+actual health-refresh/SLA handlers emit healthy text for `planning_blocked` with
+buffer1/min3; dashboard activity/running counts ignore selected site and use the
+account-wide job list. Proposals only; no runtime change/deployment. LeadPilot
+also displays modern One Setup3/7 incomplete; owner choices were not confirmed.
+No acceptance/SEO-growth claim. Supervisor should assign only these evidenced
+next actions, not paid replay or speculative admission work.
 
 ## Exact planned-topic admission — assignment13
 
