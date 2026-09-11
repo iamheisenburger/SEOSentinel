@@ -1,8 +1,31 @@
 # Pentra — fresh-task handoff
 
-Updated: **2026-09-11 13:24 UTC**. Start here and refresh production before
+Updated: **2026-09-11 13:46 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.
+
+## Publication projection fault isolation — assignment10, review required
+
+Read `docs/PENTRA_PROJECTION_FAULT_ISOLATION_2026-09-11.md` first.09's throwing
+legacy-window guard was reproduced to hide healthy fleet peers and roll back
+run completion to `running`. It is replaced with typed complete/partial/unknown
+inventory throughout all nine shared-reader consumers. Unknown totals cannot
+authorize refill/promotion or masquerade as zero; an affected site no longer
+erases a peer's SLA/health output. Blocked ticks finish before onboarding or
+pending provider work. Exact recorded deadlines and missed-SLA evidence remain
+visible. Genuine database/auth/schema errors still propagate. Optional typed
+receipts on existing health/runs are additive; no new table/cache/migration.
+The customer dashboard's indirect health fallback also preserves unknown and
+partial inventory instead of claiming ready from raw article-summary counts.
+
+This local candidate is based on09 commit
+`b7997a444483e61de63ea509c01b643e4f2fbebf`. **Not pushed or deployed; supervisor
+review is required.** Final gates:1,494 tests pass, type/build/schema/secrets/
+dependency checks pass, lint0errors/157existingwarnings, browser16pass/2explicit
+authenticated skips. Full evidence is recorded in the10 report. No new live
+reads/provider calls or spend authorization;09's13:15 observation and07's
+financial audit remain the latest evidence. The historical buffers remain
+Pentra1/4, LeadPilot0/12 and **NOT READY**; no live fresh-refill acceptance.
 
 ## Publication review amendments — assignment09, review required
 

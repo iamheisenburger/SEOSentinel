@@ -136,6 +136,8 @@ test("saturated legacy domain windows cannot masquerade as an empty publication 
     })),
     maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }],
   });
-  await assert.rejects(f.run("getAutopilotState", { siteId: site._id, since: timestamp - 86400000 }),
-    /article_summary_domain_window_incomplete/);
+  const state = await f.run("getAutopilotState", { siteId: site._id, since: timestamp - 86400000 });
+  assert.equal((state.ready as Row[]).length, 0);
+  assert.deepEqual(structuredClone(state.bufferInventory), { status: "unknown", usableCountLowerBound: 0,
+    inspectedCandidates: 0, blockers: ["article_summary_domain_window_incomplete"] });
 });

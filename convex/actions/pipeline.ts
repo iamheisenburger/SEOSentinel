@@ -8300,6 +8300,15 @@ export const autopilotTick = internalAction({
         "Publication-integrity migration is incomplete; all tenant work is fail-closed.",
       );
     }
+    if (cadenceSchedule.mode === "publication_inventory_incomplete") {
+      // A bounded projection is not proof of an empty buffer. Finish this
+      // wake-up before onboarding or any pending provider-backed work.
+      return finish(
+        { processed: 0 },
+        "publication_inventory_incomplete",
+        `Publication inventory is incomplete: ${(cadenceSchedule.blockers ?? []).join(", ")}.`,
+      );
+    }
     if (cadenceSchedule.mode === "cadence_paused") {
       return finish(
         { processed: 0 },
@@ -8492,6 +8501,8 @@ export const autopilotTick = internalAction({
         "The exact article delivery history is closed or incomplete; no new delivery attempts were granted.",
       publication_destination_contended:
         "A closed article was excluded, but another workflow still owns the destination fence; no replacement delivery or generation was started.",
+      publication_inventory_incomplete:
+        `Publication inventory is incomplete; no refill or readiness claim is authorized. Blockers: ${rolloutBlockers.join(", ")}.`,
       cadence_failure_cooldown: cadenceSchedule.eligibleAt
         ? `Cadence recovery is blocked until ${new Date(cadenceSchedule.eligibleAt).toISOString()}.`
         : "Cadence recovery is blocked by an exact durable eligibility receipt.",

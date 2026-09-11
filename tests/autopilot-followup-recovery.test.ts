@@ -65,7 +65,8 @@ test("run completion may overwrite detail without erasing replay idempotency", (
   const finishStart = source.indexOf("export const markRunFinished");
   const finishEnd = source.indexOf("export const markRunFailed", finishStart);
   const finish = source.slice(finishStart, finishEnd);
-  assert.match(finish, /detail: args\.detail/);
+  assert.match(finish, /const recordedDetail = inventoryIncomplete[\s\S]*: args\.detail;/);
+  assert.match(finish, /detail: recordedDetail/);
   assert.doesNotMatch(finish, /recoveryOfRunId:/);
   assert.match(recovery, /withIndex\("by_site_recovery_source"/);
   assert.doesNotMatch(recovery, /q\.field\("detail"\)/);

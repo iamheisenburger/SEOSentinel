@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { publicationDeferralBoundaryValidator } from "./lib/publicationDeferral";
+import { publicationInventoryValidator } from "./lib/publicationEligibility";
 
 export default defineSchema({
   sites: defineTable({
@@ -1333,6 +1334,7 @@ export default defineSchema({
     .index("by_status_expires", ["status", "expiresAt"]),
 
   autopilot_runs: defineTable({
+    bufferInventory: v.optional(publicationInventoryValidator),
     siteId: v.id("sites"),
     trigger: v.string(), // natural | manual | recovery
     // Immutable execution fence for exact scheduled recovery wakes. This is
@@ -1370,6 +1372,7 @@ export default defineSchema({
     .index("by_status_heartbeat", ["status", "heartbeatAt"]),
 
   autopilot_health: defineTable({
+    bufferInventory: v.optional(publicationInventoryValidator),
     siteId: v.id("sites"),
     lastNaturalScheduledAt: v.optional(v.number()),
     lastNaturalStartedAt: v.optional(v.number()),

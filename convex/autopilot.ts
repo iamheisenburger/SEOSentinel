@@ -1,5 +1,10 @@
 import { internal } from "./_generated/api";
-import { readPublicationBufferSummaries } from "./lib/publicationEligibility";
+import {
+  readPublicationBufferSummaries,
+  publicationInventoryHealthFields,
+  publicationInventoryDetail,
+  type PublicationInventory,
+} from "./lib/publicationEligibility";
 import { sanitizeSkipReceiptForOperator } from "./lib/expectedClickSkipReceipt";
 import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -148,6 +153,10 @@ async function upsertHealth(
     .withIndex("by_site", (q) => q.eq("siteId", siteId))
     .first();
   const fields = { ...patch, updatedAt: Date.now() };
+  if (!patch.status && patch.bufferInventory?.status === "complete" && existing?.status === "publication_inventory_incomplete") {
+    fields.status = "recovering";
+    fields.detail = "Inventory completeness is restored; cadence health awaits reevaluation.";
+  }
   if (existing) await ctx.db.patch(existing._id, fields);
   else {
     await ctx.db.insert("autopilot_health", {
@@ -160,6 +169,15 @@ async function upsertHealth(
   if (patch.status === "healthy") {
     await resolveAlertsRecoveredByHealthyReceipt(ctx, siteId, fields.updatedAt);
   }
+}
+
+async function reconcilePublicationInventoryAlert(ctx: MutationCtx, siteId: Id<"sites">, inventory: PublicationInventory) {
+  if (inventory.status === "complete") return resolveAlert(ctx, siteId, "publication_inventory_incomplete");
+  await setAlert(ctx, { siteId, kind: "publication_inventory_incomplete",
+    message: publicationInventoryDetail(inventory), details: inventory });
+  // Incomplete inspection cannot assert either an empty or a low total.
+  await resolveAlert(ctx, siteId, "buffer_empty");
+  await resolveAlert(ctx, siteId, "buffer_low");
 }
 
 async function resolveAlertsRecoveredByHealthyReceipt(
@@ -892,9 +910,10 @@ export const promoteWarmSiteIfReady = internalMutation({
       blockers: [...baseReadiness.blockers, ...setupBlockers],
     };
     const ready = await readPublicationBufferSummaries(ctx, site);
-    const sealedCount = ready.filter(isSealedReady).length;
+    const sealedCount = ready.inventory.usableCountLowerBound;
     const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
     const blockers = [...readiness.blockers];
+    if (ready.inventory.status !== "complete") blockers.push("publication_inventory_incomplete", ...ready.inventory.blockers);
     if (sealedCount < bufferPolicy.minimum) blockers.push("sealed_buffer_incomplete");
     if (blockers.length > 0) {
       const blockerDetail = describeAutopilotBlockers(blockers);
@@ -904,12 +923,15 @@ export const promoteWarmSiteIfReady = internalMutation({
         message: `Autonomous publication is blocked: ${blockerDetail}.`,
         details: {
           blockers,
-          sealedCount,
+          sealedCount: ready.inventory.status === "complete" ? sealedCount : undefined,
+          bufferInventory: ready.inventory,
           minimum: bufferPolicy.minimum,
           target: bufferPolicy.target,
         },
       });
-      return { promoted: false, blockers, sealedCount };
+      return { promoted: false, blockers,
+        sealedCount: ready.inventory.status === "complete" ? sealedCount : undefined,
+        bufferInventory: ready.inventory };
     }
 
     const promotedAt = Date.now();
@@ -2077,26 +2099,27 @@ export const markRunFinished = internalMutation({
       });
       return { updated: true as const, reason: "site_parked" };
     }
-    await ctx.db.patch(args.runId, {
-      status: "completed",
-      completedAt: now,
-      heartbeatAt: now,
-      outcome: args.outcome,
-      detail: args.detail,
-      jobId: args.jobId,
-      articleId: args.articleId,
-    });
     const currentReady = await readPublicationBufferSummaries(ctx, runSite);
-    const approvedBufferCount = currentReady.filter(isSealedReady).length;
+    const approvedBufferCount = currentReady.inventory.usableCountLowerBound;
+    const inventoryIncomplete = currentReady.inventory.status !== "complete";
+    const recordedOutcome = inventoryIncomplete ? "publication_inventory_incomplete" : args.outcome;
+    const recordedDetail = inventoryIncomplete
+      ? `${publicationInventoryDetail(currentReady.inventory)} Work outcome: ${args.outcome}.`
+      : args.detail;
+    await ctx.db.patch(args.runId, {
+      status: "completed", completedAt: now, heartbeatAt: now,
+      outcome: recordedOutcome, detail: recordedDetail,
+      jobId: args.jobId, articleId: args.articleId, bufferInventory: currentReady.inventory,
+    });
     const bufferPolicy = approvedBufferPolicy(runSite.cadencePerWeek ?? 4);
     const runClassification = classifyAutopilotRunOutcome({
-      outcome: args.outcome,
+      outcome: recordedOutcome,
       approvedBufferCount,
       bufferMinimum: bufferPolicy.minimum,
     });
     let completionStatus = runClassification.status;
     let completionDetail =
-      args.detail ?? runClassification.detail ?? args.outcome;
+      recordedDetail ?? runClassification.detail ?? recordedOutcome;
     if (!runClassification.recognized) {
       await setAlert(ctx, {
         siteId: run.siteId,
@@ -2108,8 +2131,24 @@ export const markRunFinished = internalMutation({
     } else {
       await resolveAlert(ctx, run.siteId, "run_outcome_unclassified");
     }
+    const currentPortfolioHealth = await ctx.db
+      .query("autopilot_health")
+      .withIndex("by_site", (q) => q.eq("siteId", run.siteId))
+      .first();
     let lastPublishedAt: number | undefined;
     let nextPublicationDueAt: number | undefined;
+    if (inventoryIncomplete && currentPortfolioHealth?.nextPublicationDueAt === undefined && (runSite.cadencePerWeek ?? 4) > 0) {
+      // Ready inventory completeness does not erase the independent cadence
+      // clock. Preserve a recorded deadline; these two bounded publication
+      // reads only cover a first run whose health has no deadline yet.
+      const published = await latestCurrentDomainPublishedSummaries(ctx, runSite, PUBLICATION_AUDIT_VERSION);
+      const publicationTimes = published.filter((row): row is Doc<"article_summaries"> => !!row)
+        .map(row => effectivePublishedAt({ createdAt: row.articleCreatedAt,
+          publishedAt: row.publishedAt, publicationAuditVersion: row.publicationAuditVersion,
+          auditedContentHash: row.auditedContentHash }));
+      lastPublishedAt = publicationTimes.length ? Math.max(...publicationTimes) : undefined;
+      nextPublicationDueAt = (lastPublishedAt ?? runSite.createdAt) + cadenceIntervalMs(runSite.cadencePerWeek ?? 4);
+    }
     if (args.outcome === "rollout_buffer_ready") {
       completionStatus = "readiness_blocked";
       completionDetail =
@@ -2187,10 +2226,11 @@ export const markRunFinished = internalMutation({
           "Scheduler, cadence, and strict-quality publication buffer are healthy.";
       }
     }
-    const currentPortfolioHealth = await ctx.db
-      .query("autopilot_health")
-      .withIndex("by_site", (q) => q.eq("siteId", run.siteId))
-      .first();
+    if (inventoryIncomplete) {
+      completionStatus = "publication_inventory_incomplete";
+      completionDetail = recordedDetail!;
+    }
+    await reconcilePublicationInventoryAlert(ctx, run.siteId, currentReady.inventory);
     if (
       completionStatus === "healthy" &&
       runSite?.expectedClickSchedulingEnabled === true &&
@@ -2208,8 +2248,8 @@ export const markRunFinished = internalMutation({
       heartbeatAt: now,
       status: completionStatus,
       detail: completionDetail,
-      approvedBufferCount,
-      ...(lastPublishedAt === undefined
+      ...publicationInventoryHealthFields(currentReady.inventory),
+      ...(nextPublicationDueAt === undefined && lastPublishedAt === undefined
         ? {}
         : { lastPublishedAt, nextPublicationDueAt }),
       ...(run.trigger === "natural" ? { lastNaturalCompletedAt: now } : {}),
@@ -2377,6 +2417,7 @@ export const auditSla = internalMutation({
     let stale = 0;
     let bufferLow = 0;
     let migrationPending = 0;
+    let inventoryIncomplete = 0;
 
     for (const site of sites) {
       if (!(await siteExecutionAuthorized(ctx, site))) continue;
@@ -2470,7 +2511,7 @@ export const auditSla = internalMutation({
         )[0];
       const readySummaries = await readPublicationBufferSummaries(ctx, site);
 
-      const approvedBufferCount = readySummaries.filter(isSealedReady).length;
+      const approvedBufferCount = readySummaries.inventory.usableCountLowerBound;
       const autonomousDelivery =
         !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
       const cadence = site.cadencePerWeek ?? 4;
@@ -2498,7 +2539,7 @@ export const auditSla = internalMutation({
       const lastRun = health?.lastRunId
         ? await ctx.db.get(health.lastRunId)
         : null;
-      const latestSealedAt = readySummaries
+      const latestSealedAt = readySummaries.rows
         .filter(isSealedReady)
         .reduce(
           (latest, article) => Math.max(latest, article.articleUpdatedAt),
@@ -2530,6 +2571,19 @@ export const auditSla = internalMutation({
           details: { lastPublishedAt, nextPublicationDueAt, checkedAt: now },
         });
       } else await resolveAlert(ctx, site._id, "missed_publication_sla");
+
+      await reconcilePublicationInventoryAlert(ctx, site._id, readySummaries.inventory);
+      if (readySummaries.inventory.status !== "complete") {
+        inventoryIncomplete++;
+        await upsertHealth(ctx, site._id, {
+          heartbeatAt: health?.heartbeatAt ?? now, lastPublishedAt, nextPublicationDueAt,
+          ...publicationInventoryHealthFields(readySummaries.inventory),
+          bufferMinimum: bufferPolicy.minimum, bufferTarget: bufferPolicy.target,
+          status: "publication_inventory_incomplete",
+          detail: `${publicationMissed ? "Publication cadence deadline missed. " : ""}${publicationInventoryDetail(readySummaries.inventory)}`,
+        });
+        continue;
+      }
 
       if (autonomousDelivery && approvedBufferCount === 0) {
         bufferLow++;
@@ -2590,7 +2644,7 @@ export const auditSla = internalMutation({
         heartbeatAt: health?.heartbeatAt ?? now,
         lastPublishedAt,
         nextPublicationDueAt,
-        approvedBufferCount,
+        ...publicationInventoryHealthFields(readySummaries.inventory),
         bufferMinimum: bufferPolicy.minimum,
         bufferTarget: bufferPolicy.target,
         status,
@@ -2623,6 +2677,7 @@ export const auditSla = internalMutation({
       stale,
       bufferLow,
       migrationPending,
+      inventoryIncomplete,
     };
   },
 });
@@ -2693,7 +2748,7 @@ export const refreshSiteCadenceHealth = internalMutation({
     const bufferPolicy = approvedBufferPolicy(cadence);
     const nextPublicationDueAt =
       (lastPublishedAt ?? site.createdAt) + cadenceMs;
-    const approvedBufferCount = ready.filter(isSealedReady).length;
+    const approvedBufferCount = ready.inventory.usableCountLowerBound;
     const now = Date.now();
     const schedulerStale = health
       ? health.lastNaturalScheduledAt
@@ -2703,7 +2758,7 @@ export const refreshSiteCadenceHealth = internalMutation({
     const lastRun = health?.lastRunId
       ? await ctx.db.get(health.lastRunId)
       : null;
-    const latestSealedAt = ready
+    const latestSealedAt = ready.rows
       .filter(isSealedReady)
       .reduce(
         (latest, article) => Math.max(latest, article.articleUpdatedAt),
@@ -2734,8 +2789,10 @@ export const refreshSiteCadenceHealth = internalMutation({
         ? "topic_portfolio_below_goal"
         : "topic_portfolio_evidence_missing";
     }
-    const detail =
-      status === "recovering"
+    if (ready.inventory.status !== "complete") status = "publication_inventory_incomplete";
+    const detail = ready.inventory.status !== "complete"
+      ? `${now > nextPublicationDueAt ? "Publication cadence deadline missed. " : ""}${publicationInventoryDetail(ready.inventory)}`
+      : status === "recovering"
         ? "Autopilot is actively replenishing the strict-quality buffer."
         : status === "buffer_empty"
           ? "No strict-quality sealed article is buffered."
@@ -2752,10 +2809,11 @@ export const refreshSiteCadenceHealth = internalMutation({
                   : status === "topic_portfolio_evidence_missing"
                     ? "Cadence is healthy, but the topic portfolio lacks fresh outcome evidence."
                 : "Scheduler, quality buffer, and cadence are healthy.";
+    await reconcilePublicationInventoryAlert(ctx, siteId, ready.inventory);
     await upsertHealth(ctx, siteId, {
       lastPublishedAt,
       nextPublicationDueAt,
-      approvedBufferCount,
+      ...publicationInventoryHealthFields(ready.inventory),
       bufferMinimum: bufferPolicy.minimum,
       bufferTarget: bufferPolicy.target,
       status,
@@ -2765,7 +2823,7 @@ export const refreshSiteCadenceHealth = internalMutation({
       siteId,
       lastPublishedAt,
       nextPublicationDueAt,
-      approvedBufferCount,
+      ...publicationInventoryHealthFields(ready.inventory),
       status,
     };
   },
@@ -2781,14 +2839,17 @@ export const reconcileSealedBufferCount = internalMutation({
       return { reconciled: false as const, approvedBufferCount: 0 };
     }
     const ready = await readPublicationBufferSummaries(ctx, site);
-    const approvedBufferCount = ready.filter(isSealedReady).length;
     const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
+    await reconcilePublicationInventoryAlert(ctx, siteId, ready.inventory);
     await upsertHealth(ctx, siteId, {
-      approvedBufferCount,
+      ...publicationInventoryHealthFields(ready.inventory),
       bufferMinimum: bufferPolicy.minimum,
       bufferTarget: bufferPolicy.target,
+      ...(ready.inventory.status !== "complete" ? {
+        status: "publication_inventory_incomplete", detail: publicationInventoryDetail(ready.inventory),
+      } : {}),
     });
-    return { reconciled: true as const, approvedBufferCount };
+    return { reconciled: true as const, ...publicationInventoryHealthFields(ready.inventory) };
   },
 });
 
@@ -2969,7 +3030,13 @@ export const getOperatorSnapshot = internalQuery({
         rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
         rolloutStartedAt: site.autopilotRolloutStartedAt,
       },
-      health: operatorHealthReceipt(health),
+      health: operatorHealthReceipt(health ? { ...health,
+        ...publicationInventoryHealthFields(ready.inventory),
+        ...(ready.inventory.status !== "complete" ? {
+          status: "publication_inventory_incomplete", detail: publicationInventoryDetail(ready.inventory),
+        } : {}),
+      } : null),
+      bufferInventory: ready.inventory,
       snapshotAt,
       cadenceDeadline: cadenceDeadline
         ? operatorContinuationRunReceipt(cadenceDeadline)
@@ -2977,7 +3044,7 @@ export const getOperatorSnapshot = internalQuery({
       upcomingRuns: upcomingRuns.map(operatorContinuationRunReceipt),
       runs: runs.map(operatorContinuationRunReceipt),
       planReceipts,
-      ready: ready.map((article) =>
+      ready: ready.rows.map((article) =>
         operatorArticleReceipt(article, isSealedReady(article))
       ),
       review: review.map((article) =>
@@ -3053,6 +3120,8 @@ export const getFleetReadiness = internalQuery({
         hasCrawledPage,
         limits.maxArticles,
       );
+      const inventoryBlockers = ready.inventory.status === "complete" ? []
+        : ["publication_inventory_incomplete", ...ready.inventory.blockers];
       rows.push({
         siteId: site._id,
         domain: site.domain,
@@ -3063,15 +3132,16 @@ export const getFleetReadiness = internalQuery({
         publishMethod: site.publishMethod ?? "github",
         hasCrawledPage,
         gscConnected: Boolean(site.gscAccessToken && site.gscProperty),
-        warmReady: warm.ready,
-        warmBlockers: warm.blockers,
-        liveReady: live.ready,
-        liveBlockers: live.blockers,
-        sealedBufferCount: ready.filter(isSealedReady).length,
+        warmReady: warm.ready && inventoryBlockers.length === 0,
+        warmBlockers: [...warm.blockers, ...inventoryBlockers],
+        liveReady: live.ready && inventoryBlockers.length === 0,
+        liveBlockers: [...live.blockers, ...inventoryBlockers],
+        sealedBufferCount: publicationInventoryHealthFields(ready.inventory).approvedBufferCount,
+        bufferInventory: ready.inventory,
         health: health
           ? {
-              status: health.status,
-              detail: health.detail,
+              status: inventoryBlockers.length > 0 ? "publication_inventory_incomplete" : health.status,
+              detail: inventoryBlockers.length > 0 ? publicationInventoryDetail(ready.inventory) : health.detail,
               heartbeatAt: health.heartbeatAt,
               lastPublishedAt: health.lastPublishedAt,
               nextPublicationDueAt: health.nextPublicationDueAt,

@@ -346,14 +346,7 @@ export const scheduleCadence = internalAction({
     const state = await ctx.runQuery(internal.articles.getAutopilotState, {
       siteId,
       since: candidateWindowStart,
-    }).catch((error: unknown) => {
-      if (String(error).includes("article_summary_domain_window_incomplete")) return null;
-      throw error;
     });
-    if (!state) return {
-      scheduled: 0, mode: "publication_delivery_terminal",
-      blockers: ["article_summary_domain_window_incomplete"],
-    };
     if (state.migrationPending) {
       await ctx.runMutation(internal.autopilot.raiseAlert, {
         siteId,
@@ -389,6 +382,7 @@ export const scheduleCadence = internalAction({
         since: candidateWindowStart,
       });
       state.ready = refreshed.ready;
+      state.bufferInventory = refreshed.bufferInventory;
     }
 
     const buffer = (state.ready as ArticleSummary[])
@@ -399,6 +393,11 @@ export const scheduleCadence = internalAction({
     const autonomousDelivery =
       rolloutMode === "live" &&
       !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
+    const inventory = state.bufferInventory;
+    const bufferProjection = {
+      bufferCount: inventory.status === "complete" ? inventory.usableCountLowerBound : undefined,
+      bufferInventory: inventory,
+    };
 
     const latestPublicStatus = state.latestPublished?.publicUrlStatus as
       | "pending"
@@ -427,13 +426,37 @@ export const scheduleCadence = internalAction({
       return {
         scheduled: 0,
         mode: failed ? "public_url_failed" : "public_url_pending",
-        bufferCount: buffer.length,
+        ...bufferProjection,
       };
     }
     await ctx.runMutation(internal.autopilot.resolveAlertKind, {
       siteId,
       kind: "public_publication_unverified",
     });
+
+    const exactWakeupAt = exactCadenceWakeupAt({
+      autonomousDelivery, sealedBufferCount: buffer.length, lastPublishedAt, cadenceMs, now,
+    });
+    if (exactWakeupAt !== undefined) {
+      await ctx.runMutation(internal.autopilot.scheduleCadenceDeadline, { siteId, dueAt: exactWakeupAt });
+    }
+    if (inventory.status !== "complete") {
+      await ctx.runMutation(internal.autopilot.raiseAlert, {
+        siteId, kind: "publication_inventory_incomplete",
+        message: "Publication inventory is incomplete; a validated lower bound is not an empty or full buffer.",
+        details: inventory,
+      });
+      // A saturated A's history may not poison an independently validated B.
+      // Only already-sealed due delivery is allowed; never refill or promotion.
+      const knownDueDelivery = autonomousDelivery && publicationDue && buffer.length > 0 &&
+        inventory.blockers.every(code => code === "publication_history_incomplete");
+      if (!knownDueDelivery) return {
+        scheduled: 0, mode: "publication_inventory_incomplete", bufferInventory: inventory,
+        blockers: inventory.blockers,
+      };
+    } else {
+      await ctx.runMutation(internal.autopilot.resolveAlertKind, { siteId, kind: "publication_inventory_incomplete" });
+    }
 
     const closedDeliveries = (state.ready as ArticleSummary[])
       .filter(article => article.publicationDeliveryBlocker)
@@ -444,38 +467,15 @@ export const scheduleCadence = internalAction({
         message: "Articles with closed or incomplete delivery history are excluded from the usable buffer; their quality seals and delivery history remain unchanged.",
         details: { articles: closedDeliveries },
       });
-      if (closedDeliveries.some(a => a.reason === "publication_buffer_scan_incomplete")) return {
-        scheduled: 0, mode: "publication_delivery_terminal", bufferCount: buffer.length,
-        blockers: ["publication_buffer_scan_incomplete"],
-      };
-      if (closedDeliveries.some(a => a.reason === "publication_history_incomplete") &&
-        !(autonomousDelivery && publicationDue && buffer.length > 0)) return {
-        scheduled: 0, mode: "publication_delivery_terminal", bufferCount: buffer.length,
-        blockers: ["publication_history_incomplete"],
-      };
       // Skipping a terminal artifact grants no authority to take another
       // workflow's destination fence, including an expired ambiguous fence.
       // Its real owner/recovery must settle or release it first.
       if (autonomousDelivery && site.publicationLeaseOwner) return {
-        scheduled: 0, mode: "publication_destination_contended", bufferCount: buffer.length,
+        scheduled: 0, mode: "publication_destination_contended", ...bufferProjection,
         blockers: ["unresolved_publication_destination_lease", ...closedDeliveries.map(a => `${a.reason}:${a.articleId}`)],
       };
     } else {
       await ctx.runMutation(internal.autopilot.resolveAlertKind, { siteId, kind: "publication_delivery_terminal" });
-    }
-
-    const exactWakeupAt = exactCadenceWakeupAt({
-      autonomousDelivery,
-      sealedBufferCount: buffer.length,
-      lastPublishedAt,
-      cadenceMs,
-      now,
-    });
-    if (exactWakeupAt !== undefined) {
-      await ctx.runMutation(internal.autopilot.scheduleCadenceDeadline, {
-        siteId,
-        dueAt: exactWakeupAt,
-      });
     }
 
     // Two sealed artifacts are the launch safety minimum. The scheduler still
@@ -490,7 +490,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "automatic_live_promotion",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       await ctx.runMutation(internal.autopilot.raiseAlert, {
@@ -499,7 +499,7 @@ export const scheduleCadence = internalAction({
         message:
           `The strict-quality buffer is warm, but live publication is blocked: ${describeAutopilotBlockers(promotion.blockers)}.`,
         details: {
-          bufferCount: buffer.length,
+          ...bufferProjection,
           target: bufferPolicy.target,
           blockers: promotion.blockers,
         },
@@ -507,7 +507,7 @@ export const scheduleCadence = internalAction({
       return {
         scheduled: 0,
         mode: "rollout_buffer_ready",
-        bufferCount: buffer.length,
+        ...bufferProjection,
         blockers: promotion.blockers,
       };
     }
@@ -529,7 +529,7 @@ export const scheduleCadence = internalAction({
           : "reason" in delivery ? "publication_delivery_terminal"
           : delivery.queued ? "buffer_delivery" : "buffer_delivery_pending",
         ...("reason" in delivery ? { blockers: [delivery.reason] } : {}),
-        bufferCount: buffer.length,
+        ...bufferProjection,
       };
     }
 
@@ -731,14 +731,14 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "pending_plan",
-          bufferCount: buffer.length,
+          ...bufferProjection,
           ...(activePlanJob ? { planJobId: activePlanJob._id } : {}),
         };
       }
       return {
         scheduled: 0,
         mode: "work_in_progress",
-        bufferCount: buffer.length,
+        ...bufferProjection,
         activeJobId: contentBlockingJobs[0]._id,
         ...(activePlanJob ? { planJobId: activePlanJob._id } : {}),
       };
@@ -752,13 +752,13 @@ export const scheduleCadence = internalAction({
         (article) => article.publicationGateStatus === "passed",
       );
       if (site.approvalRequired && approvalWaiting) {
-        return { scheduled: 0, mode: "approval_waiting", bufferCount: buffer.length };
+        return { scheduled: 0, mode: "approval_waiting", ...bufferProjection };
       }
       if ((site.publishMethod ?? "github") === "manual" && buffer.length > 0) {
-        return { scheduled: 0, mode: "manual_delivery_waiting", bufferCount: buffer.length };
+        return { scheduled: 0, mode: "manual_delivery_waiting", ...bufferProjection };
       }
       if (!publicationDue) {
-        return { scheduled: 0, mode: "cadence_not_due", bufferCount: buffer.length };
+        return { scheduled: 0, mode: "cadence_not_due", ...bufferProjection };
       }
     }
 
@@ -772,7 +772,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "pending_plan",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       if (strictExpectedClickScheduling && !portfolio.supportsGoal) {
@@ -781,14 +781,14 @@ export const scheduleCadence = internalAction({
           return {
             scheduled: 1,
             mode: portfolioReplenishmentReason,
-            bufferCount: buffer.length,
+            ...bufferProjection,
           };
         }
       }
       return {
         scheduled: 0,
         mode: "buffer_full",
-        bufferCount: buffer.length,
+        ...bufferProjection,
       };
     }
 
@@ -810,14 +810,14 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "quality_revision",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       if (recovery.jobId) {
         return {
           scheduled: 0,
           mode: "work_in_progress",
-          bufferCount: buffer.length,
+          ...bufferProjection,
           activeJobId: recovery.jobId,
         };
       }
@@ -849,14 +849,14 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "deterministic_repair",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       if (recovery.jobId) {
         return {
           scheduled: 0,
           mode: "work_in_progress",
-          bufferCount: buffer.length,
+          ...bufferProjection,
           activeJobId: recovery.jobId,
         };
       }
@@ -871,7 +871,7 @@ export const scheduleCadence = internalAction({
       return {
         scheduled: 0,
         mode: "opportunity_space_exhausted",
-        bufferCount: buffer.length,
+        ...bufferProjection,
         eligibleAt: terminalOpportunity.nextEligibleAt,
       };
     }
@@ -887,7 +887,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "pending_plan",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       await ctx.runMutation(internal.autopilot.raiseAlert, {
@@ -898,7 +898,7 @@ export const scheduleCadence = internalAction({
         details: {
           recentCandidates: recentCandidates.length,
           candidateBudget,
-          bufferCount: buffer.length,
+          ...bufferProjection,
         },
       });
       const qualityEligibleAt = recentCandidates.reduce(
@@ -921,7 +921,7 @@ export const scheduleCadence = internalAction({
       return {
         scheduled: 0,
         mode: "quality_budget_exhausted",
-        bufferCount: buffer.length,
+        ...bufferProjection,
       };
     }
 
@@ -953,7 +953,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 0,
           mode: "quota_reached",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       const userSiteCount = limits.maxSites >= 9999
@@ -971,7 +971,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 0,
           mode: "site_limit_reached",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
     }
@@ -1136,7 +1136,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "pending_plan",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       const microSeedContinuation = await ctx.runMutation(
@@ -1147,7 +1147,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 1,
           mode: "cadence_micro_seed_continuation",
-          bufferCount: buffer.length,
+          ...bufferProjection,
         };
       }
       const replenishmentReason = strictExpectedClickScheduling && !portfolio.supportsGoal
@@ -1195,7 +1195,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 0,
           mode: "topic_replenishment_exhausted",
-          bufferCount: buffer.length,
+          ...bufferProjection,
           planJobId: "cooldownPlanJobId" in replenishment
             ? replenishment.cooldownPlanJobId
             : undefined,
@@ -1208,7 +1208,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 0,
           mode: "cadence_failure_cooldown",
-          bufferCount: buffer.length,
+          ...bufferProjection,
           eligibleAt: replenishment.eligibleAt,
         };
       }
@@ -1217,7 +1217,7 @@ export const scheduleCadence = internalAction({
           return {
             scheduled: 0,
             mode: "work_in_progress",
-            bufferCount: buffer.length,
+            ...bufferProjection,
             planJobId: replenishment.jobId,
             activeJobId: replenishment.jobId,
           };
@@ -1225,7 +1225,7 @@ export const scheduleCadence = internalAction({
         return {
           scheduled: 0,
           mode: "planning_blocked",
-          bufferCount: buffer.length,
+          ...bufferProjection,
           blockers: [
             replenishment.reason ?? "unclassified_plan_queue_denial",
           ],
@@ -1250,7 +1250,7 @@ export const scheduleCadence = internalAction({
       return {
         scheduled: 1,
         mode: "topic_replenishment",
-        bufferCount: buffer.length,
+        ...bufferProjection,
         planJobId: replenishment.jobId,
       };
     }
@@ -1307,21 +1307,21 @@ export const scheduleCadence = internalAction({
         mode: autonomousDelivery || rolloutMode === "warm"
           ? "buffer_fill"
           : "cadence_generation",
-        bufferCount: buffer.length,
+        ...bufferProjection,
       };
     }
     if (queued.jobId) {
       return {
         scheduled: 0,
         mode: "work_in_progress",
-        bufferCount: buffer.length,
+        ...bufferProjection,
         activeJobId: queued.jobId,
       };
     }
     return {
       scheduled: 0,
       mode: "topic_admission_blocked",
-      bufferCount: buffer.length,
+      ...bufferProjection,
       blockers: [queued.reason ?? "unclassified_topic_queue_denial"],
     };
   },

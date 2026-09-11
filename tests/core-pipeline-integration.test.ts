@@ -739,7 +739,9 @@ test("more than 25 closed metadata receipts do not hide a later real sealed arti
       const queued = f.tables.jobs.find(j => j.status === "pending" && j.payload?.publishOnly);
       assert.equal(queued?.articleId, f.b._id, "Real B is eligible after the 25 closed metadata rows and closed real A");
     } else {
-      assert.equal(scheduled.mode, "publication_delivery_terminal");
+      assert.equal(scheduled.mode, "publication_inventory_incomplete");
+      assert.equal(scheduled.bufferInventory.status, "unknown");
+      assert.equal(scheduled.bufferCount, undefined);
       assert.deepEqual(scheduled.blockers, ["publication_buffer_scan_incomplete"]);
       assert.equal(f.tables.jobs.filter(j => j.status === "pending" && j.payload?.publishOnly).length, 0);
       assert.equal(externalCalls(f), calls);
@@ -748,7 +750,8 @@ test("more than 25 closed metadata receipts do not hide a later real sealed arti
         summary.canonicalDomain = "earlier.example"; summary.domainRevision = 1;
       }
       const legacy = await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.site.id });
-      assert.equal(legacy.mode, "publication_delivery_terminal");
+      assert.equal(legacy.mode, "publication_inventory_incomplete");
+      assert.equal(legacy.bufferInventory.status, "unknown");
       assert.deepEqual(legacy.blockers, ["article_summary_domain_window_incomplete"]);
       assert.equal(externalCalls(f), calls);
     }

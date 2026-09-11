@@ -337,12 +337,14 @@ test("every completed run reconciles the current sealed buffer count", () => {
   );
   assert.match(
     finishRun,
-    /const currentReady = await readPublicationBufferSummaries\(ctx, runSite\);[\s\S]*const approvedBufferCount = currentReady\.filter\(isSealedReady\)\.length/,
+    /const currentReady = await readPublicationBufferSummaries\(ctx, runSite\);[\s\S]*const approvedBufferCount = currentReady\.inventory\.usableCountLowerBound/,
   );
   const eligibility = readFileSync("convex/lib/publicationEligibility.ts", "utf8");
-  assert.match(eligibility, /takeCurrentDomainArticleSummariesByStatus\(ctx, site, "ready", PUBLICATION_BUFFER_CANDIDATE_LIMIT \+ 1, "asc"\)/);
+  assert.match(eligibility, /takeCurrentDomainArticleSummaryWindowByStatus\(ctx, site, "ready", PUBLICATION_BUFFER_CANDIDATE_LIMIT \+ 1, "asc"\)/);
   assert.match(eligibility, /publicationDeliveryBlocker\(ctx, siteId/);
   assert.match(finishRun, /approvedBufferCount,/);
+  assert.match(finishRun, /publicationInventoryHealthFields\(currentReady.inventory\)/);
+  assert.match(eligibility, /approvedBufferCount: inventory.status === "complete" \? inventory.usableCountLowerBound : undefined/);
   assert.doesNotMatch(
     finishRun,
     /approvedBufferCount === undefined/,

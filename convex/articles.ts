@@ -723,7 +723,8 @@ export const getAutopilotState = internalQuery({
       latestPublished: latestPublished
         ? summaryListItem(latestPublished)
         : null,
-      ready: ready.map(summaryListItem),
+      ready: ready.rows.map(summaryListItem),
+      bufferInventory: ready.inventory,
       review: review.map(summaryListItem),
       recent: recent.map(summaryListItem),
       published: published.map(summaryListItem),

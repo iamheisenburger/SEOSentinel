@@ -736,6 +736,7 @@ export function operatorContinuationRunReceipt(
     startedAt: run.startedAt,
     heartbeatAt: run.heartbeatAt,
     completedAt: run.completedAt,
+    bufferInventory: run.bufferInventory,
     continuationAttempt: run.continuationAttempt,
     topicPlanSettlementAttempt: run.topicPlanSettlementAttempt,
   };
@@ -758,6 +759,7 @@ export function operatorHealthReceipt(
     lastPublishedAt: health.lastPublishedAt,
     nextPublicationDueAt: health.nextPublicationDueAt,
     approvedBufferCount: health.approvedBufferCount,
+    bufferInventory: health.bufferInventory,
     bufferMinimum: health.bufferMinimum,
     bufferTarget: health.bufferTarget,
     portfolioStatus: safeOperatorCode(

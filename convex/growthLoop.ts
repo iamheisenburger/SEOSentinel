@@ -306,9 +306,15 @@ export const getStatus = query({
         (row.paidConversions ?? 0) + row.qualifiedActions,
       0,
     );
-    const readyBuffer = health?.approvedBufferCount ?? articleMetrics.readyBuffer;
+    // A typed incomplete health receipt must not fall back to raw ready labels
+    // and advertise a verified buffer. This consumes existing health only.
+    const bufferInventory = health?.bufferInventory;
+    const readyBuffer = bufferInventory
+      ? bufferInventory.status === "complete" ? bufferInventory.usableCountLowerBound : undefined
+      : health?.approvedBufferCount ?? articleMetrics.readyBuffer;
     const published = articleMetrics.publishedUrls;
     const bufferMinimum = health?.bufferMinimum ?? 2;
+    const bufferReady = readyBuffer !== undefined && readyBuffer >= bufferMinimum;
     const currentInbox = inboxes.length === 1 ? inboxes[0] : undefined;
     const activeManagedResource = currentInbox
       ? resources.find((resource) =>
@@ -441,10 +447,11 @@ export const getStatus = query({
       },
       {
         key: "buffer",
-        state: readyBuffer >= bufferMinimum ? "ready" : "waiting_pentra",
-        blockerCode: readyBuffer >= bufferMinimum ? undefined : "sealed_buffer_below_minimum",
-        nextEligibleAt: readyBuffer >= bufferMinimum ? undefined : nextIntervalAt(timestamp, 180),
-        automaticWakeAt: readyBuffer >= bufferMinimum ? undefined : nextIntervalAt(timestamp, 180),
+        state: bufferReady ? "ready" : "waiting_pentra",
+        blockerCode: bufferReady ? undefined : bufferInventory && bufferInventory.status !== "complete"
+          ? "publication_inventory_incomplete" : "sealed_buffer_below_minimum",
+        nextEligibleAt: bufferReady ? undefined : nextIntervalAt(timestamp, 180),
+        automaticWakeAt: bufferReady ? undefined : nextIntervalAt(timestamp, 180),
       },
       {
         key: "publication",
@@ -512,6 +519,7 @@ export const getStatus = query({
     return {
       siteId: String(siteId),
       stages,
+      bufferInventory,
       stageOrder: GROWTH_LOOP_STAGE_KEYS,
       ready: Object.values(stages).every((stage) => stage.state === "ready"),
       nextEligibleAt: unfinishedTimes.length ? Math.min(...unfinishedTimes) : undefined,

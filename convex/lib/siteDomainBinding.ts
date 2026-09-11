@@ -509,9 +509,21 @@ export async function takeCurrentDomainArticleSummariesByStatus(
   limit: number,
   order: "asc" | "desc" = "desc",
 ): Promise<Doc<"article_summaries">[]> {
+  return (await takeCurrentDomainArticleSummaryWindowByStatus(ctx, site, status, limit, order)).rows;
+}
+
+/** Completeness is data, not a database failure. Ordinary historical callers
+ * retain their array projection; strict inventory consumers inspect this flag. */
+export async function takeCurrentDomainArticleSummaryWindowByStatus(
+  ctx: DomainQueryCtx,
+  site: Doc<"sites">,
+  status: string,
+  limit: number,
+  order: "asc" | "desc" = "desc",
+): Promise<{ rows: Doc<"article_summaries">[]; domainWindowIncomplete: boolean }> {
   const canonicalDomain = siteCanonicalDomain(site);
   const domainRevision = siteCanonicalDomainRevision(site);
-  if (!canonicalDomain) return [];
+  if (!canonicalDomain) return { rows: [], domainWindowIncomplete: true };
   if (siteUsesLegacyDomainReceipts(site)) {
     const legacyEpoch = await ctx.db
       .query("article_summaries")
@@ -523,14 +535,10 @@ export async function takeCurrentDomainArticleSummariesByStatus(
     const current = legacyEpoch.filter((article) =>
       articleMatchesCurrentDomain(site, article)
     );
-    // An oldest-first bounded delivery view cannot call the pool empty after
-    // filtering a full legacy window: a current artifact may be just beyond it.
-    if (order === "asc" && legacyEpoch.length >= limit && current.length < legacyEpoch.length) {
-      throw new Error("article_summary_domain_window_incomplete");
-    }
-    return current;
+    return { rows: current,
+      domainWindowIncomplete: legacyEpoch.length >= limit && current.length < legacyEpoch.length };
   }
-  return ctx.db
+  const rows = await ctx.db
     .query("article_summaries")
     .withIndex(order === "asc" ? "by_site_domain_revision_status_created" : "by_site_domain_revision_status", (q) =>
       q
@@ -541,6 +549,7 @@ export async function takeCurrentDomainArticleSummariesByStatus(
     )
     .order(order)
     .take(limit);
+  return { rows, domainWindowIncomplete: false };
 }
 
 export async function latestCurrentDomainPublishedSummaries(

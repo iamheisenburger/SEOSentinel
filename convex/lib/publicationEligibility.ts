@@ -1,8 +1,29 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { v, type Infer } from "convex/values";
 import { MAX_PUBLICATION_ATTEMPTS } from "./publicationLease.ts";
 import { isSealedReady } from "./autopilotBuffer.ts";
-import { takeCurrentDomainArticleSummariesByStatus } from "./siteDomainBinding.ts";
+import { takeCurrentDomainArticleSummaryWindowByStatus } from "./siteDomainBinding.ts";
+
+export const publicationInventoryValidator = v.object({
+  status: v.union(v.literal("complete"), v.literal("partial"), v.literal("unknown")),
+  usableCountLowerBound: v.number(),
+  inspectedCandidates: v.number(),
+  blockers: v.array(v.union(
+    v.literal("article_summary_domain_window_incomplete"),
+    v.literal("publication_buffer_scan_incomplete"),
+    v.literal("publication_history_incomplete"),
+    v.literal("publication_history_binding_mismatch"),
+  )),
+});
+export type PublicationInventory = Infer<typeof publicationInventoryValidator>;
+export function publicationInventoryHealthFields(inventory: PublicationInventory) {
+  return { bufferInventory: inventory,
+    approvedBufferCount: inventory.status === "complete" ? inventory.usableCountLowerBound : undefined };
+}
+export function publicationInventoryDetail(inventory: PublicationInventory) {
+  return `Publication inventory is ${inventory.status}; at least ${inventory.usableCountLowerBound} usable articles are verified. Blockers: ${inventory.blockers.join(", ")}.`;
+}
 
 export const PUBLICATION_HISTORY_LIMIT = 100;
 // Highest supported target is 12. Keep 25 usable rows (the existing projection
@@ -59,8 +80,8 @@ export type PublicationBufferSummary = Doc<"article_summaries"> & {
 };
 
 export async function readPublicationBufferSummaries(ctx: Pick<QueryCtx, "db">, site: Doc<"sites">) {
-  const rows = await takeCurrentDomainArticleSummariesByStatus(ctx, site, "ready", PUBLICATION_BUFFER_CANDIDATE_LIMIT + 1, "asc");
-  return publicationBufferSummaries(ctx, site._id, rows);
+  const window = await takeCurrentDomainArticleSummaryWindowByStatus(ctx, site, "ready", PUBLICATION_BUFFER_CANDIDATE_LIMIT + 1, "asc");
+  return publicationBufferSummaries(ctx, site._id, window.rows, window.domainWindowIncomplete);
 }
 
 /** Read-only projection. At most 50 exact-site/article/failed index reads,
@@ -70,20 +91,32 @@ export async function readPublicationBufferSummaries(ctx: Pick<QueryCtx, "db">, 
  * saturated history closes only its artifact, never the next valid candidate. */
 export async function publicationBufferSummaries(
   ctx: Pick<QueryCtx, "db">, siteId: Id<"sites">, rows: Doc<"article_summaries">[],
-): Promise<PublicationBufferSummary[]> {
+  domainWindowIncomplete = false,
+): Promise<{ rows: PublicationBufferSummary[]; inventory: PublicationInventory }> {
   const result: PublicationBufferSummary[] = [];
+  const blockers = new Set<PublicationInventory["blockers"][number]>(
+    domainWindowIncomplete ? ["article_summary_domain_window_incomplete"] : [],
+  );
   const budget = { remainingRows: PUBLICATION_BUFFER_HISTORY_ROW_BUDGET };
-  let usable = 0;
+  let usable = 0, inspectedCandidates = 0;
   for (const [index, row] of rows.entries()) {
-    if (usable >= PUBLICATION_BUFFER_READ_LIMIT) break;
+    if (usable >= PUBLICATION_BUFFER_READ_LIMIT) { blockers.add("publication_buffer_scan_incomplete"); break; }
     if (index >= PUBLICATION_BUFFER_CANDIDATE_LIMIT) {
       result.push({ ...row, publicationDeliveryBlocker: { reason: "publication_buffer_scan_incomplete" } });
+      blockers.add("publication_buffer_scan_incomplete");
       break;
     }
+    inspectedCandidates++;
     if (!isSealedReady(row)) { result.push(row); continue; }
     const blocker = await publicationDeliveryBlocker(ctx, siteId, { ...row, _id: row.articleId }, budget);
     result.push(blocker ? { ...row, publicationDeliveryBlocker: blocker } : row);
+    if (blocker?.reason === "publication_history_incomplete" || blocker?.reason === "publication_history_binding_mismatch") {
+      blockers.add(blocker.reason);
+    }
     if (!blocker) usable++;
   }
-  return result;
+  return { rows: result, inventory: {
+    status: blockers.size === 0 ? "complete" : usable > 0 ? "partial" : "unknown",
+    usableCountLowerBound: usable, inspectedCandidates, blockers: [...blockers],
+  } };
 }

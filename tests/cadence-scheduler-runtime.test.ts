@@ -43,6 +43,7 @@ function runtime(cadence: number, overdue: boolean, ready: boolean, readiness = 
       case "sites:enforceLiveReadiness": return { ready: readiness, blockers: ["credentials_expired"] };
       case "articles:getAutopilotState": return {
         migrationPending: false, ready: ready ? [article] : [], review: [], recent: [], published: [],
+        bufferInventory: { status: "complete", usableCountLowerBound: ready ? 1 : 0, inspectedCandidates: ready ? 1 : 0, blockers: [] },
         latestPublished: { ...article, _id: "previous", status: "published", createdAt: publishedAt, publishedAt, publicUrlStatus: "verified" },
       };
       case "jobs:settleExhaustedArticleQualityFailuresForSiteInternal":
@@ -64,7 +65,8 @@ function runtime(cadence: number, overdue: boolean, ready: boolean, readiness = 
 test("actual scheduler delivers sealed new articles at every supported integer cadence", async () => {
   for (let cadence = 1; cadence <= 21; cadence += 1) {
     const harness = runtime(cadence, true, true);
-    assert.deepEqual(await harness.run(), { scheduled: 1, mode: "buffer_delivery", bufferCount: 1 });
+    assert.deepEqual(await harness.run(), { scheduled: 1, mode: "buffer_delivery", bufferCount: 1,
+      bufferInventory: { status: "complete", usableCountLowerBound: 1, inspectedCandidates: 1, blockers: [] } });
     assert.equal(harness.calls.filter(c => c.name === "jobs:queuePublicationIfAbsent").length, 1);
   }
 });

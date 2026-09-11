@@ -6591,7 +6591,10 @@ export const setAutopilotRollout = internalMutation({
         );
       }
       const ready = await readPublicationBufferSummaries(ctx, site);
-      const sealed = ready.filter(
+      if (ready.inventory.status !== "complete") {
+        throw new Error(`Publication inventory is ${ready.inventory.status}; rollout blocked: ${ready.inventory.blockers.join(", ")}`);
+      }
+      const sealed = ready.rows.filter(
         (article) =>
           !article.publicationDeliveryBlocker &&
           article.publicationGateStatus === "passed" &&

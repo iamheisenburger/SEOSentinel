@@ -1,5 +1,6 @@
 import { MIN_APPROVED_BUFFER } from "./autopilotBuffer.ts";
 import type { Id } from "../_generated/dataModel";
+import type { PublicationInventory } from "./publicationEligibility.ts";
 
 export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   autopilot_disabled: "blocked",
@@ -20,6 +21,7 @@ export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   publication_deferral_exhausted: "blocked",
   publication_delivery_terminal: "blocked",
   publication_destination_contended: "blocked",
+  publication_inventory_incomplete: "blocked",
   cadence_failure_cooldown: "blocked",
   public_url_pending: "waiting",
   automatic_live_promotion: "waiting",
@@ -49,6 +51,7 @@ export type CadenceScheduleResult = {
   scheduled: number;
   mode?: SchedulerRunOutcome;
   bufferCount?: number;
+  bufferInventory?: PublicationInventory;
   blockers?: string[];
   eligibleAt?: number;
   // Exact automatic-plan receipt observed/created by the scheduler. Cooldown

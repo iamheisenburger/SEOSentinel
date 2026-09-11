@@ -58,6 +58,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   const queryReads: Array<{ table: string; index?: string; range: Fields[]; limit?: number; rows: number; bytes: number }> = [];
   const indexes: Record<string, Record<string, string[]>> = {};
   const stored = new Map<string, Blob>();
+  const readFailures = new Map<string, Error>();
   const die = (message: string): never => { unexpected.push(message); throw new Error(message); };
   const transport: typeof fetch = async (input, init = {}) => {
     const request = input instanceof Request ? input : undefined;
@@ -158,6 +159,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
         for (const rows of Object.values(tables)) if (rows.includes(row)) rows.splice(rows.indexOf(row), 1);
       },
       query: (table: string) => {
+        if (readFailures.has(table)) throw readFailures.get(table);
         assert.ok(tables[table], `Unknown table ${table}`);
         if (table === "provider_spend_approvals") die("Dormant all-in feature entered ordinary core test");
         const predicates: Expr[] = []; let sortFields = ["_creationTime"], direction = 1;
@@ -227,6 +229,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   };
   for (const kind of ["runQuery", "runMutation", "runAction"]) context[kind] = (ref: Parameters<typeof getFunctionName>[0], args: Fields) => invoke(getFunctionName(ref), args);
   const api = { tables, trace, queryReads, logs, unexpected, stored, add, get, invoke,
+    failReads(table: string, error?: Error) { if (error) readFailures.set(table, error); else readFailures.delete(table); },
     now: () => now, setTime: (value: number) => { assert.ok(value >= now); now = value; },
     async runNextScheduled() {
       const next = tables._scheduled_functions.filter(row => row.state.kind === "pending" && row.at <= now).sort((a, b) => a.at - b.at || a._creationTime - b._creationTime)[0];

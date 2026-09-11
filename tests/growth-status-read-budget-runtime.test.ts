@@ -130,3 +130,25 @@ test("authentication and ownership are checked before reading inventory", async 
     assert.deepEqual(f.reads.exactArticleReads, []);
   }
 });
+
+test("customer buffer readiness cannot replace incomplete health with raw article-summary counts", async () => {
+  for (const status of ["unknown", "partial", "complete"]) {
+    const f = fixture();
+    // Enough raw ready metadata to tempt the old fallback into claiming ready.
+    for (const row of f.tables.article_summaries.slice(1, 6)) {
+      row.status = "ready"; row.publicationGateStatus = "passed"; row.auditedContentHash = "audited";
+    }
+    const inventory = { status, usableCountLowerBound: status === "unknown" ? 0 : 4,
+      inspectedCandidates: 5, blockers: status === "complete" ? [] : ["publication_history_incomplete"] };
+    f.tables.autopilot_health = [{ siteId: "site-a", bufferMinimum: 3, bufferInventory: inventory,
+      approvedBufferCount: status === "complete" ? 4 : undefined }];
+    const result = await f.run();
+    const buffer = result.stages.buffer;
+    assert.equal(buffer.state, status === "complete" ? "ready" : "waiting_pentra");
+    assert.equal(buffer.blockerCode, status === "complete" ? undefined : "publication_inventory_incomplete");
+    assert.deepEqual(structuredClone(result.bufferInventory), inventory);
+    assert.equal(f.reads.articleScans, 0);
+    assert.deepEqual(f.reads.exactArticleReads, ["article-0"]);
+    assert.ok(f.reads.bytes < 150_000, "Honest inventory must not add body scans");
+  }
+});
