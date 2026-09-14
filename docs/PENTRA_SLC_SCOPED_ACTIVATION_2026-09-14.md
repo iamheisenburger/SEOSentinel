@@ -154,7 +154,7 @@ and continue only already-funded delivery/reconciliation. Never renew/increase.
    monthly authorization ID/reference, cadence, domain revision, confirmed facts,
    publisher destination/generation, readiness and pending work. Never enumerate
    other sites/tenants or print raw tokens/configuration.
-3. Use the installed Convex CLI's existing admin-authenticated `run --prod
+3. For PUBLIC owner-checked handlers, use the installed Convex CLI's existing admin-authenticated `run --prod
    --identity <JSON>` capability. The JSON must contain `subject` resolved in2;
    never omit it and accept the CLI's generated fallback. The installed
    `node_modules/convex/src/cli/lib/run.ts` constructs this identity. This does
@@ -174,7 +174,13 @@ and continue only already-funded delivery/reconciliation. Never renew/increase.
    history; do not relabel the new test window as an on-time legacy delivery.
    Both sites must be safely selected while still unpriced; if either rejects,
    leave pricing absent. Do not enable spending for only a partially bound run.
-6. Call existing `providerBudget:attachCumulativeValidationBudget` with the two
+6. Call existing INTERNAL `providerBudget:attachCumulativeValidationBudget`
+   through the existing admin-authenticated CLI WITHOUT `--identity`. Live37
+   proved that adding customer impersonation rejects internal handlers: the
+   same exact-site read-only internal query failed with it and succeeded without
+   it. Public owner-checked selection/readiness/control still REQUIRE the
+   resolved owner identity from3. Do not change privileges or application guards.
+   Call the internal attachment with the two
    exact site IDs, resolved existing authorizationId and
    `expectedMonthlyApprovalReference`, `limitMicroUsd: 20000000`, stable run
    reference `owner-20260914-slc-validation-run` and

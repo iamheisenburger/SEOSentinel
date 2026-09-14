@@ -566,8 +566,10 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   const cw = job.contentWork!;
   const recoveries = cw.recoveryAttempts ?? 0;
   const uncertain = cw.providerCalls.some(c => c.state === "started");
+  const creditUnavailable = cw.providerCalls.some(c => c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable");
   const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
+    : creditUnavailable ? "content_provider_credit_unavailable"
     : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
     : /Content provider (authority changed|reservation unavailable)|Content checkpoint/.test(error) ? error
     : recoveries >= MAX_CONTENT_RECOVERIES ? "content_recovery_attempts_exhausted"
@@ -606,6 +608,9 @@ export const beginProviderCall = internalMutation({
     if (completed) {
       if (completed.result === undefined) throw new Error("Content checkpoint response unavailable; no paid replay");
       return { kind: "cached" as const, result: completed.result };
+    }
+    if (cw.providerCalls.some(c => c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable")) {
+      throw new Error("Content provider credit unavailable; reconcile the retained attempt before new execution");
     }
     if (previousCalls.some(c => c.state === "started")) throw new Error("Content provider response already attempted; reconcile before replay");
     if (previousCalls.length > MAX_CONTENT_RECOVERIES) throw new Error("Content checkpoint retry limit exhausted");
@@ -676,7 +681,8 @@ export const recordProviderRejection = internalMutation({
   args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), status: v.number(), code: v.string() },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), cw = job?.contentWork, call = cw?.providerCalls.find(c => c.key === args.key);
-    const known = (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error");
+    const known = (args.status === 400 && args.code === "provider_credit_unavailable") ||
+      (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error");
     if (!known || !job || job.status !== "running" || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
       !cw || !call || call.state === "completed") throw new Error("Content rejection receipt invalid; original ceiling retained");
     if (call.state === "rejected" && (call.rejectionStatus !== args.status || call.rejectionCode !== args.code)) throw new Error("Content rejection receipt changed");

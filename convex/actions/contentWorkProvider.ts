@@ -39,10 +39,17 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   try { response = await client.messages.create(request); }
   catch (error) {
     if (error instanceof Anthropic.APIError) {
-      const body = error.error as { error?: { type?: string }; type?: string } | undefined;
+      const body = error.error as { error?: { type?: string; message?: string }; type?: string; message?: string } | undefined;
       const code = body?.error?.type ?? body?.type;
-      if ((error.status === 429 && code === "rate_limit_error") || ([503, 529].includes(error.status ?? 0) && code === "overloaded_error")) {
-        await s.ctx.runMutation(internal.contentWork.recordProviderRejection, { jobId: s.job._id, workerToken: s.workerToken, key, status: error.status!, code: code! });
+      const message = body?.error?.message ?? body?.message;
+      // This authenticated provider refusal is not a lost model response. It
+      // identifies the blocker, but is NOT an actual-cost/zero-charge receipt.
+      // Other 400s, malformed errors and transport failures remain uncertain.
+      const creditUnavailable = error.status === 400 && code === "invalid_request_error" &&
+        typeof message === "string" && /^Your credit balance is too low to access the Anthropic API\.(?:\s|$)/.test(message);
+      if (creditUnavailable || (error.status === 429 && code === "rate_limit_error") || ([503, 529].includes(error.status ?? 0) && code === "overloaded_error")) {
+        await s.ctx.runMutation(internal.contentWork.recordProviderRejection, { jobId: s.job._id, workerToken: s.workerToken, key,
+          status: error.status!, code: creditUnavailable ? "provider_credit_unavailable" : code! });
       }
     }
     throw error;

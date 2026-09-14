@@ -1,6 +1,75 @@
 # Pentra — fresh-task handoff
 
-## Current: release36, migration blocked; local repair awaiting review
+## Current37: both migrated; Anthropic credits exhausted; local diagnostic review
+
+Assignment `supervisor-20260914-slc-live-migration-37`. Read the CURRENT37 section
+of `docs/PENTRA_SLC_FIRST_LIVE_CYCLE_2026-09-14.md`;36 below is historical.
+Independently accepted20e8ebb is deployed to Convex and Vercel Production;
+main fast-forward preserved history. Exact-SHA hosted CI34897396218 succeeded
+2026-09-14 21:18:12 UTC:1695 tests/1694 passed/0 failed/1 skip; browsers28 passed/
+2 genuine auth skips; other free gates pass. No runtime merge.
+
+BOTH actual owner-checked migrations succeeded while unpriced at21:19:15.293/
+21:19:16.930 UTC. Fixed first window is now REALLY SAVED, BOTH:
+2026-09-14 22:14:14.420–22:19:14.420 UTC. Preserve it, including if overdue.
+Pentra interval86400000ms; LeadPilot28800000ms. Do not reuse never-saved36 proposal.
+Profiles/destinations/entitlements/page permissions and all legacy history held.
+The SAME original approved20 run was bound21:22:45.131 to existing authorization
+sn756ejbtp5marqw1chdpdskp58e0j8y, exact two sites, no expiry/renewal. Scoped
+Sonnet5 configuration enabled21:23:09.744 with2.50/item,2/10 token microUSD rates.
+Run/funding audit refs identify the original approval, not new authority.
+
+Normal public owner Resume activated preparation once each. First draft calls
+received Anthropic HTTP400 invalid_request_error: insufficient credit balance.
+Actual provider wallet insufficiency is now proved for these requests; numeric
+balance/model access/provider billing are not. This is NOT Pentra account32.
+Both terminal at21:23:25.533/21:23:29.238, one attempt/call each, no article,
+quality approval, publication, live artifact or refill. SLC buffer0/2 each.
+Pentra discovered a fresh first-party topic; Lead selected a September4 topic,
+so fresh Lead discovery remains unproven too. No first-cycle acceptance.
+
+Exact jobs: Pentra j9703g7paa6atyya4fzr56ngs58ecn07;
+LeadPilot j973nq40csygxhcg0bchsmx6zd8ecq9h. Each retains2.50 reservation with no
+actual-cost receipt; combined new5 held,15 remains of the single20. Zero verified
+actual is NOT verified zero billing. Old combined31.042560 remains unchanged:
+actual2.992560, settled ceilings12, outstanding16.05. Old account32 headroom at
+most0.957440; old4 consumed3.121440/headroom at most0.878560; resetOct1 00UTC.
+Fleet35 not enumerated or changed. No reservation, attempt or cap reset.
+
+Both selected schedules remain inactive/unpaused, failed-slot fenced, no retry,
+lease or future window wake. Scoped config remains unchanged; no third call.
+No irreversible grant stop, top-up, purchase or provider probe. No new task/
+automation/backlinks. Historical last publications and overdue commitments stay.
+
+Operator tooling correction: `--identity` is required for public owner-checked
+readiness/selection/control, but the existing INTERNAL attachment must use the
+admin CLI WITHOUT customer impersonation. The first attachment failed without
+mutation; paired read-only internal calls proved the invocation distinction.
+Correct invocation then succeeded. No code or privilege bypass was added.
+
+Local SDK/registered-worker reproduction proved a diagnostic defect: the exact
+credit refusal stayed `started` and became generic ambiguous-response failure.
+LOCAL candidate recognizes only that precise authenticated refusal, preserves
+existing rejection metadata, gives an actionable provider-credit failure and
+blocks fresh I/O without automatic retries. All money/attempts/deadlines remain;
+cached completed results are still usable. Other400/401/404/unknown responses
+remain uncertain and transient429/503/529 handling remains. It does not repair
+the two historical live attempts or authorize funding/reopening them.
+Four new results; focused32/33/35/36/37 all55 pass0skip; full1699 tests/1698 pass/
+0fail/1existing skip, final-source repeat129289.826333ms; browser28 pass/2auth skips;
+types/build/schema61 tables296 indexes/secrets685/full audit0/whitespace pass;
+lint0errors157 existing warnings. Final local SHA is supplied in review handoff.
+
+Stop for independent review before deploying this new candidate or further paid
+work. Next required decision is provider funding WITHIN the already-approved20
+and evidence-backed reconciliation of retained attempts, not a new budget grant
+or deadline/attempt reset. No duplicate approval question asked. Actual customer
+Chrome still has sign-in URL; CLI identity is not customer acceptance. No
+monetisation or SEO-growth acceptance. Three ordinary cycles and measured
+follow-up remain;14days is between discretionary revisions of the SAME page.
+Retain the known503 publication recovery limitation600020ms late without replay.
+
+## Historical36: release36, migration blocked; repair accepted and deployed37
 
 Assignment `supervisor-20260914-slc-first-live-cycle-36`. Read
 `docs/PENTRA_SLC_FIRST_LIVE_CYCLE_2026-09-14.md`. Reviewed c2a10c5 is deployed to

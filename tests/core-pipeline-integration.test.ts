@@ -59,6 +59,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
+  providerError?: { tool: string; status: number; type: string; message: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
   githubReadUnavailable?: () => boolean;
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
@@ -81,6 +82,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       const body = JSON.parse(String(init.body)); modelCalls.push(body);
       const text = String(body.messages[0].content), tool = body.tools?.[0]?.name;
       await options.providerBarrier?.(tool);
+      if (options.providerError && options.providerError.tool === tool) return json({ type: "error", error: {
+        type: options.providerError.type, message: options.providerError.message,
+      } }, options.providerError.status);
       if (options.ambiguousProviderFailure === tool) return new Response("{", { status: 200, headers: { "Content-Type": "application/json" } });
       if (options.providerFailure === tool) return json({ type: "error", error: { type: "overloaded_error", message: "Mocked provider failure" } }, 503);
       const keyword = text.match(/Primary Keyword: ([^\n]+)/i)?.[1] ?? text.match(/PRIMARY KEYWORD: ([^\n]+)/)?.[1];
@@ -730,8 +734,8 @@ test("SLC32 both approved tenants execute, verify and refill three fixed cycles 
 
 const independentFunding = { scope: "additional_provider_allowance", approvalReference: "synthetic-separate-explicit-money-approval" };
 const mockContentPricing = { model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: 500_000 };
-async function scopedPricingFixture(price: Fields = {}, grant: Fields = {}) {
-  const f = await validationFixture({ noPricing: true });
+async function scopedPricingFixture(price: Fields = {}, grant: Fields = {}, options: Parameters<typeof setup>[0] = {}) {
+  const f = await validationFixture({ ...options, noPricing: true });
   for (const i of [0, 1]) assert.equal((await f.admit(i)).mode, "content_pricing_unavailable");
   assert.equal(f.tables.jobs.length, 0); assert.equal(f.tables.provider_spend_reservations.length, 0);
   await f.attach({ independentFunding, ...grant });
@@ -2318,6 +2322,103 @@ test("SLC36 both migrated sites retain old history then create, verify and refil
   await exerciseValidationCycles(f, t);
   assert.deepEqual([...history, ...old].map(id => JSON.stringify(f.get(id))), preserved);
   assert.equal(f.tables.jobs.length, 10); f.assertOffline();
+});
+
+test("SLC37 explicit provider credit refusal remains identifiable without releasing holds or replaying either site", async () => {
+  const f = await scopedPricingFixture({}, {}, { providerError: { tool: "submit_article", status: 400,
+    type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." } });
+  await Promise.all([f.admit(0), f.admit(1)]);
+  const jobs = f.tables.jobs.filter(j => j.contentWork), holds = JSON.stringify(f.tables.provider_spend_reservations);
+  await Promise.all(jobs.map(j => f.invoke("actions/pipeline:processNextJob", { siteId: j.siteId, jobId: j._id })));
+  for (const previous of jobs) {
+    const j = f.get(previous._id)!;
+    assert.equal(j.contentWork.providerCalls[0].state, "rejected");
+    assert.equal(j.contentWork.providerCalls[0].rejectionStatus, 400);
+    assert.equal(j.contentWork.providerCalls[0].rejectionCode, "provider_credit_unavailable");
+    assert.equal(j.contentWork.failure, "content_provider_credit_unavailable");
+    assert.equal(j.status, "failed"); assert.equal(j.workerAttempts, 1); assert.equal(j.nextAttemptAt, undefined);
+    assert.equal(j.contentWork.providerCalls[0].actualMicroUsd, undefined);
+    assert.equal(j.contentWork.deadlineAt, previous.contentWork.deadlineAt);
+    f.setIdentity(f.owner);
+    const r = await f.invoke("contentWork:readiness", { siteId: j.siteId });
+    assert.match(r.work.find((w: Fields) => w.jobId === j._id).failure, /provider.*credit balance/i);
+    await f.invoke("contentWork:control", { siteId: j.siteId, action: "resume", reviewToken: r.reviewToken });
+    await f.invoke("actions/pipeline:processNextJob", { siteId: j.siteId, jobId: j._id });
+  }
+  f.restartRuntime();
+  for (const j of jobs) await f.invoke("actions/pipeline:processNextJob", { siteId: j.siteId, jobId: j._id });
+  assert.equal(f.modelCalls.length, 2); assert.equal(f.tables.articles.length, 0);
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
+  assert.equal((await f.admit(0)).mode, "content_failed_slot"); assert.equal((await f.admit(1)).mode, "content_failed_slot");
+  f.assertOffline();
+});
+
+test("SLC37 other HTTP failures cannot masquerade as the observed credit refusal or release money", async () => {
+  for (const error of [
+    { status: 400, type: "invalid_request_error", message: "Unknown model parameter." },
+    { status: 400, type: "api_error", message: "Your credit balance is too low to access the Anthropic API." },
+    { status: 401, type: "authentication_error", message: "Your credit balance is too low to access the Anthropic API." },
+    { status: 404, type: "not_found_error", message: "model: nonexistent-example-model" },
+    { status: 400, type: "invalid_request_error", message: "Example text: Your credit balance is too low to access the Anthropic API." },
+    { status: 400, type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API.invalid suffix" },
+  ]) {
+    const f = await scopedPricingFixture({}, {}, { providerError: { tool: "submit_article", ...error } });
+    await f.admit(0); const job = f.tables.jobs[0], holds = JSON.stringify(f.tables.provider_spend_reservations);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    const failed = f.get(job._id)!;
+    assert.equal(failed.contentWork.failure, "content_provider_result_ambiguous_reconciliation_required", JSON.stringify(error));
+    assert.equal(failed.contentWork.providerCalls[0].state, "started");
+    assert.equal(f.modelCalls.length, 1); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); f.assertOffline();
+  }
+});
+
+test("SLC37 a credit refusal after a completed draft preserves checkpoints, spend and the fixed deadline", async () => {
+  const f = await scopedPricingFixture({}, {}, { providerError: { tool: "audit_final_article", status: 400,
+    type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." } });
+  await f.admit(0); const job = f.tables.jobs[0], hold = JSON.stringify(f.get(job.providerSpendReservationId));
+  for (let i = 0; i < 5 && f.get(job._id)!.status !== "failed"; i++) {
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  }
+  const failed = f.get(job._id)!;
+  assert.equal(failed.contentWork.failure, "content_provider_credit_unavailable");
+  assert.ok(failed.contentWork.providerCalls.some((c: Fields) => c.state === "completed" && c.actualMicroUsd > 0));
+  assert.equal(failed.contentWork.providerCalls.at(-1).state, "rejected");
+  assert.equal(failed.contentWork.deadlineAt, job.contentWork.deadlineAt);
+  assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), hold);
+  const calls = JSON.stringify(failed.contentWork.providerCalls), count = f.modelCalls.length, attempts = failed.workerAttempts;
+  f.setIdentity(f.owner); const ready = await f.invoke("contentWork:readiness", { siteId: job.siteId });
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "pause", reviewToken: ready.reviewToken });
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: ready.reviewToken });
+  f.setTime(START + 86_400_000); f.restartRuntime();
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.modelCalls.length, count); assert.equal(f.get(job._id)!.workerAttempts, attempts);
+  assert.equal(JSON.stringify(f.get(job._id)!.contentWork.providerCalls), calls);
+  assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), hold); f.assertOffline();
+});
+
+test("SLC37 credit rejection receipts are worker-bound, idempotent, non-replayable and never zero-cost settlements", async () => {
+  const f = await scopedPricingFixture(); await f.admit(0); const job = f.tables.jobs[0], workerToken = "credit-receipt-worker";
+  await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken });
+  const previous = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "completed-before-credit", ceilingMicroUsd: 100 });
+  await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: previous.key, actualMicroUsd: 30, result: { cached: true } });
+  const started = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "credit-call", ceilingMicroUsd: 100 });
+  const args = { jobId: job._id, workerToken, key: started.key, status: 400, code: "provider_credit_unavailable" };
+  const holds = JSON.stringify(f.tables.provider_spend_reservations);
+  for (const bad of [{ workerToken: "wrong-worker" }, { status: 401 }, { code: "invalid_request_error" }, { key: "missing-call" }]) {
+    await assert.rejects(f.invoke("contentWork:recordProviderRejection", { ...args, ...bad }), /receipt invalid/);
+  }
+  await Promise.all([f.invoke("contentWork:recordProviderRejection", args), f.invoke("contentWork:recordProviderRejection", args)]);
+  const calls = JSON.stringify(f.get(job._id)!.contentWork.providerCalls);
+  await assert.rejects(f.invoke("contentWork:recordProviderRejection", { ...args, status: 429, code: "rate_limit_error" }), /receipt changed/);
+  await assert.rejects(f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: started.key, actualMicroUsd: 0 }), /settlement conflict/);
+  for (const key of ["credit-call", "different-logical-call"]) await assert.rejects(f.invoke("contentWork:beginProviderCall", {
+    jobId: job._id, workerToken, key, ceilingMicroUsd: 100 }), /credit unavailable/);
+  assert.deepEqual(await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "completed-before-credit", ceilingMicroUsd: 100 }),
+    { kind: "cached", result: { cached: true } });
+  assert.equal(JSON.stringify(f.get(job._id)!.contentWork.providerCalls), calls);
+  f.setTime(f.get(job._id)!.leaseExpiresAt + 1);
+  await assert.rejects(f.invoke("contentWork:recordProviderRejection", args), /receipt invalid/);
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); assert.equal(f.modelCalls.length, 0); f.assertOffline();
 });
 
 test("SLC migration consent, tenant isolation and single-engine admission preserve the legacy path", async () => {

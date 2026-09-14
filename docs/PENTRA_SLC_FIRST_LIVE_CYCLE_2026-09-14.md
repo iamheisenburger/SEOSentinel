@@ -1,4 +1,179 @@
-# Release36 and blocked first live migration
+# First live cycle: current37 and historical36
+
+## Current37: migrated and funded internally; actual provider credit refusal
+
+Assignment `supervisor-20260914-slc-live-migration-37` released the independently
+accepted `20e8ebbe5998c8a6837c3bb24f9d4e57e53f7253`. Both sites were genuinely
+migrated and bound to the SAME original September14 USD20 total additional run.
+Each first draft request reached Anthropic and received HTTP400
+`invalid_request_error`: its credit balance was insufficient. Neither produced
+an article. This is actual provider refusal, not the old Pentra account32 guard.
+Numeric wallet balance and provider-billed cost remain unverified.
+
+The resulting diagnostic repair is LOCAL ONLY, not pushed or deployed. It
+classifies this precise authenticated refusal without releasing any money or
+replaying any request. It does NOT fund Anthropic or reconcile the two existing
+production attempts. The final handoff supplies its exact review SHA. Do not
+deploy or spend again before independent review and a bounded funding/
+reconciliation decision. No new allowance or duplicate migration approval asked.
+
+### Release and operator activation receipts
+
+Independent review had51 scoped and153 broader passing results, zero failures/
+skips. Fetch found onlyc2a10c5, already an ancestor; no merge/history rewrite.
+Convex deployment succeeded by21:12:20 UTC, no deleted index. Main fast-forwarded
+to20e8ebb. Vercel exact-SHA Production deployment6446557692 succeeded
+2026-09-14 21:12:34 UTC, as reported by its authenticated GitHub integration.
+[Deployment URL](https://seo-sentinel-eo46luqgi-arshads-projects-836ebfbd.vercel.app).
+[Hosted CI34897396218](https://github.com/iamheisenburger/SEOSentinel/actions/runs/34897396218)
+completed21:18:11, success updated21:18:12 UTC:1695 tests/1694 passed/0 failed/
+1 existing skip,193676.130460ms; browsers28 passed/2 genuine auth skips,34.6s.
+Types/build/schema61 tables296 indexes/secrets685/audit0 passed; lint0 errors,
+157 existing warnings. Production-safe public browser8 passed/2 auth skips,5.8s.
+
+Only the two authorized sites were inspected. Existing same-owner entitlement,
+confirmed profile, GitHub main/destination generations3/0, page permissions and
+publisher receipts stayed unchanged. Normal public handlers used the owner
+subject resolved from these exact records, not a guessed identity or customer
+browser session. Chrome's Pentra tab still had a sign-in URL; no login, identity
+selection or authentication reset was attempted. Operator success is not signed-
+in acceptance.
+
+Actual activation on2026-09-14 UTC:
+
+| Event | Pentra | LeadPilot |
+| --- | --- | --- |
+| Saved migration/consent | 21:19:15.293 | 21:19:16.930 |
+| Ordinary interval retained | 86400000ms, daily | 28800000ms, every8h |
+| First fixed window, BOTH | 22:14:14.420–22:19:14.420 | 22:14:14.420–22:19:14.420 |
+| Normal owner Resume | 21:23:19.982 | 21:23:22.966 |
+| New work admission | 21:23:20.975 | 21:23:24.477 |
+| Terminal worker failure | 21:23:25.533 | 21:23:29.238 |
+| New publication / live verification / refill | none / none / none | none / none / none |
+| New SLC ready buffer | 0/2 | 0/2 |
+
+Both migrations were completed while pricing was absent, verified again
+21:19:30.040. No job or new reservation existed before grant binding. The first
+internal attachment invocation at21:19:45.329 used `--identity` incorrectly and
+was rejected (request7db0d9c35e513efc), with no mutation. A safe projection proved
+every attachment precondition,724 legacy jobs totaling about506KB and zero
+unfinished content jobs. An equivalent local registered-handler attachment
+succeeded. Paired READ-ONLY exact-site internal calls then failed with identity
+(request085ff4d817b6d8f6) and succeeded through the existing admin CLI without it.
+The corrected internal invocation succeeded at21:22:45.131. This is a tooling
+invocation correction, not an application authorization/financial bypass.
+
+Existing authorization `sn756ejbtp5marqw1chdpdskp58e0j8y` now immutably binds
+exactly Pentra `jh74txye54jna4t85m6y7p4d6h82v9ab` and LeadPilot
+`jh7cccny67df67rdm4jp65tmtn8am982`, limit20000000 microUSD, no invented expiry.
+Run reference `owner-20260914-slc-validation-run` and independent funding
+reference `owner-20260914-slc-additional-provider-20` identify the SAME original
+approval. Old monthly approval `owner-approved-20260908-019fec9f` is unchanged.
+Both bindings and zero initial run consumption were verified before pricing.
+At21:23:09.744, the single existing environment setting was enabled with:
+
+```json
+{"model":"claude-sonnet-5","inputMicroUsdPerToken":2,"outputMicroUsdPerToken":10,"budgetMicroUsd":2500000,"validationAuthorizationId":"sn756ejbtp5marqw1chdpdskp58e0j8y"}
+```
+
+One normal public owner Resume per site activated preparation because selection
+wakes had already finished unpriced. No direct job, scheduler, advance or
+publisher action was forced. The new deadline is actually saved and MUST NOT
+move. The proposed36 deadline21:58:07.252 was never saved and is not this window.
+
+### Exact failures and financial boundaries
+
+Pentra job `j9703g7paa6atyya4fzr56ngs58ecn07`, reservation
+`n576sgrs11b9dzc5mg0fjbm21n8echcx`, run `kd76xtwwz0x9epjf5sxbfp6s7h8edmhz`:
+first draft request ceiling295194 microUSD; provider request
+`req_011Cf42zxY2q9yG39aW7hnqF` refused for insufficient credit.
+LeadPilot job `j973nq40csygxhcg0bchsmx6zd8ecq9h`, reservation
+`n5727h3mka0ekryf5a90ggsj8s8edf7v`, run `kd7b3vcravejwsh9mn0pa9sgmh8ed2xt`:
+first draft request ceiling282202 microUSD; provider request
+`req_011Cf431ERkqdB4pREzeTFb8` refused for the same reason.
+The exact-site automatic run detail retains the HTTP400/type/message; the
+deployed worker instead stored `content_provider_result_ambiguous_reconciliation_required`.
+
+Both jobs have one attempt, one `started` call, no usage/cost/result receipt,
+no article, no publication attempt, no live worker lease, no retry and no
+window wake. Both schedules remain selected, not active, not paused. The failed
+slot guard stops further admissions. The scoped pricing configuration remains
+unchanged; no third request was triggered. The run remains intact, not stopped
+irreversibly or renewed. No top-up, purchase, subscription or provider probe.
+
+At21:29:21.199/21:29:23.016 UTC, exact-site audits confirm all ordinary totals
+unchanged; complete windows, zero invalid settlements:
+
+| Scope, USD | Verified actual | Settled conservative ceilings | Outstanding held | Total consumed |
+| --- | ---: | ---: | ---: | ---: |
+| Pentra ordinary | 1.436640 | 5.000000 | 7.250000 | 13.686640 |
+| LeadPilot ordinary | 1.555920 | 7.000000 | 8.800000 | 17.355920 |
+| Combined ordinary | 2.992560 | 12.000000 | 16.050000 | 31.042560 |
+| Separate finite20 run | 0 verified | 0 | 5.000000 | 5.000000 |
+
+Ordinary account limit32, headroom AT MOST0.957440; old discovery4 consumed
+3.121440, headroom AT MOST0.878560. Fleet35 is unchanged and was not enumerated.
+Ordinary monthly reset2026-10-01 00:00:00 UTC. The independent run has15.000000
+remaining and never resets monthly. Zero verified actual is NOT a claim of
+zero provider billing: no cost receipt was returned. The HTTP refusal is not
+permission to remove either2.50 hold, and no historical reservation was changed.
+Provider usable credit is insufficient for these requests; its numeric balance
+and funding/reset policy were not inspected. A higher Pentra account cap would
+not cure this provider refusal. The original20 approval remains the total
+boundary; no extra financial allowance is requested by this report.
+
+Pentra did create fresh first-party topic `jn71a3650tq1fzdtpyvnyn9txd8edj0w`
+at21:23:20.975, keyword "keyword research and content automation". LeadPilot
+selected existing topic `jn7f6sbpk7008c7qhsmw9r15c18ds09e`, keyword "agent sales
+representative", created2026-09-04 04:34:27.275 UTC. Do NOT claim fresh LeadPilot
+discovery or a completed discovery→generation chain. Neither reached quality,
+ready buffer, live publication or refill. Historical legacy empty buffers0/4,
+0/12 and last actual publications/missed deadlines below are not erased by mode
+selection. Technical acceptance, genuine customer acceptance and SEO growth all
+remain open. No backlinks, prospect contact, new tasks or automations.
+
+### Local37 diagnostic repair and free gates
+
+The identical live HTTP400/type/message was reproduced in the actual SDK and
+registered worker fixture:1 test failed, actual call state `started` rather than
+`rejected`,479.497083ms. The repair recognizes ONLY that precise provider credit
+refusal and persists existing rejection fields with `provider_credit_unavailable`.
+Recovery terminates actionably as `content_provider_credit_unavailable`, never
+as an automatic retry. Customer copy distinguishes provider credit from internal
+capacity. The provider-call boundary refuses any fresh call after that terminal
+receipt, while already-completed cached checkpoints remain usable. No new schema,
+route, ledger, budget flag, pricing default or provider fallback.
+
+Crucially, classification changes no settlement/release policy: a refusal lacks
+an actual-cost receipt, so original ceilings remain. Unknown responses and other
+HTTP400/401/404 messages remain uncertain; transient429/503/529 recovery is
+unchanged. This candidate does not retrospectively modify either live attempt,
+reset its counters, release its reservation or create a replacement slot.
+
+Four new connected results include six negative error-shape/status cases,
+both sites failing concurrently, failure after a completed draft, retained
+checkpoints, pause/resume/restart/day rollover without replay, worker/lease/key
+fences, duplicate rejection idempotency, conflicting receipt rejection and
+prohibited zero-cost settlement. Existing scoped55 results all pass with no
+skips,13959.653125ms, covering cancellation/expiry/concurrency/settlement too.
+Full suite1699 tests/1698 passed/0 failed/1 existing skip,118315.155875ms;
+final-source repeat also1699/1698/0/1,129289.826333ms. Local browser28 passed/2 genuine
+auth skips,5.3s. Typecheck/build/schema61 tables296 indexes/secret scan685/full
+dependency audit0/whitespace pass; lint0 errors157 existing warnings. Initial
+local typecheck caught an optional fixture-property narrowing error; corrected.
+A build invocation without the documented non-secret public configuration also
+failed as designed, then passed with the same synthetic environment as CI.
+
+Next boundary: independent review of the exact local diagnostic candidate;
+usable Anthropic funding within the already-approved20 and an evidence-backed,
+bounded reconciliation path for these retained failed attempts. This repair
+alone cannot authorize a purchase, restore provider balance, reopen a failed
+slot or prove the first live cycle. Do not move the saved deadline or claim
+completion. Three later ordinary cycles, measured follow-up and authenticated
+desktop/mobile acceptance remain required. Fourteen days applies BETWEEN
+discretionary revisions of the same page, not before its first improvement.
+
+## Historical36: released, migration failed before saving a schedule
 
 Assignment `supervisor-20260914-slc-first-live-cycle-36`. Reviewed source
 `c2a10c5373a712a659ed75fc0b97cd1474e462c5` was released. Actual operator migration
