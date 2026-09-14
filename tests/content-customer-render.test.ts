@@ -14,7 +14,7 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   entitlement: true, enabled: true, approvalRequired: false, bindingCurrent: true, schedule: { active: false, paused: true, nextDeadlineAt: 1, intervalMs: 86_400_000, timezone: "UTC" },
   funding: { status: "blocked", checkedAt: 2, monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: 86_400_000, monthlyResetAt: 2_678_400_000, incrementalLimitMicroUsd: null },
   complete: true, ready: 0, work: [] };
-function render(component: string, queryState = state, outcome: unknown = { status: "incomplete", current: null }) {
+function render(component: string, queryState: unknown = state, outcome: unknown = { status: "incomplete", current: null }) {
   const code = buildSync({ entryPoints: [`src/components/${component}.tsx`], bundle: true, platform: "node", format: "cjs", packages: "external", write: false }).outputFiles[0].text;
   const runtime = { exports: {} as Record<string, never> }, calls: string[] = [];
   runInNewContext(code, { module: runtime, exports: runtime.exports, TextEncoder, URL, Intl,
@@ -48,4 +48,17 @@ test("SLC29 synthetic overview separates upcoming, verified, organic and issues 
   assert.deepEqual(calls, ["contentWork:readiness", "searchPerformance:contentOutcome"]);
   const available = render("content-work-overview", state, { status: "available", current: { start: "2026-08-01", end: "2026-08-28", clicks: 0 }, previous: null, cohorts: [], property: "sc-domain:fixture.example" });
   assert.match(available.html, /0 clicks/); assert.match(available.html, /No complete previous window/);
+});
+
+test("SLC38 customer rendering treats provider interruption as platform responsibility and exposes an exact restored retry", () => {
+  const interrupted = { jobId: "jobs:fixture", intent: "create", stage: "failed", windowStartAt: 1, deadlineAt: 2,
+    failure: "Pentra's generation service is interrupted. Our team must restore it; you do not need to fund a provider or change your plan." };
+  const blocked = render("content-work-service", { ...state, work: [interrupted] }).html;
+  assert.match(blocked, /generation service is interrupted/); assert.match(blocked, /you do not need to fund a provider/);
+  assert.doesNotMatch(blocked, /Retry interrupted preparation|purchase credits|top up|Plans &amp; Billing/);
+  const restored = render("content-work-service", { ...state, work: [{ ...interrupted,
+    failure: "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded.",
+    creditRetry: { jobId: interrupted.jobId, callKey: "synthetic-private-call", token: "synthetic-private-token" } }] }).html;
+  assert.match(restored, /Retry interrupted preparation/); assert.match(restored, /original deadline and earlier attempt remain recorded/);
+  assert.doesNotMatch(restored, /synthetic-private-call|synthetic-private-token|purchase credits/);
 });

@@ -1,5 +1,5 @@
 "use node";
-import { contentProviderActive, contentStructuredCall, withContentProvider } from "./contentWorkProvider";
+import { contentProviderActive, contentProviderPromptTime, contentStructuredCall, withContentProvider } from "./contentWorkProvider";
 class ContentQualityRejection extends Error {}
 
 import { internal } from "../_generated/api";
@@ -2094,7 +2094,7 @@ async function remediateFinalArticle(args: {
   auditNotes: string[];
   purpose?: "audit_remediation" | "evidence_safe_length_recovery";
 }): Promise<{ markdown: string; notes: string[] }> {
-  const currentYear = new Date().getUTCFullYear();
+  const currentYear = new Date(contentProviderPromptTime()).getUTCFullYear();
   const lengthRecovery = args.purpose === "evidence_safe_length_recovery";
   return callClaudeStructured({
     system: [
@@ -2178,7 +2178,7 @@ async function generateFinalMetadata(args: {
   primaryKeyword: string;
   sources: { url: string; title?: string }[];
 }): Promise<{ title: string; metaTitle: string; metaDescription: string }> {
-  const currentYear = new Date().getUTCFullYear();
+  const currentYear = new Date(contentProviderPromptTime()).getUTCFullYear();
   return callClaudeStructured({
     system: [
       UNTRUSTED_EVIDENCE_INSTRUCTION,
@@ -4687,7 +4687,7 @@ async function handleArticle(
     `</target_audience>`,
     ``,
     `<content_settings>`,
-    `Current date: ${new Date().toISOString().slice(0, 10)}. Never present an earlier year as current or future context.`,
+    `Current date: ${new Date(contentProviderPromptTime()).toISOString().slice(0, 10)}. Never present an earlier year as current or future context.`,
     `Tone: ${site.tone ?? "professional"} — maintain this tone throughout the entire article.`,
     site.language && site.language !== "en" ? `Language: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ, key takeaways, and meta fields must be in ${site.language}.` : `Language: English`,
     (() => {

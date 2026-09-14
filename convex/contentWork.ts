@@ -3,7 +3,8 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
-import { publicationArtifactHash, publicationDeliveryConfig } from "./lib/publicationArtifact";
+import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
+import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
@@ -87,6 +88,111 @@ async function requireOwner(ctx: MutationCtx, siteId: Id<"sites">) {
   if (!site?.userId || identity?.subject !== site.userId) throw new Error("Not authorized");
   return site;
 }
+
+type ContentCall = NonNullable<Doc<"jobs">["contentWork"]>["providerCalls"][number];
+const interruptedCreditCall = (c: ContentCall) => c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable" && c.creditRecovery?.requestedAt === undefined;
+function creditRetryToken(job: Doc<"jobs">, call: ContentCall) {
+  return sha256Hex(JSON.stringify([job._id, job.siteId, job.contentWork?.profileHash, job.contentWork?.connectionHash,
+    call.key, call.requestHash, call.rejectionRequestId, call.creditRecovery?.confirmedAt, call.creditRecovery?.fundingReference]));
+}
+function creditRunHash(run: Doc<"autopilot_runs">) {
+  return sha256Hex(JSON.stringify([run._id, run.siteId, run.jobId, run.articleId, run.status, run.outcome,
+    run.scheduledAt, run.startedAt, run.completedAt, run.detail]));
+}
+async function retainedCreditEvidence(ctx: QueryCtx | MutationCtx, job: Doc<"jobs">, call: ContentCall) {
+  const saved = call.creditRecovery;
+  if (!saved?.sourceRunId) return;
+  const run = await ctx.db.get(saved.sourceRunId);
+  if (!run || run.siteId !== job.siteId || run.jobId !== job._id || run.status !== "completed" ||
+    legacyCreditRefusal(run.detail)?.requestId !== call.rejectionRequestId || creditRunHash(run) !== saved.sourceEvidenceHash) {
+    throw new Error("Retained provider refusal evidence changed; no replay authorized");
+  }
+}
+async function creditRecoveryAuthority(ctx: MutationCtx, site: Doc<"sites">, job: Doc<"jobs">) {
+  const cw = job.contentWork;
+  if (job.siteId !== site._id || !cw || cw.operation || cw.retiredAt !== undefined || !jobAuthorizedForExecution(site, job) ||
+    !(await contentEntitlementAuthorized(ctx, site)) || site.approvalRequired || !contentConnectionComplete(site) ||
+    cw.profileHash !== confirmedContentProfileHash(site) || cw.connectionHash !== contentConnectionHash(site)) {
+    throw new Error("Interrupted content authority changed");
+  }
+  selectionConnection(site);
+  await authorizedWorkPage(ctx, site, job);
+  if (!(await pricingConfiguration(ctx, site, job))) throw new Error("Interrupted content pricing unavailable");
+  const binding = await contentValidationBinding(ctx, site, Date.now(), job);
+  if (binding && binding.state !== "active") throw new Error("Interrupted content validation is not active");
+  const receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
+  const prior = cw.providerCalls.filter(c => c.reservationId && c.reservationId !== receipt?._id)
+    .reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+  if (!receipt || receipt.siteId !== site._id || receipt.userId !== site.userId || receipt.purpose !== "content_work" ||
+    receipt.releasedAt !== undefined || receipt.settledAt !== undefined || receipt.reservedMicroUsd !== cw.budgetMicroUsd - prior ||
+    !(receipt.trigger === `content_slot:${cw.deadlineAt}` || receipt.trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`))) {
+    throw new Error("Interrupted content reservation changed");
+  }
+  // Separately funded runs account for the original hold across all dates.
+  // Ordinary dated holds cannot be borrowed in a later day/month.
+  if (!binding?.run.independentFunding && new Date(receipt.createdAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
+    throw new Error("Interrupted ordinary reservation crossed its funding day; retained hold requires review");
+  }
+}
+
+/** INTERNAL platform-operator attestation after real funding restoration. No
+ * provider probe, grant, settlement, worker wake or customer billing mutation.
+ * Its immutable reference authorizes at most one owner retry of this refusal. */
+export const confirmCreditRestoration = internalMutation({
+  args: { siteId: v.id("sites"), jobId: v.id("jobs"), callKey: v.string(), requestHash: v.string(),
+    requestId: v.string(), fundingReference: v.string(), evidenceRunId: v.optional(v.id("autopilot_runs")) },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId), job = await ctx.db.get(args.jobId), cw = job?.contentWork;
+    const call = cw?.providerCalls.find(c => c.key === args.callKey);
+    if (!site || !job || !cw || !call || call.requestHash !== args.requestHash || !/^[a-f0-9]{64}$/.test(args.requestHash) ||
+      !validProviderRequestId(args.requestId) || !/^[a-zA-Z0-9_-]{8,128}$/.test(args.fundingReference)) throw new Error("Exact provider restoration reference required");
+    await creditRecoveryAuthority(ctx, site, job);
+    if (call.creditRecovery) {
+      await retainedCreditEvidence(ctx, job, call);
+      if (call.rejectionRequestId !== args.requestId || call.creditRecovery.fundingReference !== args.fundingReference ||
+        call.creditRecovery.sourceRunId !== args.evidenceRunId) throw new Error("Provider restoration confirmation is immutable");
+      return { confirmed: false, confirmedAt: call.creditRecovery.confirmedAt };
+    }
+    if (job.status !== "failed" || cw.stage !== "failed" || job.workerToken || job.leaseExpiresAt || call !== cw.providerCalls.at(-1) ||
+      cw.providerCalls.some(c => c !== call && c.state === "started") || call.actualMicroUsd !== undefined || call.result !== undefined ||
+      (cw.recoveryAttempts ?? 0) >= MAX_CONTENT_RECOVERIES || cw.providerCalls.length >= 20 ||
+      cw.providerCalls.some(c => c.creditRecovery?.fundingReference === args.fundingReference)) throw new Error("Interrupted provider attempt is not eligible for restoration");
+    const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+    if (used + call.ceilingMicroUsd > cw.budgetMicroUsd) throw new Error("Interrupted content budget cannot fund the next priced attempt");
+    let sourceEvidenceHash: string | undefined, rejectionStage = call.rejectionStage, rejectionRecordedAt = call.rejectionRecordedAt;
+    if (args.evidenceRunId) {
+      // The old deployment saved no per-call response metadata. Only its first
+      // ever draft refusal has a unique call/run relationship: one attempt,
+      // one unresolved call, no article or possible successful checkpoint.
+      const run = await ctx.db.get(args.evidenceRunId), proof = legacyCreditRefusal(run?.detail);
+      if (!run || run.siteId !== site._id || run.jobId !== job._id || run.status !== "completed" || run.outcome !== "job_failed" ||
+        run.articleId || proof?.requestId !== args.requestId || !Number.isSafeInteger(run.startedAt) || !Number.isSafeInteger(run.completedAt) ||
+        run.scheduledAt > job.createdAt || run.scheduledAt < job.createdAt - 300_000 || run.startedAt! < run.scheduledAt || run.startedAt! > job.createdAt ||
+        run.completedAt! < job.updatedAt || run.completedAt! > job.updatedAt + 60_000 || run.completedAt! > Date.now() ||
+        job.articleId || job.payload?.articleId || job.publicationAttempts || job.workerAttempts !== 1 || cw.providerCalls.length !== 1 ||
+        cw.revisions !== 0 || cw.replacements !== 0 || (cw.recoveryAttempts ?? 0) !== 0 || call.rejectionRequestId || call.rejectionTrackingVersion !== undefined ||
+        !["content_provider_result_ambiguous_reconciliation_required", "content_provider_credit_unavailable"].includes(cw.failure ?? "") ||
+        !["started", "rejected"].includes(call.state) || (call.state === "rejected" && call.rejectionCode !== "provider_credit_unavailable") ||
+        call.logicalKey !== "0:0:draft:submit_article" || call.key !== `${call.logicalKey}:0`) throw new Error("Historical refusal lacks unique first-call evidence; no replay authorized");
+      const runs = await ctx.db.query("autopilot_runs").withIndex("by_site_scheduled", q => q.eq("siteId", site._id)
+        .gte("scheduledAt", job.createdAt - 300_000).lte("scheduledAt", job.updatedAt + 60_000)).take(101);
+      if (runs.length > 100 || runs.filter(r => r.jobId === job._id).length !== 1) throw new Error("Historical provider run evidence is incomplete or conflicting");
+      sourceEvidenceHash = creditRunHash(run); rejectionStage = "prepare"; rejectionRecordedAt = run.completedAt;
+    } else if (!interruptedCreditCall(call) || call.rejectionStatus !== 400 || call.rejectionRequestId !== args.requestId ||
+      !Number.isSafeInteger(call.rejectionRecordedAt) || call.rejectionRecordedAt! > job.updatedAt ||
+      !["prepare", "review"].includes(rejectionStage ?? "") || cw.failure !== "content_provider_credit_unavailable") {
+      throw new Error("Verified provider refusal receipt required; unknown completion cannot be retried");
+    }
+    const confirmedAt = Date.now();
+    await ctx.db.patch(job._id, { contentWork: { ...cw, failure: "content_provider_credit_unavailable",
+      providerCalls: cw.providerCalls.map(c => c.key !== call.key ? c : { ...c, state: "rejected" as const,
+        rejectionCode: "provider_credit_unavailable", rejectionStatus: 400, rejectionRequestId: args.requestId,
+        rejectionRecordedAt, rejectionStage,
+        creditRecovery: { confirmedAt, fundingReference: args.fundingReference,
+          ...(args.evidenceRunId ? { sourceRunId: args.evidenceRunId, sourceEvidenceHash } : {}) } }) } });
+    return { confirmed: true, confirmedAt };
+  },
+});
 
 type SetupIssue = { code: string; action: string; jobId?: Id<"jobs">; articleId?: Id<"articles">; until?: number };
 async function reviewChangedSetup(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[]) {
@@ -271,17 +377,24 @@ export const readiness = query({
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
-      work: jobs.filter(j => j.contentWork).map(j => ({ jobId: j._id, articleId: j.articleId,
+      work: jobs.filter(j => j.contentWork).map(j => {
+        const call = j.contentWork!.providerCalls.find(c => interruptedCreditCall(c) && c.creditRecovery);
+        const creditRetry = j.status === "failed" && j.contentWork!.stage === "failed" && call && j.contentWork!.retiredAt === undefined
+          ? { jobId: j._id, callKey: call.key, token: creditRetryToken(j, call) } : null;
+        return { jobId: j._id, articleId: j.articleId,
         intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
         retiredAt: j.contentWork!.retiredAt,
-        publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, failure: contentIssue(j.contentWork!.failure ?? j.error) })) };
+        publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, creditRetry,
+        failure: creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
+          : contentIssue(j.contentWork!.failure ?? j.error) }; }) };
   },
 });
 
 /** Pause is not cancellation: retain ready work, leases, attempts and costs.
  * Resume can only wake the same binding; changed facts require reconciliation. */
-export const control = mutation({ args: { siteId: v.id("sites"), action: v.union(v.literal("pause"), v.literal("resume"), v.literal("retry")), reviewToken: v.string() },
+export const control = mutation({ args: { siteId: v.id("sites"), action: v.union(v.literal("pause"), v.literal("resume"), v.literal("retry")), reviewToken: v.string(),
+    creditRetry: v.optional(v.object({ jobId: v.id("jobs"), callKey: v.string(), token: v.string() })) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
     if (site.serviceMode !== "growth_first" || !s) throw new Error("Choose growth-first service first");
@@ -294,6 +407,28 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     if (args.action === "resume") await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: false }, autopilotEnabled: true,
       autopilotRolloutMode: s.active ? "live" : "warm", updatedAt: Date.now() });
     if (args.action === "retry" && s.paused) throw new Error("Resume the paused service before retrying");
+    if (args.creditRetry) {
+      if (args.action !== "retry") throw new Error("Interrupted work requires its exact retry request");
+      const job = await ctx.db.get(args.creditRetry.jobId), cw = job?.contentWork;
+      const call = cw?.providerCalls.find(c => c.key === args.creditRetry!.callKey);
+      if (!job || !cw || !call || !call.creditRecovery || args.creditRetry.token !== creditRetryToken(job, call)) throw new Error("Interrupted work confirmation changed");
+      await creditRecoveryAuthority(ctx, site, job);
+      await retainedCreditEvidence(ctx, job, call);
+      if (call.creditRecovery.requestedAt !== undefined) return { recovered: false, reason: "already_requested" };
+      if (job.status !== "failed" || cw.stage !== "failed" || cw.failure !== "content_provider_credit_unavailable" ||
+        !interruptedCreditCall(call) || !["prepare", "review"].includes(call.rejectionStage ?? "") ||
+        cw.providerCalls.some(c => c.state === "started" || (c !== call && interruptedCreditCall(c))) ||
+        job.workerToken || job.leaseExpiresAt || (cw.recoveryAttempts ?? 0) >= MAX_CONTENT_RECOVERIES ||
+        cw.providerCalls.length >= 20) throw new Error("Interrupted work cannot safely retry");
+      const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+      if (used + call.ceilingMicroUsd > cw.budgetMicroUsd) throw new Error("Interrupted content budget exhausted");
+      const requestedAt = Date.now();
+      await ctx.db.patch(job._id, { status: "pending", nextAttemptAt: undefined, error: undefined,
+        contentWork: { ...cw, stage: call.rejectionStage!, failure: undefined, recoveryAttempts: (cw.recoveryAttempts ?? 0) + 1,
+          providerCalls: cw.providerCalls.map(c => c.key === call.key ? { ...c, creditRecovery: { ...c.creditRecovery!, requestedAt } } : c) }, updatedAt: requestedAt });
+      await wake(ctx, site._id);
+      return { recovered: true, jobId: job._id };
+    }
     await wake(ctx, site._id);
   } });
 
@@ -566,7 +701,7 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   const cw = job.contentWork!;
   const recoveries = cw.recoveryAttempts ?? 0;
   const uncertain = cw.providerCalls.some(c => c.state === "started");
-  const creditUnavailable = cw.providerCalls.some(c => c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable");
+  const creditUnavailable = cw.providerCalls.some(interruptedCreditCall);
   const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
     : creditUnavailable ? "content_provider_credit_unavailable"
@@ -609,12 +744,13 @@ export const beginProviderCall = internalMutation({
       if (completed.result === undefined) throw new Error("Content checkpoint response unavailable; no paid replay");
       return { kind: "cached" as const, result: completed.result };
     }
-    if (cw.providerCalls.some(c => c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable")) {
+    if (cw.providerCalls.some(interruptedCreditCall)) {
       throw new Error("Content provider credit unavailable; reconcile the retained attempt before new execution");
     }
     if (previousCalls.some(c => c.state === "started")) throw new Error("Content provider response already attempted; reconcile before replay");
     if (previousCalls.length > MAX_CONTENT_RECOVERIES) throw new Error("Content checkpoint retry limit exhausted");
     if (!(await pricingConfiguration(ctx, site, job))) throw new Error("Content provider authority changed: pricing scope unavailable");
+    for (const c of cw.providerCalls) if (c.creditRecovery?.requestedAt !== undefined) await retainedCreditEvidence(ctx, job, c);
     const validation = await contentValidationBinding(ctx, site, Date.now(), job);
     if (validation && validation.state !== "active") throw new Error(`Content provider authority changed: validation ${validation.state}`);
     let receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
@@ -630,7 +766,9 @@ export const beginProviderCall = internalMutation({
     if (!Number.isSafeInteger(args.ceilingMicroUsd) || args.ceilingMicroUsd <= 0 || used + args.ceilingMicroUsd > cw.budgetMicroUsd || cw.providerCalls.length >= 20) {
       throw new Error(`Content work budget exhausted: limitMicroUsd=${cw.budgetMicroUsd}; consumedCeilingMicroUsd=${used}; requestedMicroUsd=${args.ceilingMicroUsd}; availableMicroUsd=${Math.max(0, cw.budgetMicroUsd - used)}; calls=${cw.providerCalls.length}/20`);
     }
-    if (new Date(receipt.createdAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
+    const retainedRunCreditHold = validation?.run.independentFunding && cw.providerCalls.some(c =>
+      c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable" && c.creditRecovery?.requestedAt !== undefined);
+    if (!retainedRunCreditHold && new Date(receipt.createdAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
       if (cw.providerCalls.some(c => c.state !== "completed") || (cw.priorReservationIds?.length ?? 0) >= MAX_CONTENT_RECOVERIES) {
         throw new Error("Content work rollover blocked: uncertain prior cost or renewal limit; original reservation retained");
       }
@@ -654,7 +792,7 @@ export const beginProviderCall = internalMutation({
     if (currentUsed + args.ceilingMicroUsd > receipt.reservedMicroUsd) throw new Error(`Content work budget exhausted for current reservation: limitMicroUsd=${receipt.reservedMicroUsd}; consumedCeilingMicroUsd=${currentUsed}; requestedMicroUsd=${args.ceilingMicroUsd}`);
     const key = `${args.key}:${previousCalls.length}`;
     await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: [...cw.providerCalls, { key, logicalKey: args.key, requestHash: args.requestHash,
-      reservationId: receipt._id, ceilingMicroUsd: args.ceilingMicroUsd, state: "started" }] } });
+      reservationId: receipt._id, ceilingMicroUsd: args.ceilingMicroUsd, state: "started", rejectionTrackingVersion: 1 }] } });
     return { kind: "started" as const, key };
   },
 });
@@ -678,15 +816,22 @@ export const completeProviderCall = internalMutation({
 });
 
 export const recordProviderRejection = internalMutation({
-  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), status: v.number(), code: v.string() },
+  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), status: v.number(), code: v.string(), requestId: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), cw = job?.contentWork, call = cw?.providerCalls.find(c => c.key === args.key);
     const known = (args.status === 400 && args.code === "provider_credit_unavailable") ||
       (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error");
-    if (!known || !job || job.status !== "running" || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
+    if (!known || (args.code === "provider_credit_unavailable" && !validProviderRequestId(args.requestId)) ||
+      !job || job.status !== "running" || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
       !cw || !call || call.state === "completed") throw new Error("Content rejection receipt invalid; original ceiling retained");
-    if (call.state === "rejected" && (call.rejectionStatus !== args.status || call.rejectionCode !== args.code)) throw new Error("Content rejection receipt changed");
+    if (call.state === "rejected") {
+      if (call.rejectionStatus !== args.status || call.rejectionCode !== args.code || call.rejectionRequestId !== args.requestId) throw new Error("Content rejection receipt changed");
+      return;
+    }
+    if (args.code === "provider_credit_unavailable" && !["prepare", "review"].includes(cw.stage)) throw new Error("Content rejection stage invalid");
     await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: cw.providerCalls.map(c => c.key === args.key
-      ? { ...c, state: "rejected" as const, rejectionStatus: args.status, rejectionCode: args.code } : c) } });
+      ? { ...c, state: "rejected" as const, rejectionStatus: args.status, rejectionCode: args.code,
+        ...(args.code === "provider_credit_unavailable" ? { rejectionRequestId: args.requestId, rejectionRecordedAt: Date.now(),
+          rejectionStage: cw.stage as "prepare" | "review" } : {}) } : c) } });
   },
 });

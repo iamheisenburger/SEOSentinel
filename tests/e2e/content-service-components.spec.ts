@@ -11,7 +11,7 @@ const bundle = build({ stdin: { contents: `
   import {ContentWorkService} from './src/components/content-work-service';
   import {ContentStart} from './src/components/onboarding/content-start';
   const root = createRoot(document.getElementById('root'));
-  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
+  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off','credit_interrupted','credit_restored'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
   window.renderContentFixture();
 `, resolveDir: process.cwd(), loader: "tsx" }, bundle: true, platform: "browser", format: "iife", write: false, jsx: "automatic",
   define: { "process.env.NODE_ENV": '"test"', "process.env": "{}" }, plugins: [{ name: "explicit-synthetic-content-transport", setup(b) {
@@ -36,7 +36,7 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   funding: { status: "blocked", checkedAt: Date.UTC(2026, 8, 14, 13), monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: Date.UTC(2026,8,15), monthlyResetAt: Date.UTC(2026,9,1), incrementalLimitMicroUsd: null },
   work: [{ jobId: "jobs:synthetic", intent: "create", stage: "ready", windowStartAt: Date.UTC(2026,8,14,11,55), deadlineAt: Date.UTC(2026,8,14,12) }] };
 
-for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off"]) test(`${["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
+for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off", "credit_interrupted", "credit_restored"]) test(`${screen.startsWith("credit_") ? "SLC38" : ["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
   const css = readdirSync(".next/static/chunks").filter(f => f.endsWith(".css")).map(f => readFileSync(`.next/static/chunks/${f}`, "utf8")).join("\n");
   await page.route("**/*", route => {
     const url = new URL(route.request().url()); expect(url.origin).toBe("http://pentra.test");
@@ -49,6 +49,25 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
       : screen === "pricing_off" ? { ...state, funding: { ...state.funding, pricingScope: "unavailable", status: "unconfigured", requestedMicroUsd: null,
         independentAllowance: { totalMicroUsd: 20_000_000, state: "stopped", expiresAt: null } } } : state, calls: [] });
   await page.addScriptTag({ content: await bundle });
+  if (screen.startsWith("credit_")) {
+    await page.evaluate(restored => {
+      const w = window as unknown as { contentFixture: { state: typeof state & { work: unknown[] } }; renderContentFixture: () => void };
+      w.contentFixture.state = { ...w.contentFixture.state, ready: 0, schedule: { ...w.contentFixture.state.schedule, paused: false }, work: [{ ...w.contentFixture.state.work[0], stage: "failed",
+        failure: restored ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
+          : "Pentra's generation service is interrupted. Our team must restore it; you do not need to fund a provider or change your plan.",
+        ...(restored ? { creditRetry: { jobId: "jobs:synthetic", callKey: "synthetic-private-call", token: "synthetic-private-token" } } : {}) }] } as typeof w.contentFixture.state;
+      w.renderContentFixture();
+    }, screen === "credit_restored");
+    await expect(page.getByRole("alert").filter({ hasText: screen === "credit_restored" ? "Pentra has restored" : "Pentra's generation service" })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("synthetic-private-token");
+    await expect(page.locator("body")).not.toContainText("purchase credits");
+    const button = page.getByRole("button", { name: screen === "credit_restored" ? "Retry interrupted preparation" : "Recheck existing work" });
+    await button.click();
+    expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual([
+      { name: "contentWork:control", args: { siteId: state.siteId, action: "retry", reviewToken: state.reviewToken,
+        ...(screen === "credit_restored" ? { creditRetry: { jobId: "jobs:synthetic", callKey: "synthetic-private-call", token: "synthetic-private-token" } } : {}) } },
+    ]);
+  }
   if (screen === "overview") {
     for (const name of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) await expect(page.getByRole("heading", { name })).toBeVisible();
     await expect(page.getByText(/Overdue/)).toBeVisible(); await expect(page.getByText(/unavailable, not zero/)).toBeVisible();
@@ -98,7 +117,7 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
     expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual([
       { name: "contentWork:reconfirm", args: { siteId: state.siteId, reviewToken: "synthetic-new-binding", confirm: true } },
     ]);
-  } else {
+  } else if (screen === "start") {
     await expect(page.getByRole("heading", { name: "Start your content service" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Verify existing plan and save profile" })).toBeDisabled();
     await page.getByLabel("Content publishing destination").selectOption("wordpress");

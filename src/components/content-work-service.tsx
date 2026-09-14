@@ -30,10 +30,13 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     finally { setSaving(false); }
   };
   if (!state || state.siteId !== siteId) return <p>Loading delivery readiness…</p>;
+  const interruptedRetry = state.work.find(w => w.creditRetry)?.creditRetry;
   const operate = async (action: "pause" | "resume" | "retry") => {
     setSaving(true); setError("");
-    try { await control({ siteId, action, reviewToken: state.reviewToken }); }
-    catch { setError("The service could not continue. Review the current billing, publication consent and destination. Changed facts or unresolved work need reconciliation; attempts and deadlines remain unchanged."); }
+    try { await control({ siteId, action, reviewToken: state.reviewToken,
+      ...(action === "retry" && interruptedRetry ? { creditRetry: interruptedRetry } : {}) }); }
+    catch { setError(interruptedRetry ? "The interrupted work could not resume safely. Pentra support must check the retained attempt. Your spending limit and original deadline remain unchanged; you do not need to fund a provider."
+      : "The service could not continue. Review the current billing, publication consent and destination. Changed facts or unresolved work need reconciliation; attempts and deadlines remain unchanged."); }
     finally { setSaving(false); }
   };
   const confirmChangedSetup = async () => {
@@ -54,9 +57,10 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
       <p>Schedule: {!state.bindingCurrent ? "Stopped — review changed setup" : state.schedule?.paused ? "Paused" : state.schedule?.active ? "Active" : "Preparing, not active"}.</p>
       <p>Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}. {state.schedule && state.schedule.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue; the original deadline remains.</span>}</p>
+      {state.work.filter(w => w.failure && !w.retiredAt).map(w => <p key={w.jobId} role="alert">{w.failure}</p>)}
       <div className="flex flex-wrap gap-2"><Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button>
         {!state.bindingCurrent ? <a className="underline self-center" href="#changed-content-setup">Review changed setup</a> : <Button disabled={saving || !state.entitlement || state.approvalRequired} onClick={() => operate("resume")}>Resume preparation and schedule</Button>}
-        <Button disabled={saving || state.schedule?.paused || !state.bindingCurrent} onClick={() => operate("retry")}>Recheck existing work</Button></div>
+        <Button disabled={saving || state.schedule?.paused || !state.bindingCurrent} onClick={() => operate("retry")}>{interruptedRetry ? "Retry interrupted preparation" : "Recheck existing work"}</Button></div>
       <p>Pause retains ready work and spending history. A write already started must be checked before anything replaces it.</p>
     </div>}
     {state.funding.status !== "available" && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}

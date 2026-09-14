@@ -59,7 +59,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
-  providerError?: { tool: string; status: number; type: string; message: string };
+  providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
   githubReadUnavailable?: () => boolean;
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
@@ -82,9 +82,13 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       const body = JSON.parse(String(init.body)); modelCalls.push(body);
       const text = String(body.messages[0].content), tool = body.tools?.[0]?.name;
       await options.providerBarrier?.(tool);
-      if (options.providerError && options.providerError.tool === tool) return json({ type: "error", error: {
-        type: options.providerError.type, message: options.providerError.message,
-      } }, options.providerError.status);
+      if (options.providerError && options.providerError.tool === tool) {
+        const requestId = options.providerError.requestId === undefined ? `req_synthetic${String(modelCalls.length).padStart(8, "0")}` : options.providerError.requestId;
+        return new Response(JSON.stringify({ type: "error", error: {
+          type: options.providerError.type, message: options.providerError.message,
+        }, ...(requestId ? { request_id: requestId } : {}) }), { status: options.providerError.status,
+          headers: { "Content-Type": "application/json", ...(requestId ? { "request-id": options.providerError.headerRequestId ?? requestId } : {}) } });
+      }
       if (options.ambiguousProviderFailure === tool) return new Response("{", { status: 200, headers: { "Content-Type": "application/json" } });
       if (options.providerFailure === tool) return json({ type: "error", error: { type: "overloaded_error", message: "Mocked provider failure" } }, 503);
       const keyword = text.match(/Primary Keyword: ([^\n]+)/i)?.[1] ?? text.match(/PRIMARY KEYWORD: ([^\n]+)/)?.[1];
@@ -2324,6 +2328,284 @@ test("SLC36 both migrated sites retain old history then create, verify and refil
   assert.equal(f.tables.jobs.length, 10); f.assertOffline();
 });
 
+const creditFailure = (tool = "submit_article") => ({ tool, status: 400, type: "invalid_request_error",
+  message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." });
+async function failedCreditFixture(tool = "submit_article", price: Fields = {}, grant: Fields = {}) {
+  const f = await scopedPricingFixture(price, grant, { providerError: creditFailure(tool) });
+  await f.admit(0); const job = f.tables.jobs[0];
+  for (let i = 0; i < 5 && f.get(job._id)!.status !== "failed"; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.failure, "content_provider_credit_unavailable");
+  return { ...f, jobId: job._id };
+}
+function creditConfirmation(f: Awaited<ReturnType<typeof scopedPricingFixture>>, jobId: string, fundingReference = "synthetic-funding-restored-once") {
+  const job = f.get(jobId)!, call = job.contentWork.providerCalls.at(-1);
+  return { siteId: job.siteId, jobId, callKey: call.key, requestHash: call.requestHash, requestId: call.rejectionRequestId, fundingReference };
+}
+async function ownerCreditRetry(f: Awaited<ReturnType<typeof scopedPricingFixture>>, jobId: string) {
+  const siteId = f.get(jobId)!.siteId; f.setIdentity(f.get(siteId)!.userId);
+  const ready = await f.invoke("contentWork:readiness", { siteId });
+  const creditRetry = ready.work.find((w: Fields) => w.jobId === jobId)?.creditRetry;
+  assert.ok(creditRetry, "Only confirmed exact restoration offers the customer retry");
+  return { siteId, action: "retry", reviewToken: ready.reviewToken, creditRetry };
+}
+
+test("SLC38 both sites recover first-draft and post-draft credit refusal through same-job late delivery and fresh refill", async t => {
+  for (const tool of ["submit_article", "audit_final_article"]) await t.test(tool, async t => {
+    const f = await scopedPricingFixture({}, {}, { providerError: creditFailure(tool) });
+    await Promise.all([f.admit(0), f.admit(1)]);
+    const jobs = f.tables.jobs.filter(j => j.contentWork);
+    for (const j of jobs) for (let i = 0; i < 5 && f.get(j._id)!.status !== "failed"; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: j.siteId, jobId: j._id });
+    const original = jobs.map(j => ({ id: j._id, deadline: j.contentWork.deadlineAt, reservation: JSON.stringify(f.get(j.providerSpendReservationId)),
+      attempts: f.get(j._id)!.workerAttempts, completed: structuredClone(f.get(j._id)!.contentWork.providerCalls.filter((c: Fields) => c.state === "completed")) }));
+    const attemptHistory = f.tables.article_generation_attempts.map(a => ({ id: a._id, row: JSON.stringify(a) }));
+    const priorCalls = f.modelCalls.length;
+    f.providerOptions.providerError = undefined; // Only fixture provider availability is restored.
+    f.setTime(START + 720_000);
+    for (const j of jobs) {
+      const args = creditConfirmation(f, j._id), wakes = f.tables._scheduled_functions.length;
+      const confirmations = await Promise.all([f.invoke("contentWork:confirmCreditRestoration", args), f.invoke("contentWork:confirmCreditRestoration", args)]);
+      assert.equal(confirmations.filter(r => r.confirmed).length, 1);
+      assert.equal(f.tables._scheduled_functions.length, wakes, "Operator confirmation is not a paid wake");
+      const retry = await ownerCreditRetry(f, j._id);
+      const results = await Promise.all([f.invoke("contentWork:control", retry), f.invoke("contentWork:control", retry), f.invoke("contentWork:control", retry)]);
+      assert.equal(results.filter(r => r.recovered).length, 1);
+      assert.equal(f.get(j._id)!.workerAttempts, original.find(x => x.id === j._id)!.attempts);
+    }
+    assert.equal(f.modelCalls.length, priorCalls);
+    f.restartRuntime();
+    await pumpUntil(f, () => jobs.every(j => f.get(j._id)!.contentWork.stage === "verified" &&
+      f.tables.jobs.filter(w => w.siteId === j.siteId && w.contentWork?.stage === "ready").length === 2), 300, START + 1_020_000);
+    for (const o of original) {
+      const j = f.get(o.id)!, c = j.contentWork, article = f.get(j.articleId)!;
+      assert.equal(c.deadlineAt, o.deadline); assert.ok(c.publishedAt > o.deadline); assert.ok(c.verifiedAt >= c.publishedAt);
+      assert.equal(article.publicUrlStatus, "verified");
+      assert.equal(f.repositories.get(f.sites.find(s => s.id === j.siteId)!.name.toLowerCase())!.writes, 1);
+      assert.equal(JSON.stringify(f.get(j.providerSpendReservationId)), o.reservation);
+      assert.equal(c.recoveryAttempts, 1); assert.equal(c.revisions, 0); assert.equal(c.replacements, 0);
+      for (const old of o.completed) assert.deepEqual(c.providerCalls.find((p: Fields) => p.key === old.key), old, "Completed checkpoint was not replayed or rewritten");
+      const refill = f.tables.jobs.filter(w => w.siteId === j.siteId && w.contentWork?.stage === "ready");
+      assert.equal(refill.length, 2); assert.ok(refill.some(w => w.createdAt > c.verifiedAt));
+      assert.ok(refill.every(w => w.articleId !== j.articleId && f.get(w.articleId)!.topicId !== article.topicId));
+      assert.equal(c.validationAuthorizationId, f.args.authorizationId);
+      assert.ok(c.providerCalls.reduce((n: number, p: Fields) => n + (p.actualMicroUsd ?? p.ceilingMicroUsd), 0) <= c.budgetMicroUsd);
+      t.diagnostic(JSON.stringify({ scenario: "synthetic_credit_restoration", tool, site: f.get(j.siteId)!.domain,
+        deadline: new Date(c.deadlineAt).toISOString(), publishedAt: new Date(c.publishedAt).toISOString(), verifiedAt: new Date(c.verifiedAt).toISOString(),
+        latenessMs: c.publishedAt - c.deadlineAt, sameJob: o.id === j._id, ready: refill.length, refillCreatedAt: Math.max(...refill.map(w => w.createdAt)) }));
+    }
+    for (const old of attemptHistory) assert.equal(JSON.stringify(f.get(old.id)), old.row);
+    assert.equal(f.tables.jobs.length, 6); f.assertOffline();
+  });
+});
+
+test("SLC38 funding restoration and customer retry are separate exact-authority idempotent decisions", async () => {
+  const f = await failedCreditFixture(), job = f.get(f.jobId)!, args = creditConfirmation(f, f.jobId);
+  const original = JSON.stringify(job), holds = JSON.stringify(f.tables.provider_spend_reservations);
+  f.providerOptions.providerError = undefined;
+  f.setIdentity(f.owner); const ready = await f.invoke("contentWork:readiness", { siteId: job.siteId });
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "retry", reviewToken: ready.reviewToken });
+  assert.equal((await f.admit(0)).mode, "content_failed_slot"); assert.equal(JSON.stringify(f.get(job._id)), original);
+  for (const bad of [{ siteId: f.sites[3].id }, { jobId: "jobs:missing" }, { callKey: "wrong" }, { requestHash: "a".repeat(64) },
+    { requestId: "req_wrongrequest" }, { fundingReference: "" }]) {
+    await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", { ...args, ...bad }));
+    assert.equal(JSON.stringify(f.get(job._id)), original);
+  }
+  await f.invoke("contentWork:confirmCreditRestoration", args);
+  const retry = await ownerCreditRetry(f, job._id), confirmed = JSON.stringify(f.get(job._id));
+  assert.doesNotMatch(JSON.stringify((await f.invoke("contentWork:readiness", { siteId: job.siteId })).work), /req_synthetic|synthetic-funding-restored/);
+  f.setIdentity(f.get(f.sites[3].id)!.userId); await assert.rejects(f.invoke("contentWork:control", retry), /Not authorized/);
+  f.setIdentity(f.owner);
+  await assert.rejects(f.invoke("contentWork:control", { ...retry, creditRetry: { ...retry.creditRetry, token: "wrong" } }), /confirmation changed/);
+  await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", { ...args, fundingReference: "different-reference" }), /immutable/);
+  assert.equal(JSON.stringify(f.get(job._id)), confirmed); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
+  assert.equal((await f.invoke("contentWork:control", retry)).recovered, true);
+  assert.equal((await f.invoke("contentWork:control", retry)).reason, "already_requested");
+  assert.equal(f.get(job._id)!.workerAttempts, 1); assert.equal(f.modelCalls.length, 1); f.assertOffline();
+});
+
+test("SLC38 revoked authority and stopped pricing or grants deny confirmation, owner retry and the next paid call", async () => {
+  for (const boundary of ["confirm", "retry", "worker"]) for (const defect of ["profile", "destination", "entitlement", "paused", "stopped", "expired", "pricing"]) {
+    const f = await failedCreditFixture(), job = f.get(f.jobId)!, args = creditConfirmation(f, f.jobId);
+    let retry: Fields | undefined;
+    if (boundary !== "confirm") { await f.invoke("contentWork:confirmCreditRestoration", args); retry = await ownerCreditRetry(f, f.jobId); }
+    if (boundary === "worker") await f.invoke("contentWork:control", retry!);
+    const s = f.get(job.siteId)!, run = f.get(f.args.authorizationId)!;
+    if (defect === "profile") s.siteSummary += " Updated by the customer.";
+    if (defect === "destination") s.repoName += "-changed";
+    if (defect === "entitlement") f.tables.account_plan_entitlements.find(e => e.userId === f.owner)!.status = "pending";
+    if (defect === "paused") s.contentSchedule.paused = true;
+    if (defect === "stopped") await f.stop();
+    if (defect === "expired") { run.cumulativeValidation.expiresAt = START + 1; f.setTime(START + 2); }
+    if (defect === "pricing") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+    const holds = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length;
+    if (boundary === "confirm") await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", args), defect);
+    else if (boundary === "retry") { f.setIdentity(f.owner); await assert.rejects(f.invoke("contentWork:control", retry!), defect); }
+    else await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.modelCalls.length, calls, `${boundary}:${defect}`); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); f.assertOffline();
+  }
+});
+
+test("SLC38 repeated refusals need fresh platform confirmation and exhaust a finite unchanged attempt budget", async () => {
+  const f = await failedCreditFixture(), job = f.get(f.jobId)!, hold = JSON.stringify(f.get(job.providerSpendReservationId));
+  let priorRetry: Fields | undefined;
+  for (let n = 0; n < 3; n++) {
+    if (priorRetry) {
+      assert.equal((await f.invoke("contentWork:control", priorRetry)).reason, "already_requested");
+      await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, job._id, `synthetic-funding-event-${n - 1}`)), /not eligible/);
+    }
+    await f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, job._id, `synthetic-funding-event-${n}`));
+    priorRetry = await ownerCreditRetry(f, job._id); await f.invoke("contentWork:control", priorRetry);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.get(job._id)!.status, "failed"); assert.equal(f.get(job._id)!.nextAttemptAt, undefined);
+  }
+  await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, job._id, "synthetic-funding-event-final")), /not eligible/);
+  assert.equal(f.get(job._id)!.workerAttempts, 4); assert.equal(f.get(job._id)!.contentWork.recoveryAttempts, 3);
+  assert.equal(f.modelCalls.length, 4); assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), hold);
+  assert.equal(f.get(job._id)!.contentWork.deadlineAt, job.contentWork.deadlineAt); f.assertOffline();
+});
+
+test("SLC38 per-item exhaustion blocks retry and run exhaustion cannot borrow ordinary headroom for refill", async () => {
+  const small = await failedCreditFixture("submit_article", { budgetMicroUsd: 50_000 });
+  await assert.rejects(small.invoke("contentWork:confirmCreditRestoration", creditConfirmation(small, small.jobId)), /budget cannot fund/);
+  assert.equal(small.modelCalls.length, 1); small.assertOffline();
+  const f = await failedCreditFixture("submit_article", {}, { limitMicroUsd: 500_000 });
+  f.providerOptions.providerError = undefined;
+  await f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, f.jobId));
+  await f.invoke("contentWork:control", await ownerCreditRetry(f, f.jobId));
+  await pumpUntil(f, () => f.get(f.jobId)!.contentWork.stage === "ready", 100, START + 600_000);
+  assert.equal((await f.admit(1)).mode, "content_budget_exhausted"); assert.equal((await f.admit(0)).mode, "content_budget_exhausted");
+  assert.equal(f.tables.jobs.length, 1); assert.equal(f.get(f.args.authorizationId)!.cumulativeValidation.limitMicroUsd, 500_000);
+  assert.equal(f.get(f.get(f.jobId)!.providerSpendReservationId)!.reservedMicroUsd, 500_000); f.assertOffline();
+});
+
+test("SLC38 original independent hold funds a recovered delivery and refill across day and month without renewing the grant", async t => {
+  for (const tool of ["submit_article", "audit_final_article"]) for (const restoredAt of [START + 86_400_000, Date.UTC(2026, 9, 1, 0, 1)]) await t.test(`${tool} ${new Date(restoredAt).toISOString()}`, async t => {
+    const f = await scopedPricingFixture({}, {}, { providerError: creditFailure(tool) });
+    // Choose a slow synthetic service before admitting any work, so one late
+    // window can be observed without simulating weeks of unrelated catch-up.
+    for (const site of f.sites.slice(0, 2)) f.get(site.id)!.contentSchedule.intervalMs = 31 * 86_400_000;
+    await f.admit(0); const job = f.tables.jobs[0];
+    for (let n = 0; n < 5 && f.get(job._id)!.status !== "failed"; n++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.get(job._id)!.contentWork.failure, "content_provider_credit_unavailable");
+    const hold = JSON.stringify(f.get(job.providerSpendReservationId)), grant = JSON.stringify(f.get(f.args.authorizationId));
+    f.providerOptions.providerError = undefined; f.setTime(restoredAt); f.restartRuntime();
+    f.setIdentity(f.owner); await f.invoke("publisher:reverifyGithubConnectionInternal", { siteId: job.siteId });
+    await f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, job._id));
+    await f.invoke("contentWork:control", await ownerCreditRetry(f, job._id));
+    await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.siteId === job.siteId && j.contentWork?.stage === "ready").length === 2, 240, restoredAt + 300_000);
+    const c = f.get(job._id)!.contentWork;
+    assert.equal(c.deadlineAt, job.contentWork.deadlineAt); assert.ok(c.publishedAt > c.deadlineAt);
+    assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), hold); assert.equal(JSON.stringify(f.get(f.args.authorizationId)), grant);
+    assert.equal(c.priorReservationIds, undefined); assert.equal(f.get(job._id)!.providerSpendReservationId, job.providerSpendReservationId);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+    t.diagnostic(JSON.stringify({ scenario: "synthetic_credit_rollover", tool, restoredAt, deadlineAt: c.deadlineAt, publishedAt: c.publishedAt,
+      latenessMs: c.publishedAt - c.deadlineAt, ready: 2, originalReservation: true })); f.assertOffline();
+  });
+});
+
+test("SLC38 ordinary dated credit holds cannot be reused across days or bypass terminal cancellation", async () => {
+  for (const defect of ["next_day", "cancelled", "retired", "missing_reservation", "released", "settled"]) {
+    const f = setup({ growthFirst: true, businesses: slcBusinesses.slice(0, 1), providerError: creditFailure() });
+    await selectGrowth(f); await pumpUntil(f, () => (f.tables.jobs ?? []).some(j => j.status === "failed"));
+    const job = f.tables.jobs[0], call = job.contentWork.providerCalls[0], hold = f.get(job.providerSpendReservationId)!;
+    if (defect === "next_day") f.setTime(START + 86_400_000);
+    if (defect === "cancelled") job.status = "cancelled";
+    if (defect === "retired") job.contentWork.retiredAt = f.now();
+    if (defect === "missing_reservation") job.providerSpendReservationId = "provider_spend_reservations:missing";
+    if (defect === "released") hold.releasedAt = f.now();
+    if (defect === "settled") { hold.settledAt = f.now(); hold.settledMicroUsd = 100; }
+    const before = JSON.stringify(f.tables.provider_spend_reservations);
+    await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", { siteId: job.siteId, jobId: job._id, callKey: call.key,
+      requestHash: call.requestHash, requestId: call.rejectionRequestId, fundingReference: "synthetic-restoration-event" }), defect);
+    assert.equal(f.modelCalls.length, 1); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), before); f.assertOffline();
+  }
+});
+
+async function historicalCreditFixture() {
+  const f = await scopedPricingFixture({}, {}, { providerError: creditFailure() });
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: f.sites[0].id, trigger: "content_work", reason: "synthetic original dispatch" });
+  await pumpUntil(f, () => (f.tables.autopilot_runs ?? []).some(r => r.status === "completed" && r.outcome === "job_failed"));
+  const run = f.tables.autopilot_runs.find(r => r.status === "completed" && r.outcome === "job_failed")!;
+  const job = f.get(run.jobId)!, call = job.contentWork.providerCalls[0];
+  const requestId = call.rejectionRequestId;
+  // Model precisely the deployed pre-receipt journal, without changing the
+  // actual dispatcher/worker's immutable run response or monetary records.
+  call.state = "started";
+  for (const key of ["rejectionTrackingVersion", "rejectionRequestId", "rejectionRecordedAt", "rejectionStage", "rejectionStatus", "rejectionCode"]) delete call[key];
+  job.contentWork.failure = "content_provider_result_ambiguous_reconciliation_required";
+  const args = { siteId: job.siteId, jobId: job._id, callKey: call.key, requestHash: call.requestHash,
+    requestId, fundingReference: "synthetic-historical-funding-restored", evidenceRunId: run._id };
+  return { ...f, jobId: job._id, runId: run._id, confirmation: args };
+}
+
+test("SLC38 durable first-call run evidence reconciles a legacy journal then resumes the actual chain", async t => {
+  const f = await historicalCreditFixture(), job = f.get(f.jobId)!, originalRun = JSON.stringify(f.get(f.runId)), hold = JSON.stringify(f.get(job.providerSpendReservationId));
+  const oldCall = structuredClone(job.contentWork.providerCalls[0]);
+  assert.equal((await f.invoke("contentWork:confirmCreditRestoration", f.confirmation)).confirmed, true);
+  assert.equal((await f.invoke("contentWork:confirmCreditRestoration", f.confirmation)).confirmed, false);
+  assert.equal(f.modelCalls.length, 1); assert.equal(JSON.stringify(f.get(f.runId)), originalRun);
+  const reconciled = f.get(f.jobId)!.contentWork.providerCalls[0];
+  assert.equal(reconciled.requestHash, oldCall.requestHash); assert.equal(reconciled.ceilingMicroUsd, oldCall.ceilingMicroUsd);
+  assert.equal(reconciled.actualMicroUsd, undefined); assert.equal(reconciled.creditRecovery.sourceRunId, f.runId);
+  f.providerOptions.providerError = undefined; f.setTime(START + 720_000); f.restartRuntime();
+  await f.invoke("contentWork:control", await ownerCreditRetry(f, f.jobId));
+  await pumpUntil(f, () => f.get(f.jobId)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.siteId === job.siteId && j.contentWork?.stage === "ready").length === 2, 240, START + 780_000);
+  const c = f.get(f.jobId)!.contentWork;
+  assert.equal(JSON.stringify(f.get(f.runId)), originalRun); assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), hold);
+  assert.equal(c.deadlineAt, job.contentWork.deadlineAt); assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+  assert.ok(f.tables.jobs.some(j => j.siteId === job.siteId && j.createdAt > c.verifiedAt));
+  t.diagnostic(JSON.stringify({ scenario: "synthetic_legacy_receipt_recovery", deadlineAt: c.deadlineAt, publishedAt: c.publishedAt, verifiedAt: c.verifiedAt, ready: 2 })); f.assertOffline();
+});
+
+test("SLC38 historical reconciliation rejects missing, conflicting, wrong-lineage or possibly successful evidence", async () => {
+  for (const defect of ["missing_run", "foreign_site", "wrong_job", "wrong_request", "wrong_hash", "missing_detail", "extra_usage", "possible_success", "duplicate_run", "late_start", "early_finish", "extra_attempt", "extra_call", "known_cost", "result", "article", "new_tracking"]) {
+    const f = await historicalCreditFixture(), job = f.get(f.jobId)!, run = f.get(f.runId)!, call = job.contentWork.providerCalls[0], args = { ...f.confirmation };
+    if (defect === "missing_run") args.evidenceRunId = "autopilot_runs:missing";
+    if (defect === "foreign_site") run.siteId = f.sites[1].id;
+    if (defect === "wrong_job") run.jobId = "jobs:wrong";
+    if (defect === "wrong_request") args.requestId = "req_wrongrequestid";
+    if (defect === "wrong_hash") args.requestHash = "a".repeat(64);
+    if (defect === "missing_detail") delete run.detail;
+    if (defect === "extra_usage") { const body = JSON.parse(run.detail.slice(4)); body.usage = { input_tokens: 1 }; run.detail = `400 ${JSON.stringify(body)}`; }
+    if (defect === "possible_success") run.outcome = "article_generated";
+    if (defect === "duplicate_run") f.add("autopilot_runs", { ...run, _id: undefined });
+    if (defect === "late_start") run.startedAt = job.createdAt + 1;
+    if (defect === "early_finish") run.completedAt = job.updatedAt - 1;
+    if (defect === "extra_attempt") job.workerAttempts = 2;
+    if (defect === "extra_call") job.contentWork.providerCalls.push({ ...call, key: `${call.logicalKey}:1` });
+    if (defect === "known_cost") call.actualMicroUsd = 1;
+    if (defect === "result") call.result = { content: "possible successful result" };
+    if (defect === "article") job.articleId = "articles:possible";
+    if (defect === "new_tracking") call.rejectionTrackingVersion = 1;
+    const before = JSON.stringify(job), holds = JSON.stringify(f.tables.provider_spend_reservations);
+    await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", args), defect);
+    assert.equal(JSON.stringify(f.get(job._id)), before, defect); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); assert.equal(f.modelCalls.length, 1); f.assertOffline();
+  }
+});
+
+test("SLC38 retained historical evidence is rechecked at customer retry and before new provider I/O", async () => {
+  for (const boundary of ["retry", "worker"]) {
+    const f = await historicalCreditFixture(); await f.invoke("contentWork:confirmCreditRestoration", f.confirmation);
+    const retry = await ownerCreditRetry(f, f.jobId);
+    if (boundary === "worker") await f.invoke("contentWork:control", retry);
+    f.get(f.runId)!.detail += " conflicting amendment"; f.providerOptions.providerError = undefined;
+    const holds = JSON.stringify(f.tables.provider_spend_reservations);
+    if (boundary === "retry") await assert.rejects(f.invoke("contentWork:control", retry), /evidence changed/);
+    else await f.invoke("actions/pipeline:processNextJob", { siteId: f.confirmation.siteId, jobId: f.jobId });
+    assert.equal(f.modelCalls.length, 1); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); f.assertOffline();
+  }
+});
+
+test("SLC38 missing or contradictory request identifiers never authorize a future-refusal replay", async () => {
+  for (const extra of [{ requestId: null }, { headerRequestId: "req_contradictoryrequestid" }]) {
+    const f = await scopedPricingFixture({}, {}, { providerError: { ...creditFailure(), ...extra } }); await f.admit(0);
+    const job = f.tables.jobs[0]; await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    const c = f.get(job._id)!.contentWork;
+    assert.equal(c.failure, "content_provider_result_ambiguous_reconciliation_required"); assert.equal(c.providerCalls[0].rejectionTrackingVersion, 1);
+    await assert.rejects(f.invoke("contentWork:confirmCreditRestoration", { ...creditConfirmation(f, job._id), requestId: "req_unverifiedrequestid" }), /Verified provider refusal/);
+    assert.equal(f.modelCalls.length, 1); f.assertOffline();
+  }
+});
+
 test("SLC37 explicit provider credit refusal remains identifiable without releasing holds or replaying either site", async () => {
   const f = await scopedPricingFixture({}, {}, { providerError: { tool: "submit_article", status: 400,
     type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." } });
@@ -2341,7 +2623,7 @@ test("SLC37 explicit provider credit refusal remains identifiable without releas
     assert.equal(j.contentWork.deadlineAt, previous.contentWork.deadlineAt);
     f.setIdentity(f.owner);
     const r = await f.invoke("contentWork:readiness", { siteId: j.siteId });
-    assert.match(r.work.find((w: Fields) => w.jobId === j._id).failure, /provider.*credit balance/i);
+    assert.match(r.work.find((w: Fields) => w.jobId === j._id).failure, /Pentra's generation service is interrupted/i);
     await f.invoke("contentWork:control", { siteId: j.siteId, action: "resume", reviewToken: r.reviewToken });
     await f.invoke("actions/pipeline:processNextJob", { siteId: j.siteId, jobId: j._id });
   }
@@ -2402,7 +2684,7 @@ test("SLC37 credit rejection receipts are worker-bound, idempotent, non-replayab
   const previous = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "completed-before-credit", ceilingMicroUsd: 100 });
   await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: previous.key, actualMicroUsd: 30, result: { cached: true } });
   const started = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "credit-call", ceilingMicroUsd: 100 });
-  const args = { jobId: job._id, workerToken, key: started.key, status: 400, code: "provider_credit_unavailable" };
+  const args = { jobId: job._id, workerToken, key: started.key, status: 400, code: "provider_credit_unavailable", requestId: "req_syntheticreceipt" };
   const holds = JSON.stringify(f.tables.provider_spend_reservations);
   for (const bad of [{ workerToken: "wrong-worker" }, { status: 401 }, { code: "invalid_request_error" }, { key: "missing-call" }]) {
     await assert.rejects(f.invoke("contentWork:recordProviderRejection", { ...args, ...bad }), /receipt invalid/);

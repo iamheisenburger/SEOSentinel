@@ -5,10 +5,14 @@ import type { ActionCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { sha256Hex } from "../lib/publicationArtifact";
+import { isProviderCreditRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
 
 type Scope = { ctx: ActionCtx; job: Doc<"jobs">; workerToken: string; phase: string };
 const scope = new AsyncLocalStorage<Scope>();
 export const contentProviderActive = () => Boolean(scope.getStore());
+// Rebuilding an exact interrupted request must keep its original prompt date.
+// Admission/expiry/leases still use the real clock, never this prompt-only time.
+export const contentProviderPromptTime = () => scope.getStore()?.job.createdAt ?? Date.now();
 export function withContentProvider<T>(value: Scope, run: () => Promise<T>) { return scope.run(value, run); }
 
 /** No SDK retry, model fallback, repair ladder or optional paid service. The
@@ -39,17 +43,19 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   try { response = await client.messages.create(request); }
   catch (error) {
     if (error instanceof Anthropic.APIError) {
-      const body = error.error as { error?: { type?: string; message?: string }; type?: string; message?: string } | undefined;
+      const body = error.error as { error?: { type?: string; message?: string }; type?: string; message?: string; request_id?: string } | undefined;
       const code = body?.error?.type ?? body?.type;
       const message = body?.error?.message ?? body?.message;
       // This authenticated provider refusal is not a lost model response. It
       // identifies the blocker, but is NOT an actual-cost/zero-charge receipt.
       // Other 400s, malformed errors and transport failures remain uncertain.
-      const creditUnavailable = error.status === 400 && code === "invalid_request_error" &&
-        typeof message === "string" && /^Your credit balance is too low to access the Anthropic API\.(?:\s|$)/.test(message);
+      const requestId = error.requestID ?? body?.request_id;
+      const creditUnavailable = isProviderCreditRefusal(error.status, code, message) && validProviderRequestId(requestId) &&
+        (!error.requestID || !body?.request_id || error.requestID === body.request_id);
       if (creditUnavailable || (error.status === 429 && code === "rate_limit_error") || ([503, 529].includes(error.status ?? 0) && code === "overloaded_error")) {
         await s.ctx.runMutation(internal.contentWork.recordProviderRejection, { jobId: s.job._id, workerToken: s.workerToken, key,
-          status: error.status!, code: creditUnavailable ? "provider_credit_unavailable" : code! });
+          status: error.status!, code: creditUnavailable ? "provider_credit_unavailable" : code!,
+          ...(creditUnavailable ? { requestId: requestId! } : {}) });
       }
     }
     throw error;
