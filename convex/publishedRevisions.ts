@@ -674,6 +674,7 @@ export const prepareForCadenceRecovery = internalMutation({
       !site ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       !rolloutAllowsRevision(site) ||
+      site.serviceMode === "growth_first" ||
       site.autopilotRolloutMode !== "live" ||
       site.approvalRequired ||
       (site.publishMethod ?? "github") === "manual"
@@ -992,10 +993,10 @@ export const prepareForGrowthAction = internalMutation({
     ) {
       throw new Error("Published revision crossed a tenant, article, or action boundary");
     }
-    if (!rolloutAllowsRevision(site)) {
+    if (!rolloutAllowsRevision(site) || site.serviceMode === "growth_first") {
       return {
         status: "no_safe_candidate",
-        detail: "Published revisions are measurement-only unless this tenant is warm or live.",
+        detail: "Legacy growth revisions require the legacy article engine in a warm or live rollout.",
       };
     }
     if ((site.publishMethod ?? "github") === "wordpress") {

@@ -2210,6 +2210,116 @@ test("SLC persisted checkpoint survives restart and duplicate workers without an
   f.assertOffline();
 });
 
+test("SLC36 closed legacy history and nonexecuting growth classifications do not prevent owner migration", async () => {
+  for (const status of ["missed", "provider_balance_unavailable", "provider_response_unverified"]) {
+    const f = setup({ growthFirst: true, noPricing: true }), site = f.sites[0], owner = f.get(site.id)!.userId;
+    const reservationId = f.add("provider_spend_reservations", { siteId: site.id, userId: owner, purpose: "topic_plan",
+      trigger: "synthetic-retained-legacy-attempt", reservedMicroUsd: 250_000, createdAt: START - 86_400_000 });
+    const closed = f.add("cadence_micro_seed_jobs", { siteId: site.id, userId: owner, status, providerCallAttempted: true,
+      providerCallCompleted: status === "missed", providerSpendReservationId: reservationId, workerAttempts: 1,
+      completedAt: START - 80_000_000, createdAt: START - 86_400_000, updatedAt: START - 80_000_000 });
+    const articleId = f.add("articles", { siteId: site.id, status: "published", title: "Retained historical page" });
+    const actions = ["open", "monitoring", "resolved", "dismissed"].map((state, i) => f.add("seo_growth_actions", {
+      siteId: site.id, articleId, status: state, automationStatus: i === 0 ? "executed" : "not_applicable", fingerprint: `synthetic-history-${i}`,
+      actionKind: "improve_snippet", measurementKey: "synthetic-measurement",
+      createdAt: START - 86_400_000, updatedAt: START - 80_000_000 }));
+    const revision = f.add("published_article_revisions", { siteId: site.id, articleId, growthActionId: actions[0], status: "verified",
+      attemptedAt: START - 83_000_000, liveVerifiedAt: START - 82_000_000, createdAt: START - 84_000_000 });
+    f.get(actions[0])!.publishedRevisionId = revision;
+    const preserved = [reservationId, closed, articleId, ...actions, revision].map(id => JSON.stringify(f.get(id)));
+    await selectGrowth(f, 86_400_000);
+    assert.deepEqual([reservationId, closed, articleId, ...actions, revision].map(id => JSON.stringify(f.get(id))), preserved);
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 600_000);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_pricing_unavailable");
+    assert.equal((await f.invoke("jobs:queuePlanIfAbsent", { siteId: site.id, reason: "topic_replenishment" })).queued, false);
+    assert.equal(await f.invoke("seoGrowth:getActionAttemptEligibilityInternal", { siteId: site.id, fingerprint: "synthetic-history-0", measurementKey: "synthetic" }), false);
+    assert.equal((await f.invoke("publishedRevisions:prepareForCadenceRecovery", { siteId: site.id, dueAt: START + 600_000 })).status, "no_safe_candidate");
+    assert.equal((await f.invoke("publishedRevisions:prepareForGrowthAction", { siteId: site.id, articleId,
+      fingerprint: "synthetic-history-0", actionKind: "improve_snippet", measurementKey: "synthetic-measurement" })).status, "no_safe_candidate");
+    assert.equal(f.tables.jobs.length, 0); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC36 migration still rejects actual legacy workers, partial work, live terminal leases and unknown states", async () => {
+  for (const table of ["cadence_micro_seed_jobs", "expected_click_evidence_jobs", "expected_click_demand_jobs", "seo_growth_actions"]) {
+    const states = table === "seo_growth_actions" ? ["unknown_state"] : ["pending", "running", "partial", "unknown_state", "live_terminal_lease"];
+    for (const status of states) {
+      const f = setup({ growthFirst: true, noPricing: true }), site = f.sites[0];
+      f.add(table, { siteId: site.id, status: status === "live_terminal_lease" ? "completed" : status,
+        ...(status === "live_terminal_lease" ? { leaseExpiresAt: START + 60_000, workerToken: "retained-worker" } : {}) });
+      const before = JSON.stringify(f.tables);
+      await assert.rejects(selectGrowth(f), /Reconcile legacy growth/);
+      assert.equal(JSON.stringify(f.tables), before); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+    }
+  }
+});
+
+test("SLC36 both legacy and content revision delivery must finish before migration, regardless of growth classification", async () => {
+  for (const content of [false, true]) for (const status of ["prepared", "leased", "attempted", "verification_pending", "unverified", "failed_after_attempt"]) {
+    const f = setup({ growthFirst: true, noPricing: true }), site = f.sites[0];
+    f.add("published_article_revisions", { siteId: site.id, status: status === "failed_after_attempt" ? "failed" : status,
+      ...(status === "failed_after_attempt" ? { attemptedAt: START - 100_000 } : {}),
+      ...(content ? { contentWorkJobId: "jobs:retained-content" } : {}), createdAt: START - 200_000 });
+    const before = JSON.stringify(f.tables);
+    await assert.rejects(selectGrowth(f), /Reconcile.*revision/);
+    assert.equal(JSON.stringify(f.tables), before); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC36 migration rejects corrupt growth-to-revision links and incomplete inventory without changing history", async () => {
+  for (const defect of ["missing_revision", "foreign_site", "wrong_article", "wrong_action", "too_many_actions", "too_many_revisions", "too_many_workers"]) {
+    const f = setup({ growthFirst: true, noPricing: true }), site = f.sites[0];
+    const actionId = f.add("seo_growth_actions", { siteId: site.id, status: "resolved", articleId: "articles:retained" });
+    const revisionId = f.add("published_article_revisions", { siteId: defect === "foreign_site" ? f.sites[1].id : site.id,
+      articleId: defect === "wrong_article" ? "articles:wrong" : "articles:retained", growthActionId: defect === "wrong_action" ? "seo_growth_actions:wrong" : actionId,
+      status: "verified", liveVerifiedAt: START - 1, createdAt: START - 10 });
+    f.get(actionId)!.publishedRevisionId = defect === "missing_revision" ? "published_article_revisions:missing" : revisionId;
+    const overflow = defect === "too_many_actions" ? "seo_growth_actions" : defect === "too_many_revisions" ? "published_article_revisions" : defect === "too_many_workers" ? "cadence_micro_seed_jobs" : null;
+    if (overflow) for (let i = 0; i < 1001; i++) f.add(overflow, { siteId: site.id, status: overflow === "seo_growth_actions" ? "resolved" : overflow === "published_article_revisions" ? "verified" : "completed", createdAt: START - 5 });
+    const before = JSON.stringify(f.tables);
+    await assert.rejects(selectGrowth(f), /Reconcile/);
+    assert.equal(JSON.stringify(f.tables), before); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC36 concurrent legacy queue admission and owner migration commit only one engine", async () => {
+  for (const migrationFirst of [false, true]) {
+    const f = setup({ growthFirst: true, noPricing: true }), site = f.sites[0];
+    f.setIdentity(f.get(site.id)!.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const migrate = () => f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+      reviewToken: r.reviewToken, firstDeadlineAt: START + 600_000, intervalMs: 86_400_000 });
+    const legacy = () => f.invoke("jobs:queuePlanIfAbsent", { siteId: site.id, reason: "topic_replenishment" });
+    const results = await Promise.allSettled(migrationFirst ? [migrate(), legacy()] : [legacy(), migrate()]);
+    const migrated = f.get(site.id)!.serviceMode === "growth_first";
+    assert.equal(migrated, migrationFirst);
+    assert.equal(f.tables.jobs.length, migrated ? 0 : 1);
+    if (!migrated) assert.equal(results[1].status, "rejected");
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC36 both migrated sites retain old history then create, verify and refill three scoped cycles", async t => {
+  const f = await validationFixture({ noPricing: true }), history: string[] = [];
+  for (const site of f.sites.slice(0, 2)) {
+    const s = f.get(site.id)!; s.serviceMode = "legacy_articles"; delete s.contentSchedule;
+    history.push(f.add("cadence_micro_seed_jobs", { siteId: site.id, status: "missed", completedAt: START - 10, createdAt: START - 100 }));
+    for (const status of ["open", "monitoring", "resolved"]) history.push(f.add("seo_growth_actions", { siteId: site.id, status, createdAt: START - 100 }));
+    f.setIdentity(f.owner);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+      authorizeAutomaticPublication: true, reviewToken: r.reviewToken, firstDeadlineAt: START + 600_000, intervalMs: 1_800_000 });
+    assert.equal((await f.admit(f.sites.indexOf(site))).mode, "content_pricing_unavailable");
+  }
+  assert.equal(f.tables.jobs.length, 0); assert.equal(f.modelCalls.length, 0);
+  await f.attach({ independentFunding });
+  const old = occupyOrdinaryCapacity(f), preserved = [...history, ...old].map(id => JSON.stringify(f.get(id)));
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...mockContentPricing, validationAuthorizationId: f.args.authorizationId }) });
+  await exerciseValidationCycles(f, t);
+  assert.deepEqual([...history, ...old].map(id => JSON.stringify(f.get(id))), preserved);
+  assert.equal(f.tables.jobs.length, 10); f.assertOffline();
+});
+
 test("SLC migration consent, tenant isolation and single-engine admission preserve the legacy path", async () => {
   const f = setup({ growthFirst: true });
   const site = f.sites[0], other = f.sites[1];

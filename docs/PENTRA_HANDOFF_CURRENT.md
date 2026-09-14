@@ -1,6 +1,54 @@
 # Pentra — fresh-task handoff
 
-## Current: run-scoped activation35, local review only
+## Current: release36, migration blocked; local repair awaiting review
+
+Assignment `supervisor-20260914-slc-first-live-cycle-36`. Read
+`docs/PENTRA_SLC_FIRST_LIVE_CYCLE_2026-09-14.md`. Reviewed c2a10c5 is deployed to
+Convex and Vercel Production, fast-forward preserving history. Exact-SHA hosted
+CI34895295233 passed20:57:17 UTC:1689 tests/1688 pass/0 fail/1 existing skip;
+browser28 pass/2 genuine auth skips; remaining free gates pass. No runtime merge.
+
+Actual normal owner-checked CLI migration failed on both sites before either
+schedule was saved. Pricing stayed absent; no20 grant attached, no provider I/O,
+USD0 spent. Proposed21:58:07.252 UTC first window was NEVER selected. Original
+missed deadlines remain. Post-attempt profiles/destinations/pages/history and all
+financial fields compare unchanged; both still legacy with buffers0/4 and0/12.
+
+Exact-site inspection plus local registered-handler reproduction identifies the
+migration guard: it mistakes closed micro-seed misses/unknown-cost history and
+resolved/open/monitoring growth classifications for running jobs. Both have0
+active micro leases and0 nonterminal micro jobs; all2/11 revisions are verified.
+Production public mutation errors are redacted Server Error, with request IDs
+recorded in the report, not a plaintext production stack. No other tenant read.
+
+Small LOCAL correction separates retained history from actual work; blocks
+pending/partial/unknown jobs/live leases and ALL unfinished legacy/content
+revisions; validates growth/revision lineage; preserves all history and holds.
+Two legacy revision preparation mutations now reject growth-first mode to fence
+stale pre-migration eligibility reads. No schema/index/new route/framework.
+Six new connected test results include competing migration/queue commit orders
+and both migrated synthetic sites'3 scoped create/verify/refill cycles,2 ready
+each and old4/32/35 unchanged. Full1695 tests/1694 pass/0 fail/1 existing skip;
+focused32/33/35/36 all51 pass; local browser28 pass/2 genuine auth skips; types/
+build/schema61 tables296 indexes/audit0 pass; lint0 errors157 existing warnings.
+Secret scan685 tracked files/whitespace pass; final SHA accompanies the review
+handoff. Production-safe public smoke
+8 pass/2 auth skips; initial accidental local-harness selection failed twice on
+intentional production404, disclosed in the report. No skip or gate changed.
+
+Original20 approval already authorizes the migration and finite separate run;
+no duplicate owner permission question. Do not deploy this local correction or
+retry activation before independent review. Current canonical plan updated.
+No real article generation/live verification/refill or SaaS acceptance. Signed-in
+customer acceptance remains distinct from CLI --identity owner queries. No
+backlinks/new tasks/automations, cap/attempt/reservation reset or provider probe.
+
+The supervisor's single503 fault injection recovers600020ms late due to existing
+15-minute uncertain-write lease/5-minute retry, without provider replay. Preserve
+that limitation. Fourteen days is BETWEEN discretionary revisions of the same
+page, not a mandatory wait after creation/before first measured improvement.
+
+## Historical: run-scoped activation35, accepted and released in36
 
 Assignment `supervisor-20260914-slc-scoped-activation-35`. Read
 `docs/PENTRA_SLC_SCOPED_ACTIVATION_2026-09-14.md`. Based on local5b601ad;

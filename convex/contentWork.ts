@@ -189,15 +189,32 @@ export const selectServiceMode = mutation({
     if (site.publicationLeaseOwner || jobs.some(j => ["pending", "running"].includes(j.status) ||
       (j.contentWork && j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage)))) throw new Error("Reconcile in-flight content work before switching engines");
     const revisions = await ctx.db.query("published_article_revisions").withIndex("by_site_created", q => q.eq("siteId", site._id)).take(LIMIT + 1);
-    if (revisions.length > LIMIT || revisions.some(r => r.contentWorkJobId && r.attemptedAt && !r.liveVerifiedAt && !r.ambiguityDispositionAt)) {
-      throw new Error("Reconcile the uncertain selected-page delivery before switching engines");
+    if (revisions.length > LIMIT || revisions.some(r =>
+      ["prepared", "leased", "attempted", "verification_pending"].includes(r.status) ||
+      ((r.status === "unverified" || r.attemptedAt) && !r.liveVerifiedAt && !r.ambiguityDispositionAt))) {
+      throw new Error("Reconcile the unfinished or uncertain revision delivery before switching engines");
     }
-    for (const table of ["cadence_micro_seed_jobs", "expected_click_evidence_jobs", "expected_click_demand_jobs", "seo_growth_actions"] as const) {
+    for (const table of ["cadence_micro_seed_jobs", "expected_click_evidence_jobs", "expected_click_demand_jobs"] as const) {
       const rows = await ctx.db.query(table).withIndex("by_site_status", q => q.eq("siteId", site._id)).take(LIMIT + 1);
-      if (rows.length > LIMIT || rows.some(r => !["completed", "failed", "cancelled", "expired", "skipped", "done", "published"].includes(r.status))) {
+      // These are closed execution states in the legacy watchdogs. A missing
+      // provider response retains its monetary hold, not an eternal worker.
+      const closed = ["completed", "failed", "cancelled", "expired", "skipped", "done", "published",
+        "provider_balance_unavailable", ...(table === "cadence_micro_seed_jobs" ? ["missed", "provider_response_unverified"] : [])];
+      if (rows.length > LIMIT || rows.some(r => !closed.includes(r.status) || (r.leaseExpiresAt ?? 0) > Date.now())) {
         throw new Error("Reconcile legacy growth work before switching engines");
       }
     }
+    // Growth actions are measured classifications, not worker jobs. Preserve
+    // open/monitoring/history unchanged; existing actuation/queue gates exclude
+    // growth-first sites. Their actual jobs and ALL revision deliveries above
+    // must drain first, including legacy (non-contentWork) revisions.
+    const actions = await ctx.db.query("seo_growth_actions").withIndex("by_site_status", q => q.eq("siteId", site._id)).take(LIMIT + 1);
+    if (actions.length > LIMIT || actions.some(a => {
+      if (!["open", "monitoring", "resolved", "dismissed"].includes(a.status)) return true;
+      if (!a.publishedRevisionId) return false;
+      const r = revisions.find(r => r._id === a.publishedRevisionId);
+      return !r || r.siteId !== site._id || r.articleId !== a.articleId || r.growthActionId !== a._id;
+    })) throw new Error("Reconcile legacy growth history before switching engines");
     if (args.mode === "legacy_articles") {
       await ctx.db.patch(site._id, { serviceMode: args.mode, updatedAt: Date.now() });
       return { changed: true };

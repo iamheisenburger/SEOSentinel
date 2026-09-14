@@ -197,8 +197,10 @@ and continue only already-funded delivery/reconciliation. Never renew/increase.
    Recheck run spent/held/remaining separately from unchanged ordinary limits.
    No optional paid services or discretionary work outside this approved run.
 9. Report operator migration separately from genuine signed-in acceptance.
-   Three ordinary cycles at unchanged cadence and at least14-day measured
-   follow-up cannot be proved by a same-day accelerated fixture. After the new
+   Three ordinary cycles at unchanged cadence and actual measured follow-up
+   cannot be proved by a same-day accelerated fixture. Fourteen days applies
+   BETWEEN discretionary revisions of the same page (`lastImprovedAt`), not
+   after creation or before its first measured improvement. After the new
    first deadline, derive each next deadline by the preserved interval; never
    move a failed window. Do not promise same-day full acceptance or attributable
    SEO growth. No backlinks or prospect contact.
