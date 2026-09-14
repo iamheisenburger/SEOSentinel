@@ -1,3 +1,4 @@
+"use node";
 import { safeRequestPublicHttps, validatePublicHttpsUrl } from "./safeOutbound";
 import { contentConnectionHash } from "./contentSelection";
 export { preserveWordPressReviewedText } from "./contentSelection";

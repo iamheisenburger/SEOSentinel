@@ -80,6 +80,13 @@ additive schema61 tables/295 indexes; dependency audit0 vulnerabilities;
 677-file tracked/staged secret scan and staged whitespace pass. A preflight
 status-literal inference type error was caught and corrected before this pass.
 
+First deployment attempt stopped at local bundling before upload: the existing
+WordPress conditional helper imported Node DNS/HTTPS without a `use node`
+declaration. The helper is used exclusively by Node actions; adding that marker
+preserves behavior and prevents isolate bundling. A new offline regression
+bundles every isolate entry using browser resolution (1 passed,238.552042ms).
+No production state changed in that failed attempt.
+
 The final handoff will record the exact application commit, additive Convex
 deployment, GitHub CI and Vercel production alias evidence. Local gates and
 genuine owner acceptance are reported separately; skipped authentication is not
