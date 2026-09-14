@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph, createEmptyContentSite, exerciseReadyPause, exerciseSetupReconfirmation, exerciseReceiptSetup, exerciseUncertainSetup } from './core-pipeline-integration.test.ts';
+import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph, createEmptyContentSite, exerciseReadyPause, exerciseSetupReconfirmation, exerciseReceiptSetup, exerciseUncertainSetup, exerciseRollbackReceipt, exerciseRollbackUnknown } from './core-pipeline-integration.test.ts';
 import { START } from './helpers/core-pipeline-fixture.ts';
 import { correctionVisibleText } from '../convex/lib/publishedCorrection.ts';
 import { renderSafePublicationHtml } from '../convex/lib/safeMarkdownHtml.ts';
@@ -62,6 +62,54 @@ test('real WordPress SLC30 changed setup and old delivery reconciliation reach n
     const delivered = f.tables.jobs.filter(j => j.contentWork?.stage === 'verified').sort((a,b) => b.contentWork.verifiedAt - a.contentWork.verifiedAt)[0].contentWork;
     t.diagnostic(JSON.stringify({ scenario, database: local.database, provider: 'synthetic', wordpressCore: 'real loopback',
       deadline: delivered.deadlineAt, publishedAt: delivered.publishedAt, verifiedAt: delivered.verifiedAt, ready: 2 }));
+  });
+});
+
+test('real WordPress SLC41 service rollback preserves receipts, revoked access and customer edits after lost responses', async t => {
+  for (const scenario of ['receipt', 'revoked_selected', 'lost_unchanged_requires_disposition', 'lost_edited']) await t.test(scenario, async () => {
+    const local = command({ operation: 'setup' });
+    const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+    const suffix = randomUUID().slice(0, 8), domain = `rollback-${suffix}.example`;
+    let outage = false, writes = 0, createdId: number | undefined;
+    const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+      transport: async (url, init) => {
+        assert.equal(url.hostname, domain);
+        if (outage && url.pathname.startsWith('/wp-json/')) return new Response('{"code":"synthetic_read_outage"}', { status: 503, headers: { 'Content-Type': 'application/json' } });
+        const response = await fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+        if (response.ok && url.pathname.endsWith('/pentra/v1/write')) {
+          writes++; createdId = (await response.clone().json()).id;
+          if (scenario.startsWith('lost_') && writes === 1) { outage = true; return new Response('{"code":"synthetic_lost_response"}', { status: 503, headers: { 'Content-Type': 'application/json' } }); }
+        }
+        return response;
+      } } });
+    const site = f.sites[0]; await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: site.id });
+    if (scenario.startsWith('lost_')) {
+      await exerciseRollbackUnknown(f, async () => {
+        assert.ok(createdId);
+        if (scenario === 'lost_edited') command({ operation: 'edit', id: createdId, content: '<p>Customer-owned later edit must survive the service switch.</p>' });
+        outage = false;
+      // This connector exposes no read-only creation-receipt lookup. The
+      // existing watchdog must refuse its POST replay even if unchanged.
+      // Explicit owner disposition closes ambiguity, never claims delivery.
+      }, true);
+      if (scenario === 'lost_edited') {
+        const current = await fetch(`${root}/wp-json/wp/v2/posts/${createdId}`, { headers: { Authorization: `Basic ${local.auth}` } });
+        assert.match((await current.json()).content.rendered, /Customer-owned later edit must survive/);
+      }
+    } else {
+      let pageId: string | undefined;
+      if (scenario === 'revoked_selected') {
+        const p = command({ operation: 'create', slug: `rollback-selected-${suffix}`, title: slcBusinesses[0].keywords[0], content: '<p>Preserve the confirmed customer facts and original explanation. Ask an authorized reviewer to clarify uncertainties before making a decision.</p>' });
+        f.setIdentity(f.get(site.id)!.userId);
+        const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
+        pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true });
+        f.get(site.id)!.gscDateEpochs = [{ date: '2026-09-10', syncEpoch: 'rollback-selected' }];
+        f.add('search_performance', { siteId: site.id, date: '2026-09-10', syncEpoch: 'rollback-selected', page: preview.url, query: slcBusinesses[0].keywords[0], syncVersion: 2, syncedAt: f.now(), clicks: 1, impressions: 60, ctr: 1 / 60, position: 12, createdAt: f.now() });
+      }
+      await exerciseRollbackReceipt(f, pageId);
+    }
+    assert.equal(writes, 1, 'A service switch never replays the external write');
+    t.diagnostic(JSON.stringify({ scenario, database: local.database, provider: 'synthetic', wordpress: 'real loopback', writes }));
   });
 });
 

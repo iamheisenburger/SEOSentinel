@@ -11,7 +11,7 @@ const bundle = build({ stdin: { contents: `
   import {ContentWorkService} from './src/components/content-work-service';
   import {ContentStart} from './src/components/onboarding/content-start';
   const root = createRoot(document.getElementById('root'));
-  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off','credit_interrupted','credit_restored'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
+  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off','credit_interrupted','credit_restored','rollback'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
   window.renderContentFixture();
 `, resolveDir: process.cwd(), loader: "tsx" }, bundle: true, platform: "browser", format: "iife", write: false, jsx: "automatic",
   define: { "process.env.NODE_ENV": '"test"', "process.env": "{}" }, plugins: [{ name: "explicit-synthetic-content-transport", setup(b) {
@@ -23,7 +23,7 @@ const bundle = build({ stdin: { contents: `
         export const useQuery=(ref,args)=>{const n=getFunctionName(ref); const f=window.contentFixture;
           if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};
           if(n==='searchPerformance:contentOutcome')return {status:'incomplete',current:null}; throw Error('Unexpected query '+n)};
-        export const useMutation=ref=>async args=>{window.contentFixture.calls.push({name:getFunctionName(ref),args});return {status:'preparing',issues:[]}};
+        export const useMutation=ref=>async args=>{const f=window.contentFixture;f.calls.push({name:getFunctionName(ref),args});const r=f.response??{status:'preparing',issues:[]};if(getFunctionName(ref)==='contentWork:selectServiceMode'&&r.changed)f.state={...f.state,serviceMode:args.mode};return r};
         export const useAction=useMutation;`, resolveDir: process.cwd() };
     });
   } }] }).then(r => r.outputFiles[0].text);
@@ -36,7 +36,7 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   funding: { status: "blocked", checkedAt: Date.UTC(2026, 8, 14, 13), monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: Date.UTC(2026,8,15), monthlyResetAt: Date.UTC(2026,9,1), incrementalLimitMicroUsd: null },
   work: [{ jobId: "jobs:synthetic", intent: "create", stage: "ready", windowStartAt: Date.UTC(2026,8,14,11,55), deadlineAt: Date.UTC(2026,8,14,12) }] };
 
-for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off", "credit_interrupted", "credit_restored"]) test(`${screen.startsWith("credit_") ? "SLC38" : ["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
+for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off", "credit_interrupted", "credit_restored", "rollback"]) test(`${screen === "rollback" ? "SLC41" : screen.startsWith("credit_") ? "SLC38" : ["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
   const css = readdirSync(".next/static/chunks").filter(f => f.endsWith(".css")).map(f => readFileSync(`.next/static/chunks/${f}`, "utf8")).join("\n");
   await page.route("**/*", route => {
     const url = new URL(route.request().url()); expect(url.origin).toBe("http://pentra.test");
@@ -68,7 +68,24 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
         ...(screen === "credit_restored" ? { creditRetry: { jobId: "jobs:synthetic", callKey: "synthetic-private-call", token: "synthetic-private-token" } } : {}) } },
     ]);
   }
-  if (screen === "overview") {
+  if (screen === "rollback") {
+    await page.getByText("Service mode and publication consent", { exact: true }).click();
+    await page.getByLabel("Service mode", { exact: true }).selectOption("legacy_articles");
+    await expect(page.getByText(/Switching back pauses new work/)).toBeVisible();
+    for (const status of ["pending", "needs_action", "completed"]) {
+      await page.evaluate(status => {
+        const f = (window as unknown as { contentFixture: { response: unknown } }).contentFixture;
+        f.response = { status, changed: status === "completed", issues: status === "completed" ? [] : [{ action: "Inspect the retained delivery before checking again." }] };
+      }, status);
+      await page.getByRole("button", { name: status === "pending" ? "Switch back safely" : "Check service switch again" }).click();
+      await expect(page.getByRole("status")).toContainText(status === "pending" ? "Switch pending" : status === "needs_action" ? "Switch needs action" : "Service selection completed");
+    }
+    await expect(page.getByText("Current contract: Existing fixed-article delivery.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Work history and technical references", { exact: true })).toBeVisible();
+    const calls = await page.evaluate(() => (window as unknown as { contentFixture: { calls: { name: string; args: Record<string, unknown> }[] } }).contentFixture.calls);
+    expect(calls).toHaveLength(3);
+    for (const call of calls) { expect(call.name).toBe("contentWork:selectServiceMode"); expect(call.args).toMatchObject({ siteId: state.siteId, mode: "legacy_articles", confirmBusinessProfile: false, reviewToken: state.reviewToken }); expect(call.args).not.toHaveProperty("firstDeadlineAt"); }
+  } else if (screen === "overview") {
     for (const name of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) await expect(page.getByRole("heading", { name })).toBeVisible();
     await expect(page.getByText(/Overdue/)).toBeVisible(); await expect(page.getByText(/unavailable, not zero/)).toBeVisible();
   } else if (screen === "controls") {

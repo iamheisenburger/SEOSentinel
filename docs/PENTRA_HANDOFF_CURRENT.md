@@ -1,6 +1,95 @@
 # Pentra — fresh-task handoff
 
-## Current40: accepted retirement released; exact-site state verified; delivery incomplete
+## Current41: explicit safe service rollback — LOCAL review candidate, not deployed
+
+Assignment `supervisor-20260914-slc-safe-mode-rollback-41`. Based on clean
+`70e321451737b3c8e62c454e53bdfe7479b43126`; deployed source remains accepted39
+`1c632853acf0dac9b3ea8add6ce965f66a722e0b`. This is a bounded, free offline
+engineering change. No production read, service-mode mutation, provider request,
+funding attestation, Retry, purchase, deployment or push occurred in41. No new
+queue, ledger, schema, account exception, tenant patch or connector endpoint.
+
+### Reproduction and repair
+
+Actual registered handlers reproduced both reported failures on unchanged39:
+select growth → admit prepare → owner Pause → select legacy; and select growth
+→ two ready → Pause → select legacy. Both threw the in-flight guard (baseline
+3 test results failed). Pause prevents the worker from draining that work, so
+the old guard alone cannot implement an owner-requested rollback.
+
+The existing `selectServiceMode` mutation now treats an explicit owner legacy
+selection as retirement consent. Ordinary Pause is unchanged. It persists pause
+first, runs a bounded exact-site work/revision review and reuses existing worker
+expiry, receipt verification and publication watchdogs. Active or inconsistent
+worker ownership is never force-cleared. Unsafe inventory returns `pending` or
+`needs_action`, leaving growth-first selected and new work paused. This is NOT
+an automatic pending mode transition: the owner checks the same switch again
+after reconciliation. Resume still means resume growth-first. No hidden wake
+can select legacy or renew consent.
+
+Safe unstarted/prepared jobs retire through existing article archival and
+financial closure: reviewed draft bodies/seals, published artifacts, original
+attempts, deadlines, provider receipts and historical failures remain. Only
+proven no-I/O provider holds release; known actuals settle once; unknown and
+rejected costs retain their conservative ceilings. Original separate $20 grants
+stay active/stopped exactly as they were; re-opt-in cannot renew them or move
+the old deadline. Legacy admissions resume only after the original shared
+history/lease guards pass. Later explicit growth opt-in cannot replay retired
+jobs; connected tests reach a distinct fresh delivery and replenish to two.
+
+A second reproduced edge case was a lost GitHub response whose exact artifact
+later verifies but whose job is still pending. `closeVerifiedContentWake` closes
+only that stale pending wake with no worker token/lease and exact retained
+article/revision verification. It keeps historical errors and monetary holds,
+uses existing attempt/topic settlement, and never manufactures publication.
+
+UI exposes completed/pending/needs-action, existing article review links and
+lease check times. It explains retirement versus Pause, requires an explicit
+recheck, and keeps retained work history visible after the switch.
+
+### Important WordPress boundary — not hidden by the tests
+
+The existing conditional connector has no read-only creation-receipt lookup.
+Its creation path calls the pre-write fence before its idempotent POST. Thus a
+lost creation response cannot be automatically accepted by the receipt-only
+watchdog during rollback, even if the external post is unchanged. An initial
+test expecting automatic recovery correctly failed. The source is NOT changed
+to replay that POST. Final tests require the existing owner-reviewed unverified
+delivery disposition after expiry, with no success claim, no second write and
+the external post/customer edit preserved. Acknowledged WordPress receipts still
+verify read-only after pause/revocation. GitHub's exact lost receipt can recover
+read-only. This deliberate needs-action path is not autonomous WordPress lost-
+receipt recovery and must not be represented as such.
+
+### Validation and remaining acceptance
+
+- Focused changed-setup/rollback handlers:42 passed,0 failed,8907.659583ms; all
+  also included in the final full gate below.
+- Final full repository gate:1749 discovered,1748 passed,0 failed,1 existing
+  skip,146103.173083ms. Initial run also passed,135634.112167ms.
+- Final-source desktop/mobile browser:34 passed,2 genuine-owner-session skips,
+  6.9s. Pending/needs-action/completed interactions pass on both screen sizes.
+- Final-source types/schema61 tables296 indexes/secrets688/dependency audit0/
+  build/whitespace pass. Lint0 errors,157 pre-existing warnings.
+- Final real WordPress:SQLite29/29 passed,47182.828291ms; MySQL30/30 passed,
+  41773.745625ms (includes nontransactional-table rejection). All providers are
+  synthetic; WordPress core/connector/database are real and loopback-only.
+- [ ] Independent candidate review and authorized deployment. No release in41.
+- [ ] Genuine owner-session acceptance; two skipped tests are still gaps.
+- [ ] Three ordinary live cycles on both authorized tenants; fresh LeadPilot
+  discovery and post-consumption refill; measured Search Console follow-up.
+
+No41 live verification is claimed. Last actual40 observations remain below:
+both0/2 ready, one failed job each; original2026-09-14
+22:14:14.420–22:19:14.420 UTC windows missed. No41 publication time exists.
+Original20 allowance had5 held/0 verified settlement/15 remaining; ordinary32,
+old4 discovery and35 fleet caps unchanged. Actual provider funding remains
+unverified. LeadPilot is overdue. No backlinks or article/SLC/monetisation/SEO
+growth acceptance is claimed. Parent canonical plan remains the only plan and
+is updated but not staged. Protected supervisor state and environment contents
+were not inspected. No supervisor task history/state was read.
+
+## Previous40: accepted retirement released; exact-site state verified; delivery incomplete
 
 Assignment `supervisor-20260914-slc-release-access-40`. Reviewed retirement39
 `1c632853acf0dac9b3ea8add6ce965f66a722e0b` is now deployed to Convex and pushed

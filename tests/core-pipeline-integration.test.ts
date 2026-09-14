@@ -2372,6 +2372,234 @@ async function retirementFixture() {
   return f;
 }
 
+test("SLC41 explicit owner rollback retires paused prepare and two-ready work without erasing history", async t => {
+  for (const prepared of [false, true]) await t.test(prepared ? "two ready" : "pending prepare", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+    if (prepared) await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+    else await f.invoke("contentWork:advance", { siteId: site.id });
+    f.setIdentity(f.get(site.id)!.userId);
+    await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken });
+    const jobs = structuredClone(f.tables.jobs.filter(j => j.contentWork)), calls = f.modelCalls.length;
+    const holds = structuredClone(f.tables.provider_spend_reservations);
+    const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    assert.ok(jobs.every(j => !j.contentWork.retiredAt), "Pause alone never retires work");
+    const request = { siteId: site.id, mode: "legacy_articles", confirmBusinessProfile: false };
+    const result = await f.invoke("contentWork:selectServiceMode", request);
+    assert.equal(result.status, "completed"); assert.equal(f.get(site.id)!.serviceMode, "legacy_articles");
+    for (const before of jobs) {
+      const after = f.get(before._id)!; assert.ok(after.contentWork.retiredAt); assert.equal(after.status, "failed");
+      assert.equal(after.workerAttempts, before.workerAttempts); assert.equal(after.contentWork.deadlineAt, before.contentWork.deadlineAt);
+      assert.deepEqual(after.contentWork.providerCalls, before.contentWork.providerCalls);
+      const reservation = f.get(after.providerSpendReservationId)!;
+      if (!prepared) assert.ok(reservation.releasedAt); else assert.equal(reservation.settledMicroUsd, holds.find(r => r._id === before.providerSpendReservationId)!.settledMicroUsd);
+      if (before.articleId) { assert.equal(f.get(before.articleId)!.markdown.length > 0, true); assert.equal(f.get(before.articleId)!.status, "revision"); }
+      assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: before._id })).processed, false);
+    }
+    assert.equal((await f.invoke("contentWork:selectServiceMode", request)).changed, false);
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline); assert.equal(f.modelCalls.length, calls); f.assertOffline();
+  });
+});
+
+const rollbackRequest = (siteId: string) => ({ siteId, mode: "legacy_articles", confirmBusinessProfile: false });
+
+test("SLC41 rollback preserves in-flight worker ownership and closes only evidenced provider costs", async t => {
+  for (const cost of ["no_io", "known", "unknown", "rejected"] as const) for (const stopped of [false, true]) await t.test(`${cost}/${stopped ? "stopped" : "active"} allowance`, async () => {
+    const f = await scopedPricingFixture(); await f.admit(0);
+    const job = f.tables.jobs[0], site = f.sites[0], workerToken = "rollback-owned-worker";
+    await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken });
+    const call = cost !== "no_io" ? await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "original-call", ceilingMicroUsd: 100 }) : null;
+    if (cost === "rejected") await f.invoke("contentWork:recordProviderRejection", { jobId: job._id, workerToken, key: call.key, status: 429, code: "rate_limit_error" });
+    if (stopped) await f.stop();
+    const grant = structuredClone(f.get(f.args.authorizationId)), original = structuredClone(f.get(job._id)!);
+    f.setIdentity(f.owner);
+    const result = await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id));
+    assert.equal(result.status, "pending"); assert.equal(f.get(site.id)!.serviceMode, "growth_first");
+    assert.equal(f.get(job._id)!.workerToken, workerToken); assert.equal(f.get(job._id)!.leaseExpiresAt, original.leaseExpiresAt);
+    assert.equal(f.get(job._id)!.contentWork.retiredAt, undefined);
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "forbidden-call", ceilingMicroUsd: 100 }));
+    if (cost === "known") for (let n = 0; n < 2; n++) await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: call.key, actualMicroUsd: 70, result: { retained: true } });
+    f.setTime(original.leaseExpiresAt + 1);
+    await f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: job._id, expectedWorkerToken: workerToken });
+    const closed = structuredClone(f.get(job._id)!);
+    const results = await Promise.all(Array.from({ length: 3 }, () => f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))));
+    assert.equal(results.filter(r => r.changed).length, 1);
+    const after = f.get(job._id)!, hold = f.get(after.providerSpendReservationId)!;
+    assert.equal(after.workerAttempts, closed.workerAttempts); assert.equal(after.contentWork.deadlineAt, original.contentWork.deadlineAt);
+    assert.deepEqual(after.contentWork.providerCalls, closed.contentWork.providerCalls);
+    assert.equal(Boolean(hold.releasedAt), cost === "no_io"); assert.equal(hold.settledMicroUsd, cost === "known" ? 70 : undefined);
+    assert.deepEqual(f.get(f.args.authorizationId), grant, "Switch never renews, stops or rewrites the independent $20 grant");
+    const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+      reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken, firstDeadlineAt: f.now() + 600_000, intervalMs: 86_400_000 });
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+    assert.equal(f.get(site.id)!.contentSchedule.validationAuthorizationId, f.args.authorizationId);
+    assert.deepEqual(f.get(f.args.authorizationId), grant);
+    assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id })).processed, false);
+    if (stopped) assert.equal((await f.admit(0)).mode, "content_pricing_unavailable");
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC41 owner rollback during actual provider execution records late cost and prevents the next call", async () => {
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], providerBarrier: async () => { entered(); await held; } });
+  const site = await selectGrowth(f); await f.invoke("contentWork:advance", { siteId: site.id });
+  const job = f.tables.jobs[0], worker = f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  await started;
+  f.setIdentity(f.get(site.id)!.userId);
+  const original = structuredClone(f.get(job._id)!);
+  assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "pending");
+  assert.equal(f.get(job._id)!.workerToken, original.workerToken);
+  release(); await worker;
+  const current = f.get(job._id)!;
+  if (current.workerToken) { f.setTime(current.leaseExpiresAt + 1); await f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: job._id, expectedWorkerToken: current.workerToken }); }
+  assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "completed");
+  assert.equal(f.modelCalls.length, 1); assert.equal(f.get(job._id)!.contentWork.providerCalls[0].actualMicroUsd, 200);
+  assert.equal(f.get(f.get(job._id)!.providerSpendReservationId)!.settledMicroUsd, 200); f.assertOffline();
+});
+
+test("SLC41 safe legacy switch and later explicit opt-in prepare fresh work without replaying retired drafts", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const old = structuredClone(f.tables.jobs), deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  f.setIdentity(f.get(site.id)!.userId);
+  assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "completed");
+  const legacy = await f.invoke("jobs:queuePlanIfAbsent", { siteId: site.id, reason: "topic_replenishment" });
+  assert.equal(legacy.queued, true);
+  const token = "legacy-unstarted-close";
+  await f.invoke("jobs:claimPending", { siteId: site.id, jobId: legacy.jobId, workerToken: token });
+  await f.invoke("jobs:markFailed", { jobId: legacy.jobId, workerToken: token, error: "Owner cancelled synthetic unstarted legacy plan" });
+  await selectGrowth(f);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 200);
+  assert.ok(old.every(j => f.get(j._id)!.contentWork.retiredAt));
+  const delivered = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!;
+  assert.ok(!old.some(j => j._id === delivered._id || j.articleId === delivered.articleId));
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 1);
+  assert.equal(delivered.contentWork.deadlineAt, deadline); f.assertOffline();
+});
+
+test("SLC41 selected revision leases require expiry or exact owner disposition before rollback", async t => {
+  for (const attempted of [false, true]) await t.test(attempted ? "attempted" : "pristine", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const page = await selectExistingPage(f), site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+    const job = f.tables.jobs.find(j => j.contentWork?.intent === "improve")!, workerToken = "rollback-selected-worker";
+    f.setTime(job.contentWork.windowStartAt); await f.invoke("contentWork:advance", { siteId: site.id });
+    await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken });
+    const claim = await f.invoke("contentImprovements:claim", { siteId: site.id, jobId: job._id, workerToken });
+    if (attempted) await f.invoke("contentImprovements:attempted", { siteId: site.id, jobId: job._id, workerToken, revisionId: claim.revision._id });
+    const before = structuredClone(f.get(claim.revision._id)!), hold = structuredClone(f.get(job.providerSpendReservationId));
+    f.setIdentity(f.get(site.id)!.userId); await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: page.pageId });
+    const blocked = await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id));
+    assert.notEqual(blocked.status, "completed"); assert.equal(f.get(claim.revision._id)!.leaseOwner, before.leaseOwner);
+    f.setTime(Math.max(f.get(site.id)!.publicationLeaseExpiresAt, f.get(job._id)!.leaseExpiresAt) + 1);
+    await f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: job._id, expectedWorkerToken: workerToken });
+    if (attempted) {
+      assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "needs_action");
+      await f.invoke("publishedRevisions:abandonUnverifiedDelivery", { revisionId: before._id, confirmation: "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT" });
+    }
+    assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "completed");
+    const after = f.get(before._id)!;
+    assert.equal(after.attempts, before.attempts); assert.equal(after.attemptedAt, before.attemptedAt); assert.equal(after.nextArtifactHash, before.nextArtifactHash);
+    assert.equal(after.receipt, undefined); assert.equal(Boolean(after.ambiguityDispositionAt), attempted);
+    assert.equal(f.get(page.pageId)!.editable.active, false); assert.deepEqual(f.get(job.providerSpendReservationId), hold); f.assertOffline();
+  });
+});
+
+test("SLC41 rollback authenticates owner and current consent, preserves overdue history and blocks orphan ownership", async () => {
+  const f = setup({ growthFirst: true }), site = await selectGrowth(f); await f.invoke("contentWork:advance", { siteId: site.id });
+  const request = rollbackRequest(site.id), job = f.tables.jobs[0];
+  f.setIdentity(`synthetic-owner-${f.sites[1].domain}`);
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", request), /Not authorized/);
+  f.setIdentity(f.get(site.id)!.userId);
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", { ...request, reviewToken: "outdated" }), /Review/);
+  assert.equal(f.get(site.id)!.contentSchedule.paused, false);
+  // Fault injection: inconsistent retained ownership must not be force-cleared.
+  f.get(job._id)!.workerToken = "unreconciled-owner"; f.get(job._id)!.leaseExpiresAt = START;
+  f.setTime(START + 86_400_000);
+  const before = structuredClone(f.get(job._id)!);
+  const blocked = await f.invoke("contentWork:selectServiceMode", request);
+  assert.equal(blocked.status, "needs_action"); assert.ok(blocked.issues.some((i: Fields) => i.code === "worker_ownership"));
+  assert.deepEqual(f.get(job._id), before); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 600_000);
+  assert.equal(f.get(site.id)!.contentSchedule.paused, true); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+export async function exerciseRollbackReceipt(f: ReturnType<typeof setup>, selectedPageId?: string) {
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verify"));
+  const job = f.tables.jobs.find(j => j.contentWork?.stage === "verify")!, before = structuredClone(job);
+  const article = structuredClone(f.get(job.articleId)!), hold = structuredClone(f.get(job.providerSpendReservationId)), calls = f.modelCalls.length;
+  f.setIdentity(f.get(site.id)!.userId);
+  if (selectedPageId) await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: selectedPageId });
+  for (const result of await Promise.all([f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id)), f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))])) {
+    assert.equal(result.status, "pending"); assert.ok(result.issues.some((i: Fields) => i.code === "verification"));
+  }
+  assert.equal(f.get(job._id)!.contentWork.retiredAt, undefined);
+  await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified");
+  assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "completed");
+  assert.equal(f.get(job._id)!.contentWork.retiredAt, undefined); assert.equal(f.get(job._id)!.contentWork.deadlineAt, before.contentWork.deadlineAt);
+  assert.equal(f.get(job._id)!.workerAttempts, before.workerAttempts); assert.equal(f.get(article._id)!.markdown, article.markdown);
+  assert.deepEqual(f.get(job.providerSpendReservationId), hold); assert.equal(f.modelCalls.length, calls);
+  if (selectedPageId) assert.equal(f.get(selectedPageId)!.editable.active, false);
+  f.assertOffline();
+}
+
+export async function exerciseRollbackUnknown(f: ReturnType<typeof setup>, resolve: (article: Fields) => Promise<void>, disposition: boolean) {
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.articles?.some(a => a.publicationOutcomeUnverifiedAt), 180);
+  const article = f.tables.articles.find(a => a.publicationOutcomeUnverifiedAt)!, job = f.tables.jobs.find(j => j.articleId === article._id)!;
+  const before = structuredClone(article), hold = structuredClone(f.get(job.providerSpendReservationId)), calls = f.modelCalls.length;
+  f.setIdentity(f.get(site.id)!.userId);
+  const blocked = await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id));
+  assert.equal(blocked.status, "needs_action"); assert.ok(blocked.issues.some((i: Fields) => i.code === "uncertain_delivery"));
+  assert.equal(f.get(job._id)!.contentWork.retiredAt, undefined);
+  await resolve(before);
+  if (disposition) {
+    const retained = f.get(article._id)!;
+    f.setTime(Math.max(f.now(), f.get(site.id)!.publicationLeaseExpiresAt, retained.publicationLeaseStartedAt + 15 * 60_000));
+    const recovered = await f.invoke("publisher:recoverInitialPublicationLeaseInternal", { siteId: site.id, articleId: article._id,
+      expectedContentHash: retained.publicationLeaseHash, expectedLeaseOwner: retained.publicationLeaseOwner });
+    assert.equal(recovered.status, "unverified");
+    assert.equal((await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id))).status, "needs_action");
+    const review = await f.invoke("articles:getPublicationAmbiguityReview", { articleId: article._id });
+    f.setTime(review.initial.reviewAt + 1);
+    await f.invoke("articles:abandonUnverifiedPublication", { articleId: article._id, confirmation: "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT" });
+  } else await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified", 200, f.now() + 3_600_000);
+  const reconciled = structuredClone(f.get(article._id)!);
+  const completed = await f.invoke("contentWork:selectServiceMode", rollbackRequest(site.id));
+  assert.equal(completed.status, "completed", JSON.stringify(completed));
+  assert.deepEqual(f.get(article._id), reconciled, "Mode switch preserves the exact reconciled or owner-disposed artifact");
+  assert.equal(f.get(article._id)!.markdown, before.markdown);
+  assert.equal(Boolean(f.get(article._id)!.publicationReceipt), !disposition);
+  assert.deepEqual(f.get(job.providerSpendReservationId), hold); assert.equal(f.modelCalls.length, calls);
+  assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id })).processed, false);
+  f.assertOffline();
+}
+
+test("SLC41 GitHub rollback reconciles acknowledged and lost responses without a second write", async t => {
+  for (const selected of [false, true]) await t.test(selected ? "revoked selected receipt" : "creation receipt", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const page = selected ? await selectExistingPage(f) : null;
+    await exerciseRollbackReceipt(f, page?.pageId);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+  });
+  for (const edited of [false, true]) await t.test(edited ? "lost response then customer edit" : "lost response recovered", async () => {
+    let outage = false, dropped = false;
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], lostCommitResponses: 1,
+      githubBeforeWrite: async () => { if (!dropped) { outage = true; dropped = true; } }, githubReadUnavailable: () => outage });
+    const repo = f.repositories.get(f.sites[0].name.toLowerCase())!;
+    let path = "";
+    await exerciseRollbackUnknown(f, async () => {
+      if (edited) { path = [...repo.files.keys()][0]; repo.files.set(path, "Customer-owned later edit"); }
+      outage = false;
+    }, edited);
+    assert.equal(repo.writes, 1);
+    if (edited) assert.equal(repo.files.get(path), "Customer-owned later edit");
+  });
+});
+
 test("SLC39 fleet selection excludes only migrated sites while measurement still includes both modes", async () => {
   const f = await retirementFixture();
   await selectGrowth(f); await selectGrowth({ ...f, sites: [f.sites[3]] });
@@ -2941,7 +3169,7 @@ test("SLC migration consent, tenant isolation and single-engine admission preser
   assert.equal(f.tables.jobs.filter(j => j.siteId === site.id).length, 1);
   const legacy = await f.invoke("jobs:queuePlanIfAbsent", { siteId: other.id, reason: "topic_replenishment" }); assert.equal(legacy.queued, true);
   f.setIdentity(`synthetic-owner-${site.domain}`);
-  await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "legacy_articles", confirmBusinessProfile: false }), /Reconcile/);
+  assert.equal((await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "legacy_articles", confirmBusinessProfile: false })).status, "completed");
   assert.equal(f.modelCalls.length, 0); f.assertOffline();
 });
 

@@ -623,6 +623,28 @@ export async function closeRetiredContentAccounting(ctx: MutationCtx, job: Doc<"
   await reconcileJobTopicLifecycle(ctx, job);
 }
 
+/** A read-only late receipt can verify a publication after its worker has
+ * already returned to pending. Close that stale wake, not a live worker or a
+ * new delivery; retain its original failure/attempt history and monetary holds. */
+export async function closeVerifiedContentWake(ctx: MutationCtx, job: Doc<"jobs">) {
+  const cw = job.contentWork;
+  if (job.status !== "pending" || job.workerToken || job.leaseExpiresAt !== undefined || cw?.stage !== "verified" || !cw.verifiedAt || !job.articleId) return false;
+  const article = await ctx.db.get(job.articleId);
+  if (!article || article.siteId !== job.siteId) return false;
+  if (cw.intent === "create") {
+    if (!article.publicationReceipt || article.publicUrlStatus !== "verified" || article.publicUrlVerifiedAt !== cw.verifiedAt ||
+      article.publishedContentHash !== cw.approvedArtifactHash) return false;
+  } else {
+    const revision = cw.revisionId ? await ctx.db.get(cw.revisionId) : null;
+    if (!revision?.receipt || revision.siteId !== job.siteId || revision.articleId !== job.articleId || revision.contentWorkJobId !== job._id || revision.liveVerifiedAt !== cw.verifiedAt) return false;
+  }
+  await settleArticleProviderAttempt(ctx, job, "completed", now());
+  await cancelPublicationDeferralWake(ctx, job.publicationDeferral);
+  await ctx.db.patch(job._id, { status: "done", nextAttemptAt: undefined, updatedAt: now() });
+  await reconcileJobTopicLifecycle(ctx, job);
+  return true;
+}
+
 async function raiseJobAlert(
   ctx: MutationCtx,
   siteId: Id<"sites">,

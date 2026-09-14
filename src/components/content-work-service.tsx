@@ -20,12 +20,15 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const [confirmed, setConfirmed] = useState(false), [deadline, setDeadline] = useState("");
   const [confirmedReview, setConfirmedReview] = useState("");
   const [hours, setHours] = useState("24"), [saving, setSaving] = useState(false), [error, setError] = useState("");
+  const [switchResult, setSwitchResult] = useState<{ status: string; issues: { action: string; articleId?: string; until?: number }[] } | null>(null);
   const save = async () => {
     if (mode === "growth_first" && confirmedReview !== state?.reviewToken) return;
     setSaving(true); setError("");
     try {
-      await select({ siteId, mode, confirmBusinessProfile: confirmed, authorizeAutomaticPublication: mode === "growth_first" && confirmed, reviewToken: state!.reviewToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      const result = await select({ siteId, mode, confirmBusinessProfile: confirmed, authorizeAutomaticPublication: mode === "growth_first" && confirmed, reviewToken: state!.reviewToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         ...(mode === "growth_first" ? { firstDeadlineAt: new Date(deadline).getTime(), intervalMs: Number(hours) * 3_600_000 } : {}) });
+      setSwitchResult(result.status ? { status: result.status, issues: "issues" in result ? result.issues ?? [] : [] } : null);
+      if (result.changed) setMode(null);
     } catch { setError("Service selection could not be accepted. Review the saved business, destination, billing and unresolved work. No existing deadline or spending commitment was reset."); }
     finally { setSaving(false); }
   };
@@ -97,10 +100,11 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     </details>
     <details open={state.serviceMode !== "growth_first"} className="space-y-3"><summary className="cursor-pointer font-medium">Service mode and publication consent</summary>
     <label className="block">Choose service mode
-      <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); }} className="block bg-[#0F1117] border rounded p-2">
+      <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="block bg-[#0F1117] border rounded p-2">
         <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">Explicitly switch to growth-first</option>
       </select>
     </label>
+    {mode === "legacy_articles" && state.serviceMode === "growth_first" && <p className="text-sm">Switching back pauses new work and retires safe, unstarted work. Reviewed drafts, published content, original deadlines and spending history stay recorded. Active workers and uncertain deliveries must reconcile first. If pending, keep the service paused and check this switch again; resuming keeps growth-first selected.</p>}
     {mode === "growth_first" && state.serviceMode !== "growth_first" && <>
       <label className="block"><input type="checkbox" checked={confirmed && confirmedReview === state.reviewToken} onChange={e => { setConfirmed(e.target.checked); setConfirmedReview(state.reviewToken); }} /> I confirm these saved business facts, offerings, audience and exact publishing destination.</label>
       <p className="text-sm">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT} Selecting growth-first authorizes this scheduled creation/improvement service, not backlinks or a spending increase.</p>
@@ -108,11 +112,12 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       <label className="block">Hours between deadlines<input aria-label="Delivery interval hours" type="number" min="1" value={hours} onChange={e => setHours(e.target.value)} className="block bg-[#0F1117] border rounded p-2" /></label>
       <p className="text-sm">Selection does not purchase credits or increase spending limits. Preparation must be funded and two items ready before automatic schedule activation. Switching engines requires reconciliation of in-flight work.</p>
     </>}
-    {mode !== state.serviceMode && <Button onClick={save} disabled={saving || (mode === "growth_first" && (!confirmed || confirmedReview !== state.reviewToken || !deadline || !state.entitlement || !state.destination.verified))}>{saving ? "Saving…" : "Confirm service selection"}</Button>}
+    {mode !== state.serviceMode && <Button onClick={save} disabled={saving || (mode === "growth_first" && (!confirmed || confirmedReview !== state.reviewToken || !deadline || !state.entitlement || !state.destination.verified))}>{saving ? "Saving…" : mode === "legacy_articles" ? switchResult ? "Check service switch again" : "Switch back safely" : "Confirm service selection"}</Button>}
+    {switchResult && <div role="status"><p>{switchResult.status === "completed" ? "Service selection completed. Retained delivery and spending history is unchanged." : switchResult.status === "pending" ? "Switch pending — new work is paused while existing work reconciles." : "Switch needs action — new work remains paused."}</p><ul>{switchResult.issues.map((issue, index) => <li key={index}>{issue.action} {issue.until && <>Check after {shownTime(issue.until)}. </>}{issue.articleId && <Link href={`/articles/${issue.articleId}`} className="underline">Open retained delivery and owner review</Link>}</li>)}</ul></div>}
     </details>
     {error && <p role="alert">{error}</p>}
-    {state.serviceMode === "growth_first" && <details className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Work history and technical references</summary>
-      <ul>{state.work.slice(-10).map(work => <li key={work.jobId}>{workLabel(work)} · {work.retiredAt ? "Retired after owner-reviewed setup change; retained for history" : stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}<span> · Reference: {work.jobId}</span></li>)}</ul>
+    {state.work.length > 0 && <details className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Work history and technical references</summary>
+      <ul>{state.work.slice(-10).map(work => <li key={work.jobId}>{workLabel(work)} · {work.retiredAt ? "Retired after owner request; retained for history" : stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}<span> · Reference: {work.jobId}</span></li>)}</ul>
     </details>}
     <EditablePageSelection key={siteId} siteId={siteId} />
   </section>;
