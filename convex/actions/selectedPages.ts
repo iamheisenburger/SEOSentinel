@@ -5,7 +5,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { sha256Hex, safeGitHubRepositoryPart, requireSafeGitHubDefaultBranch } from "../lib/publicationArtifact";
 import { contentConnectionHash, confirmedContentProfileHash, selectedGitHubPath, parseSelectedMarkdown,
-  selectedUrl, selectedUrlMatches, classicHtmlMarkdown, assertUnprotectedPage } from "../lib/contentSelection";
+  selectedUrl, selectedUrlMatches, classicHtmlMarkdown, assertUnprotectedPage, contentConsentToken } from "../lib/contentSelection";
 import { wordpressConditionalRequest } from "../lib/wordpressConditional";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 import { verifyLivePublishedRevision } from "../lib/publishedRevision";
@@ -61,15 +61,16 @@ export async function readSelectedSource(site: Doc<"sites">, args: { path?: stri
     sourceRevision: data.revision as string, sourceContent: data.content as string, markdown: classicHtmlMarkdown(data.renderedContent ?? data.content),
     title: data.title as string, metaTitle: data.metadata?.title ?? data.title as string, description: data.metadata?.description ?? "" };
 }
-export const preview = action({ args: target, handler: async (ctx, args) => {
+export const preview = action({ args: target, handler: async (ctx, args): Promise<{ title: string; url: string; revision: string; sourceHash: string; reviewToken: string; preview: string; supported: boolean }> => {
   const site = await ctx.runQuery(internal.selectedPages.selectionContext, { siteId: args.siteId });
   const source = await renderedSnapshot(await readSelectedSource(site, args));
   return { title: source.title, url: source.url, revision: source.sourceRevision, sourceHash: sha256Hex(source.sourceContent),
-    preview: source.markdown.slice(0, 2000), supported: true };
+    reviewToken: contentConsentToken(site), preview: source.markdown.slice(0, 2000), supported: true };
 } });
-export const select = action({ args: { ...target, revision: v.string(), confirm: v.boolean() }, handler: async (ctx, args): Promise<Id<"pages">> => {
+export const select = action({ args: { ...target, revision: v.string(), reviewToken: v.string(), confirm: v.boolean() }, handler: async (ctx, args): Promise<Id<"pages">> => {
   if (!args.confirm) throw new Error("Explicit selected-page permission required");
   const site = await ctx.runQuery(internal.selectedPages.selectionContext, { siteId: args.siteId });
+  if (args.reviewToken !== contentConsentToken(site)) throw new Error("Business or destination changed since preview; review the current page again");
   const source = await renderedSnapshot(await readSelectedSource(site, args));
   if (source.sourceRevision !== args.revision) throw new Error("Source changed since preview; select the current version");
   let permission: string | undefined;

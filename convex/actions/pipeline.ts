@@ -5871,8 +5871,26 @@ async function handleLinks(
       kind: "published article",
       preferredGrowthTarget: candidate._id === growthParentArticle?._id,
     }));
+  const linkPages: Array<{ slug: string; title?: string; summary?: string; keywords?: string[] }> = [...pages];
+  // A content-only empty account has no legacy crawl inventory yet. Its
+  // confirmed business homepage may be a link target only after a fresh safe
+  // read proves the exact root exists. This neither enrolls editable content
+  // nor creates a crawl receipt, and it does not waive the internal-link gate.
+  if (site.serviceMode === "growth_first" && site.contentSetupRequestedAt && relatedArticles.length === 0 && !linkPages.some(p => p.slug === "/")) {
+    try {
+      const domain = siteCanonicalDomain(site);
+      if (domain) {
+        const root = await fetchPublicText(`https://${domain}/`, { sameHostRedirects: true });
+        const resolved = new URL(root.url);
+        if (resolved.hostname === domain && resolved.pathname === "/" && !resolved.search && root.text.trim()) {
+          linkPages.push({ slug: "/", title: site.siteSummary ?? site.siteName ?? domain, summary: site.siteSummary,
+            keywords: (site.anchorKeywords ?? []).slice(0, 12) });
+        }
+      }
+    } catch { /* No proven target: retain normal substantive quality failure. */ }
+  }
   const destinations = [
-    ...pages.map(
+    ...linkPages.map(
       (page: {
         slug: string;
         title?: string;
@@ -5933,7 +5951,7 @@ async function handleLinks(
   const pageLinks = selectRelatedInternalLinks({
     currentTitle: article.title,
     currentKeywords: article.metaKeywords,
-    destinations: pages.map((page: {
+    destinations: linkPages.map((page: {
       slug: string;
       title?: string;
       summary?: string;

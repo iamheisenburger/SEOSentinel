@@ -1,6 +1,33 @@
 # Pentra — fresh-task handoff
 
-## Current: Stage2 completion candidate28, local review required
+## Current: Stage3 customer journey candidate29, local review required
+
+Assignment `supervisor-20260914-slc-stage3-29` builds on accepted1961e3450d2e4ab0d473d339b631e836f30c6a23.
+Read `docs/PENTRA_SLC_STAGE3_2026-09-14.md` first. Work remains in the isolated
+`.claude/assignment24` checkout on `codex/simplified-article-admission`; final
+handoff supplies the one exact local commit. Do not proceed to Stage4 unreviewed.
+
+The UI now connects content-only empty onboarding, verified existing billing and
+publisher destination, bound consent, funding readiness, fixed windows, page
+permissions, correction/rollback previews, pause/resume and organic reporting.
+Stronger actual-handler empty-start tests found and repaired disabled preparation
+and missing initial internal-link inventory; quality/budget gates stay intact.
+Five business fixtures per adapter prove repeated delivery plus pause across an
+unchanged deadline, closed-browser resumption and a genuinely fresh replacement.
+Real WordPress MySQL/SQLite fixtures retain conditional safety and bounded cleanup.
+
+Local tests are not authenticated-browser acceptance. The exact Pentra live URL
+redirected to sign-in; the existing Google chooser awaits owner selection. No
+account was guessed and no other tenant inspected. A reviewed/deployed candidate
+and authorized owner session remain prerequisites. See the report for final free
+gates, exact synthetic publication times and honest authenticated skips.
+
+USD0 provider spend; canonical USD20 remains inactive/unspent, old USD4 separate.
+No live tenant budget/buffer/deadline refresh, production writes, cap change,
+push/deploy/migration, resets or backlinks. Historical production evidence below
+is not current. Live SaaS acceptance and attributable growth remain unproven.
+
+## Historical: Stage2 completion candidate28
 
 Assignment `supervisor-20260914-slc-stage2-complete-28` completes the bounded
 follow-up to reviewed19046a0. Work remains in `.claude/assignment24`, branch

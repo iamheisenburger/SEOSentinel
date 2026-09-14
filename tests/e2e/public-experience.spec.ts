@@ -68,15 +68,17 @@ test("One Setup exposes bootstrap-v1 adapters and visibly gates managed beta cho
 
 test.describe("authenticated, read-only customer acceptance", () => {
   test.skip(
-    !process.env.PENTRA_E2E_AUTH_STATE,
-    "Set PENTRA_E2E_AUTH_STATE to a dedicated test tenant storage state.",
+    !process.env.PENTRA_E2E_AUTH_STATE || !process.env.PENTRA_E2E_CONTENT_SITE_ID,
+    "Requires a reviewed deployed candidate, an authorized owner session (PENTRA_E2E_AUTH_STATE), and exact PENTRA_E2E_CONTENT_SITE_ID. Synthetic fixtures do not satisfy this gate.",
   );
 
-  test("dashboard and backlinks expose customer-visible loop state", async ({ page }) => {
-    await page.goto("/dashboard");
-    await expect(page.getByText("Growth loop")).toBeVisible();
-    await page.goto("/backlinks");
-    await expect(page.getByRole("heading", { name: "Backlinks" })).toBeVisible();
-    await expect(page.getByText("Sending inbox")).toBeVisible();
+  test("exact-site owner sees content readiness and page controls", async ({ page }) => {
+    const siteId = process.env.PENTRA_E2E_CONTENT_SITE_ID!;
+    await page.goto(`/sites/${encodeURIComponent(siteId)}?tab=settings`);
+    await expect(page).not.toHaveURL(/\/sign-in/);
+    await page.goto("/settings");
+    await expect(page.getByRole("heading", { name: "Content delivery service" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Funding readiness" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pages Pentra may improve" })).toBeVisible();
   });
 });

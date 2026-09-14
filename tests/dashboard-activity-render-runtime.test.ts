@@ -16,6 +16,7 @@ const owned = [
 const code = buildSync({ entryPoints: ["src/app/(dashboard)/dashboard/page.tsx"], bundle: true,
   platform: "node", format: "cjs", packages: "external", write: false,
   external: ["@/contexts/site-context", "@/hooks/usePlanLimits", "@/components/onboarding/setup-wizard",
+    "@/components/onboarding/content-start", "@/components/content-work-overview", "@/components/content-work-service",
     "@/components/growth-loop/growth-loop-status", "@/components/ui/article-progress"],
 }).outputFiles[0].text;
 
@@ -29,6 +30,9 @@ function render(selected: string | undefined, data?: SiteJobActivity, routeSiteI
       if (name === "@/contexts/site-context") return { useActiveSite: () => ({ activeSite, sites: owned }) };
       if (name === "@/hooks/usePlanLimits") return { usePlanLimits: () => ({ maxSites: 9999, maxArticles: 150 }) };
       if (name === "@/components/onboarding/setup-wizard") return { SetupWizard: () => createElement("aside", null, "Setup") };
+      if (name === "@/components/onboarding/content-start") return { ContentStart: () => createElement("aside", null, "Content setup") };
+      if (name === "@/components/content-work-overview") return { ContentWorkOverview: () => null };
+      if (name === "@/components/content-work-service") return { ContentWorkService: () => null };
       if (name === "@/components/growth-loop/growth-loop-status") return { GrowthLoopStatus: () => null };
       if (name === "@/components/ui/article-progress") return { ArticleProgress: () => null };
       if (name === "@clerk/nextjs") return { useAuth: () => ({ userId: "synthetic-owner" }) };

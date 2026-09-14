@@ -1,5 +1,5 @@
 import type { Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { readProviderBudgetAuthorization } from "./providerBudgetAuthorization.ts";
 import {
   resolvePlanFromFeatures,
@@ -353,17 +353,22 @@ export function evaluateSharedProviderCapacity(args: {
   return { allowed: true };
 }
 
-export async function reserveSharedProviderBudget(
-  ctx: MutationCtx,
-  args: {
+type ProviderBudgetRequest = {
     siteId: Id<"sites">;
     userId: string;
     purpose: SharedProviderPurpose;
     trigger: string;
     reservedMicroUsd: number;
     timestamp: number;
-  },
-): Promise<SharedProviderReservationResult> {
+};
+type ProviderBudgetInspection = Omit<Extract<SharedProviderReservationResult, { ok: true }>, "reservationId"> |
+  Extract<SharedProviderReservationResult, { ok: false }>;
+
+/** The exact same account/window/health/fleet admission check, without a write.
+ * Its result is a snapshot, never an authorization token for later paid I/O. */
+export async function inspectSharedProviderBudget(
+  ctx: QueryCtx | MutationCtx, args: ProviderBudgetRequest,
+): Promise<ProviderBudgetInspection> {
   if (!Number.isSafeInteger(args.reservedMicroUsd) || args.reservedMicroUsd <= 0) {
     throw new Error("Shared provider reservation must be a positive integer");
   }
@@ -469,6 +474,14 @@ export async function reserveSharedProviderBudget(
     return { ok: false, ...capacity };
   }
 
+  return { ok: true, ...ledger, accountMonthlyCeilingMicroUsd };
+}
+
+export async function reserveSharedProviderBudget(
+  ctx: MutationCtx, args: ProviderBudgetRequest,
+): Promise<SharedProviderReservationResult> {
+  const admission = await inspectSharedProviderBudget(ctx, args);
+  if (!admission.ok) return admission;
   const reservationId = await ctx.db.insert("provider_spend_reservations", {
     siteId: args.siteId,
     userId: args.userId,
@@ -483,14 +496,14 @@ export async function reserveSharedProviderBudget(
     ok: true,
     reservationId,
     fleetReservedTodayMicroUsd:
-      ledger.fleetReservedTodayMicroUsd + args.reservedMicroUsd,
+      admission.fleetReservedTodayMicroUsd + args.reservedMicroUsd,
     fleetReservedThisMonthMicroUsd:
-      ledger.fleetReservedThisMonthMicroUsd + args.reservedMicroUsd,
+      admission.fleetReservedThisMonthMicroUsd + args.reservedMicroUsd,
     accountReservedTodayMicroUsd:
-      ledger.accountReservedTodayMicroUsd + args.reservedMicroUsd,
+      admission.accountReservedTodayMicroUsd + args.reservedMicroUsd,
     accountReservedThisMonthMicroUsd:
-      ledger.accountReservedThisMonthMicroUsd + args.reservedMicroUsd,
-    accountMonthlyCeilingMicroUsd,
+      admission.accountReservedThisMonthMicroUsd + args.reservedMicroUsd,
+    accountMonthlyCeilingMicroUsd: admission.accountMonthlyCeilingMicroUsd,
   };
 }
 

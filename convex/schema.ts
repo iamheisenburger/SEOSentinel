@@ -6,10 +6,13 @@ import { publicationInventoryValidator } from "./lib/publicationEligibility";
 export default defineSchema({
   sites: defineTable({
     serviceMode: v.optional(v.union(v.literal("legacy_articles"), v.literal("growth_first"))),
+    contentSetupRequestedAt: v.optional(v.number()),
     contentSchedule: v.optional(v.object({
       selectedAt: v.number(), profileHash: v.string(), connectionHash: v.string(),
       intervalMs: v.number(), nextDeadlineAt: v.number(), active: v.boolean(),
       paused: v.boolean(),
+      timezone: v.optional(v.string()),
+      autopublishConsentAt: v.optional(v.number()),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),

@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { confirmedContentProfileHash, contentConnectionHash, assertUnprotectedPage, selectedUrlMatches,
   CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, parseSelectedMarkdown, selectedGitHubPath, targetedImprovement, contentWords } from "./lib/contentSelection";
+import { contentIssue } from "./lib/contentCustomer";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
@@ -54,16 +55,35 @@ export async function enrollVerifiedCreation(ctx: MutationCtx, site: Doc<"sites"
     canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site), editable, createdAt: Date.now() });
 }
 export const list = query({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
-  await owner(ctx, siteId);
+  const site = await owner(ctx, siteId);
+  let connectionHash: string | undefined;
+  try { connectionHash = contentConnectionHash(site); } catch { /* Disconnected owners must still see and revoke existing permissions. */ }
+  const profileHash = confirmedContentProfileHash(site);
   const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(501);
-  return { complete: rows.length <= 500, pages: rows.filter(p => p.editable).map(p => ({ id: p._id, url: p.url,
+  return { complete: rows.length <= 500, pages: await Promise.all(rows.slice(0, 500).filter(p => p.editable).map(async p => {
+    const job = p.editable!.lastWorkJobId ? await ctx.db.get(p.editable!.lastWorkJobId) : null;
+    const state = job?.siteId === siteId ? job.contentWork : null;
+    return { id: p._id, url: p.url,
     title: p.title, active: p.editable!.active, selectedAt: p.editable!.selectedAt, lastImprovedAt: p.editable!.lastImprovedAt,
-    latestRevisionId: p.editable!.latestRevisionId, revocationStatus: p.editable!.revocationStatus, sourceRevision: p.editable!.sourceRevision })) };
+    managed: Boolean(p.editable!.managedArticleId), bindingCurrent: p.editable!.connectionHash === connectionHash && p.editable!.profileHash === profileHash,
+    pendingVerification: state?.stage === "verify", issue: contentIssue(state?.failure),
+    latestRevisionId: p.editable!.latestRevisionId, revocationStatus: p.editable!.revocationStatus, sourceRevision: p.editable!.sourceRevision };
+  })) };
 } });
 const imported = v.object({ kind: v.union(v.literal("github"), v.literal("wordpress")), path: v.optional(v.string()),
   resourceId: v.optional(v.number()), permission: v.optional(v.string()), slug: v.string(), url: v.string(),
   sourceRevision: v.string(), sourceContent: v.string(), markdown: v.string(), title: v.string(), metaTitle: v.string(),
   description: v.string(), header: v.optional(v.string()) });
+export const detail = query({ args: { siteId: v.id("sites"), pageId: v.id("pages") }, handler: async (ctx, args) => {
+  await owner(ctx, args.siteId);
+  const page = await ctx.db.get(args.pageId), e = page?.editable;
+  if (!page || page.siteId !== args.siteId || !e) throw new Error("Selected page not found");
+  const revision = e.latestRevisionId ? await ctx.db.get(e.latestRevisionId) : null;
+  return { title: e.title, url: page.url, baseRevision: e.sourceRevision,
+    paragraphs: e.markdown.split(/\n\s*\n/).filter(p => p.length >= 15 && contentWords(p) <= 100).slice(0, 100),
+    rollback: revision?.siteId === args.siteId && revision.selectedPageId === page._id && revision.liveVerifiedAt && revision.deliveredSource?.revision === e.sourceRevision
+      ? { revisionId: revision._id, before: revision.nextArtifact.markdown, after: revision.baseArtifact.markdown } : null };
+} });
 export const recordSelection = internalMutation({ args: { siteId: v.id("sites"), connectionHash: v.string(), profileHash: v.string(), source: imported },
   handler: async (ctx, args) => {
     const site = await owner(ctx, args.siteId); selectionConnection(site);

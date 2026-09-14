@@ -263,7 +263,7 @@ test("atomic reservation re-reads ownership and applies account capacity before 
     "utf8",
   );
   const reserve = source.slice(
-    source.indexOf("export async function reserveSharedProviderBudget"),
+    source.indexOf("export async function inspectSharedProviderBudget"),
     source.indexOf("export async function releaseSharedProviderReservation"),
   );
   const siteRead = reserve.indexOf("ctx.db.get(args.siteId)");
@@ -279,6 +279,9 @@ test("atomic reservation re-reads ownership and applies account capacity before 
   assert.ok(tierResolution < accountCheck);
   assert.ok(accountCheck < fleetCheck);
   assert.ok(fleetCheck < insert);
+  const writer = reserve.slice(reserve.indexOf("export async function reserveSharedProviderBudget"));
+  assert.ok(writer.indexOf("await inspectSharedProviderBudget(ctx, args)") < writer.indexOf('ctx.db.insert("provider_spend_reservations"'));
+  assert.match(writer, /if \(!admission\.ok\) return admission/);
   assert.match(reserve, /reason: "provider_account_entitlement_unavailable"/);
   assert.match(reserve, /summarizeProviderReservationLedger\([\s\S]*site\.userId/);
 });

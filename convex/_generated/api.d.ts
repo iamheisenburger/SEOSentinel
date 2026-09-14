@@ -11,6 +11,7 @@
 import type * as actions_backlinks from "../actions/backlinks.js";
 import type * as actions_cadenceMicroSeed from "../actions/cadenceMicroSeed.js";
 import type * as actions_contentDecay from "../actions/contentDecay.js";
+import type * as actions_contentCorrections from "../actions/contentCorrections.js";
 import type * as actions_expectedClickBackfillFleet from "../actions/expectedClickBackfillFleet.js";
 import type * as actions_expectedClickDemandBackfill from "../actions/expectedClickDemandBackfill.js";
 import type * as actions_expectedClickEvidenceBackfill from "../actions/expectedClickEvidenceBackfill.js";
@@ -182,6 +183,7 @@ declare const fullApi: ApiFromModules<{
   "actions/backlinks": typeof actions_backlinks;
   "actions/cadenceMicroSeed": typeof actions_cadenceMicroSeed;
   "actions/contentDecay": typeof actions_contentDecay;
+  "actions/contentCorrections": typeof actions_contentCorrections;
   "actions/expectedClickBackfillFleet": typeof actions_expectedClickBackfillFleet;
   "actions/expectedClickDemandBackfill": typeof actions_expectedClickDemandBackfill;
   "actions/expectedClickEvidenceBackfill": typeof actions_expectedClickEvidenceBackfill;

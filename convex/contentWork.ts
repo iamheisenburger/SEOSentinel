@@ -1,9 +1,9 @@
-import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
-import { publicationArtifactHash } from "./lib/publicationArtifact";
+import { publicationArtifactHash, publicationDeliveryConfig } from "./lib/publicationArtifact";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
@@ -12,9 +12,11 @@ import { planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoin
 import { terminalContentFeasibility } from "./lib/topicLifecycle";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness } from "./lib/autopilotReadiness";
-import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete } from "./lib/contentSelection";
+import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken } from "./lib/contentSelection";
+import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
-import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation } from "./selectedPages";
+import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
+import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -31,7 +33,7 @@ function pricingConfiguration() {
       outputMicroUsdPerToken: p.outputMicroUsdPerToken as number, budgetMicroUsd: p.budgetMicroUsd as number };
   } catch { return null; }
 }
-async function contentEntitlementAuthorized(ctx: MutationCtx, site: Doc<"sites">) {
+async function contentEntitlementAuthorized(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
   if (!site.userId) return false;
   const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
   return entitlement?.status === "completed" && await siteExecutionAuthorized(ctx, site);
@@ -69,7 +71,7 @@ async function requireOwner(ctx: MutationCtx, siteId: Id<"sites">) {
  * deadline by toggling mode. Migration and rollback drain unresolved work. */
 export const selectServiceMode = mutation({
   args: { siteId: v.id("sites"), mode: v.union(v.literal("legacy_articles"), v.literal("growth_first")),
-    confirmBusinessProfile: v.boolean(), firstDeadlineAt: v.optional(v.number()), intervalMs: v.optional(v.number()) },
+    confirmBusinessProfile: v.boolean(), authorizeAutomaticPublication: v.optional(v.boolean()), reviewToken: v.optional(v.string()), timezone: v.optional(v.string()), firstDeadlineAt: v.optional(v.number()), intervalMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId);
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false };
@@ -91,16 +93,23 @@ export const selectServiceMode = mutation({
       return { changed: true };
     }
     if (!args.confirmBusinessProfile || !site.siteSummary?.trim() || !site.targetAudienceSummary?.trim() ||
-      !contentAnalysisMatchesCurrentDomain(site)) throw new Error("Confirm the current business and audience first");
+      (!site.contentSetupRequestedAt && !contentAnalysisMatchesCurrentDomain(site))) throw new Error("Confirm the current business and audience first");
+    if (args.reviewToken !== contentConsentToken(site)) throw new Error("Saved business or destination changed. Review the current values before confirming.");
+    const timezone = args.timezone ?? "UTC";
+    try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { throw new Error("Choose a valid timezone"); }
     if (!contentConnectionComplete(site)) {
       throw new Error("Connect a supported GitHub or conditional WordPress destination first");
     }
+    selectionConnection(site);
     if (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
       !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS) throw new Error("Choose a future fixed delivery window and interval");
     if (!(await contentEntitlementAuthorized(ctx, site))) throw new Error("Current plan entitlement is required");
-    await ctx.db.patch(site._id, { serviceMode: "growth_first", contentSchedule: {
+    await ctx.db.patch(site._id, { serviceMode: "growth_first", ...(args.authorizeAutomaticPublication === true ? {
+      approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
+    } : {}), contentSchedule: {
       selectedAt: Date.now(), profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
-      intervalMs: site.contentSchedule?.intervalMs ?? args.intervalMs!, nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? args.firstDeadlineAt!, active: false, paused: false,
+      ...(args.authorizeAutomaticPublication === true ? { autopublishConsentAt: Date.now() } : {}),
+      intervalMs: site.contentSchedule?.intervalMs ?? args.intervalMs!, nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? args.firstDeadlineAt!, timezone: site.contentSchedule?.timezone ?? timezone, active: false, paused: false,
     }, updatedAt: Date.now() });
     await wake(ctx, site._id);
     return { changed: true };
@@ -113,15 +122,46 @@ export const readiness = query({
     const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
     if (!site?.userId || identity?.subject !== site.userId) throw new Error("Not authorized");
     const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1);
-    return { serviceMode: site.serviceMode ?? "legacy_articles", schedule: site.contentSchedule,
-      funding: pricingConfiguration() ? "priced_admission_required" : "pricing_not_configured",
+    const s = site.contentSchedule;
+    let verified = false, directory: string | null = null, bindingCurrent = !s;
+    try {
+      directory = publicationDeliveryConfig(site).contentDir ?? null;
+      verified = contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site });
+      bindingCurrent = !s || (s.profileHash === confirmedContentProfileHash(site) && s.connectionHash === contentConnectionHash(site));
+    } catch { /* Incomplete destination is actionable readiness, not a query crash. */ }
+    return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
+      profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [] },
+      destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
+        branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified },
+      entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
+      bindingCurrent,
+      schedule: s ? { active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
+      funding: await contentFunding(ctx, site, pricingConfiguration()?.budgetMicroUsd),
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready").length,
       work: jobs.filter(j => j.contentWork).map(j => ({ jobId: j._id, articleId: j.articleId,
         intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
-        publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, failure: j.contentWork!.failure })) };
+        publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, failure: contentIssue(j.contentWork!.failure ?? j.error) })) };
   },
 });
+
+/** Pause is not cancellation: retain ready work, leases, attempts and costs.
+ * Resume can only wake the same binding; changed facts require reconciliation. */
+export const control = mutation({ args: { siteId: v.id("sites"), action: v.union(v.literal("pause"), v.literal("resume"), v.literal("retry")), reviewToken: v.string() },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
+    if (site.serviceMode !== "growth_first" || !s) throw new Error("Choose growth-first service first");
+    if (args.action === "pause") {
+      await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: true }, updatedAt: Date.now() });
+      await wake(ctx, site._id); return;
+    }
+    if (args.reviewToken !== contentConsentToken(site) || s.profileHash !== confirmedContentProfileHash(site) || s.connectionHash !== contentConnectionHash(site)) throw new Error("Business or destination changed. Reconcile existing work before reviewing a new service selection.");
+    if (!await contentEntitlementAuthorized(ctx, site) || !contentConnectionComplete(site) || site.approvalRequired) throw new Error("Verify billing, publishing and automatic-publication consent before resuming");
+    if (args.action === "resume") await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: false }, autopilotEnabled: true,
+      autopilotRolloutMode: s.active ? "live" : "warm", updatedAt: Date.now() });
+    if (args.action === "retry" && s.paused) throw new Error("Resume the paused service before retrying");
+    await wake(ctx, site._id);
+  } });
 
 async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">) {
   const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
@@ -168,6 +208,13 @@ export const advance = internalMutation({
   handler: async (ctx, { siteId }): Promise<CadenceScheduleResult> => {
     const site = await ctx.db.get(siteId), schedule = site?.contentSchedule;
     if (!site || site.serviceMode !== "growth_first" || !schedule) return { scheduled: 0, mode: "content_mode_required" };
+    // Pause/entitlement loss stop admissions and unstarted writes, not read-only
+    // reconciliation of a write already acknowledged by the destination.
+    const verifying = await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", "verify")).take(LIMIT + 1);
+    if (verifying.length > LIMIT) return { scheduled: 0, mode: "content_failed_slot", blockers: ["content_inventory_incomplete"] };
+    for (const job of verifying) if (job.contentWork?.intent === "improve" && (job.contentWork.verificationNextAt ?? 0) <= Date.now()) {
+      await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId, jobId: job._id });
+    }
     if (!site.autopilotEnabled || schedule.paused || !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
       !(await contentEntitlementAuthorized(ctx, site))) return { scheduled: 0, mode: "content_paused" };
     if (!contentConnectionComplete(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
@@ -188,6 +235,9 @@ export const advance = internalMutation({
     const ready = waiting.filter(j => j.status === "done" && j.contentWork!.stage === "ready");
     let active = schedule.active;
     if (!active && ready.length >= 2 && liveAutopilotReadiness(site, true).ready) {
+      const funding = await contentFunding(ctx, site, pricingConfiguration()?.budgetMicroUsd);
+      if (funding.status !== "available") return { scheduled: 0, mode: "content_budget_exhausted" };
+      if (new Set(ready.slice(0, 2).map(j => j.articleId)).size !== 2) return { scheduled: 0, mode: "content_artifact_changed" };
       for (const item of ready.slice(0, 2)) {
         const artifact = item.articleId ? await ctx.db.get(item.articleId) : null;
         if (!artifact || !isSealedReady(artifact) || publicationArtifactHash(artifact) !== item.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
@@ -281,6 +331,7 @@ export const advance = internalMutation({
         profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: 0, replacements: 0,
         discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] }, createdAt: Date.now(), updatedAt: Date.now() });
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
+    if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
     return { scheduled: 1, mode: "buffer_fill", activeJobId: jobId };
   },
 });

@@ -72,7 +72,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     parents: Map<string, string>; snapshots: Map<string, Map<string, string>>; writes: number }>();
   for (const b of businesses) repositories.set(b.name.toLowerCase(), { head: sha(b.domain), files: new Map(), blobs: new Map(), trees: new Map(), commits: new Map(), parents: new Map(), snapshots: new Map(), writes: 0 });
   const f = corePipelineFixture(async (url, init) => {
-    if (options.wordpress && businesses.some(b => b.domain === url.hostname) && (url.pathname.startsWith("/wp-json/") || url.pathname.startsWith("/blog/") || /^\/selected-[a-f0-9]+\/$/.test(url.pathname))) {
+    if (options.wordpress && businesses.some(b => b.domain === url.hostname) && (url.pathname === "/" || url.pathname.startsWith("/wp-json/") || url.pathname.startsWith("/blog/") || /^\/selected-[a-f0-9]+\/$/.test(url.pathname))) {
       return options.wordpress.transport(url, init);
     }
     if (url.origin === "https://api.anthropic.com") {
@@ -252,6 +252,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       ...(options.wordpress ? { publishMethod: "wordpress", wpUrl: `https://${b.domain}`, wpUsername: options.wordpress.username,
         wpAppPassword: options.wordpress.password, urlStructure: "/blog/[slug]/" } : {}),
     });
+    if (!options.wordpress) f.get(id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(id)! as never,
+      ownerAccountKey: accountDeletionKey(f.get(id)!.userId), verifiedAt: START });
     f.add("pages", { siteId: id, slug: "/", url: `https://${b.domain}/`, title: b.niche, summary: `${b.name} provides ${b.niche}.`, keywords: b.keywords, createdAt: START - 1000 });
     return { ...b, id };
   });
@@ -309,11 +311,242 @@ export const slcBusinesses = [defaultBusinesses[0],
 export async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 * 60_000) {
   const site = f.sites[0];
   f.setIdentity(`synthetic-owner-${site.domain}`);
+  const readiness = await f.invoke("contentWork:readiness", { siteId: site.id });
   await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+    reviewToken: readiness.reviewToken, ...(readiness.setupPending ? { authorizeAutomaticPublication: true, timezone: "America/Los_Angeles" } : {}),
     firstDeadlineAt: START + 10 * 60_000, intervalMs });
   f.setIdentity(null);
   return site;
 }
+
+// Only the test-owned empty site is removed. Billing identity and GitHub OAuth
+// callbacks are synthetic; WordPress verifies against the real loopback core.
+export async function createEmptyContentSite(f: ReturnType<typeof setup>) {
+  const site = f.sites[0], prior = { ...f.get(site.id)! }, owner = prior.userId;
+  f.tables.sites.splice(0); f.tables.pages.splice(0);
+  f.setIdentity(owner);
+  site.id = await f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain, clerkUserId: owner,
+    siteName: site.name, siteSummary: site.niche, niche: site.niche, blogTheme: site.niche,
+    targetAudienceSummary: "Customers evaluating this business's confirmed offering", productUsage: site.niche,
+    anchorKeywords: site.keywords, painPoints: site.keywords, language: "en", publishMethod: prior.publishMethod,
+    autopilotEnabled: false, approvalRequired: true, inferToneNiche: false });
+  assert.equal(f.get(site.id)!.autopilotEnabled, false); assert.equal(f.get(site.id)!.autopilotRolloutMode, "observe");
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: site.id })).destination.verified, false);
+  assert.equal(f.modelCalls.length, 0); assert.equal(f.tables.jobs?.length ?? 0, 0);
+  await f.invoke("sites:upsert", { id: site.id, domain: site.domain, publishMethod: prior.publishMethod,
+    urlStructure: prior.urlStructure,
+    ...(prior.publishMethod === "wordpress" ? { wpUrl: prior.wpUrl, wpUsername: prior.wpUsername, wpAppPassword: prior.wpAppPassword }
+      : { repoOwner: prior.repoOwner, repoName: prior.repoName }) });
+  if (prior.publishMethod === "wordpress") await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id });
+  else {
+    await f.invoke("sites:setGithubTokenInternal", { siteId: site.id, githubToken: "synthetic-only", repoOwner: prior.repoOwner, repoName: prior.repoName, repoDefaultBranch: "main" });
+    await f.invoke("sites:recordPublisherDestinationReceiptInternal", { siteId: site.id, receipt: expectedPublisherDestinationReceipt({
+      site: f.get(site.id)! as never, ownerAccountKey: accountDeletionKey(owner), verifiedAt: f.now() }) });
+  }
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: site.id })).destination.verified, true);
+  f.setIdentity(null); return site;
+}
+
+export async function exerciseReadyPause(f: ReturnType<typeof setup>) {
+  const site = f.sites[0], deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  const ready = f.tables.jobs.filter(j => j.contentWork?.stage === "ready").map(j => j._id);
+  assert.equal(ready.length, 2);
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const jobs = JSON.stringify(f.tables.jobs), reservations = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length;
+  await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: r.reviewToken });
+  f.setTime(deadline + 1);
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_paused");
+  assert.equal(JSON.stringify(f.tables.jobs), jobs); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), reservations);
+  assert.equal(f.modelCalls.length, calls); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  await f.invoke("contentWork:control", { siteId: site.id, action: "resume", reviewToken: r.reviewToken });
+  f.setIdentity(null);
+  await pumpUntil(f, () => ready.some(id => f.get(id)!.contentWork.stage === "verified") &&
+    f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 160, deadline + 3_600_000);
+  const delivered = ready.map(id => f.get(id)!).find(j => j.contentWork.stage === "verified")!;
+  assert.equal(delivered.contentWork.deadlineAt, deadline); assert.ok(delivered.contentWork.publishedAt > deadline);
+  assert.ok(f.tables.jobs.some(j => j.contentWork?.stage === "ready" && j.createdAt > delivered.contentWork.verifiedAt));
+  f.assertOffline();
+  return { deadline, publishedAt: delivered.contentWork.publishedAt, verifiedAt: delivered.contentWork.verifiedAt, ready: 2 };
+}
+
+test("SLC29 synthetic empty owner journey starts preparation after explicit consent and refills after paused consumption", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await createEmptyContentSite(f);
+  await selectGrowth(f);
+  assert.equal(f.get(site.id)!.autopilotEnabled, true, "Explicit service consent must start preparation from the disabled empty setup");
+  assert.equal(f.get(site.id)!.autopilotRolloutMode, "warm"); assert.equal(f.get(site.id)!.contentSchedule.active, false);
+  assert.equal(f.get(site.id)!.contentSchedule.timezone, "America/Los_Angeles");
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  await exerciseReadyPause(f);
+  assert.equal(f.tables.pages.some(p => p.slug === "/"), false, "A link target is not an editable-page grant or a fabricated crawl record");
+});
+
+test("SLC29 an unreachable empty-site homepage cannot manufacture an internal-link target or quality approval", async () => {
+  const f = setup({ growthFirst: true, failedOptionalSource: true, businesses: [slcBusinesses[0]] }), site = await createEmptyContentSite(f);
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.status === "failed" && j.contentWork?.stage === "failed"));
+  assert.equal(f.get(site.id)!.contentSchedule.active, false);
+  assert.equal(f.tables.articles.some(a => ["ready", "published"].includes(a.status)), false);
+  assert.equal(f.tables.pages.length, 0);
+  assert.ok(f.tables.articles.some(a => a.publicationQuality?.issues?.some((issue: string) => /internal link/.test(issue))) ||
+    f.tables.articles.some(a => JSON.stringify(a).includes("Strict publication requires at least one internal link")));
+  f.assertOffline();
+});
+
+test("SLC29 owner controls preserve ready reservations and overdue deadlines through pause/resume and closed-browser refill", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const work = JSON.stringify(f.tables.jobs), reservations = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length;
+  await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: r.reviewToken });
+  f.setTime(deadline + 1);
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_paused");
+  assert.equal(JSON.stringify(f.tables.jobs), work); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), reservations);
+  assert.equal(f.modelCalls.length, calls); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  await f.invoke("contentWork:control", { siteId: site.id, action: "resume", reviewToken: r.reviewToken });
+  await f.invoke("contentWork:control", { siteId: site.id, action: "retry", reviewToken: r.reviewToken });
+  f.setIdentity(null); // The browser/session is gone; the durable scheduler owns continuation.
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const delivered = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!;
+  assert.equal(delivered.contentWork.deadlineAt, deadline); assert.ok(delivered.contentWork.publishedAt > deadline);
+  assert.ok(f.tables.jobs.some(j => j.createdAt > delivered.contentWork.verifiedAt));
+  f.assertOffline();
+});
+
+test("SLC29 safe readiness distinguishes actual spend, conservative holds, available capacity and missing pricing", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f), owner = `synthetic-owner-${site.domain}`;
+  for (const data of [{ reservedMicroUsd: 700_000, settledMicroUsd: 120_000, settledAt: START, settlementReason: "verified_provider_receipt_actual_cost" },
+    { reservedMicroUsd: 600_000 }, { reservedMicroUsd: 400_000, releasedAt: START, releaseReason: "content_work_closed_before_provider_execution" }]) {
+    f.add("provider_spend_reservations", { siteId: site.id, userId: owner, purpose: "content_work", trigger: "synthetic-held-ledger", reservationDay: "2026-09-11", reservationMonth: "2026-09", createdAt: START, ...data });
+  }
+  f.setIdentity(owner);
+  const before = JSON.stringify(f.tables.provider_spend_reservations), r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.funding.settledActualMicroUsd, 120_000); assert.equal(r.funding.heldCeilingMicroUsd, 600_000);
+  assert.equal(r.funding.status, "available"); assert.equal(r.funding.providerCredit, "unverified");
+  assert.equal(r.funding.monthlyResetAt, Date.UTC(2026, 9, 1));
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), before);
+  assert.doesNotMatch(JSON.stringify(r), /synthetic-only|providerCalls|sourceContent|permission|workerToken/);
+  f.setIdentity("unrelated-fixture-owner");
+  await assert.rejects(f.invoke("contentWork:readiness", { siteId: site.id }), /Not authorized/);
+  const unpriced = setup({ growthFirst: true, noPricing: true, businesses: [slcBusinesses[0]] });
+  unpriced.setIdentity(`synthetic-owner-${unpriced.sites[0].domain}`);
+  assert.equal((await unpriced.invoke("contentWork:readiness", { siteId: unpriced.sites[0].id })).funding.status, "unconfigured");
+  f.assertOffline(); unpriced.assertOffline();
+});
+
+test("SLC29 synthetic owner-handler empty-site setup reuses verified entitlement, stays stopped and cannot alter another owner", async t => {
+  for (const method of ["github", "wordpress"]) await t.test(method, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), owner = `synthetic-owner-${f.sites[0].domain}`;
+    f.setIdentity(owner);
+    const args = { createOnly: true, contentSetup: true, domain: `new-${method}.example`, clerkUserId: owner,
+      siteName: "New fixture business", siteSummary: "The synthetic business provides garden maintenance services.", targetAudienceSummary: "Residents arranging garden maintenance.",
+      productUsage: "Residents describe the requested garden maintenance visit.", niche: "Garden maintenance", blogTheme: "Garden visit preparation", publishMethod: method, autopilotEnabled: false, approvalRequired: true, inferToneNiche: false };
+    const id = await f.invoke("sites:upsert", args), saved = f.get(id)!;
+    assert.equal(saved.contentSetupRequestedAt, START); assert.equal(saved.autopilotEnabled, false);
+    assert.equal(saved.approvalRequired, true); assert.equal(saved.serviceMode, undefined);
+    assert.equal(f.tables.jobs?.length ?? 0, 0); assert.equal(f.tables.provider_spend_reservations?.length ?? 0, 0);
+    const r = await f.invoke("contentWork:readiness", { siteId: id });
+    assert.equal(r.entitlement, true); assert.equal(r.destination.verified, false); assert.equal(r.profile.summary, args.siteSummary);
+    await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, firstDeadlineAt: START + 600_000, intervalMs: 86_400_000 }), /Connect|Verify/);
+    f.setIdentity("foreign-fixture-owner");
+    await assert.rejects(f.invoke("sites:upsert", { id, domain: args.domain, siteSummary: "A foreign owner cannot change this." }), /authorized|owner|auth|not found/i);
+    assert.equal(f.get(id)!.siteSummary, args.siteSummary); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC29 selecting an exact page rejects stale preview consent and never exposes its remote grant", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), selected = await selectExistingPage(f), site = f.sites[0];
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const preview = await f.invoke("actions/selectedPages:preview", { siteId: site.id, path: selected.path });
+  f.get(site.id)!.siteSummary += " Updated owner fact.";
+  await assert.rejects(f.invoke("actions/selectedPages:select", { siteId: site.id, path: selected.path, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true }), /changed since preview/);
+  const list = await f.invoke("selectedPages:list", { siteId: site.id });
+  assert.equal(list.pages[0].bindingCurrent, false);
+  assert.doesNotMatch(JSON.stringify(list), /sourceContent|synthetic-only|providerCalls|"permission"/);
+  const detail = await f.invoke("selectedPages:detail", { siteId: site.id, pageId: selected.pageId });
+  assert.ok(detail.paragraphs.length); assert.doesNotMatch(JSON.stringify(detail), /sourceContent|"permission"/);
+  delete f.get(site.id)!.repoDefaultBranch;
+  assert.equal((await f.invoke("selectedPages:list", { siteId: site.id })).pages[0].bindingCurrent, false,
+    "A disconnected publisher must not crash permission inventory or hide the revoke control");
+  f.assertOffline();
+});
+
+test("SLC29 consent snapshots, owner isolation and entitlement loss block resume without resetting work", async t => {
+  for (const scenario of ["wrong_owner", "profile", "connection", "entitlement"]) await t.test(scenario, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: r.reviewToken });
+    if (scenario === "wrong_owner") f.setIdentity("unrelated-fixture-owner");
+    if (scenario === "profile") f.get(site.id)!.siteSummary += " A changed fact.";
+    if (scenario === "connection") f.get(site.id)!.repoName = "changed-destination";
+    if (scenario === "entitlement") f.tables.account_plan_entitlements[0].status = "pending";
+    const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    await assert.rejects(f.invoke("contentWork:control", { siteId: site.id, action: "resume", reviewToken: r.reviewToken }));
+    assert.equal(f.get(site.id)!.contentSchedule.paused, true); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC29 two ready articles with exhausted authorized capacity cannot activate a new schedule", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.get(site.id)!.contentSchedule.active = false;
+  f.add("provider_spend_reservations", { siteId: site.id, userId: `synthetic-owner-${site.domain}`, purpose: "content_work", trigger: "synthetic-existing-commitment",
+    reservedMicroUsd: 28_000_000, reservationDay: "2026-09-11", reservationMonth: "2026-09", createdAt: START });
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_budget_exhausted");
+  assert.equal(f.get(site.id)!.contentSchedule.active, false); assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length, 2);
+  f.assertOffline();
+});
+
+test("SLC29 pause before execution preserves the reservation and an in-flight selected write still verifies while paused", async t => {
+  await t.test("before paid execution", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork)!, reservation = JSON.stringify(f.get(job.providerSpendReservationId));
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: r.reviewToken });
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    assert.equal(f.modelCalls.length, 0); assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), reservation);
+    assert.equal(f.get(job._id)!.status, "pending"); f.assertOffline();
+  });
+  await t.test("after selected write before live verification", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }); await selectExistingPage(f); const site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.intent === "improve" && j.contentWork.stage === "verify"));
+    const job = f.tables.jobs.find(j => j.contentWork?.stage === "verify")!, calls = f.modelCalls.length;
+    f.setIdentity(`synthetic-owner-${site.domain}`); const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: r.reviewToken });
+    const pageList = await f.invoke("selectedPages:list", { siteId: site.id }); assert.ok(pageList.pages.some((p: Fields) => p.pendingVerification));
+    f.setIdentity(null); await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified");
+    assert.equal(f.get(site.id)!.contentSchedule.paused, true); assert.equal(f.modelCalls.length, calls); f.assertOffline();
+  });
+});
+
+test("SLC29 Search Console requires complete current epochs and distinguishes zero, missing, delayed and new-page cohorts", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f), stored = f.get(site.id)!;
+  f.setIdentity(stored.userId);
+  assert.equal((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).status, "missing");
+  const day = 86_400_000, end = Date.UTC(2026, 8, 7);
+  stored.gscDataThrough = "2026-09-07";
+  stored.gscDateEpochs = Array.from({ length: 56 }, (_, i) => ({ date: new Date(end - i * day).toISOString().slice(0, 10), syncEpoch: `current-${i}` }));
+  let r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
+  assert.equal(r.current.clicks, 0); assert.equal(r.previous.clicks, 0); assert.equal(r.delayed, true);
+  f.add("search_page_daily", { siteId: site.id, date: "2026-09-07", syncEpoch: "old-connection", page: `https://${site.domain}/blog/new-page`, clicks: 999, impressions: 999, position: 1, ctr: 1, createdAt: START });
+  f.add("search_page_daily", { siteId: site.id, date: "2026-09-07", syncEpoch: "current-0", page: `https://${site.domain}/blog/new-page`, clicks: 3, impressions: 30, position: 2, ctr: .1, createdAt: START });
+  f.add("article_summaries", { siteId: site.id, slug: "new-page", title: "New synthetic page", status: "published", publicUrlStatus: "verified", publishedAt: end - day, createdAt: end - day });
+  r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
+  assert.equal(r.current.clicks, 3); assert.equal(r.cohorts[0].clicks, 3);
+  stored.gscDateEpochs.pop(); r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
+  assert.equal(r.current.clicks, 3); assert.equal(r.previous, null);
+  stored.gscDateEpochs.shift(); assert.equal((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).status, "incomplete");
+  stored.gscProperty = "sc-domain:unrelated.example";
+  assert.equal((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).status, "not_connected");
+  f.setIdentity("unrelated-fixture-owner"); await assert.rejects(f.invoke("searchPerformance:contentOutcome", { siteId: site.id }), /Not authorized/);
+  f.assertOffline();
+});
 export async function selectExistingPage(f: ReturnType<typeof setup>, extension = "md", providedOriginal?: string) {
   const site = f.sites[0], stored = f.get(site.id)!;
   stored.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: stored as never,
@@ -324,7 +557,7 @@ export async function selectExistingPage(f: ReturnType<typeof setup>, extension 
   f.repositories.get(site.name.toLowerCase())!.files.set(path, raw);
   f.setIdentity(stored.userId);
   const preview = await f.invoke("actions/selectedPages:preview", { siteId: site.id, path });
-  const pageId = await f.invoke("actions/selectedPages:select", { siteId: site.id, path, revision: preview.revision, confirm: true });
+  const pageId = await f.invoke("actions/selectedPages:select", { siteId: site.id, path, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true });
   f.setIdentity(null);
   stored.gscDateEpochs = [{ date: "2026-09-10", syncEpoch: "selected-current" }];
   f.add("search_performance", { siteId: site.id, date: "2026-09-10", syncEpoch: "selected-current", query: site.keywords[0], page: url,
@@ -335,6 +568,7 @@ export async function selectExistingPage(f: ReturnType<typeof setup>, extension 
 test("SLC selected Markdown/MDX improvements use actual generation, review, CAS, live verification and fresh refill across five businesses", async t => {
   for (const [index, business] of slcBusinesses.entries()) await t.test(business.name, async () => {
     const f = setup({ growthFirst: true, businesses: [business] });
+    await createEmptyContentSite(f);
     const selected = await selectExistingPage(f, index % 2 ? "mdx" : "md"), site = await selectGrowth(f);
     await pumpUntil(f, () => (f.tables.jobs ?? []).length > 0, 10);
     assert.equal(f.tables.jobs[0].contentWork.intent, "improve", JSON.stringify({ page: f.get(selected.pageId), epochs: f.get(site.id)!.gscDateEpochs, reads: f.queryReads.filter(r => r.table === "search_performance") }));
@@ -350,6 +584,7 @@ test("SLC selected Markdown/MDX improvements use actual generation, review, CAS,
     assert.equal(f.tables.jobs.filter(j => j.contentWork?.intent === "improve").length, 1, "14-day cooldown must not mint repeated improvements");
     assert.ok(f.tables.jobs.some(j => j.contentWork?.intent === "create" && j.createdAt > improved.contentWork.verifiedAt));
     assert.equal(f.modelCalls.some(c => String(c.model).includes("dataforseo")), false);
+    t.diagnostic(JSON.stringify({ synthetic: true, adapter: "github", business: business.name, afterPause: await exerciseReadyPause(f) }));
     f.assertOffline();
   });
 });
@@ -501,8 +736,14 @@ export async function managedMeasuredFollowups(f: ReturnType<typeof setup>) {
   const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id);
   assert.ok(page?.editable.active, "Verified creation must enroll itself before measured work");
   const original = page.editable.markdown;
+  // Google cannot observe a page before it exists. Advance the clock, never
+  // the immutable delivery deadline or the already prepared work.
+  f.setTime(Math.max(f.now(), article.publishedAt + 2 * day));
+  const observations: string[] = [];
   const measure = (question: string) => {
     const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `fresh-${date}`;
+    assert.ok(date > new Date(article.publishedAt).toISOString().slice(0, 10));
+    observations.push(date);
     f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []).filter((x: Fields) => x.date !== date), { date, syncEpoch }];
     f.add("search_performance", { siteId: site.id, date, syncEpoch, page: page.url, query: question,
       syncVersion: 2, syncedAt: f.now(), clicks: 1, impressions: 60, ctr: 1 / 60, position: 12, createdAt: f.now() });
@@ -528,14 +769,14 @@ export async function managedMeasuredFollowups(f: ReturnType<typeof setup>) {
   assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length, 2);
   assert.ok(f.tables.jobs.some(j => j.contentWork?.intent === "create" && j.createdAt > second.contentWork.verifiedAt), "Consumed work must be freshly replenished");
   f.assertOffline();
-  return { page, first, second, original, finalText, deadlines: improved().map(j => ({ deadline: j.contentWork.deadlineAt, published: j.contentWork.publishedAt, verified: j.contentWork.verifiedAt })) };
+  return { page, first, second, original, finalText, observations, deadlines: improved().map(j => ({ deadline: j.contentWork.deadlineAt, published: j.contentWork.publishedAt, verified: j.contentWork.verifiedAt })) };
 }
 test("SLC28 empty inventory creates, measures, improves twice after fourteen days and replenishes without reselection", async t => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], longManagedPage: true });
   const result = await managedMeasuredFollowups(f);
   assert.ok(result.original.split(/\s+/).length >= 2400 && result.original.split(/\s+/).length <= 2600);
   assert.ok(result.finalText.split(/\s+/).length <= 2600);
-  t.diagnostic(JSON.stringify({ synthetic: true, adapter: "github", deadlines: result.deadlines, ready: 2,
+  t.diagnostic(JSON.stringify({ synthetic: true, adapter: "github", observations: result.observations, deadlines: result.deadlines, ready: 2,
     originalWords: result.original.split(/\s+/).length, finalWords: result.finalText.split(/\s+/).length }));
 });
 

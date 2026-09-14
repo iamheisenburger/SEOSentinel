@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { stopOwnedProcess } from './owned-process.mjs';
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(project);
 const fixture = path.join(project, '.wordpress-fixture');
@@ -49,15 +50,23 @@ async function unused(port) {
     probe.listen(port, '127.0.0.1', () => probe.close(resolve));
   });
 }
-let database;
-const stopDatabase = () => database?.kill('SIGTERM');
+let database, server, test;
+let stopping;
+const stop = () => stopping ??= (async () => {
+  await stopOwnedProcess(test);
+  await stopOwnedProcess(server);
+  await stopOwnedProcess(database);
+})();
+process.once('SIGINT', () => { process.exitCode = 130; void stop(); });
+process.once('SIGTERM', () => { process.exitCode = 143; void stop(); });
+try {
 if (mysql) {
   const basedir = path.join(fixture, 'mysql-8.4.11-macos15-arm64'), datadir = path.join(fixture, 'mysql-data');
   if (!existsSync(path.join(basedir, 'bin/mysqld'))) execFileSync('tar', ['-xzf', path.join(fixture, 'mysql-8.4.11-macos15-arm64.tar.gz'), '-C', fixture]);
   if (!existsSync(path.join(datadir, 'auto.cnf'))) execFileSync(path.join(basedir, 'bin/mysqld'), ['--no-defaults', '--initialize-insecure', `--basedir=${basedir}`, `--datadir=${datadir}`], { stdio: 'inherit' });
   await unused(18928);
+  if (stopping) throw new Error('Fixture startup interrupted');
   database = spawn(path.join(basedir, 'bin/mysqld'), ['--no-defaults', `--basedir=${basedir}`, `--datadir=${datadir}`, '--bind-address=127.0.0.1', '--port=18928', '--mysqlx=OFF', '--socket=mysql.sock', `--pid-file=${path.join(fixture, 'mysql.pid')}`, `--log-error=${path.join(fixture, 'mysql.log')}`, '--skip-log-bin', '--innodb-buffer-pool-size=67108864'], { cwd: fixture, stdio: 'ignore' });
-  process.once('SIGINT', stopDatabase); process.once('SIGTERM', stopDatabase);
   let ready = false;
   for (let i = 0; i < 100; i++) {
     if (database.exitCode !== null) throw new Error('Isolated MySQL stopped; inspect .wordpress-fixture/mysql.log');
@@ -67,19 +76,17 @@ if (mysql) {
       ready = true; break;
     } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
   }
-  if (!ready) { stopDatabase(); throw new Error('Isolated MySQL was not ready'); }
+  if (!ready) throw new Error('Isolated MySQL was not ready');
 }
-try {
 if (!process.argv.includes('--setup-only')) {
+  if (stopping) throw new Error('Fixture startup interrupted');
   await unused(18927);
-  const server = spawn(runtime, ['php-server', '--root', wordpress, '--listen', '127.0.0.1:18927'], {
+  if (stopping) throw new Error('Fixture startup interrupted');
+  server = spawn(runtime, ['php-server', '--root', wordpress, '--listen', '127.0.0.1:18927'], {
     stdio: ['ignore', 'pipe', 'pipe'], env,
   });
   let errors = '';
   server.stderr.on('data', d => { errors = (errors + d.toString()).slice(-3000); });
-  const stop = () => server.kill('SIGTERM');
-  process.once('SIGINT', stop); process.once('SIGTERM', stop);
-  try {
     let ready = false;
     for (let i = 0; i < 100; i++) {
       if (server.exitCode !== null) throw new Error(`Local fixture server stopped: ${errors}`);
@@ -87,14 +94,14 @@ if (!process.argv.includes('--setup-only')) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     if (!ready) throw new Error('Local fixture server did not become ready');
+    if (stopping) throw new Error('Fixture startup interrupted');
     if (process.argv.includes('--test')) {
-      const test = spawn(process.execPath, ['--experimental-strip-types', '--test', '--test-name-pattern=real WordPress', 'tests/wordpress-connector.integration.ts'], { stdio: 'inherit', env });
+      test = spawn(process.execPath, ['--experimental-strip-types', '--test', '--test-name-pattern=real WordPress', 'tests/wordpress-connector.integration.ts'], { stdio: 'inherit', env });
       const code = await new Promise(resolve => test.once('exit', resolve));
       if (code !== 0) process.exitCode = 1;
     } else {
       console.log('Local fixture listening only at http://127.0.0.1:18927; Ctrl-C stops it.');
       await new Promise(resolve => server.once('exit', resolve));
     }
-  } finally { stop(); }
 }
-} finally { stopDatabase(); }
+} finally { await stop(); }

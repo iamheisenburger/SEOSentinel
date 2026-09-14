@@ -5,6 +5,17 @@ import { containsExecutableMdx, evidenceRequiredParagraphs, STRICT_PUBLICATION_M
 import { publishedArticlePublicUrl } from "./publicationLive.ts";
 
 export const CONTENT_PAGE_REVIEW_MS = 7 * 86_400_000;
+export function contentConsentToken(site: Doc<"sites">) {
+  let connection: string;
+  try { connection = contentConnectionHash(site); }
+  catch {
+    // An incomplete connection must still have a stable, credential-free review
+    // identity. This token does not turn an incomplete destination into authority.
+    connection = sha256Hex(JSON.stringify(["incomplete", site.publishMethod, site.domain, site.urlStructure,
+      site.repoOwner, site.repoName, site.repoDefaultBranch, site.wpUrl, site.publisherConnectionGeneration]));
+  }
+  return sha256Hex(JSON.stringify([confirmedContentProfileHash(site), connection]));
+}
 export const CONTENT_PAGE_COOLDOWN_MS = 14 * 86_400_000;
 export type SelectedEditTarget = { before: string; sourceBefore: string; maxWords: number };
 export const contentWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length;

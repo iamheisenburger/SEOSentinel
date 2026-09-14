@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph } from './core-pipeline-integration.test.ts';
+import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph, createEmptyContentSite, exerciseReadyPause } from './core-pipeline-integration.test.ts';
 import { START } from './helpers/core-pipeline-fixture.ts';
 import { correctionVisibleText } from '../convex/lib/publishedCorrection.ts';
 import { renderSafePublicationHtml } from '../convex/lib/safeMarkdownHtml.ts';
@@ -142,7 +142,7 @@ test('real WordPress managed creation becomes editable and executes two measured
   await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: f.sites[0].id });
   const result = await managedMeasuredFollowups(f);
   assert.ok(result.original.split(/\s+/).length >= 2400 && result.finalText.split(/\s+/).length <= 2600);
-  t.diagnostic(JSON.stringify({ synthetic: true, adapter: 'wordpress', database: local.database, deadlines: result.deadlines, ready: 2,
+  t.diagnostic(JSON.stringify({ synthetic: true, adapter: 'wordpress', database: local.database, observations: result.observations, deadlines: result.deadlines, ready: 2,
     originalWords: result.original.split(/\s+/).length, finalWords: result.finalText.split(/\s+/).length }));
 });
 
@@ -159,7 +159,7 @@ test('real WordPress immediate owner factual correction retains source metadata,
   const p = command({ operation: 'create', slug: `selected-${suffix}`, content: `<p>${incorrectBusinessParagraph}</p><p>${correctionSurvivor}</p>` });
   f.setIdentity(`synthetic-owner-${domain}`);
   const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
-  const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, confirm: true });
+  const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true });
   f.setIdentity(null);
   await exerciseImmediateFactCorrection(f, pageId);
 });
@@ -177,7 +177,7 @@ test('real WordPress observed broken-link repair is live-verified and conditiona
   const p = command({ operation: 'create', slug: `selected-${suffix}`, content: renderSafePublicationHtml(`${brokenLinkParagraph(domain)}\n\n${correctionSurvivor}`) });
   f.setIdentity(`synthetic-owner-${domain}`);
   const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
-  const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, confirm: true });
+  const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true });
   f.setIdentity(null);
   await exerciseBrokenLinkCorrection(f, pageId);
 });
@@ -193,7 +193,7 @@ test('real WordPress/database connected content jobs: fresh creation, selected i
     const f = setup({ growthFirst: true, businesses: [{ ...business, domain }], wordpress: { username, password,
       transport: async (url, init) => {
         assert.equal(url.hostname, domain);
-        assert.ok(url.pathname.startsWith('/wp-json/') || url.pathname.startsWith('/blog/') || url.pathname === `/selected-${suffix}/`);
+        assert.ok(url.pathname === '/' || url.pathname.startsWith('/wp-json/') || url.pathname.startsWith('/blog/') || url.pathname === `/selected-${suffix}/`);
         const response = await fetch(root + url.pathname + url.search, { ...init,
           headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
         if (url.pathname.endsWith('/pentra/v1/connection')) {
@@ -206,14 +206,13 @@ test('real WordPress/database connected content jobs: fresh creation, selected i
         }
         return response;
       } } });
-    const site = f.sites[0];
-    await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: site.id });
+    const site = await createEmptyContentSite(f);
     const slug = `selected-${suffix}`;
     const original = '<p>Preserve the confirmed customer facts and original explanation. Ask an authorized reviewer to clarify uncertainties before making a decision.</p>';
     const p = command({ operation: 'create', slug, type: index % 2 ? 'page' : 'post', title: business.keywords[0][0].toUpperCase() + business.keywords[0].slice(1), content: original });
     f.setIdentity(`synthetic-owner-${domain}`);
     const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
-    const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, confirm: true });
+    const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true });
     f.setIdentity(null);
     f.get(site.id)!.gscDateEpochs = [{ date: '2026-09-10', syncEpoch: 'real-wp-selected' }];
     f.add('search_performance', { siteId: site.id, date: '2026-09-10', syncEpoch: 'real-wp-selected', page: preview.url, query: business.keywords[0],
@@ -247,6 +246,7 @@ test('real WordPress/database connected content jobs: fresh creation, selected i
     await f.invoke('selectedPages:revoke', { siteId: site.id, pageId }); f.setIdentity(null);
     await pumpUntil(f, () => f.get(pageId)!.editable.revocationStatus === 'confirmed', 20, deadline - 5 * 60_000 - 1);
     assert.equal(f.get(pageId)!.editable.active, false);
+    t.diagnostic(JSON.stringify({ syntheticOwner: true, realWordPress: true, business: business.name, afterPause: await exerciseReadyPause(f) }));
     f.assertOffline();
   });
 });

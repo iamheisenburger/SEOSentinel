@@ -46,6 +46,36 @@ const SEO_WINDOWS_DAYS = [7, 14, 28, 56] as const;
 const DISCOVERY_GSC_READ_LIMIT = 5_000;
 const OWNER_GSC_READ_LIMIT = 5_000;
 
+/** Customer content outcome: two complete 28-day windows, current property/
+ * domain/epoch receipts only. A missing day is unknown, never a zero-click day. */
+export const contentOutcome = query({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await requireSiteOwner(ctx, siteId), through = site.gscDataThrough;
+  const unavailable = (status: "not_connected" | "missing" | "incomplete") => ({ status, through: through ?? null,
+    current: null, previous: null, cohorts: null, delayed: false, property: site.gscProperty ?? null });
+  if (!gscConnectionMatchesCurrentDomain(site) || site.gscReceiptStatus === "revoked") return unavailable("not_connected");
+  if (!through || !site.gscDateEpochs?.length) return unavailable("missing");
+  const currentStart = addSearchConsoleDays(through, -27), previousStart = addSearchConsoleDays(through, -55), previousEnd = addSearchConsoleDays(through, -28);
+  const days = new Set(site.gscDateEpochs.map(r => r.date));
+  const complete = (start: string, end: string) => {
+    for (let day = start; day <= end; day = addSearchConsoleDays(day, 1)) if (!days.has(day)) return false;
+    return true;
+  };
+  const rows = await takeCurrentGscPageRows(ctx, site, OWNER_GSC_READ_LIMIT, { startDate: previousStart, endDate: through });
+  if (rows.exhausted || !complete(currentStart, through)) return unavailable("incomplete");
+  const sum = (start: string, end: string) => rows.rows.filter(r => r.date >= start && r.date <= end).reduce((n, r) => n + r.clicks, 0);
+  const pages = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(501);
+  const cohorts = pages.length > 500 ? null : pages.filter(p => articleMatchesCurrentDomain(site, p) && p.publicUrlStatus === "verified" &&
+    p.publishedAt && searchConsoleDate(p.publishedAt) >= currentStart && searchConsoleDate(p.publishedAt) <= through).map(p => {
+      const start = addSearchConsoleDays(searchConsoleDate(p.publishedAt!), 1), url = publishedArticlePageUrl(site.domain, site.urlStructure, p.slug);
+      return { articleId: p._id, title: p.title, url, publishedAt: p.publishedAt!, start,
+        clicks: start > through ? null : rows.rows.filter(r => r.page === url && r.date >= start && r.date <= through).reduce((s, r) => s + r.clicks, 0) };
+    });
+  return { status: "available" as const, through, property: site.gscProperty ?? null,
+    delayed: through < addSearchConsoleDays(searchConsoleDate(Date.now()), -3),
+    current: { start: currentStart, end: through, clicks: sum(currentStart, through) },
+    previous: complete(previousStart, previousEnd) ? { start: previousStart, end: previousEnd, clicks: sum(previousStart, previousEnd) } : null, cohorts };
+} });
+
 function completeCurrentGscRows<Row>(
   result: { rows: Row[]; exhausted: boolean },
   label: string,

@@ -968,6 +968,9 @@ async function verifyPublicationDestinationHandler(
   if (!receipt) throw new Error("Publishing connection is incomplete");
 
   if (site.publishMethod === "wordpress") {
+    if (site.serviceMode === "growth_first" || (site as Doc<"sites">).contentSetupRequestedAt) {
+      await wordpressConditionalRequest(site as Doc<"sites">, "connection");
+    }
     if (!site.wpUrl || !site.wpUsername || !site.wpAppPassword) {
       throw new Error("WordPress credentials are incomplete");
     }

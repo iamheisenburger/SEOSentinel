@@ -90,6 +90,7 @@ export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"
         pricing: { model: "provider-free-owner-correction", inputMicroUsdPerToken: 0, outputMicroUsdPerToken: 0 },
         opportunity: "Owner-confirmed exact correction; not scheduled SEO delivery or growth" }, createdAt: Date.now(), updatedAt: Date.now() });
     await ctx.db.patch(articleId, { contentWorkSourceJobId: jobId, contentWorkConsumedByJobId: jobId });
+    await ctx.db.patch(page._id, { editable: { ...e, lastWorkJobId: jobId } });
     await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId: site._id, trigger: "content_work", reason: "owner_confirmed_correction" });
     return jobId;
   } });
@@ -127,6 +128,7 @@ export const requestRollback = mutation({ args: { siteId: v.id("sites"), revisio
         deadlineAt: Date.now(), windowStartAt: Date.now(), revisions: 0, replacements: 0, discardedArticleIds: [],
         budgetMicroUsd: 0, pricing: original.contentWork.pricing, providerCalls: [], opportunity: "Owner-requested restoration; not SEO delivery or growth" },
       createdAt: Date.now(), updatedAt: Date.now() });
+    await ctx.db.patch(page._id, { editable: { ...e, lastWorkJobId: jobId } });
     await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId: site._id, trigger: "content_work", reason: "owner_requested_conditional_rollback" });
     return jobId;
   } });

@@ -1049,6 +1049,7 @@ function SettingsTab({
 function ConnectionSection({ site }: { site: SiteView }) {
   const fullManagedBetaEnabled =
     process.env.NEXT_PUBLIC_PENTRA_FULL_MANAGED_BETA === "true";
+  const contentWordPress = Boolean(site.contentSetupRequestedAt || site.serviceMode === "growth_first");
   const updateSite = useMutation(api.sites.upsert);
   const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
   const [editing, setEditing] = useState(false);
@@ -1141,7 +1142,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   className={inputCls}
                 >
                   <option value="github">GitHub</option>
-                  <option value="wordpress" disabled={!fullManagedBetaEnabled && method !== "wordpress"}>WordPress · Beta</option>
+                  <option value="wordpress" disabled={!fullManagedBetaEnabled && !contentWordPress && method !== "wordpress"}>WordPress · Conditional publisher required</option>
                   <option value="webhook" disabled={!fullManagedBetaEnabled && method !== "webhook"}>Signed webhook · Beta</option>
                   <option value="manual">Copy &amp; Paste</option>
                 </select>

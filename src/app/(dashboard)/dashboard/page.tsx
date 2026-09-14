@@ -6,6 +6,9 @@ import { api } from "../../../../convex/_generated/api";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { SetupWizard } from "@/components/onboarding/setup-wizard";
+import { ContentWorkOverview } from "@/components/content-work-overview";
+import { ContentStart } from "@/components/onboarding/content-start";
+import { ContentWorkService } from "@/components/content-work-service";
 import {
   FileText,
   Activity,
@@ -51,32 +54,33 @@ export default function DashboardPage() {
   const finishExistingSetup = setupMode === "existing";
   const wizardLatch = useRef(false);
   const { activeSite: site, sites } = useActiveSite();
+  const legacySite = site && site.serviceMode !== "growth_first" && !site.contentSetupRequestedAt ? site : null;
   const { userId } = useAuth();
   const topics = useQuery(
     api.topics.listBySite,
-    site?._id ? { siteId: site._id } : "skip",
+    legacySite?._id ? { siteId: legacySite._id } : "skip",
   );
   const articles = useQuery(
     api.articles.listBySite,
-    site?._id ? { siteId: site._id } : "skip",
+    legacySite?._id ? { siteId: legacySite._id } : "skip",
   );
   const jobActivity = useQuery(api.jobs.getDashboardActivity,
-    site?._id ? { siteId: site._id } : "skip");
+    legacySite?._id ? { siteId: legacySite._id } : "skip");
   const gscSummary = useQuery(
     api.searchPerformance.getSummary,
-    site?._id ? { siteId: site._id } : "skip",
+    legacySite?._id ? { siteId: legacySite._id } : "skip",
   );
   const topQueries = useQuery(
     api.searchPerformance.getTopQueries,
-    site?._id ? { siteId: site._id, limit: 5 } : "skip",
+    legacySite?._id ? { siteId: legacySite._id, limit: 5 } : "skip",
   );
   const decayingArticles = useQuery(
     api.articles.listDecaying,
-    site?._id ? { siteId: site._id } : "skip",
+    legacySite?._id ? { siteId: legacySite._id } : "skip",
   );
   const autopilotHealth = useQuery(
     api.autopilot.getHealthForSite,
-    site?._id ? { siteId: site._id } : "skip",
+    legacySite?._id ? { siteId: legacySite._id } : "skip",
   );
   const generateNow = useAction(api.actions.pipeline.generateNow);
   const crawlAndAnalyze = useAction(api.actions.pipeline.crawlAndAnalyze);
@@ -86,7 +90,7 @@ export default function DashboardPage() {
   const { maxSites, maxArticles } = usePlanLimits();
   const usageCount = useQuery(
     api.articles.countThisMonth,
-    userId ? { userId } : "skip",
+    userId && legacySite ? { userId } : "skip",
   );
 
   // Account-wide immutable usage remains truthful across sites and deletions.
@@ -161,10 +165,13 @@ export default function DashboardPage() {
     wizardLatch.current = true;
   }
   if (wizardLatch.current || !site) {
-    return <SetupWizard />;
+    return <ContentStart />;
   }
 
   const hasGSC = !!gscSummary;
+
+  if (site.serviceMode === "growth_first") return <ContentWorkOverview key={site._id} siteId={site._id} />;
+  if (site.contentSetupRequestedAt) return <ContentWorkService key={site._id} siteId={site._id} />;
 
   return (
     <div className="flex flex-col gap-5">

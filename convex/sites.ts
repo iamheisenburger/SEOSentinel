@@ -3259,6 +3259,7 @@ export const upsert = mutation({
   args: {
     id: v.optional(v.id("sites")),
     createOnly: v.optional(v.boolean()),
+    contentSetup: v.optional(v.boolean()),
     domain: v.string(),
     clerkUserId: v.optional(v.string()),
     niche: v.optional(v.string()),
@@ -3329,6 +3330,7 @@ export const upsert = mutation({
       args.publishMethod &&
       ["wordpress", "webhook"].includes(args.publishMethod) &&
       currentSite?.publishMethod !== args.publishMethod &&
+      !(args.publishMethod === "wordpress" && (currentSite?.contentSetupRequestedAt || currentSite?.serviceMode === "growth_first" || (args.contentSetup === true && args.createOnly === true && !args.id))) &&
       process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
     ) {
       throw new Error(
@@ -3707,9 +3709,10 @@ export const upsert = mutation({
     const siteId = await ctx.db.insert("sites", {
       ...data,
       userId,
+      ...(args.contentSetup === true ? { contentSetupRequestedAt: now() } : {}),
       planFeatures,
       language: args.language ?? "en",
-      autopilotEnabled: initialAutopilotEnabled,
+      autopilotEnabled: args.contentSetup === true ? false : initialAutopilotEnabled,
       approvalRequired: initialApprovalRequired,
       cadenceRequestedPerWeek: requestedCadence,
       cadencePerWeek: effectiveCadence,
@@ -3776,6 +3779,7 @@ export const updateSite = mutation({
       fields.publishMethod &&
       ["wordpress", "webhook"].includes(fields.publishMethod) &&
       site.publishMethod !== fields.publishMethod &&
+      !(fields.publishMethod === "wordpress" && (site.contentSetupRequestedAt || site.serviceMode === "growth_first")) &&
       process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
     ) {
       throw new Error(

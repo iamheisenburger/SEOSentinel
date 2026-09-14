@@ -7,6 +7,7 @@ import {
 
 export type AutopilotReadinessSite = {
   serviceMode?: string;
+  contentSetupRequestedAt?: number;
   autopilotEnabled?: boolean;
   approvalRequired?: boolean;
   cadencePerWeek?: number;
@@ -147,7 +148,9 @@ export function warmAutopilotReadiness(
   if (!configured(site.blogTheme) && !configured(site.niche)) {
     blockers.push("content_strategy_missing");
   }
-  if (!hasCrawledPage || !contentAnalysisMatchesCurrentDomain(site)) {
+  // Explicit content-only customers supply and confirm their own business
+  // profile. This is not a fabricated crawl or a legacy crawl-readiness bypass.
+  if ((!hasCrawledPage || !contentAnalysisMatchesCurrentDomain(site)) && !(site.serviceMode === "growth_first" && site.contentSetupRequestedAt)) {
     blockers.push("site_crawl_missing");
   }
   const cadence = site.cadencePerWeek ?? 0;
