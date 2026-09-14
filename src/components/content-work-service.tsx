@@ -59,7 +59,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
         <Button disabled={saving || state.schedule?.paused || !state.bindingCurrent} onClick={() => operate("retry")}>Recheck existing work</Button></div>
       <p>Pause retains ready work and spending history. A write already started must be checked before anything replaces it.</p>
     </div>}
-    {state.funding.status !== "available" && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
+    {state.funding.status !== "available" && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
     {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
     {!state.destination.verified && <p role="alert">Verify the exact publisher in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
     <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>
@@ -83,7 +83,9 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     </details>
     <details id="content-funding-details" className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Funding readiness and retained spending</summary><p>{fundingCopy[state.funding.status]}</p>
       <p>Account monthly limit {money(state.funding.monthlyLimitMicroUsd)} · settled actual spend {money(state.funding.settledActualMicroUsd)} · retained reservations / conservative ceilings {money(state.funding.heldCeilingMicroUsd)}.</p>
-      <p>Available account headroom {money(state.funding.accountAvailableMicroUsd)} · next work ceiling {money(state.funding.requestedMicroUsd)}. Fleet limits also apply.</p>
+      <p>Available ordinary account headroom {money(state.funding.accountAvailableMicroUsd)} · next work ceiling {money(state.funding.requestedMicroUsd)}. {state.funding.independentAllowance
+        ? `This work uses a separately approved, non-renewing ${money(state.funding.independentAllowance.totalMicroUsd)} validation allowance (${state.funding.independentAllowance.state}); ordinary account and fleet capacity is unchanged.`
+        : "Fleet limits also apply."}</p>
       <p>Daily reset {shownTime(state.funding.dailyResetAt)}; monthly reset {shownTime(state.funding.monthlyResetAt)}. {state.funding.incrementalLimitMicroUsd !== null && `Existing incremental allowance ${money(state.funding.incrementalLimitMicroUsd)} is not renewed.`}</p>
       <p>Provider credit balance is unverified. Internal headroom is not provider credit, a purchase or a reservation. Every paid call requires valid authorization.</p>
     </details>

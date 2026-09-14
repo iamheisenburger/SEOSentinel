@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
 import { publicationArtifactHash, publicationDeliveryKey, sha256Hex } from "../convex/lib/publicationArtifact.ts";
@@ -8,7 +8,7 @@ import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/provid
 import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerationAttempt.ts";
 import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
 import { expectedPublisherDestinationReceipt } from "../convex/lib/publisherProvisioning.ts";
-import { accountDeletionKey } from "../convex/lib/accountDeletion.ts";
+import { accountDeletionKey, accountDeletionTombstoneUserId } from "../convex/lib/accountDeletion.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -474,7 +474,8 @@ export async function exerciseSetupReconfirmation(f: ReturnType<typeof setup>, s
 // All fixtures below enter the registered content admission and worker paths.
 // Three synthetic sites share one owner; the fourth is an independent tenant.
 async function validationFixture(options: Parameters<typeof setup>[0] = {}) {
-  const f = setup({ ...options, growthFirst: true, businesses: slcBusinesses.slice(0, 4) });
+  const providerOptions = { ...options, growthFirst: true, businesses: slcBusinesses.slice(0, 4) };
+  const f = setup(providerOptions);
   const owner = f.get(f.sites[0].id)!.userId;
   for (const site of f.sites.slice(1, 3)) {
     const row = f.get(site.id)!; row.userId = owner;
@@ -500,7 +501,7 @@ async function validationFixture(options: Parameters<typeof setup>[0] = {}) {
     if (!f.get(f.sites[index].id)!.contentSchedule) await select(f.sites[index]);
     return f.invoke("contentWork:advance", { siteId: f.sites[index].id });
   };
-  return { ...f, owner, args, attach, stop, admit };
+  return { ...f, owner, args, attach, stop, admit, providerOptions };
 }
 
 test("SLC32 unrelated same-owner and foreign content cannot consume the exact two-site grant", async () => {
@@ -694,8 +695,7 @@ test("SLC32 known provider rejection retries the same bound job without erasing 
   assert.equal(f.tables.provider_spend_reservations.length, 1); f.assertOffline();
 });
 
-test("SLC32 both approved tenants execute, verify and refill three fixed cycles under one run", async t => {
-  const f = await validationFixture(); await f.attach();
+async function exerciseValidationCycles(f: Awaited<ReturnType<typeof validationFixture>>, t: TestContext) {
   const active = f.sites.slice(0, 2);
   const ready = (siteId: string) => f.tables.jobs.filter(j => j.siteId === siteId && j.contentWork?.stage === "ready");
   for (const site of active) await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
@@ -720,8 +720,246 @@ test("SLC32 both approved tenants execute, verify and refill three fixed cycles 
     const row = f.get(job.providerSpendReservationId)!; assert.equal(row.contentWorkJobId, job._id);
     assert.equal(row.validationAuthorizationId, f.args.authorizationId); assert.equal(row.settledMicroUsd, 600);
   }
-  assert.equal(f.tables.provider_spend_reservations.reduce((sum, row) => sum + row.settledMicroUsd, 0), 6000);
+  assert.equal(f.tables.provider_spend_reservations.filter(r => r.validationAuthorizationId === f.args.authorizationId).reduce((sum, row) => sum + row.settledMicroUsd, 0), 6000);
   assert.equal(f.modelCalls.length, 30); f.assertOffline();
+}
+
+test("SLC32 both approved tenants execute, verify and refill three fixed cycles under one run", async t => {
+  const f = await validationFixture(); await f.attach(); await exerciseValidationCycles(f, t);
+});
+
+const independentFunding = { scope: "additional_provider_allowance", approvalReference: "synthetic-separate-explicit-money-approval" };
+function occupyOrdinaryCapacity(f: Awaited<ReturnType<typeof validationFixture>>) {
+  return [
+    f.add("provider_spend_reservations", { siteId: f.sites[0].id, userId: f.owner, purpose: "topic_plan", trigger: "synthetic-historical-hold", reservedMicroUsd: 28_000_000, createdAt: START - 86_400_000 }),
+    f.add("provider_spend_reservations", { siteId: f.sites[1].id, userId: f.owner, purpose: "topic_plan", trigger: "synthetic-old-approved-window-hold", reservedMicroUsd: 4_000_000, createdAt: START }),
+    f.add("provider_spend_reservations", { siteId: f.sites[3].id, userId: f.get(f.sites[3].id)!.userId, purpose: "topic_plan", trigger: "synthetic-foreign-ordinary-hold", reservedMicroUsd: 3_000_000, createdAt: START - 86_400_000 }),
+  ];
+}
+
+test("SLC33 explicit independent funding completes both tenants' three fresh cycles/refills while legacy account and fleet capacity stay full", async t => {
+  const f = await validationFixture(), oldIds = occupyOrdinaryCapacity(f);
+  const original = oldIds.map(id => JSON.stringify(f.get(id)));
+  await f.attach({ independentFunding });
+  await exerciseValidationCycles(f, t);
+  assert.deepEqual(oldIds.map(id => JSON.stringify(f.get(id))), original);
+  assert.equal(f.get(f.args.authorizationId)!.cumulativeValidation.limitMicroUsd, 20_000_000);
+  for (const row of f.tables.provider_spend_reservations.filter(r => r.validationAuthorizationId)) {
+    assert.equal(row.independentFundingApprovalReference, independentFunding.approvalReference);
+  }
+  for (const index of [2, 3]) {
+    const ordinary = await f.admit(index); assert.equal(ordinary.mode, "content_budget_exhausted");
+    assert.equal(ordinary.budgetBlocker.ceilingMicroUsd, index === 2 ? 4_000_000 : 35_000_000);
+  }
+  f.setIdentity(f.owner);
+  const readiness = await f.invoke("contentWork:readiness", { siteId: f.sites[0].id });
+  assert.equal(readiness.funding.status, "available"); assert.equal(readiness.funding.accountAvailableMicroUsd, 0);
+  assert.equal(readiness.funding.independentAllowance.totalMicroUsd, 20_000_000);
+  const projection = await f.invoke("providerBudget:getSiteReservationSnapshot", { siteId: f.sites[0].id });
+  assert.equal(projection.monthlyConsumedMicroUsd, 28_000_000); assert.equal(projection.independentConsumedMicroUsd, 3000);
+  const audit = await f.invoke("providerBudget:getSiteReservationAudit", { siteId: f.sites[0].id });
+  assert.equal(audit.monthlyConsumedMicroUsd, 28_000_000); assert.equal(audit.independentConsumedMicroUsd, 3000);
+  assert.doesNotMatch(JSON.stringify(projection), /synthetic-only|githubToken|clerk|API_KEY/); f.assertOffline();
+});
+
+test("SLC33 absent or non-distinct explicit approval stays blocked and an existing run cannot be retroactively exempted", async () => {
+  const f = await validationFixture(); occupyOrdinaryCapacity(f);
+  for (const approvalReference of ["bad", f.args.approvalReference, f.args.expectedMonthlyApprovalReference]) {
+    await assert.rejects(f.attach({ independentFunding: { ...independentFunding, approvalReference } }), /contract/);
+    assert.equal(f.get(f.args.authorizationId)!.cumulativeValidation, undefined);
+  }
+  await f.attach(); assert.equal((await f.admit(0)).mode, "content_budget_exhausted");
+  const before = JSON.stringify(f.tables.provider_spend_reservations);
+  await assert.rejects(f.attach({ independentFunding }), /immutable/);
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), before); assert.equal(f.modelCalls.length, 0);
+  const approved = await validationFixture(); await approved.attach({ independentFunding });
+  await assert.rejects(approved.attach(), /immutable/);
+  await assert.rejects(approved.attach({ independentFunding: { ...independentFunding, approvalReference: "different-explicit-reference" } }), /immutable/);
+  f.assertOffline(); approved.assertOffline();
+});
+
+test("SLC33 ordinary headroom and admissions are identical before and after separate reservations, settlement and stop", async () => {
+  const f = await validationFixture(); await f.admit(2); await f.admit(3);
+  f.setIdentity(f.owner);
+  const before = (await f.invoke("contentWork:readiness", { siteId: f.sites[2].id })).funding;
+  await f.attach({ independentFunding }); await f.admit(0); await f.admit(1);
+  for (const index of [0, 1]) {
+    const job = f.tables.jobs.find(j => j.siteId === f.sites[index].id)!;
+    for (let step = 0; step < 2; step++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.get(job._id)!.contentWork.stage, "ready");
+  }
+  await f.stop();
+  const after = (await f.invoke("contentWork:readiness", { siteId: f.sites[2].id })).funding;
+  assert.deepEqual(after, before);
+  assert.equal(after.independentAllowance, null); assert.equal(after.accountAvailableMicroUsd, 3_500_000);
+  for (const index of [2, 3]) {
+    const job = f.tables.jobs.find(j => j.siteId === f.sites[index].id)!;
+    for (let step = 0; step < 2; step++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.get(job._id)!.contentWork.stage, "ready"); assert.equal(f.get(job.providerSpendReservationId)!.independentFundingApprovalReference, undefined);
+    assert.equal((await f.admit(index)).mode, "buffer_fill");
+  }
+  f.assertOffline();
+});
+
+test("SLC33 concurrent reservations reach but never exceed20 and unknown charges retain that ceiling across UTC/restart", async () => {
+  const f = await validationFixture({ budgetMicroUsd: 10_000_000 }); occupyOrdinaryCapacity(f);
+  const grants = await Promise.all([f.attach({ independentFunding }), f.attach({ independentFunding })]);
+  assert.equal(grants.filter(g => g.created).length, 1);
+  const results = await Promise.all([f.admit(0), f.admit(1), f.admit(0), f.admit(1)]);
+  assert.equal(results.filter(r => r.mode === "buffer_fill").length, 2);
+  const jobs = f.tables.jobs;
+  assert.equal(jobs.length, 2); assert.equal(f.tables.provider_spend_reservations.filter(r => r.validationAuthorizationId).reduce((s, r) => s + r.reservedMicroUsd, 0), 20_000_000);
+  for (const job of jobs) {
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: `uncertain-${job._id}` });
+    await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: `uncertain-${job._id}`, key: "unknown-result", ceilingMicroUsd: 100 });
+  }
+  f.setTime(Date.UTC(2026, 9, 1, 0, 1));
+  // A cheaper NEW request fits all ordinary limits after reset. It must still
+  // be rejected by the exhausted run; this cannot pass via a daily-cap denial.
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: 500_000 }) });
+  await f.invoke("providerBudget:approveAccountMonthBudget", { siteId: f.args.siteId, comparisonSiteId: f.args.comparisonSiteId,
+    month: "2026-10", expectedBaseMonthlyCeilingMicroUsd: 28_000_000, monthlyCeilingMicroUsd: 32_000_000,
+    incrementalLimitMicroUsd: 4_000_000, approvalReference: "synthetic-renewed-ordinary-month" });
+  for (const job of jobs) await f.invoke("jobs:resetStuckJobs", { siteId: job.siteId, jobId: job._id, expectedWorkerToken: `uncertain-${job._id}` });
+  assert.equal((await f.attach({ independentFunding })).approvedAt, START);
+  f.setIdentity(f.owner);
+  const readiness = await f.invoke("contentWork:readiness", { siteId: f.sites[0].id });
+  assert.equal(readiness.funding.status, "blocked"); assert.equal(readiness.funding.accountAvailableMicroUsd, 4_000_000);
+  assert.equal(readiness.funding.requestedMicroUsd, 500_000);
+  for (const job of jobs) {
+    assert.equal(f.get(job._id)!.status, "failed");
+    assert.equal(f.get(job._id)!.contentWork.budgetMicroUsd, 10_000_000);
+    const r = f.get(job.providerSpendReservationId)!; assert.equal(r.settledAt, undefined); assert.equal(r.releasedAt, undefined);
+    assert.equal(r.independentFundingApprovalReference, independentFunding.approvalReference);
+  }
+  // Keep the ordinary control's synthetic publisher verification current after
+  // the month jump, so this assertion isolates financial admission.
+  const ordinarySite = f.get(f.sites[2].id)!;
+  ordinarySite.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: ordinarySite as never, ownerAccountKey: accountDeletionKey(f.owner), verifiedAt: f.now() });
+  assert.equal((await f.admit(2)).mode, "buffer_fill", "That same cheaper request remains admissible as ordinary third-site work");
+  assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC33 UTC renewal settles only known costs and preserves the original independent funding marker", async () => {
+  const f = await validationFixture(); occupyOrdinaryCapacity(f); await f.attach({ independentFunding }); await f.admit(0);
+  const job = f.tables.jobs[0], oldId = job.providerSpendReservationId;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "independent-crashed" });
+  f.setTime(START + 86_400_000); f.restartRuntime();
+  await f.invoke("jobs:resetStuckJobs", { siteId: job.siteId, jobId: job._id, expectedWorkerToken: "independent-crashed" });
+  await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "ready", 240, f.now() + 600_000);
+  const resumed = f.get(job._id)!;
+  const receipts = [f.get(oldId)!, f.get(resumed.providerSpendReservationId)!];
+  assert.notEqual(resumed.providerSpendReservationId, oldId); assert.equal(receipts[0].settledMicroUsd, 200); assert.equal(receipts[1].settledMicroUsd, 400);
+  assert.equal(receipts[1].reservedMicroUsd, 499_800);
+  for (const r of receipts) { assert.equal(r.independentFundingApprovalReference, independentFunding.approvalReference); assert.equal(r.contentWorkJobId, job._id); }
+  assert.equal(resumed.contentWork.deadlineAt, START + 600_000); f.assertOffline();
+});
+
+test("SLC33 explicit stop/expiry allows original settlement but cannot be removed by mode switching or reconfirmation", async t => {
+  for (const lifecycle of ["stop", "expiry"] as const) await t.test(lifecycle, async () => {
+    const f = await validationFixture(); const extra = lifecycle === "expiry" ? { expiresAt: START + 1000 } : {};
+    await f.attach({ independentFunding, ...extra }); await f.admit(0);
+    const job = f.tables.jobs[0], token = "independent-inflight";
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: token });
+    const call = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: token, key: "cost-before-stop", ceilingMicroUsd: 100 });
+    if (lifecycle === "stop") await f.stop(); else f.setTime(START + 1000);
+    await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: token, key: call.key, actualMicroUsd: 70, result: { fixture: true } });
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: token, key: "not-authorized", ceilingMicroUsd: 100 }), /validation (stopped|expired)/);
+    await f.invoke("jobs:markFailed", { jobId: job._id, workerToken: token, error: "Synthetic validation ended" });
+    assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 70);
+    f.setIdentity(f.owner);
+    const siteId = f.sites[1].id;
+    await f.invoke("contentWork:selectServiceMode", { siteId, mode: "legacy_articles", confirmBusinessProfile: false });
+    await f.invoke("contentWork:selectServiceMode", { siteId, mode: "growth_first", confirmBusinessProfile: true,
+      reviewToken: (await f.invoke("contentWork:readiness", { siteId })).reviewToken, firstDeadlineAt: f.now() + 600_000, intervalMs: 1_800_000 });
+    assert.equal(f.get(siteId)!.contentSchedule.validationAuthorizationId, f.args.authorizationId);
+    await f.invoke("sites:upsert", { id: siteId, domain: f.sites[1].domain, siteSummary: f.get(siteId)!.siteSummary + " Customers may request a review." });
+    await f.invoke("contentWork:reconfirm", { siteId, reviewToken: (await f.invoke("contentWork:readiness", { siteId })).reviewToken, confirm: true });
+    const denied = await f.admit(1); assert.equal(denied.mode, "content_budget_exhausted");
+    assert.equal(denied.budgetBlocker.validationState, lifecycle === "stop" ? "stopped" : "expired");
+    assert.equal((await f.attach({ independentFunding, ...extra })).approvedAt, START);
+    assert.equal((await f.admit(2)).mode, "buffer_fill"); assert.equal((await f.admit(3)).mode, "buffer_fill");
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC33 run-ID or funding-reference omission cannot escape persisted provider lineage", async () => {
+  for (const omit of ["job", "schedule", "reservation", "funding_reference", "all_job_receipt_scope"] as const) {
+    const f = await validationFixture(); await f.attach({ independentFunding }); await f.admit(0);
+    const job = f.tables.jobs[0], r = f.get(job.providerSpendReservationId)!;
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "scope-omission" });
+    if (omit === "job") delete f.get(job._id)!.contentWork.validationAuthorizationId;
+    if (omit === "schedule") delete f.get(job.siteId)!.contentSchedule.validationAuthorizationId;
+    if (omit === "reservation") delete r.validationAuthorizationId;
+    if (omit === "funding_reference") delete r.independentFundingApprovalReference;
+    if (omit === "all_job_receipt_scope") {
+      delete f.get(job._id)!.contentWork.validationAuthorizationId;
+      delete r.validationAuthorizationId; delete r.independentFundingApprovalReference;
+    }
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "scope-omission", key: "new-call", ceilingMicroUsd: 100 }), /validation/);
+    if (omit === "reservation") await assert.rejects(f.admit(1), /funding receipt/);
+    if (omit === "funding_reference") assert.equal((await f.admit(1)).budgetBlocker.validationState, "invalid");
+    assert.equal(f.modelCalls.length, 0); assert.equal(f.get(r._id)!.releasedAt, undefined); f.assertOffline();
+  }
+});
+
+test("SLC33 independent authorization retains provider-health cooldown and strict per-request ceilings", async () => {
+  const f = await validationFixture(); occupyOrdinaryCapacity(f); await f.attach({ independentFunding });
+  f.add("provider_spend_reservations", { siteId: f.sites[0].id, userId: f.owner, purpose: "topic_plan", trigger: "synthetic-wallet-health",
+    reservedMicroUsd: 100, createdAt: START, releasedAt: START, releaseReason: "provider_balance_insufficient" });
+  assert.equal((await f.admit(0)).budgetBlocker.reason, "provider_account_preflight_cooling_down");
+  f.setTime(START + 300_001); assert.equal((await f.admit(0)).mode, "buffer_fill");
+  const job = f.tables.jobs[0]; await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "priced-request" });
+  await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "priced-request", key: "too-much", ceilingMicroUsd: 500_001 }), /budget exhausted/);
+  assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC33 real transient provider recovery retains the independent receipt and the unresolved rejection ceiling", async () => {
+  const f = await validationFixture({ providerFailure: "submit_article" }); occupyOrdinaryCapacity(f);
+  await f.attach({ independentFunding }); await f.admit(0);
+  const job = f.tables.jobs[0], id = job.providerSpendReservationId;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.providerCalls[0].state, "rejected");
+  assert.equal(f.modelCalls.length, 1);
+  f.providerOptions.providerFailure = undefined;
+  f.setTime(f.get(job._id)!.nextAttemptAt); f.restartRuntime();
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  const recovered = f.get(job._id)!;
+  assert.equal(recovered.contentWork.stage, "ready"); assert.equal(f.modelCalls.length, 4);
+  assert.equal(recovered.providerSpendReservationId, id); assert.equal(recovered.contentWork.recoveryAttempts, 1);
+  assert.equal(f.get(id)!.independentFundingApprovalReference, independentFunding.approvalReference);
+  assert.equal(f.get(id)!.settledAt, undefined); assert.equal(f.get(id)!.releasedAt, undefined);
+  assert.equal(recovered.contentWork.providerCalls[0].actualMicroUsd, undefined); f.assertOffline();
+});
+
+test("SLC33 copied run scope on third/foreign sites and incomplete run inventory fail closed before provider I/O", async () => {
+  for (const index of [2, 3]) {
+    const f = await validationFixture(); await f.attach({ independentFunding }); await f.admit(index);
+    const job = f.tables.jobs.find(j => j.siteId === f.sites[index].id)!;
+    f.get(job.siteId)!.contentSchedule.validationAuthorizationId = f.args.authorizationId;
+    const r = f.get(job.providerSpendReservationId)!;
+    f.get(job._id)!.contentWork.validationAuthorizationId = f.args.authorizationId;
+    r.validationAuthorizationId = f.args.authorizationId; r.independentFundingApprovalReference = independentFunding.approvalReference;
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "copied-scope" });
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "copied-scope", key: "foreign-call", ceilingMicroUsd: 100 }), /scope changed/);
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+  const f = await validationFixture(); await f.attach({ independentFunding }); await f.admit(0);
+  const job = f.tables.jobs[0];
+  for (let i = 0; i < 5000; i++) f.add("provider_spend_reservations", { siteId: job.siteId, userId: f.owner, purpose: "content_work",
+    contentWorkJobId: job._id, validationAuthorizationId: f.args.authorizationId, independentFundingApprovalReference: independentFunding.approvalReference,
+    trigger: "synthetic-incomplete-history", reservedMicroUsd: 1, createdAt: START });
+  assert.equal((await f.admit(1)).budgetBlocker.validationState, "incomplete"); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC33 deleted-account financial tombstones retain independent scope without blocking ordinary foreign capacity", async () => {
+  const f = await validationFixture(); await f.attach({ independentFunding }); await f.admit(0);
+  const row = f.tables.provider_spend_reservations[0];
+  // Exact existing deletion scrub shape; raw owner/site are intentionally gone.
+  row.userId = accountDeletionTombstoneUserId(accountDeletionKey(f.owner)); delete row.siteId;
+  assert.equal((await f.admit(3)).mode, "buffer_fill");
+  assert.equal(f.get(row._id)!.reservedMicroUsd, 500_000); assert.equal(f.get(row._id)!.releasedAt, undefined); f.assertOffline();
 });
 
 test("SLC32 exact revision and replacement call envelope stays in the original run and work budget", async t => {

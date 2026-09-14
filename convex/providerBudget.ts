@@ -6,7 +6,7 @@ import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import { activeProviderBudgetAuthorization, MAX_APPROVED_PROVIDER_MONTHLY_CEILING_MICRO_USD, providerBudgetMonth,
   readProviderBudgetAuthorization, MAX_CUMULATIVE_VALIDATION_MICRO_USD,
-  validCumulativeValidationAuthorization } from "./lib/providerBudgetAuthorization.ts";
+  validCumulativeValidationAuthorization, ordinaryProviderReservationRows } from "./lib/providerBudgetAuthorization.ts";
 import { resolvePlanFromFeatures } from "./planLimits.ts";
 import {
   PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
@@ -48,10 +48,13 @@ export const getSiteReservationSnapshot = internalQuery({
     let settledCount = 0;
     let releasedCount = 0;
     let unmatchedOwnerCount = 0;
+    const ordinaryIds = new Set((await ordinaryProviderReservationRows(ctx, rows.filter(r => r.userId === site.userId), snapshotAt)).map(r => r._id));
+    let independentConsumedMicroUsd = 0;
     for (const row of rows.slice(0, SITE_RESERVATION_READ_LIMIT)) {
       if (row.userId !== site.userId) { unmatchedOwnerCount++; continue; }
       if (row.releasedAt !== undefined) { releasedCount++; continue; }
       const consumed = providerReservationConsumedMicroUsd(row);
+      if (!ordinaryIds.has(row._id)) { independentConsumedMicroUsd += consumed; continue; }
       monthlyOriginalMicroUsd += row.reservedMicroUsd;
       monthlyConsumedMicroUsd += consumed;
       if (authorization && row.createdAt >= authorization.approvedAt) approvedWindowConsumedMicroUsd += consumed;
@@ -66,6 +69,7 @@ export const getSiteReservationSnapshot = internalQuery({
       examined: Math.min(rows.length, SITE_RESERVATION_READ_LIMIT),
       unmatchedOwnerCount, releasedCount, settledCount,
       monthlyOriginalMicroUsd, monthlyConsumedMicroUsd, dailyConsumedMicroUsd,
+      independentConsumedMicroUsd, allScopesMonthlyConsumedMicroUsd: monthlyConsumedMicroUsd + independentConsumedMicroUsd,
       accountDailyCeilingMicroUsd: PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
       accountMonthlyCeilingMicroUsd: monthlyCeilingMicroUsd,
       baseMonthlyCeilingMicroUsd,
@@ -178,22 +182,28 @@ export const getSiteReservationAudit = internalQuery({
     let retainedMicroUsd = 0;
     let releasedOriginalMicroUsd = 0;
     let invalidSettlementCount = 0;
+    const ordinaryIds = new Set((await ordinaryProviderReservationRows(ctx, reservations.filter(r => r.siteId === siteId && r.userId === site.userId), snapshotAt)).map(r => r._id));
+    let independentConsumedMicroUsd = 0;
     const purposes = new Set(["topic_plan", "onboarding_analysis", "authority_discovery",
       "expected_click_demand_backfill", "expected_click_evidence_backfill", "cadence_micro_seed", "cadence_micro_seed_fallback"]);
     const rows = reservations.slice(0, SITE_RESERVATION_READ_LIMIT)
       .filter(r => r.siteId === siteId && r.userId === site.userId).map(r => {
         const consumedMicroUsd = r.releasedAt !== undefined ? 0 : providerReservationConsumedMicroUsd(r);
+        const independent = !ordinaryIds.has(r._id);
+        const ordinaryConsumed = independent ? 0 : consumedMicroUsd;
+        if (independent) independentConsumedMicroUsd += consumedMicroUsd;
         const settlementValid = r.settledAt !== undefined && r.settledMicroUsd !== undefined &&
           Number.isSafeInteger(r.settledMicroUsd) && r.settledMicroUsd >= 0 && r.settledMicroUsd <= r.reservedMicroUsd;
         let accountingState: "released" | "verified_actual" | "execution_ceiling" | "retained_ceiling";
         if (r.releasedAt !== undefined) { accountingState = "released"; releasedOriginalMicroUsd += r.reservedMicroUsd; }
         else if (settlementValid && r.settlementReason === "verified_provider_receipt_actual_cost") {
-          accountingState = "verified_actual"; verifiedSettledMicroUsd += consumedMicroUsd;
+          accountingState = "verified_actual"; verifiedSettledMicroUsd += ordinaryConsumed;
         } else if (settlementValid && r.settlementReason === "single_execution_plan_contingency_retired") {
-          accountingState = "execution_ceiling"; contingencySettledMicroUsd += consumedMicroUsd;
-        } else { accountingState = "retained_ceiling"; retainedMicroUsd += consumedMicroUsd; }
+          accountingState = "execution_ceiling"; contingencySettledMicroUsd += ordinaryConsumed;
+        } else { accountingState = "retained_ceiling"; retainedMicroUsd += ordinaryConsumed; }
         if ((r.settledAt !== undefined || r.settledMicroUsd !== undefined) && !settlementValid) invalidSettlementCount++;
         return { reservationId: r._id, purpose: purposes.has(r.purpose) ? r.purpose : "other",
+          budgetScope: independent ? "independent_validation" as const : "ordinary_account" as const,
           reservedMicroUsd: r.reservedMicroUsd, consumedMicroUsd, accountingState, createdAt: r.createdAt,
           sources: (sources.get(r._id) ?? []).map(s => ({ ...s,
             planProof: planProofs.get(s.jobId as Id<"jobs">) })) };
@@ -202,7 +212,7 @@ export const getSiteReservationAudit = internalQuery({
       accountMonthlyCeilingMicroUsd: authorization?.monthlyCeilingMicroUsd ?? baseMonthlyCeilingMicroUsd,
       baseMonthlyCeilingMicroUsd, approvedIncrementalLimitMicroUsd: authorization?.incrementalLimitMicroUsd,
       approvalStartedAt: authorization?.approvedAt,
-      approvedWindowConsumedMicroUsd: authorization ? rows.filter(r => r.createdAt >= authorization.approvedAt)
+      approvedWindowConsumedMicroUsd: authorization ? rows.filter(r => r.budgetScope === "ordinary_account" && r.createdAt >= authorization.approvedAt)
         .reduce((sum, r) => sum + r.consumedMicroUsd, 0) : undefined,
       approvalExpiresAt: authorization?.expiresAt,
       sameAccountAsComparison: comparisonSiteId ? Boolean(comparison?.userId && comparison.userId === site.userId) : null,
@@ -211,6 +221,7 @@ export const getSiteReservationAudit = internalQuery({
       sourceWindowsComplete: sourceWindows.every(w => w.length <= SITE_RESERVATION_READ_LIMIT),
       verifiedSettledMicroUsd, contingencySettledMicroUsd, retainedMicroUsd, releasedOriginalMicroUsd,
       monthlyConsumedMicroUsd: verifiedSettledMicroUsd + contingencySettledMicroUsd + retainedMicroUsd,
+      independentConsumedMicroUsd, allScopesMonthlyConsumedMicroUsd: verifiedSettledMicroUsd + contingencySettledMicroUsd + retainedMicroUsd + independentConsumedMicroUsd,
       invalidSettlementCount, rows };
   },
 });
@@ -269,7 +280,8 @@ export const approveAccountMonthBudget = internalMutation({
  * without replacing the old $4 receipt or changing account/fleet ceilings. */
 export const attachCumulativeValidationBudget = internalMutation({
   args: { siteId: v.id("sites"), comparisonSiteId: v.id("sites"), authorizationId: v.id("provider_budget_authorizations"),
-    expectedMonthlyApprovalReference: v.string(), approvalReference: v.string(), limitMicroUsd: v.number(), expiresAt: v.optional(v.number()) },
+    expectedMonthlyApprovalReference: v.string(), approvalReference: v.string(), limitMicroUsd: v.number(), expiresAt: v.optional(v.number()),
+    independentFunding: v.optional(v.object({ scope: v.literal("additional_provider_allowance"), approvalReference: v.string() })) },
   handler: async (ctx, args) => {
     const [site, comparison, anchor] = await Promise.all([ctx.db.get(args.siteId), ctx.db.get(args.comparisonSiteId), ctx.db.get(args.authorizationId)]);
     if (args.siteId === args.comparisonSiteId || !site?.userId || comparison?.userId !== site.userId ||
@@ -286,13 +298,17 @@ export const attachCumulativeValidationBudget = internalMutation({
       if (!previous || selected.some(s => s.contentSchedule!.validationAuthorizationId !== anchor._id) ||
         !validCumulativeValidationAuthorization(anchor, site.userId, timestamp) || previous.limitMicroUsd !== args.limitMicroUsd ||
         JSON.stringify([...previous.siteIds].sort()) !== JSON.stringify(siteIds) ||
-        previous.approvalReference !== args.approvalReference || previous.expiresAt !== args.expiresAt) throw new Error("An immutable validation budget already exists");
+        previous.approvalReference !== args.approvalReference || previous.expiresAt !== args.expiresAt ||
+        previous.independentFunding?.scope !== args.independentFunding?.scope ||
+        previous.independentFunding?.approvalReference !== args.independentFunding?.approvalReference) throw new Error("An immutable validation budget already exists");
       return { created: false, ...previous };
     }
     const base = providerAccountMonthlyCeilingMicroUsd(resolvePlanFromFeatures(entitlement.planFeatures).tier);
     if (entitlement.providerBudgetAuthorizationId !== anchor._id || !activeProviderBudgetAuthorization(anchor, site.userId, base, timestamp) ||
       !Number.isSafeInteger(args.limitMicroUsd) || args.limitMicroUsd <= 0 || args.limitMicroUsd > MAX_CUMULATIVE_VALIDATION_MICRO_USD ||
       (args.expiresAt !== undefined && (!Number.isSafeInteger(args.expiresAt) || args.expiresAt <= timestamp)) ||
+      (args.independentFunding !== undefined && (!/^[a-zA-Z0-9_-]{8,128}$/.test(args.independentFunding.approvalReference) ||
+        [args.approvalReference, anchor.approvalReference].includes(args.independentFunding.approvalReference))) ||
       !/^[a-zA-Z0-9_-]{8,128}$/.test(args.approvalReference)) throw new Error("Validation budget contract is invalid");
     // Existing work is never retroactively charged to this additional grant.
     // Prepare a fresh run only after prior content execution has terminated.
@@ -303,6 +319,7 @@ export const attachCumulativeValidationBudget = internalMutation({
       }
     }
     const receipt = { approvedAt: timestamp, ...(args.expiresAt !== undefined ? { expiresAt: args.expiresAt } : {}),
+      ...(args.independentFunding ? { independentFunding: args.independentFunding } : {}),
       siteIds, limitMicroUsd: args.limitMicroUsd, approvalReference: args.approvalReference };
     await ctx.db.patch(anchor._id, { cumulativeValidation: receipt });
     for (const target of selected) await ctx.db.patch(target._id, {

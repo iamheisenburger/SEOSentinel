@@ -1,6 +1,6 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { readProviderBudgetAuthorization, contentValidationBinding } from "./providerBudgetAuthorization.ts";
+import { readProviderBudgetAuthorization, contentValidationBinding, ordinaryProviderReservationRows } from "./providerBudgetAuthorization.ts";
 import {
   resolvePlanFromFeatures,
   type CanonicalPlanTier,
@@ -124,6 +124,7 @@ export type SharedProviderReservationResult =
       accountReservedThisMonthMicroUsd: number;
       accountMonthlyCeilingMicroUsd: number;
       validationAuthorizationId?: Id<"provider_budget_authorizations">;
+      independentFundingApprovalReference?: string;
     }
   | {
       ok: false;
@@ -425,7 +426,8 @@ export async function inspectSharedProviderBudget(
     if (validationRows.length > 5000) return denied("incomplete");
     let consumed = 0;
     for (const row of validationRows) {
-      if (row.userId !== site.userId || !row.contentWorkJobId || row.purpose !== "content_work" ||
+      if (row.independentFundingApprovalReference !== run.independentFunding?.approvalReference ||
+        row.userId !== site.userId || !row.contentWorkJobId || row.purpose !== "content_work" ||
         (row.siteId !== undefined && !run.siteIds.includes(row.siteId)) ||
         !Number.isSafeInteger(row.reservedMicroUsd) || row.reservedMicroUsd <= 0 ||
         !Number.isSafeInteger(row.createdAt) || row.createdAt < run.approvedAt || row.createdAt > args.timestamp) return denied("invalid");
@@ -448,13 +450,18 @@ export async function inspectSharedProviderBudget(
       q.gte("createdAt", utcMonthStart(args.timestamp))
     )
     .collect();
+  const ordinaryRows = await ordinaryProviderReservationRows(ctx, monthRows, args.timestamp);
   const ledger = summarizeProviderReservationLedger(
-    monthRows,
+    ordinaryRows,
     site.userId,
     args.timestamp,
   );
-  if (authorization) {
-    const approvedWindowConsumed = monthRows.filter(row => row.userId === site.userId &&
+  // Opt-in authority is immutable on the existing run and copied onto each
+  // new receipt. It substitutes only the monetary scope, never execution or
+  // provider-health checks. Old grants still take every original guard.
+  const independent = validation?.run.independentFunding;
+  if (!independent && authorization) {
+    const approvedWindowConsumed = ordinaryRows.filter(row => row.userId === site.userId &&
       row.createdAt >= authorization.approvedAt && row.releasedAt === undefined)
       .reduce((sum, row) => sum + providerReservationConsumedMicroUsd(row), 0);
     if (approvedWindowConsumed + args.reservedMicroUsd > authorization.incrementalLimitMicroUsd) {
@@ -470,7 +477,7 @@ export async function inspectSharedProviderBudget(
     requestedMicroUsd: args.reservedMicroUsd,
     monthlyCeilingMicroUsd: accountMonthlyCeilingMicroUsd,
   });
-  if (!accountCapacity.allowed) {
+  if (!independent && !accountCapacity.allowed) {
     return { ok: false, ...accountCapacity };
   }
 
@@ -510,11 +517,12 @@ export async function inspectSharedProviderBudget(
     fleetReservedThisMonthMicroUsd: ledger.fleetReservedThisMonthMicroUsd,
     requestedMicroUsd: args.reservedMicroUsd,
   });
-  if (!capacity.allowed) {
+  if (!independent && !capacity.allowed) {
     return { ok: false, ...capacity };
   }
 
-  return { ok: true, ...ledger, accountMonthlyCeilingMicroUsd, ...(validation ? { validationAuthorizationId: validation.id } : {}) };
+  return { ok: true, ...ledger, accountMonthlyCeilingMicroUsd, ...(validation ? { validationAuthorizationId: validation.id } : {}),
+    ...(independent ? { independentFundingApprovalReference: independent.approvalReference } : {}) };
 }
 
 export async function reserveSharedProviderBudget(
@@ -526,6 +534,7 @@ export async function reserveSharedProviderBudget(
   const reservationId = await ctx.db.insert("provider_spend_reservations", {
     ...(args.contentWorkJobId ? { contentWorkJobId: args.contentWorkJobId } : {}),
     ...(admission.validationAuthorizationId ? { validationAuthorizationId: admission.validationAuthorizationId } : {}),
+    ...(admission.independentFundingApprovalReference ? { independentFundingApprovalReference: admission.independentFundingApprovalReference } : {}),
     siteId: args.siteId,
     userId: args.userId,
     purpose: args.purpose,
@@ -535,17 +544,20 @@ export async function reserveSharedProviderBudget(
     reservationMonth: new Date(args.timestamp).toISOString().slice(0, 7),
     createdAt: args.timestamp,
   });
+  const ordinaryIncrease = admission.independentFundingApprovalReference ? 0 : args.reservedMicroUsd;
   return {
     ok: true,
     reservationId,
+    ...(admission.validationAuthorizationId ? { validationAuthorizationId: admission.validationAuthorizationId } : {}),
+    ...(admission.independentFundingApprovalReference ? { independentFundingApprovalReference: admission.independentFundingApprovalReference } : {}),
     fleetReservedTodayMicroUsd:
-      admission.fleetReservedTodayMicroUsd + args.reservedMicroUsd,
+      admission.fleetReservedTodayMicroUsd + ordinaryIncrease,
     fleetReservedThisMonthMicroUsd:
-      admission.fleetReservedThisMonthMicroUsd + args.reservedMicroUsd,
+      admission.fleetReservedThisMonthMicroUsd + ordinaryIncrease,
     accountReservedTodayMicroUsd:
-      admission.accountReservedTodayMicroUsd + args.reservedMicroUsd,
+      admission.accountReservedTodayMicroUsd + ordinaryIncrease,
     accountReservedThisMonthMicroUsd:
-      admission.accountReservedThisMonthMicroUsd + args.reservedMicroUsd,
+      admission.accountReservedThisMonthMicroUsd + ordinaryIncrease,
     accountMonthlyCeilingMicroUsd: admission.accountMonthlyCeilingMicroUsd,
   };
 }

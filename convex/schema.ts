@@ -638,6 +638,7 @@ export default defineSchema({
     cumulativeValidation: v.optional(v.object({
       approvedAt: v.number(), expiresAt: v.optional(v.number()), stoppedAt: v.optional(v.number()),
       siteIds: v.array(v.id("sites")), limitMicroUsd: v.number(), approvalReference: v.string(),
+      independentFunding: v.optional(v.object({ scope: v.literal("additional_provider_allowance"), approvalReference: v.string() })),
     })),
   }).index("by_account_month", ["accountKey", "month"]),
 
@@ -1889,6 +1890,7 @@ export default defineSchema({
   provider_spend_reservations: defineTable({
     contentWorkJobId: v.optional(v.id("jobs")),
     validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
+    independentFundingApprovalReference: v.optional(v.string()),
     siteId: v.optional(v.id("sites")),
     userId: v.string(),
     purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback

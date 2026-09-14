@@ -1,6 +1,38 @@
 # Pentra — fresh-task handoff
 
-## Current: scoped financial repair32, local review only
+## Current: independent validation integration33, local review only
+
+Assignment `supervisor-20260914-slc-validation-integration-33`. Read
+`docs/PENTRA_SLC_VALIDATION_INTEGRATION_2026-09-14.md`. Based on accepted local
+`83af018813b90d0e1b6e38f0fbc2447285caaf89`; final handoff supplies one exact new
+review commit. No push, deployment, activation or paid work is authorized here.
+
+The existing run/ledger now supports an optional separately explicit immutable
+additional-funding approval. Without it, old conjunctive guards remain. With it,
+only exact bound new work uses the finite non-renewing USD 20 monetary scope;
+ordinary account/fleet capacity and historical holds stay unchanged. This is a
+scoped additional allowance, so combined spending could exceed the old fleet cap
+if subsequently authorized and activated. It is dormant, not a claim that such
+spending has been approved or performed in this assignment. All non-monetary,
+provider-health, lineage, per-request, unknown-charge and settlement guards remain.
+
+Both approved synthetic sites create, publish, verify and refill three cycles
+despite full old account/incremental/fleet holds, with two ready items remaining
+each. Ordinary/foreign isolation, immutable approvals, concurrency, retry,
+restart/UTC, stop/expiry and omission fences are exercised. Report has exact
+synthetic times and final free gate receipts: 1,674 tests / 1,673 passed / 0 failed /
+1 existing skip; focused 30 passed; browser 26 passed / 2 genuine auth skips;
+types/build/schema (61 tables, 296 indexes)/682-file secrets/audit pass; lint
+0 errors / 157 existing warnings. Genuine authenticated browser skips remain gaps;
+no new owner prompt or account selection was attempted.
+
+USD 0 provider spend; no production records refreshed or mutated. Production
+remains last verified b3994e0. Historical Pentra/LeadPilot empty buffers and missed
+deadlines below are not cleared by local tests. No fresh live replenishment,
+SaaS readiness or attributable growth claim. Stop for independent review before
+any financial deployment/activation, consent/migration or natural-cycle acceptance.
+
+## Historical: scoped financial repair32, accepted locally
 
 Assignment `supervisor-20260914-slc-scoped-validation-32`. Read
 `docs/PENTRA_SLC_SCOPED_VALIDATION_2026-09-14.md`. The final handoff supplies one
