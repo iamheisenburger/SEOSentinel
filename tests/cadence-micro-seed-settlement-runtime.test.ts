@@ -160,6 +160,23 @@ test("watchdog fences cancellation and day expiry atomically before releasing, w
   assert.equal(live.reservation.releasedAt, undefined);
 });
 
+test("SLC39 migrated sites retain actual-cost reconciliation and unknown holds without resuming legacy workers", async () => {
+  for (const known of [true, false]) {
+    const f = fixture(); Object.assign(f.site, { serviceMode: "growth_first" });
+    Object.assign(f.job, { status: known ? "completed" : "provider_response_unverified", workerToken: undefined,
+      leaseExpiresAt: undefined, completedAt: now - 100, updatedAt: now - 100, providerCallAttempted: true,
+      providerCallCompleted: known, providerAttemptedAt: now - 500,
+      ...(known ? { providerCompletedAt: now - 200, providerTaskCostUsd: 0.01224 } : {}) });
+    const history = JSON.stringify(f.job);
+    assert.equal((await f.run("reconcileVerifiedProviderCosts"))?.settled, known ? 1 : 0);
+    assert.equal(f.reservation.settledMicroUsd, known ? 12_240 : undefined);
+    assert.equal(f.reservation.releasedAt, undefined);
+    assert.equal((await f.run("reconcileVerifiedProviderCosts"))?.settled, 0);
+    assert.equal(JSON.stringify(f.job), history); assert.equal(f.scheduled.length, 0);
+    assert.equal(await f.run("claimWorker", { policyVersion: CADENCE_MICRO_SEED_VERSION }), null);
+  }
+});
+
 test("concurrent duplicate closures and cross-site reservations preserve the account ceiling under transaction retries", async () => {
   // Optimistic transaction harness: simultaneous operations read a snapshot;
   // only a matching revision can commit, otherwise the real handlers rerun.

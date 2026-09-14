@@ -1374,7 +1374,7 @@ export const inspectTopicReadinessInternal = internalQuery({
   handler: async (ctx, { siteId }): Promise<CadenceTopicReadinessResult> => {
     const site = await ctx.db.get(siteId);
     if (
-      !siteExecutionActive(site) ||
+      !siteExecutionActive(site) || site.serviceMode === "growth_first" ||
       !site.userId ||
       !(await siteExecutionAuthorized(ctx, site))
     ) return { ready: false, reason: "site_unavailable" };
@@ -1414,7 +1414,7 @@ export const inspectOperationalReadinessInternal = internalQuery({
     const timestamp = Date.now();
     const site = await ctx.db.get(siteId);
     if (
-      !siteExecutionActive(site) ||
+      !siteExecutionActive(site) || site.serviceMode === "growth_first" ||
       !site.userId ||
       !(await siteExecutionAuthorized(ctx, site))
     ) return { ready: false, reason: "site_unavailable" };
@@ -2549,6 +2549,7 @@ async function inspectReadiness(
   },
 ): Promise<ReadinessResult> {
   const site = await ctx.db.get(siteId);
+  if (site?.serviceMode === "growth_first") return { ready: false, reason: "content_work_engine_owns_site" };
   if (
     !siteExecutionActive(site) ||
     !site.userId ||
@@ -3102,7 +3103,7 @@ export const claimWorker = internalMutation({
     ]);
     const timestamp = Date.now();
     if (
-      !siteExecutionActive(site) ||
+      !siteExecutionActive(site) || site.serviceMode === "growth_first" ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       !job ||
       job.siteId !== args.siteId ||
@@ -3177,6 +3178,7 @@ export const beginProviderAttempt = internalMutation({
   },
   handler: async (ctx, args) => {
     const { site, job } = await requireWorker(ctx, args);
+    if (site.serviceMode === "growth_first") return { allowed: false as const, reason: "content_work_engine_owns_site" as const };
     const jobKind = cadenceMicroSeedAttemptKind(job.attemptKind);
     if (!jobKind) {
       return { allowed: false as const, reason: "attempt_kind_incompatible" as const };
@@ -3412,7 +3414,7 @@ export const resumeLegacySemanticCandidateInternal = internalMutation({
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
     if (
-      !siteExecutionActive(site) ||
+      !siteExecutionActive(site) || site.serviceMode === "growth_first" ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       site.expectedClickSchedulingEnabled !== true ||
       !verifiedKeywordPlanningActive(site)
@@ -3665,7 +3667,7 @@ export const continueSuccessfulCandidateInternal = internalMutation({
     const site = await ctx.db.get(siteId);
     const timestamp = Date.now();
     if (
-      !siteExecutionActive(site) ||
+      !siteExecutionActive(site) || site.serviceMode === "growth_first" ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       site.expectedClickSchedulingEnabled !== true ||
       !verifiedKeywordPlanningActive(site) ||
@@ -4112,6 +4114,16 @@ export const recordProviderReceiptAndMaterialize = internalMutation({
       timestamp,
     });
 
+    // A response already in flight is still a financial receipt, not authority
+    // to start legacy planning after migration. Keep its audit without a topic.
+    if (site.serviceMode === "growth_first") {
+      await ctx.db.patch(job._id, { status: "missed", providerCallCompleted: true,
+        providerCompletedAt: timestamp, providerTaskCostUsd: args.providerTaskCostUsd,
+        candidateReceipts: args.candidates, errorCode: "content_work_engine_owns_site",
+        workerToken: undefined, leaseExpiresAt: undefined, completedAt: timestamp, updatedAt: timestamp });
+      return { materialized: false as const, reason: "content_work_engine_owns_site" as const };
+    }
+
     const articleInventory = await cadenceMicroSeedArticleInventory(ctx, site);
     const articles = articleInventory.articles;
     const topicInventory = await cadenceMicroSeedTopicInventory(
@@ -4500,6 +4512,7 @@ export const reconcileWatchdog = internalMutation({
     }
 
     const timestamp = Date.now();
+    if (site.serviceMode === "growth_first") return { reconciled: false as const, reason: "content_work_engine_owns_site" as const };
     const executionFenceActive = siteExecutionActive(site) &&
       (await siteExecutionAuthorized(ctx, site)) &&
       job.rolloutEpoch === (site.autopilotRolloutEpoch ?? 0) &&
@@ -5054,6 +5067,7 @@ export const finalizeEvidence = internalMutation({
         ).take(CADENCE_MICRO_SEED_READ_LIMIT + 1)
       )),
     ]);
+    if (site?.serviceMode === "growth_first") return { finalized: false as const, reason: "content_work_engine_owns_site" as const };
     const executionAuthorized = siteExecutionActive(site) &&
       (await siteExecutionAuthorized(ctx, site));
     const exactScope = Boolean(

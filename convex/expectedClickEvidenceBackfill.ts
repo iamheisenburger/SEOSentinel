@@ -972,7 +972,7 @@ export async function expectedClickEvidenceFleetReadiness(
 ) {
     const site = snapshot?.site ?? await ctx.db.get(siteId);
     if (site?._id !== siteId) return null;
-    if (!siteExecutionActive(site)) return null;
+    if (!siteExecutionActive(site) || site.serviceMode === "growth_first") return null;
     if (!activeRollout(site)) {
       return {
         ready: false as const,
@@ -1261,7 +1261,7 @@ export const getFleetRecoveryInternal = internalQuery({
   },
   handler: async (ctx, { siteId, staleAfterMs }) => {
     const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site) || !activeRollout(site)) return null;
+    if (!siteExecutionActive(site) || site.serviceMode === "growth_first" || !activeRollout(site)) return null;
     const unresolved = await unresolvedFleetEvidenceJobs(ctx, siteId);
     if (unresolved.exhausted) {
       return {
@@ -1349,6 +1349,8 @@ export const reserveAndQueue = internalMutation({
     plannedRecoveryGuard: v.optional(plannedRecoveryGuardValidator),
   },
   handler: async (ctx, args) => {
+    // Retired planning cannot overwrite old skip receipts or reserve new work.
+    if ((await ctx.db.get(args.siteId))?.serviceMode === "growth_first") return { queued: false as const, reason: "content_work_engine_owns_site" as const };
     // Written in this same transaction so an overlapping dispatcher can never
     // observe a decision the stored evidence contradicts.
     const evaluatedAt = Date.now();
@@ -1700,7 +1702,7 @@ export const claimWorker = internalMutation({
       ctx.db.get(args.jobId),
     ]);
     if (
-      !site ||
+      !site || site.serviceMode === "growth_first" ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       !job ||
       job.siteId !== args.siteId
@@ -1953,6 +1955,7 @@ export const beginProviderCall = internalMutation({
   },
   handler: async (ctx, args) => {
     const { site, job } = await requireWorker(ctx, args);
+    if (site.serviceMode === "growth_first") return { allowed: false as const, reason: "content_work_engine_owns_site" as const };
     if (job.providerCallsAttempted >= EXPECTED_CLICK_EVIDENCE_BACKFILL_TOTAL_CALL_LIMIT) {
       throw new Error("Expected-click evidence provider call ceiling exhausted");
     }
@@ -2555,7 +2558,7 @@ export const persistEvidence = internalMutation({
     // sealed buffer without waiting for the coarse fleet cron. Convex commits
     // this schedule atomically with the one completed-job receipt, so retries
     // cannot replay SERPs or emit a second continuation.
-    await ctx.scheduler.runAfter(
+    if (site.serviceMode !== "growth_first") await ctx.scheduler.runAfter(
       0,
       internal.autopilot.dispatchSiteFollowup,
       {
@@ -2643,7 +2646,7 @@ export const scheduleResume = internalMutation({
       ctx.db.get(args.siteId),
       ctx.db.get(args.jobId),
     ]);
-    if (!siteExecutionActive(site) || !job || job.siteId !== args.siteId) {
+    if (!siteExecutionActive(site) || site.serviceMode === "growth_first" || !job || job.siteId !== args.siteId) {
       return { scheduled: false as const, reason: "site_unavailable" as const };
     }
     validateWorkerState(site, job);

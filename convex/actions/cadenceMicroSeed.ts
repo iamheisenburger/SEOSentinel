@@ -471,6 +471,9 @@ export const recoverCadenceGap = internalAction({
       ctx,
       args.siteId,
     );
+    if (!(await ctx.runQuery(internal.sites.getExpectedClickBackfillFleetState, { siteId: args.siteId }))) {
+      return { ready: false, reason: "legacy_planning_ineligible", providerCallsMade: 0, providerReservationsCreated: 0, reconciledCosts };
+    }
     const sourcePlanId = await resolveExhaustedSourcePlan(ctx, args.siteId);
     if (!sourcePlanId) {
       return {
@@ -1081,6 +1084,7 @@ export const resumeCadenceEvidenceHandoff = internalAction({
     jobId: v.id("cadence_micro_seed_jobs"),
   },
   handler: async (ctx, args): Promise<unknown> => {
+    if (!(await ctx.runQuery(internal.sites.getExpectedClickBackfillFleetState, { siteId: args.siteId }))) return { resumed: false, reason: "legacy_planning_ineligible" };
     const job = await ctx.runQuery(api.getJobInternal, args);
     if (!job || job.status !== "awaiting_evidence") {
       return { resumed: false, reason: "job_not_awaiting_evidence" };
@@ -1149,7 +1153,7 @@ export const scheduleCadenceForMicroSeed = internalAction({
     const site = await ctx.runQuery(internal.sites.getFull, {
       siteId: args.siteId,
     });
-    if (!site) return { scheduled: false, reason: "site_not_found" };
+    if (!site || site.serviceMode === "growth_first") return { scheduled: false, reason: "legacy_planning_ineligible" };
     if (site.autopilotRolloutMode === "live") {
       const readiness = await ctx.runMutation(
         internal.sites.enforceLiveReadiness,
@@ -1254,6 +1258,7 @@ export const dispatchCadenceMicroSeedFleet = internalAction({
 export const runCadenceMicroSeedFleetSite = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<unknown> => {
+    if (!(await ctx.runQuery(internal.sites.getExpectedClickBackfillFleetState, { siteId }))) return { applied: false, reason: "legacy_planning_ineligible" };
     const semanticContinuation = await ctx.runMutation(
       api.resumeLegacySemanticCandidateInternal,
       { siteId },
@@ -1356,6 +1361,7 @@ export const finalizeCadenceMicroSeed = internalAction({
   },
   handler: async (ctx, args): Promise<unknown> => {
     const state = await ctx.runQuery(api.getFinalizationStateInternal, args);
+    if (state?.site?.serviceMode === "growth_first") return { finalized: false, reason: "legacy_planning_ineligible" };
     if (!state?.site || !state.topic || !state.evidence) {
       await raiseMiss(ctx, args.siteId, args.jobId, "evidence_state_unavailable");
       return { finalized: false, reason: "evidence_state_unavailable" };

@@ -118,7 +118,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     }
     runInNewContext(source(name), {
       module: runtime, exports: runtime.exports, require: localRequire,
-      Date: ClockDate, URL, URLSearchParams, Buffer, TextEncoder, TextDecoder,
+      Date: ClockDate, URL, URLSearchParams, Buffer, TextEncoder, TextDecoder, crypto: globalThis.crypto,
       Error, TypeError, RangeError, SyntaxError,
       Response, Request, Headers, AbortSignal, AbortController, Blob,
       fetch: transport, setTimeout, clearTimeout, structuredClone,

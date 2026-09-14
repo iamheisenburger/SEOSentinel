@@ -5954,6 +5954,7 @@ export const listExpectedClickBackfillFleetPage = internalQuery({
       .filter((q) =>
         q.and(
           q.eq(q.field("expectedClickSchedulingEnabled"), true),
+          q.neq(q.field("serviceMode"), "growth_first"),
           q.eq(q.field("deletionStatus"), undefined),
           q.eq(q.field("planParkedAt"), undefined),
           q.neq(q.field("userId"), undefined),
@@ -5975,7 +5976,7 @@ export const getExpectedClickBackfillFleetState = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
-    if (!site || site.deletionStatus || site.planParkedAt) return null;
+    if (!site || site.deletionStatus || site.planParkedAt || site.serviceMode === "growth_first") return null;
     return expectedClickBackfillFleetState(site);
   },
 });

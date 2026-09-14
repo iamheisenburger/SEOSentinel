@@ -913,7 +913,7 @@ export async function expectedClickDemandFleetReadiness(
 ) {
     const site = snapshot?.site ?? await ctx.db.get(siteId);
     if (site?._id !== siteId) return null;
-    if (!siteExecutionActive(site)) return null;
+    if (!siteExecutionActive(site) || site.serviceMode === "growth_first") return null;
     if (!activeRollout(site)) {
       return {
         ready: false as const,
@@ -1142,7 +1142,7 @@ export const getFleetRecoveryInternal = internalQuery({
   },
   handler: async (ctx, { siteId, staleAfterMs }) => {
     const site = await ctx.db.get(siteId);
-    if (!siteExecutionActive(site) || !activeRollout(site)) return null;
+    if (!siteExecutionActive(site) || site.serviceMode === "growth_first" || !activeRollout(site)) return null;
     const unresolved = await unresolvedFleetDemandJobs(ctx, siteId);
     if (unresolved.exhausted) {
       return {
@@ -1232,6 +1232,8 @@ export const reserveAndQueue = internalMutation({
     plannedRecoveryGuard: v.optional(plannedRecoveryGuardValidator),
   },
   handler: async (ctx, args) => {
+    // Retired planning cannot overwrite old skip receipts or reserve new work.
+    if ((await ctx.db.get(args.siteId))?.serviceMode === "growth_first") return { queued: false as const, reason: "content_work_engine_owns_site" as const };
     // The receipt is written in this same transaction, so an overlapping
     // dispatcher can never observe a decision the stored evidence contradicts.
     const evaluatedAt = Date.now();
@@ -1538,7 +1540,7 @@ export const claimWorker = internalMutation({
       ctx.db.get(args.jobId),
     ]);
     if (
-      !site ||
+      !site || site.serviceMode === "growth_first" ||
       !(await siteExecutionAuthorized(ctx, site)) ||
       !job ||
       job.siteId !== args.siteId
@@ -1694,6 +1696,7 @@ export const beginProviderAttempt = internalMutation({
   },
   handler: async (ctx, args) => {
     const { site, job } = await requireWorker(ctx, args);
+    if (site.serviceMode === "growth_first") return { callRequired: false as const, reason: "content_work_engine_owns_site" as const };
     if (
       job.providerCallAttempted === true ||
       job.providerCallsAttempted >=
@@ -1988,6 +1991,7 @@ export const persistDemand = internalMutation({
     });
     if (
       job.origin === "autonomous_fleet" &&
+      site.serviceMode !== "growth_first" &&
       args.suppressEvidenceChain !== true
     ) {
       await ctx.scheduler.runAfter(
@@ -2080,7 +2084,7 @@ export const scheduleResume = internalMutation({
       ctx.db.get(args.siteId),
       ctx.db.get(args.jobId),
     ]);
-    if (!siteExecutionActive(site) || !job || job.siteId !== args.siteId) {
+    if (!siteExecutionActive(site) || site.serviceMode === "growth_first" || !job || job.siteId !== args.siteId) {
       return { scheduled: false as const, reason: "site_unavailable" as const };
     }
     validateWorkerState(site, job);

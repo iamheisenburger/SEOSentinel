@@ -9,6 +9,8 @@ import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerati
 import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
 import { expectedPublisherDestinationReceipt } from "../convex/lib/publisherProvisioning.ts";
 import { accountDeletionKey, accountDeletionTombstoneUserId } from "../convex/lib/accountDeletion.ts";
+import { CADENCE_MICRO_SEED_VERSION, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT } from "../convex/lib/cadenceMicroSeed.ts";
+import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../convex/lib/planProviderBudget.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -57,7 +59,7 @@ function articlePayload(keyword: string) {
 }
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
-  longManagedPage?: boolean;
+  longManagedPage?: boolean; gscFixture?: boolean;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
@@ -74,6 +76,18 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     parents: Map<string, string>; snapshots: Map<string, Map<string, string>>; writes: number }>();
   for (const b of businesses) repositories.set(b.name.toLowerCase(), { head: sha(b.domain), files: new Map(), blobs: new Map(), trees: new Map(), commits: new Map(), parents: new Map(), snapshots: new Map(), writes: 0 });
   const f = corePipelineFixture(async (url, init) => {
+    if (options.gscFixture && url.origin === "https://oauth2.googleapis.com") {
+      assert.equal(url.pathname, "/token"); assert.equal(init.method, "POST");
+      assert.equal(new URLSearchParams(String(init.body)).get("refresh_token"), "synthetic-only-refresh");
+      return json({ access_token: "synthetic-refreshed-token", expires_in: 3600 });
+    }
+    if (options.gscFixture && url.origin === "https://www.googleapis.com") {
+      const business = businesses.find(b => decodeURIComponent(url.pathname).includes(`sc-domain:${b.domain}/`));
+      assert.ok(business); assert.ok(url.pathname.endsWith("/searchAnalytics/query")); assert.equal(init.method, "POST");
+      const body = JSON.parse(String(init.body)); assert.equal(body.startDate, body.endDate); assert.equal(body.startRow, 0);
+      return json({ rows: [{ keys: body.dimensions.length === 3 ? [body.startDate, business.keywords[0], `https://${business.domain}/`]
+        : [body.startDate, `https://${business.domain}/`], clicks: 1, impressions: 5, ctr: 0.2, position: 3 }] });
+    }
     if (options.wordpress && businesses.some(b => b.domain === url.hostname) && (url.pathname === "/" || url.pathname.startsWith("/wp-json/") || url.pathname.startsWith("/blog/") || /^\/selected-[a-f0-9]+\/$/.test(url.pathname))) {
       return options.wordpress.transport(url, init);
     }
@@ -246,7 +260,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       url: `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
     else assert.fail(`Unexpected DataForSEO route ${url.pathname}`);
     return json({ status_code: 20000, cost: 0.001, tasks: [{ id: `synthetic-${f.trace.length}`, status_code: 20000, cost: 0.001, result }] });
-  }, options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {});
+  }, { ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
+    ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) });
   const sites = businesses.map(b => {
     const owner = `synthetic-owner-${b.domain}`;
     f.add("account_plan_entitlements", { userId: owner, status: "completed", maxSites: 9999, maxArticles: 150, planFeatures: ["max_sites_unlimited", "max_articles_150"] });
@@ -2348,6 +2363,213 @@ async function ownerCreditRetry(f: Awaited<ReturnType<typeof scopedPricingFixtur
   assert.ok(creditRetry, "Only confirmed exact restoration offers the customer retry");
   return { siteId, action: "retry", reviewToken: ready.reviewToken, creditRetry };
 }
+
+async function retirementFixture() {
+  const f = setup({ growthFirst: true, businesses: slcBusinesses.slice(0, 4), noPricing: true, gscFixture: true });
+  f.get(f.sites[1].id)!.userId = f.get(f.sites[0].id)!.userId;
+  for (const site of f.sites) Object.assign(f.get(site.id)!, { expectedClickSchedulingEnabled: true, verifiedKeywordDataRequired: true,
+    gscRefreshToken: "synthetic-only-refresh" });
+  return f;
+}
+
+test("SLC39 fleet selection excludes only migrated sites while measurement still includes both modes", async () => {
+  const f = await retirementFixture();
+  await selectGrowth(f); await selectGrowth({ ...f, sites: [f.sites[3]] });
+  const page = await f.invoke("sites:listExpectedClickBackfillFleetPage", {});
+  assert.deepEqual(page.page.map((s: Fields) => s.siteId), [f.sites[1].id, f.sites[2].id]);
+  for (const i of [0, 3]) {
+    assert.equal(await f.invoke("sites:getExpectedClickBackfillFleetState", { siteId: f.sites[i].id }), null);
+    for (const kind of ["Demand", "Evidence"]) {
+      assert.equal(await f.invoke(`expectedClick${kind}Backfill:getFleetReadinessInternal`, { siteId: f.sites[i].id }), null);
+      assert.equal(await f.invoke(`expectedClick${kind}Backfill:getFleetRecoveryInternal`, { siteId: f.sites[i].id, staleAfterMs: 600_000 }), null);
+    }
+  }
+  const measurement = await f.invoke("sites:listGrowthPage", {});
+  assert.deepEqual(measurement.page.map((s: Fields) => s.siteId), f.sites.map(s => s.id));
+  assert.equal((await f.invoke("actions/gscSync:syncAllSites", {})).scheduled, 4);
+  assert.equal((await f.invoke("actions/expectedClickBackfillFleet:dispatchFleet", {})).scheduled, 2);
+  assert.equal((await f.invoke("actions/expectedClickBackfillFleet:dispatchRecoveryFleet", {})).scheduled, 2);
+  assert.equal((await f.invoke("actions/cadenceMicroSeed:dispatchCadenceMicroSeedFleet", {})).scheduled, 2);
+  assert.equal((f.tables.provider_spend_reservations ?? []).length, 0); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC39 legacy wakes queued before actual migration become inert and retain historical receipts", async () => {
+  const f = await retirementFixture();
+  for (const name of ["actions/expectedClickBackfillFleet:dispatchFleet", "actions/expectedClickBackfillFleet:dispatchRecoveryFleet", "actions/cadenceMicroSeed:dispatchCadenceMicroSeedFleet"]) {
+    assert.equal((await f.invoke(name, {})).scheduled, 4);
+  }
+  const stale = f.tables._scheduled_functions.filter(s => [f.sites[0].id, f.sites[3].id].includes(s.args.siteId));
+  assert.equal(stale.length, 6);
+  await selectGrowth(f); await selectGrowth({ ...f, sites: [f.sites[3]] });
+  const history = JSON.stringify(f.tables.expected_click_fleet_dispatch_runs), before = f.trace.length;
+  f.restartRuntime();
+  for (const s of stale) await f.invoke(s.name, s.args);
+  for (const i of [0, 3]) await f.invoke("actions/expectedClickBackfillFleet:runEvidenceSite", { siteId: f.sites[i].id });
+  assert.equal(f.tables.jobs.length, 0); assert.equal(f.tables.provider_spend_reservations.length, 0);
+  assert.equal(f.tables.expected_click_backfill_skip_receipts.length, 0);
+  assert.equal(JSON.stringify(f.tables.expected_click_fleet_dispatch_runs), history);
+  assert.equal(f.trace.slice(before).filter(t => t.name === "network").length, 0); f.assertOffline();
+});
+
+const legacyKinds = [
+  { module: "expectedClickDemandBackfill", table: "expected_click_demand_jobs", version: 2 },
+  { module: "expectedClickEvidenceBackfill", table: "expected_click_evidence_jobs", version: 2 },
+  { module: "cadenceMicroSeed", table: "cadence_micro_seed_jobs", version: CADENCE_MICRO_SEED_VERSION },
+];
+function staleLegacyJob(f: Awaited<ReturnType<typeof retirementFixture>>, siteId: string, kind: typeof legacyKinds[number]) {
+  const site = f.get(siteId)!;
+  return f.add(kind.table, { siteId, userId: site.userId, status: "pending", policyVersion: kind.version, rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    origin: "autonomous_fleet", createdAt: START - 1000, updatedAt: START - 1000, workerAttempts: 0, reservationDay: new Date(START).toISOString().slice(0, 10),
+    providerCallAttempted: false, providerCallCompleted: false, providerCallsAttempted: 0, providerCallsCompleted: 0,
+    keywordAttempts: [], metricReceipts: [], metricFailures: [], selectedTopics: [], candidateReceipts: [], serpSnapshots: [], serpFailures: [],
+    serpAttemptedTopicIds: [], authorityEvidence: [], finalizeAttempts: 0, watchdogRecoveries: 0, locationCode: 2840, languageCode: "en" });
+}
+function staleMicroPrechecks(siteId: string, domain: string) {
+  const common = { ready: true, siteId, canonicalDomain: domain, domainRevision: 0, rolloutEpoch: 0 };
+  return {
+    topicPrecheck: { ...common, contract: "cadence-topic-readiness-v1", inventoryFingerprint: "a".repeat(64), schedulerTopicAvailable: false, coveredKeywords: [] },
+    operationalPrecheck: { ...common, contract: "cadence-operational-readiness-v1", operationalFingerprint: "b".repeat(64), remainingArticles: 150, nextCadenceDueAt: START },
+    sourcePrecheck: { ...common, contract: "cadence-source-readiness-v1", topicInventoryFingerprint: "a".repeat(64), sourceInventoryFingerprint: "c".repeat(64),
+      sourcePlanId: "jobs:original", sourcePlanReservationId: "provider_spend_reservations:original", sourcePlanFingerprint: "d".repeat(64), attemptKind: "primary",
+      seed: "synthetic seed", providerSeeds: ["synthetic seed"], locationCode: 2840, languageCode: "en", planTier: "enterprise", planFeatures: [], providerCostCeilingMicroUsd: 100_000, evidenceHeadroomMicroUsd: 100_000 },
+  };
+}
+
+test("SLC39 exact queue and claim fences reject stale legacy jobs only for migrated sites", async () => {
+  const f = await retirementFixture(); await selectGrowth(f); await selectGrowth({ ...f, sites: [f.sites[3]] });
+  for (const [i, site] of f.sites.entries()) for (const kind of legacyKinds) {
+    const id = staleLegacyJob(f, site.id, kind), before = JSON.stringify(f.get(id)), migrated = [0, 3].includes(i);
+    const claims = await Promise.all([1, 2].map(n => f.invoke(`${kind.module}:claimWorker`, { siteId: site.id, jobId: id, policyVersion: kind.version, workerToken: `worker-${n}` })));
+    assert.equal(claims.filter(Boolean).length, migrated ? 0 : 1);
+    if (migrated) {
+      assert.equal(JSON.stringify(f.get(id)), before);
+      if (kind.module !== "cadenceMicroSeed") {
+        const queued = await f.invoke(`${kind.module}:reserveAndQueue`, { siteId: site.id, policyVersion: kind.version, origin: "autonomous_fleet" });
+        assert.equal(queued.reason, "content_work_engine_owns_site");
+        f.get(id)!.status = "partial"; const partial = JSON.stringify(f.get(id));
+        assert.equal((await f.invoke(`${kind.module}:scheduleResume`, { siteId: site.id, jobId: id, policyVersion: kind.version })).scheduled, false);
+        assert.equal(JSON.stringify(f.get(id)), partial);
+      } else {
+        const queued = await f.invoke("cadenceMicroSeed:reserveAndQueue", { siteId: site.id, ...staleMicroPrechecks(site.id, site.domain),
+          inspectionKey: "old-inspection", reservationDay: new Date(START).toISOString().slice(0, 10), rolloutEpoch: 0, sourcePlanId: "jobs:original",
+          sourcePlanFingerprint: "d".repeat(64), attemptKind: "primary", providerCostCeilingMicroUsd: 100_000, providerBalancePreflightAt: START, providerBalanceRequiredMicroUsd: 600_000 });
+        assert.equal(queued.reason, "content_work_engine_owns_site");
+        assert.equal((await f.invoke("cadenceMicroSeed:reconcileWatchdog", { siteId: site.id, jobId: id })).reconciled, false);
+        assert.equal(JSON.stringify(f.get(id)), before);
+      }
+    }
+  }
+  assert.equal(f.tables.provider_spend_reservations.length, 0); assert.equal(f.tables.expected_click_backfill_skip_receipts.length, 0); f.assertOffline();
+});
+
+test("SLC39 migration after legacy claim denies fresh I/O but still records its already-started demand receipt", async () => {
+  const f = await retirementFixture(), site = f.sites[0];
+  for (const kind of legacyKinds) {
+    const id = staleLegacyJob(f, site.id, kind), args = { siteId: site.id, jobId: id, workerToken: "old-worker" };
+    assert.ok(await f.invoke(`${kind.module}:claimWorker`, { ...args, policyVersion: kind.version }));
+    // Model the last-boundary race directly; actual migration normally waits
+    // for workers to drain, and never changes these old receipt counters.
+    f.get(site.id)!.serviceMode = "growth_first";
+    const before = JSON.stringify(f.get(id));
+    const result = kind.module === "expectedClickEvidenceBackfill"
+      ? await f.invoke(`${kind.module}:beginProviderCall`, { ...args, kind: "authority", authorityDomains: [] })
+      : await f.invoke(`${kind.module}:beginProviderAttempt`, { ...args, ...(kind.module === "cadenceMicroSeed" ? staleMicroPrechecks(site.id, site.domain) : {}) });
+    assert.equal(result.reason, "content_work_engine_owns_site"); assert.equal(JSON.stringify(f.get(id)), before);
+    if (kind.module === "expectedClickDemandBackfill") {
+      Object.assign(f.get(id)!, { providerCallAttempted: true, providerAttemptedAt: START - 1, providerCallsAttempted: 1 });
+      assert.equal((await f.invoke(`${kind.module}:recordMetricReceipts`, { ...args, measuredAt: START, locationCode: 2840, languageCode: "en", metrics: [] })).recorded, true);
+      const scheduled = f.tables._scheduled_functions.length;
+      await f.invoke(`${kind.module}:persistDemand`, args);
+      assert.equal(f.get(id)!.providerCallsCompleted, 1); assert.equal(f.get(id)!.status, "completed");
+      assert.equal(f.tables._scheduled_functions.length, scheduled, "A retained receipt cannot chain legacy evidence after migration");
+    }
+    delete f.get(site.id)!.serviceMode;
+  }
+  assert.equal(f.trace.filter(t => t.name === "network").length, 0); f.assertOffline();
+});
+
+test("SLC39 daily measurement persists both modes and owners without paid legacy planning", async () => {
+  const f = await retirementFixture(); await selectGrowth(f); await selectGrowth({ ...f, sites: [f.sites[3]] });
+  for (const site of f.sites) {
+    const result = await f.invoke("actions/gscSync:syncSiteInternal", { siteId: site.id });
+    assert.equal(result.rows, 28);
+    assert.equal(f.get(site.id)!.gscDataThrough, "2026-09-08");
+    assert.equal(f.tables.search_performance.filter(r => r.siteId === site.id).length, 28);
+  }
+  assert.equal(f.tables.provider_spend_reservations.length, 0); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC39 stale micro-seed handoffs cannot demote the migrated rollout or schedule old planning", async () => {
+  const f = await retirementFixture(); await selectGrowth(f);
+  const site = f.sites[0], jobId = staleLegacyJob(f, site.id, legacyKinds[2]);
+  const topicId = f.add("topic_clusters", { siteId: site.id, primaryKeyword: site.keywords[0], status: "planned" });
+  Object.assign(f.get(jobId)!, { status: "cadence_scheduling", topicId });
+  const history = JSON.stringify(f.get(jobId)), siteBefore = JSON.stringify(f.get(site.id)), wakes = f.tables._scheduled_functions.length;
+  for (const name of ["resumeLegacySemanticCandidateInternal", "continueSuccessfulCandidateInternal"]) {
+    assert.equal((await f.invoke(`cadenceMicroSeed:${name}`, { siteId: site.id })).advanced, false);
+  }
+  for (const [name, field] of [["resumeCadenceEvidenceHandoff", "resumed"], ["scheduleCadenceForMicroSeed", "scheduled"], ["finalizeCadenceMicroSeed", "finalized"]]) {
+    const result = await f.invoke(`actions/cadenceMicroSeed:${name}`, { siteId: site.id, jobId });
+    assert.equal(result[field], false); assert.equal(result.reason, "legacy_planning_ineligible");
+  }
+  assert.equal((await f.invoke("cadenceMicroSeed:finalizeEvidence", { siteId: site.id, jobId, outcome: "eligible", reason: "synthetic stale handoff" })).finalized, false);
+  assert.equal(JSON.stringify(f.get(jobId)), history); assert.equal(JSON.stringify(f.get(site.id)), siteBefore);
+  assert.equal(f.tables._scheduled_functions.length, wakes); assert.equal(f.tables.provider_spend_reservations.length, 0);
+  assert.equal(f.trace.filter(t => t.name === "network").length, 0); f.assertOffline();
+});
+
+test("SLC39 an exact in-flight discovery receipt settles after migration without creating a topic or a continuation", async () => {
+  const f = await retirementFixture(), site = f.sites[0], owner = f.get(site.id)!.userId;
+  const day = new Date(START).toISOString().slice(0, 10), createdAt = START - 1000;
+  const payload = { reason: "topic_replenishment", underfilledPlanContinuation: { version: 1, firstExecutionCount: 1,
+    remainingTopicCapacity: AUTOMATIC_PLAN_TOPIC_CAPACITY - 1, queuedAt: createdAt } };
+  const ceiling = planProviderEnvelopeMicroUsd(payload); assert.ok(ceiling);
+  const sourceReservationId = f.add("provider_spend_reservations", { siteId: site.id, userId: owner, purpose: "topic_plan", trigger: "topic_plan",
+    reservedMicroUsd: ceiling, reservationDay: day, reservationMonth: "2026-09", createdAt });
+  const sourcePlanId = f.add("jobs", { siteId: site.id, userId: owner, type: "plan", status: "failed", canonicalDomain: site.domain,
+    domainRevision: 0, rolloutEpoch: 0, workerAttempts: 2, createdAt, updatedAt: createdAt, payload,
+    providerSpendReservationId: sourceReservationId, providerCostCeilingMicroUsd: ceiling, providerCostReservedMicroUsd: ceiling, providerCostReservationDay: day,
+    result: { count: 1, continuationStatus: "queued", continuationWorkerExecution: 2, remainingTopicCapacity: AUTOMATIC_PLAN_TOPIC_CAPACITY - 1,
+      providerBudget: { workerExecution: 1, reservedMicroUsd: ceiling, ceilingMicroUsd: ceiling, reservationDay: day } } });
+  const source = await f.invoke("cadenceMicroSeed:inspectSourcePlanReadinessInternal", { siteId: site.id, sourcePlanId }); assert.equal(source.ready, true);
+  const jobId = staleLegacyJob(f, site.id, legacyKinds[2]), seed = site.keywords[0];
+  const reservationId = f.add("provider_spend_reservations", { siteId: site.id, userId: owner, purpose: "cadence_micro_seed",
+    trigger: `cadence_micro_seed_v${CADENCE_MICRO_SEED_VERSION}`, reservedMicroUsd: 100_000, reservationDay: day, reservationMonth: "2026-09", createdAt });
+  Object.assign(f.get(jobId)!, { attemptKind: "primary", sourcePlanId, sourcePlanReservationId: sourceReservationId, sourcePlanFingerprint: source.sourcePlanFingerprint,
+    providerSpendReservationId: reservationId, providerCostCeilingMicroUsd: 100_000, providerCostReservedMicroUsd: 100_000,
+    seed, providerSeeds: [seed], providerEndpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT, providerResultLimit: 10, includeSerpInfo: false,
+    includeClickstreamData: false });
+  assert.ok(await f.invoke("cadenceMicroSeed:claimWorker", { siteId: site.id, jobId, policyVersion: CADENCE_MICRO_SEED_VERSION, workerToken: "old-worker" }));
+  Object.assign(f.get(jobId)!, { providerCallAttempted: true, providerAttemptedAt: START - 500, providerRequestTag: "synthetic-inflight" });
+  f.get(site.id)!.serviceMode = "growth_first"; // Exact last-boundary race; no production migration or spend.
+  const receipt = { siteId: site.id, jobId, workerToken: "old-worker", endpoint: CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT,
+    seed, seeds: [seed], requestTag: "synthetic-inflight", resultLimit: 10, locationCode: 2840, languageCode: "en",
+    providerTaskCostUsd: 0.01224, providerRowsReceived: 1, providerRowsRejected: 0, measuredAt: START,
+    candidates: [{ keyword: seed, searchVolume: 100, difficulty: 20, difficultyMeasured: true, intent: "informational", trend: [100] }] };
+  const wakes = f.tables._scheduled_functions.length, sourceBefore = JSON.stringify(f.get(sourceReservationId));
+  const result = await f.invoke("cadenceMicroSeed:recordProviderReceiptAndMaterialize", receipt);
+  assert.equal(result.materialized, false); assert.equal(result.reason, "content_work_engine_owns_site");
+  assert.equal(f.get(reservationId)!.settledMicroUsd, 12_240); assert.equal(f.get(reservationId)!.releasedAt, undefined);
+  assert.equal(f.get(jobId)!.providerCallCompleted, true); assert.equal(f.get(jobId)!.workerAttempts, 1);
+  assert.deepEqual(f.get(jobId)!.candidateReceipts, receipt.candidates);
+  assert.equal(f.tables.topic_clusters.length, 0); assert.equal(f.tables._scheduled_functions.length, wakes);
+  const settled = JSON.stringify(f.get(reservationId));
+  await assert.rejects(f.invoke("cadenceMicroSeed:recordProviderReceiptAndMaterialize", receipt), /worker lease is invalid/);
+  assert.equal(JSON.stringify(f.get(reservationId)), settled); assert.equal(JSON.stringify(f.get(sourceReservationId)), sourceBefore);
+  assert.equal(f.trace.filter(t => t.name === "network").length, 0); f.assertOffline();
+});
+
+test("SLC39 retired fleets leave migrated create publish verify and repeated fresh refill working", async t => {
+  const f = await scopedPricingFixture();
+  for (const site of f.sites.slice(0, 2)) {
+    f.get(site.id)!.expectedClickSchedulingEnabled = true;
+    for (const name of ["actions/expectedClickBackfillFleet:runSite", "actions/expectedClickBackfillFleet:runEvidenceSite", "actions/cadenceMicroSeed:runCadenceMicroSeedFleetSite"]) await f.invoke(name, { siteId: site.id });
+  }
+  assert.equal(f.tables.provider_spend_reservations.length, 0); await exerciseValidationCycles(f, t);
+  assert.equal(f.tables.jobs.length, 10); assert.ok(f.tables.jobs.every(j => j.contentWork));
+  for (const table of ["expected_click_demand_jobs", "expected_click_evidence_jobs", "cadence_micro_seed_jobs"]) assert.equal(f.tables[table].length, 0);
+  f.assertOffline();
+});
 
 test("SLC38 both sites recover first-draft and post-draft credit refusal through same-job late delivery and fresh refill", async t => {
   for (const tool of ["submit_article", "audit_final_article"]) await t.test(tool, async t => {
