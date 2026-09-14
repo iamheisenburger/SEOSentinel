@@ -1,6 +1,34 @@
 # Pentra — fresh-task handoff
 
-## Current: Stage3 customer journey candidate29, local review required
+## Current: Stage3 changed-setup recovery candidate30, local review required
+
+Assignment `supervisor-20260914-slc-stage3-recovery-30`, based on
+`17cb93ceeb7aa4cc02140965c124ea3598daaa11`, repairs the independently reproduced
+ready2 → pause → changed setup dead end. Read the current section of
+`docs/PENTRA_SLC_STAGE3_2026-09-14.md`. Work remains in `.claude/assignment24`,
+branch `codex/simplified-article-admission`; final handoff supplies one exact
+local review commit. Stop before Stage4 or deployment.
+
+Current-token owner reconfirmation stops work, reconciles prior deliveries and
+retires stale jobs without rebinding old seals or erasing attempts/spend/deadlines.
+New jobs pass the same budget/quality gates. Receipt verification is separate from
+new page-edit permission. WordPress's invalidated adapter check is now an explicit
+connection-verification prerequisite. Primary preparation/actions precede native
+money/setup/history disclosures. Both adapters reach fresh verified publication
+and actual refill after changed facts/credentials; real MySQL and SQLite include
+revoked permissions and lost acknowledgements. See the report for exact gates.
+
+Real authenticated browser acceptance remains open (two genuine skips); the
+existing owner handoff was not interrupted again. Reviewed deployment, exact-site
+session, safe current budgets, tenant migration and closed-browser production
+cycles remain prerequisites, in that order. Pentra/LeadPilot production buffers,
+deadlines and guard status were not refreshed. No SaaS launch or SEO-growth claim.
+
+USD0 provider spend; canonical USD20 TOTAL inactive/unspent, old USD4 separate,
+account/fleet caps unchanged. No production access/write, push/deploy, migration,
+paid probe, purchase, reservation/attempt reset, new auth prompt or backlinks.
+
+## Historical: Stage3 customer journey candidate29
 
 Assignment `supervisor-20260914-slc-stage3-29` builds on accepted1961e3450d2e4ab0d473d339b631e836f30c6a23.
 Read `docs/PENTRA_SLC_STAGE3_2026-09-14.md` first. Work remains in the isolated

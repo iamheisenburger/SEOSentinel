@@ -266,6 +266,18 @@ export async function archiveConsumedImprovementArtifact(ctx: MutationCtx, artic
   await syncSummary(ctx, article._id);
 }
 
+/** Preserve the original bytes/audit while excluding owner-retired stale work
+ * from every ready-inventory path. This is not a new review or a publication. */
+export async function archiveRetiredContentArtifact(ctx: MutationCtx, job: Doc<"jobs">) {
+  if (!job.contentWork?.retiredAt) throw new Error("Explicit content retirement required");
+  if (!job.articleId) return;
+  const article = await ctx.db.get(job.articleId);
+  if (!article || article.siteId !== job.siteId) throw new Error("Retirement artifact binding changed");
+  if (article.status === "published" || article.publicationReceipt || article.publicationAttemptedAt) return;
+  await ctx.db.patch(article._id, { status: "revision", updatedAt: now() });
+  await syncSummary(ctx, article._id);
+}
+
 /**
  * Provider-free natural-cadence migration for artifacts sealed before the
  * recovered-topic settlement existed. New seals repair atomically through

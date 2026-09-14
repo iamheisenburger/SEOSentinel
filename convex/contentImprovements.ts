@@ -232,7 +232,9 @@ export const claimVerification = internalMutation({ args: { siteId: v.id("sites"
   const site = await ctx.db.get(args.siteId), job = await ctx.db.get(args.jobId), cw = job?.contentWork;
   if (!site || !job || job.siteId !== site._id || !cw?.revisionId || cw.intent !== "improve" || cw.stage !== "verify") return null;
   const revision = await ctx.db.get(cw.revisionId);
-  if (revision?.contentWorkJobId !== job._id || !revision.receipt || cw.connectionHash !== contentConnectionHash(site)) return null;
+  // A receipt-backed public GET reconciles the already-written immutable URL;
+  // it does not authorize use of a changed connection or new page permission.
+  if (revision?.siteId !== site._id || revision.contentWorkJobId !== job._id || !revision.receipt) return null;
   if ((revision.liveVerificationLeaseExpiresAt ?? 0) > Date.now() || (cw.verificationNextAt ?? 0) > Date.now()) return null;
   if (revision.liveVerificationAttempts >= 5) {
     await ctx.db.patch(revision._id, { status: "failed", failureDetail: "Bounded verification attempts exhausted; reconcile live destination", updatedAt: Date.now() });
@@ -253,9 +255,9 @@ export const verified = internalMutation({ args: { siteId: v.id("sites"), jobId:
     const site = await ctx.db.get(args.siteId), job = await ctx.db.get(args.jobId), cw = job?.contentWork;
     if (!site || !job || job.siteId !== site._id || !cw?.revisionId || cw.stage !== "verify") return;
     const r = await ctx.db.get(cw.revisionId), page = cw.targetPageId ? await ctx.db.get(cw.targetPageId) : null;
-    if (!r?.receipt || r.liveVerificationLeaseOwner !== args.leaseOwner || (r.liveVerificationLeaseExpiresAt ?? 0) <= Date.now()) return;
+    if (r?.siteId !== site._id || !r.receipt || r.liveVerificationLeaseOwner !== args.leaseOwner || (r.liveVerificationLeaseExpiresAt ?? 0) <= Date.now()) return;
     if (r.nextArtifactHash !== args.nextArtifactHash || r.contentWorkJobId !== job._id ||
-      !page?.editable || page.siteId !== site._id || cw.connectionHash !== contentConnectionHash(site)) throw new Error("Live improvement proof binding changed");
+      !page?.editable || page.siteId !== site._id) throw new Error("Live improvement proof binding changed");
     const attempts = r.liveVerificationAttempts;
     if (args.error) {
       await ctx.db.patch(r._id, { liveVerificationLeaseOwner: undefined, liveVerificationLeaseExpiresAt: undefined, failureDetail: args.error.slice(0, 400),
@@ -274,7 +276,8 @@ export const verified = internalMutation({ args: { siteId: v.id("sites"), jobId:
     const source = r.deliveredSource as { content: string; revision: string; permission?: string };
     const artifact = r.nextArtifact as { markdown: string; title: string; metaTitle?: string; metaDescription?: string };
     // Do not resurrect a revoked/reselected permission while recording history.
-    if (page.editable.version === cw.permissionVersion && page.editable.sourceRevision === cw.baseRevision) await ctx.db.patch(page._id, {
+    if (page.editable.version === cw.permissionVersion && page.editable.sourceRevision === cw.baseRevision &&
+      page.editable.connectionHash === cw.connectionHash && page.editable.profileHash === cw.profileHash) await ctx.db.patch(page._id, {
       editable: { ...page.editable, sourceContent: source.content, sourceRevision: source.revision,
         markdown: artifact.markdown, title: artifact.title, metaTitle: artifact.metaTitle ?? artifact.title,
         description: artifact.metaDescription ?? "", permission: source.permission ?? page.editable.permission,

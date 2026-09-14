@@ -613,6 +613,16 @@ async function releaseReservedUsage(
   return false;
 }
 
+/** Existing terminal accounting, shared by explicit stale-setup retirement.
+ * Paid attempts/receipts survive; only the normal unspent quota hold can close. */
+export async function closeRetiredContentAccounting(ctx: MutationCtx, job: Doc<"jobs">) {
+  if (!job.contentWork?.retiredAt || job.status !== "failed") throw new Error("Retired terminal content work required");
+  await settleArticleProviderAttempt(ctx, job, job.contentWork.providerCalls.some(c => c.state === "started") ? "ambiguous" : "failed", now());
+  if (await releaseReservedUsage(ctx, job)) await ctx.db.patch(job._id, { reservationId: undefined });
+  await settleFailedContentWork(ctx, job._id);
+  await reconcileJobTopicLifecycle(ctx, job);
+}
+
 async function raiseJobAlert(
   ctx: MutationCtx,
   siteId: Id<"sites">,

@@ -14,6 +14,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const state = useQuery(api.contentWork.readiness, { siteId });
   const select = useMutation(api.contentWork.selectServiceMode);
   const control = useMutation(api.contentWork.control);
+  const reconfirm = useMutation(api.contentWork.reconfirm);
   const [chosenMode, setMode] = useState<"legacy_articles" | "growth_first" | null>(null);
   const mode = chosenMode ?? (state?.setupPending ? "growth_first" : state?.serviceMode ?? "legacy_articles");
   const [confirmed, setConfirmed] = useState(false), [deadline, setDeadline] = useState("");
@@ -35,25 +36,57 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     catch { setError("The service could not continue. Review the current billing, publication consent and destination. Changed facts or unresolved work need reconciliation; attempts and deadlines remain unchanged."); }
     finally { setSaving(false); }
   };
+  const confirmChangedSetup = async () => {
+    if (!confirmed || confirmedReview !== state.reviewToken) return;
+    setSaving(true); setError("");
+    try {
+      const result = await reconfirm({ siteId, reviewToken: confirmedReview, confirm: true });
+      if (result.status === "waiting") setError(result.issues.map(issue => issue.action).join(" "));
+      else { setConfirmed(false); setConfirmedReview(""); }
+    } catch { setError("The saved setup changed again. Review its current facts and exact destination before confirming. No deadline or spending history was reset."); }
+    finally { setSaving(false); }
+  };
   return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading">
     <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
     <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
-    <p className="text-sm">Growth-first prepares two reviewed, distinct items and refills after verified delivery. Each delivery has a five-minute window ending at a fixed deadline. WordPress requires the Pentra conditional publisher connector. Existing pages require separate exact-page permission below. Publication is not evidence of SEO growth.</p>
-    <div key={state.reviewToken} className="space-y-2 text-sm">
+    {state.serviceMode === "growth_first" && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
+      <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
+      <p>Schedule: {!state.bindingCurrent ? "Stopped — review changed setup" : state.schedule?.paused ? "Paused" : state.schedule?.active ? "Active" : "Preparing, not active"}.</p>
+      <p>Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}. {state.schedule && state.schedule.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue; the original deadline remains.</span>}</p>
+      <div className="flex flex-wrap gap-2"><Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button>
+        {!state.bindingCurrent ? <a className="underline self-center" href="#changed-content-setup">Review changed setup</a> : <Button disabled={saving || !state.entitlement || state.approvalRequired} onClick={() => operate("resume")}>Resume preparation and schedule</Button>}
+        <Button disabled={saving || state.schedule?.paused || !state.bindingCurrent} onClick={() => operate("retry")}>Recheck existing work</Button></div>
+      <p>Pause retains ready work and spending history. A write already started must be checked before anything replaces it.</p>
+    </div>}
+    {state.funding.status !== "available" && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
+    {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
+    {!state.destination.verified && <p role="alert">Verify the exact publisher in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
+    <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>
+    <details id="changed-content-setup" open={!state.bindingCurrent || state.serviceMode !== "growth_first"} key={state.reviewToken} className="space-y-2 text-sm">
+      <summary className="cursor-pointer font-medium">{state.bindingCurrent ? "Saved business and exact destination" : "Review changed setup"}</summary>
       <h3 className="font-medium">Review your saved setup</h3>
       <p>Business: {state.profile.summary || "Missing"}</p><p>Audience: {state.profile.audience || "Missing"}</p><p>Product or service: {state.profile.productUsage || "Missing"}</p>
       <p>Offerings: {state.profile.offerings.join("; ") || "Not specified"}</p>
       <p>Exact destination: {state.destination.domain} · {state.destination.kind === "github" ? `${state.destination.repository}, branch ${state.destination.branch}, ${state.destination.contentDirectory}` : state.destination.kind === "wordpress" ? "WordPress with conditional publisher" : "Unsupported for growth-first"}. {state.destination.verified ? "Verified" : "Verification required"}.</p>
       <p>Existing plan entitlement: {state.entitlement ? "Verified" : "Unavailable — verify Billing"}.</p>
       <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Review business and publishing settings</Link> · <Link className="underline" href="/settings/billing">Billing</Link>
-      {!state.bindingCurrent && <p role="alert">Business or destination changed. Existing work is held for reconciliation; resume cannot silently accept these changes.</p>}
+      {!state.bindingCurrent && <>
+        <p role="alert">Business or destination changed. {state.reconciliation?.staleItems ?? "Existing"} stale work items need review. Old drafts will be kept, never relabelled as newly approved.</p>
+        <ul>{state.reconciliation?.issues.map((issue, index) => <li key={index} role="alert">{issue.action} {issue.until && <>Check after {shownTime(issue.until)}. </>}{issue.articleId && <Link href={`/articles/${issue.articleId}`} className="underline">Open retained delivery and owner review</Link>}</li>)}</ul>
+        <p>Confirming safely retires stale unstarted work and prepares newly reviewed content under the existing remaining budget. Prior costs, uncertain charges and missed deadlines remain. Existing page permissions are not renewed; inspect and authorize changed pages separately.</p>
+        <label className="block"><input type="checkbox" checked={confirmed && confirmedReview === state.reviewToken} onChange={e => { setConfirmed(e.target.checked); setConfirmedReview(state.reviewToken); }} /> I confirm the changed facts, audience and exact destination above, and authorize newly reviewed work within the existing spending limits.</label>
+        <p>{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>
+        <Button disabled={saving || !confirmed || confirmedReview !== state.reviewToken} onClick={confirmChangedSetup}>Confirm changed setup and prepare fresh work</Button>
+      </>}
       {state.approvalRequired && <p role="alert">Automatic publication consent is not active. Review the saved publishing setup before activation.</p>}
-      <h3 className="font-medium">Funding readiness</h3><p>{fundingCopy[state.funding.status]}</p>
+    </details>
+    <details id="content-funding-details" className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Funding readiness and retained spending</summary><p>{fundingCopy[state.funding.status]}</p>
       <p>Account monthly limit {money(state.funding.monthlyLimitMicroUsd)} · settled actual spend {money(state.funding.settledActualMicroUsd)} · retained reservations / conservative ceilings {money(state.funding.heldCeilingMicroUsd)}.</p>
       <p>Available account headroom {money(state.funding.accountAvailableMicroUsd)} · next work ceiling {money(state.funding.requestedMicroUsd)}. Fleet limits also apply.</p>
       <p>Daily reset {shownTime(state.funding.dailyResetAt)}; monthly reset {shownTime(state.funding.monthlyResetAt)}. {state.funding.incrementalLimitMicroUsd !== null && `Existing incremental allowance ${money(state.funding.incrementalLimitMicroUsd)} is not renewed.`}</p>
       <p>Provider credit balance is unverified. Internal headroom is not provider credit, a purchase or a reservation. Every paid call requires valid authorization.</p>
-    </div>
+    </details>
+    <details open={state.serviceMode !== "growth_first"} className="space-y-3"><summary className="cursor-pointer font-medium">Service mode and publication consent</summary>
     <label className="block">Choose service mode
       <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); }} className="block bg-[#0F1117] border rounded p-2">
         <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">Explicitly switch to growth-first</option>
@@ -67,14 +100,11 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       <p className="text-sm">Selection does not purchase credits or increase spending limits. Preparation must be funded and two items ready before automatic schedule activation. Switching engines requires reconciliation of in-flight work.</p>
     </>}
     {mode !== state.serviceMode && <Button onClick={save} disabled={saving || (mode === "growth_first" && (!confirmed || confirmedReview !== state.reviewToken || !deadline || !state.entitlement || !state.destination.verified))}>{saving ? "Saving…" : "Confirm service selection"}</Button>}
+    </details>
     {error && <p role="alert">{error}</p>}
-    {state.serviceMode === "growth_first" && <div className="space-y-2 text-sm">
-      <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
-      <p>Schedule: {state.schedule?.paused ? "Paused" : state.schedule?.active ? "Active" : "Preparing, not active"}. Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}.</p>
-      <p>Pausing stops admissions and unstarted writes. Ready work and reservations remain; already-started writes are reconciled. Resume and recheck never reset attempts, costs or deadlines.</p>
-      <div className="flex flex-wrap gap-2"><Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button><Button disabled={saving || !state.bindingCurrent || !state.entitlement || state.approvalRequired} onClick={() => operate("resume")}>Resume preparation and schedule</Button><Button disabled={saving || state.schedule?.paused} onClick={() => operate("retry")}>Recheck existing work</Button></div>
-      <ul>{state.work.slice(-5).map(work => <li key={work.jobId}>{workLabel(work)} · {stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}</li>)}</ul>
-    </div>}
+    {state.serviceMode === "growth_first" && <details className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Work history and technical references</summary>
+      <ul>{state.work.slice(-10).map(work => <li key={work.jobId}>{workLabel(work)} · {work.retiredAt ? "Retired after owner-reviewed setup change; retained for history" : stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}<span> · Reference: {work.jobId}</span></li>)}</ul>
+    </details>}
     <EditablePageSelection key={siteId} siteId={siteId} />
   </section>;
 }

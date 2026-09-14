@@ -11,12 +11,15 @@ import { reserveSharedProviderBudget, settleSharedProviderReservation, releaseSh
 import { planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoint";
 import { terminalContentFeasibility } from "./lib/topicLifecycle";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
-import { liveAutopilotReadiness } from "./lib/autopilotReadiness";
+import { liveAutopilotReadiness, publicationDestinationBlockers } from "./lib/autopilotReadiness";
+import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken } from "./lib/contentSelection";
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
+import { archiveRetiredContentArtifact } from "./articles";
+import { closeRetiredContentAccounting } from "./jobs";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -67,6 +70,95 @@ async function requireOwner(ctx: MutationCtx, siteId: Id<"sites">) {
   return site;
 }
 
+type SetupIssue = { code: string; action: string; jobId?: Id<"jobs">; articleId?: Id<"articles">; until?: number };
+async function reviewChangedSetup(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[]) {
+  let connection: string | undefined;
+  try { connection = contentConnectionHash(site); } catch { /* An incomplete destination cannot be confirmed. */ }
+  const profile = confirmedContentProfileHash(site), schedule = site.contentSchedule;
+  const needed = Boolean(schedule && (schedule.profileHash !== profile || schedule.connectionHash !== connection));
+  const stale = jobs.filter(j => j.contentWork && j.contentWork.retiredAt === undefined && j.contentWork.stage !== "verified" &&
+    (j.contentWork.profileHash !== profile || j.contentWork.connectionHash !== connection));
+  const issues: SetupIssue[] = [];
+  const verifying: Doc<"jobs">[] = [], recoveryArticles: Doc<"articles">[] = [];
+  if (!needed) return { needed, stale, issues, verifying, recoveryArticles, pristineLease: false };
+  if (jobs.length > LIMIT) issues.push({ code: "incomplete", action: "Ask support to complete this site's bounded work-inventory review before confirming changes. New work stays stopped." });
+  for (const job of jobs) {
+    if (!job.contentWork && ["pending", "running"].includes(job.status)) issues.push({ code: "legacy_work", jobId: job._id,
+      action: "Finish or cancel the original legacy job from its job details before confirming the changed content service." });
+    if (job.contentWork?.retiredAt !== undefined) continue;
+    if (job.status === "running") issues.push({ code: "worker", jobId: job._id, until: job.leaseExpiresAt,
+      action: "Wait for the current worker or its existing lease recovery, then check the changed setup again. No additional work starts while paused." });
+    if (!job.articleId) continue;
+    const article = await ctx.db.get(job.articleId);
+    if (!article || article.siteId !== site._id) { issues.push({ code: "artifact", jobId: job._id, action: "Ask support to recover the exact missing work artifact. Do not reset the job or its spending." }); continue; }
+    if (job.contentWork?.intent === "improve") continue;
+    if (article.publicationReceipt && article.publicUrlStatus !== "verified") issues.push({ code: "verification", jobId: job._id, articleId: article._id,
+      action: "Open this delivered article and fix its live URL, canonical, title or body to match the retained reviewed artifact. Check the existing delivery again; do not publish another copy." });
+    if (article.publicationAttemptedAt && !article.publicationReceipt && !article.publicationAmbiguityDispositionAt) issues.push({ code: "uncertain_delivery", jobId: job._id, articleId: article._id,
+      action: "Check the original destination for this article. If its exact receipt cannot be recovered, use the article's existing owner-reviewed unverified-delivery disposition after the lease expires. This never asserts publication." });
+    if (article.publicationLeaseOwner && article.publicationLeaseHash) recoveryArticles.push(article);
+  }
+  const revisions = await ctx.db.query("published_article_revisions").withIndex("by_site_created", q => q.eq("siteId", site._id)).take(LIMIT + 1);
+  if (revisions.length > LIMIT) issues.push({ code: "incomplete", action: "Ask support to complete this site's retained-delivery inventory review. No old delivery may be discarded to make room." });
+  for (const r of revisions) {
+    if (r.attemptedAt && !r.liveVerifiedAt && !r.ambiguityDispositionAt) {
+      const job = jobs.find(j => j._id === r.contentWorkJobId);
+      if (job?.contentWork?.stage === "verify" && r.receipt) verifying.push(job);
+      issues.push({ code: r.receipt ? "verification" : "uncertain_delivery", jobId: job?._id, articleId: r.articleId,
+        action: r.receipt ? "Check the already-delivered page against its retained reviewed version. Live verification must finish before the setup can change; no extra write is authorized."
+          : "Inspect the original page for this attempted change. If the exact delivery cannot be recovered, open its article's owner-reviewed unverified-revision disposition after lease expiry; resolve any external copy before continuing." });
+    }
+  }
+  const leasedRevisions = revisions.filter(r => site.publicationLeaseOwner && r.leaseOwner === site.publicationLeaseOwner);
+  const pristineLease = leasedRevisions.length === 1 && (site.publicationLeaseExpiresAt ?? Infinity) <= Date.now() &&
+    (leasedRevisions[0].leaseStartedAt ?? Infinity) + PUBLISHED_REVISION_LEASE_MS <= Date.now() &&
+    !leasedRevisions[0].attemptedAt && !leasedRevisions[0].receipt;
+  if (site.publicationLeaseOwner && !pristineLease) issues.push({ code: "destination_lease", until: site.publicationLeaseExpiresAt,
+    action: "Wait for the existing destination lease to close, then check again. If its exact retained delivery cannot be recovered, use the linked article's owner-reviewed disposition; never clear the lock manually." });
+  return { needed, stale, issues, verifying, recoveryArticles, pristineLease };
+}
+
+/** Explicit owner review retires stale unstarted work, never rebinds its seal.
+ * It reuses normal terminal accounting and new-work admission, not new credit. */
+export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: v.string(), confirm: v.boolean() },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
+    if (!args.confirm || args.reviewToken !== contentConsentToken(site)) throw new Error("Review and explicitly confirm the current saved setup first");
+    if (site.serviceMode !== "growth_first" || !schedule) throw new Error("Choose the content service first");
+    const jobs = await jobsForSite(ctx, site._id), review = await reviewChangedSetup(ctx, site, jobs);
+    if (!review.needed) return { status: "unchanged" as const, retired: 0, issues: [] as SetupIssue[] };
+    await ctx.db.patch(site._id, { contentSchedule: { ...schedule, paused: true }, updatedAt: Date.now() });
+    for (const job of review.verifying) await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id });
+    for (const article of review.recoveryArticles) await ctx.scheduler.runAfter(0, internal.publisher.recoverInitialPublicationLeaseInternal, {
+      siteId: site._id, articleId: article._id, expectedContentHash: article.publicationLeaseHash!, expectedLeaseOwner: article.publicationLeaseOwner! });
+    for (const job of jobs.filter(j => j.status === "running" && j.workerToken && j.leaseExpiresAt)) await ctx.scheduler.runAt(Math.max(Date.now(), job.leaseExpiresAt!),
+      internal.jobs.resetStuckJobs, { siteId: site._id, jobId: job._id, expectedWorkerToken: job.workerToken! });
+    if (!contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site }) || publicationDestinationBlockers(site).length) review.issues.push({ code: "connection", action: "Reconnect and verify the exact current GitHub or WordPress destination in website settings, then review these changes again." });
+    if (!await contentEntitlementAuthorized(ctx, site)) review.issues.push({ code: "billing", action: "Verify the existing plan in Billing, then check these changes again. No plan or credit is purchased by confirming setup." });
+    if (!site.siteSummary?.trim() || !site.targetAudienceSummary?.trim()) review.issues.push({ code: "profile", action: "Complete the confirmed business facts and audience in website settings, then review the saved setup again." });
+    if (review.issues.length) return { status: "waiting" as const, retired: 0, issues: review.issues };
+    for (const job of review.stale) {
+      await ctx.db.patch(job._id, { status: "failed", nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
+        contentWork: { ...job.contentWork!, retiredAt: Date.now(), retiredForReviewToken: args.reviewToken }, updatedAt: Date.now() });
+      const retired = (await ctx.db.get(job._id))!;
+      await archiveRetiredContentArtifact(ctx, retired);
+      await closeRetiredContentAccounting(ctx, retired);
+    }
+    if (review.pristineLease) {
+      const revisions = await ctx.db.query("published_article_revisions").withIndex("by_site_created", q => q.eq("siteId", site._id)).take(LIMIT + 1);
+      const pristine = revisions.find(r => r.leaseOwner === site.publicationLeaseOwner)!;
+      // Same proven-before-I/O terminal disposition as expired revision recovery.
+      // Preserve its attempts, exact source and all accounting history.
+      await ctx.db.patch(pristine._id, { status: "failed", leaseOwner: undefined, leaseStartedAt: undefined,
+        failureCode: "pristine_revision_lease_retired", failureDetail: "Owner confirmed changed setup after the lease expired before any external attempt.", updatedAt: Date.now() });
+    }
+    await ctx.db.patch(site._id, { contentSchedule: { ...schedule, profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
+      active: false, paused: false, autopublishConsentAt: Date.now() }, autopilotEnabled: true, autopilotRolloutMode: "warm", approvalRequired: false,
+      ...(review.pristineLease ? { publicationLeaseOwner: undefined, publicationLeaseExpiresAt: undefined } : {}), updatedAt: Date.now() });
+    await wake(ctx, site._id);
+    return { status: "preparing" as const, retired: review.stale.length, issues: [] as SetupIssue[] };
+  } });
+
 /** Stage 1 interface. No customer can opt in implicitly or rewrite an existing
  * deadline by toggling mode. Migration and rollback drain unresolved work. */
 export const selectServiceMode = mutation({
@@ -77,7 +169,7 @@ export const selectServiceMode = mutation({
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false };
     const jobs = await jobsForSite(ctx, site._id);
     if (site.publicationLeaseOwner || jobs.some(j => ["pending", "running"].includes(j.status) ||
-      (j.contentWork && !["verified", "failed"].includes(j.contentWork.stage)))) throw new Error("Reconcile in-flight content work before switching engines");
+      (j.contentWork && j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage)))) throw new Error("Reconcile in-flight content work before switching engines");
     const revisions = await ctx.db.query("published_article_revisions").withIndex("by_site_created", q => q.eq("siteId", site._id)).take(LIMIT + 1);
     if (revisions.length > LIMIT || revisions.some(r => r.contentWorkJobId && r.attemptedAt && !r.liveVerifiedAt && !r.ambiguityDispositionAt)) {
       throw new Error("Reconcile the uncertain selected-page delivery before switching engines");
@@ -126,21 +218,25 @@ export const readiness = query({
     let verified = false, directory: string | null = null, bindingCurrent = !s;
     try {
       directory = publicationDeliveryConfig(site).contentDir ?? null;
-      verified = contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site });
+      verified = contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site }) && publicationDestinationBlockers(site).length === 0;
       bindingCurrent = !s || (s.profileHash === confirmedContentProfileHash(site) && s.connectionHash === contentConnectionHash(site));
     } catch { /* Incomplete destination is actionable readiness, not a query crash. */ }
+    const reconciliation = await reviewChangedSetup(ctx, site, jobs);
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
         branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified },
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
       bindingCurrent,
+      reconciliation: { needed: reconciliation.needed, staleItems: reconciliation.stale.length, issues: reconciliation.issues },
       schedule: s ? { active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
       funding: await contentFunding(ctx, site, pricingConfiguration()?.budgetMicroUsd),
-      complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready").length,
+      complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined &&
+        j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
       work: jobs.filter(j => j.contentWork).map(j => ({ jobId: j._id, articleId: j.articleId,
         intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
+        retiredAt: j.contentWork!.retiredAt,
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, failure: contentIssue(j.contentWork!.failure ?? j.error) })) };
   },
 });
@@ -155,7 +251,7 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
       await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: true }, updatedAt: Date.now() });
       await wake(ctx, site._id); return;
     }
-    if (args.reviewToken !== contentConsentToken(site) || s.profileHash !== confirmedContentProfileHash(site) || s.connectionHash !== contentConnectionHash(site)) throw new Error("Business or destination changed. Reconcile existing work before reviewing a new service selection.");
+    if (args.reviewToken !== contentConsentToken(site) || s.profileHash !== confirmedContentProfileHash(site) || s.connectionHash !== contentConnectionHash(site)) throw new Error("Business or destination changed. Use Review changed setup to confirm current facts and safely replace stale unstarted work.");
     if (!await contentEntitlementAuthorized(ctx, site) || !contentConnectionComplete(site) || site.approvalRequired) throw new Error("Verify billing, publishing and automatic-publication consent before resuming");
     if (args.action === "resume") await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: false }, autopilotEnabled: true,
       autopilotRolloutMode: s.active ? "live" : "warm", updatedAt: Date.now() });
@@ -171,10 +267,13 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">) {
   if (pages.length > LIMIT) throw new Error("Existing page inventory is incomplete");
   const pageCoverage = pages.filter(p => pageMatchesCurrentDomain(site, p) && !["", "/", "/index"].includes(p.slug))
     .flatMap(p => [...(p.keywords ?? []), ...(p.title ? [p.title] : [])].map(primaryKeyword => ({ primaryKeyword })));
-  for (const status of ["ready", "published"]) {
+  for (const status of ["ready", "published", "rejected"]) {
     const summaries = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", status)).take(LIMIT + 1);
     if (summaries.length > LIMIT) throw new Error("Published intent inventory is incomplete");
     for (const row of summaries.filter(row => articleMatchesCurrentDomain(site, row))) {
+      // An owner-reviewed unknown write remains possible external coverage.
+      // Never replay that intent as a "fresh" replacement after reconfirmation.
+      if (status === "rejected" && !row.publicationAttemptedAt) continue;
       pageCoverage.push(...[...(row.metaKeywords ?? []), row.title].map(primaryKeyword => ({ primaryKeyword })));
     }
   }
@@ -220,7 +319,7 @@ export const advance = internalMutation({
     if (!contentConnectionComplete(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
       schedule.connectionHash !== contentConnectionHash(site)) return { scheduled: 0, mode: "content_binding_changed" };
     if (site.approvalRequired) return { scheduled: 0, mode: "approval_waiting" };
-    const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork);
+    const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork && j.contentWork.retiredAt === undefined);
     if (all.some(j => !j.contentWork && ["pending", "running"].includes(j.status))) return { scheduled: 0, mode: "content_migration_pending" };
     const waiting = work.filter(j => !["verified", "failed"].includes(j.contentWork!.stage)).sort((a,b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt);
     const restoration = waiting.find(j => j.contentWork!.operation);
@@ -372,8 +471,13 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   if (site.serviceMode !== "growth_first" || !site.contentSchedule) return;
   const jobs = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", site._id).eq("articleId", article._id)).take(20);
   const job = jobs.find(j => j.contentWork?.approvedArtifactHash === article.publishedContentHash);
-  if (!job?.contentWork || job.contentWork.stage === "verified") return;
-  if (job.contentWork.intent === "create") await enrollVerifiedCreation(ctx, site, article, job);
+  if (!job?.contentWork || job.contentWork.retiredAt !== undefined || job.contentWork.stage === "verified") return;
+  // Recording an old, already-delivered artifact is not permission to enroll
+  // it for edits under changed facts or credentials. Preserve the receipt but
+  // require a separate current page selection when its binding changed.
+  let currentBinding = false;
+  try { currentBinding = job.contentWork.profileHash === confirmedContentProfileHash(site) && job.contentWork.connectionHash === contentConnectionHash(site); } catch { /* Disconnected. */ }
+  if (job.contentWork.intent === "create" && currentBinding) await enrollVerifiedCreation(ctx, site, article, job);
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verified", publishedAt: article.publishedAt, verifiedAt: checkedAt } });
   if (job.contentWork.deadlineAt === site.contentSchedule.nextDeadlineAt) await ctx.db.patch(site._id, {
     contentSchedule: { ...site.contentSchedule, nextDeadlineAt: site.contentSchedule.nextDeadlineAt + site.contentSchedule.intervalMs }, updatedAt: checkedAt });

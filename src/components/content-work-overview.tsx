@@ -33,11 +33,11 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Needs attention</h2>
       {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
       {!state.destination.verified && <p role="alert">Publishing destination verification required.</p>}
-      {!state.bindingCurrent && <p role="alert">Business or destination changed. Review and reconcile existing work before resuming.</p>}
+      {!state.bindingCurrent && <p role="alert">Business or destination changed. <Link className="underline" href="/settings#changed-content-setup">Review changed setup</Link> to replace stale unstarted work safely. Existing costs and deadlines remain.</p>}
       {state.approvalRequired && <p role="alert">Automatic publication consent is not active.</p>}
       {state.funding.status !== "available" && <p role="alert">{state.funding.reason ?? fundingCopy[state.funding.status]}</p>}
       {!state.complete && <p role="alert">Work history is incomplete. No clean-health claim is possible.</p>}
-      {state.work.filter(w => w.failure).map(w => <p role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <span className="text-xs">Work reference: {w.jobId}</span></p>)}
+      {state.work.filter(w => w.failure && !w.retiredAt).map(w => <div role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <details><summary>Work reference</summary>{w.jobId}</details></div>)}
       <p className="text-sm">Delivery acceptance and organic growth are separate. A successful API response alone is not verification.</p>
     </section>
   </div>;

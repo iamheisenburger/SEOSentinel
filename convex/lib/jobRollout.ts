@@ -7,7 +7,7 @@ import {
 } from "./siteDomainBinding.ts";
 
 export type JobRolloutState = {
-  contentWork?: { connectionHash: string; profileHash: string };
+  contentWork?: { connectionHash: string; profileHash: string; retiredAt?: number };
   payload?: unknown;
   rolloutEpoch?: number;
   canonicalDomain?: string;
@@ -49,6 +49,7 @@ export function jobAuthorizedForExecution(
   job: JobRolloutState,
 ): boolean {
   if (!siteExecutionActive(site)) return false;
+  if (job.contentWork?.retiredAt !== undefined) return false;
   if (site.serviceMode === "growth_first") {
     if (!job.contentWork || !site.contentSchedule || site.contentSchedule.paused ||
       job.contentWork.connectionHash !== site.contentSchedule.connectionHash ||

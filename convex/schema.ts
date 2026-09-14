@@ -1229,6 +1229,8 @@ export default defineSchema({
       verificationNextAt: v.optional(v.number()),
       windowWakeId: v.optional(v.id("_scheduled_functions")),
       failure: v.optional(v.string()),
+      retiredAt: v.optional(v.number()),
+      retiredForReviewToken: v.optional(v.string()),
     })),
     siteId: v.optional(v.id("sites")),
     canonicalDomain: v.optional(v.string()),

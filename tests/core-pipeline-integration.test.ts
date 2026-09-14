@@ -60,6 +60,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   longManagedPage?: boolean;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
+  githubReadUnavailable?: () => boolean;
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string } } = {}) {
@@ -168,6 +169,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       const match = url.pathname.match(/^\/repos\/([^/]+)\/website(.*)$/); assert.ok(match);
       const repo = repositories.get(match[1]); assert.ok(repo, "No cross-tenant repository access");
       const path = match[2], method = init.method ?? "GET", body = init.body ? JSON.parse(String(init.body)) : {};
+      if (method === "GET" && options.githubReadUnavailable?.()) return json({ message: "Synthetic receipt-read outage" }, 503);
       if (method === "GET" && path === "") return json({ default_branch: "main", permissions: { push: true } });
       if (method === "GET" && path === "/git/ref/heads/main") { repo.snapshots.set(repo.head, new Map(repo.files)); return json({ object: { sha: repo.head } }); }
       if (method === "GET" && path.startsWith("/contents/")) {
@@ -413,6 +415,255 @@ test("SLC29 owner controls preserve ready reservations and overdue deadlines thr
   assert.equal(delivered.contentWork.deadlineAt, deadline); assert.ok(delivered.contentWork.publishedAt > deadline);
   assert.ok(f.tables.jobs.some(j => j.createdAt > delivered.contentWork.verifiedAt));
   f.assertOffline();
+});
+
+export async function exerciseSetupReconfirmation(f: ReturnType<typeof setup>, stock = true, changeDestination?: () => Promise<void>) {
+  const site = await selectGrowth(f);
+  if (stock) await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const old = (f.tables.jobs ?? []).filter(j => j.contentWork).map(j => ({ id: j._id, articleId: j.articleId,
+    markdown: j.articleId ? f.get(j.articleId)!.markdown : undefined, attempts: j.workerAttempts,
+    calls: JSON.stringify(j.contentWork.providerCalls), reservation: JSON.stringify(f.get(j.providerSpendReservationId)) }));
+  const schedule = { ...f.get(site.id)!.contentSchedule };
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const before = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:control", { siteId: site.id, action: "pause", reviewToken: before.reviewToken });
+  await changeDestination?.();
+  await f.invoke("sites:upsert", { id: site.id, domain: site.domain,
+    siteSummary: f.get(site.id)!.siteSummary + " Customers can also request a maintenance review." });
+  const changed = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(changed.bindingCurrent, false); assert.equal(changed.reconciliation.needed, true);
+  await assert.rejects(f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: before.reviewToken, confirm: true }), /current saved setup/);
+  f.setIdentity("wrong-fixture-owner");
+  await assert.rejects(f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: changed.reviewToken, confirm: true }), /Not authorized/);
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  f.setTime(schedule.nextDeadlineAt + 1);
+  if (!changed.destination.verified && f.get(site.id)!.publishMethod === "wordpress") {
+    const stopped = await f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: changed.reviewToken, confirm: true });
+    assert.equal(stopped.status, "waiting"); assert.ok(stopped.issues.some((i: Fields) => i.code === "connection"));
+    assert.equal(stopped.retired, 0);
+    await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id });
+  }
+  const concurrent = await Promise.all(Array.from({ length: 3 }, () => f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: changed.reviewToken, confirm: true })));
+  const result = concurrent.find(r => r.status === "preparing")!;
+  assert.equal(concurrent.filter(r => r.status === "unchanged").length, 2);
+  assert.equal(result.status, "preparing", JSON.stringify(result)); assert.equal(result.retired, old.length);
+  const jobsAfter = JSON.stringify(f.tables.jobs), reservationsAfter = JSON.stringify(f.tables.provider_spend_reservations);
+  assert.equal((await f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: changed.reviewToken, confirm: true })).status, "unchanged");
+  assert.equal(JSON.stringify(f.tables.jobs), jobsAfter); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), reservationsAfter);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, schedule.nextDeadlineAt);
+  assert.equal(f.get(site.id)!.contentSchedule.intervalMs, schedule.intervalMs);
+  assert.equal(f.get(site.id)!.contentSchedule.timezone, schedule.timezone);
+  for (const previous of old) {
+    const job = f.get(previous.id)!; assert.ok(job.contentWork.retiredAt);
+    assert.equal(job.workerAttempts, previous.attempts); assert.equal(JSON.stringify(job.contentWork.providerCalls), previous.calls);
+    assert.equal(f.get(previous.articleId)!.markdown, previous.markdown);
+    assert.equal(f.get(previous.articleId)!.status, "revision");
+    assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), previous.reservation);
+  }
+  const oldIds = new Set(old.map(j => j.id));
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => !oldIds.has(j._id) && j.contentWork?.stage === "verified") &&
+    f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 200, schedule.nextDeadlineAt + 3_600_000);
+  const delivered = f.tables.jobs.find(j => !oldIds.has(j._id) && j.contentWork?.stage === "verified")!;
+  assert.equal(delivered.contentWork.deadlineAt, schedule.nextDeadlineAt); assert.ok(delivered.contentWork.publishedAt > schedule.nextDeadlineAt);
+  assert.ok(f.tables.jobs.some(j => j.contentWork?.stage === "ready" && j.createdAt > delivered.contentWork.verifiedAt));
+  f.assertOffline();
+  return { deadline: schedule.nextDeadlineAt, publishedAt: delivered.contentWork.publishedAt, verifiedAt: delivered.contentWork.verifiedAt, retired: old.length, ready: 2 };
+}
+
+test("SLC30 explicit changed-setup confirmation retires stale seals and reaches fresh late delivery/refill", async t => {
+  for (const stock of [false, true]) await t.test(stock ? "two ready" : "empty stock", async () => {
+    t.diagnostic(JSON.stringify(await exerciseSetupReconfirmation(setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), stock)));
+  });
+});
+
+test("SLC30 pending, running and uncertain provider work retain their history through changed-setup recovery", async t => {
+  for (const state of ["pending", "cancelled_by_settings", "running", "uncertain_provider"]) await t.test(state, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+    await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    const original = f.tables.jobs.find(j => j.contentWork)!, reservationId = original.providerSpendReservationId;
+    if (state !== "pending") assert.ok(await f.invoke("jobs:claimPending", { siteId: site.id, jobId: original._id, workerToken: "fixture-held-worker" }));
+    if (state === "uncertain_provider") await f.invoke("contentWork:beginProviderCall", { jobId: original._id, workerToken: "fixture-held-worker", key: "fixture-unknown-result", ceilingMicroUsd: 100 });
+    const held = JSON.stringify(f.get(reservationId));
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    if (["running", "uncertain_provider"].includes(state)) {
+      // Persisted legacy/callback checkpoint: binding changed while its old
+      // worker lease still exists. Normal upsert cancellation is tested apart.
+      f.get(site.id)!.siteSummary += " Customers may request a review.";
+    } else await f.invoke("sites:upsert", { id: site.id, domain: site.domain, siteSummary: f.get(site.id)!.siteSummary + " Customers may request a review." });
+    const request = { siteId: site.id, reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken, confirm: true };
+    let result = await f.invoke("contentWork:reconfirm", request);
+    if (["running", "uncertain_provider"].includes(state)) {
+      assert.equal(result.status, "waiting"); assert.ok(result.issues.some((i: Fields) => i.code === "worker"));
+      assert.equal(f.get(original._id)!.contentWork.retiredAt, undefined); assert.equal(JSON.stringify(f.get(reservationId)), held);
+      f.setTime(f.get(original._id)!.leaseExpiresAt + 1);
+      await f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: original._id, expectedWorkerToken: "fixture-held-worker" });
+      result = await f.invoke("contentWork:reconfirm", request);
+    }
+    assert.equal(result.status, "preparing", JSON.stringify(result));
+    const retired = f.get(original._id)!; assert.ok(retired.contentWork.retiredAt);
+    if (state === "uncertain_provider") {
+      assert.equal(JSON.stringify(f.get(reservationId)), held); assert.equal(retired.contentWork.providerCalls[0].state, "started");
+    } else assert.ok(f.get(reservationId)!.releasedAt, "Only a proven never-started provider envelope closes through normal terminal accounting");
+    assert.equal(f.modelCalls.length, 0);
+    f.setIdentity(null);
+    await pumpUntil(f, () => f.tables.jobs.some(j => j._id !== original._id && j.contentWork?.stage === "verified") &&
+      f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 220, f.now() + 3_600_000);
+    assert.equal(f.get(original._id)!.contentWork.retiredAt, retired.contentWork.retiredAt);
+    f.assertOffline();
+  });
+});
+
+export async function rotateFixtureGithub(f: ReturnType<typeof setup>, owner = f.get(f.sites[0].id)!.repoOwner) {
+  const site = f.sites[0];
+  await f.invoke("sites:setGithubTokenInternal", { siteId: site.id, githubToken: "synthetic-rotated-only", repoOwner: owner, repoName: "website", repoDefaultBranch: "main" });
+  await f.invoke("sites:recordPublisherDestinationReceiptInternal", { siteId: site.id, receipt: expectedPublisherDestinationReceipt({
+    site: f.get(site.id)! as never, ownerAccountKey: accountDeletionKey(`synthetic-owner-${site.domain}`), verifiedAt: f.now() }) });
+}
+
+test("SLC30 changed GitHub credentials and repository require fresh seals and actual replenishment", async t => {
+  for (const destination of [false, true]) await t.test(destination ? "repository" : "credentials", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    await exerciseSetupReconfirmation(f, true, async () => {
+      const owner = f.sites[0].name.toLowerCase(), nextOwner = destination ? owner + "-new" : owner;
+      // Synthetic replacement repo serves the same owned fixture website.
+      if (destination) f.repositories.set(nextOwner, f.repositories.get(owner)!);
+      if (destination) await f.invoke("sites:upsert", { id: f.sites[0].id, domain: f.sites[0].domain, repoOwner: nextOwner, repoName: "website" });
+      await rotateFixtureGithub(f, nextOwner);
+    });
+  });
+});
+
+export async function exerciseReceiptSetup(f: ReturnType<typeof setup>, selectedPageId?: string, rotate?: () => Promise<void>) {
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verify"));
+  const delivered = f.tables.jobs.find(j => j.contentWork?.stage === "verify")!, before = structuredClone(delivered);
+  const receipts = JSON.stringify(selectedPageId ? f.get(delivered.contentWork.revisionId)!.receipt : f.get(delivered.articleId)!.publicationReceipt);
+  const oldJobs = new Set(f.tables.jobs.map(j => j._id)), calls = f.modelCalls.length;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  if (selectedPageId) await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: selectedPageId });
+  const revokedVersion = selectedPageId ? f.get(selectedPageId)!.editable.version : null;
+  await rotate?.();
+  await f.invoke("sites:upsert", { id: site.id, domain: site.domain, siteSummary: f.get(site.id)!.siteSummary + " Owner-confirmed follow-up service." });
+  const request = { siteId: site.id, reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken, confirm: true };
+  const waiting = await f.invoke("contentWork:reconfirm", request);
+  assert.equal(waiting.status, "waiting"); assert.ok(waiting.issues.some((i: Fields) => i.code === "verification"));
+  assert.equal(f.get(delivered._id)!.contentWork.retiredAt, undefined);
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.get(delivered._id)!.contentWork.stage === "verified");
+  assert.equal(f.modelCalls.length, calls, "Reconciliation is read-only, not new generation");
+  assert.equal(JSON.stringify(selectedPageId ? f.get(delivered.contentWork.revisionId)!.receipt : f.get(delivered.articleId)!.publicationReceipt), receipts);
+  assert.equal(f.get(delivered._id)!.workerAttempts, before.workerAttempts);
+  if (selectedPageId) {
+    assert.equal(f.get(selectedPageId)!.editable.active, false); assert.equal(f.get(selectedPageId)!.editable.version, revokedVersion);
+  } else assert.ok(!f.tables.pages.some(p => p.editable?.managedArticleId === delivered.articleId), "Changed setup does not enroll an old artifact under fresh permission");
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  if (f.get(site.id)!.publishMethod === "wordpress") await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id });
+  assert.equal((await f.invoke("contentWork:reconfirm", request)).status, "preparing");
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => !oldJobs.has(j._id) && j.contentWork?.stage === "verified") &&
+    f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 240, deadline + 3_600_000);
+  if (selectedPageId) assert.equal(f.get(selectedPageId)!.editable.active, false);
+  f.assertOffline();
+}
+
+test("SLC30 old delivery receipts reconcile after changed credentials without restoring permissions", async t => {
+  for (const selected of [false, true]) await t.test(selected ? "revoked selected page" : "new creation", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const page = selected ? await selectExistingPage(f) : null;
+    await exerciseReceiptSetup(f, page?.pageId, () => rotateFixtureGithub(f));
+  });
+});
+
+test("SLC30 expired selected leases retire only before I/O; attempted changes require retained owner disposition", async t => {
+  for (const attempted of [false, true]) await t.test(attempted ? "attempted revision" : "pristine revision", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const page = await selectExistingPage(f), site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+    const job = f.tables.jobs.find(j => j.contentWork?.intent === "improve")!;
+    f.setTime(job.contentWork.windowStartAt);
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.ok(await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "retained-selected-worker" }));
+    const claim = await f.invoke("contentImprovements:claim", { siteId: site.id, jobId: job._id, workerToken: "retained-selected-worker" });
+    if (attempted) await f.invoke("contentImprovements:attempted", { siteId: site.id, jobId: job._id, workerToken: "retained-selected-worker", revisionId: claim.revision._id });
+    const revision = structuredClone(f.get(claim.revision._id)!), oldJobs = new Set(f.tables.jobs.map(j => j._id));
+    const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt, ledger = JSON.stringify(f.get(job.providerSpendReservationId));
+    // Durable legacy/callback drift while the external lease is still retained.
+    f.get(site.id)!.siteSummary += " Confirmed maintenance-review option.";
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: page.pageId });
+    const request = { siteId: site.id, reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken, confirm: true };
+    assert.equal((await f.invoke("contentWork:reconfirm", request)).status, "waiting");
+    f.setTime(Math.max(f.get(site.id)!.publicationLeaseExpiresAt, f.get(job._id)!.leaseExpiresAt) + 1);
+    await f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: job._id, expectedWorkerToken: "retained-selected-worker" });
+    if (attempted) {
+      const blocked = await f.invoke("contentWork:reconfirm", request);
+      assert.equal(blocked.status, "waiting"); assert.ok(blocked.issues.some((i: Fields) => i.code === "uncertain_delivery" && i.articleId === job.articleId));
+      await f.invoke("publishedRevisions:abandonUnverifiedDelivery", { revisionId: revision._id, confirmation: "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT" });
+    }
+    assert.equal((await f.invoke("contentWork:reconfirm", request)).status, "preparing");
+    const retained = f.get(revision._id)!;
+    assert.equal(retained.attempts, revision.attempts); assert.equal(retained.nextArtifactHash, revision.nextArtifactHash);
+    assert.equal(retained.attemptedAt, revision.attemptedAt); assert.equal(retained.receipt, undefined);
+    assert.equal(Boolean(retained.ambiguityDispositionAt), attempted); assert.equal(f.get(site.id)!.publicationLeaseOwner, undefined);
+    assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), ledger); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+    f.setIdentity(null);
+    await pumpUntil(f, () => f.tables.jobs.some(j => !oldJobs.has(j._id) && j.contentWork?.stage === "verified") &&
+      f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 240, f.now() + 3_600_000);
+    assert.equal(f.get(page.pageId)!.editable.active, false); f.assertOffline();
+  });
+});
+
+export async function exerciseUncertainSetup(f: ReturnType<typeof setup>, restoreTransport: () => void) {
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.articles?.some(a => a.publicationOutcomeUnverifiedAt), 180);
+  const article = f.tables.articles.find(a => a.publicationOutcomeUnverifiedAt)!, job = f.tables.jobs.find(j => j.articleId === article._id)!;
+  const artifact = article.markdown, ledger = JSON.stringify(f.get(job.providerSpendReservationId)), calls = f.modelCalls.length;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  await assert.rejects(f.invoke("sites:upsert", { id: site.id, domain: site.domain, siteSummary: "Changed while delivery is uncertain" }), /locked/);
+  const ownerReview = await f.invoke("articles:getPublicationAmbiguityReview", { articleId: article._id });
+  assert.ok(ownerReview.initial.reviewAt);
+  f.setTime(ownerReview.initial.reviewAt + 1);
+  await f.invoke("articles:abandonUnverifiedPublication", { articleId: article._id, confirmation: "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT" });
+  await f.invoke("sites:upsert", { id: site.id, domain: site.domain, siteSummary: f.get(site.id)!.siteSummary + " Owner confirmed the retained uncertain article must not be replayed." });
+  restoreTransport();
+  if (f.get(site.id)!.publishMethod === "wordpress") await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id });
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  const result = await f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken, confirm: true });
+  assert.equal(result.status, "preparing", JSON.stringify(result));
+  assert.equal(f.get(article._id)!.markdown, artifact); assert.ok(f.get(article._id)!.publicationAttemptedAt);
+  assert.equal(f.get(article._id)!.publicationReceipt, undefined); assert.equal(f.get(article._id)!.status, "rejected");
+  assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), ledger); assert.equal(f.modelCalls.length, calls);
+  const oldJobs = new Set(f.tables.jobs.map(j => j._id)); f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => !oldJobs.has(j._id) && j.contentWork?.stage === "verified") &&
+    f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 260, f.now() + 3_600_000);
+  const fresh = f.tables.jobs.filter(j => !oldJobs.has(j._id));
+  assert.ok(fresh.every(j => j.payload.topicId !== job.payload.topicId), "Never replay the possibly delivered intent");
+  assert.equal(fresh.find(j => j.contentWork.stage === "verified")!.contentWork.deadlineAt, deadline);
+  f.assertOffline();
+}
+
+test("SLC30 lost external acknowledgement requires exact owner disposition, preserves audit, then publishes a different fresh intent", async () => {
+  let outage = false, dropped = false;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], lostCommitResponses: 1,
+    githubBeforeWrite: async () => { if (!dropped) { outage = true; dropped = true; } }, githubReadUnavailable: () => outage });
+  await exerciseUncertainSetup(f, () => { outage = false; });
+});
+
+test("SLC30 reconfirmation does not mint a spending allowance when existing headroom is exhausted", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.add("provider_spend_reservations", { siteId: site.id, userId: `synthetic-owner-${site.domain}`, purpose: "content_work", trigger: "existing-fixture-commitment",
+    reservedMicroUsd: 28_000_000, reservationDay: "2026-09-11", reservationMonth: "2026-09", createdAt: START });
+  const before = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length, deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  await f.invoke("sites:upsert", { id: site.id, domain: site.domain, siteSummary: f.get(site.id)!.siteSummary + " Owner-confirmed clarification." });
+  assert.equal((await f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: (await f.invoke("contentWork:readiness", { siteId: site.id })).reviewToken, confirm: true })).status, "preparing");
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_budget_exhausted");
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), before); assert.equal(f.modelCalls.length, calls);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline); assert.equal(f.get(site.id)!.contentSchedule.active, false); f.assertOffline();
 });
 
 test("SLC29 safe readiness distinguishes actual spend, conservative holds, available capacity and missing pricing", async () => {

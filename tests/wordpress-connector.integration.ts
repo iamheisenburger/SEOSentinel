@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph, createEmptyContentSite, exerciseReadyPause } from './core-pipeline-integration.test.ts';
+import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph, createEmptyContentSite, exerciseReadyPause, exerciseSetupReconfirmation, exerciseReceiptSetup, exerciseUncertainSetup } from './core-pipeline-integration.test.ts';
 import { START } from './helpers/core-pipeline-fixture.ts';
 import { correctionVisibleText } from '../convex/lib/publishedCorrection.ts';
 import { renderSafePublicationHtml } from '../convex/lib/safeMarkdownHtml.ts';
@@ -17,6 +17,53 @@ function command(input: Json): Json {
   assert.equal(p.status, 0, p.stderr + p.stdout.slice(0, 1000));
   return JSON.parse(p.stdout);
 }
+
+test('real WordPress SLC30 changed setup and old delivery reconciliation reach new publication and fresh refill', async t => {
+  for (const scenario of ['empty', 'ready', 'rotated_credentials', 'creation_receipt', 'revoked_selected_receipt', 'unknown_delivery']) await t.test(scenario, async () => {
+    const local = command({ operation: 'setup' });
+    const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+    const suffix = randomUUID().slice(0, 8), domain = `reconfirm-${suffix}.example`;
+    let outage = false, dropped = false;
+    const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+      transport: async (url, init) => {
+        assert.equal(url.hostname, domain);
+        if (outage && url.pathname.startsWith('/wp-json/')) return new Response('{"code":"synthetic_receipt_read_outage"}', { status: 503 });
+        const response = await fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+        if (scenario === 'unknown_delivery' && !dropped && response.ok && url.pathname.endsWith('/pentra/v1/write') && JSON.parse(String(init.body)).operation === 'create') {
+          outage = true; dropped = true;
+          return new Response('{"code":"synthetic_acknowledgement_lost"}', { status: 503 });
+        }
+        return response;
+      } } });
+    const site = f.sites[0]; await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: site.id });
+    const rotate = async () => {
+      // Rotate only this local fixture's generated application password.
+      const next = command({ operation: 'setup' });
+      const [wpUsername, wpAppPassword] = Buffer.from(next.auth, 'base64').toString().split(':');
+      await f.invoke('sites:upsert', { id: site.id, domain, wpUsername, wpAppPassword });
+      await f.invoke('publisher:verifyPublicationDestination', { siteId: site.id });
+    };
+    if (scenario === 'unknown_delivery') await exerciseUncertainSetup(f, () => { outage = false; });
+    else if (scenario.endsWith('receipt')) {
+      let pageId: string | undefined;
+      if (scenario === 'revoked_selected_receipt') {
+        const p = command({ operation: 'create', slug: `selected-${suffix}`, title: slcBusinesses[0].keywords[0],
+          content: '<p>Preserve the confirmed customer facts and original explanation. Ask an authorized reviewer to clarify uncertainties before making a decision.</p>' });
+        f.setIdentity(`synthetic-owner-${domain}`);
+        const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
+        pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, reviewToken: preview.reviewToken, confirm: true });
+        f.get(site.id)!.gscDateEpochs = [{ date: '2026-09-10', syncEpoch: 'reconfirmation-selected' }];
+        f.add('search_performance', { siteId: site.id, date: '2026-09-10', syncEpoch: 'reconfirmation-selected', page: preview.url, query: slcBusinesses[0].keywords[0],
+          syncVersion: 2, syncedAt: f.now(), clicks: 1, impressions: 60, ctr: 1 / 60, position: 12, createdAt: f.now() });
+        f.setIdentity(null);
+      }
+      await exerciseReceiptSetup(f, pageId, rotate);
+    } else await exerciseSetupReconfirmation(f, scenario !== 'empty', scenario === 'rotated_credentials' ? rotate : undefined);
+    const delivered = f.tables.jobs.filter(j => j.contentWork?.stage === 'verified').sort((a,b) => b.contentWork.verifiedAt - a.contentWork.verifiedAt)[0].contentWork;
+    t.diagnostic(JSON.stringify({ scenario, database: local.database, provider: 'synthetic', wordpressCore: 'real loopback',
+      deadline: delivered.deadlineAt, publishedAt: delivered.publishedAt, verifiedAt: delivered.verifiedAt, ready: 2 }));
+  });
+});
 
 test('real WordPress/core database: authentication, permissions, CAS, replay, edit races and rollback', async t => {
   const env = command({ operation: 'setup' });
