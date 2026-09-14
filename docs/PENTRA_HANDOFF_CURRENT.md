@@ -1,6 +1,131 @@
 # Pentra — fresh-task handoff
 
-## Current37: both migrated; Anthropic credits exhausted; local diagnostic review
+## Current40: accepted retirement released; exact-site state verified; delivery incomplete
+
+Assignment `supervisor-20260914-slc-release-access-40`. Reviewed retirement39
+`1c632853acf0dac9b3ea8add6ce965f66a722e0b` is now deployed to Convex and pushed
+by fast-forward to origin/main. No runtime code was changed in40. Recovery38
+`47f82d108d801b813b6acb88c7515e060c3f36d0` was already released in39.
+The sole plan remains the parent `docs/PENTRA_SLC_PLAN.md`; this is the current
+worker handoff, not a new plan. Sections37 and older below are historical.
+
+### Access diagnosis and release evidence
+
+The39 read failed before credentials loaded with the CLI's selected-project
+`noAccess` branch. Installed CLI maps deployment lookup `DeploymentNotFound` or
+`ProjectNotFound` to that branch;39 did not retain which HTTP/code caused it.
+Do not reinterpret this as backend disablement, owner denial or revoked access.
+
+At 2026-09-14 22:25:31.357 UTC the SAME explicit `prod:wary-starfish-773`
+selector and saved global CLI `accessToken` mechanism returned HTTP200 for the
+exact deployment-to-project lookup, with authorization present and no error code.
+There was no credential, permission, login, environment-file or target change.
+Default `.env`, `.env.local` and `convex.json` are absent in this checkout;
+there was no deploy key, override token or provision-host override. The existing
+target file also classifies as the same production target without a deploy key.
+Only booleans/type/target equality were printed, never file contents or tokens.
+
+The earlier documented target-only `convex --env-file` trap skips global login
+initialization, but that flag was NOT used by the failed39 read, so it is not
+an established explanation for39. Current access is restored/reproven without
+a local fix; the underlying earlier denial remains unconfirmed. No interactive
+setup, auth reset, project/team enumeration or permission bypass occurred.
+Two ordinary exact-site internal reads then succeeded22:25:52.236/53.773 UTC.
+Admin CLI access is NOT genuine customer-session acceptance.
+
+All free gates were rerun on the unchanged clean accepted39 source: full1726
+discovered /1725 passed /0 failed /1 existing skip,130983.965458ms; local browser
+32 passed /2 genuine-auth skips,6.1s; types/build/schema61 tables296 indexes
+against47f82d/secrets688/full dependency audit0/whitespace pass; lint0 errors,
+157 existing warnings. The parent production content history was already an
+ancestor, and no merge or force push was required.
+
+Convex push from exact clean1c63285 completed by22:29:17 UTC; schema validation
+succeeded, no indexes deleted. Origin/main fast-forwarded47f82d→1c63285.
+Vercel Production6447744117 succeeded at22:30:14 UTC for exact1c63285:
+[immutable build](https://seo-sentinel-xcnby37b7-arshads-projects-836ebfbd.vercel.app).
+Actual pentra.dev public desktop/mobile smoke passed8 with2 genuine-auth skips,
+5.1s. [Hosted CI34904370199](https://github.com/iamheisenburger/SEOSentinel/actions/runs/34904370199),
+job104177483917, completed SUCCESS at22:36:48 UTC for exact1c63285.
+Hosted full suite:1726 discovered /1725 passed /0 failed /1 existing skip,
+239981.684956ms; browser32 passed /2 genuine-auth skips,47.1s. Hosted types,
+build, schema61/296, secrets688 and audit0 passed; lint0 errors157 warnings.
+This completes accepted39's release/access verification, not content acceptance.
+
+### Actual post-release evidence — only the two authorized tenants
+
+At22:29:32.899–22:29:39.360 UTC, each exact-site shared legacy-fleet state and
+demand/evidence readiness query returned null. This verifies the deployed
+retirement without enumerating any fleet or touching other tenants.
+
+Credential-free exact-site/job/reservation/publication projections succeeded
+at22:29:33.495 UTC. The initial historical jobs page hit its101-row bound and
+was NOT used to assert complete readiness. A separate stage/status-indexed
+read at22:30:17.109 UTC completed each relevant inventory: BOTH sites have
+0 ready items,1 failed content job,0 active content jobs and0 active legacy jobs.
+
+| Current verified field | Pentra | LeadPilot |
+| --- | --- | --- |
+| Site | `jh74txye54jna4t85m6y7p4d6h82v9ab` | `jh7cccny67df67rdm4jp65tmtn8am982` |
+| Mode / rollout | growth_first / warm | growth_first / warm |
+| Schedule | inactive, unpaused | inactive, unpaused |
+| Ready buffer | 0/2 | 0/2 |
+| Same failed job | `j9703g7paa6atyya4fzr56ngs58ecn07` | `j973nq40csygxhcg0bchsmx6zd8ecq9h` |
+| Worker attempts / calls / publication attempts | 1 /1 /0 | 1 /1 /0 |
+| Retained reservation | `n576sgrs11b9dzc5mg0fjbm21n8echcx` | `n5727h3mka0ekryf5a90ggsj8s8edf7v` |
+| Held / settled / released | USD2.50 /none /none | USD2.50 /none /none |
+| New article / publication / verification | none | none |
+| Original interval | 86,400,000ms (daily) | 28,800,000ms (every8h) |
+
+Both retain the exact2026-09-14 22:14:14.420–22:19:14.420 UTC delivery window.
+It is missed; no deadline was moved. Neither job has a lease, next retry,
+recovery attempt, call result, known actual cost, restoration attestation or
+restoration request. Historical calls remain `started` with
+`content_provider_result_ambiguous_reconciliation_required`;38 intentionally
+does not rewrite/retry those rows merely because its recovery code is deployed.
+Their retained37 run evidence identified Anthropic400 insufficient credit.
+No new provider response or actual funding event is established in40.
+
+The latest stored publications are still OLD, not a new SLC cycle:
+
+- Pentra:2026-09-12 10:24:14.649 UTC; stored live verification10:24:16.851 UTC,
+  [artifact](https://pentra.dev/blog/ai-content-automation-governance-workflow).
+- LeadPilot:2026-09-07 22:15:34.409 UTC; stored live verification22:18:06.407 UTC,
+  [artifact](https://leadpilot.chat/blog/saas-lead-scoring-framework).
+
+These are retained publication receipts, not fresh HTTP artifact verification
+in40. Older missed commitments remain PentraSep13 10:24:14.649 UTC and
+LeadPilotSep8 06:15:34.409 UTC. LeadPilot fresh discovery, both-site fresh quality,
+scheduled new delivery and repeated consumption/refill remain unaccepted.
+
+### Money and remaining acceptance
+
+Fresh bounded September reservation projections for each authorized site are
+complete and unchanged: Pentra actual1.436640 + settled conservative ceiling5
++ held7.25 =13.686640; LeadPilot actual1.555920 + settled conservative ceiling7
++ held8.8 =17.355920. Combined ordinary31.042560 gives account32 headroom AT MOST
+0.957440. The ordinary32 limit, old4 allowance and35 fleet limit remain unchanged;
+fleet contents/other tenants were not enumerated. Ordinary authorization expiry
+and account-month reset:2026-10-01 00:00:00 UTC.
+
+The SAME original independent20 authorization
+`sn756ejbtp5marqw1chdpdskp58e0j8y` is active with no expiry/stop. Its two authorized
+site records hold5 total,0 VERIFIED settlement and15 remaining. Zero verified
+settlement is NOT verified zero provider billing. Numeric provider wallet
+balance/reset are unknown. No new approval/grant, cap/attempt/reservation reset,
+provider call/probe/switch, funding-restoration attestation, owner Retry, purchase,
+top-up, backlinks work or new architecture/task/automation occurred in40.
+
+Authenticated customer acceptance remains incomplete: browser tests explicitly
+skip it without a genuine owner session;39's available profile redirected exact
+Pentra settings to sign-in, and that tab is no longer available in40. No session
+or security settings were changed. Do not substitute admin `--identity` reads.
+This release/access result is NOT SLC completion or monetisation readiness.
+Attributable SEO growth remains separate;14days is the minimum BETWEEN
+discretionary revisions of the same page. Stop at the release result; further
+funding recovery requires actual funding evidence and the existing authority.
+
+## Historical37: both migrated; Anthropic credits exhausted; local diagnostic review
 
 Assignment `supervisor-20260914-slc-live-migration-37`. Read the CURRENT37 section
 of `docs/PENTRA_SLC_FIRST_LIVE_CYCLE_2026-09-14.md`;36 below is historical.
