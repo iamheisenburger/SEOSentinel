@@ -1,6 +1,37 @@
 # Pentra — fresh-task handoff
 
-## Current: independent validation integration33, local review only
+## Current: dormant release34 and GitHub readiness
+
+Assignment `supervisor-20260914-slc-dormant-release-34`. Read
+`docs/PENTRA_SLC_DORMANT_RELEASE_2026-09-14.md`. Independently accepted source
+`40c4d90b6e970a720485df9d642a510f1a92e3d6` is now deployed to Convex and Vercel
+Production/current `pentra.dev`, without a source merge. Convex added only
+the validation index, no deletion; Vercel completed 2026-09-14 20:22:09 UTC.
+Exact-SHA hosted CI 34892394020 passed at 20:27:37 UTC: 1,674 tests / 1,673
+passed / 0 failed / 1 existing skip; browser 26 passed / 2 genuine auth skips;
+types/build/schema61 tables296 indexes/682-file secrets/audit pass; lint0 errors,
+157 existing warnings. The final documentation-only handoff remains local.
+
+Independent supervisor acceptance included 35 focused and 132 broader passes,
+plus four preprepared items publishing/verifying after grant stop with no new
+calls/reservations and correctly blocked refill. It did not accept production.
+
+Both exact unchanged GitHub destinations now verify: Pentra at 20:23:23.499 UTC,
+LeadPilot at 20:23:25.221 UTC, main branches and generations 3/0 unchanged.
+Pentra's existing setup request also reconciled to complete; no new setup request
+was created. Production pricing remains absent; neither site has a content
+schedule, validation binding or independent grant. Independent consumption zero;
+all old budget/settlement/hold fields, epochs and deadlines compare unchanged.
+
+Actual customer Chrome route still shows the fully loaded sign-in form. No
+identity selected or repeated owner question. Production public browser 8 passed /
+2 genuine auth skips; authenticated desktop/mobile acceptance remains open.
+Pentra buffer 0/4, LeadPilot 0/12; original missed deadlines and last publications
+are recorded in the report. No fresh live delivery/refill, migration, pricing
+activation or SaaS acceptance is claimed. USD 0 provider spend, total20 inactive
+and old4/history unchanged. Stop for review before any further activation or work.
+
+## Historical: independent validation integration33, accepted then released in34
 
 Assignment `supervisor-20260914-slc-validation-integration-33`. Read
 `docs/PENTRA_SLC_VALIDATION_INTEGRATION_2026-09-14.md`. Based on accepted local
