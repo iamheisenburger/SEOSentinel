@@ -877,7 +877,7 @@ export default defineSchema({
   articles: defineTable({
     contentWorkCreationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress")),
       sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()),
-      permission: v.optional(v.string()), connectionHash: v.string(), profileHash: v.string() })),
+      permission: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()), connectionHash: v.string(), profileHash: v.string() })),
     contentWorkSourceJobId: v.optional(v.id("jobs")),
     contentWorkConsumedByJobId: v.optional(v.id("jobs")),
     siteId: v.id("sites"),

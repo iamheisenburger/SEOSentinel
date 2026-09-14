@@ -13,6 +13,7 @@ import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
 import { verifyCorrectivePatch } from "./lib/contentCorrection";
+import { closeVerifiedContentWake } from "./jobs";
 
 async function correctionOwner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
@@ -158,10 +159,10 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     !["publish","verify","verified"].includes(cw.stage)) throw new Error("Improvement lost its reviewed artifact");
   if (!rollback && !correction) assertSafeImprovement(page.editable, article, cw.editTarget);
   let revision = cw.revisionId ? await ctx.db.get(cw.revisionId) : null;
-  if (revision?.receipt) return { revision, page, article, site, rollback, correction, editTarget: cw.editTarget, deferredUntil: null };
+  if (revision?.receipt) return { revision, page, article, site, rollback, correction, editTarget: cw.editTarget, jobContentWork: cw, deferredUntil: null };
   if (Date.now() < cw.windowStartAt) throw new Error("Improvement is outside its fixed delivery window");
   if (site.publicationLeaseOwner && site.publicationLeaseOwner !== revision?.leaseOwner &&
-    (site.publicationLeaseExpiresAt ?? 0) > Date.now()) return { revision: null, page, article, site, rollback, correction, editTarget: cw.editTarget, deferredUntil: site.publicationLeaseExpiresAt! };
+    (site.publicationLeaseExpiresAt ?? 0) > Date.now()) return { revision: null, page, article, site, rollback, correction, editTarget: cw.editTarget, jobContentWork: cw, deferredUntil: site.publicationLeaseExpiresAt! };
   // A vanished lease does not erase an uncertain write on another record.
   for (const status of ["leased","attempted","unverified"] as const) {
     const others = await ctx.db.query("published_article_revisions").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", status)).take(101);
@@ -190,7 +191,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
   if (revision.attempts >= 3) throw new Error("Improvement publication retry bound reached; reconciliation required");
   await ctx.db.patch(revision._id, { status: "leased", leaseOwner: args.workerToken, leaseStartedAt: Date.now(), updatedAt: Date.now() });
   await ctx.db.patch(site._id, { publicationLeaseOwner: args.workerToken, publicationLeaseExpiresAt: Date.now() + PUBLICATION_LEASE_MS });
-  return { revision: (await ctx.db.get(revision._id))!, page, article, site, rollback, correction, editTarget: cw.editTarget, deferredUntil: null };
+  return { revision: (await ctx.db.get(revision._id))!, page, article, site, rollback, correction, editTarget: cw.editTarget, jobContentWork: cw, deferredUntil: null };
 } });
 export const attempted = internalMutation({ args: { ...claimArgs, revisionId: v.id("published_article_revisions") }, handler: async (ctx, args) => {
   const job = await ctx.db.get(args.jobId), site = await ctx.db.get(args.siteId), revision = await ctx.db.get(args.revisionId);
@@ -208,33 +209,50 @@ export const attempted = internalMutation({ args: { ...claimArgs, revisionId: v.
   if (revision.receipt) return;
   await ctx.db.patch(revision._id, { status: "attempted", attemptedAt: revision.attemptedAt ?? Date.now(),
     attempts: revision.attempts + 1, updatedAt: Date.now() });
+  if (page?.editable?.kind === "wordpress") await ctx.scheduler.runAt(site.publicationLeaseExpiresAt!, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id });
 } });
 const receipt = v.object({ method: v.union(v.literal("github"), v.literal("wordpress")), deliveryKey: v.string(), contentHash: v.string(),
   externalId: v.string(), url: v.string(), status: v.string(), receivedAt: v.number() });
 export const delivered = internalMutation({ args: { ...claimArgs, revisionId: v.id("published_article_revisions"), receipt,
-  sourceContent: v.string(), sourceRevision: v.string(), permission: v.optional(v.string()) }, handler: async (ctx, args) => {
+  sourceContent: v.string(), sourceRevision: v.string(), permission: v.optional(v.string()), receiptRecoveryLeaseOwner: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()) }, handler: async (ctx, args) => {
   const job = await ctx.db.get(args.jobId), site = await ctx.db.get(args.siteId), r = await ctx.db.get(args.revisionId);
   if (!job?.contentWork || !site || job.siteId !== site._id || r?.contentWorkJobId !== job._id ||
     r.leaseOwner !== args.workerToken || !r.attemptedAt || args.receipt.deliveryKey !== `pentra:${r.revisionKey}` ||
     args.receipt.contentHash !== r.nextArtifactHash || !args.sourceRevision || !args.sourceContent ||
     args.receipt.method !== r.baseReceipt.method || args.receipt.receivedAt < r.attemptedAt) throw new Error("Improvement receipt mismatch");
+  if (r.ambiguityDispositionAt || job.contentWork.retiredAt || site.deletionStatus || site.accountDeletionRequestedAt) throw new Error("Improvement receipt retired");
+  if (args.receiptRecoveryLeaseOwner && (r.liveVerificationLeaseOwner !== args.receiptRecoveryLeaseOwner ||
+    (r.liveVerificationLeaseExpiresAt ?? 0) <= Date.now() || r.selectedSource?.connectionHash !== contentConnectionHash(site))) throw new Error("Improvement receipt recovery claim changed");
   // Receipt recording survives revocation after an already-authorized write.
   // It does not authorize another external mutation or call it live-verified.
   await ctx.db.patch(r._id, { status: "verification_pending", receipt: { ...args.receipt, revisionKey: r.revisionKey,
     baseContentHash: r.baseArtifactHash, baseExternalId: r.baseReceipt.externalId },
-    deliveredSource: { content: args.sourceContent, revision: args.sourceRevision, permission: args.permission },
+    deliveredSource: { content: args.sourceContent, revision: args.sourceRevision, permission: args.permission, ...(args.permissionRevokedAtReceipt ? { permissionRevokedAtReceipt: true } : {}) },
+    liveVerificationLeaseOwner: undefined, liveVerificationLeaseExpiresAt: undefined,
     deliveryVerifiedAt: Date.now(), leaseOwner: undefined, leaseStartedAt: undefined, updatedAt: Date.now() });
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verify", verificationNextAt: Date.now(), publishedAt: args.receipt.receivedAt } });
   if (site.publicationLeaseOwner === args.workerToken) await ctx.db.patch(site._id, { publicationLeaseOwner: undefined, publicationLeaseExpiresAt: undefined });
   await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id });
 } });
-export const claimVerification = internalMutation({ args: { siteId: v.id("sites"), jobId: v.id("jobs"), leaseOwner: v.string() }, handler: async (ctx, args) => {
+export const claimVerification = internalMutation({ args: { siteId: v.id("sites"), jobId: v.id("jobs"), leaseOwner: v.string(), expectedLeaseOwner: v.optional(v.string()) }, handler: async (ctx, args) => {
   const site = await ctx.db.get(args.siteId), job = await ctx.db.get(args.jobId), cw = job?.contentWork;
-  if (!site || !job || job.siteId !== site._id || !cw?.revisionId || cw.intent !== "improve" || cw.stage !== "verify") return null;
+  if (!site || site.deletionStatus || site.accountDeletionRequestedAt || !job || job.siteId !== site._id || !cw?.revisionId || cw.intent !== "improve" || cw.retiredAt) return null;
   const revision = await ctx.db.get(cw.revisionId);
   // A receipt-backed public GET reconciles the already-written immutable URL;
   // it does not authorize use of a changed connection or new page permission.
-  if (revision?.siteId !== site._id || revision.contentWorkJobId !== job._id || !revision.receipt) return null;
+  if (revision?.siteId !== site._id || revision.contentWorkJobId !== job._id || revision.ambiguityDispositionAt) return null;
+  if (args.expectedLeaseOwner !== undefined && revision.liveVerificationLeaseOwner !== args.expectedLeaseOwner) return null;
+  const article = job.articleId ? await ctx.db.get(job.articleId) : null;
+  const rollback = cw.rollbackOfRevisionId ? await ctx.db.get(cw.rollbackOfRevisionId) : null;
+  if (!revision.receipt) {
+    const e = revision.selectedSource;
+    if (!revision.attemptedAt || !revision.leaseOwner || e?.kind !== "wordpress" || !article || article.siteId !== site._id || revision.articleId !== article._id ||
+      revision.nextArtifactHash !== cw.approvedArtifactHash || e.connectionHash !== cw.connectionHash || e.connectionHash !== contentConnectionHash(site) ||
+      site.publicationLeaseOwner !== revision.leaseOwner || (site.publicationLeaseExpiresAt ?? Infinity) > Date.now() ||
+      (revision.leaseStartedAt ?? Infinity) + PUBLICATION_LEASE_MS > Date.now() ||
+      (job.status === "running" && (job.leaseExpiresAt ?? Infinity) > Date.now())) return null;
+    if (cw.operation === "rollback" && (!rollback || rollback.siteId !== site._id || rollback.selectedPageId !== revision.selectedPageId)) return null;
+  } else if (cw.stage !== "verify") return null;
   if ((revision.liveVerificationLeaseExpiresAt ?? 0) > Date.now() || (cw.verificationNextAt ?? 0) > Date.now()) return null;
   if (revision.liveVerificationAttempts >= 5) {
     await ctx.db.patch(revision._id, { status: "failed", failureDetail: "Bounded verification attempts exhausted; reconcile live destination", updatedAt: Date.now() });
@@ -247,18 +265,28 @@ export const claimVerification = internalMutation({ args: { siteId: v.id("sites"
   await ctx.db.patch(job._id, { contentWork: { ...cw, verificationNextAt: expiresAt } });
   // Durable watchdog survives the action dying after its claim. Duplicate
   // wakeups cannot consume attempts while the exact verifier lease is active.
-  await ctx.scheduler.runAt(expiresAt, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id });
-  return { site, job, revision: (await ctx.db.get(revision._id))! };
+  await ctx.scheduler.runAt(expiresAt, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id, expectedLeaseOwner: args.leaseOwner });
+  return { site, job, article, rollback, revision: (await ctx.db.get(revision._id))! };
 } });
 export const verified = internalMutation({ args: { siteId: v.id("sites"), jobId: v.id("jobs"), leaseOwner: v.string(), nextArtifactHash: v.string(), error: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId), job = await ctx.db.get(args.jobId), cw = job?.contentWork;
-    if (!site || !job || job.siteId !== site._id || !cw?.revisionId || cw.stage !== "verify") return;
+    if (!site || !job || job.siteId !== site._id || !cw?.revisionId || cw.retiredAt || site.deletionStatus || site.accountDeletionRequestedAt) return;
     const r = await ctx.db.get(cw.revisionId), page = cw.targetPageId ? await ctx.db.get(cw.targetPageId) : null;
-    if (r?.siteId !== site._id || !r.receipt || r.liveVerificationLeaseOwner !== args.leaseOwner || (r.liveVerificationLeaseExpiresAt ?? 0) <= Date.now()) return;
+    if (r?.siteId !== site._id || r.ambiguityDispositionAt || r.liveVerificationLeaseOwner !== args.leaseOwner || (r.liveVerificationLeaseExpiresAt ?? 0) <= Date.now()) return;
     if (r.nextArtifactHash !== args.nextArtifactHash || r.contentWorkJobId !== job._id ||
       !page?.editable || page.siteId !== site._id) throw new Error("Live improvement proof binding changed");
     const attempts = r.liveVerificationAttempts;
+    if (!r.receipt) {
+      if (!args.error || !r.attemptedAt) return;
+      const updateRequired = args.error.includes("wordpress_receipt_update_required");
+      await ctx.db.patch(r._id, { liveVerificationLeaseOwner: undefined, liveVerificationLeaseExpiresAt: undefined, failureDetail: args.error.slice(0, 400), updatedAt: Date.now() });
+      await ctx.db.patch(job._id, { contentWork: { ...cw, verificationNextAt: Date.now() + attempts * 30_000,
+        failure: updateRequired ? "wordpress_receipt_update_required" : "improvement_receipt_unverified" } });
+      if (!updateRequired && attempts < 5) await ctx.scheduler.runAfter(attempts * 30_000, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id });
+      return;
+    }
+    if (cw.stage !== "verify") return;
     if (args.error) {
       await ctx.db.patch(r._id, { liveVerificationLeaseOwner: undefined, liveVerificationLeaseExpiresAt: undefined, failureDetail: args.error.slice(0, 400),
         status: attempts < 5 ? "verification_pending" : "failed", updatedAt: Date.now() });
@@ -273,17 +301,18 @@ export const verified = internalMutation({ args: { siteId: v.id("sites"), jobId:
       failureDetail: undefined, liveVerifiedAt: Date.now(), updatedAt: Date.now() });
     await ctx.db.patch(job._id, { contentWork: { ...cw, stage: "verified", verificationNextAt: undefined, verifiedAt: Date.now() } });
     if (!cw.operation) await archiveConsumedImprovementArtifact(ctx, job.articleId!, job._id);
-    const source = r.deliveredSource as { content: string; revision: string; permission?: string };
+    const source = r.deliveredSource as { content: string; revision: string; permission?: string; permissionRevokedAtReceipt?: boolean };
     const artifact = r.nextArtifact as { markdown: string; title: string; metaTitle?: string; metaDescription?: string };
     // Do not resurrect a revoked/reselected permission while recording history.
     if (page.editable.version === cw.permissionVersion && page.editable.sourceRevision === cw.baseRevision &&
       page.editable.connectionHash === cw.connectionHash && page.editable.profileHash === cw.profileHash) await ctx.db.patch(page._id, {
-      editable: { ...page.editable, sourceContent: source.content, sourceRevision: source.revision,
+      editable: { ...page.editable, ...(source.permissionRevokedAtReceipt ? { active: false } : {}), sourceContent: source.content, sourceRevision: source.revision,
         markdown: artifact.markdown, title: artifact.title, metaTitle: artifact.metaTitle ?? artifact.title,
         description: artifact.metaDescription ?? "", permission: source.permission ?? page.editable.permission,
         header: page.editable.kind === "github" ? source.content.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)/)?.[1] : undefined,
         lastImprovedAt: cw.operation ? page.editable.lastImprovedAt : Date.now(), latestRevisionId: r._id, lastWorkJobId: job._id } });
     if (!cw.operation && site.contentSchedule?.nextDeadlineAt === cw.deadlineAt) await ctx.db.patch(site._id, {
       contentSchedule: { ...site.contentSchedule, nextDeadlineAt: site.contentSchedule.nextDeadlineAt + site.contentSchedule.intervalMs }, updatedAt: Date.now() });
+    await closeVerifiedContentWake(ctx, (await ctx.db.get(job._id))!);
     await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId: site._id, trigger: "content_work", reason: "verified_improvement_refill" });
   } });

@@ -1,6 +1,6 @@
 "use node";
 import { verifyLiveCreatedArticle, verifyLiveSelectedRestoration } from "./lib/publishedRevision";
-import { wordpressConditionalRequest, preserveWordPressReviewedText } from "./lib/wordpressConditional";
+import { wordpressConditionalRequest, wordpressConditionalReceipt, preserveWordPressReviewedText } from "./lib/wordpressConditional";
 import { assertSafeImprovement, selectedGitHubPath, contentConnectionHash, confirmedContentProfileHash, exactReplacement } from "./lib/contentSelection";
 import { verifyBrokenLinkEvidence, verifyCorrectedLink } from "./lib/contentCorrectionProof";
 import { createHash } from "node:crypto";
@@ -1332,21 +1332,24 @@ async function publishToWordPress(
   rendererVersion: string,
   beforeExternalMutation: BeforeExternalMutation,
   onManagedSource?: (source: NonNullable<Doc<"articles">["contentWorkCreationSource"]>) => void,
+  hadPriorAttempt = false,
 ): Promise<{ method: "wordpress"; postUrl: string; postId: number; receipt: PublicationReceipt }> {
   if (site.serviceMode === "growth_first") {
     const currentSite = site as Doc<"sites">;
     await wordpressConditionalRequest(currentSite, "connection");
     const content = preserveWordPressReviewedText(renderSafePublicationHtml(stripLeadingDocumentTitle(article.markdown, article.title)));
     const url = publishedArticlePublicUrl({ domain: site.domain, urlStructure: site.urlStructure, slug: article.slug });
-    await beforeExternalMutation();
-    const result = await wordpressConditionalRequest(currentSite, "write", {
+    const body = {
       key: deliveryKey.replace(/^pentra:/, ""), operation: "create", type: "post", slug: article.slug.replace(/^\//, ""),
       title: article.title, content, metadata: { canonical: url, title: article.metaTitle ?? article.title, description: article.metaDescription ?? "" },
-    });
+    };
+    let result;
+    if (hadPriorAttempt) result = await wordpressConditionalReceipt(currentSite, body);
+    else { await beforeExternalMutation(); result = await wordpressConditionalRequest(currentSite, "write", body); }
     if (result.key !== deliveryKey.replace(/^pentra:/, "") || result.content !== content || result.title !== article.title ||
       result.url !== url || !Number.isSafeInteger(result.id) || !/^[a-f0-9]{64}$/.test(result.revision) || !/^[a-f0-9]{64}$/.test(result.permission)) throw new Error("WordPress conditional creation receipt mismatch");
     onManagedSource?.({ kind: "wordpress", sourceContent: content, sourceRevision: result.revision, resourceId: result.id,
-      permission: result.permission, connectionHash: contentConnectionHash(currentSite), profileHash: confirmedContentProfileHash(currentSite) });
+      permission: result.permission, ...(result.permissionActive === false ? { permissionRevokedAtReceipt: true } : {}), connectionHash: contentConnectionHash(currentSite), profileHash: confirmedContentProfileHash(currentSite) });
     return { method: "wordpress", postUrl: url, postId: result.id,
       receipt: { method: "wordpress", deliveryKey, contentHash, externalId: String(result.id), url, status: "published", receivedAt: Date.now() } };
   }
@@ -2306,6 +2309,20 @@ type PublishArgs = {
       articleId: Id<"articles">;
 };
 
+function wordpressImprovementBody(e: NonNullable<Doc<"pages">["editable"]>, article: Doc<"articles">,
+  revision: Doc<"published_article_revisions">, cw: NonNullable<Doc<"jobs">["contentWork"]>, rollback?: Doc<"published_article_revisions"> | null) {
+  const { correction, editTarget } = cw;
+  const added = rollback || correction ? "" : assertSafeImprovement(e, article, editTarget);
+  const after = correction?.sourceAfter ?? preserveWordPressReviewedText(renderSafePublicationHtml(added));
+  const content = rollback ? rollback.selectedSource.sourceContent : correction ? exactReplacement(e.sourceContent, correction.sourceBefore, after)
+    : editTarget ? exactReplacement(e.sourceContent, editTarget.sourceBefore, after) : e.sourceContent + "\n" + after;
+  return { key: revision.revisionKey, operation: rollback ? "rollback" : editTarget || correction ? "replace" : "append",
+    ...(rollback ? { rollbackKey: rollback.revisionKey } : {}),
+    ...(correction ? { before: correction.sourceBefore, after } : editTarget ? { before: editTarget.sourceBefore, after } : {}),
+    id: e.resourceId, permission: e.permission, baseRevision: e.sourceRevision, content,
+    ...(!correction ? { metadata: { canonical: revision.expectedPublicUrl, title: article.metaTitle ?? article.title, description: article.metaDescription ?? "" } } : {}) };
+}
+
 async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jobClaim: PublicationJobClaim): Promise<PublishResult | PublicationContentionResult> {
   const args = { siteId, jobId: jobClaim.jobId, workerToken: jobClaim.workerToken };
   const claimed = await ctx.runMutation(internal.contentImprovements.claim, args);
@@ -2324,6 +2341,7 @@ async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jo
     attempted = true;
   };
   let sourceContent: string, sourceRevision: string, permission: string | undefined, receipt: PublicationReceipt, result: PublishResult;
+  let permissionRevokedAtReceipt: boolean | undefined;
   if (e.kind === "github") {
     if (!e.path || selectedGitHubPath(site, e.path) !== page.slug || !e.header) throw new Error("Selected GitHub source contract changed");
     if (await getDefaultBranch({ token: site.githubToken!, owner: site.repoOwner!, repo: site.repoName! }) !== site.repoDefaultBranch) throw new Error("GitHub selected default branch changed");
@@ -2345,18 +2363,16 @@ async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jo
       url: delivered.commitUrl, status: "committed", receivedAt: Date.now() };
     result = { method: "github", filePath: e.path, commitUrl: delivered.commitUrl, receipt };
   } else {
-    const after = correction?.sourceAfter ?? preserveWordPressReviewedText(renderSafePublicationHtml(added));
-    sourceContent = rollback ? rollback.selectedSource.sourceContent : correction ? exactReplacement(e.sourceContent, correction.sourceBefore, after) : editTarget ? exactReplacement(e.sourceContent, editTarget.sourceBefore, after) : e.sourceContent + "\n" + after;
-    await beforeExternalMutation();
-    const delivered = await wordpressConditionalRequest(site, "write", { key: revision.revisionKey, operation: rollback ? "rollback" : editTarget || correction ? "replace" : "append",
-      ...(rollback ? { rollbackKey: rollback.revisionKey } : {}),
-      ...(correction ? { before: correction.sourceBefore, after } : editTarget ? { before: editTarget.sourceBefore, after } : {}),
-      id: e.resourceId, permission: e.permission, baseRevision: e.sourceRevision, content: sourceContent,
-      ...(!correction ? { metadata: { canonical: page.url, title: article.metaTitle ?? article.title, description: article.metaDescription ?? "" } } : {}) });
+    const body = wordpressImprovementBody(e, article, revision, claimed.jobContentWork, rollback);
+    sourceContent = body.content;
+    let delivered;
+    if (revision.attemptedAt) delivered = await wordpressConditionalReceipt(site, body);
+    else { await wordpressConditionalRequest(site, "connection"); await beforeExternalMutation(); delivered = await wordpressConditionalRequest(site, "write", body); }
     if (delivered.key !== revision.revisionKey || delivered.id !== e.resourceId || delivered.content !== sourceContent ||
       delivered.url !== page.url || delivered.title !== article.title || !/^[a-f0-9]{64}$/.test(delivered.revision) ||
       delivered.permission !== e.permission) throw new Error("WordPress improvement receipt mismatch");
     sourceRevision = delivered.revision; permission = delivered.permission;
+    permissionRevokedAtReceipt = delivered.permissionActive === false ? true : undefined;
     receipt = { method: "wordpress", deliveryKey, contentHash: revision.nextArtifactHash, externalId: String(delivered.id),
       url: page.url, status: "published", receivedAt: Date.now() };
     result = { method: "wordpress", postId: delivered.id, postUrl: page.url, receipt };
@@ -2364,17 +2380,35 @@ async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jo
   // GitHub may reconcile an already-written artifact without calling the write
   // fence. Its original durable attempt is required by this receipt mutation.
   await ctx.runMutation(internal.contentImprovements.delivered, { ...args, revisionId: revision._id,
-    receipt: { ...receipt, method: e.kind }, sourceContent, sourceRevision, ...(permission ? { permission } : {}) });
+    receipt: { ...receipt, method: e.kind }, sourceContent, sourceRevision, ...(permission ? { permission } : {}), ...(permissionRevokedAtReceipt ? { permissionRevokedAtReceipt } : {}) });
   return result;
 }
 
-export const verifyContentImprovement = internalAction({ args: { siteId: v.id("sites"), jobId: v.id("jobs") },
+export const verifyContentImprovement = internalAction({ args: { siteId: v.id("sites"), jobId: v.id("jobs"), expectedLeaseOwner: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const leaseOwner = randomUUID();
     const context = await ctx.runMutation(internal.contentImprovements.claimVerification, { ...args, leaseOwner });
-    if (!context || context.job.contentWork?.stage !== "verify") return;
+    if (!context?.job.contentWork) return;
+    const target = { siteId: args.siteId, jobId: args.jobId };
     const r = context.revision;
     let error: string | undefined;
+    if (!r.receipt) {
+      try {
+        const article = { ...context.article!, ...r.nextArtifact, auditedContentHash: r.nextArtifactHash } as Doc<"articles">;
+        const body = wordpressImprovementBody(r.selectedSource, article, r, context.job.contentWork!, context.rollback);
+        const proof = await wordpressConditionalReceipt(context.site, body);
+        if (proof.url !== r.expectedPublicUrl || proof.title !== article.title) throw new Error("WordPress improvement receipt target mismatch");
+        await ctx.runMutation(internal.contentImprovements.delivered, { ...target, workerToken: r.leaseOwner!, revisionId: r._id,
+          receiptRecoveryLeaseOwner: leaseOwner,
+          receipt: { method: "wordpress", deliveryKey: `pentra:${r.revisionKey}`, contentHash: r.nextArtifactHash,
+            externalId: String(proof.id), url: proof.url, status: "published", receivedAt: Date.now() },
+          sourceContent: proof.content, sourceRevision: proof.revision, permission: proof.permission,
+          ...(proof.permissionActive === false ? { permissionRevokedAtReceipt: true } : {}) });
+        return;
+      } catch (e) { error = e instanceof Error ? e.message : "WordPress receipt recovery unavailable"; }
+      await ctx.runMutation(internal.contentImprovements.verified, { ...target, leaseOwner, nextArtifactHash: r.nextArtifactHash, error });
+      return;
+    }
     try {
       const fetched = await safeFetchPublicText(r.expectedPublicUrl, { expectedHost: new URL(r.expectedPublicUrl).hostname,
         allowedContentTypes: [/^text\/html(?:;|$)/i] });
@@ -2384,7 +2418,7 @@ export const verifyContentImprovement = internalAction({ args: { siteId: v.id("s
         article: r.nextArtifact as PublishedRevisionArtifact });
       if (context.job.contentWork.correction) verifyCorrectedLink(fetched.text, context.job.contentWork.correction);
     } catch (e) { error = e instanceof Error ? e.message : "Live improvement verification failed"; }
-    await ctx.runMutation(internal.contentImprovements.verified, { ...args, leaseOwner, nextArtifactHash: r.nextArtifactHash, ...(error ? { error } : {}) });
+    await ctx.runMutation(internal.contentImprovements.verified, { ...target, leaseOwner, nextArtifactHash: r.nextArtifactHash, ...(error ? { error } : {}) });
   } });
 
 async function publishArticleHandler(
@@ -2784,6 +2818,7 @@ async function publishArticleHandler(
             sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION,
             beforeExternalMutation,
             source => { creationSource = source; },
+            hadPriorAttempt,
           );
           break;
         case "webhook":

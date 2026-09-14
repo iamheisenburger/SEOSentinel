@@ -231,7 +231,7 @@ async function reviewChangedSetup(ctx: QueryCtx | MutationCtx, site: Doc<"sites"
   for (const r of revisions) {
     if (r.attemptedAt && !r.liveVerifiedAt && !r.ambiguityDispositionAt) {
       const job = jobs.find(j => j._id === r.contentWorkJobId);
-      if (job?.contentWork?.stage === "verify" && r.receipt) verifying.push(job);
+      if (job?.contentWork && ((job.contentWork.stage === "verify" && r.receipt) || (!r.receipt && r.selectedSource?.kind === "wordpress"))) verifying.push(job);
       issues.push({ code: r.receipt ? "verification" : "uncertain_delivery", jobId: job?._id, articleId: r.articleId,
         action: r.receipt ? "Check the already-delivered page against its retained reviewed version. Live verification must finish before the setup can change; no extra write is authorized."
           : "Inspect the original page for this attempted change. If the exact delivery cannot be recovered, open its article's owner-reviewed unverified-revision disposition after lease expiry; resolve any external copy before continuing." });
@@ -723,6 +723,7 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   try { currentBinding = job.contentWork.profileHash === confirmedContentProfileHash(site) && job.contentWork.connectionHash === contentConnectionHash(site); } catch { /* Disconnected. */ }
   if (job.contentWork.intent === "create" && currentBinding) await enrollVerifiedCreation(ctx, site, article, job);
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verified", publishedAt: article.publishedAt, verifiedAt: checkedAt } });
+  await closeVerifiedContentWake(ctx, (await ctx.db.get(job._id))!);
   if (job.contentWork.deadlineAt === site.contentSchedule.nextDeadlineAt) await ctx.db.patch(site._id, {
     contentSchedule: { ...site.contentSchedule, nextDeadlineAt: site.contentSchedule.nextDeadlineAt + site.contentSchedule.intervalMs }, updatedAt: checkedAt });
   await wake(ctx, site._id);

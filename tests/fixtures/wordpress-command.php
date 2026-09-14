@@ -22,8 +22,12 @@ if ($request['operation'] === 'setup') {
     if (!$subscriber) { $sid = wp_create_user('fixture-subscriber', wp_generate_password(40), 'subscriber@synthetic.example'); $subscriber = get_user_by('ID', $sid); $subscriber->set_role('subscriber'); }
     WP_Application_Passwords::delete_all_application_passwords($subscriber->ID);
     $low = WP_Application_Passwords::create_new_application_password($subscriber->ID, ['name'=>'Pentra synthetic fixture']);
+    $other = get_user_by('login', 'fixture-other-owner');
+    if (!$other) { $oid = wp_create_user('fixture-other-owner', wp_generate_password(40), 'other-owner@synthetic.example'); $other = get_user_by('ID', $oid); $other->set_role('editor'); }
+    WP_Application_Passwords::delete_all_application_passwords($other->ID);
+    $other_password = WP_Application_Passwords::create_new_application_password($other->ID, ['name'=>'Pentra synthetic fixture']);
     echo wp_json_encode(['wordpress'=>$wp_version, 'php'=>PHP_VERSION, 'database'=>DB_ENGINE,
-        'auth'=>base64_encode('fixture-owner:' . $password[0]), 'lowAuth'=>base64_encode('fixture-subscriber:' . $low[0])]);
+        'auth'=>base64_encode('fixture-owner:' . $password[0]), 'lowAuth'=>base64_encode('fixture-subscriber:' . $low[0]), 'otherAuth'=>base64_encode('fixture-other-owner:' . $other_password[0])]);
     exit;
 }
 $owner = get_user_by('login', 'fixture-owner'); wp_set_current_user($owner->ID);

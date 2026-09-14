@@ -8,6 +8,7 @@ import { inspectSharedProviderBudget, providerAccountMonthlyCeilingMicroUsd, pro
 // Browser-facing copy is selected, never raw exception/provider payload text.
 export function contentIssue(reason?: string) {
   if (!reason) return null;
+  if (reason.includes("wordpress_receipt_update_required")) return "Update the Pentra WordPress connector to 1.1.0 or newer, then recheck this retained delivery. Do not publish another copy.";
   if (reason === "content_provider_credit_unavailable") return "Pentra's generation service is interrupted. Our team must restore it; you do not need to fund a provider or change your plan. Your original delivery deadline and prior attempt remain visible.";
   if (/budget|funding|reservation|priced/i.test(reason)) return "Spending capacity is unavailable. Review billing and the retained spending commitments; no limit was raised.";
   if (/permission|source|revision|conflict|customer|binding|destination|profile|409|412/i.test(reason)) return "The page, permission, business profile or destination changed. Review the current source; customer edits will not be overwritten.";

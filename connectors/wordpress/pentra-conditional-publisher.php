@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pentra Conditional Publisher
  * Description: Authenticated, revision-bound publishing of explicitly selected classic posts/pages.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Requires PHP: 8.1
  * License: GPL-2.0-or-later
  */
@@ -56,18 +56,18 @@ final class Pentra_Conditional_Publisher {
             ? true : new WP_Error('pentra_forbidden', 'Publishing capability required.', ['status' => 403]);
     }
     static function routes() {
-        foreach (['connection' => 'GET', 'source' => 'GET', 'select' => 'POST', 'revoke' => 'POST', 'write' => 'POST'] as $name => $method) {
+        foreach (['connection' => 'GET', 'source' => 'GET', 'receipt' => 'GET', 'select' => 'POST', 'revoke' => 'POST', 'write' => 'POST'] as $name => $method) {
             register_rest_route(self::NS, '/' . $name, [
                 'methods' => $method, 'permission_callback' => [__CLASS__, 'auth'],
                 'callback' => function($request) use ($name) {
-                    try { return new WP_REST_Response(self::dispatch($name, $request), 200); }
+                    try { return new WP_REST_Response(self::dispatch($name, $request), 200, $name === 'receipt' ? ['Cache-Control'=>'private, no-store'] : []); }
                     catch (Throwable $e) {
                         // Never echo SQL, credentials, request bodies or stack traces.
                         $safe = ['binding_changed', 'source_changed', 'permission_revoked', 'idempotency_conflict',
                             'unsupported_content', 'protected_content', 'invalid_request', 'post_forbidden',
-                            'no_change', 'rollback_conflict', 'transactional_tables_required', 'unsupported_database_driver'];
+                            'no_change', 'rollback_conflict', 'transactional_tables_required', 'unsupported_database_driver', 'receipt_unavailable'];
                         $code = in_array($e->getMessage(), $safe, true) ? $e->getMessage() : 'database_operation_failed';
-                        return new WP_Error('pentra_' . $code, $code, ['status' => $code === 'post_forbidden' ? 403 : 409]);
+                        return new WP_Error('pentra_' . $code, $code, ['status' => $code === 'post_forbidden' ? 403 : ($code === 'receipt_unavailable' ? 404 : 409)]);
                     }
                 },
             ]);
@@ -139,10 +139,11 @@ final class Pentra_Conditional_Publisher {
         global $wpdb;
         self::assert_engine();
         $origin = untrailingslashit(home_url());
-        if ($name === 'connection') { return ['version'=>1, 'atomic'=>true, 'site'=>$origin, 'userId'=>get_current_user_id()]; }
+        if ($name === 'connection') { return ['version'=>1, 'atomic'=>true, 'receiptLookup'=>1, 'site'=>$origin, 'userId'=>get_current_user_id()]; }
         if ($r['site'] !== $origin) { throw new RuntimeException('binding_changed'); }
         $binding = self::hex($r['binding']);
         if ($name === 'write') { return self::write($r, $binding); }
+        if ($name === 'receipt') { return self::receipt($r, $binding); }
         $id = filter_var($r['id'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]);
         if (!$id) { throw new RuntimeException('invalid_request'); }
         $row = self::post($id); if ($name !== 'revoke') { self::supported($row); }
@@ -167,6 +168,35 @@ final class Pentra_Conditional_Publisher {
                 self::sql($wpdb->prepare('UPDATE ' . self::permissions() . ' SET active=0 WHERE post_id=%d', $id));
             }
             $result = self::source($row, self::permission($id));
+            self::sql('COMMIT'); return $result;
+        } catch (Throwable $e) { $wpdb->query('ROLLBACK'); throw $e; }
+    }
+    static function receipt($r, $binding) {
+        global $wpdb;
+        $key = self::hex($r['key']); $hash = self::hex($r['requestHash']);
+        // One indexed owner-scoped lookup. Missing and foreign/conflicting
+        // keys have the same response; never enumerate receipts.
+        self::sql('START TRANSACTION');
+        try {
+            $prior = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table() .
+                ' WHERE request_key=%s AND request_hash=%s AND owner_id=%d AND binding=%s LIMIT 1',
+                $key, $hash, get_current_user_id(), $binding), ARRAY_A);
+            if (!$prior || strlen($prior['receipt']) > 4000000) { throw new RuntimeException('receipt_unavailable'); }
+            $receipt = json_decode($prior['receipt'], true); $id = (int)$prior['post_id'];
+            if (!$receipt || $id < 1 || ($receipt['key'] ?? '') !== $key || ($receipt['requestHash'] ?? '') !== $hash ||
+                ($receipt['binding'] ?? '') !== $binding || (int)($receipt['id'] ?? 0) !== $id) { throw new RuntimeException('receipt_unavailable'); }
+            $row = self::post($id, true); self::supported($row);
+            if (($r['id'] !== null && (string)$r['id'] !== (string)$id) ||
+                ($r['id'] === null && ($r['type'] !== $row['post_type'] || $r['slug'] !== $row['post_name']))) { throw new RuntimeException('receipt_unavailable'); }
+            $p = self::permission($id, true);
+            // Revocation forbids future writes, not proof of this user's prior
+            // delivery. Reselection/ownership/binding still fence this lookup.
+            self::require_permission($p, $binding, self::hex($receipt['permission'] ?? null), true);
+            if (self::revision($row) !== ($receipt['revision'] ?? '') || $row['post_content'] !== ($receipt['content'] ?? null) ||
+                $row['post_title'] !== ($receipt['title'] ?? null) || get_permalink($id) !== ($receipt['url'] ?? null) ||
+                json_decode($p['metadata'], true) !== ($receipt['metadata'] ?? null)) { throw new RuntimeException('source_changed'); }
+            $result = array_intersect_key($receipt, array_flip(['key','requestHash','binding','id','permission','url','revision','content','title','metadata','writtenAt']));
+            $result['permissionActive'] = (bool)$p['active']; $result['type'] = $row['post_type']; $result['slug'] = $row['post_name'];
             self::sql('COMMIT'); return $result;
         } catch (Throwable $e) { $wpdb->query('ROLLBACK'); throw $e; }
     }

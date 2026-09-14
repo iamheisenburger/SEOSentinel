@@ -1,6 +1,121 @@
 # Pentra — fresh-task handoff
 
-## Current41: explicit safe service rollback — LOCAL review candidate, not deployed
+## Current42: exact WordPress receipt recovery — LOCAL combined41/42 review candidate
+
+Assignment `supervisor-20260914-slc-wordpress-receipt-recovery-42`, based on
+independently accepted LOCAL41 `09ce26511ad60b150a9e0782a9e0429c2272cbd0`.
+Neither41 nor42 is pushed or deployed. Last known deployed source is accepted39
+`1c632853acf0dac9b3ea8add6ce965f66a722e0b`. No production read or mutation,
+provider call/probe, funding attestation, owner Retry, auth reset, purchase,
+backlinks work, new task or automation occurred in42. This is free, local
+engineering; all model/provider/GSC inputs in fixtures are synthetic.
+
+### Reproduced gap and bounded repair
+
+The new actual-handler test reproduced the lost successful WordPress creation
+response on unchanged41: one failed test,1362.093083ms. WordPress had committed
+the article, but the existing receipt-only watchdog could not recover it without
+the write fence. That baseline was not converted into a successful POST replay
+or owner disposition. The same test passes with the following repair.
+
+Connector1.1.0 adds authenticated GET `/wp-json/pentra/v1/receipt` over the
+EXISTING receipt table. One exact indexed lookup binds request key, SHA-256 of
+the original serialized request, current WordPress owner, connection binding
+and exact post ID or creation type/slug. Missing, foreign and conflicting keys
+return the same unavailable error without receipt/content disclosure. Current
+capability, original grant token, revision, title, content, URL and metadata
+must still match. The response is bounded, private/no-store and allowlisted;
+it omits the old base snapshot. No new table, ledger, enumeration endpoint or
+content-write operation is introduced.
+
+A revoked original permission can prove historical delivery with
+`permissionActive:false`; it cannot authorize another edit or replay. A newly
+selected grant, different owner, changed connection or customer edit prevents
+recovery. A later edit between receipt lookup and public GET still fails live
+verification. Managed creation never enrolls a revoked remote grant, and
+selected-page verification never reactivates one. The only Convex schema
+extension is an optional creation-source revocation-at-receipt boolean; no
+table/index migration is introduced.
+
+Creation's existing uncertain-write/watchdog path now uses this GET for a
+durable prior attempt, never another POST. Selected-page improvement reconstructs
+the exact original payload and uses the EXISTING improvement verifier and
+bounded read lease. Its expiry watchdog is generation-fenced so a stale wake
+cannot burn attempts after a known result. Recovery requires the original
+expired publication ownership and exact immutable job/revision/artifact binding;
+no force-cleared lease, attempt reset or disposition is used. Exact receipts
+enter existing delivery recording and rendered-live verification. Only after
+verification can accepted41's stale-wake closure permit ordinary fresh refill.
+Original deadlines, publication attempts, financial holds and historical
+failure evidence are retained. The receipt lookup and live check use the same
+existing five-attempt selected-page read bound, not a second retry budget.
+
+`writtenAt` is the connector's original external write timestamp. Pentra's
+existing `receivedAt`/content-work publication observation remains the time it
+learned of delivery; recovery is NOT a new external publication. Tests label
+their virtual deadline, receipt observation and verification separately.
+
+### Installation dependency and fail-closed compatibility
+
+Install the updated connector1.1.0 on an authorized WordPress destination BEFORE
+releasing/enabling the updated publisher there. It reuses the existing tables
+and application password; no reinstallation/reset or new credential is needed.
+Older connectors, missing receipt capability or an unavailable route produce an
+understandable update requirement, without another article write. Existing
+retained work can recover after the update and explicit recheck within its
+original read budget. This is not permission to reset exhausted attempts or
+declare missing/conflicting proof successful. No connector was installed on
+any external destination in42.
+
+### Validation and remaining acceptance
+
+- Final-source full repository suite:1749 discovered,1748 passed,0 failed,
+  1 existing skip,144005.806083ms. One earlier run reported the correction-runtime
+  file as failed without a retained underlying error; its isolated rerun passed
+  17/17 and this complete rerun passed. No cause is asserted for that earlier
+  non-reproduced file-process failure.
+- Final-source desktop/mobile browser:34 passed,2 genuine-owner-session skips,
+  6.6s. Synthetic credentials are not real authenticated-customer acceptance.
+- Final-source types/build/schema61 tables296 indexes against09ce265/secrets688/
+  full dependency audit0/whitespace pass. Lint0 errors,157 existing warnings.
+- Final real WordPress7.1/SQLite:61/61 passed,0 skips,78158.9015ms;
+  MySQL8.4.11/InnoDB:62/62 passed,0 skips,73270.906708ms, including the
+  nontransactional-table rejection. Both fixture servers/databases stop through
+  their normal owned-process teardown; existing local fixture data is retained.
+- Focused42 negative/security suite:20/20 passed,21875.966625ms, including
+  post-update recovery on unchanged attempts and stale-verifier generation fencing.
+
+The real loopback tests cover creation AND selected improvement under active,
+paused, explicit rollback, local-revoked and remote-only-revoked conditions.
+They require exactly one POST, unchanged provider-call count/holds during
+reconciliation, one verification, then distinct fresh work restoring two ready
+items. Concurrent GETs and duplicate recovery wakes pass. Negative cases cover
+wrong key/hash/binding/owner/target, missing/old endpoint, reselected grant and
+customer edits before/after lookup. Upgrading the connector recovers the SAME
+retained work without resetting its attempts. Existing WordPress CAS, races,
+rollback, authentication and nontransactional-engine tests remain.
+
+- [ ] Independent combined41/42 review and authorized release. No push/deploy.
+- [ ] Genuine owner-session acceptance; real-auth browser skips remain gaps.
+- [ ] Three ordinary live cycles on BOTH authorized tenants, fresh LeadPilot
+  discovery/quality approval, scheduled new delivery and post-consumption refill.
+- [ ] Measured Search Console follow-up; attributable SEO growth is separate.
+
+No42 live buffer, deadline or publication observation exists. Last40 remains
+both0/2 ready with one failed job each, and BOTH original2026-09-14
+22:14:14.420–22:19:14.420 UTC windows missed. Old stored publication times remain
+Pentra2026-09-12 10:24:14.649 UTC and LeadPilot2026-09-07 22:15:34.409 UTC;
+these are NOT fresh42 live verifications. Last40 original independent20 grant
+was active:5 held/0 VERIFIED settlement/15 remaining. Verified zero settlement
+is not verified zero provider billing. Ordinary32/old4 discovery/fleet35 limits
+are unchanged; last40 ordinary account headroom was AT MOST0.957440, resetting
+2026-10-01 00:00:00 UTC. Actual provider funding remains unverified. LeadPilot
+is overdue; no article/SLC/monetisation/SEO growth acceptance or backlinks work
+is claimed. The sole parent plan is updated but never staged. Protected parent
+diagnosis edit is preserved; supervisor state/environment contents and supervisor
+task history/state were not inspected.
+
+## Previous41: explicit safe service rollback — accepted locally, not deployed
 
 Assignment `supervisor-20260914-slc-safe-mode-rollback-41`. Based on clean
 `70e321451737b3c8e62c454e53bdfe7479b43126`; deployed source remains accepted39

@@ -2085,7 +2085,7 @@ export const completePublication = internalMutation({
   args: {
     creationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress")),
       sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()),
-      permission: v.optional(v.string()), connectionHash: v.string(), profileHash: v.string() })),
+      permission: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()), connectionHash: v.string(), profileHash: v.string() })),
     articleId: v.id("articles"),
     publishedContentHash: v.string(),
     expectedDeliveryHash: v.string(),

@@ -11,6 +11,12 @@
 Installation requires your site's normal plugin-install permission. Publishing
 after installation requires only the documented content capabilities below.
 
+Version1.1.0 is required for unattended lost-response recovery. Replace the
+existing connector file using the same authorized installation workflow before
+enabling the updated publisher. Existing receipt/permission tables are reused;
+no data reset or new authentication credential is needed. Older installations
+fail closed with an update requirement, never silently retry an uncertain write.
+
 Install only `pentra-conditional-publisher.php` in a same-named plugin directory
 and activate it on the explicitly authorized WordPress destination. Use core
 WordPress application-password authentication over HTTPS. The authenticated
@@ -32,6 +38,26 @@ the resulting full source; unrelated-byte changes are rejected. When an owner
 correction omits metadata, the connector retains the previous metadata exactly,
 including absence. Pentra's reviewed discretionary changes supply explicit
 metadata. A PHP API acknowledgement never substitutes for rendered verification.
+
+`GET /wp-json/pentra/v1/receipt` reads one exact existing receipt. It requires
+core authentication plus the original site/binding, request key, SHA-256 hash of
+the exact serialized write body, and target ID or creation type/slug. Missing,
+foreign-owner and conflicting receipts share an unavailable response. The read
+checks current content capabilities, the original permission (which may be
+revoked but not replaced), source revision, metadata and target. It never writes
+content, changes permissions, or treats absence as permission to try again.
+Responses are private/no-store and omit the previous source snapshot; reads are
+bounded. Historical delivery evidence includes whether the permission is still
+active and must never renew a revoked editing grant.
+
+Both creation and selected-page improvement can reconcile a lost response using
+this GET, then verify the retained rendered artifact through the existing work
+record. A customer edit before lookup rejects the receipt; an edit after lookup
+still fails the subsequent live verification. Missing/conflicting proof stays
+unresolved. The connector's `writtenAt` records its original external transaction
+time; Pentra's receipt `receivedAt` records when it observed the receipt, including
+late recovery. Recovery is not a new publication. Fixed missed deadlines, costs
+and prior attempts remain; only verified delivery permits normal fresh refill.
 
 Transactions cover core DB state, not arbitrary side effects performed by other
 installed plugins. Third-party publishing hooks, caches, custom themes and SEO
