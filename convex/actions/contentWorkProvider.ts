@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { ActionCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
+import { sha256Hex } from "../lib/publicationArtifact";
 
 type Scope = { ctx: ActionCtx; job: Doc<"jobs">; workerToken: string; phase: string };
 const scope = new AsyncLocalStorage<Scope>();
@@ -28,15 +29,30 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192;
   if (inputBound > 200_000) throw new Error("Content request exceeds priced input bound");
   const ceilingMicroUsd = inputBound * p.inputMicroUsdPerToken + request.max_tokens * p.outputMicroUsdPerToken;
-  const key = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
-  await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key, ceilingMicroUsd });
+  const logicalKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
+  const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
+    key: logicalKey, requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd });
+  if (admission.kind === "cached") return admission.result;
+  const key = admission.key;
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0, fetch });
-  const response = await client.messages.create(request);
+  let response;
+  try { response = await client.messages.create(request); }
+  catch (error) {
+    if (error instanceof Anthropic.APIError) {
+      const body = error.error as { error?: { type?: string }; type?: string } | undefined;
+      const code = body?.error?.type ?? body?.type;
+      if ((error.status === 429 && code === "rate_limit_error") || ([503, 529].includes(error.status ?? 0) && code === "overloaded_error")) {
+        await s.ctx.runMutation(internal.contentWork.recordProviderRejection, { jobId: s.job._id, workerToken: s.workerToken, key, status: error.status!, code: code! });
+      }
+    }
+    throw error;
+  }
   const input = response.usage.input_tokens, output = response.usage.output_tokens;
   if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0 || input > inputBound || output > request.max_tokens) throw new Error("Provider usage receipt missing or over bound");
-  await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
-    actualMicroUsd: input * p.inputMicroUsdPerToken + output * p.outputMicroUsdPerToken });
   const result = response.content.find(block => block.type === "tool_use" && block.name === args.toolName);
+  await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
+    actualMicroUsd: input * p.inputMicroUsdPerToken + output * p.outputMicroUsdPerToken,
+    ...(result?.type === "tool_use" ? { result: result.input } : {}) });
   if (!result || result.type !== "tool_use") throw new Error("Content model response is invalid; no paid schema replay");
   return result.input;
 }

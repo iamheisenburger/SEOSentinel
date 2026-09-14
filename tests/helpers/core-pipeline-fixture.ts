@@ -73,6 +73,18 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     if (modules.has(name)) return modules.get(name)!;
     const runtime = { exports: {} as Exported };
     const localRequire = (id: string) => {
+      if (id === "@anthropic-ai/sdk") {
+        const sdk = requireActual(id);
+        const construct = (target: Dynamic, args: Dynamic[]) => {
+          // Legacy work wraps the VM's fetch to retain its timeout boundary.
+          // Both that wrapper and direct fixture transport are valid; omission
+          // must fail before the SDK can select the process-global transport.
+          if (typeof args[0]?.fetch !== "function") die("Anthropic fixture requires explicit fetch before SDK construction");
+          return Reflect.construct(target, args) as object;
+        };
+        return new Proxy(sdk, { construct, get: (target, key) =>
+          key === "default" || key === "Anthropic" ? new Proxy(target[key], { construct }) : Reflect.get(target, key) });
+      }
       if (["node:dns/promises", "dns/promises"].includes(id)) return {
         lookup: async (host: string) => {
           if (!/\.(example|example\.gov|example\.edu)$/.test(host)) die(`Unexpected DNS ${host}`);

@@ -1,5 +1,112 @@
 # Pentra SLC Stage 1 — local implementation review
 
+## Current repair review — assignment26
+
+Assignment `supervisor-20260914-slc-stage1-repair-26` repairs candidate
+`36373d23f1823dbb40c0dd43b649e7d98ed53f94` in the same isolated checkout and
+branch. No Stage2 work, deployment, production access or live provider I/O.
+The approved additional USD20 allowance remains inactive/unspent.
+
+Independent supervisor review reran the original fourteen SLC tests, then
+reproduced two release blockers that those tests missed. Before repairing the
+source, two new connected regressions failed here with the same observations:
+due delivery returned `work_in_progress` behind a future refill, and one mocked
+503 left its work permanently `failed`. The original happy-path evidence below
+does not establish correct recovery and is not an acceptance receipt.
+
+### Changes in the existing lifecycle
+
+- Due sealed delivery and its persisted window wake now precede unrelated
+  pending/running preparation, future failed review and future funding failure.
+  Worker claim also defers preparation when the exact due artifact is ready,
+  including workers dispatched before the scheduler promotes that artifact.
+  The existing provider-free disjoint worker lane and publisher lease still
+  reject unknown/shared targets and concurrent conflicting publishers.
+- The existing exact-worker failure and expired-lease transitions now make a
+  durable recovery decision: at most three recoveries per work item, with
+  one/two/four-minute backoff, unchanged candidate/revision limits and increasing
+  worker-attempt history. No new queue or global retry-policy change.
+- Protocol-confirmed transient rejections (429 rate limit; 503/529 overload)
+  receive unique immutable attempt receipts and may retry only within remaining
+  work capacity. A rejected request is **not assumed free**: its priced ceiling
+  continues to consume the work budget and the shared reservation stays held
+  when actual cost remains unverified.
+- A completed structured response is a request-hash-bound checkpoint on the
+  same job. Restart/retry can reuse it without another model call. Different
+  request content or conflicting completion receipts fail closed. The complete
+  persisted response collection has a 700,000-byte storage bound.
+- A genuinely uncertain response (including truncated success output or a
+  started call with a lost worker) does not replay. Its original reservation
+  remains held, with `content_provider_result_ambiguous_reconciliation_required`.
+  The safe next action is receipt reconciliation, not another paid attempt;
+  unrelated already-prepared due delivery remains eligible.
+- On UTC-day rollover, proven no-I/O work appends release metadata to the old
+  reservation; fully known completed work settles old actual usage. Only the
+  original work budget's remainder can be reserved in the new window, atomically
+  through unchanged account/fleet guards. Prior reservation IDs and per-call
+  bindings remain on the job. Uncertain costs cannot roll over. Re-admission
+  failure exposes exact requested/consumed/ceiling amounts and stops that work.
+- Attempt exhaustion remains explicit and terminal; it does not mint another
+  candidate or shift a missed deadline. A terminal future item is not reported
+  as recovered merely because a different ready article publishes.
+  A terminal publisher is also excluded from pending-delivery classification;
+  its exact failed slot remains actionable without another write.
+- Test SDK construction now refuses a missing explicit transport before the
+  SDK can select process-global network I/O. It allows the inspected legacy
+  timeout wrapper around fixture fetch. No repetition of assignment25's
+  synthetic-key outbound incident occurred in assignment26.
+
+### Connected repair evidence
+
+Nine added regression tests plus the adapted original cases give **23 SLC
+runtime tests**. They execute real registered handlers with mock external
+transports, including an actual paused provider worker crossing a due window,
+duplicate dispatches/claims, future review failure, monthly-allowance deferral,
+ambiguous future work, rejection-to-publication/refill, cached review response,
+no-I/O lease restart, persisted-draft rollover, rejected re-admission, immutable
+checkpoint receipts and recovery exhaustion. The original five-business,
+three-cycle creation/refill test remains passing.
+
+Exact observations below are **virtual mock timestamps, not production**:
+
+| Scenario | Original deadline (UTC) | Mock publication (UTC) | Mock verification (UTC) | Buffer after refill |
+| --- | --- | --- | --- | --- |
+| Known rejection, one recovery | 2026-09-11 12:10:00.000 | 2026-09-11 12:05:00.007 | 2026-09-11 12:05:00.010 | 2 |
+| Due delivery while refill provider call remains running | 2026-09-11 12:40:00.000 | 2026-09-11 12:35:00.022 | 2026-09-11 12:35:00.029 | 2 |
+| No-I/O expired lease, next-day admission | 2026-09-11 12:10:00.000 | 2026-09-12 12:01:00.013 | 2026-09-12 12:01:00.015 | 2 |
+| Persisted draft, next-day review admission | 2026-09-11 12:10:00.000 | 2026-09-12 12:01:00.012 | 2026-09-12 12:01:00.014 | 2 |
+
+The two next-day deliveries are explicitly late; their deadlines are unchanged.
+Repeated known rejection stops after four total mock calls/three recoveries,
+with one job, zero replacement drafts and its reservation retained. An ambiguous
+result stops after one mock call without replay. The exhausted-account rollover
+test requests500,000microUSD against28,000,000 consumed/28,000,000 ceiling and
+performs zero provider calls; these are synthetic accounting numbers, not cash.
+
+### Final frozen repair gates and limitations
+
+- Final full repository suite on bundled Node24.19.0:1,554 discovered;
+  1,553 executed/passed,0 failed,1 skipped (89,244.831750ms). The relative LeadPilot
+  sibling-consumer fixture remains unavailable in this isolated checkout.
+- Build and separate typecheck passed; lint0 errors/157 existing warnings.
+- Schema compatibility against9fd01af passed:61 tables/294 indexes.
+- Production dependency audit:0 vulnerabilities. Secret scan:647 files passed.
+- Desktop/mobile browser suite:18 discovered;16 executed/passed,0 failed,
+  2 authenticated skips (6.4s).
+  Authenticated checks remain incomplete, not evidence that the owner signed out.
+- No production budget/headroom, live deadline, buffer or publication time was
+  refreshed. No current Pentra/LeadPilot delivery or monetisation acceptance.
+- USD0 provider expenditure in this assignment. No new live provider request,
+  production migration, cap/allowance change, attempt reset or backlinks work.
+- Stage2–4 remain incomplete/unaccepted as listed in the canonical plan.
+  Independent supervisor review of the repaired commit is required before
+  Stage2. Technical delivery and attributable SEO growth remain separate.
+
+## Original candidate evidence — 36373d2
+
+The following preserves assignment25's historical evidence and limitations.
+Its failure/recovery behavior is superseded by assignment26 above.
+
 Assignment: `supervisor-20260914-slc-stage1-25`, 2026-09-14.
 Candidate branch: `codex/simplified-article-admission`.
 Baseline: `9fd01affd5bc57a681e8b32f2212ed671d3aab2c`.

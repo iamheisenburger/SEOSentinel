@@ -54,6 +54,7 @@ function articlePayload(keyword: string) {
 }
 function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
+  ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string } } = {}) {
   const modelCalls: Fields[] = [];
@@ -68,6 +69,8 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       assert.equal(url.pathname, "/v1/messages");
       const body = JSON.parse(String(init.body)); modelCalls.push(body);
       const text = String(body.messages[0].content), tool = body.tools?.[0]?.name;
+      await options.providerBarrier?.(tool);
+      if (options.ambiguousProviderFailure === tool) return new Response("{", { status: 200, headers: { "Content-Type": "application/json" } });
       if (options.providerFailure === tool) return json({ type: "error", error: { type: "overloaded_error", message: "Mocked provider failure" } }, 503);
       const keyword = text.match(/Primary Keyword: ([^\n]+)/i)?.[1] ?? text.match(/PRIMARY KEYWORD: ([^\n]+)/)?.[1];
       let value: unknown;
@@ -316,8 +319,8 @@ test("SLC pricing, unknown shared budget and exhausted account or per-work funds
   }
 });
 
-test("SLC provider failure retains its reservation, blocks replay and preserves the failed fixed slot", async () => {
-  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], providerFailure: "submit_article" });
+test("SLC genuinely ambiguous provider result retains its reservation and requires reconciliation without replay", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], ambiguousProviderFailure: "submit_article" });
   const site = await selectGrowth(f);
   await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
   const job = f.tables.jobs.find(j => j.contentWork)!;
@@ -329,8 +332,226 @@ test("SLC provider failure retains its reservation, blocks replay and preserves 
     await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
   }
   assert.equal(f.modelCalls.length, 1); assert.equal(f.tables.jobs.length, 1);
+  assert.equal(f.get(job._id)!.contentWork.failure, "content_provider_result_ambiguous_reconciliation_required");
   assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000);
   f.assertOffline();
+});
+
+test("SLC repair26 due ready delivery outranks an unfinished future refill", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(START + 5 * 60_000);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "first mocked slot" });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.length === 3);
+  const due = f.tables.jobs.find(j => j.contentWork?.stage === "ready")!;
+  assert.ok(f.tables.jobs.some(j => j.contentWork?.stage === "prepare" && j.status === "pending"));
+  f.setTime(due.contentWork.windowStartAt);
+  const background = f.tables.jobs.find(j => j.contentWork?.stage === "prepare")!, calls = f.modelCalls.length;
+  assert.equal((await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: background._id })).processed, false,
+    "an already-scheduled preparation worker cannot race ahead of an exact due ready artifact");
+  assert.equal(f.modelCalls.length, calls);
+  assert.equal((await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id })).mode, "buffer_delivery");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "second mocked slot" });
+  await pumpUntil(f, () => f.get(due._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2,
+    180, due.contentWork.deadlineAt + 60_000);
+  assert.ok(f.get(due._id)!.contentWork.publishedAt <= due.contentWork.deadlineAt); f.assertOffline();
+});
+
+test("SLC repair26 transient provider rejection recovers the same work through delivery and refill", async t => {
+  const options = { growthFirst: true, businesses: [slcBusinesses[0]], providerFailure: "submit_article" as string | undefined };
+  const f = setup(options), site = await selectGrowth(f);
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  assert.equal(f.get(job._id)!.status, "pending", "known transient rejection must have bounded recovery, not permanent shutdown");
+  const originalReservationId = job.providerSpendReservationId;
+  const firstRejected = f.get(job._id)!.contentWork.providerCalls[0];
+  assert.equal(firstRejected.state, "rejected"); assert.equal(firstRejected.actualMicroUsd, undefined);
+  await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id })));
+  assert.equal(f.modelCalls.length, 1, "duplicate early wakes cannot bypass backoff");
+  options.providerFailure = undefined;
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(Math.max(f.now(), START + 5 * 60_000));
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "recovered mocked slot" });
+  await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  assert.equal(f.get(job._id)!.contentWork.deadlineAt, START + 10 * 60_000);
+  assert.equal(f.get(job._id)!.contentWork.replacements, 0); f.assertOffline();
+  const closed = f.get(job._id)!;
+  assert.equal(closed.providerSpendReservationId, originalReservationId);
+  assert.ok(closed.workerAttempts >= 1); assert.equal(closed.contentWork.recoveryAttempts, 1);
+  assert.equal(new Set(closed.contentWork.providerCalls.map((c: Fields) => c.key)).size, closed.contentWork.providerCalls.length);
+  assert.ok(closed.contentWork.providerCalls.reduce((sum: number, c: Fields) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0) <= closed.contentWork.budgetMicroUsd);
+  assert.equal(f.get(originalReservationId)!.settledAt, undefined, "rejection is not assumed free; original reservation remains conservative");
+  t.diagnostic(JSON.stringify({ scenario: "known_rejection_recovered", transports: "mocked", deadlineAt: new Date(closed.contentWork.deadlineAt).toISOString(),
+    publishedAt: new Date(closed.contentWork.publishedAt).toISOString(), verifiedAt: new Date(closed.contentWork.verifiedAt).toISOString(),
+    buffer: 2, recoveryAttempts: closed.contentWork.recoveryAttempts }));
+});
+
+test("SLC repair26 running refill crosses the delivery window without starving or duplicating publication", async t => {
+  const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]], failedOptionalSource: true };
+  const f = setup(options), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(START + 5 * 60_000);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "first mocked slot" });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.length === 3);
+  const due = f.tables.jobs.find(j => j.contentWork?.stage === "ready")!, background = f.tables.jobs.find(j => j.contentWork?.stage === "prepare")!;
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
+  options.providerBarrier = async tool => { if (tool === "submit_article") { entered(); await held; } };
+  f.setTime(due.contentWork.windowStartAt - 1);
+  const worker = f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: background._id });
+  await started;
+  assert.equal(f.get(background._id)!.status, "running");
+  f.setTime(due.contentWork.windowStartAt);
+  await Promise.all(Array.from({ length: 3 }, () => f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "overlapping fixed window" })));
+  await pumpUntil(f, () => f.get(due._id)!.contentWork.stage === "verified", 120, due.contentWork.deadlineAt);
+  assert.equal(f.get(background._id)!.status, "running", "actual provider worker still outstanding when delivery verified");
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 2);
+  assert.ok(f.get(due._id)!.contentWork.publishedAt <= due.contentWork.deadlineAt);
+  options.providerBarrier = undefined; release(); await worker;
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 160, due.contentWork.deadlineAt + 60_000);
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length, 2); f.assertOffline();
+  const delivered = f.get(due._id)!.contentWork;
+  t.diagnostic(JSON.stringify({ scenario: "delivery_with_running_refill", transports: "mocked", deadlineAt: new Date(delivered.deadlineAt).toISOString(),
+    publishedAt: new Date(delivered.publishedAt).toISOString(), verifiedAt: new Date(delivered.verifiedAt).toISOString(), buffer: 2 }));
+});
+
+test("SLC repair26 future review failure and funding deferral cannot outrank a due sealed article", async () => {
+  for (const scenario of ["review_failed", "allowance_deferred", "ambiguous_failed"] as const) {
+    const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]] };
+    const f = setup(options), site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+    f.setTime(START + 5 * 60_000);
+    await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "first mocked slot" });
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.length === 3);
+    const due = f.tables.jobs.find(j => j.contentWork?.stage === "ready")!, background = f.tables.jobs.find(j => j.contentWork?.stage === "prepare")!;
+    if (scenario === "review_failed") {
+      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: background._id });
+      options.quality = "low";
+      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: background._id });
+      assert.equal(f.get(background._id)!.contentWork.stage, "review_failed");
+      options.quality = undefined;
+    } else if (scenario === "ambiguous_failed") {
+      options.ambiguousProviderFailure = "submit_article";
+      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: background._id });
+      options.ambiguousProviderFailure = undefined;
+    } else {
+      await f.invoke("jobs:claimPending", { siteId: site.id, jobId: background._id, workerToken: "deferred-worker" });
+      await f.invoke("jobs:deferArticleProviderMonthlyAllowance", { jobId: background._id, workerToken: "deferred-worker" });
+    }
+    f.setTime(due.contentWork.windowStartAt);
+    assert.equal((await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id })).mode, "buffer_delivery", scenario);
+    await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "due work despite future issue" });
+    await pumpUntil(f, () => f.get(due._id)!.contentWork.stage === "verified", 120, due.contentWork.deadlineAt);
+    assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 2);
+    if (scenario === "review_failed") await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 180, due.contentWork.deadlineAt + 60_000);
+    else assert.notEqual(f.get(background._id)!.contentWork.stage, "verified", "unresolved future work is not called successful recovery");
+    f.assertOffline();
+  }
+});
+
+test("SLC repair26 completed provider checkpoints survive a later rejected review call without replay", async () => {
+  const options = { growthFirst: true, businesses: [slcBusinesses[0]], providerFailure: "audit_final_article" as string | undefined };
+  const f = setup(options), site = await selectGrowth(f);
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  const original = f.get(job._id)!;
+  assert.equal(original.status, "pending"); options.providerFailure = undefined;
+  f.setTime(original.nextAttemptAt);
+  await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id })));
+  assert.equal(f.get(job._id)!.contentWork.stage, "ready", diagnostic(f));
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1);
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "review_article").length, 1);
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "audit_final_article").length, 2);
+  assert.equal(f.tables.articles.length, 1); f.assertOffline();
+});
+
+test("SLC repair26 no-I/O lease restart and UTC rollover retain one work envelope and exact deadline", async t => {
+  for (const checkpoint of [false, true]) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f, 48 * 60 * 60_000);
+    await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork)!;
+    const originalReservationId = job.providerSpendReservationId;
+    if (checkpoint) await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    const initialCalls = f.modelCalls.length;
+    await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "crashed-before-next-call" });
+    f.setTime(START + 24 * 60 * 60_000);
+    await Promise.all(Array.from({ length: 3 }, () => f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: job._id, expectedWorkerToken: "crashed-before-next-call" })));
+    assert.equal(f.get(job._id)!.contentWork.recoveryAttempts, 1);
+    assert.equal(f.modelCalls.length, initialCalls);
+    await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "ready", 120, f.now() + 10 * 60_000);
+    const recovered = f.get(job._id)!;
+    assert.notEqual(recovered.providerSpendReservationId, originalReservationId);
+    const prior = f.get(originalReservationId)!, current = f.get(recovered.providerSpendReservationId)!;
+    if (checkpoint) assert.equal(prior.settledMicroUsd, 200); else assert.ok(prior.releasedAt !== undefined);
+    assert.equal(current.reservedMicroUsd + (prior.settledMicroUsd ?? 0), recovered.contentWork.budgetMicroUsd);
+    assert.equal(recovered.contentWork.deadlineAt, START + 10 * 60_000);
+    assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1);
+    assert.equal(recovered.workerAttempts, 1);
+    await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2,
+      180, f.now() + 10 * 60_000);
+    const delivered = f.get(job._id)!.contentWork;
+    t.diagnostic(JSON.stringify({ scenario: checkpoint ? "persisted_draft_rollover" : "no_io_lease_rollover", transports: "mocked",
+      deadlineAt: new Date(delivered.deadlineAt).toISOString(), publishedAt: new Date(delivered.publishedAt).toISOString(),
+      verifiedAt: new Date(delivered.verifiedAt).toISOString(), explicitlyLate: true, buffer: 2 }));
+    f.assertOffline();
+  }
+});
+
+test("SLC repair26 rollover cannot borrow a new budget when costs are uncertain or account headroom is exhausted", async () => {
+  for (const uncertain of [false, true]) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+    await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork)!, reservationId = job.providerSpendReservationId;
+    if (uncertain) {
+      await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "uncertain-worker" });
+      await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "uncertain-worker", key: "unknown", ceilingMicroUsd: 100 });
+    }
+    f.setTime(START + 24 * 60 * 60_000);
+    if (uncertain) await f.invoke("jobs:resetStuckJobs", { siteId: site.id, jobId: job._id, expectedWorkerToken: "uncertain-worker" });
+    else {
+      f.add("provider_spend_reservations", { siteId: site.id, userId: `synthetic-owner-${site.domain}`, purpose: "topic_plan", trigger: "valid-other-work",
+        reservedMicroUsd: 28_000_000, createdAt: f.now() });
+      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    }
+    const closed = f.get(job._id)!;
+    assert.equal(closed.status, "failed"); assert.equal(closed.providerSpendReservationId, reservationId);
+    assert.equal(f.modelCalls.length, 0); assert.equal(f.get(reservationId)!.releasedAt !== undefined, !uncertain);
+    if (!uncertain) assert.match(closed.contentWork.failure, /rollover blocked: provider_account_monthly_budget_reserved; requestedMicroUsd=500000; consumedMicroUsd=28000000; ceilingMicroUsd=28000000/);
+    else assert.equal(closed.contentWork.failure, "content_provider_result_ambiguous_reconciliation_required");
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
+  }
+});
+
+test("SLC repair26 completed response checkpoint is immutable, idempotent and request-bound", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  const call = structuredClone(f.get(job._id)!.contentWork.providerCalls[0]);
+  await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "resumed-worker" });
+  const args = { jobId: job._id, workerToken: "resumed-worker", key: call.logicalKey, requestHash: call.requestHash, ceilingMicroUsd: call.ceilingMicroUsd };
+  for (let n = 0; n < 3; n++) assert.equal((await f.invoke("contentWork:beginProviderCall", args)).kind, "cached");
+  await assert.rejects(f.invoke("contentWork:beginProviderCall", { ...args, requestHash: "different-request" }), /request changed/);
+  await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: "resumed-worker", key: call.key, actualMicroUsd: call.actualMicroUsd, result: call.result });
+  await assert.rejects(f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: "resumed-worker", key: call.key, actualMicroUsd: call.actualMicroUsd, result: { tampered: true } }), /settlement conflict/);
+  assert.equal(f.modelCalls.length, 1); assert.deepEqual(f.get(job._id)!.contentWork.providerCalls[0], call); f.assertOffline();
+});
+
+test("SLC repair26 repeated rejection exhausts bounded recovery without extra candidates or erased spend", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], providerFailure: "submit_article", budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+  const job = f.tables.jobs[0];
+  assert.equal(f.modelCalls.length, 4); assert.equal(job.contentWork.recoveryAttempts, 3);
+  assert.equal(job.contentWork.failure, "content_recovery_attempts_exhausted");
+  assert.equal(f.tables.jobs.length, 1); assert.equal(job.contentWork.replacements, 0);
+  assert.equal(f.get(job.providerSpendReservationId)!.settledAt, undefined);
+  for (let n = 0; n < 3; n++) await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "job_retry", reason: "duplicate terminal wake" });
+  assert.equal(f.modelCalls.length, 4); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
 });
 
 test("SLC bounded reviews allow two targeted revisions and one distinct replacement, never unsupported acceptance", async () => {
@@ -445,22 +666,17 @@ test("SLC changed connection, revoked access and changed confirmed facts stop be
   }
 });
 
-test("SLC terminal cancellation and UTC expiry release only proven no-I/O reservations, idempotently", async () => {
-  for (const reason of ["cancel_before_call", "cancel_after_call_started", "expired_before_call"] as const) {
+test("SLC terminal cancellation releases only proven no-I/O reservations, idempotently", async () => {
+  for (const reason of ["cancel_before_call", "cancel_after_call_started"] as const) {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await selectGrowth(f);
     await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
     const job = f.tables.jobs.find(j => j.contentWork)!;
-    if (reason === "expired_before_call") {
-      f.setTime(START + 24 * 60 * 60_000);
-      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
-    } else {
       await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "cancel-worker" });
       if (reason === "cancel_after_call_started") await f.invoke("contentWork:beginProviderCall", {
         jobId: job._id, workerToken: "cancel-worker", key: "in-flight-request", ceilingMicroUsd: 100 });
       await Promise.all(Array.from({ length: 3 }, () => f.invoke("jobs:markFailed", {
         jobId: job._id, workerToken: "cancel-worker", error: "Synthetic terminal cancellation" })));
-    }
     const closed = f.get(job._id)!, receipt = f.get(job.providerSpendReservationId)!;
     assert.equal(closed.status, "failed"); assert.equal(closed.contentWork.stage, "failed");
     assert.equal(receipt.releasedAt !== undefined, reason !== "cancel_after_call_started");
@@ -518,6 +734,9 @@ test("SLC create cannot overwrite an existing customer-edited or earlier Pentra-
   await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked window" });
   await pumpUntil(f, () => f.get(job._id)!.status === "failed", 180, START + 180 * 60_000);
   assert.equal(repo.files.get(path), original); assert.equal(repo.writes, 0);
+  assert.equal((await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id })).mode, "content_failed_slot",
+    "a terminal publisher must not be mislabeled as pending delivery");
+  assert.equal(f.get(job._id)!.contentWork.failure, "content_publication_failed_reconciliation_required");
   assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
 });
 

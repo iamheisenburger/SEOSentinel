@@ -3,7 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { contentWorkCompleted, settleFailedContentWork } from "./contentWork";
+import { contentWorkCompleted, settleFailedContentWork, recoverContentWork } from "./contentWork";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import { publicationDeliveryBlocker } from "./lib/publicationEligibility";
@@ -955,6 +955,12 @@ export const resetStuckJobs = internalMutation({
         reservationId: job.articleId ? job.reservationId : undefined,
         updatedAt: currentTime,
       };
+      if (job.contentWork && job.contentWork.stage !== "publish") {
+        const recovered = await recoverContentWork(ctx, job, "Worker lease expired at its unchanged deadline");
+        if (recovered.willRetry) reset += 1; else terminal += 1;
+        await reconcileJobTopicLifecycle(ctx, job);
+        continue;
+      }
       if (job.type === "plan") {
         await ctx.db.patch(job._id, {
           ...ownershipReset,
@@ -1066,6 +1072,10 @@ export const recoverParentTimeoutJob = internalMutation({
     await settleArticleProviderAttempt(ctx, job, "ambiguous", currentTime);
     await releaseReservedUsage(ctx, job);
     const attempts = (job.workerAttempts ?? 0) + 1;
+    if (job.contentWork && job.contentWork.stage !== "publish") {
+      const recovered = await recoverContentWork(ctx, job, "Parent worker lost after its lease expired");
+      return { recovered: recovered.willRetry, attempts };
+    }
     if (job.type === "plan") {
       await ctx.db.patch(jobId, {
         status: "failed",
@@ -1332,6 +1342,17 @@ async function hasConflictingRunningJob(
   job: Doc<"jobs"> | null,
 ): Promise<boolean> {
   if (!site || !job) return true;
+  if (site.serviceMode === "growth_first" && site.contentSchedule?.active && job.contentWork?.stage !== "publish") {
+    const due = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
+      .eq("contentWork.deadlineAt", site.contentSchedule!.nextDeadlineAt)).take(3);
+    for (const delivery of due) {
+      if (delivery._id === job._id || !["ready", "publish"].includes(delivery.contentWork?.stage ?? "") ||
+        delivery.contentWork!.windowStartAt > now() || !delivery.articleId) continue;
+      const article = await ctx.db.get(delivery.articleId);
+      if (article?.siteId === site._id && isSealedReady(article) &&
+        article.auditedContentHash === delivery.contentWork!.approvedArtifactHash) return true;
+    }
+  }
   const running = (await ctx.db.query("jobs")
     .withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "running"))
     .collect()).filter(candidate => candidate._id !== job._id &&
@@ -4832,13 +4853,18 @@ export const markRetryableFailure = internalMutation({
       return { updated: false, willRetry: false, nextAttemptAt: undefined };
     }
     const site = job.siteId ? await ctx.db.get(job.siteId) : null;
+    if (job.contentWork) {
+      await settleArticleProviderAttempt(ctx, job, "failed", now());
+      if (!job.articleId) await releaseReservedUsage(ctx, job);
+      return recoverContentWork(ctx, job, error);
+    }
     const checkpointSingleExecution = Boolean(
       job.type === "plan" &&
       site?.expectedClickSchedulingEnabled === true &&
       automaticSingleExecutionCheckpointTargetFromPayload(job.payload),
     );
     const attempts = (job.workerAttempts ?? 0) + 1;
-    const maximumRetries = checkpointSingleExecution || job.contentWork
+    const maximumRetries = checkpointSingleExecution
       ? 0
       : job.type === "plan"
         ? AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES

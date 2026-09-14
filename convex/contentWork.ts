@@ -14,6 +14,7 @@ import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness } from "./lib/autopilotReadiness";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
+export const MAX_CONTENT_RECOVERIES = 3;
 const LIMIT = 1000;
 function contentConnectionHash(site: Doc<"sites">): string {
   return sha256Hex(JSON.stringify([publicationAdapterConfigHash(site), site.publisherConnectionGeneration ?? 0]));
@@ -165,14 +166,45 @@ export const advance = internalMutation({
       schedule.connectionHash !== contentConnectionHash(site)) return { scheduled: 0, mode: "content_binding_changed" };
     if (site.approvalRequired) return { scheduled: 0, mode: "approval_waiting" };
     const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork);
+    if (all.some(j => !j.contentWork && ["pending", "running"].includes(j.status))) return { scheduled: 0, mode: "content_migration_pending" };
+    const waiting = work.filter(j => !["verified", "failed"].includes(j.contentWork!.stage)).sort((a,b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt);
+    // Delivery and its persisted window wake precede all unrelated preparation,
+    // review and funding failures. Claiming still uses the existing disjoint
+    // provider-free worker lane and the publisher's destination lease.
+    const ready = waiting.filter(j => j.status === "done" && j.contentWork!.stage === "ready");
+    let active = schedule.active;
+    if (!active && ready.length >= 2 && liveAutopilotReadiness(site, true).ready) {
+      for (const item of ready.slice(0, 2)) {
+        const artifact = item.articleId ? await ctx.db.get(item.articleId) : null;
+        if (!artifact || !isSealedReady(artifact) || publicationArtifactHash(artifact) !== item.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
+      }
+      active = true;
+      await ctx.db.patch(siteId, { contentSchedule: { ...schedule, active: true }, autopilotRolloutMode: "live", updatedAt: Date.now() });
+    }
+    const first = ready.find(j => j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
+    if (active && first && Date.now() >= first.contentWork!.windowStartAt) {
+      const article = first.articleId ? await ctx.db.get(first.articleId) : null;
+      if (!article || !isSealedReady(article) || article.auditedContentHash !== first.contentWork!.approvedArtifactHash ||
+        publicationArtifactHash(article) !== first.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
+      await ctx.db.patch(first._id, { status: "pending", nextAttemptAt: undefined,
+        payload: { ...first.payload, articleId: article._id, publishOnly: true, bufferDelivery: true, qualityRetry: false, bufferFill: false },
+        contentWork: { ...first.contentWork!, stage: "publish" }, updatedAt: Date.now() });
+      return { scheduled: 1, mode: "buffer_delivery", activeJobId: first._id };
+    }
+    const publishing = waiting.find(j => ["pending", "running"].includes(j.status) &&
+      j.contentWork!.deadlineAt === schedule.nextDeadlineAt && j.contentWork!.stage === "publish");
+    if (publishing) return { scheduled: 0, mode: "buffer_delivery_pending", activeJobId: publishing._id };
+    if (active && first && first.contentWork!.windowStartAt > Date.now() && !first.contentWork!.windowWakeId) {
+      const windowWakeId = await ctx.scheduler.runAt(first.contentWork!.windowStartAt, internal.autopilot.dispatchSiteFollowup,
+        { siteId, trigger: "content_window", reason: `fixed_deadline_${first.contentWork!.deadlineAt}` });
+      await ctx.db.patch(first._id, { contentWork: { ...first.contentWork!, windowWakeId } });
+    }
     for (const j of work) if (j.status === "failed" && !["verified", "failed"].includes(j.contentWork!.stage)) {
       await settleFailedContentWork(ctx, j._id);
       return { scheduled: 0, mode: "content_failed_slot" };
     }
-    if (all.some(j => !j.contentWork && ["pending", "running"].includes(j.status))) return { scheduled: 0, mode: "content_migration_pending" };
     const activeJob = work.find(j => ["pending", "running"].includes(j.status));
     if (activeJob) return { scheduled: 0, mode: "work_in_progress", activeJobId: activeJob._id };
-    const waiting = work.filter(j => !["verified", "failed"].includes(j.contentWork!.stage)).sort((a,b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt);
     const unverified = waiting.find(j => j.contentWork!.stage === "verify");
     if (unverified) {
       const article = unverified.articleId ? await ctx.db.get(unverified.articleId) : null;
@@ -201,31 +233,8 @@ export const advance = internalMutation({
       return { scheduled: 0, mode: "content_quality_exhausted" };
     }
     // A failed delivery slot cannot silently mint unlimited replacement jobs.
-    if (work.some(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
-    const ready = waiting.filter(j => j.contentWork!.stage === "ready");
-    let active = schedule.active;
-    if (!active && ready.length >= 2 && liveAutopilotReadiness(site, true).ready) {
-      for (const item of ready.slice(0, 2)) {
-        const artifact = item.articleId ? await ctx.db.get(item.articleId) : null;
-        if (!artifact || !isSealedReady(artifact) || publicationArtifactHash(artifact) !== item.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
-      }
-      active = true;
-      await ctx.db.patch(siteId, { contentSchedule: { ...schedule, active: true }, autopilotRolloutMode: "live", updatedAt: Date.now() });
-    }
-    const first = ready[0];
-    if (active && first && first.contentWork!.deadlineAt === schedule.nextDeadlineAt && Date.now() >= first.contentWork!.windowStartAt) {
-      const article = first.articleId ? await ctx.db.get(first.articleId) : null;
-      if (!article || !isSealedReady(article) || article.auditedContentHash !== first.contentWork!.approvedArtifactHash ||
-        publicationArtifactHash(article) !== first.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
-      await ctx.db.patch(first._id, { status: "pending", payload: { ...first.payload, articleId: article._id, publishOnly: true, bufferDelivery: true },
-        contentWork: { ...first.contentWork!, stage: "publish" }, updatedAt: Date.now() });
-      return { scheduled: 1, mode: "buffer_delivery" };
-    }
-    if (active && first && first.contentWork!.windowStartAt > Date.now() && !first.contentWork!.windowWakeId) {
-      const windowWakeId = await ctx.scheduler.runAt(first.contentWork!.windowStartAt, internal.autopilot.dispatchSiteFollowup,
-        { siteId, trigger: "content_window", reason: `fixed_deadline_${first.contentWork!.deadlineAt}` });
-      await ctx.db.patch(first._id, { contentWork: { ...first.contentWork!, windowWakeId } });
-    }
+    const failedSlot = work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
+    if (failedSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
     const pricing = pricingConfiguration();
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
@@ -260,9 +269,10 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
   if (!article || article.siteId !== job.siteId) throw new Error("Content work artifact crossed tenant boundary");
   const stage = article.status === "published" ? (article.publicUrlStatus === "verified" ? "verified" : "verify")
     : isSealedReady(article) ? "ready" : "review_failed";
-  if (stage === "ready" && job.providerSpendReservationId && cw.providerCalls.length > 0 && cw.providerCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
+  const currentCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === job.providerSpendReservationId);
+  if (stage === "ready" && job.providerSpendReservationId && currentCalls.length > 0 && currentCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
     await settleSharedProviderReservation(ctx, { reservationId: job.providerSpendReservationId, siteId: job.siteId!, purpose: "content_work",
-      actualMicroUsd: cw.providerCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0), reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+      actualMicroUsd: currentCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0), reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
   }
   await ctx.db.patch(job._id, { contentWork: { ...cw, stage,
     approvedArtifactHash: stage === "ready" ? article.auditedContentHash : cw.approvedArtifactHash,
@@ -289,45 +299,133 @@ export async function settleFailedContentWork(ctx: MutationCtx, jobId: Id<"jobs"
   if (!job || job.status !== "failed" || !cw || !job.siteId || !job.providerSpendReservationId) return;
   const receipt = await ctx.db.get(job.providerSpendReservationId);
   if (!receipt || receipt.siteId !== job.siteId || receipt.purpose !== "content_work") throw new Error("Content work settlement binding changed");
+  const currentCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === receipt._id);
   if (receipt.settledAt === undefined && receipt.releasedAt === undefined) {
-    if (cw.providerCalls.length === 0) {
+    if (currentCalls.length === 0) {
       await releaseSharedProviderReservation(ctx, { reservationId: receipt._id, siteId: job.siteId, purpose: "content_work",
         reason: "content_work_closed_before_provider_execution", timestamp: Date.now() });
-    } else if (cw.providerCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
+    } else if (currentCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
       await settleSharedProviderReservation(ctx, { reservationId: receipt._id, siteId: job.siteId, purpose: "content_work",
-        actualMicroUsd: cw.providerCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0),
+        actualMicroUsd: currentCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0),
         reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
     }
   }
-  await ctx.db.patch(job._id, { contentWork: { ...cw, stage: "failed", failure: cw.failure ?? "worker_failed_review_required" } });
+  await ctx.db.patch(job._id, { contentWork: { ...cw, stage: "failed", failure: cw.failure ??
+    (cw.stage === "publish" ? "content_publication_failed_reconciliation_required" : "worker_failed_review_required") } });
+}
+
+/** Called only by the existing exact-worker failure/lease transitions. Recovery
+ * changes neither logical candidate/revision counts nor the work envelope.
+ * Rejected requests keep their priced ceilings; an unknown result never replays.
+ */
+export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, error: string) {
+  const cw = job.contentWork!;
+  const recoveries = cw.recoveryAttempts ?? 0;
+  const uncertain = cw.providerCalls.some(c => c.state === "started");
+  const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+  const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
+    : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
+    : /Content provider (authority changed|reservation unavailable)|Content checkpoint/.test(error) ? error
+    : recoveries >= MAX_CONTENT_RECOVERIES ? "content_recovery_attempts_exhausted"
+    : used >= cw.budgetMicroUsd ? `Content work budget exhausted: limitMicroUsd=${cw.budgetMicroUsd}; consumedCeilingMicroUsd=${used}; availableMicroUsd=0`
+    : undefined;
+  const willRetry = failure === undefined;
+  const nextAttemptAt = willRetry ? Date.now() + 2 ** recoveries * 60_000 : undefined;
+  await ctx.db.patch(job._id, { status: willRetry ? "pending" : "failed",
+    workerAttempts: (job.workerAttempts ?? 0) + 1, nextAttemptAt,
+    workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
+    reservationId: job.articleId ? job.reservationId : undefined,
+    contentWork: { ...cw, recoveryAttempts: recoveries + (willRetry ? 1 : 0),
+      stage: willRetry ? cw.stage : "failed", failure },
+    error: failure ?? `Content recovery ${recoveries + 1}/${MAX_CONTENT_RECOVERIES} scheduled: ${error}`,
+    updatedAt: Date.now() });
+  if (willRetry) await ctx.scheduler.runAt(nextAttemptAt!, internal.autopilot.dispatchSiteFollowup,
+    { siteId: job.siteId!, trigger: "job_retry", reason: `content_recovery_${recoveries + 1}` });
+  else await settleFailedContentWork(ctx, job._id);
+  return { updated: true, willRetry, nextAttemptAt };
 }
 
 export const beginProviderCall = internalMutation({
-  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), ceilingMicroUsd: v.number() },
+  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), requestHash: v.optional(v.string()), ceilingMicroUsd: v.number() },
   handler: async (ctx, args) => {
-    const job = await ctx.db.get(args.jobId), cw = job?.contentWork, site = job?.siteId ? await ctx.db.get(job.siteId) : null;
+    const job = await ctx.db.get(args.jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
+    let cw = job?.contentWork;
     if (!job || !cw || !site || job.workerToken !== args.workerToken || job.status !== "running" ||
       (job.leaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) ||
       !(await contentEntitlementAuthorized(ctx, site)) || !site.githubToken || confirmedContentProfileHash(site) !== cw.profileHash ||
       contentConnectionHash(site) !== cw.connectionHash) throw new Error("Content provider authority changed");
-    const receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
+    const previousCalls = cw.providerCalls.filter(c => (c.logicalKey ?? c.key) === args.key);
+    if (previousCalls.some(c => c.requestHash !== args.requestHash)) throw new Error("Content checkpoint request changed; reconcile the persisted result");
+    const completed = previousCalls.find(c => c.state === "completed");
+    if (completed) {
+      if (completed.result === undefined) throw new Error("Content checkpoint response unavailable; no paid replay");
+      return { kind: "cached" as const, result: completed.result };
+    }
+    if (previousCalls.some(c => c.state === "started")) throw new Error("Content provider response already attempted; reconcile before replay");
+    if (previousCalls.length > MAX_CONTENT_RECOVERIES) throw new Error("Content checkpoint retry limit exhausted");
+    let receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
     if (!receipt || receipt.siteId !== site._id || receipt.userId !== site.userId || receipt.purpose !== "content_work" ||
-      receipt.releasedAt !== undefined || receipt.settledAt !== undefined || receipt.reservedMicroUsd !== cw.budgetMicroUsd) throw new Error("Content provider reservation unavailable");
-    if (new Date(receipt.createdAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) throw new Error("Content reservation accounting day expired; no cross-window provider replay");
-    if (cw.providerCalls.some(c => c.key === args.key)) throw new Error("Content provider response already attempted; reconcile before replay");
+      receipt.releasedAt !== undefined || receipt.settledAt !== undefined) throw new Error("Content provider reservation unavailable");
+    const priorConsumed = cw.providerCalls.filter(c => c.reservationId && c.reservationId !== receipt!._id)
+      .reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+    if (receipt.reservedMicroUsd !== cw.budgetMicroUsd - priorConsumed ||
+      !(receipt.trigger === `content_slot:${cw.deadlineAt}` || receipt.trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`))) {
+      throw new Error("Content provider reservation unavailable: work envelope binding changed");
+    }
     const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
-    if (!Number.isSafeInteger(args.ceilingMicroUsd) || args.ceilingMicroUsd <= 0 || used + args.ceilingMicroUsd > cw.budgetMicroUsd || cw.providerCalls.length >= 20) throw new Error("Content work budget exhausted");
-    await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: [...cw.providerCalls, { key: args.key, ceilingMicroUsd: args.ceilingMicroUsd, state: "started" }] } });
+    if (!Number.isSafeInteger(args.ceilingMicroUsd) || args.ceilingMicroUsd <= 0 || used + args.ceilingMicroUsd > cw.budgetMicroUsd || cw.providerCalls.length >= 20) {
+      throw new Error(`Content work budget exhausted: limitMicroUsd=${cw.budgetMicroUsd}; consumedCeilingMicroUsd=${used}; requestedMicroUsd=${args.ceilingMicroUsd}; availableMicroUsd=${Math.max(0, cw.budgetMicroUsd - used)}; calls=${cw.providerCalls.length}/20`);
+    }
+    if (new Date(receipt.createdAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
+      if (cw.providerCalls.some(c => c.state !== "completed") || (cw.priorReservationIds?.length ?? 0) >= MAX_CONTENT_RECOVERIES) {
+        throw new Error("Content work rollover blocked: uncertain prior cost or renewal limit; original reservation retained");
+      }
+      const oldId = receipt._id;
+      const oldCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === oldId);
+      if (oldCalls.length) await settleSharedProviderReservation(ctx, { reservationId: oldId, siteId: site._id, purpose: "content_work",
+        actualMicroUsd: oldCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0), reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+      else await releaseSharedProviderReservation(ctx, { reservationId: oldId, siteId: site._id, purpose: "content_work",
+        reason: "content_work_closed_before_provider_execution", timestamp: Date.now() });
+      const replacement = await reserveSharedProviderBudget(ctx, { siteId: site._id, userId: site.userId!, purpose: "content_work",
+        trigger: `content_slot:${cw.deadlineAt}:remaining_window:${Date.now()}`, reservedMicroUsd: cw.budgetMicroUsd - used, timestamp: Date.now() });
+      if (!replacement.ok) throw new Error(`Content work rollover blocked: ${replacement.reason}; requestedMicroUsd=${cw.budgetMicroUsd - used}; consumedMicroUsd=${replacement.reservedMicroUsd}; ceilingMicroUsd=${replacement.ceilingMicroUsd}`);
+      receipt = (await ctx.db.get(replacement.reservationId))!;
+      cw = { ...cw, priorReservationIds: [...(cw.priorReservationIds ?? []), oldId],
+        providerCalls: cw.providerCalls.map(c => ({ ...c, reservationId: c.reservationId ?? oldId })) };
+      await ctx.db.patch(job._id, { providerSpendReservationId: receipt._id });
+    }
+    const currentUsed = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === receipt!._id)
+      .reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+    if (currentUsed + args.ceilingMicroUsd > receipt.reservedMicroUsd) throw new Error(`Content work budget exhausted for current reservation: limitMicroUsd=${receipt.reservedMicroUsd}; consumedCeilingMicroUsd=${currentUsed}; requestedMicroUsd=${args.ceilingMicroUsd}`);
+    const key = `${args.key}:${previousCalls.length}`;
+    await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: [...cw.providerCalls, { key, logicalKey: args.key, requestHash: args.requestHash,
+      reservationId: receipt._id, ceilingMicroUsd: args.ceilingMicroUsd, state: "started" }] } });
+    return { kind: "started" as const, key };
   },
 });
 export const completeProviderCall = internalMutation({
-  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), actualMicroUsd: v.number() },
+  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), actualMicroUsd: v.number(), result: v.optional(v.any()) },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), cw = job?.contentWork;
     const call = cw?.providerCalls.find(c => c.key === args.key);
     if (!job || !cw || !call || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
       !Number.isSafeInteger(args.actualMicroUsd) || args.actualMicroUsd < 0 || args.actualMicroUsd > call.ceilingMicroUsd) throw new Error("Content provider receipt invalid; reserved ceiling retained");
-    if (call.state === "completed" && call.actualMicroUsd !== args.actualMicroUsd) throw new Error("Content provider settlement conflict");
-    await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: cw.providerCalls.map(c => c.key === args.key ? { ...c, state: "completed" as const, actualMicroUsd: args.actualMicroUsd } : c) } });
+    if (call.state === "rejected" || (call.state === "completed" && (call.actualMicroUsd !== args.actualMicroUsd || JSON.stringify(call.result) !== JSON.stringify(args.result)))) throw new Error("Content provider settlement conflict");
+    const providerCalls = cw.providerCalls.map(c => c.key === args.key ? { ...c, state: "completed" as const, actualMicroUsd: args.actualMicroUsd, result: args.result } : c);
+    if (new TextEncoder().encode(JSON.stringify(providerCalls)).length > 700_000) throw new Error("Content checkpoint storage bound exceeded; reserved ceiling retained");
+    await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls } });
+  },
+});
+
+export const recordProviderRejection = internalMutation({
+  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), status: v.number(), code: v.string() },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId), cw = job?.contentWork, call = cw?.providerCalls.find(c => c.key === args.key);
+    const known = (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error");
+    if (!known || !job || job.status !== "running" || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
+      !cw || !call || call.state === "completed") throw new Error("Content rejection receipt invalid; original ceiling retained");
+    if (call.state === "rejected" && (call.rejectionStatus !== args.status || call.rejectionCode !== args.code)) throw new Error("Content rejection receipt changed");
+    await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: cw.providerCalls.map(c => c.key === args.key
+      ? { ...c, state: "rejected" as const, rejectionStatus: args.status, rejectionCode: args.code } : c) } });
   },
 });

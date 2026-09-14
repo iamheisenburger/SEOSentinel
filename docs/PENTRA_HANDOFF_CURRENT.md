@@ -1,6 +1,28 @@
 # Pentra — fresh-task handoff
 
-## Current: SLC Stage 1 local candidate, 2026-09-14
+## Current: Stage 1 delivery-priority/recovery repair26, review required
+
+Assignment `supervisor-20260914-slc-stage1-repair-26` repairs independently
+reproduced starvation and permanent-shutdown defects in36373d2. Stay in
+`.claude/assignment24`, branch `codex/simplified-article-admission`. The current
+section of `docs/PENTRA_SLC_STAGE1_2026-09-14.md` records the failed-before/passing-
+after connected evidence and free gates. The parent `docs/PENTRA_SLC_PLAN.md`
+remains the only canonical plan. Do not advance Stage2 or deploy until review.
+
+Exact due delivery now takes precedence over disjoint preparation/recovery.
+Known rejections have bounded same-budget retries; completed request-bound
+responses resume without model replay. No-I/O/known-cost UTC rollover must
+re-admit only the original budget remainder through existing account/fleet
+guards. Uncertain requests retain their reservation and require reconciliation;
+they are not called successful recovery. Attempt history and missed deadlines
+are preserved. Twenty-three connected SLC scenarios include running-worker
+overlap and verified publication/refill after rejection/restart.
+
+No production reads/writes or provider I/O in26. USD20 remains inactive/unspent.
+The original transport incident below remains history, not a repeated event.
+LeadPilot/live SaaS acceptance and authenticated browser acceptance remain open.
+
+## Historical: original SLC Stage 1 local candidate, 2026-09-14
 
 Assignment `supervisor-20260914-slc-stage1-25` implements the approved SLC
 contract, not the historical global admission relaxation below. Start with
