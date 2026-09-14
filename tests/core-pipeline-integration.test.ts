@@ -471,6 +471,18 @@ export async function exerciseSetupReconfirmation(f: ReturnType<typeof setup>, s
   return { deadline: schedule.nextDeadlineAt, publishedAt: delivered.contentWork.publishedAt, verifiedAt: delivered.contentWork.verifiedAt, retired: old.length, ready: 2 };
 }
 
+test("SLC31 exact-site release projection exposes readiness without credentials or another fixture tenant", async () => {
+  const f = setup({ growthFirst: true, businesses: slcBusinesses.slice(0, 2) }), site = f.sites[0];
+  f.get(site.id)!.gscRefreshToken = "sensitive-fixture-refresh-value";
+  const result = await f.invoke("autopilot:getOperatorSnapshot", { siteId: site.id, includeContentPreflight: true });
+  assert.equal(result.site.siteId, site.id); assert.equal(result.contentPreflight.domain, site.domain);
+  assert.equal(result.contentPreflight.serviceMode, "legacy_articles"); assert.equal(result.contentPreflight.schedule, null);
+  assert.equal(result.contentPreflight.revisionInventoryComplete, true);
+  assert.doesNotMatch(JSON.stringify(result), /sensitive-fixture|githubToken|gscRefreshToken|wpAppPassword/);
+  assert.ok(!JSON.stringify(result).includes(f.sites[1].domain)); assert.equal(f.modelCalls.length, 0);
+  assert.ok(!f.trace.some(t => t.name === "network")); f.assertOffline();
+});
+
 test("SLC30 explicit changed-setup confirmation retires stale seals and reaches fresh late delivery/refill", async t => {
   for (const stock of [false, true]) await t.test(stock ? "two ready" : "empty stock", async () => {
     t.diagnostic(JSON.stringify(await exerciseSetupReconfirmation(setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), stock)));

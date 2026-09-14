@@ -1161,6 +1161,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
               )}
               {isWp && (
                 <>
+                  <p className="text-[12px] text-[#8B8FA3]">Growth-first requires the conditional publisher. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Install the WordPress connector</a>, then save and verify this exact website.</p>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />

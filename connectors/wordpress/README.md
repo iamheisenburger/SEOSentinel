@@ -1,5 +1,16 @@
 # Pentra conditional WordPress publisher
 
+## Install on your website
+
+1. [Download the connector file](https://raw.githubusercontent.com/iamheisenburger/SEOSentinel/main/connectors/wordpress/pentra-conditional-publisher.php) and save it as `pentra-conditional-publisher.php` inside a folder named `pentra-conditional-publisher`.
+2. Compress that folder to a ZIP. In your authorized WordPress site's admin, open **Plugins → Add New Plugin → Upload Plugin**, upload the ZIP, install and activate it.
+3. In **Users → Profile → Application Passwords**, create an application password for the existing user who may edit and publish your chosen content. Do not use your main login password or grant extra administrator access to the publisher.
+4. In Pentra's website publishing settings, choose WordPress, enter the exact HTTPS website URL, username and application password, then save. Pentra verifies both the connection and the conditional connector before allowing growth-first delivery.
+5. Review the saved business, schedule and publication consent. Existing pages remain uneditable until separately selected; unsupported layouts stay excluded. Test your theme/plugin compatibility before relying on unattended delivery.
+
+Installation requires your site's normal plugin-install permission. Publishing
+after installation requires only the documented content capabilities below.
+
 Install only `pentra-conditional-publisher.php` in a same-named plugin directory
 and activate it on the explicitly authorized WordPress destination. Use core
 WordPress application-password authentication over HTTPS. The authenticated

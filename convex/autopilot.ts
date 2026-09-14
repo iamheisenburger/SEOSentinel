@@ -25,7 +25,9 @@ import {
   liveAutopilotReadiness,
   requiredMonthlyArticlesForCadence,
   warmAutopilotReadiness,
+  publicationDestinationBlockers,
 } from "./lib/autopilotReadiness";
+import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { getLimitsFromFeatures, resolvePlanFromFeatures } from "./planLimits";
 import { growthLoopRolloutAllowsSite } from "./lib/growthLoopContracts.ts";
 import {
@@ -2865,8 +2867,8 @@ export const pruneLifecycle = internalMutation({
 // response. This avoids reading complete article bodies, source snapshots, or
 // tenant publishing configuration merely to verify rollout health.
 export const getOperatorSnapshot = internalQuery({
-  args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
+  args: { siteId: v.id("sites"), includeContentPreflight: v.optional(v.boolean()) },
+  handler: async (ctx, { siteId, includeContentPreflight }) => {
     const snapshotAt = Date.now();
     const site = await ctx.db.get(siteId);
     if (!site) throw new Error("Site not found");
@@ -2987,7 +2989,27 @@ export const getOperatorSnapshot = internalQuery({
         reservation,
       });
     }));
+    // Exact-site, credential-free release projection. No provider call,
+    // eligibility mutation, account enumeration or copied site document.
+    const retainedRevisions = includeContentPreflight ? await Promise.all((["leased", "attempted", "unverified", "verification_pending"] as const).map(status =>
+      ctx.db.query("published_article_revisions").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", status)).take(21))) : [];
     return {
+      ...(includeContentPreflight ? { contentPreflight: {
+        domain: siteCanonicalDomain(site), domainRevision: siteCanonicalDomainRevision(site), serviceMode: site.serviceMode ?? "legacy_articles",
+        profilePresent: Boolean(site.siteSummary?.trim() && site.targetAudienceSummary?.trim()),
+        publishingMethod: site.publishMethod ?? "github", publisherVerified: publisherDestinationReceiptVerified({ site }),
+        publisherBlockers: publicationDestinationBlockers(site), approvalRequired: Boolean(site.approvalRequired),
+        schedule: site.contentSchedule ? { active: site.contentSchedule.active, paused: site.contentSchedule.paused,
+          nextDeadlineAt: site.contentSchedule.nextDeadlineAt, intervalMs: site.contentSchedule.intervalMs, timezone: site.contentSchedule.timezone } : null,
+        publicationLease: { held: Boolean(site.publicationLeaseOwner), expiresAt: site.publicationLeaseExpiresAt },
+        measurement: { connected: Boolean(site.gscProperty && site.gscRefreshToken), property: site.gscProperty,
+          connectionRevision: site.gscConnectionRevision, dataThrough: site.gscDataThrough, syncedAt: site.gscDataSyncedAt,
+          retainedDateEpochs: site.gscDateEpochs?.length ?? 0 },
+        revisionInventoryComplete: retainedRevisions.every(rows => rows.length <= 20),
+        unresolvedRevisions: retainedRevisions.flatMap(rows => rows.slice(0, 20)).map(r => ({ revisionId: r._id, articleId: r.articleId,
+          status: r.status, attemptedAt: r.attemptedAt, hasReceipt: Boolean(r.receipt), verifiedAt: r.liveVerifiedAt,
+          ownerDispositionAt: r.ambiguityDispositionAt })),
+      } } : {}),
       site: {
         siteId: site._id,
         autopilotEnabled: site.autopilotEnabled,

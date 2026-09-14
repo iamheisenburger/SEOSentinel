@@ -84,6 +84,7 @@ for (const screen of ["overview", "controls", "start", "changed"]) test(`SLC30 s
     await expect(page.getByRole("button", { name: "Verify existing plan and save profile" })).toBeDisabled();
     await page.getByLabel("Content publishing destination").selectOption("wordpress");
     await expect(page.getByLabel("Content publishing destination")).toHaveValue("wordpress");
+    await expect(page.getByRole("link", { name: "Install the WordPress connector" })).toHaveAttribute("href", "https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md");
   }
   await expect(page.locator("body")).not.toContainText("synthetic-reviewed-binding");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

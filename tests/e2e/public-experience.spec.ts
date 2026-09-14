@@ -74,11 +74,23 @@ test.describe("authenticated, read-only customer acceptance", () => {
 
   test("exact-site owner sees content readiness and page controls", async ({ page }) => {
     const siteId = process.env.PENTRA_E2E_CONTENT_SITE_ID!;
+    const authorizedDomains: Record<string, string> = {
+      jh74txye54jna4t85m6y7p4d6h82v9ab: "pentra.dev",
+      jh7cccny67df67rdm4jp65tmtn8am982: "leadpilot.chat",
+    };
+    expect(authorizedDomains[siteId], "Use only an explicitly authorized production tenant").toBeTruthy();
     await page.goto(`/sites/${encodeURIComponent(siteId)}?tab=settings`);
     await expect(page).not.toHaveURL(/\/sign-in/);
+    await expect(page.getByText(new RegExp(`^${authorizedDomains[siteId].replaceAll(".", "\\.")}(?: · .+)?$`)).first()).toBeVisible();
     await page.goto("/settings");
-    await expect(page.getByRole("heading", { name: "Content delivery service" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Funding readiness" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Pages Pentra may improve" })).toBeVisible();
+    const service = page.getByRole("region", { name: "Content delivery service" });
+    await expect(service).toHaveAttribute("data-content-site-id", siteId);
+    await expect(service.getByRole("link", { name: authorizedDomains[siteId], exact: true })).toHaveAttribute("href", `/sites/${siteId}?tab=settings`);
+    const funding = service.locator("#content-funding-details");
+    await funding.locator("summary", { hasText: "Funding readiness and retained spending" }).click();
+    await expect(funding).toHaveAttribute("open", "");
+    await expect(funding.getByText(/Account monthly limit.*settled actual spend.*retained reservations/)).toBeVisible();
+    await expect(funding.getByText(/Provider credit balance is unverified/)).toBeVisible();
+    await expect(service.getByRole("heading", { name: "Pages Pentra may improve" })).toBeVisible();
   });
 });

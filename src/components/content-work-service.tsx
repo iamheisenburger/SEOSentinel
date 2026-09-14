@@ -46,8 +46,9 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     } catch { setError("The saved setup changed again. Review its current facts and exact destination before confirming. No deadline or spending history was reset."); }
     finally { setSaving(false); }
   };
-  return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading">
+  return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
     <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
+    <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
     <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
     {state.serviceMode === "growth_first" && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
       <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
