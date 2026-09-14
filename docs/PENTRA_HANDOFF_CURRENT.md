@@ -1,6 +1,40 @@
 # Pentra — fresh-task handoff
 
-## Current: Stage2 selected-page/WordPress candidate27, local review required
+## Current: Stage2 completion candidate28, local review required
+
+Assignment `supervisor-20260914-slc-stage2-complete-28` completes the bounded
+follow-up to reviewed19046a0. Work remains in `.claude/assignment24`, branch
+`codex/simplified-article-admission`. Read
+`docs/PENTRA_SLC_STAGE2_COMPLETION_2026-09-14.md` first. The final review message
+supplies the exact candidate commit; no push, deployment or Stage3 is implied.
+
+Verified managed creations now automatically enter existing editable inventory,
+without reselecting or reviving revoked access. Long pages use bounded targeted
+guidance edits in the same jobs, retain facts/unrelated prose/links, pass unchanged
+quality gates and replenish after consumption. Both adapters complete two measured
+edits on the same2425-word page, ending2441 words and2 freshly ready work items.
+The synthetic changes are21 days apart and preserve their original deadlines.
+
+Immediate exact owner-confirmed factual correction and demonstrated broken-link
+repair reuse these jobs/revisions/CAS/rollback with zero provider calls and no
+fabricated scores. They never consume regular cadence or change cooldown/lateness.
+Unsupported layouts, arbitrary rewrites and protected facts remain unavailable.
+The correction endpoint exists; authenticated UI integration is still Stage3.
+
+Real WordPress/MySQL8.4.11 InnoDB now passes18 tests; retained real SQLite passes17.
+Actual core-editor races, conditional creates/updates, lost responses, revocation,
+targeted replacement, later customer edits and nontransactional rejection are
+exercised. See the report for the full free release receipts and honest skips.
+
+USD20 TOTAL future Stage4 allowance remains inactive/unspent; provider spend in28
+USD0. No production query/provider probe, push/deploy/migration, cap/subscription,
+reservation/attempt/schedule reset, auth change, tenant enumeration or backlinks.
+The protected parent diagnosis, secret and supervisor state remain untouched.
+Production buffers/deadlines below remain historical, not fresh observations.
+Stage3 authenticated journey and Stage4 tenant migration/live acceptance are still
+open. Stop after this one candidate handoff for independent supervisor review.
+
+## Historical: Stage2 selected-page/WordPress candidate27
 
 Assignment `supervisor-20260914-slc-stage2-27` builds on the locally reviewed
 Stage1 commit66f06de. Stay in `.claude/assignment24`; no Stage3 or production work

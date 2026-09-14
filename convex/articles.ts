@@ -753,7 +753,9 @@ export const get = query({
     const article = await ctx.db.get(articleId);
     if (!article) return null;
     await requireArticleOwner(ctx, article);
-    return article;
+    const visible = { ...article };
+    delete visible.contentWorkCreationSource;
+    return visible;
   },
 });
 
@@ -2069,6 +2071,9 @@ export const abandonUnverifiedPublication = mutation({
 
 export const completePublication = internalMutation({
   args: {
+    creationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress")),
+      sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()),
+      permission: v.optional(v.string()), connectionHash: v.string(), profileHash: v.string() })),
     articleId: v.id("articles"),
     publishedContentHash: v.string(),
     expectedDeliveryHash: v.string(),
@@ -2095,6 +2100,7 @@ export const completePublication = internalMutation({
       expectedRolloutEpoch,
       leaseOwner,
       receipt,
+      creationSource,
     },
   ) => {
     const article = await ctx.db.get(articleId);
@@ -2183,6 +2189,7 @@ export const completePublication = internalMutation({
       publicUrlCheckAttempts: 0,
       publicUrlCheckError: undefined,
       publicationReceipt: receipt,
+      ...(creationSource ? { contentWorkCreationSource: creationSource } : {}),
       publicationLeaseHash: undefined,
       publicationLeaseOwner: undefined,
       publicationLeaseStartedAt: undefined,

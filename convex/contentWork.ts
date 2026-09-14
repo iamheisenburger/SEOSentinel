@@ -14,7 +14,7 @@ import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness } from "./lib/autopilotReadiness";
 import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete } from "./lib/contentSelection";
 import { assertSafeImprovement } from "./lib/contentSelection";
-import { authorizedWorkPage, chooseImprovement } from "./selectedPages";
+import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation } from "./selectedPages";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -176,7 +176,7 @@ export const advance = internalMutation({
     const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork);
     if (all.some(j => !j.contentWork && ["pending", "running"].includes(j.status))) return { scheduled: 0, mode: "content_migration_pending" };
     const waiting = work.filter(j => !["verified", "failed"].includes(j.contentWork!.stage)).sort((a,b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt);
-    const restoration = waiting.find(j => j.contentWork!.operation === "rollback");
+    const restoration = waiting.find(j => j.contentWork!.operation);
     if (restoration?.contentWork?.stage === "verify") {
       if ((restoration.contentWork.verificationNextAt ?? 0) <= Date.now()) await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId, jobId: restoration._id });
       return { scheduled: 0, mode: "public_url_pending" };
@@ -243,7 +243,7 @@ export const advance = internalMutation({
           workerAttempts: (failed.workerAttempts ?? 0) + 1,
           payload: { topicId: replacement._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
           contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
-            opportunity: undefined, revisionId: undefined, stage: "prepare", replacements: 1, discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
+            opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1, discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
         await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
         return { scheduled: 1, mode: "buffer_fill" };
       }
@@ -275,7 +275,8 @@ export const advance = internalMutation({
       providerSpendReservationId: budget.reservationId,
       payload: { topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
       contentWork: { intent: improvement ? "improve" : "create", ...(improvement ? { targetPageId: improvement.page._id,
-          baseRevision: improvement.page.editable!.sourceRevision, permissionVersion: improvement.page.editable!.version, opportunity: improvement.reason } : {}),
+          baseRevision: improvement.page.editable!.sourceRevision, permissionVersion: improvement.page.editable!.version, opportunity: improvement.reason,
+          editTarget: improvement.editTarget } : {}),
         stage: "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
         profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: 0, replacements: 0,
         discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] }, createdAt: Date.now(), updatedAt: Date.now() });
@@ -296,20 +297,21 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
   if (!article || article.siteId !== job.siteId) throw new Error("Content work artifact crossed tenant boundary");
   let stage: NonNullable<Doc<"jobs">["contentWork"]>["stage"] = article.status === "published" ? (article.publicUrlStatus === "verified" ? "verified" : "verify")
     : isSealedReady(article) ? "ready" : "review_failed";
+  let selectedFailure: string | undefined;
   if (stage === "ready" && cw.intent === "improve") {
     const site = await ctx.db.get(job.siteId!);
     try {
       const page = site ? await authorizedWorkPage(ctx, site, job) : null;
       if (!page?.editable) throw new Error("Selected page unavailable");
-      assertSafeImprovement(page.editable, article);
-    } catch { stage = "review_failed"; }
+      assertSafeImprovement(page.editable, article, cw.editTarget);
+    } catch (error) { stage = "review_failed"; selectedFailure = error instanceof Error ? error.message : "Selected-page review failed"; }
   }
   const currentCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === job.providerSpendReservationId);
   if (stage === "ready" && job.providerSpendReservationId && currentCalls.length > 0 && currentCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
     await settleSharedProviderReservation(ctx, { reservationId: job.providerSpendReservationId, siteId: job.siteId!, purpose: "content_work",
       actualMicroUsd: currentCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0), reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
   }
-  await ctx.db.patch(job._id, { contentWork: { ...cw, stage,
+  await ctx.db.patch(job._id, { contentWork: { ...cw, stage, failure: selectedFailure ?? (stage === "ready" ? undefined : cw.failure),
     approvedArtifactHash: stage === "ready" ? article.auditedContentHash : cw.approvedArtifactHash,
     publishedAt: article.publishedAt, verifiedAt: article.publicUrlVerifiedAt } });
   await wake(ctx, job.siteId!);
@@ -320,6 +322,7 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   const jobs = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", site._id).eq("articleId", article._id)).take(20);
   const job = jobs.find(j => j.contentWork?.approvedArtifactHash === article.publishedContentHash);
   if (!job?.contentWork || job.contentWork.stage === "verified") return;
+  if (job.contentWork.intent === "create") await enrollVerifiedCreation(ctx, site, article, job);
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verified", publishedAt: article.publishedAt, verifiedAt: checkedAt } });
   if (job.contentWork.deadlineAt === site.contentSchedule.nextDeadlineAt) await ctx.db.patch(site._id, {
     contentSchedule: { ...site.contentSchedule, nextDeadlineAt: site.contentSchedule.nextDeadlineAt + site.contentSchedule.intervalMs }, updatedAt: checkedAt });
@@ -385,7 +388,7 @@ export const beginProviderCall = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     let cw = job?.contentWork;
-    if (cw?.operation === "rollback") throw new Error("Rollback is provider-free; no paid work is authorized");
+    if (cw?.operation) throw new Error("Owner correction/restoration is provider-free; no paid work is authorized");
     if (!job || !cw || !site || job.workerToken !== args.workerToken || job.status !== "running" ||
       (job.leaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) ||
       !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||

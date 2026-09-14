@@ -178,7 +178,7 @@ final class Pentra_Conditional_Publisher {
         // the same serialized request on retry rather than inventing a new key.
         $hash = hash('sha256', $r->get_body());
         $operation = $body['operation'] ?? '';
-        if (!in_array($operation, ['create','append','rollback'], true)) { throw new RuntimeException('invalid_request'); }
+        if (!in_array($operation, ['create','append','replace','rollback'], true)) { throw new RuntimeException('invalid_request'); }
         self::sql('START TRANSACTION');
         try {
             $prior = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table() . ' WHERE request_key=%s', $key), ARRAY_A);
@@ -240,12 +240,16 @@ final class Pentra_Conditional_Publisher {
                     $metadata = json_decode($restore['baseMetadata'], true);
                 } else {
                     $content = $body['content'] ?? null; self::html($content);
-                    // Keep all selected customer text/facts intact. This release
-                    // supports substantive additions, never wholesale rewriting.
-                    if (!str_starts_with($content, $base['post_content']) || strlen(trim(substr($content, strlen($base['post_content'])))) < 40) {
-                        throw new RuntimeException('no_change');
-                    }
-                    $metadata = $body['metadata'] ?? [];
+                    if ($operation === 'replace') {
+                        $before = $body['before'] ?? null; $after = $body['after'] ?? null;
+                        if (!is_string($before) || !is_string($after) || $before === '' || $before === $after || strlen($before) > 20000 || strlen($after) > 24000 ||
+                            substr_count($base['post_content'], $before) !== 1 || str_replace($before, $after, $base['post_content']) !== $content) {
+                            throw new RuntimeException('targeted_edit_mismatch');
+                        }
+                    } elseif (!str_starts_with($content, $base['post_content']) || strlen(trim(substr($content, strlen($base['post_content'])))) < 40) { throw new RuntimeException('no_change'); }
+                    // Exact owner corrections may retain the original metadata,
+                    // including its deliberate absence, instead of inventing it.
+                    $metadata = $body['metadata'] ?? json_decode($old_meta, true);
                 }
                 // Row lock plus binary field predicate: core editor writes use
                 // this same wp_posts row, not a plugin-only advisory lock.
@@ -265,7 +269,7 @@ final class Pentra_Conditional_Publisher {
             if (!is_array($metadata)) { throw new RuntimeException('invalid_request'); }
             $canonical = $metadata['canonical'] ?? '';
             $url = get_permalink($id);
-            if (!($operation === 'rollback' && $metadata === []) && ($canonical !== $url || !is_string($metadata['description'] ?? null) ||
+            if (!(($operation === 'rollback' || ($operation === 'replace' && !array_key_exists('metadata', $body))) && $metadata === []) && ($canonical !== $url || !is_string($metadata['description'] ?? null) ||
                 !is_string($metadata['title'] ?? null) || strlen($metadata['description']) > 400 ||
                 strlen($metadata['title']) > 200 || wp_strip_all_tags($metadata['description']) !== $metadata['description'] ||
                 wp_strip_all_tags($metadata['title']) !== $metadata['title'])) { throw new RuntimeException('binding_changed'); }

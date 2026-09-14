@@ -5,7 +5,7 @@ if (!$request) { exit(2); }
 define('WP_INSTALLING', $request['operation'] === 'setup');
 $_SERVER['HTTP_HOST'] = '127.0.0.1:18927';
 $_SERVER['REQUEST_URI'] = '/';
-require dirname(__DIR__, 2) . '/.wordpress-fixture/wordpress/wp-load.php';
+require dirname(__DIR__, 2) . (getenv('PENTRA_FIXTURE_DB') === 'mysql' ? '/.wordpress-fixture/mysql-wordpress/wordpress/wp-load.php' : '/.wordpress-fixture/wordpress/wp-load.php');
 if ($request['operation'] === 'setup') {
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
     if (!is_blog_installed()) { wp_install('Pentra local fixture', 'fixture-owner', 'owner@synthetic.example', false, '', wp_generate_password(40)); }
@@ -42,9 +42,15 @@ if ($request['operation'] === 'create') {
 } elseif ($request['operation'] === 'lock_edit') {
     $wpdb->query('START TRANSACTION');
     // SQLite's BEGIN IMMEDIATE holds the write lock before announcing readiness.
+    if (DB_ENGINE === 'mysql') { $wpdb->get_row($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE ID=%d FOR UPDATE", $request['id'])); }
     echo "locked\n"; flush();
     usleep(500000);
     wp_update_post(['ID'=>$request['id'], 'post_content'=>$request['content']]);
     $wpdb->query('COMMIT');
     echo wp_json_encode(['ok'=>true]);
+} elseif ($request['operation'] === 'receipt_engine' && DB_ENGINE === 'mysql') {
+    // Only this isolated fixture's adapter table, never customer tables.
+    $engine = ($request['transactional'] ?? true) ? 'InnoDB' : 'MyISAM';
+    $ok = $wpdb->query("ALTER TABLE {$wpdb->prefix}pentra_receipts ENGINE=$engine");
+    echo wp_json_encode(['ok'=>$ok !== false]);
 } else { exit(3); }

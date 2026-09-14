@@ -660,6 +660,7 @@ export default defineSchema({
       markdown: v.string(), title: v.string(), metaTitle: v.string(), description: v.string(), header: v.optional(v.string()),
       selectedAt: v.number(), lastReviewedAt: v.optional(v.number()), lastImprovedAt: v.optional(v.number()),
       lastWorkJobId: v.optional(v.id("jobs")), latestRevisionId: v.optional(v.id("published_article_revisions")),
+      managedArticleId: v.optional(v.id("articles")),
     })),
     siteId: v.id("sites"),
     url: v.string(),
@@ -865,6 +866,9 @@ export default defineSchema({
     ]),
 
   articles: defineTable({
+    contentWorkCreationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress")),
+      sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()),
+      permission: v.optional(v.string()), connectionHash: v.string(), profileHash: v.string() })),
     contentWorkSourceJobId: v.optional(v.id("jobs")),
     contentWorkConsumedByJobId: v.optional(v.id("jobs")),
     siteId: v.id("sites"),
@@ -1194,9 +1198,14 @@ export default defineSchema({
   jobs: defineTable({
     contentWork: v.optional(v.object({
       intent: v.union(v.literal("create"), v.literal("improve")),
-      operation: v.optional(v.literal("rollback")), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
+      operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
+      correction: v.optional(v.object({ key: v.string(), kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")),
+        before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
+        field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
+        targetPageId: v.optional(v.id("pages")), targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()), observedAt: v.number() })),
       targetPageId: v.optional(v.id("pages")), baseRevision: v.optional(v.string()), permissionVersion: v.optional(v.number()),
       opportunity: v.optional(v.string()), revisionId: v.optional(v.id("published_article_revisions")),
+      editTarget: v.optional(v.object({ before: v.string(), sourceBefore: v.string(), maxWords: v.number() })),
       stage: v.union(v.literal("prepare"), v.literal("review"), v.literal("review_failed"),
         v.literal("ready"), v.literal("publish"), v.literal("verify"), v.literal("verified"), v.literal("failed")),
       deadlineAt: v.number(), windowStartAt: v.number(),

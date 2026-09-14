@@ -3,12 +3,13 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { confirmedContentProfileHash, contentConnectionHash, assertUnprotectedPage, selectedUrlMatches,
-  CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS } from "./lib/contentSelection";
+  CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, parseSelectedMarkdown, selectedGitHubPath, targetedImprovement, contentWords } from "./lib/contentSelection";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
+import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
@@ -22,6 +23,36 @@ export function selectionConnection(site: Doc<"sites">) {
 export const selectionContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await owner(ctx, siteId); selectionConnection(site); return site;
 } });
+
+/** Creation consent covers Pentra's own verified pages, never an unrelated
+ * customer's existing URL. The exact source/grant is retained with its receipt;
+ * a later revocation or selection is never overwritten by verification replay. */
+export async function enrollVerifiedCreation(ctx: MutationCtx, site: Doc<"sites">, article: Doc<"articles">, job: Doc<"jobs">) {
+  const source = article.contentWorkCreationSource;
+  const slug = article.slug.replace(/^\//, "");
+  if (job.contentWork?.intent !== "create" || job.articleId !== article._id || article.siteId !== site._id ||
+    article.publishedContentHash !== job.contentWork.approvedArtifactHash || !article.publicationReceipt || !article.publicUrl) throw new Error("Managed creation receipt is not bound to this work");
+  if (!source || source.kind !== site.publishMethod || source.connectionHash !== contentConnectionHash(site) ||
+    source.profileHash !== confirmedContentProfileHash(site) || source.connectionHash !== job.contentWork.connectionHash ||
+    !selectedUrlMatches(site, slug, article.publicUrl)) throw new Error("Managed creation source or consent is unavailable");
+  const parsed = source.kind === "github" ? parseSelectedMarkdown(source.sourceContent, article.publicUrl) : null;
+  if (parsed && (parsed.title !== article.title || parsed.markdown !== stripLeadingDocumentTitle(article.markdown, article.title))) throw new Error("Managed source differs from the verified article title/body");
+  if (source.kind === "github" && (!source.path || selectedGitHubPath(site, source.path) !== slug || !/^[a-f0-9]{40}$/.test(source.sourceRevision))) throw new Error("Managed GitHub source does not match its created path");
+  if (source.kind === "wordpress" && (String(source.resourceId) !== article.publicationReceipt.externalId || !/^[a-f0-9]{64}$/.test(source.permission ?? "") || !/^[a-f0-9]{64}$/.test(source.sourceRevision))) throw new Error("Managed WordPress receipt lost its exact resource grant");
+  assertUnprotectedPage(article.slug, article.title, source.sourceContent);
+  const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
+  if (rows.length > 500) throw new Error("Managed page inventory is incomplete");
+  const matches = rows.filter(p => p.url === article.publicUrl);
+  if (matches.length > 1) throw new Error("Managed page inventory is ambiguous");
+  const existing = matches[0];
+  if (existing?.editable) return; // Includes an explicitly revoked managed page.
+  const editable = { ...source, version: 1, active: true, managedArticleId: article._id,
+    markdown: parsed?.markdown ?? stripLeadingDocumentTitle(article.markdown, article.title), title: article.title, metaTitle: article.metaTitle ?? article.title,
+    description: article.metaDescription ?? "", header: parsed?.header, selectedAt: Date.now(), lastWorkJobId: job._id };
+  if (existing) await ctx.db.patch(existing._id, { editable });
+  else await ctx.db.insert("pages", { siteId: site._id, slug, url: article.publicUrl, title: article.title,
+    canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site), editable, createdAt: Date.now() });
+}
 export const list = query({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   await owner(ctx, siteId);
   const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(501);
@@ -115,6 +146,7 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     await ctx.db.patch(page._id, { editable: { ...e, lastReviewedAt: Date.now() } });
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
     const rows = measurements.rows.filter(r => r.page === page.url && r.impressions > 0 &&
+      (!e.lastImprovedAt || r.date > new Date(e.lastImprovedAt).toISOString().slice(0, 10)) &&
       !e.markdown.toLowerCase().includes(r.query.toLowerCase()) &&
       evaluateTopicBusinessFit({ keyword: r.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible)
       .sort((a,b) => b.impressions - a.impressions);
@@ -122,7 +154,9 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     const question = rows[0]?.query ?? (site.painPoints ?? []).find(q => q.endsWith("?") &&
       !e.markdown.toLowerCase().includes(q.toLowerCase()) && evaluateTopicBusinessFit({ keyword: q, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
     if (!question) continue;
-    return { page, question, reason: rows[0] ? `Current Search Console query: ${question}; impressions=${rows[0].impressions}; date=${rows[0].date}. No claim of causal growth.`
+    const editTarget = targetedImprovement(e, site, question);
+    if (contentWords(e.markdown) >= 1200 && !editTarget) continue;
+    return { page, question, editTarget, reason: rows[0] ? `Current Search Console query: ${question}; impressions=${rows[0].impressions}; date=${rows[0].date}. No claim of causal growth.`
       : `Confirmed first-party reader question: ${question}. Search metrics unavailable; do not invent them.` };
   }
   return null;

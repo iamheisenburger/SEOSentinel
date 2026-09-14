@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { setup, pumpUntil, selectGrowth, slcBusinesses } from './core-pipeline-integration.test.ts';
+import { setup, pumpUntil, selectGrowth, slcBusinesses, managedMeasuredFollowups, exerciseImmediateFactCorrection, incorrectBusinessParagraph, correctionSurvivor, exerciseBrokenLinkCorrection, brokenLinkParagraph } from './core-pipeline-integration.test.ts';
 import { START } from './helpers/core-pipeline-fixture.ts';
 import { correctionVisibleText } from '../convex/lib/publishedCorrection.ts';
 import { renderSafePublicationHtml } from '../convex/lib/safeMarkdownHtml.ts';
@@ -18,7 +18,7 @@ function command(input: Json): Json {
   return JSON.parse(p.stdout);
 }
 
-test('real WordPress/core + SQLite: authentication, permissions, CAS, replay, edit races and rollback', async t => {
+test('real WordPress/core database: authentication, permissions, CAS, replay, edit races and rollback', async t => {
   const env = command({ operation: 'setup' });
   t.diagnostic(`WordPress ${env.wordpress}, PHP ${env.php}, database ${env.database}; loopback only`);
   const binding = key();
@@ -110,6 +110,76 @@ test('real WordPress/core + SQLite: authentication, permissions, CAS, replay, ed
     command({ operation: 'protect', id: p.id }); assert.equal((await request('write', append(fresh))).status, 409);
     assert.equal((await request('revoke', scoped({ id: p.id, permission: fresh.permission }))).status, 200, 'New protection must not prevent revocation');
   });
+  await t.test('exact bounded replacement, retry and rollback preserve all unrelated source bytes', async () => {
+    const p = command({ operation: 'create', slug: 'replace-' + randomUUID(), content: '<p>Retained confirmed fact.</p><p>Old proposed guidance.</p><p>Another unchanged fact.</p>' });
+    const s = await select(p.id), before = '<p>Old proposed guidance.</p>', after = '<p>A clarified proposed workflow for a reversible handoff.</p>';
+    const body: Json = { ...append(s), operation: 'replace', before, after, content: s.content.replace(before, after) };
+    assert.equal((await request('write', { ...body, content: body.content.replace('Retained', 'Invented') })).status, 409);
+    const written = await request('write', body); assert.equal(written.status, 200, JSON.stringify(written.data));
+    assert.equal((await request('write', body)).status, 200);
+    assert.equal((await source(p.id)).data.content, body.content);
+    const rolled = await request('write', scoped({ key: key(), operation: 'rollback', id: p.id, permission: s.permission,
+      baseRevision: written.data.revision, rollbackKey: body.key }));
+    assert.equal(rolled.status, 200); assert.equal(rolled.data.content, s.content);
+  });
+  if (env.database === 'mysql') await t.test('nontransactional receipt table fails closed before creation', async () => {
+    assert.equal(command({ operation: 'receipt_engine', transactional: false }).ok, true);
+    try { assert.notEqual((await request('connection')).status, 200); }
+    finally { assert.equal(command({ operation: 'receipt_engine', transactional: true }).ok, true); }
+    assert.equal((await request('connection')).status, 200);
+  });
+});
+
+test('real WordPress managed creation becomes editable and executes two measured improvements with fresh refill', async t => {
+  const local = command({ operation: 'setup' });
+  const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+  const domain = `managed-${randomUUID().slice(0, 8)}.example`;
+  const f = setup({ growthFirst: true, longManagedPage: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+    transport: async (url, init) => {
+      assert.equal(url.hostname, domain);
+      return fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+    } } });
+  await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: f.sites[0].id });
+  const result = await managedMeasuredFollowups(f);
+  assert.ok(result.original.split(/\s+/).length >= 2400 && result.finalText.split(/\s+/).length <= 2600);
+  t.diagnostic(JSON.stringify({ synthetic: true, adapter: 'wordpress', database: local.database, deadlines: result.deadlines, ready: 2,
+    originalWords: result.original.split(/\s+/).length, finalWords: result.finalText.split(/\s+/).length }));
+});
+
+test('real WordPress immediate owner factual correction retains source metadata, overdue deadline and conditional rollback', async () => {
+  const local = command({ operation: 'setup' });
+  const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+  const suffix = randomUUID().slice(0, 8), domain = `correct-${suffix}.example`;
+  const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+    transport: async (url, init) => {
+      assert.equal(url.hostname, domain);
+      return fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+    } } });
+  const site = f.sites[0]; await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: site.id });
+  const p = command({ operation: 'create', slug: `selected-${suffix}`, content: `<p>${incorrectBusinessParagraph}</p><p>${correctionSurvivor}</p>` });
+  f.setIdentity(`synthetic-owner-${domain}`);
+  const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
+  const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, confirm: true });
+  f.setIdentity(null);
+  await exerciseImmediateFactCorrection(f, pageId);
+});
+
+test('real WordPress observed broken-link repair is live-verified and conditionally reversible through the same jobs', async () => {
+  const local = command({ operation: 'setup' });
+  const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+  const suffix = randomUUID().slice(0, 8), domain = `link-${suffix}.example`;
+  const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+    transport: async (url, init) => {
+      assert.equal(url.hostname, domain);
+      return fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+    } } });
+  const site = f.sites[0]; await f.invoke('publisher:verifyPublicationDestinationInternal', { siteId: site.id });
+  const p = command({ operation: 'create', slug: `selected-${suffix}`, content: renderSafePublicationHtml(`${brokenLinkParagraph(domain)}\n\n${correctionSurvivor}`) });
+  f.setIdentity(`synthetic-owner-${domain}`);
+  const preview = await f.invoke('actions/selectedPages:preview', { siteId: site.id, wordpressId: p.id });
+  const pageId = await f.invoke('actions/selectedPages:select', { siteId: site.id, wordpressId: p.id, revision: preview.revision, confirm: true });
+  f.setIdentity(null);
+  await exerciseBrokenLinkCorrection(f, pageId);
 });
 
 test('real WordPress/database connected content jobs: fresh creation, selected improvement, exact rendered verification and refill', async t => {

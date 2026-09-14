@@ -1,4 +1,4 @@
-import { internalMutation, mutation } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { authorizedWorkPage } from "./selectedPages";
@@ -12,6 +12,95 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
+import { verifyCorrectivePatch } from "./lib/contentCorrection";
+
+async function correctionOwner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
+  const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
+  if (!site?.userId || identity?.subject !== site.userId || site.serviceMode !== "growth_first" ||
+    !await siteExecutionAuthorized(ctx, site) || !site.autopilotEnabled || site.autopilotRolloutMode !== "live" || site.approvalRequired ||
+    site.contentSchedule?.paused) throw new Error("Active owner-authorized corrective work required");
+  return site;
+}
+async function verifiedDestination(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, id?: Id<"pages">) {
+  const page = id ? await ctx.db.get(id) : null;
+  if (!page || page.siteId !== site._id || !page.editable?.active) throw new Error("Correction destination is not an authorized exact-site page");
+  const revision = page.editable.latestRevisionId ? await ctx.db.get(page.editable.latestRevisionId) : null;
+  const article = page.editable.managedArticleId ? await ctx.db.get(page.editable.managedArticleId) : null;
+  if (!(revision?.siteId === site._id && revision.liveVerifiedAt && revision.deliveredSource?.revision === page.editable.sourceRevision) &&
+    !(article?.siteId === site._id && article.publicUrlStatus === "verified" && article.publicUrl === page.url &&
+      article.contentWorkCreationSource?.sourceRevision === page.editable.sourceRevision)) throw new Error("Correction destination has no matching verified live artifact");
+  return page;
+}
+export const correctionContext = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), targetPageId: v.optional(v.id("pages")) },
+  handler: async (ctx, args) => {
+    const site = await correctionOwner(ctx, args.siteId), page = await ctx.db.get(args.pageId);
+    if (!page?.editable?.active || page.siteId !== site._id || page.editable.profileHash !== confirmedContentProfileHash(site) ||
+      page.editable.connectionHash !== contentConnectionHash(site)) throw new Error("Corrective source permission or business profile changed");
+    return { site, page, target: args.targetPageId ? await verifiedDestination(ctx, site, args.targetPageId) : null };
+  } });
+export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
+  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")), before: v.string(), reason: v.string(),
+  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")) },
+  handler: async (ctx, args) => {
+    await correctionOwner(ctx, args.siteId);
+    const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", args.siteId)).take(501);
+    if (jobs.length > 500) throw new Error("Corrective work inventory incomplete");
+    return jobs.find(j => { const cw = j.contentWork, c = cw?.correction; return cw?.targetPageId === args.pageId &&
+      cw.baseRevision === args.baseRevision && c?.kind === args.kind && c.before === args.before && c.reason === args.reason &&
+      c.field === args.field && c.targetPageId === args.targetPageId; })?._id ?? null;
+  } });
+const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")),
+  before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
+  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
+  targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()) });
+export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
+  permissionVersion: v.number(), patch: correctivePatch, targetPageId: v.optional(v.id("pages")), observedAt: v.number() },
+  handler: async (ctx, args): Promise<Id<"jobs">> => {
+    const site = await correctionOwner(ctx, args.siteId);
+    const key = sha256Hex(JSON.stringify([site._id, args.pageId, args.baseRevision, args.permissionVersion, args.patch, args.targetPageId]));
+    const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
+    if (jobs.length > 500) throw new Error("Corrective work inventory is incomplete");
+    const prior = jobs.find(j => j.contentWork?.correction?.key === key);
+    if (prior) return prior._id;
+    const page = await ctx.db.get(args.pageId), e = page?.editable;
+    if (!page || !e?.active || page.siteId !== site._id || e.sourceRevision !== args.baseRevision || e.version !== args.permissionVersion ||
+      e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
+      site.contentSchedule?.profileHash !== e.profileHash || site.contentSchedule?.connectionHash !== e.connectionHash ||
+      site.publicationLeaseOwner || jobs.some(j => ["pending", "running"].includes(j.status))) throw new Error("Reconcile active work or changed source before correction");
+    if (args.observedAt > Date.now() || Date.now() - args.observedAt > 60_000) throw new Error("Correction evidence must be current");
+    if (args.patch.kind === "technical_repair") {
+      const target = await verifiedDestination(ctx, site, args.targetPageId);
+      if (target.url !== args.patch.targetUrl) throw new Error("Broken-link destination changed");
+    } else if (args.targetPageId) throw new Error("Factual corrections cannot add destinations");
+    const markdown = verifyCorrectivePatch(site, page, args.patch);
+    const artifact = { title: e.title, slug: page.slug, markdown, metaTitle: e.metaTitle, metaDescription: e.description,
+      publicationConfigHash: publicationDeliveryConfigHash(publicationDeliveryConfig(site)) };
+    const approvedArtifactHash = publicationArtifactHash(artifact);
+    const articleId = await ctx.db.insert("articles", { ...artifact, siteId: site._id, status: "revision",
+      canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
+      publicationConfigHash: publicationDeliveryConfigHash(publicationDeliveryConfig(site)), createdAt: Date.now(), updatedAt: Date.now() });
+    const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
+      rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", articleId, workerAttempts: 0, publicationAttempts: 0,
+      payload: { articleId, publishOnly: true, bufferDelivery: true },
+      contentWork: { intent: "improve", operation: args.patch.kind, correction: { ...args.patch, key, observedAt: args.observedAt,
+        ...(args.targetPageId ? { targetPageId: args.targetPageId } : {}) }, stage: "publish", targetPageId: page._id,
+        baseRevision: e.sourceRevision, permissionVersion: e.version, approvedArtifactHash,
+        profileHash: e.profileHash, connectionHash: e.connectionHash, deadlineAt: Date.now(), windowStartAt: Date.now(),
+        revisions: 0, replacements: 0, discardedArticleIds: [], budgetMicroUsd: 0, providerCalls: [],
+        pricing: { model: "provider-free-owner-correction", inputMicroUsdPerToken: 0, outputMicroUsdPerToken: 0 },
+        opportunity: "Owner-confirmed exact correction; not scheduled SEO delivery or growth" }, createdAt: Date.now(), updatedAt: Date.now() });
+    await ctx.db.patch(articleId, { contentWorkSourceJobId: jobId, contentWorkConsumedByJobId: jobId });
+    await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId: site._id, trigger: "content_work", reason: "owner_confirmed_correction" });
+    return jobId;
+  } });
+
+async function assertCorrection(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, page: Doc<"pages">, job: Doc<"jobs">, article: Doc<"articles">) {
+  const cw = job.contentWork!, correction = cw.correction;
+  if (!correction || cw.operation !== correction.kind || cw.budgetMicroUsd !== 0 || cw.providerCalls.length || job.providerSpendReservationId ||
+    article.markdown !== verifyCorrectivePatch(site, page, correction) || publicationArtifactHash(article) !== cw.approvedArtifactHash ||
+    article.contentWorkSourceJobId !== job._id || article.publicationConfigHash !== publicationDeliveryConfigHash(publicationDeliveryConfig(site))) throw new Error("Correction lost exact source, evidence or provider-free authority");
+  if (correction.kind === "technical_repair" && (await verifiedDestination(ctx, site, correction.targetPageId)).url !== correction.targetUrl) throw new Error("Correction target changed before write");
+}
 
 export const requestRollback = mutation({ args: { siteId: v.id("sites"), revisionId: v.id("published_article_revisions"), confirm: v.boolean() },
   handler: async (ctx, args): Promise<Id<"jobs">> => {
@@ -53,21 +142,24 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
   const page = await authorizedWorkPage(ctx, site, job);
   let article = job.articleId ? await ctx.db.get(job.articleId) : null;
   const rollback = cw.operation === "rollback" && cw.rollbackOfRevisionId ? await ctx.db.get(cw.rollbackOfRevisionId) : null;
+  const correction = cw.correction;
+  if (cw.operation && cw.operation !== "rollback" && !correction) throw new Error("Missing exact corrective evidence");
+  if (correction && page && article) await assertCorrection(ctx, site, page, job, article);
   if (cw.operation === "rollback") {
     if (!article || !rollback?.liveVerifiedAt || rollback.siteId !== site._id || rollback.selectedPageId !== page?._id ||
       rollback.baseArtifactHash !== cw.approvedArtifactHash || rollback.deliveredSource?.revision !== cw.baseRevision) throw new Error("Rollback no longer matches the exact retained version");
     article = { ...article, ...rollback.baseArtifact, auditedContentHash: rollback.baseArtifactHash } as Doc<"articles">;
   }
-  if (!page?.editable || !article || article.siteId !== site._id || (!rollback && (!isSealedReady(article) ||
+  if (!page?.editable || !article || article.siteId !== site._id || (!rollback && !correction && (!isSealedReady(article) ||
     article.auditedContentHash !== cw.approvedArtifactHash || publicationArtifactHash(article) !== cw.approvedArtifactHash ||
     article.publicationConfigHash !== publicationDeliveryConfigHash(publicationDeliveryConfig(site)))) ||
     !["publish","verify","verified"].includes(cw.stage)) throw new Error("Improvement lost its reviewed artifact");
-  if (!rollback) assertSafeImprovement(page.editable, article);
+  if (!rollback && !correction) assertSafeImprovement(page.editable, article, cw.editTarget);
   let revision = cw.revisionId ? await ctx.db.get(cw.revisionId) : null;
-  if (revision?.receipt) return { revision, page, article, site, rollback, deferredUntil: null };
+  if (revision?.receipt) return { revision, page, article, site, rollback, correction, editTarget: cw.editTarget, deferredUntil: null };
   if (Date.now() < cw.windowStartAt) throw new Error("Improvement is outside its fixed delivery window");
   if (site.publicationLeaseOwner && site.publicationLeaseOwner !== revision?.leaseOwner &&
-    (site.publicationLeaseExpiresAt ?? 0) > Date.now()) return { revision: null, page, article, site, rollback, deferredUntil: site.publicationLeaseExpiresAt! };
+    (site.publicationLeaseExpiresAt ?? 0) > Date.now()) return { revision: null, page, article, site, rollback, correction, editTarget: cw.editTarget, deferredUntil: site.publicationLeaseExpiresAt! };
   // A vanished lease does not erase an uncertain write on another record.
   for (const status of ["leased","attempted","unverified"] as const) {
     const others = await ctx.db.query("published_article_revisions").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", status)).take(101);
@@ -79,7 +171,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     const baseHash = publicationArtifactHash(base), revisionKey = sha256Hex(JSON.stringify([job._id, cw.baseRevision, cw.approvedArtifactHash]));
     const id = await ctx.db.insert("published_article_revisions", {
       siteId: site._id, articleId: article._id, contentWorkJobId: job._id, selectedPageId: page._id,
-      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : "content_improvement",
+      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
       ...(rollback ? { rollbackOfRevisionId: rollback._id } : {}),
       revisionKey, status: "prepared", rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       publicationConfigHash: article.publicationConfigHash!, publicationDate: 0, expectedPublicUrl: page.url,
@@ -96,7 +188,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
   if (revision.attempts >= 3) throw new Error("Improvement publication retry bound reached; reconciliation required");
   await ctx.db.patch(revision._id, { status: "leased", leaseOwner: args.workerToken, leaseStartedAt: Date.now(), updatedAt: Date.now() });
   await ctx.db.patch(site._id, { publicationLeaseOwner: args.workerToken, publicationLeaseExpiresAt: Date.now() + PUBLICATION_LEASE_MS });
-  return { revision: (await ctx.db.get(revision._id))!, page, article, site, rollback, deferredUntil: null };
+  return { revision: (await ctx.db.get(revision._id))!, page, article, site, rollback, correction, editTarget: cw.editTarget, deferredUntil: null };
 } });
 export const attempted = internalMutation({ args: { ...claimArgs, revisionId: v.id("published_article_revisions") }, handler: async (ctx, args) => {
   const job = await ctx.db.get(args.jobId), site = await ctx.db.get(args.siteId), revision = await ctx.db.get(args.revisionId);
@@ -104,9 +196,11 @@ export const attempted = internalMutation({ args: { ...claimArgs, revisionId: v.
     revision?.contentWorkJobId !== job._id || revision.leaseOwner !== args.workerToken || site.publicationLeaseOwner !== args.workerToken ||
     (site.publicationLeaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) || !await siteExecutionAuthorized(ctx, site) ||
     site.approvalRequired || site.contentSchedule?.paused || !site.autopilotEnabled || site.autopilotRolloutMode !== "live") throw new Error("Improvement mutation authority changed");
-  await authorizedWorkPage(ctx, site, job);
+  const page = await authorizedWorkPage(ctx, site, job);
   const article = job.articleId ? await ctx.db.get(job.articleId) : null;
-  if (job.contentWork?.operation !== "rollback" && (!article || !isSealedReady(article) ||
+  if (job.contentWork?.correction && page && article) await assertCorrection(ctx, site, page, job, article);
+  if (job.contentWork?.correction && revision.nextArtifactHash !== job.contentWork.approvedArtifactHash) throw new Error("Corrective revision changed before the write");
+  if (!job.contentWork?.operation && (!article || !isSealedReady(article) ||
     publicationArtifactHash(article) !== revision.nextArtifactHash || article.auditedContentHash !== revision.nextArtifactHash ||
     article.publicationConfigHash !== publicationDeliveryConfigHash(publicationDeliveryConfig(site)))) throw new Error("Reviewed improvement changed before the write");
   if (revision.receipt) return;

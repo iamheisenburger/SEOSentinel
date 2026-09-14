@@ -57,6 +57,7 @@ function articlePayload(keyword: string) {
 }
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
+  longManagedPage?: boolean;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
@@ -89,6 +90,18 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
           article.markdown = article.markdown.replace("The synthetic field register contains an observation label and a review note [1].", "").split("## Sources")[0].trim();
           article.sources = [];
         }
+        if (options.longManagedPage) article.markdown += "\n\n## Detailed rehearsal for an existing procedure\n\n" + [
+          "Before rehearsing the procedure, agree which decisions belong to the exercise and which remain with the authorized business owner. Give participants an example that they are allowed to inspect. Ask them to distinguish source observations from proposed interpretations without guessing at missing context. Keep a separate list of questions that the exercise cannot answer. At the end, check whether the original boundaries still describe the work. Revise the exercise instructions only after the owner has considered the consequences for people who were not present.",
+          "Prepare a handover record that can be understood without a private conversation with its author. Include the unresolved question, the relevant observation, the person responsible for answering, and the condition that would justify closure. Let the receiving person describe the next permitted action in their own words. If the explanation differs from the sender's intention, record the discrepancy before moving on. Use the disagreement to clarify the proposed wording rather than assigning blame or implying that silence indicates agreement with an unsupported conclusion.",
+          "Consider how a participant should handle an unavailable source. Keep the missing information visible and explain why it matters to the pending decision. Avoid filling the gap with an estimate that might later be mistaken for an observed value. If the team can continue safely without the source, describe the narrower decision that is actually supported. If it cannot, identify who can obtain the missing material and how the request should be tracked. Revisit the conclusion when the authorized source becomes available.",
+          "Rehearse a disputed interpretation without changing the underlying observation. Invite each participant to state which part of the record supports their reading and what would persuade them to reconsider. Preserve both explanations when the available material does not distinguish between them. Ask a reviewer to identify an appropriate reversible next action. Do not convert the exercise into a claim that the proposed process improves business performance. It demonstrates only whether the participants can describe and review this particular hypothetical disagreement in an understandable way.",
+          "Walk through the proposed access boundary using role descriptions rather than real customer credentials. Ask who should be able to inspect a record, suggest a correction, approve its use, or export a copy. Treat those capabilities as separate decisions that require appropriate authorization. Include a discussion of temporary participation and what should happen when it ends. If a participant discovers that the proposed boundary is ambiguous, retain that issue for the responsible owner instead of treating an example permission label as a complete security policy.",
+          "Plan how to communicate a rejected proposal. Explain which question remains unresolved, what evidence was considered, and what would make another review useful. Keep the earlier version available so a reviewer can compare the actual changes. Avoid presenting rejection as proof that an alternative is correct. Ask whether the record distinguishes a factual disagreement from a preference about wording or presentation. Where the distinction is unclear, request clarification before the team relies on the decision to change an unrelated part of its working procedure.",
+          "Review how a person would resume the work after an interruption. Provide the retained record without adding private background information and ask the participant to explain what has already been decided. Note which details they need to request again. Use those questions to improve the proposed handover, while keeping the original observation and its limitations intact. Do not assume that a successful rehearsal proves reliability under all future conditions. Treat it as feedback about the clarity of the particular example and the instructions supplied for it.",
+          "Summarize the exercise and list its limits. Distinguish the hypothetical rehearsal from ordinary customer work outside the exercise. Identify suggestions requiring owner approval and avoid promising an unmeasured outcome. Preserve the proposed next step, the reason for it, and the evidence needed to check its completion. Invite participants to correct the exercise record before sharing guidance with absent colleagues. Ask the responsible owner to review uncertain language and explain the remaining limitations without turning a rehearsal into a claim about commercial effectiveness.",
+          "Examine the proposed naming convention with a reader unfamiliar with the project. Ask them to distinguish a source observation, a draft interpretation, an approved decision, and an unresolved question. Collect ambiguous labels for review rather than quietly choosing a meaning on behalf of the owner. Consider a worked example for each label and invite a colleague to challenge the distinction. Preserve the original language beside any proposed replacement until the responsible reviewer accepts it. Keep this terminology discussion separate from unsupported claims about product capabilities.",
+          "Prepare a closing checklist for the person responsible for the rehearsal. Ask them to identify the retained evidence, unresolved objections, proposed next action, and permission needed before proceeding. Include a route for requesting clarification without silently reopening completed customer work. Compare the checklist against the original scope and remove suggestions outside that scope unless the owner explicitly approves them. Let participants describe remaining concerns in their own words. Retain the proposed checklist as a discussion artifact and seek explicit owner approval before any operational use.",
+        ].join("\n\n");
         if (options.quality === "unsupported") article.markdown = article.markdown.replace(
           "The synthetic field register contains an observation label and a review note [1].",
           "A completed valve inspection reduces annual water consumption by 37% [1].",
@@ -97,6 +110,24 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         if (selected) {
           article.title = selected[1]; article.slug = selected[2]; article.metaTitle = selected[1].slice(0, 60);
           article.markdown = selected[3] + "\n\n## Additional reader guidance\n\n" + article.markdown;
+          const target = text.match(/<targeted_edit>([^\n]+)<\/targeted_edit>/)?.[1];
+          if (target) {
+            const edit = JSON.parse(target);
+            const sentences = keyword.includes("accountable handoff") ? [
+              `For ${keyword}, propose an explicit transfer checklist that distinguishes delegated responsibility from permission to approve.`,
+              "Identify the sender, receiver, acceptance evidence, and escalation route before transferring ownership.",
+              "If acknowledgement is missing, keep the original assignee visible and flag the unresolved transfer.",
+              "Let participants document objections and agree how an incomplete handover should be returned.",
+              "Preserve the previous record so the team can reconstruct the decision.",
+            ] : [`For ${keyword}, use a proposed diagnostic walkthrough before changing the working process.`,
+              "Separate the observation, suspected cause, and next reversible experiment in the record.",
+              "Ask an accountable colleague to reproduce the example and challenge missing context.",
+              "Keep unresolved contradictions visible until a documented explanation supports the decision.",
+              "Describe the acceptance condition and who can approve a handoff."];
+            let after = "";
+            for (const sentence of sentences) if ((after + " " + sentence).trim().split(/\s+/).length <= edit.maxWords) after = (after + " " + sentence).trim();
+            article.markdown = selected[3].replace(edit.before, after);
+          }
           if (options.selectedNoop) article.markdown = selected[3];
         } else if (options.wordpress) article.slug += "-" + businesses[0].domain.split(".")[0];
         value = article;
@@ -283,12 +314,12 @@ export async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 
   f.setIdentity(null);
   return site;
 }
-export async function selectExistingPage(f: ReturnType<typeof setup>, extension = "md") {
+export async function selectExistingPage(f: ReturnType<typeof setup>, extension = "md", providedOriginal?: string) {
   const site = f.sites[0], stored = f.get(site.id)!;
   stored.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: stored as never,
     ownerAccountKey: accountDeletionKey(stored.userId), verifiedAt: f.now() });
   const slug = slugify(site.keywords[0]), path = `content/blog/${slug}.${extension}`, url = `https://${site.domain}/blog/${slug}`;
-  const original = "This page preserves the confirmed local business facts and the customer's original explanation. Record the context behind each decision and ask an authorized reviewer to clarify anything that is uncertain. Keep the original record available when planning an addition to this guidance.";
+  const original = providedOriginal ?? "This page preserves the confirmed local business facts and the customer's original explanation. Record the context behind each decision and ask an authorized reviewer to clarify anything that is uncertain. Keep the original record available when planning an addition to this guidance.";
   const raw = `---\ntitle: ${JSON.stringify(titleFor(site.keywords[0]))}\nmetaTitle: ${JSON.stringify(titleFor(site.keywords[0]).slice(0,60))}\ndescription: ${JSON.stringify(description)}\ncanonicalUrl: ${JSON.stringify(url)}\n---\n\n${original}\n`;
   f.repositories.get(site.name.toLowerCase())!.files.set(path, raw);
   f.setIdentity(stored.userId);
@@ -321,6 +352,191 @@ test("SLC selected Markdown/MDX improvements use actual generation, review, CAS,
     assert.equal(f.modelCalls.some(c => String(c.model).includes("dataforseo")), false);
     f.assertOffline();
   });
+});
+
+test("SLC28 verified fresh creation automatically enters the exact editable inventory without manual reselection", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f);
+  try { await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2); }
+  catch { assert.fail(JSON.stringify(f.tables.articles?.map(a => ({ status: a.status, verificationError: a.publicUrlCheckError, hasSource: !!a.contentWorkCreationSource })))); }
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages?.find(p => p.siteId === site.id && p.slug === article.slug.replace(/^\//, "") && p.editable?.active);
+  assert.ok(page, "A verified Pentra-created page must enter its measured-improvement inventory");
+  assert.equal(page.editable.managedArticleId, article._id);
+  assert.equal(page.editable.sourceContent, f.repositories.get(site.name.toLowerCase())!.files.get(`content/blog/${article.slug.replace(/^\//, "")}.md`));
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  assert.equal((await f.invoke("articles:get", { articleId: article._id })).contentWorkCreationSource, undefined, "Owner UI must not receive the remote creation grant");
+  await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: page._id }); f.setIdentity(null);
+  await f.invoke("articles:recordPublicPublicationCheck", { siteId: site.id, articleId: article._id,
+    expectedContentHash: article.publishedContentHash, publicUrl: article.publicUrl, status: "verified", attempts: 2 });
+  assert.equal(f.get(page._id)!.editable.active, false, "A duplicate creation verification must not resurrect revoked consent");
+  assert.equal(f.tables.pages.find(p => p.slug === "/")?.editable, undefined, "Never enroll unrelated pre-existing content");
+  f.assertOffline();
+});
+
+export const incorrectBusinessParagraph = "This business exclusively sells decorative commercial paint through unrelated retail appointments.";
+export const correctionSurvivor = "Keep the original observations available to an authorized reviewer. Record uncertainty explicitly and ask the responsible owner to clarify unsupported statements before anyone relies on the explanation. Do not silently alter unrelated customer content or infer new facts from an automated label.";
+export async function exerciseImmediateFactCorrection(f: ReturnType<typeof setup>, pageId: string) {
+  const site = f.sites[0];
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const e = f.get(pageId)!.editable, original = e.sourceContent, originalMarkdown = e.markdown, deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  e.lastImprovedAt = f.now(); // A recent discretionary revision may not block a demonstrated correction.
+  const lastImproved = e.lastImprovedAt, modelCount = f.modelCalls.length, reservationCount = f.tables.provider_spend_reservations.length;
+  // Deliberately overdue fixed slot: correction must not move it or erase lateness.
+  f.setTime(deadline + 1);
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const request = { siteId: site.id, pageId, baseRevision: e.sourceRevision, confirm: true, kind: "factual_correction", before: incorrectBusinessParagraph,
+    reason: "Owner confirms this paragraph describes the wrong business; use the confirmed summary exactly.", field: "siteSummary" };
+  const ids = await Promise.all([f.invoke("actions/contentCorrections:correct", request), f.invoke("actions/contentCorrections:correct", request)]);
+  assert.equal(ids[0], ids[1], "Concurrent owner retries reuse one existing job"); f.setIdentity(null);
+  await pumpUntil(f, () => f.get(ids[0])!.contentWork.stage === "verified", 100, f.now() + 60_000);
+  const job = f.get(ids[0])!, page = f.get(pageId)!;
+  assert.equal(page.editable.markdown, originalMarkdown.replace(incorrectBusinessParagraph, f.get(site.id)!.siteSummary));
+  assert.equal(page.editable.lastImprovedAt, lastImproved);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  assert.equal(f.modelCalls.length, modelCount); assert.equal(f.tables.provider_spend_reservations.length, reservationCount);
+  assert.equal(job.contentWork.budgetMicroUsd, 0); assert.equal(job.providerSpendReservationId, undefined);
+  assert.equal(f.get(job.articleId)!.editorialQualityScore, undefined, "Do not fabricate model quality scores for a literal owner correction");
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  assert.equal(await f.invoke("actions/contentCorrections:correct", request), ids[0], "A lost owner-action response cannot duplicate an already verified correction");
+  const rollback = await f.invoke("contentImprovements:requestRollback", { siteId: site.id, revisionId: job.contentWork.revisionId, confirm: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.get(rollback)!.contentWork.stage === "verified", 100, f.now() + 60_000);
+  assert.equal(f.get(pageId)!.editable.sourceContent, original);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  assert.equal(f.modelCalls.length, modelCount);
+  f.assertOffline();
+  return { job, original, deadline };
+}
+test("SLC28 immediate exact factual correction and rollback are provider-free and preserve overdue cadence", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const page = await selectExistingPage(f, "md", `${incorrectBusinessParagraph}\n\n${correctionSurvivor}`);
+  f.get(f.sites[0].id)!.gscDateEpochs = [];
+  await exerciseImmediateFactCorrection(f, page.pageId);
+});
+test("SLC28 corrections reject wrong owner, cross-site page, revoked consent, changed profile and stale source without spending", async t => {
+  for (const scenario of ["wrong_owner", "foreign_page", "revoked", "profile_changed", "stale_source"]) await t.test(scenario, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const selected = await selectExistingPage(f, "md", `${incorrectBusinessParagraph}\n\n${correctionSurvivor}`), site = await selectGrowth(f);
+    f.get(site.id)!.gscDateEpochs = [];
+    await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+    const page = f.get(selected.pageId)!, revision = page.editable.sourceRevision;
+    const calls = f.modelCalls.length, reservations = f.tables.provider_spend_reservations.length, jobs = f.tables.jobs.length;
+    f.setIdentity(scenario === "wrong_owner" ? "unauthorized-synthetic-owner" : `synthetic-owner-${site.domain}`);
+    if (scenario === "foreign_page") page.siteId = "sites:foreign-synthetic";
+    if (scenario === "revoked") await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: page._id });
+    if (scenario === "profile_changed") f.get(site.id)!.siteSummary = "A changed unconfirmed business description";
+    if (scenario === "stale_source") page.editable.sourceRevision = "f".repeat(40);
+    await assert.rejects(f.invoke("actions/contentCorrections:correct", { siteId: site.id, pageId: page._id, baseRevision: revision,
+      confirm: true, kind: "factual_correction", before: incorrectBusinessParagraph, field: "siteSummary", reason: "Owner confirms the incorrect company description." }));
+    assert.equal(f.modelCalls.length, calls); assert.equal(f.tables.provider_spend_reservations.length, reservations); assert.equal(f.tables.jobs.length, jobs);
+    f.assertOffline();
+  });
+});
+test("SLC28 exact correction respects the final customer-edit fence and reconciles lost GitHub responses", async t => {
+  for (const scenario of ["customer_edit", "lost_ack"]) await t.test(scenario, async () => {
+    let armed = false;
+    const f: ReturnType<typeof setup> = setup({ growthFirst: true, businesses: [slcBusinesses[0]], lostCommitResponses: scenario === "lost_ack" ? 1 : 0,
+      githubBeforeWrite: async () => {
+        if (scenario === "customer_edit" && armed) {
+          armed = false; const repo = f.repositories.get(f.sites[0].name.toLowerCase())!;
+          repo.files.set(selected.path, "Later customer source must survive."); repo.head = sha("customer-edit-after-correction-claim");
+        }
+      } });
+    const selected = await selectExistingPage(f, "md", `${incorrectBusinessParagraph}\n\n${correctionSurvivor}`);
+    const site = await selectGrowth(f); f.get(site.id)!.gscDateEpochs = [];
+    await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    const id = await f.invoke("actions/contentCorrections:correct", { siteId: site.id, pageId: selected.pageId, baseRevision: f.get(selected.pageId)!.editable.sourceRevision,
+      kind: "factual_correction", confirm: true, before: incorrectBusinessParagraph, field: "siteSummary", reason: "Owner confirms the exact corrected company summary." });
+    f.setIdentity(null); armed = true;
+    if (scenario === "customer_edit") {
+      await pumpUntil(f, () => !armed, 30);
+      assert.equal(f.repositories.get(site.name.toLowerCase())!.files.get(selected.path), "Later customer source must survive.");
+      assert.notEqual(f.get(id)!.contentWork.stage, "verified");
+    } else {
+      await pumpUntil(f, () => f.get(id)!.contentWork.stage === "verified", 140, START + 10 * 60_000);
+      assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 1, "A lost response cannot duplicate the corrective commit");
+    }
+    f.assertOffline();
+  });
+});
+
+export function brokenLinkParagraph(domain: string) { return `The navigation in this paragraph points to the [owner guidance](https://${domain}/blog/missing-correction-target). Retain the existing link label and every other word when repairing the demonstrated missing destination.`; }
+export async function exerciseBrokenLinkCorrection(f: ReturnType<typeof setup>, pageId: string) {
+  const site = f.sites[0]; await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const destination = f.tables.pages.find(p => p.editable?.managedArticleId), source = f.get(pageId)!;
+  assert.ok(destination); const original = source.editable.sourceContent;
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt, count = f.modelCalls.length;
+  source.editable.lastImprovedAt = f.now(); const lastImproved = source.editable.lastImprovedAt;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const request = { siteId: site.id, pageId, baseRevision: source.editable.sourceRevision, kind: "technical_repair", confirm: true,
+    before: brokenLinkParagraph(site.domain), reason: "Owner confirms this internal navigation target is missing; preserve the label and point to the verified guidance.", targetPageId: destination._id };
+  const id = await f.invoke("actions/contentCorrections:correct", request); f.setIdentity(null);
+  await pumpUntil(f, () => f.get(id)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000);
+  assert.equal(f.modelCalls.length, count); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  assert.equal(f.get(pageId)!.editable.lastImprovedAt, lastImproved);
+  assert.ok(f.get(pageId)!.editable.markdown.includes(`[owner guidance](${destination.url})`));
+  const r = f.get(f.get(id)!.contentWork.revisionId)!; assert.equal(r.kind, "renderer_repair"); assert.equal(r.status, "verified");
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const rollback = await f.invoke("contentImprovements:requestRollback", { siteId: site.id, revisionId: r._id, confirm: true }); f.setIdentity(null);
+  await pumpUntil(f, () => f.get(rollback)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000);
+  assert.equal(f.get(pageId)!.editable.sourceContent, original); assert.equal(f.modelCalls.length, count);
+  f.assertOffline(); return { id, destination, deadline };
+}
+test("SLC28 a demonstrated broken internal link is repaired and fully verified without model work or cadence credit", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const p = await selectExistingPage(f, "md", `${brokenLinkParagraph(f.sites[0].domain)}\n\n${correctionSurvivor}`);
+  f.get(f.sites[0].id)!.gscDateEpochs = [];
+  await exerciseBrokenLinkCorrection(f, p.pageId);
+});
+
+/** Real handlers, synthetic Search Console observations and virtual deadlines.
+ * No manual selection, discarded ready jobs, clock reset or manufactured seals. */
+export async function managedMeasuredFollowups(f: ReturnType<typeof setup>) {
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verified"));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id);
+  assert.ok(page?.editable.active, "Verified creation must enroll itself before measured work");
+  const original = page.editable.markdown;
+  const measure = (question: string) => {
+    const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `fresh-${date}`;
+    f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []).filter((x: Fields) => x.date !== date), { date, syncEpoch }];
+    f.add("search_performance", { siteId: site.id, date, syncEpoch, page: page.url, query: question,
+      syncVersion: 2, syncedAt: f.now(), clicks: 1, impressions: 60, ctr: 1 / 60, position: 12, createdAt: f.now() });
+  };
+  measure(`${site.keywords[0]} diagnostic decision`);
+  const improved = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await pumpUntil(f, () => improved().length === 1 && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 300, START + 30 * day);
+  const first = improved()[0], firstText = f.get(page._id)!.editable.markdown;
+  assert.ok(first.contentWork.editTarget, "A full-length managed page requires a bounded edit, not appended articles");
+  assert.notEqual(firstText, original);
+  assert.ok(firstText.split(/\s+/).length <= original.split(/\s+/).length + 60);
+  f.setTime(first.contentWork.verifiedAt + 14 * day + 1);
+  measure(`${site.keywords[0]} accountable handoff`);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_post_change_measurement" });
+  await pumpUntil(f, () => improved().length === 2 && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 400, START + 70 * day);
+  const second = improved()[1], finalText = f.get(page._id)!.editable.markdown;
+  assert.ok(second.contentWork.verifiedAt - first.contentWork.verifiedAt >= 14 * day);
+  assert.ok(second.contentWork.editTarget);
+  assert.notEqual(finalText, firstText);
+  assert.ok(finalText.includes("Do not generalize the result into a performance claim"), "Unrelated source limitations survive both edits");
+  assert.ok(finalText.split(/\s+/).length <= original.split(/\s+/).length + 120);
+  for (const j of [first, second]) assert.equal(f.get(j.contentWork.revisionId)!.status, "verified");
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length, 2);
+  assert.ok(f.tables.jobs.some(j => j.contentWork?.intent === "create" && j.createdAt > second.contentWork.verifiedAt), "Consumed work must be freshly replenished");
+  f.assertOffline();
+  return { page, first, second, original, finalText, deadlines: improved().map(j => ({ deadline: j.contentWork.deadlineAt, published: j.contentWork.publishedAt, verified: j.contentWork.verifiedAt })) };
+}
+test("SLC28 empty inventory creates, measures, improves twice after fourteen days and replenishes without reselection", async t => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], longManagedPage: true });
+  const result = await managedMeasuredFollowups(f);
+  assert.ok(result.original.split(/\s+/).length >= 2400 && result.original.split(/\s+/).length <= 2600);
+  assert.ok(result.finalText.split(/\s+/).length <= 2600);
+  t.diagnostic(JSON.stringify({ synthetic: true, adapter: "github", deadlines: result.deadlines, ready: 2,
+    originalWords: result.original.split(/\s+/).length, finalWords: result.finalText.split(/\s+/).length }));
 });
 
 test("SLC selected rollback uses the same provider-free job, restores exact bytes and does not consume a cadence slot", async () => {

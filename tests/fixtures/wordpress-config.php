@@ -1,9 +1,11 @@
 <?php
 // ISOLATED TEST CONFIGURATION. Never install on a public WordPress instance.
-define('DB_NAME', 'pentra_local_fixture');
-define('DB_USER', 'synthetic-local');
-define('DB_PASSWORD', '');
-define('DB_HOST', '127.0.0.1');
+$fixture_mysql = getenv('PENTRA_FIXTURE_DB') === 'mysql';
+define('DB_NAME', $fixture_mysql ? 'pentra_local_mysql_fixture' : 'pentra_local_fixture');
+define('DB_USER', $fixture_mysql ? 'pentra_fixture' : 'synthetic-local');
+define('DB_PASSWORD', $fixture_mysql ? 'synthetic-local-fixture' : '');
+define('DB_HOST', $fixture_mysql ? '127.0.0.1:18928' : '127.0.0.1');
+if ($fixture_mysql) { define('DB_ENGINE', 'mysql'); }
 define('DB_CHARSET', 'utf8');
 define('DB_COLLATE', '');
 define('WP_ENVIRONMENT_TYPE', 'local');
