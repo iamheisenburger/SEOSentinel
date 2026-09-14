@@ -3,6 +3,16 @@ import { publicationInventoryDetail, type PublicationInventory } from "./publica
 /** Presentation only. Status precedence, deadlines and admission stay with
  * their existing owners. Tests require every registered health status here. */
 export const AUTOPILOT_HEALTH_DETAILS = {
+  content_mode_required: "Select the content-work service before delivery.",
+  content_paused: "Content delivery is paused or its entitlement is unavailable.",
+  content_binding_changed: "The confirmed business or publishing connection changed; delivery stopped.",
+  content_migration_pending: "Reconcile legacy work before the replacement engine can start.",
+  content_quality_exhausted: "The bounded draft, revisions and replacement did not pass substantive review.",
+  content_failed_slot: "The fixed delivery slot failed; its deadline has not moved.",
+  content_artifact_changed: "Prepared content no longer matches its approved artifact.",
+  content_pricing_unavailable: "Provider pricing is not configured; paid work is blocked.",
+  content_inputs_exhausted: "Confirmed inputs contain no remaining distinct supported question.",
+  content_budget_exhausted: "The existing funding limits block admission; no new work was funded.",
   healthy: "Scheduler, quality buffer, and cadence are healthy.",
   recovering: "Autopilot work is in progress; buffer recovery and delivery are not yet verified.",
   missed: "Publication cadence deadline missed.",

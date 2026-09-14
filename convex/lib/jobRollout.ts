@@ -7,6 +7,7 @@ import {
 } from "./siteDomainBinding.ts";
 
 export type JobRolloutState = {
+  contentWork?: { connectionHash: string; profileHash: string };
   payload?: unknown;
   rolloutEpoch?: number;
   canonicalDomain?: string;
@@ -14,6 +15,8 @@ export type JobRolloutState = {
 };
 
 export type SiteRolloutState = {
+  serviceMode?: string;
+  contentSchedule?: { connectionHash: string; profileHash: string; paused: boolean };
   autopilotEnabled?: boolean;
   autopilotRolloutMode?: string;
   autopilotRolloutEpoch?: number;
@@ -46,6 +49,11 @@ export function jobAuthorizedForExecution(
   job: JobRolloutState,
 ): boolean {
   if (!siteExecutionActive(site)) return false;
+  if (site.serviceMode === "growth_first") {
+    if (!job.contentWork || !site.contentSchedule || site.contentSchedule.paused ||
+      job.contentWork.connectionHash !== site.contentSchedule.connectionHash ||
+      job.contentWork.profileHash !== site.contentSchedule.profileHash) return false;
+  } else if (job.contentWork) return false;
   const currentDomain = siteCanonicalDomain(site);
   const currentRevision = siteCanonicalDomainRevision(site);
   const hasJobBinding = job.canonicalDomain !== undefined ||

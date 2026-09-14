@@ -913,7 +913,7 @@ export const promoteWarmSiteIfReady = internalMutation({
     };
     const ready = await readPublicationBufferSummaries(ctx, site);
     const sealedCount = ready.inventory.usableCountLowerBound;
-    const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
+    const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4, site.serviceMode);
     const blockers = [...readiness.blockers];
     if (ready.inventory.status !== "complete" && !publicationInventoryProvesMinimum(ready.inventory, bufferPolicy.minimum)) {
       blockers.push("publication_inventory_incomplete", ...ready.inventory.blockers);
@@ -1378,7 +1378,7 @@ export const armTopicPlanCooldownJobSettlement = internalMutation({
       site.autopilotEnabled === true &&
       (site.cadencePerWeek ?? 0) > 0 &&
       ["warm", "live"].includes(site.autopilotRolloutMode ?? "observe") &&
-      site.expectedClickSchedulingEnabled === true &&
+      site.serviceMode !== "growth_first" && site.expectedClickSchedulingEnabled === true &&
       (site.autopilotRolloutEpoch ?? 0) === args.rolloutEpoch &&
       job &&
       job.siteId === args.siteId &&
@@ -2117,7 +2117,7 @@ export const markRunFinished = internalMutation({
       outcome: recordedOutcome, detail: recordedDetail,
       jobId: args.jobId, articleId: args.articleId, bufferInventory: currentReady.inventory,
     });
-    const bufferPolicy = approvedBufferPolicy(runSite.cadencePerWeek ?? 4);
+    const bufferPolicy = approvedBufferPolicy(runSite.cadencePerWeek ?? 4, runSite.serviceMode);
     const runClassification = classifyAutopilotRunOutcome({
       outcome: recordedOutcome,
       approvedBufferCount,
@@ -2239,7 +2239,7 @@ export const markRunFinished = internalMutation({
     await reconcilePublicationInventoryAlert(ctx, run.siteId, currentReady.inventory);
     if (
       completionStatus === "healthy" &&
-      runSite?.expectedClickSchedulingEnabled === true &&
+      runSite?.serviceMode !== "growth_first" && runSite?.expectedClickSchedulingEnabled === true &&
       currentPortfolioHealth?.portfolioSupportsGoal === false
     ) {
       completionStatus = currentPortfolioHealth.portfolioStatus === "below_goal"
@@ -2249,6 +2249,7 @@ export const markRunFinished = internalMutation({
         `Cadence is operational, but the measured topic portfolio does not yet support ` +
         `${currentPortfolioHealth.portfolioGoalMonthly ?? "the configured"} organic clicks/month.`;
     }
+    if (runSite.serviceMode === "growth_first" && runSite.contentSchedule) nextPublicationDueAt = runSite.contentSchedule.nextDeadlineAt;
     await upsertHealth(ctx, run.siteId, {
       lastRunId: args.runId,
       heartbeatAt: now,
@@ -2521,7 +2522,7 @@ export const auditSla = internalMutation({
         !site.approvalRequired && (site.publishMethod ?? "github") !== "manual";
       const cadence = site.cadencePerWeek ?? 4;
       const cadenceMs = cadenceIntervalMs(cadence);
-      const bufferPolicy = approvedBufferPolicy(cadence);
+      const bufferPolicy = approvedBufferPolicy(cadence, site.serviceMode);
       const articlePublishedAt = latestPublished
         ? effectivePublishedAt({
             createdAt: latestPublished.articleCreatedAt,
@@ -2534,7 +2535,7 @@ export const auditSla = internalMutation({
         articlePublishedAt,
       });
       const nextPublicationDueAt =
-        (lastPublishedAt ?? site.createdAt) + cadenceMs;
+        site.serviceMode === "growth_first" && site.contentSchedule ? site.contentSchedule.nextDeadlineAt : (lastPublishedAt ?? site.createdAt) + cadenceMs;
       const schedulerStale = health
         ? health.lastNaturalScheduledAt
           ? now - health.lastNaturalScheduledAt > NATURAL_RUN_STALE_MS
@@ -2637,7 +2638,7 @@ export const auditSla = internalMutation({
       });
       if (
         status === "healthy" &&
-        site.expectedClickSchedulingEnabled === true &&
+        site.serviceMode !== "growth_first" && site.expectedClickSchedulingEnabled === true &&
         health?.portfolioSupportsGoal === false
       ) {
         status = health.portfolioStatus === "below_goal"
@@ -2730,9 +2731,9 @@ export const refreshSiteCadenceHealth = internalMutation({
     });
     const cadence = site.cadencePerWeek ?? 4;
     const cadenceMs = cadenceIntervalMs(cadence);
-    const bufferPolicy = approvedBufferPolicy(cadence);
+    const bufferPolicy = approvedBufferPolicy(cadence, site.serviceMode);
     const nextPublicationDueAt =
-      (lastPublishedAt ?? site.createdAt) + cadenceMs;
+      site.serviceMode === "growth_first" && site.contentSchedule ? site.contentSchedule.nextDeadlineAt : (lastPublishedAt ?? site.createdAt) + cadenceMs;
     const approvedBufferCount = ready.inventory.usableCountLowerBound;
     const now = Date.now();
     const schedulerStale = health
@@ -2767,7 +2768,7 @@ export const refreshSiteCadenceHealth = internalMutation({
           });
     if (
       status === "healthy" &&
-      site.expectedClickSchedulingEnabled === true &&
+      site.serviceMode !== "growth_first" && site.expectedClickSchedulingEnabled === true &&
       health?.portfolioSupportsGoal === false
     ) {
       status = health.portfolioStatus === "below_goal"
@@ -2807,7 +2808,7 @@ export const reconcileSealedBufferCount = internalMutation({
       return { reconciled: false as const, approvedBufferCount: 0 };
     }
     const ready = await readPublicationBufferSummaries(ctx, site);
-    const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4);
+    const bufferPolicy = approvedBufferPolicy(site.cadencePerWeek ?? 4, site.serviceMode);
     await reconcilePublicationInventoryAlert(ctx, siteId, ready.inventory);
     await upsertHealth(ctx, siteId, {
       ...publicationInventoryHealthFields(ready.inventory),
@@ -3088,7 +3089,7 @@ export const getFleetReadiness = internalQuery({
         hasCrawledPage,
         limits.maxArticles,
       );
-      const bufferMinimumMet = publicationInventoryProvesMinimum(ready.inventory, approvedBufferPolicy(site.cadencePerWeek ?? 4).minimum);
+      const bufferMinimumMet = publicationInventoryProvesMinimum(ready.inventory, approvedBufferPolicy(site.cadencePerWeek ?? 4, site.serviceMode).minimum);
       const inventoryBlockers = ready.inventory.status === "complete" || bufferMinimumMet ? []
         : ["publication_inventory_incomplete", ...ready.inventory.blockers];
       rows.push({

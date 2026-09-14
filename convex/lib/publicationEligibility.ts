@@ -88,6 +88,17 @@ export type PublicationBufferSummary = Doc<"article_summaries"> & {
 };
 
 export async function readPublicationBufferSummaries(ctx: Pick<QueryCtx, "db">, site: Doc<"sites">) {
+  if (site.serviceMode === "growth_first" && site.contentSchedule) {
+    const work = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
+      .gte("contentWork.deadlineAt", site.contentSchedule!.nextDeadlineAt)).take(PUBLICATION_BUFFER_CANDIDATE_LIMIT + 1);
+    const rows: Doc<"article_summaries">[] = [];
+    for (const job of work.slice(0, PUBLICATION_BUFFER_CANDIDATE_LIMIT)) {
+      if (job.contentWork?.stage !== "ready" || !job.articleId) continue;
+      const row = await ctx.db.query("article_summaries").withIndex("by_article", q => q.eq("articleId", job.articleId!)).unique();
+      if (row?.siteId === site._id && row.auditedContentHash === job.contentWork.approvedArtifactHash) rows.push(row);
+    }
+    return publicationBufferSummaries(ctx, site._id, rows, work.length > PUBLICATION_BUFFER_CANDIDATE_LIMIT);
+  }
   const window = await takeCurrentDomainArticleSummaryWindowByStatus(ctx, site, "ready", PUBLICATION_BUFFER_CANDIDATE_LIMIT + 1, "asc");
   return publicationBufferSummaries(ctx, site._id, window.rows, window.domainWindowIncomplete);
 }

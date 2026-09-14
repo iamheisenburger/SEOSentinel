@@ -49,7 +49,7 @@ function source(name: string) {
 /** Infrastructure only. Every function reference dispatches the actual
  * registered handler. Mutations are serializable with rollback; indexed
  * queries use the real schema's field ordering, never a canned result. */
-export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>) {
+export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>, environment: Record<string, string> = {}) {
   let now = START, serial = 0;
   let identitySubject: string | null = null;
   let mutationTail: Promise<unknown> = Promise.resolve();
@@ -111,7 +111,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
       Response, Request, Headers, AbortSignal, AbortController, Blob,
       fetch: transport, setTimeout, clearTimeout, structuredClone,
       console: Object.fromEntries(["log", "warn", "error", "info"].map(level => [level, (...values: unknown[]) => logs.push(values.map(String).join(" "))])),
-      process: { env: { ANTHROPIC_API_KEY: "synthetic-only", OPENAI_API_KEY: "synthetic-only", DATAFORSEO_LOGIN: "synthetic-only", DATAFORSEO_PASSWORD: "synthetic-only" } },
+      process: { env: { ANTHROPIC_API_KEY: "synthetic-only", OPENAI_API_KEY: "synthetic-only", DATAFORSEO_LOGIN: "synthetic-only", DATAFORSEO_PASSWORD: "synthetic-only", ...environment } },
     });
     modules.set(name, runtime.exports); return runtime.exports;
   }

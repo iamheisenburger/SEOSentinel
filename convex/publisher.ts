@@ -1,4 +1,5 @@
 "use node";
+import { verifyLiveCreatedArticle } from "./lib/publishedRevision";
 
 import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
@@ -150,6 +151,7 @@ type ArticleRecord = {
 };
 
 type SiteRecord = {
+  serviceMode?: string;
   _id: Id<"sites">;
   userId?: string;
   domain: string;
@@ -488,6 +490,7 @@ async function commitToMain({
   file,
   deliveryKey,
   expectedCurrentContent,
+  createOnly,
   beforeExternalMutation,
 }: {
   token: string;
@@ -498,6 +501,7 @@ async function commitToMain({
   file: FileContent;
   deliveryKey: string;
   expectedCurrentContent?: string;
+  createOnly?: boolean;
   beforeExternalMutation: BeforeExternalMutation;
 }): Promise<{ commitUrl: string; sha: string }> {
   const headers = {
@@ -538,6 +542,7 @@ async function commitToMain({
         deliveryKey,
       });
     }
+    if (createOnly && destination.disposition !== "create") throw new Error("Creation cannot replace an existing page");
     return commitViaContentsApi({
       owner,
       repo,
@@ -578,6 +583,7 @@ async function commitToMain({
       deliveryKey,
     });
   }
+  if (createOnly && destination.disposition !== "create") throw new Error("Creation cannot replace an existing page");
 
   const blobRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/blobs`,
@@ -907,6 +913,7 @@ async function publishToGitHub(
     repo: repoName,
     branch: sealedDefaultBranch,
     message: `Pentra publish ${deliveryKey}: ${article.title}`,
+    createOnly: site.serviceMode === "growth_first",
     file: { path: filePath, content: mdx },
     deliveryKey,
     beforeExternalMutation,
@@ -2768,6 +2775,7 @@ export const verifyPublicPublicationInternal = internalAction({
         html: fetched.text,
         title: article.title,
       });
+      if (site.serviceMode === "growth_first") verifyLiveCreatedArticle({ expectedUrl: publicUrl, fetchedUrl: fetched.url, html: fetched.text, article });
       const recorded = await ctx.runMutation(
         internal.articles.recordPublicPublicationCheck,
         {

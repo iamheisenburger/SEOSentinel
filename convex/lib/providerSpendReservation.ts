@@ -83,6 +83,7 @@ export type ProviderReservationReleaseReason =
   | "plan_cancelled_before_execution"
   | "plan_reservation_day_expired_before_execution"
   | "micro_seed_closed_before_provider_execution"
+  | "content_work_closed_before_provider_execution"
   | "one_setup_planning_context_superseded_before_execution";
 
 export type ProviderReservationSettlementReason =
@@ -90,6 +91,7 @@ export type ProviderReservationSettlementReason =
   | "single_execution_plan_contingency_retired";
 
 export type SharedProviderPurpose =
+  | "content_work"
   | "topic_plan"
   | "authority_discovery"
   | "onboarding_analysis"
@@ -371,6 +373,7 @@ export async function reserveSharedProviderBudget(
   // same serializable transaction that will append the reservation receipt.
   const site = await ctx.db.get(args.siteId);
   if (
+    (site?.serviceMode === "growth_first" && args.purpose !== "content_work") ||
     !siteExecutionActive(site) ||
     !(await siteExecutionAuthorized(ctx, site)) ||
     !site.userId ||

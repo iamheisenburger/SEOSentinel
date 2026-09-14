@@ -531,8 +531,8 @@ test("generated drafts cross an atomic action-runtime checkpoint before final re
     /reviewCheckpointVersion[\s\S]*status: "pending"[\s\S]*internal\.actions\.pipeline\.processNextJob/,
   );
   const generationBranch = pipeline.slice(
-    pipeline.indexOf("const generated = await handleArticle("),
-    pipeline.indexOf("await ctx.runMutation(internal.jobs.updateProgress", pipeline.indexOf("const generated = await handleArticle(")),
+    pipeline.indexOf('const generated = await providerScope("draft", () => handleArticle('),
+    pipeline.indexOf("await ctx.runMutation(internal.jobs.updateProgress", pipeline.indexOf('const generated = await providerScope("draft", () => handleArticle(')),
   );
   assert.match(generationBranch, /yieldGeneratedArticleForReview/);
   assert.match(generationBranch, /checkpointContinuationScheduled: true/);

@@ -70,6 +70,7 @@ import {
   cadenceMicroSeedLegacyAnchorReceiptEligible,
 } from "./lib/cadenceMicroSeed";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
+import { contentWorkVerified } from "./contentWork";
 import { assertPublicationJobClaim, publicationContentionUntil, publicationJobClaimValidator } from "./lib/publicationDeferral";
 import {
   executionLeasePredatesPlanTransition,
@@ -2343,6 +2344,7 @@ export const recordPublicPublicationCheck = internalMutation({
       updatedAt: checkedAt,
     });
     await syncSummary(ctx, articleId);
+    if (status === "verified") await contentWorkVerified(ctx, site, article, checkedAt);
     return { recorded: true };
   },
 });

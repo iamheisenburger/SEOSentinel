@@ -6,6 +6,7 @@ import {
 } from "./siteDomainBinding.ts";
 
 export type AutopilotReadinessSite = {
+  serviceMode?: string;
   autopilotEnabled?: boolean;
   approvalRequired?: boolean;
   cadencePerWeek?: number;
@@ -170,7 +171,7 @@ export function liveAutopilotReadiness(
     ...warmAutopilotReadiness(site, hasCrawledPage).blockers,
   ];
   if (site.approvalRequired) blockers.push("manual_approval_requested");
-  if (!gscConnectionMatchesCurrentDomain(site)) {
+  if (site.serviceMode !== "growth_first" && !gscConnectionMatchesCurrentDomain(site)) {
     blockers.push("search_console_not_connected");
   }
   return { ready: blockers.length === 0, blockers };

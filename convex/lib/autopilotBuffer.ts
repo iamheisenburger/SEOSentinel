@@ -1,6 +1,7 @@
 import { PUBLICATION_AUDIT_VERSION } from "./publicationArtifact.ts";
 import {
   articleReservesTopicIntent,
+  normalizeTopicIntentKeyword,
   type TopicReservationArticle,
 } from "./topicLifecycle.ts";
 import {
@@ -33,10 +34,11 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
  * customer's own cadence and keep one additional publishing day as the fill
  * target. This changes inventory, never the quality gate.
  */
-export function approvedBufferPolicy(cadencePerWeek: number): {
+export function approvedBufferPolicy(cadencePerWeek: number, serviceMode?: string): {
   minimum: number;
   target: number;
 } {
+  if (serviceMode === "growth_first") return { minimum: 2, target: 2 };
   const boundedCadence = Number.isFinite(cadencePerWeek) && cadencePerWeek > 0
     ? Math.min(21, cadencePerWeek)
     : 4;
@@ -732,6 +734,29 @@ export function filterNonCannibalizingSerpTopics<
     if (accepted.length >= limit) break;
   }
   return accepted;
+}
+
+/** Positive wording evidence for growth-first topics without reliable SERPs. */
+function positiveKeywordIntentOverlap(left: string, right: string, minimumOverlap = 0.35): boolean {
+  const framing = new Set(["best", "top", "practical", "automate", "model", "b2b", "b2c", "ai", "saas", "tool", "tools", "software"]);
+  const tokens = (value: string) => [...new Set(keywordTokens(value).filter(token => !framing.has(token)))];
+  const a = tokens(left), b = tokens(right);
+  if (a.length === 0 || b.length === 0) return left.trim().toLowerCase() === right.trim().toLowerCase();
+  const shared = new Set(a.filter(token => b.includes(token)));
+  if (shared.size === a.length && shared.size === b.length) return true;
+  return shared.size >= 2 && sharedIntentOrderMatches(a, b, shared) &&
+    shared.size / Math.max(a.length, b.length) >= Math.max(0.8, minimumOverlap);
+}
+
+
+/** Growth-first requires positive intent evidence; missing forecasts are not duplication. */
+export function contentIntentConflicts(a: { primaryKeyword: string; serpTopUrls?: string[] }, b: { primaryKeyword: string; serpTopUrls?: string[] }): boolean {
+  if (normalizeTopicIntentKeyword(a.primaryKeyword) === normalizeTopicIntentKeyword(b.primaryKeyword)) return true;
+  if (hasReliableSerpFingerprint(a.serpTopUrls) && hasReliableSerpFingerprint(b.serpTopUrls)) {
+    const overlap = serpFingerprintOverlap(a.serpTopUrls, b.serpTopUrls);
+    return overlap.shared >= 3 && overlap.coefficient >= 0.4;
+  }
+  return positiveKeywordIntentOverlap(a.primaryKeyword, b.primaryKeyword);
 }
 
 /**

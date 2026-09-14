@@ -1,4 +1,5 @@
 "use node";
+import { contentProviderActive, contentStructuredCall, withContentProvider } from "./contentWorkProvider";
 
 import { internal } from "../_generated/api";
 import { action, internalAction } from "../_generated/server";
@@ -1216,6 +1217,7 @@ async function callClaudeStructured<T>(args: {
   outputSchema: z.ZodType<T>;
   maxTokens?: number;
 }): Promise<T> {
+  if (contentProviderActive()) return args.outputSchema.parse(await contentStructuredCall(args));
   try {
     const client = anthropicClient();
     let correction = "";
@@ -1702,14 +1704,14 @@ async function factCheckArticle(
     maxTokens: 16384,
   });
   const citationSafeMarkdown = removeUnverifiedInlineCitations(
-    reviewed.markdown,
+    contentProviderActive() ? markdown : reviewed.markdown,
     sources?.length ?? 0,
   );
   return {
     ...reviewed,
     confidenceScore: normalizedFactCheckConfidence(reviewed),
     markdown:
-      (sources?.length ?? 0) === 0
+      contentProviderActive() ? markdown : (sources?.length ?? 0) === 0
         ? removeUncitedQuantifiedSentences(citationSafeMarkdown)
         : citationSafeMarkdown,
   };
@@ -2023,6 +2025,7 @@ export const auditPublishedCorrectionInternal = internalAction({
 });
 
 async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
+  metadata?: { title: string; metaTitle: string; metaDescription: string };
   markdown: string;
   articleType: string;
   primaryKeyword: string;
@@ -2039,6 +2042,7 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
 }> {
   let markdown = args.markdown;
   let audit = await auditFinalArticle(args);
+  if (contentProviderActive()) return { markdown, audit, deterministicPruningApplied: false };
   let deterministicPruningApplied = false;
 
   // A fresh audit can expose another unsupported proposition after the first
@@ -4357,7 +4361,7 @@ async function handleArticle(
   let serpDifficulty: string | undefined;
   let serpRecommendedType: string | undefined;
 
-  if (topic) {
+  if (topic && !contentProviderActive()) {
     await reportProgress(1, "Analyzing search results...");
     try {
       // Use cached PAA questions from topic if available, otherwise run fresh analysis
@@ -4422,7 +4426,7 @@ async function handleArticle(
   let researchContext = "";
   let researchSources: PreservedSource[] = [];
 
-  if (topic) {
+  if (topic && !contentProviderActive()) {
     try {
       const research = await webResearch(
         {
@@ -4976,6 +4980,7 @@ async function handleArticle(
   if (checkpointId && !generatedCheckpoint) {
     throw new Error("Generated draft checkpoint disappeared before review");
   }
+  if (checkpointId && contentProviderActive()) return { articleId: checkpointId };
 
   try {
     console.log("Running fact check...");
@@ -7028,7 +7033,7 @@ async function reviewExistingArticleHandler(
       // draft against this review's exact evidence before the first editor
       // can replace it. This consumes one of the later remediation passes,
       // not an additional provider envelope (same audits, one fewer edit).
-      if (persistedLengthIsValid) {
+      if (persistedLengthIsValid && !contentProviderActive()) {
         const baselineReviewed = await factCheckArticle(
           reviewMarkdown, sources, bannedNames, productName,
           productEvidence, researchEvidence,
@@ -7088,6 +7093,7 @@ async function reviewExistingArticleHandler(
     }
     let reviewedConfidenceScore = reviewed.confidenceScore;
     const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
+      ...(contentProviderActive() ? { metadata: { title: article.title, metaTitle: article.metaTitle ?? article.title, metaDescription: article.metaDescription ?? "" } } : {}),
       markdown: reviewed.markdown,
       articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title,
@@ -7135,7 +7141,7 @@ async function reviewExistingArticleHandler(
     // it never restores the unsupported prose that pruning removed.
     for (
       let lengthRecoveryPass = 1;
-      stats.wordCount < minimumWords && lengthRecoveryPass <= 3;
+      !contentProviderActive() && stats.wordCount < minimumWords && lengthRecoveryPass <= 3;
       lengthRecoveryPass++
     ) {
       const recoveryTargetWords = evidenceSafeLengthRecoveryTarget({
@@ -7268,7 +7274,7 @@ async function reviewExistingArticleHandler(
     // keeping the same strict threshold, evidence contract, and spend bound.
     for (
       let postAuditPass = 1;
-      postAuditPass <= 2 &&
+      !contentProviderActive() && postAuditPass <= 2 &&
         (!recoveryBaseline || postAuditPass <= 1) &&
         (auditState.score < 85 || auditState.evidenceDefectCount > 0);
       postAuditPass++
@@ -7424,7 +7430,7 @@ async function reviewExistingArticleHandler(
       productName,
       reviewedMedia,
     );
-    if (proseReadyForMedia) {
+    if (proseReadyForMedia && !contentProviderActive()) {
       if (!featuredImage && reviewedProductImage) {
         featuredImage = reviewedProductImage;
         mediaQualityNotes.push(
@@ -7584,7 +7590,7 @@ async function reviewExistingArticleHandler(
       }
     }
 
-    const metadata = await generateFinalMetadata({
+    const metadata = contentProviderActive() ? { title: article.title, metaTitle: article.metaTitle ?? article.title, metaDescription: article.metaDescription ?? "" } : await generateFinalMetadata({
       title: article.title,
       markdown: finalReviewMarkdown,
       primaryKeyword: topic?.primaryKeyword ?? article.title,
@@ -8345,7 +8351,7 @@ export const autopilotTick = internalAction({
 
     // 3. New-site onboarding is useful, but it is not allowed to delay due
     // delivery or compete with work already running for this tenant.
-    if (!deliveryPriority && cadenceSchedule.mode !== "work_in_progress") {
+    if (site.serviceMode !== "growth_first" && !deliveryPriority && cadenceSchedule.mode !== "work_in_progress") {
       const pages = await ctx.runQuery(internal.pages.listBySiteInternal, { siteId });
       if (!pages.length || !contentAnalysisMatchesCurrentDomain(site)) {
         const onboarding = await executeClaimedCrawlAndAnalyze(ctx, siteId);
@@ -8488,6 +8494,16 @@ export const autopilotTick = internalAction({
           )
         : [];
     const detailByMode = {
+      content_mode_required: "Select the content-work service mode first.",
+      content_paused: "Content work is paused or current entitlement is unavailable.",
+      content_binding_changed: "Confirm the changed business profile or publishing connection before resuming.",
+      content_migration_pending: "Reconcile legacy work before starting the new engine.",
+      content_quality_exhausted: "The draft, targeted revisions and distinct replacement exhausted their quality boundary.",
+      content_failed_slot: "A fixed delivery slot failed; its deadline and spending history remain outstanding.",
+      content_artifact_changed: "The prepared artifact no longer matches its reviewed seal.",
+      content_pricing_unavailable: "Provider pricing and bounded funding are not configured; no paid work started.",
+      content_inputs_exhausted: "No distinct supported question remains in the confirmed business inventory.",
+      content_budget_exhausted: "Existing account or fleet funding cannot admit this work.",
       autopilot_disabled: "Autopilot is disabled for this tenant.",
       cadence_paused: "The effective tenant cadence is paused.",
       rollout_observe: "Automation remains in fail-closed observe mode.",
@@ -8624,6 +8640,8 @@ export const processNextJob = internalAction({
       workerToken,
     });
     if (!job) return { processed: false };
+    const providerScope = <T,>(phase: string, run: () => Promise<T>): Promise<T> => job.contentWork
+      ? withContentProvider({ ctx, job, workerToken, phase }, run) : run();
 
     type JobPayload = {
       topicId?: Id<"topic_clusters">;
@@ -9064,13 +9082,13 @@ export const processNextJob = internalAction({
               internal.articles.applyDeterministicQualityRepair,
               { articleId: payload.articleId },
             )
-          : await reviewExistingArticleHandler(ctx, {
+          : await providerScope("review", () => reviewExistingArticleHandler(ctx, {
               siteId: args.siteId,
               articleId: checkpoint._id,
               incrementRevision: true,
               qualityRecoveryVersion:
                 qualityRecoveryAttemptVersionFromJob(job),
-            });
+            }));
         if (review.readyForPublication && review.contentHash) {
           let linked: Awaited<ReturnType<typeof handleLinks>>;
           try {
@@ -9352,14 +9370,14 @@ export const processNextJob = internalAction({
           }
         }
         await reserveArticleProviderAttempt("generation");
-        const generated = await handleArticle(
+        const generated = await providerScope("draft", () => handleArticle(
           ctx,
           args.siteId,
           payload?.topicId,
           payload?.options,
           job._id,
           workerToken,
-        );
+        ));
         articleId = generated.articleId;
         const handoff = await ctx.runMutation(
           internal.jobs.yieldGeneratedArticleForReview,
@@ -9401,11 +9419,11 @@ export const processNextJob = internalAction({
       });
 
       await reserveArticleProviderAttempt("quality_review");
-      const finalReview = await reviewExistingArticleHandler(ctx, {
+      const finalReview = await providerScope("review", () => reviewExistingArticleHandler(ctx, {
         siteId: args.siteId,
         articleId,
         incrementRevision: false,
-      });
+      }));
       if (!finalReview.readyForPublication) {
         await ctx.runMutation(
           internal.seoGrowth.recordSupportArticleOutcome,

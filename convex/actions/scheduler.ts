@@ -267,6 +267,7 @@ export const scheduleCadence = internalAction({
   ): Promise<CadenceScheduleResult> => {
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
+    if (site.serviceMode === "growth_first") return ctx.runMutation(internal.contentWork.advance, { siteId });
     if (!site.autopilotEnabled) {
       return { scheduled: 0, mode: "autopilot_disabled" };
     }

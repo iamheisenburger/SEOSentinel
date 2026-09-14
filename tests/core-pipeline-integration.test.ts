@@ -3,11 +3,12 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
 import { publicationArtifactHash, publicationDeliveryKey, sha256Hex } from "../convex/lib/publicationArtifact.ts";
-import { approvedBufferPolicy } from "../convex/lib/autopilotBuffer.ts";
+import { approvedBufferPolicy, contentIntentConflicts } from "../convex/lib/autopilotBuffer.ts";
 import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/providerSpendReservation.ts";
 import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerationAttempt.ts";
+import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
 
-const businesses = [
+const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
     niche: "Irrigation maintenance scheduling software", keywords: [
       "irrigation maintenance scheduling software", "irrigation valve inspection workflow",
@@ -52,8 +53,11 @@ function articlePayload(keyword: string) {
     metaKeywords: [keyword], sources: [{ url: "https://records.example.gov/specification", title: "Synthetic register specification" }, { url: "https://methods.example.edu/review", title: "Synthetic review methods" }] };
 }
 function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
+  growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
+  failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string } } = {}) {
   const modelCalls: Fields[] = [];
+  const businesses = options.businesses ?? defaultBusinesses;
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
   const failedPublications: number[] = [];
@@ -64,10 +68,15 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       assert.equal(url.pathname, "/v1/messages");
       const body = JSON.parse(String(init.body)); modelCalls.push(body);
       const text = String(body.messages[0].content), tool = body.tools?.[0]?.name;
+      if (options.providerFailure === tool) return json({ type: "error", error: { type: "overloaded_error", message: "Mocked provider failure" } }, 503);
       const keyword = text.match(/Primary Keyword: ([^\n]+)/i)?.[1] ?? text.match(/PRIMARY KEYWORD: ([^\n]+)/)?.[1];
       let value: unknown;
       if (tool === "submit_article") {
         assert.ok(keyword); const article = articlePayload(keyword);
+        if (options.growthFirst && !options.quality) {
+          article.markdown = article.markdown.replace("The synthetic field register contains an observation label and a review note [1].", "").split("## Sources")[0].trim();
+          article.sources = [];
+        }
         if (options.quality === "unsupported") article.markdown = article.markdown.replace(
           "The synthetic field register contains an observation label and a review note [1].",
           "A completed valve inspection reduces annual water consumption by 37% [1].",
@@ -145,8 +154,15 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
         const content = repositories.get(business.name.toLowerCase())!.files.get(`content/blog/${url.pathname.slice(6)}.md`);
         if (!content) return new Response("Not deployed", { status: 404, headers: { "Content-Type": "text/html" } });
         const title = JSON.parse(content.match(/^title: (.+)$/m)![1]);
+        if (options.growthFirst) {
+          const metaTitle = JSON.parse(content.match(/^metaTitle: (.+)$/m)![1]);
+          const metaDescription = JSON.parse(content.match(/^description: (.+)$/m)![1]);
+          const body = content.replace(/^---\n[\s\S]*?\n---\n/, "");
+          return new Response(`<html><head><title>${options.liveCorrupt === "title" ? "Wrong title" : metaTitle}</title><meta name="description" content="${metaDescription}"><link rel="canonical" href="${options.liveCorrupt === "canonical" ? `https://${business.domain}/wrong` : url.href}"></head><body><main><h1>${title}</h1>${options.liveCorrupt === "body" ? "Unreviewed body" : renderSafePublicationHtml(body)}</main></body></html>`, { headers: { "Content-Type": "text/html" } });
+        }
         return new Response(`<html><body><main><h1>${title}</h1><pre>${content}</pre></main></body></html>`, { headers: { "Content-Type": "text/html" } });
       }
+      if (business && options.failedOptionalSource) return new Response("Mocked optional source unavailable", { status: 503 });
       return new Response(`<html><body><main>${business ? `${business.name} provides ${business.niche}.` : evidenceText}</main></body></html>`, { headers: { "Content-Type": "text/html" } });
     }
     assert.equal(url.origin, "https://api.dataforseo.com", `No fixture for ${url}`);
@@ -168,7 +184,7 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       url: `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
     else assert.fail(`Unexpected DataForSEO route ${url.pathname}`);
     return json({ status_code: 20000, cost: 0.001, tasks: [{ id: `synthetic-${f.trace.length}`, status_code: 20000, cost: 0.001, result }] });
-  });
+  }, options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {});
   const sites = businesses.map(b => {
     const owner = `synthetic-owner-${b.domain}`;
     f.add("account_plan_entitlements", { userId: owner, status: "completed", maxSites: 9999, maxArticles: 150, planFeatures: ["max_sites_unlimited", "max_articles_150"] });
@@ -229,6 +245,297 @@ async function pumpUntil(f: ReturnType<typeof setup>, done: () => boolean, maxim
   }
   assert.fail(`Synthetic scheduler did not converge: ${diagnostic(f)}`);
 }
+
+const slcBusinesses = [defaultBusinesses[0],
+  { name: "CedarCare", domain: "cedarcare.example", cadence: 3, niche: "Residential garden maintenance service", keywords: ["garden maintenance visit preparation", "garden pruning request checklist", "garden watering observation notes", "garden seasonal cleanup planning", "garden plant condition records", "garden service access instructions"] },
+  { name: "ClayShelf", domain: "clayshelf.example", cadence: 4, niche: "Retail ceramic tableware shop", keywords: ["ceramic tableware gift selection", "ceramic dinner set storage planning", "ceramic serving dish size comparison", "ceramic glaze appearance questions", "ceramic tableware order checklist", "ceramic handmade care questions"] },
+  { name: "BriefHarbor", domain: "briefharbor.example", cadence: 2, niche: "Brand design agency", keywords: ["brand design brief preparation", "brand asset handoff checklist", "brand stakeholder feedback workflow", "brand photography permission review", "brand style guide organization", "brand messaging interview questions"] },
+  { name: "FieldPress", domain: "fieldpress.example", cadence: 5, niche: "Independent nature magazine publisher", keywords: ["nature magazine submission preparation", "nature interview source notes", "nature photograph permission checklist", "nature story outline review", "nature correction request workflow", "nature reading list organization"] },
+];
+async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 * 60_000) {
+  const site = f.sites[0];
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+    firstDeadlineAt: START + 10 * 60_000, intervalMs });
+  f.setIdentity(null);
+  return site;
+}
+test("SLC mocked connected GitHub create-review-deliver-verify-refill repeats across five business types", async t => {
+  for (const [index, business] of slcBusinesses.entries()) {
+    const f = setup({ growthFirst: true, businesses: [business] });
+    const intervalMs = (20 + index * 10) * 60_000, site = await selectGrowth(f, intervalMs);
+    const ready = () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready");
+    await pumpUntil(f, () => ready().length === 2);
+    assert.equal(f.tables.articles.filter(a => a.status === "published").length, 0);
+    const initial = ready().map(j => j.articleId);
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const deadlineAt = START + 10 * 60_000 + cycle * intervalMs;
+      f.setTime(deadlineAt - 5 * 60_000);
+      await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked ordinary fixed clock" });
+      await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length === cycle + 1 && ready().length === 2,
+        160, deadlineAt + 60_000);
+      const delivered = f.tables.jobs.find(j => j.contentWork?.deadlineAt === deadlineAt)!;
+      assert.equal(delivered.contentWork.stage, "verified", diagnostic(f));
+      assert.ok(delivered.contentWork.publishedAt >= deadlineAt - 5 * 60_000 && delivered.contentWork.publishedAt <= deadlineAt);
+      const article = f.get(delivered.articleId)!;
+      assert.equal(article.publicUrlStatus, "verified");
+      assert.equal(article.publishedContentHash, delivered.contentWork.approvedArtifactHash);
+      assert.equal(f.tables.jobs.filter(j => j.articleId === article._id).length, 1, "one authoritative content-work job through every stage");
+      t.diagnostic(JSON.stringify({ fixture: business.name, transports: "mocked", cycle: cycle + 1,
+        windowStartAt: new Date(deadlineAt - 5 * 60_000).toISOString(), deadlineAt: new Date(deadlineAt).toISOString(),
+        publishedAt: new Date(article.publishedAt).toISOString(), verifiedAt: new Date(article.publicUrlVerifiedAt).toISOString(), buffer: ready().length }));
+    }
+    assert.ok(ready().every(j => !initial.includes(j.articleId)));
+    assert.equal(f.tables.jobs.filter(j => j.type === "plan").length, 0);
+    assert.ok(f.tables.topic_clusters.every(topic => topic.searchVolume === undefined && topic.keywordDifficulty === undefined));
+    assert.ok(f.modelCalls.every(call => call.model === "mocked-content-model"), "no unpriced model or optional enrichment");
+    const count = f.modelCalls.length, writes = f.repositories.get(business.name.toLowerCase())!.writes;
+    await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id })));
+    assert.equal(f.modelCalls.length, count); assert.equal(f.repositories.get(business.name.toLowerCase())!.writes, writes);
+    f.assertOffline();
+  }
+});
+
+test("SLC pricing, unknown shared budget and exhausted account or per-work funds stop before mocked paid I/O", async () => {
+  for (const scenario of ["unpriced", "unknown", "account_full", "work_full", "attempt_full"] as const) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], noPricing: scenario === "unpriced", budgetMicroUsd: scenario === "work_full" ? 1 : undefined });
+    const site = await selectGrowth(f);
+    if (scenario === "unknown") f.failReads("provider_spend_reservations", new Error("Mocked budget read unavailable"));
+    if (scenario === "account_full") f.add("provider_spend_reservations", { siteId: site.id, userId: `synthetic-owner-${site.domain}`, purpose: "topic_plan", trigger: "historical", reservedMicroUsd: 28_000_000, createdAt: START });
+    if (scenario === "attempt_full") for (let n = 0; n < 170; n++) f.add("article_generation_attempts", { userId: `synthetic-owner-${site.domain}`, jobKey: `old-${n}`, workerAttempt: 0, attemptKey: `old-${n}:0`, monthKey: "2026-09", providerWorkKind: "generation", maxArticles: 150, attemptAllowance: 170, status: "failed", expiresAt: START - 1, createdAt: START - 1, updatedAt: START - 1 });
+    if (scenario === "unknown") await assert.rejects(f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id }), /budget read unavailable/);
+    else {
+      const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+      if (["work_full", "attempt_full"].includes(scenario)) {
+        const job = f.tables.jobs.find(j => j.contentWork)!;
+        await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+        assert.equal(f.get(job._id)!.status, scenario === "attempt_full" ? "pending" : "failed");
+      } else assert.equal(result.mode, scenario === "unpriced" ? "content_pricing_unavailable" : "content_budget_exhausted");
+    }
+    assert.equal(f.modelCalls.length, 0, scenario); f.assertOffline();
+  }
+});
+
+test("SLC provider failure retains its reservation, blocks replay and preserves the failed fixed slot", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], providerFailure: "submit_article" });
+  const site = await selectGrowth(f);
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  const receipt = f.get(job.providerSpendReservationId)!;
+  assert.equal(f.modelCalls.length, 1); assert.equal(receipt.releasedAt, undefined); assert.equal(receipt.settledMicroUsd, undefined);
+  for (let n = 0; n < 3; n++) {
+    await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  }
+  assert.equal(f.modelCalls.length, 1); assert.equal(f.tables.jobs.length, 1);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000);
+  f.assertOffline();
+});
+
+test("SLC bounded reviews allow two targeted revisions and one distinct replacement, never unsupported acceptance", async () => {
+  for (const quality of ["unsupported", "low"] as const) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality, budgetMicroUsd: 2_000_000 });
+    await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const jobs = f.tables.jobs.filter(j => j.contentWork); assert.equal(jobs.length, 1, diagnostic(f));
+    assert.equal(jobs[0].contentWork.revisions, 2); assert.equal(jobs[0].contentWork.replacements, 1);
+    assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_article").length, 2);
+    assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").length, 2);
+    assert.equal(f.tables.articles.filter(a => a.status === "published" || a.publicationGateStatus === "passed").length, 0);
+    assert.equal(f.tables.provider_spend_reservations.length, 1, "replacement shares the original budget");
+    assert.equal(f.tables.provider_spend_reservations[0].settledMicroUsd,
+      jobs[0].contentWork.providerCalls.reduce((sum: number, call: { actualMicroUsd: number }) => sum + call.actualMicroUsd, 0),
+      "terminal quality failure settles known mock usage instead of retaining the full envelope");
+    assert.equal(new Set(f.tables.articles.map(a => a.topicId)).size, 2);
+    f.assertOffline();
+  }
+});
+
+test("SLC persisted checkpoint survives restart and duplicate workers without another initial draft", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], failedOptionalSource: true });
+  const site = await selectGrowth(f);
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.stage, "review");
+  await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id })));
+  assert.equal(f.get(job._id)!.contentWork.stage, "ready", diagnostic(f));
+  assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_article").length, 1);
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 600, "three mocked 100/100 usage receipts, not a cash-spend assertion");
+  assert.ok(f.logs.some(log => log.includes("crawl") || log.includes("Crawl")));
+  f.assertOffline();
+});
+
+test("SLC migration consent, tenant isolation and single-engine admission preserve the legacy path", async () => {
+  const f = setup({ growthFirst: true });
+  const site = f.sites[0], other = f.sites[1];
+  f.setIdentity(`synthetic-owner-${other.domain}`);
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true }), /Not authorized/);
+  await selectGrowth(f);
+  const topicId = f.add("topic_clusters", { siteId: site.id, primaryKeyword: site.keywords[0], label: site.keywords[0], status: "planned", secondaryKeywords: [], createdAt: START, updatedAt: START });
+  const results = await Promise.all([
+    f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id }),
+    f.invoke("jobs:queuePlanIfAbsent", { siteId: site.id, reason: "topic_replenishment" }),
+    f.invoke("jobs:queueTopicArticleIfAbsent", { siteId: site.id, topicId, bufferFill: true }),
+  ]);
+  assert.equal(results[0].mode, "buffer_fill"); assert.equal(results[1].queued, false); assert.equal(results[2].queued, false);
+  assert.equal(f.tables.jobs.filter(j => j.siteId === site.id).length, 1);
+  const legacy = await f.invoke("jobs:queuePlanIfAbsent", { siteId: other.id, reason: "topic_replenishment" }); assert.equal(legacy.queued, true);
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "legacy_articles", confirmBusinessProfile: false }), /Reconcile/);
+  assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC lost publication acknowledgement reconciles exact GitHub bytes without duplicate write, then refills", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], lostCommitResponses: 1 });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(START + 5 * 60_000);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked window" });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 180, START + 180 * 60_000);
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 1);
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length, 1);
+  assert.equal(f.tables.jobs.find(j => j.contentWork?.stage === "verified")!.contentWork.deadlineAt, START + 10 * 60_000);
+  f.assertOffline();
+});
+
+test("SLC mismatched canonical, title or rendered body never verifies and never advances the deadline", async () => {
+  for (const liveCorrupt of ["canonical", "title", "body"] as const) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], liveCorrupt });
+    const site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+    f.setTime(START + 5 * 60_000);
+    await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked window" });
+    await pumpUntil(f, () => f.tables.articles.some(a => a.publicUrlStatus === "failed"), 180, START + 48 * 60 * 60_000);
+    assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length, 0);
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
+  }
+});
+
+test("SLC changed connection, revoked access and changed confirmed facts stop before further provider work", async () => {
+  for (const change of ["connection", "revoked", "profile", "lease", "entitlement"] as const) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork)!;
+    if (change === "connection") f.get(site.id)!.publisherConnectionGeneration = 1;
+    if (change === "revoked") f.get(site.id)!.githubToken = undefined;
+    if (change === "profile") f.get(site.id)!.siteSummary = "Unconfirmed replacement facts";
+    if (change === "entitlement") f.tables.account_plan_entitlements[0].status = "pending";
+    if (change === "lease") {
+      await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "old-worker" });
+      f.get(job._id)!.leaseExpiresAt = START - 1;
+      await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "old-worker", key: "stale", ceilingMicroUsd: 100 }), /authority changed/);
+    } else {
+      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+      if (change === "entitlement") {
+        // The existing site query hides sites with revoked entitlement before
+        // the scheduler routes them; direct admission must independently deny.
+        await assert.rejects(f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id }), /Site not found/);
+        assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_paused");
+      } else {
+        assert.equal((await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id })).mode, "content_binding_changed");
+      }
+    }
+    assert.equal(f.modelCalls.length, 0, change);
+    const receipt = f.get(job.providerSpendReservationId)!;
+    assert.equal(receipt.releasedAt !== undefined, f.get(job._id)!.status === "failed",
+      "only a terminal no-I/O job releases; revoked but pending work stays reserved"); f.assertOffline();
+  }
+});
+
+test("SLC terminal cancellation and UTC expiry release only proven no-I/O reservations, idempotently", async () => {
+  for (const reason of ["cancel_before_call", "cancel_after_call_started", "expired_before_call"] as const) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork)!;
+    if (reason === "expired_before_call") {
+      f.setTime(START + 24 * 60 * 60_000);
+      await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    } else {
+      await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken: "cancel-worker" });
+      if (reason === "cancel_after_call_started") await f.invoke("contentWork:beginProviderCall", {
+        jobId: job._id, workerToken: "cancel-worker", key: "in-flight-request", ceilingMicroUsd: 100 });
+      await Promise.all(Array.from({ length: 3 }, () => f.invoke("jobs:markFailed", {
+        jobId: job._id, workerToken: "cancel-worker", error: "Synthetic terminal cancellation" })));
+    }
+    const closed = f.get(job._id)!, receipt = f.get(job.providerSpendReservationId)!;
+    assert.equal(closed.status, "failed"); assert.equal(closed.contentWork.stage, "failed");
+    assert.equal(receipt.releasedAt !== undefined, reason !== "cancel_after_call_started");
+    assert.equal(receipt.settledMicroUsd, undefined); assert.equal(f.modelCalls.length, 0);
+    const attempts = closed.workerAttempts, releasedAt = receipt.releasedAt;
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    assert.equal(f.get(job._id)!.workerAttempts, attempts); assert.equal(f.get(receipt._id)!.releasedAt, releasedAt);
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
+  }
+});
+
+test("SLC initial preparation activates warm mode without measurements, and overdue deadlines never move", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0]; f.get(site.id)!.autopilotRolloutMode = "warm";
+  f.get(site.id)!.gscAccessToken = undefined; f.get(site.id)!.gscProperty = undefined;
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const count = f.modelCalls.length;
+  f.setTime(START + 12 * 60_000);
+  const state = f.get(site.id)!.contentSchedule;
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  assert.equal(f.get(site.id)!.autopilotRolloutMode, "live");
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, state.nextDeadlineAt);
+  const job = f.tables.jobs.find(j => j.contentWork?.stage === "publish")!;
+  assert.equal(job.contentWork.deadlineAt, START + 10 * 60_000);
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+  assert.ok(f.get(job.articleId)!.publishedAt > job.contentWork.deadlineAt, "late publication is explicitly late, never a moved deadline");
+  assert.equal(f.modelCalls.length, count); f.assertOffline();
+});
+
+test("SLC confirmed inventory rejects duplicate existing reader intent and blocks absent business inputs", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  f.add("pages", { siteId: site.id, slug: "/guide", url: `https://${site.domain}/guide`, title: site.keywords[0], keywords: [site.keywords[0]], createdAt: START });
+  const off = f.add("topic_clusters", { siteId: site.id, primaryKeyword: "ceramic glaze inventory tracking", label: "Ceramic glaze inventory tracking", status: "planned", secondaryKeywords: [], createdAt: START, updatedAt: START });
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  assert.notEqual(job.payload.topicId, off); assert.notEqual(f.get(job.payload.topicId)!.primaryKeyword, site.keywords[0]);
+  assert.equal(f.get(job.payload.topicId)!.searchVolume, undefined);
+  const empty = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const emptySite = empty.sites[0]; Object.assign(empty.get(emptySite.id)!, { anchorKeywords: [], keyFeatures: [], painPoints: [], productUsage: undefined });
+  await selectGrowth(empty);
+  assert.equal((await empty.invoke("actions/scheduler:scheduleCadence", { siteId: emptySite.id })).mode, "content_inputs_exhausted");
+  assert.equal(empty.modelCalls.length, 0); f.assertOffline(); empty.assertOffline();
+});
+
+test("SLC create cannot overwrite an existing customer-edited or earlier Pentra-owned path", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const job = f.tables.jobs.find(j => j.contentWork?.stage === "ready")!, article = f.get(job.articleId)!;
+  const path = `content/blog/${article.slug.replace(/^\//, "")}.md`, original = '---\ngenerator: "pentra"\npentraDeliveryKey: "earlier-work"\n---\nCustomer-edited existing page';
+  const repo = f.repositories.get(site.name.toLowerCase())!; repo.files.set(path, original);
+  f.setTime(START + 5 * 60_000);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked window" });
+  await pumpUntil(f, () => f.get(job._id)!.status === "failed", 180, START + 180 * 60_000);
+  assert.equal(repo.files.get(path), original); assert.equal(repo.writes, 0);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
+});
+
+test("SLC owner-requested approval stops delivery and exact intent never becomes distinct because SERPs differ", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const count = f.modelCalls.length;
+  f.get(site.id)!.approvalRequired = true;
+  f.setTime(START + 12 * 60_000);
+  assert.equal((await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id })).mode, "approval_waiting");
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0); assert.equal(f.modelCalls.length, count);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000);
+  assert.equal(contentIntentConflicts({ primaryKeyword: "garden visit checklist", serpTopUrls: Array.from({ length: 5 }, (_, i) => `https://a${i}.example/guide`) },
+    { primaryKeyword: "Garden visit checklist", serpTopUrls: Array.from({ length: 5 }, (_, i) => `https://b${i}.example/guide`) }), true);
+  assert.equal(contentIntentConflicts({ primaryKeyword: "garden visit checklist" }, { primaryKeyword: "garden pruning request" }), false);
+  f.assertOffline();
+});
 
 const extraEvidence = { url: "https://unused.example.edu/extra", title: "Unused synthetic primary candidate",
   text: "This synthetic appendix concerns document retention headings, not field-register contents or outcomes. Its example fields are a custodian heading and a storage heading. It provides no measurements of commercial performance, resource savings, or the behavior of a product." };

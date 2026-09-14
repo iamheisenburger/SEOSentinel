@@ -82,6 +82,7 @@ export type SeoGrowthClassification = {
 };
 
 export type SeoGrowthAutomationSite = {
+  serviceMode?: string;
   autopilotEnabled?: boolean;
   autopilotRolloutMode?: string;
   deletionStatus?: string;
@@ -98,6 +99,7 @@ export function isSeoGrowthActuationEligible(
   site: SeoGrowthAutomationSite,
 ): boolean {
   return (
+    site.serviceMode !== "growth_first" &&
     siteExecutionActive(site) &&
     site.autopilotEnabled === true &&
     (site.autopilotRolloutMode === "warm" ||

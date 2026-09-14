@@ -646,6 +646,12 @@ function sameLiveAnchor(left: LiveAnchor, right: LiveAnchor): boolean {
   return left.href === right.href && left.anchor === right.anchor;
 }
 
+/** Stage 1 creation proof reuses the exact rendered-content verifier. It does
+ * not create a revision record or count a legacy correction as new delivery. */
+export function verifyLiveCreatedArticle(args: { expectedUrl: string; fetchedUrl: string; html: string; article: PublishedRevisionArtifact }): void {
+  verifyLivePublishedRevision({ ...args, base: { ...args.article, markdown: "" }, next: args.article, kind: "renderer_repair" });
+}
+
 /** Exact post-deploy proof. A delivery acknowledgement alone is not success. */
 export function verifyLivePublishedRevision(args: {
   expectedUrl: string;

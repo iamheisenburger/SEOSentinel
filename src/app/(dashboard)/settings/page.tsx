@@ -13,6 +13,7 @@ import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
+import { ContentWorkService } from "@/components/content-work-service";
 
 const PLAN_NAMES: Record<string, string> = {
   max_articles_3: "Free",
@@ -706,6 +707,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Publishing */}
+      {pubSite && <ContentWorkService key={pubSite._id} siteId={pubSite._id} />}
       {pubSite && (
         <PublishingSection pubSite={pubSite} />
       )}

@@ -5,6 +5,12 @@ import { publicationInventoryValidator } from "./lib/publicationEligibility";
 
 export default defineSchema({
   sites: defineTable({
+    serviceMode: v.optional(v.union(v.literal("legacy_articles"), v.literal("growth_first"))),
+    contentSchedule: v.optional(v.object({
+      selectedAt: v.number(), profileHash: v.string(), connectionHash: v.string(),
+      intervalMs: v.number(), nextDeadlineAt: v.number(), active: v.boolean(),
+      paused: v.boolean(),
+    })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),
     // Canonical hostname used for tenant ownership/collision checks. Legacy
@@ -1175,6 +1181,23 @@ export default defineSchema({
     .index("by_site_slug", ["siteId", "slug"]),
 
   jobs: defineTable({
+    contentWork: v.optional(v.object({
+      intent: v.literal("create"),
+      stage: v.union(v.literal("prepare"), v.literal("review"), v.literal("review_failed"),
+        v.literal("ready"), v.literal("publish"), v.literal("verify"), v.literal("verified"), v.literal("failed")),
+      deadlineAt: v.number(), windowStartAt: v.number(),
+      profileHash: v.string(), connectionHash: v.string(),
+      revisions: v.number(), replacements: v.number(),
+      discardedArticleIds: v.array(v.id("articles")),
+      approvedArtifactHash: v.optional(v.string()),
+      budgetMicroUsd: v.number(),
+      pricing: v.object({ model: v.string(), inputMicroUsdPerToken: v.number(), outputMicroUsdPerToken: v.number() }),
+      providerCalls: v.array(v.object({ key: v.string(), ceilingMicroUsd: v.number(),
+        state: v.union(v.literal("started"), v.literal("completed")), actualMicroUsd: v.optional(v.number()) })),
+      publishedAt: v.optional(v.number()), verifiedAt: v.optional(v.number()),
+      windowWakeId: v.optional(v.id("_scheduled_functions")),
+      failure: v.optional(v.string()),
+    })),
     siteId: v.optional(v.id("sites")),
     canonicalDomain: v.optional(v.string()),
     domainRevision: v.optional(v.number()),
@@ -1247,6 +1270,7 @@ export default defineSchema({
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_status_attempt", ["siteId", "status", "nextAttemptAt"])
     .index("by_site_article", ["siteId", "articleId", "status"])
+    .index("by_site_content_deadline", ["siteId", "contentWork.deadlineAt"])
     .index("by_status_heartbeat", ["status", "heartbeatAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
     .index("by_site_type_status_created", [

@@ -3,6 +3,10 @@ import type { Id } from "../_generated/dataModel";
 import type { PublicationInventory } from "./publicationEligibility.ts";
 
 export const SCHEDULER_RUN_OUTCOME_HEALTH = {
+  content_mode_required: "blocked", content_paused: "blocked", content_binding_changed: "blocked",
+  content_migration_pending: "blocked", content_quality_exhausted: "blocked", content_failed_slot: "blocked",
+  content_artifact_changed: "blocked", content_pricing_unavailable: "blocked", content_inputs_exhausted: "blocked",
+  content_budget_exhausted: "blocked",
   autopilot_disabled: "blocked",
   cadence_paused: "blocked",
   rollout_observe: "blocked",

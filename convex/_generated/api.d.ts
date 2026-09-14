@@ -32,6 +32,7 @@ import type * as articles from "../articles.js";
 import type * as autopilot from "../autopilot.js";
 import type * as blog from "../blog.js";
 import type * as cadenceMicroSeed from "../cadenceMicroSeed.js";
+import type * as contentWork from "../contentWork.js";
 import type * as crons from "../crons.js";
 import type * as executionAuthorization from "../executionAuthorization.js";
 import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfill.js";
@@ -199,6 +200,7 @@ declare const fullApi: ApiFromModules<{
   autopilot: typeof autopilot;
   blog: typeof blog;
   cadenceMicroSeed: typeof cadenceMicroSeed;
+  contentWork: typeof contentWork;
   crons: typeof crons;
   executionAuthorization: typeof executionAuthorization;
   expectedClickDemandBackfill: typeof expectedClickDemandBackfill;

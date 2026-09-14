@@ -1,5 +1,32 @@
 # Pentra — fresh-task handoff
 
+## Current: SLC Stage 1 local candidate, 2026-09-14
+
+Assignment `supervisor-20260914-slc-stage1-25` implements the approved SLC
+contract, not the historical global admission relaxation below. Start with
+`docs/PENTRA_SLC_STAGE1_2026-09-14.md` in this checkout and the one canonical
+`/Users/madmanhakim/Desktop/SEOSentinel-managed-integrated/docs/PENTRA_SLC_PLAN.md`.
+Work exclusively in `.claude/assignment24`, branch
+`codex/simplified-article-admission`, baseline9fd01af. The new candidate is LOCAL
+ONLY; no deployment or tenant migration occurred. Supervisor review is next.
+
+The existing durable job owns the explicit growth-first GitHub path through
+fresh creation, bounded review, fixed-window delivery, exact live verification
+and two-item refill. Legacy fixed-article contracts remain separate. Five
+business fixtures each complete three mocked delivery/refill cycles, not real
+tenant acceptance. USD20 additional provider-validation authority remains
+inactive and unspent; cumulative scope binding is a Stage4 prerequisite.
+One exploratory synthetic-auth SDK request escaped its mock and failed401 with
+no generation; explicit transport injection is fixed. Details and test gaps
+are in the Stage1 report. No claim of zero network requests or SaaS acceptance.
+
+Stage2 improvement/WordPress, Stage3 full customer journey and Stage4 production
+validation remain. Do not reuse old full-feature release receipts, claim SEO
+growth, or start backlinks. The historical financial/tenant observations below
+are NOT refreshed production evidence or current financial authority.
+
+## Historical handoff follows
+
 Updated: **2026-09-11 15:02 UTC**. Start here and refresh production before
 treating inventory or deadlines as current. Do not reload the old chat or read
 every historical report.

@@ -3,6 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { contentWorkCompleted, settleFailedContentWork } from "./contentWork";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import { publicationDeliveryBlocker } from "./lib/publicationEligibility";
@@ -178,6 +179,7 @@ function activeRollout(site: Doc<"sites"> | null): boolean {
 }
 
 function rolloutFields(site: Doc<"sites">, manual = false) {
+  if (site.serviceMode === "growth_first") throw new Error("The content-work engine exclusively owns this site; legacy queue admission is disabled");
   if (site.deletionStatus || site.planParkedAt) {
     throw new Error("This site is not active under the current plan");
   }
@@ -1416,6 +1418,7 @@ export const queueTopicArticleIfAbsent = internalMutation({
     if (!site || !topic || topic.siteId !== siteId) {
       throw new Error("Topic does not belong to the site");
     }
+    if (site.serviceMode === "growth_first") return { queued: false, reason: "content_work_engine_owns_site" as const };
     if (manual && cadenceMicroSeedJobId) {
       return { queued: false, reason: "manual_micro_seed_handoff_forbidden" as const };
     }
@@ -1922,6 +1925,7 @@ export const queuePlanIfAbsent = internalMutation({
   handler: async (ctx, args) => {
     const site = await ctx.db.get(args.siteId);
     if (!site) throw new Error("Site not found");
+    if (site.serviceMode === "growth_first") return { queued: false, reason: "content_work_engine_owns_site" as const };
     const setupBindingValues = [
       args.oneSetupExecutionId,
       args.oneSetupClaimNonce,
@@ -3337,6 +3341,7 @@ export const yieldGeneratedArticleForReview = internalMutation({
         reviewCheckpointVersion,
         reviewCheckpointScheduledAt: currentTime,
       },
+      ...(job.contentWork ? { contentWork: { ...job.contentWork, stage: "review" as const } } : {}),
       error: undefined,
       cadenceFailure: undefined,
       workerToken: undefined,
@@ -4689,6 +4694,7 @@ export const markDone = internalMutation({
     });
     await reconcileJobTopicLifecycle(ctx, job);
     await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
+    await contentWorkCompleted(ctx, job);
     return { updated: true };
   },
 });
@@ -4741,6 +4747,7 @@ export const markFailed = internalMutation({
       nextAttemptAt: undefined,
       updatedAt: currentTime,
     });
+    if (job.contentWork) await settleFailedContentWork(ctx, jobId);
     if (job.type === "plan") {
       await terminallyClosePlanCheckpoints(ctx, jobId, currentTime);
       await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
@@ -4831,7 +4838,7 @@ export const markRetryableFailure = internalMutation({
       automaticSingleExecutionCheckpointTargetFromPayload(job.payload),
     );
     const attempts = (job.workerAttempts ?? 0) + 1;
-    const maximumRetries = checkpointSingleExecution
+    const maximumRetries = checkpointSingleExecution || job.contentWork
       ? 0
       : job.type === "plan"
         ? AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES
@@ -4875,6 +4882,7 @@ export const markRetryableFailure = internalMutation({
       leaseExpiresAt: undefined,
       updatedAt: currentTime,
     });
+    if (!willRetry && job.contentWork) await settleFailedContentWork(ctx, jobId);
     if (willRetry && nextAttemptAt && job.siteId) {
       // Mutation scheduling is atomic with the state transition. The parent
       // action may terminate immediately after this mutation returns.

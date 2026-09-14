@@ -767,7 +767,7 @@ test("checkpoint transient failure is terminal while legacy retry remains bounde
   assert.match(retry, /const checkpointSingleExecution = Boolean/);
   assert.match(
     retry,
-    /const maximumRetries = checkpointSingleExecution\s*\? 0\s*:\s*job\.type === "plan"\s*\? AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES/,
+    /const maximumRetries = checkpointSingleExecution \|\| job\.contentWork\s*\? 0\s*:\s*job\.type === "plan"\s*\? AUTOMATIC_PLAN_MAX_TRANSIENT_RETRIES/,
   );
   assert.match(retry, /!willRetry && job\.type === "plan"/);
   assert.match(retry, /activateTerminalPlanCheckpoints/);

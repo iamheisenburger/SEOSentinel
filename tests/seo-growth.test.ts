@@ -314,7 +314,7 @@ test("fleet growth reconciliation keeps tenant boundaries and rollout-gates ever
 
 test("the final editor runs before internal-link injection and exact resealing", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  const finalReview = pipeline.indexOf("const finalReview = await reviewExistingArticleHandler");
+  const finalReview = pipeline.indexOf('const finalReview = await providerScope("review", () => reviewExistingArticleHandler');
   const sealedLinks = pipeline.indexOf("finalReview.contentHash", finalReview);
   assert.ok(finalReview >= 0 && sealedLinks > finalReview);
   assert.doesNotMatch(pipeline, /internal\.actions\.backlinks\.quickBacklinkScan/);
