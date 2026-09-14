@@ -4,7 +4,6 @@ import { accountDeletionKey } from "./accountDeletion.ts";
 
 export const MAX_APPROVED_PROVIDER_MONTHLY_CEILING_MICRO_USD = 35_000_000;
 export const MAX_CUMULATIVE_VALIDATION_MICRO_USD = 20_000_000;
-export const MAX_CUMULATIVE_VALIDATION_DURATION_MS = 24 * 60 * 60 * 1000;
 
 /** A stopped/expired validation run never falls back to ordinary spending.
  * Its stable existing approval row remains authoritative across UTC months. */
@@ -14,10 +13,36 @@ export function validCumulativeValidationAuthorization(
   const run = row?.cumulativeValidation;
   return Boolean(row?.accountKey === accountDeletionKey(userId) && run &&
     Number.isSafeInteger(timestamp) && Number.isSafeInteger(run.approvedAt) &&
-    Number.isSafeInteger(run.expiresAt) && run.approvedAt <= timestamp &&
-    run.expiresAt > run.approvedAt && run.expiresAt - run.approvedAt <= MAX_CUMULATIVE_VALIDATION_DURATION_MS &&
+    run.approvedAt <= timestamp && run.siteIds?.length === 2 && new Set(run.siteIds).size === 2 &&
+    (run.expiresAt === undefined || (Number.isSafeInteger(run.expiresAt) && run.expiresAt > run.approvedAt)) &&
+    (run.stoppedAt === undefined || (Number.isSafeInteger(run.stoppedAt) && run.stoppedAt >= run.approvedAt)) &&
     Number.isSafeInteger(run.limitMicroUsd) && run.limitMicroUsd > 0 && run.limitMicroUsd <= MAX_CUMULATIVE_VALIDATION_MICRO_USD &&
     /^[a-zA-Z0-9_-]{8,128}$/.test(run.approvalReference));
+}
+
+/** Prospective readiness uses the saved schedule; execution uses immutable job
+ * and reservation lineage. Neither caller arguments nor a month change can
+ * opt an existing job out. Ordinary, unbound work has no validation grant. */
+export async function contentValidationBinding(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
+  timestamp: number, job?: Doc<"jobs"> | null) {
+  const id = job ? job.contentWork?.validationAuthorizationId : site.contentSchedule?.validationAuthorizationId;
+  if (job) {
+    if (job.siteId !== site._id || !job.contentWork) throw new Error("Content validation job binding invalid");
+    for (const reservationId of [job.providerSpendReservationId, ...(job.contentWork.priorReservationIds ?? [])]) {
+      if (!reservationId) continue;
+      const receipt = await ctx.db.get(reservationId);
+      if (!receipt || receipt.validationAuthorizationId !== id || (id && receipt.contentWorkJobId !== job._id)) {
+        throw new Error("Content validation reservation lineage changed");
+      }
+    }
+  }
+  if (!id) return null;
+  const anchor = await ctx.db.get(id), run = anchor?.cumulativeValidation;
+  if (!site.userId || !validCumulativeValidationAuthorization(anchor, site.userId, timestamp) || !run ||
+    !run.siteIds.includes(site._id) || (job && job.createdAt < run.approvedAt) ||
+    site.contentSchedule?.validationAuthorizationId !== id) throw new Error("Content validation scope changed");
+  return { id, run, state: run.stoppedAt !== undefined ? "stopped" as const :
+    run.expiresAt !== undefined && timestamp >= run.expiresAt ? "expired" as const : "active" as const };
 }
 
 export function providerBudgetMonth(timestamp: number) {

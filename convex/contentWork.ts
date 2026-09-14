@@ -7,7 +7,8 @@ import { publicationArtifactHash, publicationDeliveryConfig } from "./lib/public
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
-import { reserveSharedProviderBudget, settleSharedProviderReservation, releaseSharedProviderReservation } from "./lib/providerSpendReservation";
+import { inspectSharedProviderBudget, reserveSharedProviderBudget, settleSharedProviderReservation, releaseSharedProviderReservation } from "./lib/providerSpendReservation";
+import { contentValidationBinding } from "./lib/providerBudgetAuthorization";
 import { planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoint";
 import { terminalContentFeasibility } from "./lib/topicLifecycle";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
@@ -199,6 +200,7 @@ export const selectServiceMode = mutation({
     await ctx.db.patch(site._id, { serviceMode: "growth_first", ...(args.authorizeAutomaticPublication === true ? {
       approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
     } : {}), contentSchedule: {
+      validationAuthorizationId: site.contentSchedule?.validationAuthorizationId,
       selectedAt: Date.now(), profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
       ...(args.authorizeAutomaticPublication === true ? { autopublishConsentAt: Date.now() } : {}),
       intervalMs: site.contentSchedule?.intervalMs ?? args.intervalMs!, nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? args.firstDeadlineAt!, timezone: site.contentSchedule?.timezone ?? timezone, active: false, paused: false,
@@ -415,20 +417,25 @@ export const advance = internalMutation({
     if (!topic) return { scheduled: 0, mode: "content_inputs_exhausted" };
     const deadlineAt = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
     if (work.some(j => j.contentWork!.deadlineAt === deadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
-    const budget = await reserveSharedProviderBudget(ctx, { siteId, userId: site.userId!, purpose: "content_work",
-      trigger: `content_slot:${deadlineAt}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() });
-    if (!budget.ok) return { scheduled: 0, mode: "content_budget_exhausted", blockers: [budget.reason] };
+    const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,
+      trigger: `content_slot:${deadlineAt}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
+    const budget = await inspectSharedProviderBudget(ctx, budgetRequest);
+    if (!budget.ok) return { scheduled: 0, mode: "content_budget_exhausted", blockers: [budget.reason], budgetBlocker: budget };
     const { budgetMicroUsd, ...price } = pricing;
     const jobId = await ctx.db.insert("jobs", { siteId, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
-      providerSpendReservationId: budget.reservationId,
       payload: { topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
-      contentWork: { intent: improvement ? "improve" : "create", ...(improvement ? { targetPageId: improvement.page._id,
+      contentWork: { validationAuthorizationId: schedule.validationAuthorizationId, intent: improvement ? "improve" : "create", ...(improvement ? { targetPageId: improvement.page._id,
           baseRevision: improvement.page.editable!.sourceRevision, permissionVersion: improvement.page.editable!.version, opportunity: improvement.reason,
           editTarget: improvement.editTarget } : {}),
         stage: "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
         profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: 0, replacements: 0,
         discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] }, createdAt: Date.now(), updatedAt: Date.now() });
+    // The provisional job and its receipt commit together. The preceding read
+    // uses the same transaction; an unexpected denial rolls back both.
+    const reserved = await reserveSharedProviderBudget(ctx, { ...budgetRequest, contentWorkJobId: jobId });
+    if (!reserved.ok) throw new Error("Content reservation changed inside admission");
+    await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
     return { scheduled: 1, mode: "buffer_fill", activeJobId: jobId };
@@ -558,6 +565,8 @@ export const beginProviderCall = internalMutation({
     }
     if (previousCalls.some(c => c.state === "started")) throw new Error("Content provider response already attempted; reconcile before replay");
     if (previousCalls.length > MAX_CONTENT_RECOVERIES) throw new Error("Content checkpoint retry limit exhausted");
+    const validation = await contentValidationBinding(ctx, site, Date.now(), job);
+    if (validation && validation.state !== "active") throw new Error(`Content provider authority changed: validation ${validation.state}`);
     let receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
     if (!receipt || receipt.siteId !== site._id || receipt.userId !== site.userId || receipt.purpose !== "content_work" ||
       receipt.releasedAt !== undefined || receipt.settledAt !== undefined) throw new Error("Content provider reservation unavailable");
@@ -582,6 +591,7 @@ export const beginProviderCall = internalMutation({
       else await releaseSharedProviderReservation(ctx, { reservationId: oldId, siteId: site._id, purpose: "content_work",
         reason: "content_work_closed_before_provider_execution", timestamp: Date.now() });
       const replacement = await reserveSharedProviderBudget(ctx, { siteId: site._id, userId: site.userId!, purpose: "content_work",
+        contentWorkJobId: job._id,
         trigger: `content_slot:${cw.deadlineAt}:remaining_window:${Date.now()}`, reservedMicroUsd: cw.budgetMicroUsd - used, timestamp: Date.now() });
       if (!replacement.ok) throw new Error(`Content work rollover blocked: ${replacement.reason}; requestedMicroUsd=${cw.budgetMicroUsd - used}; consumedMicroUsd=${replacement.reservedMicroUsd}; ceilingMicroUsd=${replacement.ceilingMicroUsd}`);
       receipt = (await ctx.db.get(replacement.reservationId))!;
@@ -605,6 +615,11 @@ export const completeProviderCall = internalMutation({
     const call = cw?.providerCalls.find(c => c.key === args.key);
     if (!job || !cw || !call || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
       !Number.isSafeInteger(args.actualMicroUsd) || args.actualMicroUsd < 0 || args.actualMicroUsd > call.ceilingMicroUsd) throw new Error("Content provider receipt invalid; reserved ceiling retained");
+    const site = job.siteId ? await ctx.db.get(job.siteId) : null;
+    if (!site) throw new Error("Content settlement site unavailable");
+    // A stop cannot erase an in-flight cost. Validate immutable lineage, but
+    // permit its original worker to record the result after expiry/stop.
+    await contentValidationBinding(ctx, site, Date.now(), job);
     if (call.state === "rejected" || (call.state === "completed" && (call.actualMicroUsd !== args.actualMicroUsd || JSON.stringify(call.result) !== JSON.stringify(args.result)))) throw new Error("Content provider settlement conflict");
     const providerCalls = cw.providerCalls.map(c => c.key === args.key ? { ...c, state: "completed" as const, actualMicroUsd: args.actualMicroUsd, result: args.result } : c);
     if (new TextEncoder().encode(JSON.stringify(providerCalls)).length > 700_000) throw new Error("Content checkpoint storage bound exceeded; reserved ceiling retained");

@@ -1,4 +1,9 @@
-# Cumulative validation cap — local review candidate31
+# Historical REJECTED cumulative validation candidate31
+
+Independent review rejected79d40cb: account-wide interference, historical holds
+charged against the additional grant, and arbitrary24-hour expiry. It was never
+deployed/activated. The text below is retained as rejected historical evidence,
+not current guidance. See `PENTRA_SLC_SCOPED_VALIDATION_2026-09-14.md` for repair32.
 
 Do not deploy or activate without separate review. The deployed application is
 `b3994e0a5a10a24189a7fc767f11b8c3dbb1240a`; this financial change is local only.

@@ -1,6 +1,6 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { readProviderBudgetAuthorization, validCumulativeValidationAuthorization } from "./providerBudgetAuthorization.ts";
+import { readProviderBudgetAuthorization, contentValidationBinding } from "./providerBudgetAuthorization.ts";
 import {
   resolvePlanFromFeatures,
   type CanonicalPlanTier,
@@ -123,6 +123,7 @@ export type SharedProviderReservationResult =
       accountReservedTodayMicroUsd: number;
       accountReservedThisMonthMicroUsd: number;
       accountMonthlyCeilingMicroUsd: number;
+      validationAuthorizationId?: Id<"provider_budget_authorizations">;
     }
   | {
       ok: false;
@@ -136,7 +137,7 @@ export type SharedProviderReservationResult =
       ceilingMicroUsd: number;
       retryAfterMs?: number;
       budgetScope?: "approved_incremental_window" | "cumulative_validation";
-      validationState?: "invalid" | "expired" | "incomplete" | "exhausted";
+      validationState?: "invalid" | "expired" | "stopped" | "incomplete" | "exhausted";
     };
 
 export type SharedProviderCapacityDecision =
@@ -355,6 +356,7 @@ export function evaluateSharedProviderCapacity(args: {
 }
 
 type ProviderBudgetRequest = {
+    contentWorkJobId?: Id<"jobs">;
     siteId: Id<"sites">;
     userId: string;
     purpose: SharedProviderPurpose;
@@ -400,31 +402,38 @@ export async function inspectSharedProviderBudget(
     accountEntitlement?.planFeatures ?? site.planFeatures ?? [],
   );
   const baseMonthlyCeilingMicroUsd = providerAccountMonthlyCeilingMicroUsd(plan.tier);
-  if (accountEntitlement?.providerValidationAuthorizationId) {
-    const anchor = await ctx.db.get(accountEntitlement.providerValidationAuthorizationId);
-    const run = anchor?.cumulativeValidation;
-    const denied = (validationState: "invalid" | "expired" | "incomplete" | "exhausted", consumed = 0): ProviderBudgetInspection => ({
+  let validation: Awaited<ReturnType<typeof contentValidationBinding>> = null;
+  if (args.purpose === "content_work") {
+    try {
+      const job = args.contentWorkJobId ? await ctx.db.get(args.contentWorkJobId) : undefined;
+      if (args.contentWorkJobId && !job) throw new Error("Missing content job");
+      validation = await contentValidationBinding(ctx, site, args.timestamp, job);
+    } catch { return { ok: false, reason: "provider_account_monthly_budget_reserved", budgetScope: "cumulative_validation",
+      validationState: "invalid", reservedMicroUsd: 0, ceilingMicroUsd: 0 }; }
+  }
+  if (validation) {
+    const { run } = validation;
+    const denied = (validationState: "invalid" | "expired" | "stopped" | "incomplete" | "exhausted", consumed = 0): ProviderBudgetInspection => ({
       ok: false, reason: "provider_account_monthly_budget_reserved", budgetScope: "cumulative_validation",
       validationState, reservedMicroUsd: consumed, ceilingMicroUsd: validationState === "invalid" ? 0 : run?.limitMicroUsd ?? 0,
     });
-    if (!validCumulativeValidationAuthorization(anchor, site.userId, args.timestamp) || !run) return denied("invalid");
-    if (args.timestamp >= run.expiresAt) return denied("expired");
-    // Reuse the original ledger, not a second spending counter. Include all
-    // sites owned by this account, even scrubbed site IDs and older unknown
-    // costs that may settle during this run. No monthly rollover can drop them.
+    if (validation.state !== "active") return denied(validation.state);
+    // Only newly admitted run-bound jobs spend this additional grant. Older
+    // unknown holds remain in their original account/fleet guards below.
     const validationRows = await ctx.db.query("provider_spend_reservations")
-      .withIndex("by_user", q => q.eq("userId", site.userId!)).take(5001);
+      .withIndex("by_validation", q => q.eq("validationAuthorizationId", validation.id)).take(5001);
     if (validationRows.length > 5000) return denied("incomplete");
     let consumed = 0;
     for (const row of validationRows) {
-      if (row.userId !== site.userId || !Number.isSafeInteger(row.reservedMicroUsd) || row.reservedMicroUsd <= 0 ||
-        !Number.isSafeInteger(row.createdAt) || row.createdAt > args.timestamp) return denied("invalid");
+      if (row.userId !== site.userId || !row.contentWorkJobId || row.purpose !== "content_work" ||
+        (row.siteId !== undefined && !run.siteIds.includes(row.siteId)) ||
+        !Number.isSafeInteger(row.reservedMicroUsd) || row.reservedMicroUsd <= 0 ||
+        !Number.isSafeInteger(row.createdAt) || row.createdAt < run.approvedAt || row.createdAt > args.timestamp) return denied("invalid");
       if (row.releasedAt !== undefined) continue; // Only the existing proven-no-I/O release path can set this.
       const settled = row.settledAt !== undefined && Number.isSafeInteger(row.settledAt) &&
         row.settledAt >= row.createdAt && row.settledAt <= args.timestamp &&
         ["verified_provider_receipt_actual_cost", "single_execution_plan_contingency_retired"].includes(row.settlementReason ?? "") &&
         Number.isSafeInteger(row.settledMicroUsd) && row.settledMicroUsd! >= 0 && row.settledMicroUsd! <= row.reservedMicroUsd;
-      if (row.createdAt < run.approvedAt && settled && row.settledAt! < run.approvedAt) continue;
       consumed += settled ? providerReservationConsumedMicroUsd(row) : row.reservedMicroUsd;
       if (!Number.isSafeInteger(consumed)) return denied("invalid");
     }
@@ -505,15 +514,18 @@ export async function inspectSharedProviderBudget(
     return { ok: false, ...capacity };
   }
 
-  return { ok: true, ...ledger, accountMonthlyCeilingMicroUsd };
+  return { ok: true, ...ledger, accountMonthlyCeilingMicroUsd, ...(validation ? { validationAuthorizationId: validation.id } : {}) };
 }
 
 export async function reserveSharedProviderBudget(
   ctx: MutationCtx, args: ProviderBudgetRequest,
 ): Promise<SharedProviderReservationResult> {
+  if (args.purpose === "content_work" && !args.contentWorkJobId) throw new Error("Content work reservation requires its durable job");
   const admission = await inspectSharedProviderBudget(ctx, args);
   if (!admission.ok) return admission;
   const reservationId = await ctx.db.insert("provider_spend_reservations", {
+    ...(args.contentWorkJobId ? { contentWorkJobId: args.contentWorkJobId } : {}),
+    ...(admission.validationAuthorizationId ? { validationAuthorizationId: admission.validationAuthorizationId } : {}),
     siteId: args.siteId,
     userId: args.userId,
     purpose: args.purpose,

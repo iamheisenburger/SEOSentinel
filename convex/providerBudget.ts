@@ -5,7 +5,7 @@ import { automaticSingleExecutionCheckpointTargetFromPayload } from "./lib/planP
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import { activeProviderBudgetAuthorization, MAX_APPROVED_PROVIDER_MONTHLY_CEILING_MICRO_USD, providerBudgetMonth,
-  readProviderBudgetAuthorization, MAX_CUMULATIVE_VALIDATION_MICRO_USD, MAX_CUMULATIVE_VALIDATION_DURATION_MS,
+  readProviderBudgetAuthorization, MAX_CUMULATIVE_VALIDATION_MICRO_USD,
   validCumulativeValidationAuthorization } from "./lib/providerBudgetAuthorization.ts";
 import { resolvePlanFromFeatures } from "./planLimits.ts";
 import {
@@ -269,7 +269,7 @@ export const approveAccountMonthBudget = internalMutation({
  * without replacing the old $4 receipt or changing account/fleet ceilings. */
 export const attachCumulativeValidationBudget = internalMutation({
   args: { siteId: v.id("sites"), comparisonSiteId: v.id("sites"), authorizationId: v.id("provider_budget_authorizations"),
-    expectedMonthlyApprovalReference: v.string(), approvalReference: v.string(), limitMicroUsd: v.number(), expiresAt: v.number() },
+    expectedMonthlyApprovalReference: v.string(), approvalReference: v.string(), limitMicroUsd: v.number(), expiresAt: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const [site, comparison, anchor] = await Promise.all([ctx.db.get(args.siteId), ctx.db.get(args.comparisonSiteId), ctx.db.get(args.authorizationId)]);
     if (args.siteId === args.comparisonSiteId || !site?.userId || comparison?.userId !== site.userId ||
@@ -279,21 +279,51 @@ export const attachCumulativeValidationBudget = internalMutation({
     }
     const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
     if (!entitlement || entitlement.status !== "completed") throw new Error("Canonical account entitlement required");
+    const selected = [site, comparison], siteIds = selected.map(s => s._id).sort();
+    if (selected.some(s => s.serviceMode !== "growth_first" || !s.contentSchedule)) throw new Error("Select the exact content schedules before binding validation");
     const timestamp = Date.now(), previous = anchor.cumulativeValidation;
-    if (previous || entitlement.providerValidationAuthorizationId) {
-      if (entitlement.providerValidationAuthorizationId !== anchor._id || !previous ||
+    if (previous || selected.some(s => s.contentSchedule!.validationAuthorizationId)) {
+      if (!previous || selected.some(s => s.contentSchedule!.validationAuthorizationId !== anchor._id) ||
         !validCumulativeValidationAuthorization(anchor, site.userId, timestamp) || previous.limitMicroUsd !== args.limitMicroUsd ||
+        JSON.stringify([...previous.siteIds].sort()) !== JSON.stringify(siteIds) ||
         previous.approvalReference !== args.approvalReference || previous.expiresAt !== args.expiresAt) throw new Error("An immutable validation budget already exists");
       return { created: false, ...previous };
     }
     const base = providerAccountMonthlyCeilingMicroUsd(resolvePlanFromFeatures(entitlement.planFeatures).tier);
     if (entitlement.providerBudgetAuthorizationId !== anchor._id || !activeProviderBudgetAuthorization(anchor, site.userId, base, timestamp) ||
       !Number.isSafeInteger(args.limitMicroUsd) || args.limitMicroUsd <= 0 || args.limitMicroUsd > MAX_CUMULATIVE_VALIDATION_MICRO_USD ||
-      !Number.isSafeInteger(args.expiresAt) || args.expiresAt <= timestamp || args.expiresAt - timestamp > MAX_CUMULATIVE_VALIDATION_DURATION_MS ||
+      (args.expiresAt !== undefined && (!Number.isSafeInteger(args.expiresAt) || args.expiresAt <= timestamp)) ||
       !/^[a-zA-Z0-9_-]{8,128}$/.test(args.approvalReference)) throw new Error("Validation budget contract is invalid");
-    const receipt = { approvedAt: timestamp, expiresAt: args.expiresAt, limitMicroUsd: args.limitMicroUsd, approvalReference: args.approvalReference };
+    // Existing work is never retroactively charged to this additional grant.
+    // Prepare a fresh run only after prior content execution has terminated.
+    for (const target of selected) {
+      const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", target._id)).take(1001);
+      if (jobs.length > 1000 || jobs.some(j => j.contentWork && !["verified", "failed"].includes(j.contentWork.stage))) {
+        throw new Error("Reconcile existing content work before validation");
+      }
+    }
+    const receipt = { approvedAt: timestamp, ...(args.expiresAt !== undefined ? { expiresAt: args.expiresAt } : {}),
+      siteIds, limitMicroUsd: args.limitMicroUsd, approvalReference: args.approvalReference };
     await ctx.db.patch(anchor._id, { cumulativeValidation: receipt });
-    await ctx.db.patch(entitlement._id, { providerValidationAuthorizationId: anchor._id });
+    for (const target of selected) await ctx.db.patch(target._id, {
+      contentSchedule: { ...target.contentSchedule!, validationAuthorizationId: anchor._id } });
     return { created: true, ...receipt };
+  },
+});
+
+/** Explicit stop preserves the immutable run and every retained reservation.
+ * Only bound content work is fenced; ordinary work has no dependency on it. */
+export const stopCumulativeValidationBudget = internalMutation({
+  args: { siteId: v.id("sites"), comparisonSiteId: v.id("sites"), authorizationId: v.id("provider_budget_authorizations"), approvalReference: v.string() },
+  handler: async (ctx, args) => {
+    const [site, other, anchor] = await Promise.all([ctx.db.get(args.siteId), ctx.db.get(args.comparisonSiteId), ctx.db.get(args.authorizationId)]);
+    const run = anchor?.cumulativeValidation;
+    if (args.siteId === args.comparisonSiteId || !site?.userId || other?.userId !== site.userId || !run ||
+      !validCumulativeValidationAuthorization(anchor, site.userId, Date.now()) ||
+      !run.siteIds.includes(site._id) || !run.siteIds.includes(other._id) || run.approvalReference !== args.approvalReference ||
+      !(await siteExecutionAuthorized(ctx, site)) || !(await siteExecutionAuthorized(ctx, other))) throw new Error("Validation stop scope is unavailable");
+    if (run.stoppedAt !== undefined) return { stoppedAt: run.stoppedAt, changed: false };
+    const stoppedAt = Date.now(); await ctx.db.patch(anchor!._id, { cumulativeValidation: { ...run, stoppedAt } });
+    return { stoppedAt, changed: true };
   },
 });

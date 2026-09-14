@@ -471,6 +471,281 @@ export async function exerciseSetupReconfirmation(f: ReturnType<typeof setup>, s
   return { deadline: schedule.nextDeadlineAt, publishedAt: delivered.contentWork.publishedAt, verifiedAt: delivered.contentWork.verifiedAt, retired: old.length, ready: 2 };
 }
 
+// All fixtures below enter the registered content admission and worker paths.
+// Three synthetic sites share one owner; the fourth is an independent tenant.
+async function validationFixture(options: Parameters<typeof setup>[0] = {}) {
+  const f = setup({ ...options, growthFirst: true, businesses: slcBusinesses.slice(0, 4) });
+  const owner = f.get(f.sites[0].id)!.userId;
+  for (const site of f.sites.slice(1, 3)) {
+    const row = f.get(site.id)!; row.userId = owner;
+    row.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: row as never, ownerAccountKey: accountDeletionKey(owner), verifiedAt: f.now() });
+  }
+  const select = async (site: typeof f.sites[number]) => {
+    f.setIdentity(f.get(site.id)!.userId);
+    const readiness = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+      reviewToken: readiness.reviewToken, firstDeadlineAt: f.now() + 10 * 60_000, intervalMs: 30 * 60_000 });
+    f.setIdentity(null);
+  };
+  for (const site of f.sites.slice(0, 2)) await select(site);
+  const approval = await f.invoke("providerBudget:approveAccountMonthBudget", {
+    siteId: f.sites[0].id, comparisonSiteId: f.sites[1].id, month: "2026-09", expectedBaseMonthlyCeilingMicroUsd: 28_000_000,
+    monthlyCeilingMicroUsd: 32_000_000, incrementalLimitMicroUsd: 4_000_000, approvalReference: "synthetic-old-discovery-approval" });
+  const args = { siteId: f.sites[0].id, comparisonSiteId: f.sites[1].id, authorizationId: approval.authorizationId,
+    expectedMonthlyApprovalReference: "synthetic-old-discovery-approval", approvalReference: "synthetic-additional-validation", limitMicroUsd: 20_000_000 };
+  const attach = (patch: Fields = {}) => f.invoke("providerBudget:attachCumulativeValidationBudget", { ...args, ...patch });
+  const stop = () => f.invoke("providerBudget:stopCumulativeValidationBudget", { siteId: args.siteId,
+    comparisonSiteId: args.comparisonSiteId, authorizationId: args.authorizationId, approvalReference: args.approvalReference });
+  const admit = async (index: number) => {
+    if (!f.get(f.sites[index].id)!.contentSchedule) await select(f.sites[index]);
+    return f.invoke("contentWork:advance", { siteId: f.sites[index].id });
+  };
+  return { ...f, owner, args, attach, stop, admit };
+}
+
+test("SLC32 unrelated same-owner and foreign content cannot consume the exact two-site grant", async () => {
+  const f = await validationFixture();
+  await f.attach({ limitMicroUsd: 500_000 });
+  await f.admit(2); await f.admit(3);
+  for (const row of f.tables.provider_spend_reservations) assert.equal(row.validationAuthorizationId, undefined);
+  assert.equal((await f.admit(0)).mode, "buffer_fill");
+  const bound = f.tables.jobs.find(j => j.siteId === f.sites[0].id)!;
+  assert.equal(bound.contentWork.validationAuthorizationId, f.args.authorizationId);
+  assert.equal(f.get(bound.providerSpendReservationId)!.contentWorkJobId, bound._id);
+  assert.equal(f.get(bound.providerSpendReservationId)!.validationAuthorizationId, f.args.authorizationId);
+  const blocked = await f.admit(1);
+  assert.equal(blocked.mode, "content_budget_exhausted"); assert.match(JSON.stringify(blocked), /cumulative_validation/);
+  assert.match(JSON.stringify(blocked), /500000/);
+  await assert.rejects(f.attach({ comparisonSiteId: f.sites[2].id, limitMicroUsd: 500_000 }), /immutable/);
+  await assert.rejects(f.attach({ comparisonSiteId: f.sites[3].id, limitMicroUsd: 500_000 }), /scope/);
+  f.assertOffline();
+});
+
+test("SLC32 historical unknown 28.05 stays in old account limits, not the additional validation total", async () => {
+  const f = await validationFixture();
+  const old = f.add("provider_spend_reservations", { siteId: f.sites[0].id, userId: f.owner, purpose: "topic_plan",
+    trigger: "synthetic-prior-unknown", reservedMicroUsd: 28_050_000, createdAt: START - 86_400_000 });
+  const before = JSON.stringify(f.get(old));
+  await f.attach();
+  assert.equal((await f.admit(0)).mode, "buffer_fill");
+  assert.equal(JSON.stringify(f.get(old)), before);
+  assert.equal(f.tables.provider_spend_reservations.filter(r => r.validationAuthorizationId).length, 1);
+  // A further valid historical hold reaches the account cap; the new allowance
+  // does not waive that independently applicable reservation.
+  f.add("provider_spend_reservations", { siteId: f.sites[1].id, userId: f.owner, purpose: "topic_plan",
+    trigger: "synthetic-second-prior-unknown", reservedMicroUsd: 3_450_000, createdAt: START - 86_400_000 });
+  const blocked = await f.admit(1);
+  assert.equal(blocked.mode, "content_budget_exhausted"); assert.match(JSON.stringify(blocked), /32000000/);
+  assert.doesNotMatch(JSON.stringify(blocked), /cumulative_validation/); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC32 ordinary legacy work stays outside validation while old incremental and fleet guards remain effective", async () => {
+  const f = await validationFixture(); await f.attach({ limitMicroUsd: 500_000 });
+  assert.equal((await f.invoke("jobs:queuePlanIfAbsent", { siteId: f.sites[2].id, reason: "topic_replenishment" })).queued, true);
+  const legacy = f.tables.jobs.find(j => j.siteId === f.sites[2].id)!;
+  assert.equal(f.get(legacy.providerSpendReservationId)!.validationAuthorizationId, undefined);
+  assert.equal((await f.admit(0)).mode, "buffer_fill"); f.assertOffline();
+  for (const scope of ["old_incremental", "fleet"] as const) {
+    const isolated = await validationFixture(); await isolated.attach();
+    isolated.add("provider_spend_reservations", { siteId: isolated.sites[scope === "fleet" ? 3 : 2].id,
+      userId: scope === "fleet" ? isolated.get(isolated.sites[3].id)!.userId : isolated.owner, purpose: "topic_plan", trigger: "synthetic-valid-other-hold",
+      reservedMicroUsd: scope === "fleet" ? 35_000_000 : 3_600_000, createdAt: scope === "fleet" ? START - 86_400_000 : START });
+    const denied = await isolated.admit(0); assert.equal(denied.mode, "content_budget_exhausted");
+    assert.equal(denied.budgetBlocker.budgetScope, scope === "old_incremental" ? "approved_incremental_window" : undefined);
+    assert.equal(denied.budgetBlocker.ceilingMicroUsd, scope === "fleet" ? 35_000_000 : 4_000_000);
+    assert.equal(isolated.tables.jobs.length, 0); isolated.assertOffline();
+  }
+});
+
+test("SLC32 first binding rejects invalid authority, extra allowance and retroactive work adoption", async () => {
+  const f = await validationFixture();
+  for (const patch of [{ limitMicroUsd: 20_000_001 }, { limitMicroUsd: 0 }, { expiresAt: START },
+    { expectedMonthlyApprovalReference: "not-approved" }, { comparisonSiteId: f.sites[3].id }, { approvalReference: "bad" }]) {
+    await assert.rejects(f.attach(patch));
+    assert.equal(f.get(f.args.authorizationId)!.cumulativeValidation, undefined);
+  }
+  await f.admit(0);
+  await assert.rejects(f.attach(), /Reconcile existing content work/);
+  assert.equal(f.get(f.args.authorizationId)!.cumulativeValidation, undefined);
+  assert.equal(f.tables.provider_spend_reservations[0].validationAuthorizationId, undefined);
+  const separate = await validationFixture();
+  assert.equal((await separate.attach({ expiresAt: START + 7 * 86_400_000 })).created, true, "No invented 24-hour expiry");
+  f.assertOffline(); separate.assertOffline();
+});
+
+test("SLC32 bound jobs cannot lose grant lineage or borrow another site's reservation before paid I/O", async () => {
+  for (const change of ["job", "schedule", "reservation", "foreign_owner"] as const) {
+    const f = await validationFixture(); await f.attach(); await f.admit(0);
+    const job = f.tables.jobs[0], receipt = f.get(job.providerSpendReservationId)!;
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "synthetic-lineage" });
+    if (change === "job") delete f.get(job._id)!.contentWork.validationAuthorizationId;
+    if (change === "schedule") delete f.get(job.siteId)!.contentSchedule.validationAuthorizationId;
+    if (change === "reservation") receipt.contentWorkJobId = "jobs:foreign";
+    if (change === "foreign_owner") f.get(job.siteId)!.userId = f.get(f.sites[3].id)!.userId;
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "synthetic-lineage", key: "new-request", ceilingMicroUsd: 100 }), /validation|authority changed/);
+    assert.equal(f.get(receipt._id)!.releasedAt, undefined); assert.equal(f.get(receipt._id)!.settledAt, undefined);
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC32 concurrent real admissions and attachment retries cannot oversubscribe or restart the grant", async () => {
+  const f = await validationFixture();
+  const replies = await Promise.all([f.attach({ limitMicroUsd: 500_000 }), f.attach({ limitMicroUsd: 500_000 })]);
+  assert.equal(replies.filter(r => r.created).length, 1);
+  const results = await Promise.all([f.admit(0), f.admit(1), f.admit(0), f.admit(1)]);
+  assert.equal(results.filter(r => r.mode === "buffer_fill").length, 1);
+  assert.equal(f.tables.jobs.length, 1); assert.equal(f.tables.provider_spend_reservations.length, 1);
+  f.restartRuntime(); f.setTime(START + 25 * 60 * 60_000);
+  assert.equal((await f.attach({ limitMicroUsd: 500_000 })).approvedAt, START);
+  assert.match(JSON.stringify(await f.admit(1)), /cumulative_validation/);
+  await assert.rejects(f.attach({ limitMicroUsd: 500_001 }), /immutable/);
+  await assert.rejects(f.attach({ limitMicroUsd: 500_000, expiresAt: f.now() + 1000 }), /immutable/);
+  assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC32 stop and explicit expiry fence only bound work, permit in-flight settlement, and never renew", async t => {
+  for (const lifecycle of ["stop", "expiry"] as const) await t.test(lifecycle, async () => {
+    const f = await validationFixture();
+    const patch = lifecycle === "expiry" ? { expiresAt: START + 1000 } : {};
+    await f.attach(patch); await f.admit(0);
+    const job = f.tables.jobs[0], token = "synthetic-inflight";
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: token });
+    const call = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: token, key: "known-request", ceilingMicroUsd: 100 });
+    if (lifecycle === "stop") { const first = await f.stop(); assert.equal(first.changed, true); assert.equal((await f.stop()).stoppedAt, first.stoppedAt); }
+    else f.setTime(START + 1000);
+    await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: token, key: call.key, actualMicroUsd: 70, result: { fixture: true } });
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: token, key: "another-request", ceilingMicroUsd: 100 }), /validation (stopped|expired)/);
+    await f.invoke("jobs:markFailed", { jobId: job._id, workerToken: token, error: "Synthetic stopped validation" });
+    assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 70);
+    assert.equal(f.get(job.providerSpendReservationId)!.releasedAt, undefined);
+    assert.match(JSON.stringify(await f.admit(1)), /cumulative_validation/);
+    f.setTime(START + 25 * 60 * 60_000); f.restartRuntime();
+    assert.equal((await f.attach(patch)).created, false);
+    for (const index of [2, 3]) {
+      assert.equal((await f.admit(index)).mode, "buffer_fill");
+      const ordinary = f.tables.jobs.find(j => j.siteId === f.sites[index].id)!;
+      await f.invoke("actions/pipeline:processNextJob", { siteId: ordinary.siteId, jobId: ordinary._id });
+      await f.invoke("actions/pipeline:processNextJob", { siteId: ordinary.siteId, jobId: ordinary._id });
+      assert.equal(f.get(ordinary._id)!.contentWork.stage, "ready", diagnostic(f));
+      assert.equal(f.get(ordinary.providerSpendReservationId)!.settledMicroUsd, 600);
+      assert.equal(f.get(ordinary.providerSpendReservationId)!.validationAuthorizationId, undefined);
+    }
+    f.assertOffline();
+  });
+});
+
+test("SLC32 cancellation and unknown NEW costs retain the correct run charge without double settlement", async t => {
+  for (const kind of ["no_io", "unknown", "known"] as const) await t.test(kind, async () => {
+    const f = await validationFixture(); await f.attach({ limitMicroUsd: 500_000 }); await f.admit(0);
+    const job = f.tables.jobs[0], workerToken = "synthetic-cancel";
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken });
+    if (kind !== "no_io") {
+      const call = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "cancelled-request", ceilingMicroUsd: 100 });
+      if (kind === "known") for (let n = 0; n < 2; n++) await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: call.key, actualMicroUsd: 70, result: { fixture: true } });
+    }
+    await Promise.all(Array.from({ length: 3 }, () => f.invoke("jobs:markFailed", { jobId: job._id, workerToken, error: "Synthetic cancellation" })));
+    const row = f.get(job.providerSpendReservationId)!;
+    assert.equal(row.releasedAt !== undefined, kind === "no_io");
+    assert.equal(row.settledMicroUsd, kind === "known" ? 70 : undefined);
+    const result = await f.admit(1);
+    assert.equal(result.mode, kind === "no_io" ? "buffer_fill" : "content_budget_exhausted");
+    if (kind !== "no_io") assert.match(JSON.stringify(result), new RegExp(`reservedMicroUsd":${kind === "known" ? 70 : 500000}`));
+    assert.equal(f.get(job._id)!.contentWork.validationAuthorizationId, f.args.authorizationId); f.assertOffline();
+  });
+});
+
+test("SLC32 worker restart and UTC month renewal preserve job and reservation lineage, then fresh execution settles", async () => {
+  const f = await validationFixture(); await f.attach({ limitMicroUsd: 500_000 }); await f.admit(0);
+  const job = f.tables.jobs[0], oldId = job.providerSpendReservationId;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "synthetic-crashed" });
+  f.setTime(Date.UTC(2026, 9, 1, 0, 1)); f.restartRuntime();
+  await f.invoke("providerBudget:approveAccountMonthBudget", { siteId: f.args.siteId, comparisonSiteId: f.args.comparisonSiteId,
+    month: "2026-10", expectedBaseMonthlyCeilingMicroUsd: 28_000_000, monthlyCeilingMicroUsd: 32_000_000,
+    incrementalLimitMicroUsd: 4_000_000, approvalReference: "synthetic-next-month-approval" });
+  assert.equal((await f.attach({ limitMicroUsd: 500_000 })).approvedAt, START);
+  await f.invoke("jobs:resetStuckJobs", { siteId: job.siteId, jobId: job._id, expectedWorkerToken: "synthetic-crashed" });
+  await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "ready", 120, f.now() + 600_000);
+  const completed = f.get(job._id)!, old = f.get(oldId)!, renewed = f.get(completed.providerSpendReservationId)!;
+  assert.equal(old.settledMicroUsd, 200); assert.equal(renewed.reservedMicroUsd, 499_800); assert.equal(renewed.settledMicroUsd, 400);
+  assert.equal(completed.contentWork.validationAuthorizationId, f.args.authorizationId);
+  for (const row of [old, renewed]) { assert.equal(row.validationAuthorizationId, f.args.authorizationId); assert.equal(row.contentWorkJobId, job._id); }
+  assert.equal(completed.contentWork.deadlineAt, START + 600_000);
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1);
+  assert.match(JSON.stringify(await f.admit(1)), /reservedMicroUsd":600/); f.assertOffline();
+});
+
+test("SLC32 known provider rejection retries the same bound job without erasing uncertain cost or minting another grant", async () => {
+  const f = await validationFixture({ providerFailure: "submit_article" });
+  await f.attach(); await f.admit(0);
+  const job = f.tables.jobs[0], reservationId = job.providerSpendReservationId;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.providerCalls[0].state, "rejected");
+  const first = structuredClone(f.get(job._id)!.contentWork.providerCalls[0]);
+  for (let attempt = 0; attempt < 3; attempt++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.modelCalls.length, 1);
+  f.setTime(f.get(job._id)!.nextAttemptAt); f.restartRuntime();
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  const resumed = f.get(job._id)!;
+  assert.equal(resumed.providerSpendReservationId, reservationId); assert.equal(resumed.contentWork.validationAuthorizationId, f.args.authorizationId);
+  assert.equal(f.modelCalls.length, 2); assert.equal(resumed.contentWork.providerCalls.length, 2);
+  assert.deepEqual(resumed.contentWork.providerCalls[0], first);
+  assert.equal(f.get(reservationId)!.settledAt, undefined); assert.equal(f.get(reservationId)!.releasedAt, undefined);
+  assert.equal(f.tables.provider_spend_reservations.length, 1); f.assertOffline();
+});
+
+test("SLC32 both approved tenants execute, verify and refill three fixed cycles under one run", async t => {
+  const f = await validationFixture(); await f.attach();
+  const active = f.sites.slice(0, 2);
+  const ready = (siteId: string) => f.tables.jobs.filter(j => j.siteId === siteId && j.contentWork?.stage === "ready");
+  for (const site of active) await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  await pumpUntil(f, () => active.every(s => ready(s.id).length === 2), 240);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const slots = active.map(s => ({ site: s, deadline: f.get(s.id)!.contentSchedule.nextDeadlineAt }));
+    f.setTime(Math.max(f.now(), slots[0].deadline - 5 * 60_000)); f.restartRuntime();
+    for (const { site } of slots) await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "synthetic ordinary cycle" });
+    await pumpUntil(f, () => active.every(s => f.tables.jobs.filter(j => j.siteId === s.id && j.contentWork?.stage === "verified").length === cycle + 1 && ready(s.id).length === 2), 240, slots[0].deadline + 60_000);
+    for (const { site, deadline } of slots) {
+      const verified = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.deadlineAt === deadline)!;
+      assert.ok(verified); assert.ok(verified.contentWork.publishedAt <= deadline); assert.ok(verified.contentWork.verifiedAt >= verified.contentWork.publishedAt);
+      assert.ok(ready(site.id).some(j => j.createdAt > verified.contentWork.verifiedAt));
+      assert.equal(f.get(verified.articleId)!.publicUrlStatus, "verified");
+      t.diagnostic(JSON.stringify({ scenario: "synthetic_validation_refill", site: site.domain, cycle: cycle + 1,
+        deadline: new Date(deadline).toISOString(), publishedAt: new Date(verified.contentWork.publishedAt).toISOString(), ready: ready(site.id).length }));
+    }
+  }
+  assert.equal(f.tables.jobs.length, 10);
+  for (const job of f.tables.jobs) {
+    assert.equal(job.contentWork.validationAuthorizationId, f.args.authorizationId);
+    const row = f.get(job.providerSpendReservationId)!; assert.equal(row.contentWorkJobId, job._id);
+    assert.equal(row.validationAuthorizationId, f.args.authorizationId); assert.equal(row.settledMicroUsd, 600);
+  }
+  assert.equal(f.tables.provider_spend_reservations.reduce((sum, row) => sum + row.settledMicroUsd, 0), 6000);
+  assert.equal(f.modelCalls.length, 30); f.assertOffline();
+});
+
+test("SLC32 exact revision and replacement call envelope stays in the original run and work budget", async t => {
+  const f = await validationFixture({ quality: "low", budgetMicroUsd: 2_000_000 }); await f.attach();
+  f.setIdentity(f.owner);
+  const second = f.sites[1].id;
+  await f.invoke("contentWork:control", { siteId: second, action: "pause", reviewToken: (await f.invoke("contentWork:readiness", { siteId: second })).reviewToken });
+  f.setIdentity(null);
+  await f.invoke("actions/scheduler:scheduleCadence", { siteId: f.sites[0].id });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+  const job = f.tables.jobs[0];
+  assert.equal(f.tables.jobs.length, 1); assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 1);
+  assert.equal(job.contentWork.validationAuthorizationId, f.args.authorizationId); assert.equal(f.tables.provider_spend_reservations.length, 1);
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, job.contentWork.providerCalls.length * 200);
+  assert.equal(job.contentWork.providerCalls.length, 12);
+  assert.deepEqual(f.modelCalls.map(c => c.tools[0].name), ["submit_article", "review_article", "audit_final_article",
+    "remediate_final_article", "review_article", "audit_final_article", "remediate_final_article", "review_article", "audit_final_article",
+    "submit_article", "review_article", "audit_final_article"]);
+  assert.equal(f.tables.articles.some(a => a.status === "published" || a.publicationGateStatus === "passed"), false);
+  t.diagnostic(JSON.stringify({ scenario: "offline_pricing_envelope", model: "mocked-content-model", calls: f.modelCalls.map(c => ({
+    tool: c.tools[0].name, inputBound: Buffer.byteLength(JSON.stringify(c)) + 8192, outputBound: c.max_tokens })) }));
+  f.assertOffline();
+});
+
 test("SLC31 exact-site release projection exposes readiness without credentials or another fixture tenant", async () => {
   const f = setup({ growthFirst: true, businesses: slcBusinesses.slice(0, 2) }), site = f.sites[0];
   f.get(site.id)!.gscRefreshToken = "sensitive-fixture-refresh-value";

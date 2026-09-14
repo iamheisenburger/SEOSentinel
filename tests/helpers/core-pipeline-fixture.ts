@@ -242,6 +242,9 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   };
   for (const kind of ["runQuery", "runMutation", "runAction"]) context[kind] = (ref: Parameters<typeof getFunctionName>[0], args: Fields) => invoke(getFunctionName(ref), args);
   const api = { tables, trace, queryReads, logs, unexpected, stored, add, get, invoke,
+    // Drop handler/module memory while retaining the database, clock and
+    // scheduled work. Call only between awaited actions, like a worker restart.
+    restartRuntime() { modules.clear(); identitySubject = null; },
     setIdentity(subject: string | null) { identitySubject = subject; },
     failReads(table: string, error?: Error) { if (error) readFailures.set(table, error); else readFailures.delete(table); },
     now: () => now, setTime: (value: number) => { assert.ok(value >= now); now = value; },

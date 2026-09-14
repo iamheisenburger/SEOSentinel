@@ -1,6 +1,7 @@
 import { MIN_APPROVED_BUFFER } from "./autopilotBuffer.ts";
 import type { Id } from "../_generated/dataModel";
 import type { PublicationInventory } from "./publicationEligibility.ts";
+import type { SharedProviderReservationResult } from "./providerSpendReservation.ts";
 
 export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   content_mode_required: "blocked", content_paused: "blocked", content_binding_changed: "blocked",
@@ -57,6 +58,8 @@ export type CadenceScheduleResult = {
   bufferCount?: number;
   bufferInventory?: PublicationInventory;
   blockers?: string[];
+  // Internal credential-free guard receipt; never raw provider responses.
+  budgetBlocker?: Extract<SharedProviderReservationResult, { ok: false }>;
   eligibleAt?: number;
   // Exact automatic-plan receipt observed/created by the scheduler. Cooldown
   // runs use it only to bind a terminal observer; it is not queue authority.

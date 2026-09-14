@@ -1,6 +1,45 @@
 # Pentra — fresh-task handoff
 
-## Current: application release31 deployed; separate financial candidate local
+## Current: scoped financial repair32, local review only
+
+Assignment `supervisor-20260914-slc-scoped-validation-32`. Read
+`docs/PENTRA_SLC_SCOPED_VALIDATION_2026-09-14.md`. The final handoff supplies one
+exact local candidate SHA. Rejected79d40cb was never deployed. Application
+production remainsb3994e0. Do not deploy, activate, price-configure or migrate
+before independent review and the documented prerequisites.
+
+All three31 scope defects are locally reproduced on exact79d40cb. The repair
+binds the additional grant to exact2 site schedules, their durable content jobs
+and existing reservations. New costs only; historical holds stay under old
+guards. No invented24h expiry; optional actual expiry and idempotent explicit
+stop fence only bound work. No renewal, fallback, double-count, cap lift or reset.
+Seventeen connected cases cover actual admission/provider/settlement paths,
+ordinary/foreign sites, concurrency, lifecycle, month renewal and both approved
+fixtures'3 verified publication/refill cycles with2 ready remaining each.
+
+Full gates1661 tests/1660 passed/0 failures/1 existing skip; browser24 passed/2
+genuine authenticated skips; typecheck/build/schema296 indexes/secrets/audit pass;
+lint0 errors/157 existing warnings. Report distinguishes synthetic cash-free
+evidence from live acceptance. The existing Google chooser still awaited owner
+selection at16:48:46 UTC; no identity guessed or repeat request issued.
+
+Actual provider path is Anthropic, not OpenAI; official Sonnet5 rates checked.
+The complete12-call quality path costs at most6.766080/item; the recorded
+synthetic prompt/output-ceiling illustration is2.045316/item, not a live quote.
+12 planned work items including accelerated+3 ordinary cycles/refill would have
+illustrative ceiling24.543792 (4.543792 above20), absolute81.192960 before recovery.
+Even a2.05 item ceiling lacks at least1.171440 old4-window and1.092560 account32
+capacity against release31's headroom upper bounds. No larger approval requested;
+no configuration activated. USD0 actual provider spend;20 inactive/unspent.
+
+Pentra/LeadPilot live buffers, deadlines and budgets were not refreshed in32;
+last exact-site evidence is in release31 below. Both remain unaccepted, including
+fresh live replenishment. LeadPilot publisher receipt, exact owner session,
+migration consent and safely budget-admissible activation remain prerequisites.
+No paid calls, production writes/deploy, scope expansion, automation/task,
+attempt/reservation reset or backlinks. Stop for independent financial review.
+
+## Historical: application release31 deployed; financial candidate rejected
 
 Assignment `supervisor-20260914-slc-release-preflight-31`. Reviewed application
 plus exact-site acceptance/WordPress installation corrections is deployed at

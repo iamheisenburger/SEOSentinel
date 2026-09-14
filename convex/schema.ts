@@ -8,6 +8,7 @@ export default defineSchema({
     serviceMode: v.optional(v.union(v.literal("legacy_articles"), v.literal("growth_first"))),
     contentSetupRequestedAt: v.optional(v.number()),
     contentSchedule: v.optional(v.object({
+      validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       selectedAt: v.number(), profileHash: v.string(), connectionHash: v.string(),
       intervalMs: v.number(), nextDeadlineAt: v.number(), active: v.boolean(),
       paused: v.boolean(),
@@ -615,9 +616,6 @@ export default defineSchema({
     allocatedMonthlyArticles: v.optional(v.number()),
     cadenceAllocationVersion: v.optional(v.number()),
     providerBudgetAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
-    // Stable anchor for one cumulative validation run; monthly approval changes
-    // cannot replace this pointer or renew the run's allowance.
-    providerValidationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -638,7 +636,8 @@ export default defineSchema({
     incrementalLimitMicroUsd: v.number(),
     approvalReference: v.string(),
     cumulativeValidation: v.optional(v.object({
-      approvedAt: v.number(), expiresAt: v.number(), limitMicroUsd: v.number(), approvalReference: v.string(),
+      approvedAt: v.number(), expiresAt: v.optional(v.number()), stoppedAt: v.optional(v.number()),
+      siteIds: v.array(v.id("sites")), limitMicroUsd: v.number(), approvalReference: v.string(),
     })),
   }).index("by_account_month", ["accountKey", "month"]),
 
@@ -1206,6 +1205,7 @@ export default defineSchema({
 
   jobs: defineTable({
     contentWork: v.optional(v.object({
+      validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       intent: v.union(v.literal("create"), v.literal("improve")),
       operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
       correction: v.optional(v.object({ key: v.string(), kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")),
@@ -1887,6 +1887,8 @@ export default defineSchema({
   // and result ledger. Tenant deletion scrubs the optional site reference but
   // retains the billing-window row so delete/recreate cannot reset allowance.
   provider_spend_reservations: defineTable({
+    contentWorkJobId: v.optional(v.id("jobs")),
+    validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
     siteId: v.optional(v.id("sites")),
     userId: v.string(),
     purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback
@@ -1910,6 +1912,7 @@ export default defineSchema({
   })
     .index("by_created", ["createdAt"])
     .index("by_user", ["userId"])
+    .index("by_validation", ["validationAuthorizationId"])
     .index("by_released", ["releasedAt"])
     .index("by_user_purpose_created", ["userId", "purpose", "createdAt"])
     .index("by_site_created", ["siteId", "createdAt"]),
