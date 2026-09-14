@@ -1,0 +1,256 @@
+{
+  "assignment": "supervisor-20260914-slc-release-preflight-31",
+  "deployedCommit": "b3994e0a5a10a24189a7fc767f11b8c3dbb1240a",
+  "convexDeployment": "https://wary-starfish-773.convex.cloud",
+  "githubRun": "https://github.com/iamheisenburger/SEOSentinel/actions/runs/34868247839",
+  "vercelDeployment": "https://vercel.com/arshads-projects-836ebfbd/seo-sentinel/HVVWUgjavVUZaFUpxhaoyBaVAVAQ",
+  "providerSpendThisAssignmentUsd": 0,
+  "validationAllowanceActive": false,
+  "scope": "Only exact Pentra and LeadPilot records; account/fleet capacity uninspected",
+  "sites": [
+    {
+      "name": "Pentra",
+      "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+      "snapshotAt": 1789402978004,
+      "readiness": {
+        "approvalRequired": false,
+        "domain": "pentra.dev",
+        "domainRevision": 0,
+        "measurement": {
+          "connected": true,
+          "connectionRevision": 0,
+          "dataThrough": "2026-09-11",
+          "property": "sc-domain:pentra.dev",
+          "retainedDateEpochs": 56,
+          "syncedAt": 1789389012883
+        },
+        "profilePresent": true,
+        "publicationLease": {
+          "held": false
+        },
+        "publisherBlockers": [],
+        "publisherVerified": true,
+        "publishingMethod": "github",
+        "revisionInventoryComplete": true,
+        "schedule": null,
+        "serviceMode": "legacy_articles",
+        "unresolvedRevisions": []
+      },
+      "health": {
+        "approvedBufferCount": 0,
+        "bufferInventory": {
+          "blockers": [],
+          "inspectedCandidates": 0,
+          "status": "complete",
+          "usableCountLowerBound": 0
+        },
+        "bufferMinimum": 3,
+        "bufferTarget": 4,
+        "heartbeatAt": 1789398037453,
+        "lastNaturalCompletedAt": 1789398037453,
+        "lastNaturalScheduledAt": 1789398029015,
+        "lastNaturalStartedAt": 1789398031064,
+        "lastPublishedAt": 1789208654649,
+        "lastRunId": "kd7f77x3t53k5w7f2yenvpxna18ecvgz",
+        "nextPublicationDueAt": 1789295054649,
+        "portfolioClickDeficit": 100,
+        "portfolioDecision": "flag",
+        "portfolioEvaluatedAt": 1789398032535,
+        "portfolioEvidenceMissing": 1,
+        "portfolioExpectedClicksMonthly": 0,
+        "portfolioGoalMonthly": 100,
+        "portfolioStatus": "insufficient_evidence",
+        "portfolioSupportsGoal": false,
+        "portfolioVersion": 1,
+        "status": "missed",
+        "updatedAt": 1789401309404
+      },
+      "budget": {
+        "accountAndFleetCapacity": "not_inspected",
+        "accountMonthlyCeilingMicroUsd": 32000000,
+        "approvalExpiresAt": 1790812800000,
+        "approvalStartedAt": 1788876095681,
+        "approvedIncrementalLimitMicroUsd": 4000000,
+        "approvedWindowConsumedMicroUsd": 2060960,
+        "baseMonthlyCeilingMicroUsd": 28000000,
+        "contingencySettledMicroUsd": 5000000,
+        "invalidSettlementCount": 0,
+        "monthStartAt": 1788220800000,
+        "monthlyConsumedMicroUsd": 13686640,
+        "releasedOriginalMicroUsd": 100000,
+        "resetAt": 1790812800000,
+        "retainedMicroUsd": 7250000,
+        "sameAccountAsComparison": true,
+        "scope": "exact_site_current_owner_only",
+        "siteId": "jh74txye54jna4t85m6y7p4d6h82v9ab",
+        "siteWindowComplete": true,
+        "snapshotAt": 1789402980005,
+        "sourceWindowsComplete": true,
+        "tier": "enterprise",
+        "verifiedSettledMicroUsd": 1436640,
+        "byState": {
+          "verified_actual:missed": {
+            "count": 45,
+            "consumedMicroUsd": 1220640
+          },
+          "retained_ceiling:done": {
+            "count": 4,
+            "consumedMicroUsd": 5000000
+          },
+          "retained_ceiling:completed": {
+            "count": 20,
+            "consumedMicroUsd": 2000000
+          },
+          "execution_ceiling:done": {
+            "count": 2,
+            "consumedMicroUsd": 2000000
+          },
+          "execution_ceiling:failed": {
+            "count": 3,
+            "consumedMicroUsd": 3000000
+          },
+          "verified_actual:completed": {
+            "count": 6,
+            "consumedMicroUsd": 216000
+          },
+          "released:missed": {
+            "count": 1,
+            "consumedMicroUsd": 0
+          },
+          "retained_ceiling:provider_response_unverified": {
+            "count": 3,
+            "consumedMicroUsd": 250000
+          }
+        },
+        "orphanReservations": 0,
+        "duplicateSourceBindings": 0,
+        "sourceAmountMismatches": 0,
+        "retainedExpiredLeases": 0
+      }
+    },
+    {
+      "name": "LeadPilot",
+      "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+      "snapshotAt": 1789402981787,
+      "readiness": {
+        "approvalRequired": false,
+        "domain": "leadpilot.chat",
+        "domainRevision": 0,
+        "measurement": {
+          "connected": true,
+          "connectionRevision": 0,
+          "dataThrough": "2026-09-11",
+          "property": "sc-domain:leadpilot.chat",
+          "retainedDateEpochs": 56,
+          "syncedAt": 1789389018952
+        },
+        "profilePresent": true,
+        "publicationLease": {
+          "held": false
+        },
+        "publisherBlockers": [],
+        "publisherVerified": false,
+        "publishingMethod": "github",
+        "revisionInventoryComplete": true,
+        "schedule": null,
+        "serviceMode": "legacy_articles",
+        "unresolvedRevisions": []
+      },
+      "health": {
+        "approvedBufferCount": 0,
+        "bufferInventory": {
+          "blockers": [],
+          "inspectedCandidates": 0,
+          "status": "complete",
+          "usableCountLowerBound": 0
+        },
+        "bufferMinimum": 9,
+        "bufferTarget": 12,
+        "heartbeatAt": 1789398041596,
+        "lastNaturalCompletedAt": 1789398041596,
+        "lastNaturalScheduledAt": 1789398029015,
+        "lastNaturalStartedAt": 1789398034845,
+        "lastPublishedAt": 1788819334409,
+        "lastRunId": "kd76d96hmxwatrdnp93142h7ex8ed3pe",
+        "nextPublicationDueAt": 1788848134409,
+        "portfolioClickDeficit": 400,
+        "portfolioDecision": "flag",
+        "portfolioEvaluatedAt": 1789398035726,
+        "portfolioEvidenceMissing": 6,
+        "portfolioExpectedClicksMonthly": 0,
+        "portfolioGoalMonthly": 400,
+        "portfolioStatus": "insufficient_evidence",
+        "portfolioSupportsGoal": false,
+        "portfolioVersion": 1,
+        "status": "missed",
+        "updatedAt": 1789401309404
+      },
+      "budget": {
+        "accountAndFleetCapacity": "not_inspected",
+        "accountMonthlyCeilingMicroUsd": 32000000,
+        "approvalExpiresAt": 1790812800000,
+        "approvalStartedAt": 1788876095681,
+        "approvedIncrementalLimitMicroUsd": 4000000,
+        "approvedWindowConsumedMicroUsd": 1060480,
+        "baseMonthlyCeilingMicroUsd": 28000000,
+        "contingencySettledMicroUsd": 7000000,
+        "invalidSettlementCount": 0,
+        "monthStartAt": 1788220800000,
+        "monthlyConsumedMicroUsd": 17355920,
+        "releasedOriginalMicroUsd": 2100000,
+        "resetAt": 1790812800000,
+        "retainedMicroUsd": 8800000,
+        "sameAccountAsComparison": true,
+        "scope": "exact_site_current_owner_only",
+        "siteId": "jh7cccny67df67rdm4jp65tmtn8am982",
+        "siteWindowComplete": true,
+        "snapshotAt": 1789402983618,
+        "sourceWindowsComplete": true,
+        "tier": "enterprise",
+        "verifiedSettledMicroUsd": 1555920,
+        "byState": {
+          "verified_actual:missed": {
+            "count": 45,
+            "consumedMicroUsd": 1315920
+          },
+          "retained_ceiling:failed": {
+            "count": 6,
+            "consumedMicroUsd": 6000000
+          },
+          "retained_ceiling:completed": {
+            "count": 27,
+            "consumedMicroUsd": 2700000
+          },
+          "execution_ceiling:failed": {
+            "count": 2,
+            "consumedMicroUsd": 2000000
+          },
+          "released:failed": {
+            "count": 1,
+            "consumedMicroUsd": 0
+          },
+          "execution_ceiling:done": {
+            "count": 5,
+            "consumedMicroUsd": 5000000
+          },
+          "verified_actual:completed": {
+            "count": 7,
+            "consumedMicroUsd": 240000
+          },
+          "retained_ceiling:provider_response_unverified": {
+            "count": 1,
+            "consumedMicroUsd": 100000
+          },
+          "released:provider_balance_unavailable": {
+            "count": 1,
+            "consumedMicroUsd": 0
+          }
+        },
+        "orphanReservations": 0,
+        "duplicateSourceBindings": 0,
+        "sourceAmountMismatches": 0,
+        "retainedExpiredLeases": 0
+      }
+    }
+  ]
+}

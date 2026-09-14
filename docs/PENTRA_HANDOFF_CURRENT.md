@@ -1,6 +1,42 @@
 # Pentra — fresh-task handoff
 
-## Current: Stage3 changed-setup recovery candidate30, local review required
+## Current: application release31 deployed; separate financial candidate local
+
+Assignment `supervisor-20260914-slc-release-preflight-31`. Reviewed application
+plus exact-site acceptance/WordPress installation corrections is deployed at
+`b3994e0a5a10a24189a7fc767f11b8c3dbb1240a` (main), preserving production article
+commit a66a085. Read `docs/PENTRA_SLC_RELEASE_PREFLIGHT_2026-09-14.md` and its
+credential-free JSON. Convex succeeded with two additive indexes/no deletes;
+Vercel confirms that exact source as Ready/Production/current `pentra.dev`.
+CI receipt and exact gates are in the release report/final handoff.
+
+Genuine authenticated desktop/mobile acceptance remains open: the existing
+Google chooser still needs the owner to select their authorized Pentra account.
+One exact action request was issued; no identity guessed or auth reset. Deployed
+public smoke8 passed/2 explicit auth skips; local browser24 passed/2 auth skips.
+
+Current exact-site observations: buffers Pentra0/4, LeadPilot0/12; deadlines
+2026-09-13 10:24:14.649 UTC and2026-09-08 06:15:34.409 UTC remain missed.
+Both legacy, profiles/GSC present, no active lease or unresolved revision.
+LeadPilot lacks a currently valid publisher receipt. Current internal consumption
+across these two sites31.042560/32; old4 consumption3.121440. Headroom upper
+bounds0.957440 monthly/0.878560 incremental; reset2026-10-01 00:00 UTC.
+No other tenant inspected and no provider balance inferred. No invalid, orphan,
+duplicate or expired-active reservation defect found in the bounded audits.
+
+There is now a separate LOCAL ONLY cumulative validation-budget candidate in
+the existing authorization/reservation path. Read
+`docs/PENTRA_SLC_CUMULATIVE_BUDGET_REVIEW_2026-09-14.md`; the final handoff supplies
+its review commit. It is NOT pushed/deployed/activated and cannot override old4,
+account32 or fleet35. Final local gates1651 tests/1650 pass/0 fail/1 existing
+skip,11 focused budget tests pass, build/types/schema/secrets680 pass, lint0
+errors/157 existing warnings. Stop for independent financial review and remaining exact
+owner prerequisites before Stage4. No tenant migration, priced configuration,
+paid provider request, limit/attempt/reservation reset or backlinks. USD0 provider
+spend;20 inactive/unspent. Live delivery/refill and SaaS acceptance remain open;
+Search Console sync is not attributable growth.
+
+## Historical: Stage3 changed-setup recovery candidate30
 
 Assignment `supervisor-20260914-slc-stage3-recovery-30`, based on
 `17cb93ceeb7aa4cc02140965c124ea3598daaa11`, repairs the independently reproduced

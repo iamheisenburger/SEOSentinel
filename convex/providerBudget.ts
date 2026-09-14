@@ -5,7 +5,8 @@ import { automaticSingleExecutionCheckpointTargetFromPayload } from "./lib/planP
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance.ts";
 import { activeProviderBudgetAuthorization, MAX_APPROVED_PROVIDER_MONTHLY_CEILING_MICRO_USD, providerBudgetMonth,
-  readProviderBudgetAuthorization } from "./lib/providerBudgetAuthorization.ts";
+  readProviderBudgetAuthorization, MAX_CUMULATIVE_VALIDATION_MICRO_USD, MAX_CUMULATIVE_VALIDATION_DURATION_MS,
+  validCumulativeValidationAuthorization } from "./lib/providerBudgetAuthorization.ts";
 import { resolvePlanFromFeatures } from "./planLimits.ts";
 import {
   PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
@@ -260,5 +261,39 @@ export const approveAccountMonthBudget = internalMutation({
     return { authorizationId, created: !existing, approvedAt: existing?.approvedAt ?? timestamp,
       expiresAt: window.endAt, baseMonthlyCeilingMicroUsd: base,
       monthlyCeilingMicroUsd: args.monthlyCeilingMicroUsd, incrementalLimitMicroUsd: args.incrementalLimitMicroUsd };
+  },
+});
+
+/** LOCAL REVIEW CANDIDATE: no invocation/deployment is authorized by its
+ * existence. Attach one additional hard stop to the existing approval row,
+ * without replacing the old $4 receipt or changing account/fleet ceilings. */
+export const attachCumulativeValidationBudget = internalMutation({
+  args: { siteId: v.id("sites"), comparisonSiteId: v.id("sites"), authorizationId: v.id("provider_budget_authorizations"),
+    expectedMonthlyApprovalReference: v.string(), approvalReference: v.string(), limitMicroUsd: v.number(), expiresAt: v.number() },
+  handler: async (ctx, args) => {
+    const [site, comparison, anchor] = await Promise.all([ctx.db.get(args.siteId), ctx.db.get(args.comparisonSiteId), ctx.db.get(args.authorizationId)]);
+    if (args.siteId === args.comparisonSiteId || !site?.userId || comparison?.userId !== site.userId ||
+      !(await siteExecutionAuthorized(ctx, site)) || !(await siteExecutionAuthorized(ctx, comparison)) ||
+      anchor?.accountKey !== accountDeletionKey(site.userId) || anchor.approvalReference !== args.expectedMonthlyApprovalReference) {
+      throw new Error("Validation budget scope is unavailable");
+    }
+    const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
+    if (!entitlement || entitlement.status !== "completed") throw new Error("Canonical account entitlement required");
+    const timestamp = Date.now(), previous = anchor.cumulativeValidation;
+    if (previous || entitlement.providerValidationAuthorizationId) {
+      if (entitlement.providerValidationAuthorizationId !== anchor._id || !previous ||
+        !validCumulativeValidationAuthorization(anchor, site.userId, timestamp) || previous.limitMicroUsd !== args.limitMicroUsd ||
+        previous.approvalReference !== args.approvalReference || previous.expiresAt !== args.expiresAt) throw new Error("An immutable validation budget already exists");
+      return { created: false, ...previous };
+    }
+    const base = providerAccountMonthlyCeilingMicroUsd(resolvePlanFromFeatures(entitlement.planFeatures).tier);
+    if (entitlement.providerBudgetAuthorizationId !== anchor._id || !activeProviderBudgetAuthorization(anchor, site.userId, base, timestamp) ||
+      !Number.isSafeInteger(args.limitMicroUsd) || args.limitMicroUsd <= 0 || args.limitMicroUsd > MAX_CUMULATIVE_VALIDATION_MICRO_USD ||
+      !Number.isSafeInteger(args.expiresAt) || args.expiresAt <= timestamp || args.expiresAt - timestamp > MAX_CUMULATIVE_VALIDATION_DURATION_MS ||
+      !/^[a-zA-Z0-9_-]{8,128}$/.test(args.approvalReference)) throw new Error("Validation budget contract is invalid");
+    const receipt = { approvedAt: timestamp, expiresAt: args.expiresAt, limitMicroUsd: args.limitMicroUsd, approvalReference: args.approvalReference };
+    await ctx.db.patch(anchor._id, { cumulativeValidation: receipt });
+    await ctx.db.patch(entitlement._id, { providerValidationAuthorizationId: anchor._id });
+    return { created: true, ...receipt };
   },
 });

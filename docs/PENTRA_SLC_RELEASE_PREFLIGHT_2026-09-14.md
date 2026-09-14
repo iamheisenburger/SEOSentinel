@@ -87,10 +87,51 @@ preserves behavior and prevents isolate bundling. A new offline regression
 bundles every isolate entry using browser resolution (1 passed,238.552042ms).
 No production state changed in that failed attempt.
 
-The final handoff will record the exact application commit, additive Convex
-deployment, GitHub CI and Vercel production alias evidence. Local gates and
-genuine owner acceptance are reported separately; skipped authentication is not
-a pass. The existing Google account chooser awaits the owner's exact selection;
-one action request was issued without guessing identity or changing credentials.
-No all-user acceptance, paid live cycle, monetisation or attributable SEO result
-is claimed by this release preflight.
+Application release: `b3994e0a5a10a24189a7fc767f11b8c3dbb1240a`, including
+merge/preflight `7906ecb6684028ed20a0b200087b454fa8c0494d`. Convex deployment
+to `wary-starfish-773` succeeded before2026-09-14 16:22:48 UTC. It added only
+`jobs.by_site_content_deadline` and `jobs.by_site_content_stage` indexes and
+reported no index deletion; schema validation/typecheck passed. The exact clean
+application commit was pushed fast-forward to main, preserving the new article.
+
+GitHub deployment6441514701 reports Production success at16:23:44 UTC for that
+exact SHA. The signed-in Vercel deployment page independently shows Ready,
+Production, Current Domains `pentra.dev`, source main/b3994e0 and completion
+2026-09-14 09:23:40 PDT. Deployment:
+https://vercel.com/arshads-projects-836ebfbd/seo-sentinel/HVVWUgjavVUZaFUpxhaoyBaVAVAQ
+URL: https://seo-sentinel-q6vpu6u83-arshads-projects-836ebfbd.vercel.app
+CI: https://github.com/iamheisenburger/SEOSentinel/actions/runs/34868247839
+
+That exact CI run completed successfully2026-09-14 16:29:19 UTC:1644 tests,
+1643 passed,0 failed,1 existing sibling-consumer skip (189.081242463s);
+types/lint/schema/secrets678/audit/build all pass; public/component browser24
+passed,2 genuine authenticated skips (39.8s). OSV fallback was not needed because
+the primary dependency audit succeeded. CI authenticates no production customer.
+
+Actual production public desktop/mobile smoke:8 passed,2 genuine authenticated
+skips,4.0s. An initial12-test invocation incorrectly included the local synthetic
+One Setup harness; its two production requests correctly returned404, as the
+existing proxy explicitly requires. The repeat selected real public routes only;
+no test or authentication skip was weakened and the harness remains unavailable
+in production. Local synthetic One Setup coverage still passes on both sizes.
+
+Post-deployment exact-site projections at16:22:58–16:23:04 UTC confirm:
+both remain `legacy_articles`, profile present, no content schedule, no held
+publication lease, no unresolved revision in the complete bounded inventory.
+Pentra's current publisher receipt verifies; LeadPilot's does not, despite an
+otherwise complete legacy GitHub configuration. LeadPilot needs exact owner
+connection verification before growth-first selection. GSC is connected to each
+exact domain, data through2026-09-11, last synced2026-09-14 12:30:12.883 UTC and
+12:30:18.952 UTC respectively. Financial totals, empty buffers, missed deadlines
+and planning blockers are unchanged. The companion JSON retains safe projections.
+
+The existing Chrome Google account chooser still awaits the owner's selection
+for Pentra. One action request was issued; no identity guessed, credential changed
+or auth state exported. Genuine authenticated desktop/mobile acceptance remains
+open, not replaced by Vercel authentication or public route tests. No all-user
+acceptance, paid live cycle, monetisation or attributable SEO result is claimed.
+
+The financial delta described in `PENTRA_SLC_CUMULATIVE_BUDGET_REVIEW_2026-09-14.md`
+is a separate local candidate AFTER the deployed commit. It was not pushed,
+deployed or invoked. No allowance activation, pricing configuration, tenant
+migration, publication attempt/reset or paid provider request occurred in31.

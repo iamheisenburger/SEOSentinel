@@ -1,6 +1,6 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { readProviderBudgetAuthorization } from "./providerBudgetAuthorization.ts";
+import { readProviderBudgetAuthorization, validCumulativeValidationAuthorization } from "./providerBudgetAuthorization.ts";
 import {
   resolvePlanFromFeatures,
   type CanonicalPlanTier,
@@ -135,7 +135,8 @@ export type SharedProviderReservationResult =
       reservedMicroUsd: number;
       ceilingMicroUsd: number;
       retryAfterMs?: number;
-      budgetScope?: "approved_incremental_window";
+      budgetScope?: "approved_incremental_window" | "cumulative_validation";
+      validationState?: "invalid" | "expired" | "incomplete" | "exhausted";
     };
 
 export type SharedProviderCapacityDecision =
@@ -399,6 +400,36 @@ export async function inspectSharedProviderBudget(
     accountEntitlement?.planFeatures ?? site.planFeatures ?? [],
   );
   const baseMonthlyCeilingMicroUsd = providerAccountMonthlyCeilingMicroUsd(plan.tier);
+  if (accountEntitlement?.providerValidationAuthorizationId) {
+    const anchor = await ctx.db.get(accountEntitlement.providerValidationAuthorizationId);
+    const run = anchor?.cumulativeValidation;
+    const denied = (validationState: "invalid" | "expired" | "incomplete" | "exhausted", consumed = 0): ProviderBudgetInspection => ({
+      ok: false, reason: "provider_account_monthly_budget_reserved", budgetScope: "cumulative_validation",
+      validationState, reservedMicroUsd: consumed, ceilingMicroUsd: validationState === "invalid" ? 0 : run?.limitMicroUsd ?? 0,
+    });
+    if (!validCumulativeValidationAuthorization(anchor, site.userId, args.timestamp) || !run) return denied("invalid");
+    if (args.timestamp >= run.expiresAt) return denied("expired");
+    // Reuse the original ledger, not a second spending counter. Include all
+    // sites owned by this account, even scrubbed site IDs and older unknown
+    // costs that may settle during this run. No monthly rollover can drop them.
+    const validationRows = await ctx.db.query("provider_spend_reservations")
+      .withIndex("by_user", q => q.eq("userId", site.userId!)).take(5001);
+    if (validationRows.length > 5000) return denied("incomplete");
+    let consumed = 0;
+    for (const row of validationRows) {
+      if (row.userId !== site.userId || !Number.isSafeInteger(row.reservedMicroUsd) || row.reservedMicroUsd <= 0 ||
+        !Number.isSafeInteger(row.createdAt) || row.createdAt > args.timestamp) return denied("invalid");
+      if (row.releasedAt !== undefined) continue; // Only the existing proven-no-I/O release path can set this.
+      const settled = row.settledAt !== undefined && Number.isSafeInteger(row.settledAt) &&
+        row.settledAt >= row.createdAt && row.settledAt <= args.timestamp &&
+        ["verified_provider_receipt_actual_cost", "single_execution_plan_contingency_retired"].includes(row.settlementReason ?? "") &&
+        Number.isSafeInteger(row.settledMicroUsd) && row.settledMicroUsd! >= 0 && row.settledMicroUsd! <= row.reservedMicroUsd;
+      if (row.createdAt < run.approvedAt && settled && row.settledAt! < run.approvedAt) continue;
+      consumed += settled ? providerReservationConsumedMicroUsd(row) : row.reservedMicroUsd;
+      if (!Number.isSafeInteger(consumed)) return denied("invalid");
+    }
+    if (consumed + args.reservedMicroUsd > run.limitMicroUsd) return denied("exhausted", consumed);
+  }
   const authorization = await readProviderBudgetAuthorization(ctx, accountEntitlement,
     site.userId, baseMonthlyCeilingMicroUsd, args.timestamp);
   const accountMonthlyCeilingMicroUsd = authorization?.monthlyCeilingMicroUsd ?? baseMonthlyCeilingMicroUsd;

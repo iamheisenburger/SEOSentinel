@@ -615,6 +615,9 @@ export default defineSchema({
     allocatedMonthlyArticles: v.optional(v.number()),
     cadenceAllocationVersion: v.optional(v.number()),
     providerBudgetAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
+    // Stable anchor for one cumulative validation run; monthly approval changes
+    // cannot replace this pointer or renew the run's allowance.
+    providerValidationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -634,6 +637,9 @@ export default defineSchema({
     monthlyCeilingMicroUsd: v.number(),
     incrementalLimitMicroUsd: v.number(),
     approvalReference: v.string(),
+    cumulativeValidation: v.optional(v.object({
+      approvedAt: v.number(), expiresAt: v.number(), limitMicroUsd: v.number(), approvalReference: v.string(),
+    })),
   }).index("by_account_month", ["accountKey", "month"]),
 
   // Durable, PII-minimized lifecycle for a verified Clerk user deletion.
