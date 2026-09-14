@@ -1,6 +1,156 @@
 # Pentra — fresh-task handoff
 
-## Current42: exact WordPress receipt recovery — LOCAL combined41/42 review candidate
+## Current43: combined41/42 released — delivery and customer acceptance still incomplete
+
+Assignment `supervisor-20260914-slc-combined-release-43`. Independently accepted
+source `11771b250131e3362d58c5b9ea7fd3d2cba9beea` is deployed to Convex and
+origin/main. No runtime patch was needed in43. The parent canonical
+`docs/PENTRA_SLC_PLAN.md` remains the only plan; this is the existing handoff.
+
+### Exact release and checks
+
+Repeated origin/main fetches resolved last released39
+`1c632853acf0dac9b3ea8add6ce965f66a722e0b`, an ancestor of11771b2. The release
+fast-forward preserved all production/published-content history; no merge,
+force-push or discarded user change. Exact-source local gates reran:
+
+- Full1749 discovered/1748 passed/0 failed/1 existing skip,154255.3425ms.
+- Browser34 passed/2 genuine-auth skips,7.0s; types/build/schema61 tables296
+  indexes against1c63285/secrets688/full audit0/whitespace pass. Lint0 errors,
+  157 existing warnings. Skipped real authentication is NOT satisfied by fixtures.
+- Real WordPress7.1/SQLite61/61,0 skips,80977.047417ms; WordPress7.1/MySQL8.4.11
+  InnoDB62/62,0 skips,78173.709625ms. Fixtures stopped normally; DBs retained.
+
+Convex deployment completed by2026-09-14 23:35:25 UTC: schema validation
+complete, no indexes deleted. Deploy-time generation refreshed only the local
+type declaration `convex/_generated/api.d.ts`; its reviewed, uncommitted
+tool-generated import/type-map delta was reversed to11771b2. No executable
+source changed or additional source commit was introduced. At23:37:20.478 UTC,
+deployed function metadata confirms the new `expectedLeaseOwner`,
+`receiptRecoveryLeaseOwner` and `permissionRevokedAtReceipt` contracts, without
+calling any mutation or publishing action.
+
+Origin/main fast-forwarded1c63285→11771b2. Matching Vercel Production
+6448552856 reports SUCCESS at23:36:18 UTC for exact11771b2:
+[immutable build](https://seo-sentinel-mgjuxezs7-arshads-projects-836ebfbd.vercel.app).
+Actual pentra.dev desktop/mobile public smoke:8 passed/2 genuine-auth skips,
+6.3s. [Hosted CI34909554341](https://github.com/iamheisenburger/SEOSentinel/actions/runs/34909554341),
+job104193773278, completed SUCCESS at23:43:01 UTC (workflow23:43:02 UTC)
+for exact11771b2. Hosted full1749 discovered/1748 passed/0 failed/1 existing
+skip,256562.196712ms; browser34 passed/2 genuine-auth skips,47.9s. Hosted
+types/build/schema61/296/secrets688/production audit0 pass; lint0 errors157
+existing warnings. OSV fallback was not needed. All43 release gates passed.
+
+Pre-release exact-site adapter projections23:29:41.658/42.627 UTC and a
+server-side projection23:30:54.742 UTC confirmed BOTH authorized tenants use
+GitHub. No production WordPress installation was needed or performed. The
+existing installable connector was packaged directly from11771b2 into
+`.wordpress-fixture/pentra-conditional-publisher-1.1.0-11771b2.zip`, containing
+only the plugin PHP and README under the installable plugin directory. Archive
+SHA-256: `ba2a2a8370c3e13bbd74cbdd37096501ef2b1b30fd642c9ca6dbcfe7a136d68f`;
+extracted PHP matches reviewed source byte-for-byte, SHA-256
+`f2cc8efbf9e59c50b0794a0c7ca7a098511e3991bc39a74b981603cf1baa039f`.
+Authorized WordPress destinations still require1.1.0 before enabling this
+publisher, plus destination-specific theme/plugin compatibility. Real local
+fixtures do not establish universal production compatibility.
+
+### Current exact-site observations — no new delivery
+
+The bounded server-side read at2026-09-14 23:37:47.579 UTC completed every
+relevant stage/status inventory and each September site reservation window.
+It read ONLY Pentra and LeadPilot, returning selected credential-free fields.
+An initial diagnostic addressed a summary index on `articles`; correcting the
+read to `article_summaries` resolved that diagnostic error, without a schema or
+runtime change. No incomplete query was used to assert readiness.
+
+| Verified field | Pentra | LeadPilot |
+| --- | --- | --- |
+| Exact site | `jh74txye54jna4t85m6y7p4d6h82v9ab` | `jh7cccny67df67rdm4jp65tmtn8am982` |
+| Adapter / engine / rollout | GitHub / growth_first / warm | GitHub / growth_first / warm |
+| Schedule | inactive, unpaused | inactive, unpaused |
+| Original interval | daily86,400,000ms | every8h28,800,000ms |
+| Ready buffer / failed work | 0/2 /1 failed | 0/2 /1 failed |
+| Active content / legacy work | 0 /0 | 0 /0 |
+| Same failed job | `j9703g7paa6atyya4fzr56ngs58ecn07` | `j973nq40csygxhcg0bchsmx6zd8ecq9h` |
+| Attempts / started calls / publication attempts | 1 /1 /0 | 1 /1 /0 |
+| Same reservation | `n576sgrs11b9dzc5mg0fjbm21n8echcx` | `n5727h3mka0ekryf5a90ggsj8s8edf7v` |
+| Held / verified settled / released | USD2.50 /none /none | USD2.50 /none /none |
+| New article / publication / verified work | none | none |
+
+BOTH original windows remain2026-09-14 22:14:14.420–22:19:14.420 UTC and are
+missed. There is no new43 actual publication time. Neither job has a worker or
+publication lease, next retry, provider result, verified actual cost or credit-
+restoration attestation; recoveryAttempts stays0 and historical errors remain.
+Both retain `content_provider_result_ambiguous_reconciliation_required` from
+the original37 interrupted Anthropic insufficient-credit attempt.43 did not
+replay, reset, reinterpret or clear it.
+
+Only OLD publication receipts remain:
+
+- Pentra:2026-09-12 10:24:14.649 UTC; stored verification10:24:16.851 UTC,
+  https://pentra.dev/blog/ai-content-automation-governance-workflow.
+- LeadPilot:2026-09-07 22:15:34.409 UTC; stored verification22:18:06.407 UTC,
+  https://leadpilot.chat/blog/saas-lead-scoring-framework.
+
+Those are current reads of retained receipts, NOT fresh43 HTTP artifact
+verification or a new SLC cycle. Older missed commitments remain PentraSep13
+10:24:14.649 UTC and LeadPilotSep8 06:15:34.409 UTC.
+
+At23:38:19.831–23:38:26.657 UTC, each site's shared legacy-fleet state,
+demand readiness and evidence readiness queries returned null. Their exact-site
+guards and zero active legacy jobs reconfirm single-engine retirement without
+enumerating a fleet. The CLI intentionally emits no output for null; the
+diagnostic parser was corrected to honor that documented behavior.
+
+### Current funding and acceptance boundary
+
+Exact-site financial projections at23:37:47.579 UTC, independently checked by
+existing read-only snapshots23:38:23.421/27.691 UTC, remain unchanged:
+
+- Pentra: verified actual1.436640 + settled conservative ceiling5 + held7.25
+  = ordinary13.686640.85 September rows examined, complete,0 owner mismatches.
+- LeadPilot: verified actual1.555920 + settled conservative ceiling7 + held8.8
+  = ordinary17.355920.96 rows examined, complete,0 owner mismatches.
+- Combined ordinary31.042560 against32 leaves monthly headroom AT MOST0.957440.
+  The existing4 incremental approval has3.121440 consumed in its approved window
+  (2.060960 +1.060480), leaving AT MOST0.878560. Thus the tighter ordinary bound
+  is0.878560, not new permission to spend. Other tenants/fleet are not inspected.
+  Ordinary approval expiry and month reset:2026-10-01 00:00:00 UTC.
+- The SAME original independent20 grant
+  `sn756ejbtp5marqw1chdpdskp58e0j8y` remains active, no expiry/stop:5 held,
+  0 VERIFIED actual settlements,15 remaining. Zero verified settlements do NOT
+  establish zero actual provider billing. Original32/old4/fleet35 limits remain.
+
+No actual Anthropic credit-restoration event or current numeric wallet balance
+has been established. A spending authorization is not provider wallet credit.
+No paid probe/planning/generation, owner Retry, provider switch, cap/grant change,
+reservation reset/release, funding attestation, top-up, purchase, cadence change
+or live service rollback occurred. Release success does not authorize any of them.
+
+Genuine customer acceptance remains open: the available Chrome profile's exact
+Pentra settings route redirects to the fully rendered Pentra sign-in page,
+including after release. No login, sign-out, account/session/security setting
+change or admin-identity substitution occurred. No authenticated claim is made.
+
+- [x] Independently reviewed combined41/42 release to Convex and Vercel11771b2.
+- [x] Matching hosted CI and public desktop/mobile release checks.
+- [ ] Genuine owner-session customer acceptance.
+- [ ] Three ordinary live cycles on EACH authorized tenant, fixed deadlines,
+  fresh LeadPilot discovery, quality approval, scheduled delivery and verified
+  replenishment AFTER consumption. LeadPilot remains overdue.
+- [ ] Real Search Console ingestion and a measured, verified follow-up change;
+  attributable SEO growth remains separate from technical acceptance.
+
+No further paid or authentication action is executed under43. Parent canonical
+plan updated but never staged; protected diagnosis stays+22/-0, environment
+contents and supervisor state/history not inspected. No other tenant, real
+prospect, backlinks work, new task or automation. No article/SLC/monetisation or
+SEO-growth acceptance claim. Sites-specific publishing guidance was inspected;
+this non-Sites project stayed on its existing stack. No foreground deployment
+handoff tab is opened from this delegated task. The final handoff documentation
+is committed locally only; it is not pushed or deployed as another release.
+
+## Previous42: exact WordPress receipt recovery — accepted and released in43
 
 Assignment `supervisor-20260914-slc-wordpress-receipt-recovery-42`, based on
 independently accepted LOCAL41 `09ce26511ad60b150a9e0782a9e0429c2272cbd0`.
