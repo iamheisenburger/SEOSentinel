@@ -13,6 +13,7 @@
     "lint": "eslint",
     "test": "node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test",
+    "test:wordpress": "node scripts/wordpress-fixture.mjs --test",
     "typecheck": "tsc --noEmit",
     "scan:secrets": "node scripts/secret-scan.mjs",
     "check:schema": "node scripts/schema-compatibility.mjs"

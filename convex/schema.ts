@@ -652,6 +652,15 @@ export default defineSchema({
     .index("by_status_updated", ["status", "updatedAt"]),
 
   pages: defineTable({
+    editable: v.optional(v.object({
+      version: v.number(), active: v.boolean(), kind: v.union(v.literal("github"), v.literal("wordpress")),
+      path: v.optional(v.string()), resourceId: v.optional(v.number()), permission: v.optional(v.string()),
+      revocationStatus: v.optional(v.union(v.literal("pending"), v.literal("confirmed"), v.literal("failed"))),
+      connectionHash: v.string(), profileHash: v.string(), sourceRevision: v.string(), sourceContent: v.string(),
+      markdown: v.string(), title: v.string(), metaTitle: v.string(), description: v.string(), header: v.optional(v.string()),
+      selectedAt: v.number(), lastReviewedAt: v.optional(v.number()), lastImprovedAt: v.optional(v.number()),
+      lastWorkJobId: v.optional(v.id("jobs")), latestRevisionId: v.optional(v.id("published_article_revisions")),
+    })),
     siteId: v.id("sites"),
     url: v.string(),
     canonicalDomain: v.optional(v.string()),
@@ -856,6 +865,8 @@ export default defineSchema({
     ]),
 
   articles: defineTable({
+    contentWorkSourceJobId: v.optional(v.id("jobs")),
+    contentWorkConsumedByJobId: v.optional(v.id("jobs")),
     siteId: v.id("sites"),
     canonicalDomain: v.optional(v.string()),
     domainRevision: v.optional(v.number()),
@@ -1182,7 +1193,10 @@ export default defineSchema({
 
   jobs: defineTable({
     contentWork: v.optional(v.object({
-      intent: v.literal("create"),
+      intent: v.union(v.literal("create"), v.literal("improve")),
+      operation: v.optional(v.literal("rollback")), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
+      targetPageId: v.optional(v.id("pages")), baseRevision: v.optional(v.string()), permissionVersion: v.optional(v.number()),
+      opportunity: v.optional(v.string()), revisionId: v.optional(v.id("published_article_revisions")),
       stage: v.union(v.literal("prepare"), v.literal("review"), v.literal("review_failed"),
         v.literal("ready"), v.literal("publish"), v.literal("verify"), v.literal("verified"), v.literal("failed")),
       deadlineAt: v.number(), windowStartAt: v.number(),
@@ -1200,6 +1214,7 @@ export default defineSchema({
       recoveryAttempts: v.optional(v.number()),
       priorReservationIds: v.optional(v.array(v.id("provider_spend_reservations"))),
       publishedAt: v.optional(v.number()), verifiedAt: v.optional(v.number()),
+      verificationNextAt: v.optional(v.number()),
       windowWakeId: v.optional(v.id("_scheduled_functions")),
       failure: v.optional(v.string()),
     })),
@@ -1276,6 +1291,7 @@ export default defineSchema({
     .index("by_site_status_attempt", ["siteId", "status", "nextAttemptAt"])
     .index("by_site_article", ["siteId", "articleId", "status"])
     .index("by_site_content_deadline", ["siteId", "contentWork.deadlineAt"])
+    .index("by_site_content_stage", ["siteId", "contentWork.stage"])
     .index("by_status_heartbeat", ["status", "heartbeatAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
     .index("by_site_type_status_created", [
@@ -1534,6 +1550,10 @@ export default defineSchema({
   // external artifact it observed. Base/next snapshots preserve rollback and
   // forensic evidence without mutating publication history.
   published_article_revisions: defineTable({
+    contentWorkJobId: v.optional(v.id("jobs")),
+    selectedPageId: v.optional(v.id("pages")),
+    selectedSource: v.optional(v.any()),
+    deliveredSource: v.optional(v.any()),
     siteId: v.id("sites"),
     articleId: v.id("articles"),
     growthActionId: v.optional(v.id("seo_growth_actions")),
@@ -1548,6 +1568,7 @@ export default defineSchema({
       v.literal("strengthen_cluster"),
       v.literal("editorial_correction"),
       v.literal("renderer_repair"),
+      v.literal("content_improvement"),
       v.literal("rollback"),
     ),
     correctionAuditId: v.optional(v.id("published_correction_audits")),

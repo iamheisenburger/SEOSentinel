@@ -8,6 +8,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { authorizedWorkPage } from "./selectedPages";
 import {
   PUBLICATION_AUDIT_VERSION,
   assertSupportedPublicationAdapterVersion,
@@ -184,6 +185,7 @@ function summaryFields(article: Doc<"articles">): ArticleSummaryFields {
 }
 
 function assertNotPublishing(article: Doc<"articles">) {
+  if (article.contentWorkConsumedByJobId) throw new Error("Consumed improvement artifacts are immutable revision history");
   if (
     article.publicationLeaseOwner ||
     article.publicationLeaseHash ||
@@ -255,6 +257,13 @@ async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) 
       topicId: article.topicId,
     });
   }
+}
+
+export async function archiveConsumedImprovementArtifact(ctx: MutationCtx, articleId: Id<"articles">, jobId: Id<"jobs">) {
+  const article = await ctx.db.get(articleId), job = await ctx.db.get(jobId);
+  if (!article || !job || job.articleId !== article._id || job.siteId !== article.siteId || job.contentWork?.intent !== "improve") throw new Error("Improvement archive binding changed");
+  await ctx.db.patch(article._id, { status: "revision", contentWorkConsumedByJobId: job._id, updatedAt: now() });
+  await syncSummary(ctx, article._id);
 }
 
 /**
@@ -1081,8 +1090,10 @@ export const createDraftForJob = internalMutation({
 
     let slug = args.slug;
     let suffix = 2;
+    const selectedPage = await authorizedWorkPage(ctx, site, job);
+    if (selectedPage && slug.replace(/^\//, "") !== selectedPage.slug) throw new Error("Improvement cannot change the selected page URL");
     while (
-      await ctx.db
+      !selectedPage && await ctx.db
         .query("articles")
         .withIndex("by_site_slug", (q) =>
           q.eq("siteId", args.siteId).eq("slug", slug),
@@ -1095,6 +1106,7 @@ export const createDraftForJob = internalMutation({
 
     const timestamp = now();
     const articleId = await ctx.db.insert("articles", {
+      ...(selectedPage ? { contentWorkSourceJobId: job._id } : {}),
       siteId: args.siteId,
       canonicalDomain,
       domainRevision: siteCanonicalDomainRevision(site),

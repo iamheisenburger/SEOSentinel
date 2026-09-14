@@ -145,6 +145,7 @@ export type PublishedRevisionKind =
   | "strengthen_cluster"
   | "editorial_correction"
   | "renderer_repair"
+  | "content_improvement"
   | "rollback";
 
 export type PublishedRevisionArtifact = PublicationArtifact & {
@@ -650,6 +651,20 @@ function sameLiveAnchor(left: LiveAnchor, right: LiveAnchor): boolean {
  * not create a revision record or count a legacy correction as new delivery. */
 export function verifyLiveCreatedArticle(args: { expectedUrl: string; fetchedUrl: string; html: string; article: PublishedRevisionArtifact }): void {
   verifyLivePublishedRevision({ ...args, base: { ...args.article, markdown: "" }, next: args.article, kind: "renderer_repair" });
+}
+
+/** Owner-requested restoration of an observed imported version. Absence of an
+ * original description is preserved, never replaced with fabricated metadata.
+ * This exception is not available to newly generated content. */
+export function verifyLiveSelectedRestoration(args: { expectedUrl: string; fetchedUrl: string; html: string;
+  base: PublishedRevisionArtifact; next: PublishedRevisionArtifact }): void {
+  verifyLivePublishedRevision({ ...args, base: args.next, kind: "improve_snippet" });
+  assertExactLiveMetaTitle(args.html, args.next.metaTitle ?? args.next.title);
+  if (args.next.metaDescription) assertExactLiveMetaDescription(args.html, args.next.metaDescription);
+  else if (headTags(args.html, "meta").some(tag => /^(?:description|og:description|twitter:description)$/i.test(
+    tagAttribute(tag, "name") ?? tagAttribute(tag, "property") ?? ""))) throw new Error("Restoration unexpectedly introduced search metadata");
+  verifyLiveCorrectionBody({ html: args.html, renderedBaseParagraphs: args.base.markdown.split(/\n\s*\n/).map(renderSafePublicationHtml),
+    renderedNext: renderSafePublicationHtml(args.next.markdown) });
 }
 
 /** Exact post-deploy proof. A delivery acknowledgement alone is not success. */

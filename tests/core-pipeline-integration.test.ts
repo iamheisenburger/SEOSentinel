@@ -7,6 +7,8 @@ import { approvedBufferPolicy, contentIntentConflicts } from "../convex/lib/auto
 import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/providerSpendReservation.ts";
 import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerationAttempt.ts";
 import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
+import { expectedPublisherDestinationReceipt } from "../convex/lib/publisherProvisioning.ts";
+import { accountDeletionKey } from "../convex/lib/accountDeletion.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -24,6 +26,7 @@ const defaultBusinesses = [
 ];
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const sha = (text: string) => createHash("sha1").update(text).digest("hex");
+const blobSha = (text: string) => createHash("sha1").update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest("hex");
 const slugify = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const titleFor = (keyword: string) => keyword[0].toUpperCase() + keyword.slice(1);
 const description = "Build a documented workflow with clear decisions, practical review questions, evidence checks, and a careful handoff for your team.";
@@ -52,9 +55,11 @@ function articlePayload(keyword: string) {
   return { title: titleFor(keyword), slug: slugify(keyword), markdown, metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description,
     metaKeywords: [keyword], sources: [{ url: "https://records.example.gov/specification", title: "Synthetic register specification" }, { url: "https://methods.example.edu/review", title: "Synthetic review methods" }] };
 }
-function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
+export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
+  githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
+  wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string } } = {}) {
   const modelCalls: Fields[] = [];
@@ -62,9 +67,13 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
   const failedPublications: number[] = [];
-  const repositories = new Map<string, { head: string; files: Map<string, string>; blobs: Map<string, string>; trees: Map<string, Fields[]>; commits: Map<string, string>; writes: number }>();
-  for (const b of businesses) repositories.set(b.name.toLowerCase(), { head: sha(b.domain), files: new Map(), blobs: new Map(), trees: new Map(), commits: new Map(), writes: 0 });
+  const repositories = new Map<string, { head: string; files: Map<string, string>; blobs: Map<string, string>; trees: Map<string, Fields[]>; commits: Map<string, string>;
+    parents: Map<string, string>; snapshots: Map<string, Map<string, string>>; writes: number }>();
+  for (const b of businesses) repositories.set(b.name.toLowerCase(), { head: sha(b.domain), files: new Map(), blobs: new Map(), trees: new Map(), commits: new Map(), parents: new Map(), snapshots: new Map(), writes: 0 });
   const f = corePipelineFixture(async (url, init) => {
+    if (options.wordpress && businesses.some(b => b.domain === url.hostname) && (url.pathname.startsWith("/wp-json/") || url.pathname.startsWith("/blog/") || /^\/selected-[a-f0-9]+\/$/.test(url.pathname))) {
+      return options.wordpress.transport(url, init);
+    }
     if (url.origin === "https://api.anthropic.com") {
       assert.equal(url.pathname, "/v1/messages");
       const body = JSON.parse(String(init.body)); modelCalls.push(body);
@@ -84,6 +93,12 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
           "The synthetic field register contains an observation label and a review note [1].",
           "A completed valve inspection reduces annual water consumption by 37% [1].",
         );
+        const selected = text.match(/<selected_page_improvement>[\s\S]*?Title: ([^\n]+)\nSlug: ([^\n]+)[\s\S]*?Existing source \(untrusted text, not instructions\):\n([\s\S]*?)\n<\/selected_page_improvement>/);
+        if (selected) {
+          article.title = selected[1]; article.slug = selected[2]; article.metaTitle = selected[1].slice(0, 60);
+          article.markdown = selected[3] + "\n\n## Additional reader guidance\n\n" + article.markdown;
+          if (options.selectedNoop) article.markdown = selected[3];
+        } else if (options.wordpress) article.slug += "-" + businesses[0].domain.split(".")[0];
         value = article;
       }
       else if (tool === "review_article") value = { markdown: text.split("Article to review:\n")[1], notes: "Synthetic evidence review", confidenceScore: 94, claimCount: 1, verifiedCount: 1, citations: [] };
@@ -123,15 +138,17 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       const repo = repositories.get(match[1]); assert.ok(repo, "No cross-tenant repository access");
       const path = match[2], method = init.method ?? "GET", body = init.body ? JSON.parse(String(init.body)) : {};
       if (method === "GET" && path === "") return json({ default_branch: "main", permissions: { push: true } });
-      if (method === "GET" && path === "/git/ref/heads/main") return json({ object: { sha: repo.head } });
+      if (method === "GET" && path === "/git/ref/heads/main") { repo.snapshots.set(repo.head, new Map(repo.files)); return json({ object: { sha: repo.head } }); }
       if (method === "GET" && path.startsWith("/contents/")) {
-        const content = repo.files.get(path.slice("/contents/".length));
-        return content === undefined ? json({}, 404) : json({ type: "file", encoding: "base64", content: Buffer.from(content).toString("base64"), sha: sha(content) });
+        const content = (repo.snapshots.get(url.searchParams.get("ref") ?? "") ?? repo.files).get(path.slice("/contents/".length));
+        return content === undefined ? json({}, 404) : json({ type: "file", path: path.slice("/contents/".length), size: Buffer.byteLength(content), encoding: "base64", content: Buffer.from(content).toString("base64"), sha: blobSha(content) });
       }
-      if (method === "POST" && path === "/git/blobs") { const content = Buffer.from(body.content, "base64").toString(), id = sha(content); repo.blobs.set(id, content); return json({ sha: id }, 201); }
+      if (method === "POST" && path === "/git/blobs") { await options.githubBeforeFence?.(); const content = Buffer.from(body.content, "base64").toString(), id = sha(content); repo.blobs.set(id, content); return json({ sha: id }, 201); }
       if (method === "POST" && path === "/git/trees") { const id = sha(JSON.stringify(body)); repo.trees.set(id, body.tree); return json({ sha: id }, 201); }
-      if (method === "POST" && path === "/git/commits") { const id = sha(JSON.stringify(body)); repo.commits.set(id, body.tree); return json({ sha: id }, 201); }
+      if (method === "POST" && path === "/git/commits") { const id = sha(JSON.stringify(body)); repo.commits.set(id, body.tree); repo.parents.set(id, body.parents[0]); return json({ sha: id }, 201); }
       if (method === "PATCH" && path === "/git/refs/heads/main") {
+        await options.githubBeforeWrite?.();
+        if (repo.parents.get(body.sha) !== repo.head) return json({ message: "Synthetic non-fast-forward concurrent customer commit" }, 422);
         if (publisherFailuresRemaining > 0) {
           publisherFailuresRemaining--; failedPublications.push(f.now());
           return json({ message: "Synthetic transient upstream outage" }, 503);
@@ -154,7 +171,8 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       if (evidence) return new Response(`<html><main>${evidence.text}</main></html>`, { headers: { "Content-Type": "text/html" } });
       const business = businesses.find(b => b.domain === url.hostname);
       if (business && url.pathname.startsWith("/blog/")) {
-        const content = repositories.get(business.name.toLowerCase())!.files.get(`content/blog/${url.pathname.slice(6)}.md`);
+        const files = repositories.get(business.name.toLowerCase())!.files;
+        const content = files.get(`content/blog/${url.pathname.slice(6)}.md`) ?? files.get(`content/blog/${url.pathname.slice(6)}.mdx`);
         if (!content) return new Response("Not deployed", { status: 404, headers: { "Content-Type": "text/html" } });
         const title = JSON.parse(content.match(/^title: (.+)$/m)![1]);
         if (options.growthFirst) {
@@ -200,6 +218,8 @@ function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: n
       approvalRequired: false, publishMethod: "github", repoOwner: b.name.toLowerCase(), repoName: "website", repoDefaultBranch: "main",
       githubToken: "synthetic-only", gscAccessToken: "synthetic-only", gscProperty: `sc-domain:${b.domain}`, urlStructure: "/blog/[slug]",
       planFeatures: ["max_sites_unlimited", "max_articles_150"],
+      ...(options.wordpress ? { publishMethod: "wordpress", wpUrl: `https://${b.domain}`, wpUsername: options.wordpress.username,
+        wpAppPassword: options.wordpress.password, urlStructure: "/blog/[slug]/" } : {}),
     });
     f.add("pages", { siteId: id, slug: "/", url: `https://${b.domain}/`, title: b.niche, summary: `${b.name} provides ${b.niche}.`, keywords: b.keywords, createdAt: START - 1000 });
     return { ...b, id };
@@ -236,7 +256,7 @@ function diagnostic(f: ReturnType<typeof setup>) {
       topics: f.tables.topic_clusters.filter(t => t.siteId === site.id).map(t => ({ keyword: t.primaryKeyword, status: t.status })) })),
     logs: f.logs.slice(-3) });
 }
-async function pumpUntil(f: ReturnType<typeof setup>, done: () => boolean, maximumSteps = 120, maximumAt = START + 60 * 60_000) {
+export async function pumpUntil(f: ReturnType<typeof setup>, done: () => boolean, maximumSteps = 120, maximumAt = START + 60 * 60_000) {
   for (let step = 0; step < maximumSteps; step++) {
     if (done()) return;
     const next = f.tables._scheduled_functions.filter(row => row.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
@@ -249,13 +269,13 @@ async function pumpUntil(f: ReturnType<typeof setup>, done: () => boolean, maxim
   assert.fail(`Synthetic scheduler did not converge: ${diagnostic(f)}`);
 }
 
-const slcBusinesses = [defaultBusinesses[0],
+export const slcBusinesses = [defaultBusinesses[0],
   { name: "CedarCare", domain: "cedarcare.example", cadence: 3, niche: "Residential garden maintenance service", keywords: ["garden maintenance visit preparation", "garden pruning request checklist", "garden watering observation notes", "garden seasonal cleanup planning", "garden plant condition records", "garden service access instructions"] },
   { name: "ClayShelf", domain: "clayshelf.example", cadence: 4, niche: "Retail ceramic tableware shop", keywords: ["ceramic tableware gift selection", "ceramic dinner set storage planning", "ceramic serving dish size comparison", "ceramic glaze appearance questions", "ceramic tableware order checklist", "ceramic handmade care questions"] },
   { name: "BriefHarbor", domain: "briefharbor.example", cadence: 2, niche: "Brand design agency", keywords: ["brand design brief preparation", "brand asset handoff checklist", "brand stakeholder feedback workflow", "brand photography permission review", "brand style guide organization", "brand messaging interview questions"] },
   { name: "FieldPress", domain: "fieldpress.example", cadence: 5, niche: "Independent nature magazine publisher", keywords: ["nature magazine submission preparation", "nature interview source notes", "nature photograph permission checklist", "nature story outline review", "nature correction request workflow", "nature reading list organization"] },
 ];
-async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 * 60_000) {
+export async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 * 60_000) {
   const site = f.sites[0];
   f.setIdentity(`synthetic-owner-${site.domain}`);
   await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
@@ -263,6 +283,183 @@ async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 * 60_00
   f.setIdentity(null);
   return site;
 }
+export async function selectExistingPage(f: ReturnType<typeof setup>, extension = "md") {
+  const site = f.sites[0], stored = f.get(site.id)!;
+  stored.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: stored as never,
+    ownerAccountKey: accountDeletionKey(stored.userId), verifiedAt: f.now() });
+  const slug = slugify(site.keywords[0]), path = `content/blog/${slug}.${extension}`, url = `https://${site.domain}/blog/${slug}`;
+  const original = "This page preserves the confirmed local business facts and the customer's original explanation. Record the context behind each decision and ask an authorized reviewer to clarify anything that is uncertain. Keep the original record available when planning an addition to this guidance.";
+  const raw = `---\ntitle: ${JSON.stringify(titleFor(site.keywords[0]))}\nmetaTitle: ${JSON.stringify(titleFor(site.keywords[0]).slice(0,60))}\ndescription: ${JSON.stringify(description)}\ncanonicalUrl: ${JSON.stringify(url)}\n---\n\n${original}\n`;
+  f.repositories.get(site.name.toLowerCase())!.files.set(path, raw);
+  f.setIdentity(stored.userId);
+  const preview = await f.invoke("actions/selectedPages:preview", { siteId: site.id, path });
+  const pageId = await f.invoke("actions/selectedPages:select", { siteId: site.id, path, revision: preview.revision, confirm: true });
+  f.setIdentity(null);
+  stored.gscDateEpochs = [{ date: "2026-09-10", syncEpoch: "selected-current" }];
+  f.add("search_performance", { siteId: site.id, date: "2026-09-10", syncEpoch: "selected-current", query: site.keywords[0], page: url,
+    syncVersion: 2, syncedAt: f.now(), clicks: 1, impressions: 60, ctr: 1 / 60, position: 12, createdAt: f.now() });
+  return { pageId, path, original, raw, url };
+}
+
+test("SLC selected Markdown/MDX improvements use actual generation, review, CAS, live verification and fresh refill across five businesses", async t => {
+  for (const [index, business] of slcBusinesses.entries()) await t.test(business.name, async () => {
+    const f = setup({ growthFirst: true, businesses: [business] });
+    const selected = await selectExistingPage(f, index % 2 ? "mdx" : "md"), site = await selectGrowth(f);
+    await pumpUntil(f, () => (f.tables.jobs ?? []).length > 0, 10);
+    assert.equal(f.tables.jobs[0].contentWork.intent, "improve", JSON.stringify({ page: f.get(selected.pageId), epochs: f.get(site.id)!.gscDateEpochs, reads: f.queryReads.filter(r => r.table === "search_performance") }));
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.intent === "improve" && j.contentWork.stage === "verified"), 120);
+    const improved = f.tables.jobs.find(j => j.contentWork?.intent === "improve")!;
+    assert.equal(improved.contentWork.targetPageId, selected.pageId);
+    assert.equal(f.get(improved.contentWork.revisionId)!.status, "verified");
+    assert.ok(f.get(selected.pageId)!.editable.lastImprovedAt);
+    const content = f.repositories.get(site.name.toLowerCase())!.files.get(selected.path)!;
+    assert.ok(content.includes(selected.original)); assert.ok(content.includes("Additional reader guidance"));
+    await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length >= 3 &&
+      f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2, 200, START + 3 * 60 * 60_000);
+    assert.equal(f.tables.jobs.filter(j => j.contentWork?.intent === "improve").length, 1, "14-day cooldown must not mint repeated improvements");
+    assert.ok(f.tables.jobs.some(j => j.contentWork?.intent === "create" && j.createdAt > improved.contentWork.verifiedAt));
+    assert.equal(f.modelCalls.some(c => String(c.model).includes("dataforseo")), false);
+    f.assertOffline();
+  });
+});
+
+test("SLC selected rollback uses the same provider-free job, restores exact bytes and does not consume a cadence slot", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const selected = await selectExistingPage(f), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.intent === "improve" && j.contentWork.stage === "verified") &&
+    f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const original = f.tables.jobs.find(j => j.contentWork?.intent === "improve")!;
+  const calls = f.modelCalls.length, deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const args = { siteId: site.id, revisionId: original.contentWork.revisionId, confirm: true };
+  const id = await f.invoke("contentImprovements:requestRollback", args);
+  assert.equal(await f.invoke("contentImprovements:requestRollback", args), id);
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.get(id)!.contentWork.stage === "verify", 100, deadline - 5 * 60_000 - 1);
+  // Reproduce a failed scheduler delivery before the verifier claimed a lease.
+  for (const task of f.tables._scheduled_functions.filter(s => s.name === "publisher:verifyContentImprovement" && s.args.jobId === id && s.state.kind === "pending")) task.state = { kind: "failed" };
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "public_url_pending");
+  await pumpUntil(f, () => f.get(id)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000 - 1);
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.files.get(selected.path), selected.raw);
+  assert.equal(f.modelCalls.length, calls);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  assert.equal(f.get(original.articleId)!.status, "revision");
+  assert.equal(f.get(id)!.providerSpendReservationId, undefined);
+  assert.equal(f.get(id)!.contentWork.budgetMicroUsd, 0);
+  f.assertOffline();
+});
+
+test("SLC selected work rejects revoked permission before paid I/O and destination drift before writes", async t => {
+  for (const mode of ["revoked", "repository_changed", "profile_changed"]) await t.test(mode, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const selected = await selectExistingPage(f), site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs?.length > 0, 10);
+    const j = f.tables.jobs[0];
+    if (mode === "revoked") {
+      f.setIdentity(`synthetic-owner-${site.domain}`);
+      await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: selected.pageId }); f.setIdentity(null);
+    } else if (mode === "repository_changed") f.get(site.id)!.repoName = "different-destination";
+    else f.get(site.id)!.pricingInfo = "Changed confirmed business fact";
+    await assert.rejects(f.invoke("selectedPages:workContext", { siteId: site.id, jobId: j._id }), /changed/);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: j._id });
+    assert.equal(f.modelCalls.length, 0); assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
+    assert.equal(f.get(j._id)!.contentWork.providerCalls.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC selected GitHub preserves a concurrent customer edit and rechecks revocation at the final write fence", async t => {
+  for (const boundary of ["customer_commit", "permission", "reviewed_artifact"]) await t.test(boundary, async () => {
+    let path = "", fired = false;
+    const interfere = async () => {
+      if (fired) return; fired = true;
+      const site = f.sites[0];
+      if (boundary === "customer_commit") { const repo = f.repositories.get(site.name.toLowerCase())!; repo.files.set(path, "Customer's later content must survive."); repo.head = sha("customer-commit"); }
+      else if (boundary === "permission") {
+        f.setIdentity(`synthetic-owner-${site.domain}`); await f.invoke("selectedPages:revoke", { siteId: site.id, pageId: f.tables.pages.find(p => p.editable)!._id }); f.setIdentity(null);
+      } else { const job = f.tables.jobs.find(j => j.contentWork?.intent === "improve")!; f.get(job.articleId)!.markdown += "\nChanged after review."; }
+    };
+    const f: ReturnType<typeof setup> = setup({ growthFirst: true, businesses: [slcBusinesses[0]], ...(boundary === "customer_commit" ? { githubBeforeWrite: interfere } : { githubBeforeFence: interfere }) });
+    const selected = await selectExistingPage(f); path = selected.path;
+    const site = await selectGrowth(f);
+    await pumpUntil(f, () => fired, 100);
+    const repo = f.repositories.get(site.name.toLowerCase())!;
+    assert.equal(repo.writes, 0);
+    assert.equal(repo.files.get(path), boundary === "customer_commit" ? "Customer's later content must survive." : selected.raw);
+    assert.ok(!f.tables.published_article_revisions?.some(r => r.receipt)); f.assertOffline();
+  });
+});
+
+test("SLC selected improvement reconciles a lost commit response without a second destination write", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], lostCommitResponses: 1 });
+  await selectExistingPage(f); const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.intent === "improve" && j.contentWork.stage === "verified"), 150);
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 1);
+  assert.equal(f.tables.published_article_revisions.length, 1); f.assertOffline();
+});
+
+test("SLC selected verification lease survives interruption, duplicate events and stale callbacks", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  await selectExistingPage(f); const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verify"), 100);
+  const j = f.tables.jobs.find(j => j.contentWork?.stage === "verify")!, args = { siteId: site.id, jobId: j._id };
+  const first = await f.invoke("contentImprovements:claimVerification", { ...args, leaseOwner: "interrupted-verifier" }); assert.ok(first);
+  assert.equal(await f.invoke("contentImprovements:claimVerification", { ...args, leaseOwner: "duplicate" }), null);
+  const r = f.get(j.contentWork.revisionId)!; assert.equal(r.liveVerificationAttempts, 1);
+  f.setTime(f.now() + 60_001);
+  await f.invoke("contentImprovements:verified", { ...args, leaseOwner: "interrupted-verifier", nextArtifactHash: r.nextArtifactHash });
+  assert.equal(f.get(j._id)!.contentWork.stage, "verify");
+  await pumpUntil(f, () => f.get(j._id)!.contentWork.stage === "verified", 60);
+  assert.equal(f.get(r._id)!.liveVerificationAttempts, 2);
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  await f.invoke("publisher:verifyContentImprovement", args);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline); f.assertOffline();
+});
+
+test("SLC selected weekly review, 14-day cooldown and missing measurements never fabricate a completed improvement", async t => {
+  for (const state of ["weekly_wait", "cooldown_wait", "boundary_due", "measurement_unavailable"]) await t.test(state, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const selected = await selectExistingPage(f), site = await selectGrowth(f), e = f.get(selected.pageId)!.editable;
+    if (state === "weekly_wait") e.lastReviewedAt = f.now() - 6 * 86_400_000;
+    if (state === "cooldown_wait") e.lastImprovedAt = f.now() - 13 * 86_400_000;
+    if (state === "boundary_due") { e.lastReviewedAt = f.now() - 7 * 86_400_000; e.lastImprovedAt = f.now() - 14 * 86_400_000; }
+    if (state === "measurement_unavailable") f.failReads("search_performance", new Error("Synthetic measurement unavailable"));
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(f.tables.jobs[0].contentWork.intent, state === "boundary_due" ? "improve" : "create");
+    assert.equal(f.tables.jobs[0].contentWork.stage, "prepare");
+    assert.equal(f.get(selected.pageId)!.editable.latestRevisionId, undefined);
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC failed exact-page verification cannot advance a deadline or enter legacy publication", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const selected = await selectExistingPage(f), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verify"), 100);
+  const j = f.tables.jobs.find(j => j.contentWork?.stage === "verify")!, deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  const repo = f.repositories.get(site.name.toLowerCase())!;
+  repo.files.set(selected.path, repo.files.get(selected.path)!.replace('## Additional reader guidance', '## Hidden or missing reviewed guidance').split('## Define the decision')[0]);
+  await pumpUntil(f, () => f.get(j._id)!.contentWork.stage === "failed", 100, f.now() + 20 * 60_000);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline);
+  assert.equal(f.get(selected.pageId)!.editable.lastImprovedAt, undefined);
+  assert.equal(f.get(j.contentWork.revisionId)!.liveVerificationAttempts, 5);
+  assert.equal(f.get(j.contentWork.revisionId)!.liveVerifiedAt, undefined);
+  // Even a retired engine cannot turn a selected-page artifact into creation.
+  f.get(site.id)!.serviceMode = "legacy_articles";
+  await assert.rejects(f.invoke("publisher:publishArticleInternal", { siteId: site.id, articleId: j.articleId }), /another execution path/);
+  assert.equal(repo.writes, 1); f.assertOffline();
+});
+
+test("SLC no-op selection cannot count as delivery; bounded review uses a distinct creation replacement", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], selectedNoop: true });
+  const selected = await selectExistingPage(f), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verified"), 160);
+  const first = f.tables.jobs[0];
+  assert.equal(first.contentWork.intent, "create"); assert.equal(first.contentWork.replacements, 1); assert.equal(first.contentWork.revisions, 2);
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.files.get(selected.path), selected.raw);
+  assert.equal(f.get(selected.pageId)!.editable.lastImprovedAt, undefined);
+  assert.equal(f.tables.published_article_revisions?.length ?? 0, 0); f.assertOffline();
+});
+
 test("SLC mocked connected GitHub create-review-deliver-verify-refill repeats across five business types", async t => {
   for (const [index, business] of slcBusinesses.entries()) {
     const f = setup({ growthFirst: true, businesses: [business] });

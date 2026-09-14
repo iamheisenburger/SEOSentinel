@@ -1,5 +1,8 @@
 "use node";
-import { verifyLiveCreatedArticle } from "./lib/publishedRevision";
+import { verifyLiveCreatedArticle, verifyLiveSelectedRestoration } from "./lib/publishedRevision";
+import { wordpressConditionalRequest, preserveWordPressReviewedText } from "./lib/wordpressConditional";
+import { assertSafeImprovement, selectedGitHubPath } from "./lib/contentSelection";
+import { createHash } from "node:crypto";
 
 import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
@@ -23,6 +26,7 @@ import {
   assertSafePublishableMarkdown,
   PUBLISHER_RENDERER_VERSION,
   renderSafePublicationHtmlForVersion,
+  renderSafePublicationHtml,
 } from "./lib/safeMarkdownHtml";
 import {
   safeFetchPublicText,
@@ -490,6 +494,7 @@ async function commitToMain({
   file,
   deliveryKey,
   expectedCurrentContent,
+  expectedFileSha,
   createOnly,
   beforeExternalMutation,
 }: {
@@ -501,6 +506,7 @@ async function commitToMain({
   file: FileContent;
   deliveryKey: string;
   expectedCurrentContent?: string;
+  expectedFileSha?: string;
   createOnly?: boolean;
   beforeExternalMutation: BeforeExternalMutation;
 }): Promise<{ commitUrl: string; sha: string }> {
@@ -540,9 +546,11 @@ async function commitToMain({
         branch,
         file,
         deliveryKey,
+        expectedCurrentContent,
       });
     }
     if (createOnly && destination.disposition !== "create") throw new Error("Creation cannot replace an existing page");
+    if (expectedFileSha && destination.fileSha !== expectedFileSha) throw new Error("Selected GitHub source revision changed");
     return commitViaContentsApi({
       owner,
       repo,
@@ -581,9 +589,11 @@ async function commitToMain({
       branch,
       file,
       deliveryKey,
+      expectedCurrentContent,
     });
   }
   if (createOnly && destination.disposition !== "create") throw new Error("Creation cannot replace an existing page");
+  if (expectedFileSha && destination.fileSha !== expectedFileSha) throw new Error("Selected GitHub source revision changed");
 
   const blobRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/blobs`,
@@ -784,6 +794,7 @@ async function confirmIdempotentDeliveryAtCurrentHead(args: {
   branch: string;
   file: FileContent;
   deliveryKey: string;
+  expectedCurrentContent?: string;
 }): Promise<{ commitUrl: string; sha: string }> {
   const beforeSha = await readGitHubBranchHead(args);
   const destination = await inspectGitHubDestination({
@@ -1317,6 +1328,21 @@ async function publishToWordPress(
   rendererVersion: string,
   beforeExternalMutation: BeforeExternalMutation,
 ): Promise<{ method: "wordpress"; postUrl: string; postId: number; receipt: PublicationReceipt }> {
+  if (site.serviceMode === "growth_first") {
+    const currentSite = site as Doc<"sites">;
+    await wordpressConditionalRequest(currentSite, "connection");
+    const content = preserveWordPressReviewedText(renderSafePublicationHtml(stripLeadingDocumentTitle(article.markdown, article.title)));
+    const url = publishedArticlePublicUrl({ domain: site.domain, urlStructure: site.urlStructure, slug: article.slug });
+    await beforeExternalMutation();
+    const result = await wordpressConditionalRequest(currentSite, "write", {
+      key: deliveryKey.replace(/^pentra:/, ""), operation: "create", type: "post", slug: article.slug.replace(/^\//, ""),
+      title: article.title, content, metadata: { canonical: url, title: article.metaTitle ?? article.title, description: article.metaDescription ?? "" },
+    });
+    if (result.key !== deliveryKey.replace(/^pentra:/, "") || result.content !== content || result.title !== article.title ||
+      result.url !== url || !Number.isSafeInteger(result.id) || !/^[a-f0-9]{64}$/.test(result.revision)) throw new Error("WordPress conditional creation receipt mismatch");
+    return { method: "wordpress", postUrl: url, postId: result.id,
+      receipt: { method: "wordpress", deliveryKey, contentHash, externalId: String(result.id), url, status: "published", receivedAt: Date.now() } };
+  }
   if (!site.wpUrl || !site.wpUsername || !site.wpAppPassword) {
     throw new Error("WordPress credentials not configured (wpUrl, wpUsername, wpAppPassword)");
   }
@@ -2273,6 +2299,78 @@ type PublishArgs = {
       articleId: Id<"articles">;
 };
 
+async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jobClaim: PublicationJobClaim): Promise<PublishResult | PublicationContentionResult> {
+  const args = { siteId, jobId: jobClaim.jobId, workerToken: jobClaim.workerToken };
+  const claimed = await ctx.runMutation(internal.contentImprovements.claim, args);
+  if (claimed.deferredUntil) return { method: "deferred", outcome: "publication_lease_contention", retryAt: claimed.deferredUntil,
+    boundary: publicationDeferralBoundary(claimed.site, claimed.article) };
+  const revision = claimed.revision!;
+  if (revision.receipt) return { method: "already_published" };
+  const { page, article, site, rollback } = claimed, e = page.editable!;
+  const added = rollback ? "" : assertSafeImprovement(e, article), deliveryKey = `pentra:${revision.revisionKey}`;
+  let attempted = false;
+  const beforeExternalMutation = async () => {
+    if (!attempted) await ctx.runMutation(internal.contentImprovements.attempted, { ...args, revisionId: revision._id });
+    attempted = true;
+  };
+  let sourceContent: string, sourceRevision: string, permission: string | undefined, receipt: PublicationReceipt, result: PublishResult;
+  if (e.kind === "github") {
+    if (!e.path || selectedGitHubPath(site, e.path) !== page.slug || !e.header) throw new Error("Selected GitHub source contract changed");
+    if (await getDefaultBranch({ token: site.githubToken!, owner: site.repoOwner!, repo: site.repoName! }) !== site.repoDefaultBranch) throw new Error("GitHub selected default branch changed");
+    let header = e.header;
+    for (const [key, value] of Object.entries({ metaTitle: article.metaTitle ?? article.title, description: article.metaDescription ?? "",
+      auditedContentHash: article.auditedContentHash!, pentraDeliveryKey: deliveryKey })) {
+      const line = `${key}: ${JSON.stringify(value)}\n`, pattern = new RegExp(`^${key}:.*\\r?\\n`, "m");
+      header = pattern.test(header) ? header.replace(pattern, line) : header.replace(/---\r?\n$/, line + "---\n");
+    }
+    sourceContent = rollback ? rollback.selectedSource.sourceContent : header + e.sourceContent.slice(e.header.length).trimEnd() + "\n\n" + added + "\n";
+    const delivered = await commitToMain({ token: site.githubToken!, owner: site.repoOwner!, repo: site.repoName!, branch: site.repoDefaultBranch!,
+      file: { path: e.path, content: sourceContent }, deliveryKey, message: `Pentra improve ${deliveryKey}: ${article.title}`,
+      expectedCurrentContent: e.sourceContent, expectedFileSha: e.sourceRevision, beforeExternalMutation });
+    sourceRevision = createHash("sha1").update(`blob ${Buffer.byteLength(sourceContent)}\0`).update(sourceContent).digest("hex");
+    receipt = { method: "github", deliveryKey, contentHash: revision.nextArtifactHash, externalId: delivered.sha,
+      url: delivered.commitUrl, status: "committed", receivedAt: Date.now() };
+    result = { method: "github", filePath: e.path, commitUrl: delivered.commitUrl, receipt };
+  } else {
+    sourceContent = rollback ? rollback.selectedSource.sourceContent : e.sourceContent + "\n" + preserveWordPressReviewedText(renderSafePublicationHtml(added));
+    await beforeExternalMutation();
+    const delivered = await wordpressConditionalRequest(site, "write", { key: revision.revisionKey, operation: rollback ? "rollback" : "append",
+      ...(rollback ? { rollbackKey: rollback.revisionKey } : {}),
+      id: e.resourceId, permission: e.permission, baseRevision: e.sourceRevision, content: sourceContent,
+      metadata: { canonical: page.url, title: article.metaTitle ?? article.title, description: article.metaDescription ?? "" } });
+    if (delivered.key !== revision.revisionKey || delivered.id !== e.resourceId || delivered.content !== sourceContent ||
+      delivered.url !== page.url || delivered.title !== article.title || !/^[a-f0-9]{64}$/.test(delivered.revision) ||
+      delivered.permission !== e.permission) throw new Error("WordPress improvement receipt mismatch");
+    sourceRevision = delivered.revision; permission = delivered.permission;
+    receipt = { method: "wordpress", deliveryKey, contentHash: revision.nextArtifactHash, externalId: String(delivered.id),
+      url: page.url, status: "published", receivedAt: Date.now() };
+    result = { method: "wordpress", postId: delivered.id, postUrl: page.url, receipt };
+  }
+  // GitHub may reconcile an already-written artifact without calling the write
+  // fence. Its original durable attempt is required by this receipt mutation.
+  await ctx.runMutation(internal.contentImprovements.delivered, { ...args, revisionId: revision._id,
+    receipt: { ...receipt, method: e.kind }, sourceContent, sourceRevision, ...(permission ? { permission } : {}) });
+  return result;
+}
+
+export const verifyContentImprovement = internalAction({ args: { siteId: v.id("sites"), jobId: v.id("jobs") },
+  handler: async (ctx, args) => {
+    const leaseOwner = randomUUID();
+    const context = await ctx.runMutation(internal.contentImprovements.claimVerification, { ...args, leaseOwner });
+    if (!context || context.job.contentWork?.stage !== "verify") return;
+    const r = context.revision;
+    let error: string | undefined;
+    try {
+      const fetched = await safeFetchPublicText(r.expectedPublicUrl, { expectedHost: new URL(r.expectedPublicUrl).hostname,
+        allowedContentTypes: [/^text\/html(?:;|$)/i] });
+      if (context.job.contentWork?.operation === "rollback") verifyLiveSelectedRestoration({ expectedUrl: r.expectedPublicUrl,
+        fetchedUrl: fetched.url, html: fetched.text, base: r.baseArtifact as PublishedRevisionArtifact, next: r.nextArtifact as PublishedRevisionArtifact });
+      else verifyLiveCreatedArticle({ expectedUrl: r.expectedPublicUrl, fetchedUrl: fetched.url, html: fetched.text,
+        article: r.nextArtifact as PublishedRevisionArtifact });
+    } catch (e) { error = e instanceof Error ? e.message : "Live improvement verification failed"; }
+    await ctx.runMutation(internal.contentImprovements.verified, { ...args, leaseOwner, nextArtifactHash: r.nextArtifactHash, ...(error ? { error } : {}) });
+  } });
+
 async function publishArticleHandler(
   ctx: ActionCtx,
   args: PublishArgs,
@@ -2283,10 +2381,19 @@ async function publishArticleHandler(
       { siteId: args.siteId },
     );
     if (!site) throw new Error("Site not found");
+    if (site.serviceMode === "growth_first") {
+      const selected = await ctx.runQuery(internal.selectedPages.workContext, { siteId: args.siteId, articleId: args.articleId,
+        ...(options?.jobClaim ? { jobId: options.jobClaim.jobId } : {}) });
+      if (selected) {
+        if (!options?.jobClaim || options.jobClaim.jobId !== selected.job._id || options.readOnlyRecoveryOnly) throw new Error("Selected-page delivery must be owned by its existing work job");
+        return publishContentImprovement(ctx, args.siteId, options.jobClaim);
+      }
+    }
     const initialArticle = await ctx.runQuery(internal.articles.getInternal, {
       articleId: args.articleId,
     });
     if (!initialArticle) throw new Error("Article not found");
+    if (initialArticle.contentWorkSourceJobId) throw new Error("Selected-page artifacts cannot be republished through another execution path");
     let article: Doc<"articles"> = initialArticle;
 
     if (

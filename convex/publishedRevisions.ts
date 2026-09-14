@@ -1623,6 +1623,7 @@ export const listDueLiveVerifications = internalMutation({
     for (const revision of candidates) {
       if (
         due.length >= MAX_LIVE_VERIFICATION_RECOVERIES ||
+        revision.contentWorkJobId ||
         !revision.receipt ||
         revision.liveVerificationNextAt === undefined ||
         revision.liveVerificationNextAt > now ||
@@ -1672,6 +1673,7 @@ export const claimLiveVerification = internalMutation({
     if (
       !revision ||
       revision.status !== "verification_pending" ||
+      revision.contentWorkJobId ||
       !revision.receipt ||
       revision.nextArtifactHash !== args.expectedNextArtifactHash ||
       (revision.liveVerificationNextAt ?? Number.POSITIVE_INFINITY) > args.now ||
@@ -1705,6 +1707,7 @@ export const claimExecution = internalMutation({
   handler: async (ctx, { revisionId, leaseOwner }) => {
     const revision = await ctx.db.get(revisionId);
     if (!revision) throw new Error("Published revision not found");
+    if (revision.contentWorkJobId) throw new Error("Selected-page revisions execute only through their authoritative content work job");
     const current = await currentRevisionArticle(ctx, revision);
     const site = current?.site;
     const article = current?.article;

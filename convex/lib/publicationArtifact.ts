@@ -261,7 +261,8 @@ function safeUrlStructure(value?: string): {
   } catch {
     throw new Error("Publishing URL structure contains invalid encoding");
   }
-  const segments = decoded.slice(1).split("/");
+  const trailingSlash = decoded.endsWith("/");
+  const segments = (trailingSlash ? decoded.slice(0, -1) : decoded).slice(1).split("/");
   if (
     segments.some((segment) => !segment || segment === "." || segment === "..") ||
     segments.filter((segment) => segment === "[slug]").length !== 1 ||
@@ -277,7 +278,7 @@ function safeUrlStructure(value?: string): {
   }
   const directorySegments = segments.slice(0, -1);
   return {
-    urlStructure: `/${segments.join("/")}`,
+    urlStructure: `/${segments.join("/")}${trailingSlash ? "/" : ""}`,
     contentDir:
       directorySegments.length > 0
         ? `content/${directorySegments.join("/")}`

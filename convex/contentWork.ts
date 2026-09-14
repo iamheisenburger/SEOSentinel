@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
-import { publicationAdapterConfigHash, publicationArtifactHash, sha256Hex } from "./lib/publicationArtifact";
+import { publicationArtifactHash } from "./lib/publicationArtifact";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
@@ -12,17 +12,14 @@ import { planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoin
 import { terminalContentFeasibility } from "./lib/topicLifecycle";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness } from "./lib/autopilotReadiness";
+import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete } from "./lib/contentSelection";
+import { assertSafeImprovement } from "./lib/contentSelection";
+import { authorizedWorkPage, chooseImprovement } from "./selectedPages";
+export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
 export const MAX_CONTENT_RECOVERIES = 3;
 const LIMIT = 1000;
-function contentConnectionHash(site: Doc<"sites">): string {
-  return sha256Hex(JSON.stringify([publicationAdapterConfigHash(site), site.publisherConnectionGeneration ?? 0]));
-}
-export function confirmedContentProfileHash(site: Doc<"sites">): string {
-  return sha256Hex(JSON.stringify([siteCanonicalDomain(site), siteCanonicalDomainRevision(site),
-    site.siteSummary, site.targetAudienceSummary, site.anchorKeywords, site.keyFeatures, site.painPoints, site.productUsage]));
-}
 function pricingConfiguration() {
   // Deployment-owned pricing is deliberately absent by default. Selection is
   // consent, not activation of an operator's finite validation allowance.
@@ -49,6 +46,12 @@ async function jobsForSite(ctx: MutationCtx, siteId: Id<"sites">, fromDeadline?:
     if (active.length > LIMIT) throw new Error("Active work inventory is incomplete");
     for (const job of active) if (!jobs.some(j => j._id === job._id)) jobs.push(job);
   }
+  if (fromDeadline !== undefined) {
+    // Restoration is not a cadence slot; it can precede the next fixed deadline.
+    const verifying = await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", "verify")).take(LIMIT + 1);
+    if (verifying.length > LIMIT) throw new Error("Verification inventory is incomplete");
+    for (const job of verifying) if (!jobs.some(j => j._id === job._id)) jobs.push(job);
+  }
   return jobs;
 }
 async function wake(ctx: MutationCtx, siteId: Id<"sites">) {
@@ -73,6 +76,10 @@ export const selectServiceMode = mutation({
     const jobs = await jobsForSite(ctx, site._id);
     if (site.publicationLeaseOwner || jobs.some(j => ["pending", "running"].includes(j.status) ||
       (j.contentWork && !["verified", "failed"].includes(j.contentWork.stage)))) throw new Error("Reconcile in-flight content work before switching engines");
+    const revisions = await ctx.db.query("published_article_revisions").withIndex("by_site_created", q => q.eq("siteId", site._id)).take(LIMIT + 1);
+    if (revisions.length > LIMIT || revisions.some(r => r.contentWorkJobId && r.attemptedAt && !r.liveVerifiedAt && !r.ambiguityDispositionAt)) {
+      throw new Error("Reconcile the uncertain selected-page delivery before switching engines");
+    }
     for (const table of ["cadence_micro_seed_jobs", "expected_click_evidence_jobs", "expected_click_demand_jobs", "seo_growth_actions"] as const) {
       const rows = await ctx.db.query(table).withIndex("by_site_status", q => q.eq("siteId", site._id)).take(LIMIT + 1);
       if (rows.length > LIMIT || rows.some(r => !["completed", "failed", "cancelled", "expired", "skipped", "done", "published"].includes(r.status))) {
@@ -85,8 +92,8 @@ export const selectServiceMode = mutation({
     }
     if (!args.confirmBusinessProfile || !site.siteSummary?.trim() || !site.targetAudienceSummary?.trim() ||
       !contentAnalysisMatchesCurrentDomain(site)) throw new Error("Confirm the current business and audience first");
-    if (site.publishMethod !== "github" || !site.repoOwner || !site.repoName || !site.githubToken || !site.repoDefaultBranch) {
-      throw new Error("Stage 1 supports a connected GitHub Markdown/MDX destination only");
+    if (!contentConnectionComplete(site)) {
+      throw new Error("Connect a supported GitHub or conditional WordPress destination first");
     }
     if (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
       !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS) throw new Error("Choose a future fixed delivery window and interval");
@@ -110,6 +117,7 @@ export const readiness = query({
       funding: pricingConfiguration() ? "priced_admission_required" : "pricing_not_configured",
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready").length,
       work: jobs.filter(j => j.contentWork).map(j => ({ jobId: j._id, articleId: j.articleId,
+        intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, failure: j.contentWork!.failure })) };
   },
@@ -162,12 +170,18 @@ export const advance = internalMutation({
     if (!site || site.serviceMode !== "growth_first" || !schedule) return { scheduled: 0, mode: "content_mode_required" };
     if (!site.autopilotEnabled || schedule.paused || !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
       !(await contentEntitlementAuthorized(ctx, site))) return { scheduled: 0, mode: "content_paused" };
-    if (site.publishMethod !== "github" || !site.githubToken || schedule.profileHash !== confirmedContentProfileHash(site) ||
+    if (!contentConnectionComplete(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
       schedule.connectionHash !== contentConnectionHash(site)) return { scheduled: 0, mode: "content_binding_changed" };
     if (site.approvalRequired) return { scheduled: 0, mode: "approval_waiting" };
     const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork);
     if (all.some(j => !j.contentWork && ["pending", "running"].includes(j.status))) return { scheduled: 0, mode: "content_migration_pending" };
     const waiting = work.filter(j => !["verified", "failed"].includes(j.contentWork!.stage)).sort((a,b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt);
+    const restoration = waiting.find(j => j.contentWork!.operation === "rollback");
+    if (restoration?.contentWork?.stage === "verify") {
+      if ((restoration.contentWork.verificationNextAt ?? 0) <= Date.now()) await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId, jobId: restoration._id });
+      return { scheduled: 0, mode: "public_url_pending" };
+    }
+    if (restoration && ["pending", "running"].includes(restoration.status)) return { scheduled: 0, mode: "work_in_progress", activeJobId: restoration._id };
     // Delivery and its persisted window wake precede all unrelated preparation,
     // review and funding failures. Claiming still uses the existing disjoint
     // provider-free worker lane and the publisher's destination lease.
@@ -186,6 +200,7 @@ export const advance = internalMutation({
       const article = first.articleId ? await ctx.db.get(first.articleId) : null;
       if (!article || !isSealedReady(article) || article.auditedContentHash !== first.contentWork!.approvedArtifactHash ||
         publicationArtifactHash(article) !== first.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
+      await authorizedWorkPage(ctx, site, first);
       await ctx.db.patch(first._id, { status: "pending", nextAttemptAt: undefined,
         payload: { ...first.payload, articleId: article._id, publishOnly: true, bufferDelivery: true, qualityRetry: false, bufferFill: false },
         contentWork: { ...first.contentWork!, stage: "publish" }, updatedAt: Date.now() });
@@ -207,6 +222,9 @@ export const advance = internalMutation({
     if (activeJob) return { scheduled: 0, mode: "work_in_progress", activeJobId: activeJob._id };
     const unverified = waiting.find(j => j.contentWork!.stage === "verify");
     if (unverified) {
+      if (unverified.contentWork!.intent === "improve" && (unverified.contentWork!.verificationNextAt ?? 0) <= Date.now()) {
+        await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId, jobId: unverified._id });
+      }
       const article = unverified.articleId ? await ctx.db.get(unverified.articleId) : null;
       return { scheduled: 0, mode: article?.publicUrlStatus === "failed" ? "public_url_failed" : "public_url_pending" };
     }
@@ -224,7 +242,8 @@ export const advance = internalMutation({
         await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,
           workerAttempts: (failed.workerAttempts ?? 0) + 1,
           payload: { topicId: replacement._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
-          contentWork: { ...cw, stage: "prepare", replacements: 1, discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
+          contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
+            opportunity: undefined, revisionId: undefined, stage: "prepare", replacements: 1, discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
         await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
         return { scheduled: 1, mode: "buffer_fill" };
       }
@@ -238,7 +257,12 @@ export const advance = internalMutation({
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
     const pricing = pricingConfiguration();
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
-    const topic = await chooseTopic(ctx, site);
+    const improvement = await chooseImprovement(ctx, site, work);
+    const topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
+      siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
+      primaryKeyword: improvement.question, label: improvement.page.editable!.title, secondaryKeywords: [], intent: "informational",
+      priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
+    })) : await chooseTopic(ctx, site);
     if (!topic) return { scheduled: 0, mode: "content_inputs_exhausted" };
     const deadlineAt = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
     if (work.some(j => j.contentWork!.deadlineAt === deadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
@@ -250,7 +274,9 @@ export const advance = internalMutation({
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
       providerSpendReservationId: budget.reservationId,
       payload: { topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
-      contentWork: { intent: "create", stage: "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
+      contentWork: { intent: improvement ? "improve" : "create", ...(improvement ? { targetPageId: improvement.page._id,
+          baseRevision: improvement.page.editable!.sourceRevision, permissionVersion: improvement.page.editable!.version, opportunity: improvement.reason } : {}),
+        stage: "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
         profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: 0, replacements: 0,
         discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] }, createdAt: Date.now(), updatedAt: Date.now() });
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
@@ -260,6 +286,7 @@ export const advance = internalMutation({
 
 export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
   if (!job.contentWork) return;
+  if (job.contentWork.intent === "improve" && ["verify", "verified"].includes(job.contentWork.stage)) return;
   if (!job.articleId) {
     await ctx.db.patch(job._id, { status: "failed", contentWork: { ...job.contentWork, stage: "failed", failure: "candidate_rejected_before_draft" } });
     await wake(ctx, job.siteId!);
@@ -267,8 +294,16 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
   }
   const article = await ctx.db.get(job.articleId), cw = job.contentWork;
   if (!article || article.siteId !== job.siteId) throw new Error("Content work artifact crossed tenant boundary");
-  const stage = article.status === "published" ? (article.publicUrlStatus === "verified" ? "verified" : "verify")
+  let stage: NonNullable<Doc<"jobs">["contentWork"]>["stage"] = article.status === "published" ? (article.publicUrlStatus === "verified" ? "verified" : "verify")
     : isSealedReady(article) ? "ready" : "review_failed";
+  if (stage === "ready" && cw.intent === "improve") {
+    const site = await ctx.db.get(job.siteId!);
+    try {
+      const page = site ? await authorizedWorkPage(ctx, site, job) : null;
+      if (!page?.editable) throw new Error("Selected page unavailable");
+      assertSafeImprovement(page.editable, article);
+    } catch { stage = "review_failed"; }
+  }
   const currentCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === job.providerSpendReservationId);
   if (stage === "ready" && job.providerSpendReservationId && currentCalls.length > 0 && currentCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
     await settleSharedProviderReservation(ctx, { reservationId: job.providerSpendReservationId, siteId: job.siteId!, purpose: "content_work",
@@ -350,10 +385,12 @@ export const beginProviderCall = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     let cw = job?.contentWork;
+    if (cw?.operation === "rollback") throw new Error("Rollback is provider-free; no paid work is authorized");
     if (!job || !cw || !site || job.workerToken !== args.workerToken || job.status !== "running" ||
       (job.leaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) ||
-      !(await contentEntitlementAuthorized(ctx, site)) || !site.githubToken || confirmedContentProfileHash(site) !== cw.profileHash ||
+      !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
       contentConnectionHash(site) !== cw.connectionHash) throw new Error("Content provider authority changed");
+    await authorizedWorkPage(ctx, site, job);
     const previousCalls = cw.providerCalls.filter(c => (c.logicalKey ?? c.key) === args.key);
     if (previousCalls.some(c => c.requestHash !== args.requestHash)) throw new Error("Content checkpoint request changed; reconcile the persisted result");
     const completed = previousCalls.find(c => c.state === "completed");

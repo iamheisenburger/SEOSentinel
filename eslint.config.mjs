@@ -13,6 +13,7 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "convex/_generated/**",
+    ".wordpress-fixture/**", // Downloaded vendor runtime; connector/test sources remain linted.
   ]),
   {
     // Existing integration boundaries still contain deliberately untyped

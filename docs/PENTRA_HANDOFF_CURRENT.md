@@ -1,6 +1,41 @@
 # Pentra — fresh-task handoff
 
-## Current: Stage 1 delivery-priority/recovery repair26, review required
+## Current: Stage2 selected-page/WordPress candidate27, local review required
+
+Assignment `supervisor-20260914-slc-stage2-27` builds on the locally reviewed
+Stage1 commit66f06de. Stay in `.claude/assignment24`; no Stage3 or production work
+is authorized by this handoff. Read `docs/PENTRA_SLC_STAGE2_2026-09-14.md` for the
+exact changes, reproductions and open acceptance boundaries. The final review
+message supplies the candidate commit. No handoff/approval should be inferred
+from the historical sections below.
+
+Both adapters execute selected additive improvement, fresh creation, exact live
+verification and replenishment through the same jobs, with conditional rollback.
+Five business fixtures pass on each adapter; WordPress uses actual core/SQLite,
+authentication and rendered pages. Concurrent customer edits, permission changes,
+lost acknowledgements, no-op replacement and interrupted verification are covered.
+Previous versions remain in existing article/revision records. No quality or
+spending boundary was relaxed, and no real provider request occurred in27.
+
+**Material remaining Stage2 work:** immediate factual-text replacement/technical
+correction is not implemented by the additive-only selected-page path. Repeated
+14-day measured revisions on an already enlarged page and real MySQL execution
+are unproven. Review these explicitly; do not mark the full canonical contract
+complete or advance to Stage3 as if they were resolved. Minimal consent/rollback
+UI is not authenticated customer-journey acceptance.
+
+Final free gates:1,584 repository tests/1,583 passed/0 failed/1 existing skip;
+real WordPress13/13 passed, including repeated fresh creation/refill plus rollback;
+types/build/schema/660-file secret scan/dependency audit pass;61 tables295 indexes;
+lint0 errors157 existing warnings; browser18/16 passed/2 authenticated skips.
+Candidate report records the exact fixture limitations and reproduction commands.
+
+USD20 remains inactive/unspent; provider expenditure in27 USD0. No production
+reads/writes, deployment, push, migration, auth/cap/reservation/attempt reset or
+backlinks. Production deadlines/buffers below are historical, not refreshed.
+LeadPilot/Pentra live acceptance and attributable SEO growth remain open.
+
+## Historical: Stage1 delivery-priority/recovery repair26
 
 Assignment `supervisor-20260914-slc-stage1-repair-26` repairs independently
 reproduced starvation and permanent-shutdown defects in36373d2. Stay in
