@@ -26,15 +26,32 @@ export { confirmedContentProfileHash } from "./lib/contentSelection";
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
 export const MAX_CONTENT_RECOVERIES = 3;
 const LIMIT = 1000;
-function pricingConfiguration() {
+async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, job?: Doc<"jobs">) {
   // Deployment-owned pricing is deliberately absent by default. Selection is
-  // consent, not activation of an operator's finite validation allowance.
+  // consent, not activation. An optional selector enables only the immutable
+  // saved run; it is never a caller flag or a tenant-name allowlist.
+  let p;
+  try { p = JSON.parse(process.env.PENTRA_CONTENT_WORK_PRICING ?? "null"); } catch { p = null; }
+  const scoped = Boolean(p && typeof p === "object" && "validationAuthorizationId" in p);
+  const cw = job?.contentWork;
+  // Ordinary existing jobs keep their original execution/pricing semantics.
+  // A scoped job can never become ordinary by removing deployment pricing.
+  if (cw && !scoped && cw.pricing.validationAuthorizationId === undefined) return { ...cw.pricing, budgetMicroUsd: cw.budgetMicroUsd };
+  if (!p || typeof p.model !== "string" || !p.model ||
+    ![p.inputMicroUsdPerToken, p.outputMicroUsdPerToken, p.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)) return null;
+  let validationAuthorizationId: Id<"provider_budget_authorizations"> | undefined;
   try {
-    const p = JSON.parse(process.env.PENTRA_CONTENT_WORK_PRICING ?? "null");
-    if (!p || typeof p.model !== "string" || !p.model ||
-      ![p.inputMicroUsdPerToken, p.outputMicroUsdPerToken, p.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)) return null;
-    return { model: p.model as string, inputMicroUsdPerToken: p.inputMicroUsdPerToken as number,
-      outputMicroUsdPerToken: p.outputMicroUsdPerToken as number, budgetMicroUsd: p.budgetMicroUsd as number };
+    if (scoped) {
+      if (typeof p.validationAuthorizationId !== "string" ||
+        !ctx.db.normalizeId("provider_budget_authorizations", p.validationAuthorizationId)) return null;
+      const binding = await contentValidationBinding(ctx, site, Date.now(), job);
+      if (!binding || binding.id !== p.validationAuthorizationId || binding.state !== "active" ||
+        (job && cw?.pricing.validationAuthorizationId !== binding.id)) return null;
+      validationAuthorizationId = binding.id;
+    } else if (cw?.pricing.validationAuthorizationId !== undefined) return null;
+    return { ...(cw ? cw.pricing : { model: p.model as string, inputMicroUsdPerToken: p.inputMicroUsdPerToken as number,
+      outputMicroUsdPerToken: p.outputMicroUsdPerToken as number }),
+      ...(validationAuthorizationId ? { validationAuthorizationId } : {}), budgetMicroUsd: cw?.budgetMicroUsd ?? p.budgetMicroUsd as number };
   } catch { return null; }
 }
 async function contentEntitlementAuthorized(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
@@ -224,6 +241,7 @@ export const readiness = query({
       bindingCurrent = !s || (s.profileHash === confirmedContentProfileHash(site) && s.connectionHash === contentConnectionHash(site));
     } catch { /* Incomplete destination is actionable readiness, not a query crash. */ }
     const reconciliation = await reviewChangedSetup(ctx, site, jobs);
+    const pricing = await pricingConfiguration(ctx, site);
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
@@ -232,7 +250,8 @@ export const readiness = query({
       bindingCurrent,
       reconciliation: { needed: reconciliation.needed, staleItems: reconciliation.stale.length, issues: reconciliation.issues },
       schedule: s ? { active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
-      funding: await contentFunding(ctx, site, pricingConfiguration()?.budgetMicroUsd),
+      funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
+        pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
       work: jobs.filter(j => j.contentWork).map(j => ({ jobId: j._id, articleId: j.articleId,
@@ -336,8 +355,16 @@ export const advance = internalMutation({
     const ready = waiting.filter(j => j.status === "done" && j.contentWork!.stage === "ready");
     let active = schedule.active;
     if (!active && ready.length >= 2 && liveAutopilotReadiness(site, true).ready) {
-      const funding = await contentFunding(ctx, site, pricingConfiguration()?.budgetMicroUsd);
-      if (funding.status !== "available") return { scheduled: 0, mode: "content_budget_exhausted" };
+      const funding = await contentFunding(ctx, site, (await pricingConfiguration(ctx, site))?.budgetMicroUsd);
+      // Exhausting/stopping/removing scoped model execution cannot strand two
+      // already-reviewed deliveries, even before the first window activates.
+      // Validate their retained run/receipt lineage, but require no new money.
+      const preparedRun = (await Promise.all(ready.slice(0, 2).map(async job => {
+        try { return Boolean(job.contentWork!.pricing.validationAuthorizationId &&
+          job.contentWork!.pricing.validationAuthorizationId === (await contentValidationBinding(ctx, site, Date.now(), job))?.id); }
+        catch { return false; }
+      }))).every(Boolean);
+      if (funding.status !== "available" && !preparedRun) return { scheduled: 0, mode: "content_budget_exhausted" };
       if (new Set(ready.slice(0, 2).map(j => j.articleId)).size !== 2) return { scheduled: 0, mode: "content_artifact_changed" };
       for (const item of ready.slice(0, 2)) {
         const artifact = item.articleId ? await ctx.db.get(item.articleId) : null;
@@ -406,7 +433,7 @@ export const advance = internalMutation({
     const failedSlot = work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
     if (failedSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
-    const pricing = pricingConfiguration();
+    const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
     const improvement = await chooseImprovement(ctx, site, work);
     const topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
@@ -565,6 +592,7 @@ export const beginProviderCall = internalMutation({
     }
     if (previousCalls.some(c => c.state === "started")) throw new Error("Content provider response already attempted; reconcile before replay");
     if (previousCalls.length > MAX_CONTENT_RECOVERIES) throw new Error("Content checkpoint retry limit exhausted");
+    if (!(await pricingConfiguration(ctx, site, job))) throw new Error("Content provider authority changed: pricing scope unavailable");
     const validation = await contentValidationBinding(ctx, site, Date.now(), job);
     if (validation && validation.state !== "active") throw new Error(`Content provider authority changed: validation ${validation.state}`);
     let receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;

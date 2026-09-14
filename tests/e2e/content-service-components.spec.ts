@@ -11,7 +11,7 @@ const bundle = build({ stdin: { contents: `
   import {ContentWorkService} from './src/components/content-work-service';
   import {ContentStart} from './src/components/onboarding/content-start';
   const root = createRoot(document.getElementById('root'));
-  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
+  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
   window.renderContentFixture();
 `, resolveDir: process.cwd(), loader: "tsx" }, bundle: true, platform: "browser", format: "iife", write: false, jsx: "automatic",
   define: { "process.env.NODE_ENV": '"test"', "process.env": "{}" }, plugins: [{ name: "explicit-synthetic-content-transport", setup(b) {
@@ -36,7 +36,7 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   funding: { status: "blocked", checkedAt: Date.UTC(2026, 8, 14, 13), monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: Date.UTC(2026,8,15), monthlyResetAt: Date.UTC(2026,9,1), incrementalLimitMicroUsd: null },
   work: [{ jobId: "jobs:synthetic", intent: "create", stage: "ready", windowStartAt: Date.UTC(2026,8,14,11,55), deadlineAt: Date.UTC(2026,8,14,12) }] };
 
-for (const screen of ["overview", "controls", "start", "changed", "independent"]) test(`${screen === "independent" ? "SLC33" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
+for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off"]) test(`${["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
   const css = readdirSync(".next/static/chunks").filter(f => f.endsWith(".css")).map(f => readFileSync(`.next/static/chunks/${f}`, "utf8")).join("\n");
   await page.route("**/*", route => {
     const url = new URL(route.request().url()); expect(url.origin).toBe("http://pentra.test");
@@ -45,7 +45,9 @@ for (const screen of ["overview", "controls", "start", "changed", "independent"]
   await page.goto("http://pentra.test/content");
   await page.evaluate(f => Object.assign(window, { contentFixture: f }), { screen, state: screen === "changed" ? { ...state, bindingCurrent: false, ready: 0,
     reconciliation: { needed: true, staleItems: 2, issues: [{ code: "uncertain_delivery", action: "Inspect the retained delivery, then use its owner review after lease expiry.", articleId: "articles:fixture" }] } } : screen === "independent" ? { ...state,
-      funding: { ...state.funding, accountAvailableMicroUsd: 9_600_000, independentAllowance: { totalMicroUsd: 20_000_000, state: "active", expiresAt: null } } } : state, calls: [] });
+      funding: { ...state.funding, pricingScope: "validation_run", accountAvailableMicroUsd: 9_600_000, independentAllowance: { totalMicroUsd: 20_000_000, state: "active", expiresAt: null } } }
+      : screen === "pricing_off" ? { ...state, funding: { ...state.funding, pricingScope: "unavailable", status: "unconfigured", requestedMicroUsd: null,
+        independentAllowance: { totalMicroUsd: 20_000_000, state: "stopped", expiresAt: null } } } : state, calls: [] });
   await page.addScriptTag({ content: await bundle });
   if (screen === "overview") {
     for (const name of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) await expect(page.getByRole("heading", { name })).toBeVisible();
@@ -70,7 +72,16 @@ for (const screen of ["overview", "controls", "start", "changed", "independent"]
     await page.locator("#content-funding-details summary").click();
     await expect(page.getByText(/separately approved, non-renewing \$20\.0000 validation allowance/)).toBeVisible();
     await expect(page.getByText(/ordinary account and fleet capacity is unchanged/)).toBeVisible();
+    await expect(page.getByText(/Model execution is enabled only for this saved validation run, not other sites/)).toBeVisible();
+    await expect(page.getByText(/Each work item retains its original pricing and spending ceiling/)).toBeVisible();
     await expect(page.getByText("Fleet limits also apply.")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual([]);
+  } else if (screen === "pricing_off") {
+    await expect(page.getByText("Preparation: 2/2 ready.")).toBeVisible();
+    await page.locator("#content-funding-details summary").click();
+    await expect(page.getByText(/Model pricing is not enabled for this site's current scope/)).toBeVisible();
+    await expect(page.getByText(/Already prepared delivery and verification do not require new model calls/)).toBeVisible();
+    await expect(page.getByText(/validation allowance \(stopped\)/)).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual([]);
   } else if (screen === "changed") {
     const confirm = page.getByRole("button", { name: "Confirm changed setup and prepare fresh work" });

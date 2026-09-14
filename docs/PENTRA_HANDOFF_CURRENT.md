@@ -1,6 +1,46 @@
 # Pentra — fresh-task handoff
 
-## Current: dormant release34 and GitHub readiness
+## Current: run-scoped activation35, local review only
+
+Assignment `supervisor-20260914-slc-scoped-activation-35`. Read
+`docs/PENTRA_SLC_SCOPED_ACTIVATION_2026-09-14.md`. Based on local5b601ad;
+the final handoff supplies one exact new candidate. No push/deploy/production
+read or mutation, pricing activation, migration, grant attachment or paid I/O.
+
+Original September14 USD20 TOTAL ADDITIONAL approval and the canonical plan
+ALREADY authorize the exact two-site migration and separate finite validation
+funding. The supervisor corrected the redundant extra-approval prerequisite.
+Distinct audit references may point to that same original approval. Do not
+ask the owner again or treat historical prerequisites below as current policy.
+Code review still precedes the following activation;35 itself is local only.
+
+Global pricing ignored run scope: identical test against exact5b601ad reproduced
+unrelated admission. The optional run selector now gates admission and every
+fresh call using exact immutable site/job/receipt lineage. Original pricing
+snapshots, unscoped semantics and old account/fleet headroom remain. Prepared
+deliveries/reconciliation continue after stop/expiry/pricing removal, including
+before first-window activation; fresh refill cannot spend after shutdown.
+
+Both synthetic sites complete three fresh create/verify/refill cycles with2
+ready remaining each while old4/32/35 are full. Final full1689 tests/1688 pass/
+0 fail/1 existing skip; focused32/33/35 all45 pass; browser28 pass/2 genuine auth
+skips; types/build/schema61 tables296 indexes pass; lint0 errors157 warnings.
+Secret scan684 tracked files/full dependency audit0 vulnerabilities/whitespace
+check pass. USD0 provider spend.
+
+Report prepares existing admin-authenticated Convex CLI --identity with owner
+subject resolved only from the exact two sites, existing owner-checked migration
+handlers, BOTH schedules while unpriced, binding20, then run-scoped Sonnet5
+pricing with2.50 per-item reservation. This is operator migration, never customer
+browser acceptance. Old missed deadlines stay historical; new controlled first
+test window is explicit, ordinary intervals unchanged. Same20 covers all cycles,
+refill and measured follow-up, without guaranteed completion or automatic renewal.
+
+Production remains runtime40c4d90 from34. No fresh production or auth check in35;
+historical buffers0/4 and0/12 and missed deadlines remain open. No SaaS readiness,
+fresh live replenishment or SEO-growth claim. Stop for independent review.
+
+## Historical: dormant release34 and GitHub readiness
 
 Assignment `supervisor-20260914-slc-dormant-release-34`. Read
 `docs/PENTRA_SLC_DORMANT_RELEASE_2026-09-14.md`. Independently accepted source

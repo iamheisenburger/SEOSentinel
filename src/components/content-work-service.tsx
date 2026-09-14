@@ -82,6 +82,8 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       {state.approvalRequired && <p role="alert">Automatic publication consent is not active. Review the saved publishing setup before activation.</p>}
     </details>
     <details id="content-funding-details" className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Funding readiness and retained spending</summary><p>{fundingCopy[state.funding.status]}</p>
+      {state.funding.pricingScope === "validation_run" && <p>Model execution is enabled only for this saved validation run, not other sites. Each work item retains its original pricing and spending ceiling.</p>}
+      {state.funding.pricingScope === "unavailable" && <p>Model pricing is not enabled for this site&apos;s current scope. Already prepared delivery and verification do not require new model calls.</p>}
       <p>Account monthly limit {money(state.funding.monthlyLimitMicroUsd)} · settled actual spend {money(state.funding.settledActualMicroUsd)} · retained reservations / conservative ceilings {money(state.funding.heldCeilingMicroUsd)}.</p>
       <p>Available ordinary account headroom {money(state.funding.accountAvailableMicroUsd)} · next work ceiling {money(state.funding.requestedMicroUsd)}. {state.funding.independentAllowance
         ? `This work uses a separately approved, non-renewing ${money(state.funding.independentAllowance.totalMicroUsd)} validation allowance (${state.funding.independentAllowance.state}); ordinary account and fleet capacity is unchanged.`

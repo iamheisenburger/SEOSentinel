@@ -729,6 +729,198 @@ test("SLC32 both approved tenants execute, verify and refill three fixed cycles 
 });
 
 const independentFunding = { scope: "additional_provider_allowance", approvalReference: "synthetic-separate-explicit-money-approval" };
+const mockContentPricing = { model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: 500_000 };
+async function scopedPricingFixture(price: Fields = {}, grant: Fields = {}) {
+  const f = await validationFixture({ noPricing: true });
+  for (const i of [0, 1]) assert.equal((await f.admit(i)).mode, "content_pricing_unavailable");
+  assert.equal(f.tables.jobs.length, 0); assert.equal(f.tables.provider_spend_reservations.length, 0);
+  await f.attach({ independentFunding, ...grant });
+  const pricing = { ...mockContentPricing, validationAuthorizationId: f.args.authorizationId, ...price };
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify(pricing) });
+  return { ...f, configuredPricing: pricing };
+}
+
+test("SLC35 scoped pricing enables only the two saved run sites, not unrelated same-owner or foreign work", async () => {
+  const f = await scopedPricingFixture();
+  for (const i of [2, 3]) assert.equal((await f.admit(i)).mode, "content_pricing_unavailable");
+  for (const i of [0, 1]) {
+    assert.equal((await f.admit(i)).mode, "buffer_fill");
+    const job = f.tables.jobs.find(j => j.siteId === f.sites[i].id)!;
+    assert.equal(job.contentWork.pricing.validationAuthorizationId, f.args.authorizationId);
+  }
+  assert.equal(f.tables.jobs.length, 2); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC35 both scoped sites create, verify and refill three cycles with full legacy caps and unchanged ordinary capacity", async t => {
+  const f = await scopedPricingFixture(), old = occupyOrdinaryCapacity(f);
+  const history = old.map(id => JSON.stringify(f.get(id)));
+  await exerciseValidationCycles(f, t);
+  assert.deepEqual(old.map(id => JSON.stringify(f.get(id))), history);
+  for (const job of f.tables.jobs) assert.equal(job.contentWork.pricing.validationAuthorizationId, f.args.authorizationId);
+  assert.equal((await f.admit(2)).mode, "content_pricing_unavailable");
+  assert.equal((await f.admit(3)).mode, "content_pricing_unavailable");
+  assert.equal(f.tables.jobs.length, 10); f.assertOffline();
+});
+
+test("SLC35 settings disclose exact-run execution without leaking scope IDs, and wrong actors stay unauthorized", async () => {
+  const f = await scopedPricingFixture(); f.setIdentity(f.owner);
+  const ordinaryBefore = (await f.invoke("contentWork:readiness", { siteId: f.sites[2].id })).funding;
+  const approved = await f.invoke("contentWork:readiness", { siteId: f.sites[0].id });
+  assert.equal(approved.funding.pricingScope, "validation_run"); assert.equal(approved.funding.status, "available");
+  assert.equal(ordinaryBefore.pricingScope, "unavailable"); assert.equal(ordinaryBefore.requestedMicroUsd, null);
+  assert.doesNotMatch(JSON.stringify(approved), /provider_budget_authorizations:|synthetic-separate-explicit|synthetic-only/);
+  await f.admit(0); const job = f.tables.jobs[0];
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  f.setIdentity(f.owner);
+  assert.deepEqual((await f.invoke("contentWork:readiness", { siteId: f.sites[2].id })).funding, ordinaryBefore);
+  f.setIdentity(f.get(f.sites[3].id)!.userId);
+  await assert.rejects(f.invoke("contentWork:readiness", { siteId: f.sites[0].id }), /Not authorized/);
+  await assert.rejects(f.invoke("contentWork:control", { siteId: f.sites[0].id, action: "resume", reviewToken: approved.reviewToken }), /Not authorized/);
+  assert.equal(f.get(f.sites[0].id)!.contentSchedule.validationAuthorizationId, f.args.authorizationId); f.assertOffline();
+});
+
+test("SLC35 missing, malformed, mismatched, stopped and expired selectors cannot start work", async () => {
+  for (const value of [null, "", {}, [], "sites:wrong-table", "provider_budget_authorizations:missing"]) {
+    const f = await scopedPricingFixture({ validationAuthorizationId: value });
+    for (const i of [0, 1, 2, 3]) assert.equal((await f.admit(i)).mode, "content_pricing_unavailable");
+    assert.equal(f.tables.jobs.length, 0); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+  for (const defect of ["missing_anchor", "missing_schedule", "wrong_owner", "wrong_sites", "oversized_grant", "stopped", "expired"]) {
+    const f = await scopedPricingFixture(), run = f.get(f.args.authorizationId)!;
+    if (defect === "missing_anchor") f.tables.provider_budget_authorizations.splice(0);
+    if (defect === "missing_schedule") delete f.get(f.sites[0].id)!.contentSchedule.validationAuthorizationId;
+    if (defect === "wrong_owner") run.accountKey = accountDeletionKey("synthetic-foreign-owner");
+    if (defect === "wrong_sites") run.cumulativeValidation.siteIds = [f.sites[2].id, f.sites[3].id];
+    if (defect === "oversized_grant") run.cumulativeValidation.limitMicroUsd = 20_000_001;
+    if (defect === "stopped") await f.stop();
+    if (defect === "expired") { run.cumulativeValidation.expiresAt = START + 1; f.setTime(START + 1); }
+    assert.equal((await f.admit(0)).mode, "content_pricing_unavailable", defect);
+    assert.equal(f.tables.jobs.length, 0); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC35 scoped deployment cannot enable previously reserved ordinary same-owner or foreign jobs", async () => {
+  const f = await validationFixture(); await f.admit(2); await f.admit(3); await f.attach({ independentFunding });
+  const before = JSON.stringify(f.tables.provider_spend_reservations);
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...mockContentPricing, validationAuthorizationId: f.args.authorizationId }) });
+  for (const job of f.tables.jobs) {
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "ordinary-before-scope" });
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "ordinary-before-scope", key: "new-call", ceilingMicroUsd: 100 }), /pricing scope unavailable/);
+  }
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), before); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC35 scoped retries keep job pricing snapshots even when deployment rates and model change", async () => {
+  const f = await scopedPricingFixture(); await f.admit(0); const job = f.tables.jobs[0], original = JSON.stringify(job.contentWork.pricing);
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...f.configuredPricing, model: "new-mocked-model", inputMicroUsdPerToken: 3, outputMicroUsdPerToken: 7, budgetMicroUsd: 1_000_000 }) });
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.stage, "ready"); assert.equal(JSON.stringify(f.get(job._id)!.contentWork.pricing), original);
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 600);
+  assert.ok(f.modelCalls.every(c => c.model === "mocked-content-model"));
+  await f.admit(1); const next = f.tables.jobs.find(j => j.siteId === f.sites[1].id)!;
+  assert.equal(next.contentWork.pricing.model, "new-mocked-model"); assert.equal(next.contentWork.budgetMicroUsd, 1_000_000); f.assertOffline();
+});
+
+test("SLC35 config and persisted-lineage omissions stop new calls without freeing original holds", async () => {
+  for (const defect of ["removed_config", "removed_selector", "malformed_selector", "different_selector", "omitted_snapshot", "omitted_job_run", "omitted_receipt_run"]) {
+    const f = await scopedPricingFixture(); await f.admit(0); const job = f.tables.jobs[0];
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "scope-fence" });
+    if (defect === "removed_config") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+    if (defect === "removed_selector") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify(mockContentPricing) });
+    if (defect === "malformed_selector") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...f.configuredPricing, validationAuthorizationId: null }) });
+    if (defect === "different_selector") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...f.configuredPricing, validationAuthorizationId: "provider_budget_authorizations:different" }) });
+    if (defect === "omitted_snapshot") delete f.get(job._id)!.contentWork.pricing.validationAuthorizationId;
+    if (defect === "omitted_job_run") delete f.get(job._id)!.contentWork.validationAuthorizationId;
+    if (defect === "omitted_receipt_run") delete f.get(job.providerSpendReservationId)!.validationAuthorizationId;
+    const before = JSON.stringify(f.tables.provider_spend_reservations);
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "scope-fence", key: "new-call", ceilingMicroUsd: 100 }), /pricing scope unavailable/);
+    assert.equal(JSON.stringify(f.tables.provider_spend_reservations), before); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  }
+});
+
+test("SLC35 concurrent scoped admissions retain the cumulative20 ceiling through restart and month rollover", async () => {
+  const f = await scopedPricingFixture({ budgetMicroUsd: 10_000_000 });
+  const admission = await Promise.all([f.admit(0), f.admit(1), f.admit(0), f.admit(1)]);
+  assert.equal(admission.filter(a => a.mode === "buffer_fill").length, 2);
+  for (const job of f.tables.jobs) {
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "scoped-unknown" });
+    await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken: "scoped-unknown", key: "unknown-result", ceilingMicroUsd: 100 });
+  }
+  f.setTime(Date.UTC(2026, 9, 1, 0, 1));
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...f.configuredPricing, budgetMicroUsd: 500_000 }) });
+  for (const job of f.tables.jobs) await f.invoke("jobs:resetStuckJobs", { siteId: job.siteId, jobId: job._id, expectedWorkerToken: "scoped-unknown" });
+  f.setIdentity(f.owner); const funding = (await f.invoke("contentWork:readiness", { siteId: f.sites[0].id })).funding;
+  assert.equal(funding.pricingScope, "validation_run"); assert.equal(funding.status, "blocked"); assert.equal(funding.requestedMicroUsd, 500_000);
+  assert.ok(funding.accountAvailableMicroUsd > 500_000);
+  assert.equal(f.tables.provider_spend_reservations.reduce((s, r) => s + r.reservedMicroUsd, 0), 20_000_000);
+  for (const r of f.tables.provider_spend_reservations) { assert.equal(r.settledAt, undefined); assert.equal(r.releasedAt, undefined); }
+  assert.equal(f.tables.jobs.length, 2); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC35 scoped known-cost recovery renews only the remaining original reservation and price", async () => {
+  const f = await scopedPricingFixture(); await f.admit(0); const job = f.tables.jobs[0], originalId = job.providerSpendReservationId;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "scoped-crash" });
+  f.setTime(START + 86_400_000); f.restartRuntime();
+  await f.invoke("jobs:resetStuckJobs", { siteId: job.siteId, jobId: job._id, expectedWorkerToken: "scoped-crash" });
+  await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "ready", 240, f.now() + 600_000);
+  const restored = f.get(job._id)!;
+  assert.equal(restored.contentWork.pricing.validationAuthorizationId, f.args.authorizationId);
+  assert.equal(f.get(originalId)!.settledMicroUsd, 200); assert.equal(f.get(restored.providerSpendReservationId)!.settledMicroUsd, 400);
+  assert.equal(f.get(restored.providerSpendReservationId)!.reservedMicroUsd, 499_800);
+  assert.equal(restored.contentWork.deadlineAt, START + 600_000); f.assertOffline();
+});
+
+test("SLC35 stopped or unpriced run still delivers its prepared items even before first-window activation", async t => {
+  for (const end of ["stop", "expiry", "pricing_removed"] as const) await t.test(end, async () => {
+    const f = await scopedPricingFixture({}, end === "expiry" ? { expiresAt: START + 120_000 } : {});
+    for (const i of [0, 1]) for (let item = 0; item < 2; item++) {
+      const result = await f.admit(i), job = f.get(result.activeJobId)!;
+      for (let step = 0; step < 2; step++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+      assert.equal(f.get(job._id)!.contentWork.stage, "ready");
+    }
+    for (const site of f.sites.slice(0, 2)) assert.equal(f.get(site.id)!.contentSchedule.active, false);
+    const rows = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length;
+    if (end === "stop") await f.stop();
+    if (end === "expiry") f.setTime(START + 120_000);
+    if (end === "pricing_removed") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const deadline = START + 600_000 + cycle * 1_800_000;
+      f.setTime(deadline - 300_000);
+      for (const site of f.sites.slice(0, 2)) await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "synthetic prepared-only delivery" });
+      await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork.stage === "verified").length === (cycle + 1) * 2, 240, deadline + 60_000);
+      for (const job of f.tables.jobs.filter(j => j.contentWork.deadlineAt === deadline)) {
+        assert.ok(job.contentWork.publishedAt <= deadline); assert.equal(f.get(job.articleId)!.publicUrlStatus, "verified");
+      }
+    }
+    assert.equal(f.tables.jobs.length, 4); assert.equal(f.modelCalls.length, calls); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), rows);
+    for (const i of [0, 1]) assert.equal((await f.admit(i)).mode, "content_pricing_unavailable");
+    f.assertOffline();
+  });
+});
+
+test("SLC35 in-flight settlement and cached results survive scope shutdown without authorizing a new call", async () => {
+  const f = await scopedPricingFixture(); await f.admit(0); const job = f.tables.jobs[0];
+  await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken: "scoped-inflight" });
+  const args = { jobId: job._id, workerToken: "scoped-inflight", key: "retained-result", ceilingMicroUsd: 100 };
+  const call = await f.invoke("contentWork:beginProviderCall", args);
+  await f.stop(); f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+  const completion = { jobId: job._id, workerToken: args.workerToken, key: call.key, actualMicroUsd: 70, result: { fixture: true } };
+  await f.invoke("contentWork:completeProviderCall", completion); await f.invoke("contentWork:completeProviderCall", completion);
+  assert.equal((await f.invoke("contentWork:beginProviderCall", args)).kind, "cached");
+  await assert.rejects(f.invoke("contentWork:beginProviderCall", { ...args, key: "new-call" }), /pricing scope unavailable/);
+  await f.invoke("jobs:markFailed", { jobId: job._id, workerToken: args.workerToken, error: "Synthetic scoped run finished" });
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 70); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC35 ordinary unscoped execution keeps its historical snapshot behavior when global pricing is removed", async () => {
+  const f = await validationFixture(); await f.admit(2); const job = f.tables.jobs[0];
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.stage, "ready"); assert.equal(f.get(job._id)!.contentWork.pricing.validationAuthorizationId, undefined);
+  assert.equal(f.modelCalls.length, 3); assert.equal((await f.admit(3)).mode, "content_pricing_unavailable"); f.assertOffline();
+});
+
 function occupyOrdinaryCapacity(f: Awaited<ReturnType<typeof validationFixture>>) {
   return [
     f.add("provider_spend_reservations", { siteId: f.sites[0].id, userId: f.owner, purpose: "topic_plan", trigger: "synthetic-historical-hold", reservedMicroUsd: 28_000_000, createdAt: START - 86_400_000 }),
