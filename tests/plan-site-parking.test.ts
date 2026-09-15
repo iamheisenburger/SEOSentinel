@@ -319,8 +319,5 @@ test("dashboard parking UX is truthful and links to the real upgrade flow", () =
   assert.doesNotMatch(banner, /continue generating articles/);
   assert.match(sidebar, /Parked by plan/);
   assert.match(sidebar, /isPlanLoaded && isFreePlan/);
-  assert.ok(
-    sidebar.indexOf('activeSite.planAccessStatus === "parked"') <
-      sidebar.indexOf('activeSite.autopilotEnabled !== false'),
-  );
+  assert.match(sidebar, /activeSite\.planAccessStatus === "parked"\s*\? "Parked by plan"\s*: deliveryLabel/);
 });

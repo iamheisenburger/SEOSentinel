@@ -22,6 +22,9 @@ import {
 import { UserButton } from "@clerk/nextjs";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
+import { useQuery } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+import { contentServiceStatus } from "../../lib/content-service-status";
 
 const navSections = [
   {
@@ -53,6 +56,10 @@ export function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { isFreePlan, isPlanLoaded } = usePlanLimits();
   const { sites, activeSite, setActiveSiteId } = useActiveSite();
+  const contentState = useQuery(api.contentWork.readiness, activeSite?.serviceMode === "growth_first" ? { siteId: activeSite._id } : "skip");
+  const deliveryLabel = activeSite?.serviceMode === "growth_first"
+    ? contentServiceStatus(contentState?.siteId === activeSite._id ? contentState : null).label
+    : contentServiceStatus({ serviceMode: "legacy_articles", enabled: activeSite?.autopilotEnabled }).label;
   const [siteDropdownOpen, setSiteDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -197,9 +204,7 @@ export function Sidebar() {
                   <p className="text-[11px] text-[#565A6E]">
                     {activeSite.planAccessStatus === "parked"
                       ? "Parked by plan"
-                      : activeSite.autopilotEnabled !== false
-                        ? "Autopilot on"
-                        : "Manual"}
+                      : deliveryLabel}
                   </p>
                 </div>
                 {hasMultipleSites && (

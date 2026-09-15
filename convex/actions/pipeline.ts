@@ -18,6 +18,7 @@ import {
 } from "../lib/articleExecutionBudget";
 import { z } from "zod";
 import { ArticleSchema } from "../lib/articleToolResult";
+import { contradictoryContentAudit } from "../lib/contentAudit";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   appendRelatedInternalLinks,
@@ -1202,7 +1203,18 @@ async function callClaudeStructured<T>(args: {
   outputSchema: z.ZodType<T>;
   maxTokens?: number;
 }): Promise<T> {
-  if (contentProviderActive()) return args.outputSchema.parse(await contentStructuredCall(args));
+  if (contentProviderActive()) {
+    const originalResult = await contentStructuredCall(args);
+    const parsed = args.outputSchema.safeParse(originalResult);
+    if (parsed.success) return parsed.data;
+    if (args.toolName !== "audit_final_article") throw parsed.error;
+    if (!contradictoryContentAudit(originalResult)) throw new Error("content_audit_response_invalid");
+    const clarified = await contentStructuredCall(args, { originalResult });
+    const corrected = args.outputSchema.safeParse(clarified);
+    if (!corrected.success) throw new Error(contradictoryContentAudit(clarified)
+      ? "content_audit_clarification_inconsistent" : "content_audit_clarification_invalid");
+    return corrected.data;
+  }
   try {
     const client = anthropicClient();
     let correction = "";

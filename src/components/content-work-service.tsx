@@ -9,6 +9,7 @@ import Link from "next/link";
 import { fundingCopy, money, workLabel, stageLabel, shownTime } from "./content-work-overview";
 import { ExactPageControls } from "./content-work-corrections";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
+import { contentServiceStatus } from "../lib/content-service-status";
 
 export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const state = useQuery(api.contentWork.readiness, { siteId });
@@ -34,6 +35,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   };
   if (!state || state.siteId !== siteId) return <p>Loading delivery readiness…</p>;
   const interruptedRetry = state.work.find(w => w.creditRetry)?.creditRetry;
+  const delivery = contentServiceStatus(state);
   const operate = async (action: "pause" | "resume" | "retry") => {
     setSaving(true); setError("");
     try { await control({ siteId, action, reviewToken: state.reviewToken,
@@ -58,15 +60,15 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
     {state.serviceMode === "growth_first" && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
       <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
-      <p>Schedule: {!state.bindingCurrent ? "Stopped — review changed setup" : state.schedule?.paused ? "Paused" : state.schedule?.active ? "Active" : "Preparing, not active"}.</p>
+      <p>Schedule: {delivery.label}.</p>
       <p>Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}. {state.schedule && state.schedule.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue; the original deadline remains.</span>}</p>
       {state.work.filter(w => w.failure && !w.retiredAt).map(w => <p key={w.jobId} role="alert">{w.failure}</p>)}
-      <div className="flex flex-wrap gap-2"><Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button>
-        {!state.bindingCurrent ? <a className="underline self-center" href="#changed-content-setup">Review changed setup</a> : <Button disabled={saving || !state.entitlement || state.approvalRequired} onClick={() => operate("resume")}>Resume preparation and schedule</Button>}
-        <Button disabled={saving || state.schedule?.paused || !state.bindingCurrent} onClick={() => operate("retry")}>{interruptedRetry ? "Retry interrupted preparation" : "Recheck existing work"}</Button></div>
+      <div className="flex flex-wrap gap-2">{delivery.canPause && <Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button>}
+        {!state.bindingCurrent ? <a className="underline self-center" href="#changed-content-setup">Review changed setup</a> : delivery.canResume && <Button disabled={saving} onClick={() => operate("resume")}>Resume preparation and schedule</Button>}
+        {delivery.canRetry && <Button disabled={saving} onClick={() => operate("retry")}>{interruptedRetry ? "Retry interrupted preparation" : "Recheck existing work"}</Button>}</div>
       <p>Pause retains ready work and spending history. A write already started must be checked before anything replaces it.</p>
     </div>}
-    {state.funding.status !== "available" && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
+    {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
     {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
     {!state.destination.verified && <p role="alert">Verify the exact publisher in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
     <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>
@@ -117,7 +119,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     </details>
     {error && <p role="alert">{error}</p>}
     {state.work.length > 0 && <details className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Work history and technical references</summary>
-      <ul>{state.work.slice(-10).map(work => <li key={work.jobId}>{workLabel(work)} · {work.retiredAt ? "Retired after owner request; retained for history" : stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}<span> · Reference: {work.jobId}</span></li>)}</ul>
+      <ul>{state.work.slice(-10).map(work => <li key={work.jobId}>{workLabel(work)} · {work.retiredAt ? "Retired after owner request; retained for history" : stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}{work.technicalReason ? ` · Technical reason: ${work.technicalReason}` : ""}<span> · Reference: {work.jobId}</span></li>)}</ul>
     </details>}
     <EditablePageSelection key={siteId} siteId={siteId} />
   </section>;

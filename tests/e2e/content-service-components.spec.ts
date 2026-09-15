@@ -11,7 +11,7 @@ const bundle = build({ stdin: { contents: `
   import {ContentWorkService} from './src/components/content-work-service';
   import {ContentStart} from './src/components/onboarding/content-start';
   const root = createRoot(document.getElementById('root'));
-  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off','credit_interrupted','credit_restored','rollback'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
+  window.renderContentFixture = () => {const fixture = window.contentFixture; root.render(fixture.screen === 'start' ? <ContentStart/> : ['controls','changed','independent','pricing_off','credit_interrupted','credit_restored','audit_failed','rollback'].includes(fixture.screen) ? <ContentWorkService siteId={fixture.state.siteId}/> : <ContentWorkOverview siteId={fixture.state.siteId}/>)};
   window.renderContentFixture();
 `, resolveDir: process.cwd(), loader: "tsx" }, bundle: true, platform: "browser", format: "iife", write: false, jsx: "automatic",
   define: { "process.env.NODE_ENV": '"test"', "process.env": "{}" }, plugins: [{ name: "explicit-synthetic-content-transport", setup(b) {
@@ -36,7 +36,7 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   funding: { status: "blocked", checkedAt: Date.UTC(2026, 8, 14, 13), monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: Date.UTC(2026,8,15), monthlyResetAt: Date.UTC(2026,9,1), incrementalLimitMicroUsd: null },
   work: [{ jobId: "jobs:synthetic", intent: "create", stage: "ready", windowStartAt: Date.UTC(2026,8,14,11,55), deadlineAt: Date.UTC(2026,8,14,12) }] };
 
-for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off", "credit_interrupted", "credit_restored", "rollback"]) test(`${screen === "rollback" ? "SLC41" : screen.startsWith("credit_") ? "SLC38" : ["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
+for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off", "credit_interrupted", "credit_restored", "audit_failed", "rollback"]) test(`${screen === "audit_failed" ? "SLC47" : screen === "rollback" ? "SLC41" : screen.startsWith("credit_") ? "SLC38" : ["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
   const css = readdirSync(".next/static/chunks").filter(f => f.endsWith(".css")).map(f => readFileSync(`.next/static/chunks/${f}`, "utf8")).join("\n");
   await page.route("**/*", route => {
     const url = new URL(route.request().url()); expect(url.origin).toBe("http://pentra.test");
@@ -61,12 +61,27 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
     await expect(page.getByRole("alert").filter({ hasText: screen === "credit_restored" ? "Pentra has restored" : "Pentra's generation service" })).toBeVisible();
     await expect(page.locator("body")).not.toContainText("synthetic-private-token");
     await expect(page.locator("body")).not.toContainText("purchase credits");
-    const button = page.getByRole("button", { name: screen === "credit_restored" ? "Retry interrupted preparation" : "Recheck existing work" });
-    await button.click();
-    expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual([
+    if (screen === "credit_restored") await page.getByRole("button", { name: "Retry interrupted preparation" }).click();
+    else await expect(page.getByRole("button", { name: "Recheck existing work" })).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual(screen === "credit_restored" ? [
       { name: "contentWork:control", args: { siteId: state.siteId, action: "retry", reviewToken: state.reviewToken,
         ...(screen === "credit_restored" ? { creditRetry: { jobId: "jobs:synthetic", callKey: "synthetic-private-call", token: "synthetic-private-token" } } : {}) } },
-    ]);
+    ] : []);
+  }
+  if (screen === "audit_failed") {
+    await page.evaluate(() => {
+      const w = window as unknown as { contentFixture: { state: typeof state & { work: unknown[] } }; renderContentFixture: () => void };
+      w.contentFixture.state = { ...w.contentFixture.state, ready: 0, work: [{ ...w.contentFixture.state.work[0], stage: "failed", systemFailure: true,
+        technicalReason: "content_audit_clarification_inconsistent", failure: "Pentra encountered an internal processing error. Our team must repair it. Your drafts, spending history and original deadline are preserved. You do not need to change your plan or fund a provider." }] } as typeof w.contentFixture.state;
+      w.renderContentFixture();
+    });
+    await expect(page.getByText("Schedule: Delivery paused.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "internal processing error" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Pause new work|Resume preparation|Recheck existing|Retry interrupted/ })).toHaveCount(0);
+    await expect(page.getByText(/Technical reason: content_audit_/)).not.toBeVisible();
+    await page.getByText("Work history and technical references", { exact: true }).click();
+    await expect(page.getByText(/Technical reason: content_audit_/)).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls)).toEqual([]);
   }
   if (screen === "rollback") {
     await page.getByText("Service mode and publication consent", { exact: true }).click();
@@ -92,7 +107,8 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
     await expect(page.getByText("Preparation: 2/2 ready.")).toBeVisible();
     await expect(page.locator("#content-funding-details")).not.toHaveAttribute("open", "");
     await expect(page.getByText(/Available internal headroom/)).toBeVisible();
-    const primary = await page.getByRole("button", { name: "Pause new work" }).boundingBox();
+    await expect(page.getByRole("button", { name: "Pause new work" })).toHaveCount(0);
+    const primary = await page.getByRole("button", { name: "Resume preparation and schedule" }).boundingBox();
     const funding = await page.locator("#content-funding-details summary").boundingBox();
     expect(primary!.y).toBeLessThan(funding!.y);
     await page.screenshot({ path: info.outputPath("stage30-controls-primary.png"), fullPage: true });
@@ -100,9 +116,9 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
     await expect(page.getByText(/cedarcare\/website, branch main/)).toBeVisible();
     await page.locator("#content-funding-details summary").click();
     await expect(page.getByText(/Provider credit balance is unverified/)).toBeVisible();
-    await page.getByRole("button", { name: "Pause new work" }).click();
+    await page.getByRole("button", { name: "Resume preparation and schedule" }).click();
     const calls = await page.evaluate(() => (window as unknown as { contentFixture: { calls: unknown[] } }).contentFixture.calls);
-    expect(calls).toEqual([{ name: "contentWork:control", args: { siteId: state.siteId, action: "pause", reviewToken: state.reviewToken } }]);
+    expect(calls).toEqual([{ name: "contentWork:control", args: { siteId: state.siteId, action: "resume", reviewToken: state.reviewToken } }]);
   } else if (screen === "independent") {
     await expect(page.getByText(/Ordinary capacity cannot extend this separate validation allowance/)).toBeVisible();
     await page.locator("#content-funding-details summary").click();

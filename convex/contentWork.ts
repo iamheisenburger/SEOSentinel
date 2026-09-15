@@ -23,6 +23,7 @@ import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectio
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact } from "./articles";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
+import { auditResultHash, contradictoryContentAudit, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -192,6 +193,56 @@ export const confirmCreditRestoration = internalMutation({
         creditRecovery: { confirmedAt, fundingReference: args.fundingReference,
           ...(args.evidenceRunId ? { sourceRunId: args.evidenceRunId, sourceEvidenceHash } : {}) } }) } });
     return { confirmed: true, confirmedAt };
+  },
+});
+
+/** Reviewed operator repair for one provably completed, contradictory legacy
+ * audit. It performs no I/O and stays paused until ordinary owner Resume.
+ * This is not a general failed-job retry or a reset of either attempt limit. */
+export const reconcileSemanticAuditFailure = internalMutation({
+  args: { siteId: v.id("sites"), jobId: v.id("jobs"), expectedUpdatedAt: v.number(),
+    articleHash: v.string(), callKey: v.string(), requestHash: v.string(), resultHash: v.string(), reference: v.string() },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId), job = await ctx.db.get(args.jobId), cw = job?.contentWork;
+    if (!site?.contentSchedule?.paused || !job || job.siteId !== site._id || !cw || !job.articleId ||
+      cw.operation || cw.retiredAt !== undefined || cw.semanticAuditRepair ||
+      job.updatedAt !== args.expectedUpdatedAt || job.workerToken || job.leaseExpiresAt || job.publicationAttempts ||
+      cw.publishedAt || cw.verifiedAt || cw.approvedArtifactHash ||
+      cw.deadlineAt !== site.contentSchedule.nextDeadlineAt || (cw.recoveryAttempts ?? 0) !== MAX_CONTENT_RECOVERIES ||
+      !Number.isSafeInteger(job.workerAttempts) || job.workerAttempts! < MAX_CONTENT_RECOVERIES ||
+      !/^[a-zA-Z0-9_-]{8,128}$/.test(args.reference)) throw new Error("Semantic audit repair is not eligible or already consumed");
+    const terminal = job.status === "failed" && cw.stage === "failed" && cw.failure === "content_recovery_attempts_exhausted";
+    const pending = job.status === "pending" && cw.stage === "review" &&
+      Boolean(job.error?.includes("materialDefects") && job.error.includes("score below 85"));
+    if (!terminal && !pending) throw new Error("Only the legacy semantic-audit parsing failure is repairable");
+    const call = cw.providerCalls.at(-1), baseKey = `${cw.replacements}:${cw.revisions}:review:audit_final_article`;
+    if (!call || call.key !== args.callKey || (call.logicalKey ?? call.key) !== baseKey ||
+      call.requestHash !== args.requestHash || !/^[a-f0-9]{64}$/.test(args.requestHash) ||
+      call.state !== "completed" || !contradictoryContentAudit(call.result) || auditResultHash(call.result) !== args.resultHash ||
+      cw.providerCalls.some(c => c.semanticClarificationOf || c.key.includes(SEMANTIC_AUDIT_SUFFIX) || c.state === "started" ||
+        (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0 || c.result === undefined)) ||
+        (c.state === "rejected" && !(c.rejectionStatus === 400 && c.rejectionCode === "provider_credit_unavailable" &&
+          c.creditRecovery?.requestedAt !== undefined && validProviderRequestId(c.rejectionRequestId))))) {
+      throw new Error("Exact completed legacy audit evidence required; uncertain calls cannot be replayed");
+    }
+    const article = await ctx.db.get(job.articleId);
+    if (!article || article.siteId !== site._id || article.updatedAt > job.updatedAt ||
+      article.status === "published" || article.publicationReceipt || article.publicationAttemptedAt || article.publicationLeaseOwner ||
+      article.publicationOutcomeUnverifiedAt || article.publishedContentHash ||
+      publicationArtifactHash(article) !== args.articleHash) throw new Error("Retained article changed or publication is uncertain");
+    // Validate the future owner-resumed binding without changing paused state.
+    await creditRecoveryAuthority(ctx, { ...site, contentSchedule: { ...site.contentSchedule, paused: false } }, job);
+    for (const c of cw.providerCalls) if (c.creditRecovery) await retainedCreditEvidence(ctx, job, c);
+    const used = cw.providerCalls.reduce((n, c) => n + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+    if (used + semanticAuditCeiling(cw.pricing) > cw.budgetMicroUsd || cw.providerCalls.length >= 20) throw new Error("Retained audit budget cannot fund one bounded clarification");
+    const appliedAt = Date.now();
+    await ctx.db.patch(job._id, { status: "pending", nextAttemptAt: undefined, error: undefined,
+      contentWork: { ...cw, stage: "review", failure: undefined, semanticAuditRepair: { version: 1, appliedAt, reference: args.reference,
+        callKey: call.key, requestHash: args.requestHash, resultHash: args.resultHash, articleHash: args.articleHash,
+        previousStatus: job.status, previousStage: cw.stage, ...(cw.failure ? { previousFailure: cw.failure } : {}),
+        ...(job.error ? { previousError: job.error } : {}), ...(job.nextAttemptAt !== undefined ? { previousNextAttemptAt: job.nextAttemptAt } : {}),
+        workerAttempts: job.workerAttempts!, recoveryAttempts: cw.recoveryAttempts! } }, updatedAt: appliedAt });
+    return { reconciled: true, jobId: job._id, appliedAt };
   },
 });
 
@@ -442,6 +493,8 @@ export const readiness = query({
         return { jobId: j._id, articleId: j.articleId,
         intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
+        systemFailure: internalContentProcessingError(j.contentWork!.failure ?? j.error),
+        technicalReason: internalContentProcessingError(j.contentWork!.failure ?? j.error) ? j.contentWork!.failure ?? "legacy_semantic_audit_processing_error" : null,
         retiredAt: j.contentWork!.retiredAt,
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, creditRetry,
         failure: creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
@@ -462,6 +515,9 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     }
     if (args.reviewToken !== contentConsentToken(site) || s.profileHash !== confirmedContentProfileHash(site) || s.connectionHash !== contentConnectionHash(site)) throw new Error("Business or destination changed. Use Review changed setup to confirm current facts and safely replace stale unstarted work.");
     if (!await contentEntitlementAuthorized(ctx, site) || !contentConnectionComplete(site) || site.approvalRequired) throw new Error("Verify billing, publishing and automatic-publication consent before resuming");
+    const unresolved = (await jobsForSite(ctx, site._id)).some(j => j.contentWork && j.contentWork.retiredAt === undefined &&
+      internalContentProcessingError(j.contentWork.failure ?? j.error));
+    if (unresolved) throw new Error("Pentra must repair the retained internal processing error before delivery resumes");
     if (args.action === "resume") await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: false }, autopilotEnabled: true,
       autopilotRolloutMode: s.active ? "live" : "warm", updatedAt: Date.now() });
     if (args.action === "retry" && s.paused) throw new Error("Resume the paused service before retrying");
@@ -764,6 +820,7 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
     : creditUnavailable ? "content_provider_credit_unavailable"
+    : /^content_audit_/.test(error) ? error
     : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
     : /Content provider (authority changed|reservation unavailable)|Content checkpoint/.test(error) ? error
     : recoveries >= MAX_CONTENT_RECOVERIES ? "content_recovery_attempts_exhausted"
@@ -782,21 +839,37 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   if (willRetry) await ctx.scheduler.runAt(nextAttemptAt!, internal.autopilot.dispatchSiteFollowup,
     { siteId: job.siteId!, trigger: "job_retry", reason: `content_recovery_${recoveries + 1}` });
   else await settleFailedContentWork(ctx, job._id);
+  if (internalContentProcessingError(failure ?? error) && job.siteId) {
+    const site = await ctx.db.get(job.siteId);
+    if (site?.serviceMode === "growth_first" && site.contentSchedule) await ctx.db.patch(site._id,
+      { contentSchedule: { ...site.contentSchedule, active: false, paused: true }, updatedAt: Date.now() });
+  }
   return { updated: true, willRetry, nextAttemptAt };
 }
 
 export const beginProviderCall = internalMutation({
-  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), requestHash: v.optional(v.string()), ceilingMicroUsd: v.number() },
+  args: { jobId: v.id("jobs"), workerToken: v.string(), key: v.string(), requestHash: v.optional(v.string()), ceilingMicroUsd: v.number(),
+    semanticClarificationOf: v.optional(v.object({ key: v.string(), requestHash: v.string(), resultHash: v.string() })) },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
     let cw = job?.contentWork;
     if (cw?.operation) throw new Error("Owner correction/restoration is provider-free; no paid work is authorized");
     if (!job || !cw || !site || job.workerToken !== args.workerToken || job.status !== "running" ||
       (job.leaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) ||
-      !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
+      site.approvalRequired === true || !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
       contentConnectionHash(site) !== cw.connectionHash) throw new Error("Content provider authority changed");
     await authorizedWorkPage(ctx, site, job);
     const previousCalls = cw.providerCalls.filter(c => (c.logicalKey ?? c.key) === args.key);
+    if (args.semanticClarificationOf || args.key.includes(SEMANTIC_AUDIT_SUFFIX)) {
+      const lineage = args.semanticClarificationOf, original = cw.providerCalls.find(c => c.key === lineage?.key);
+      const expectedBase = `${cw.replacements}:${cw.revisions}:review:audit_final_article`;
+      if (!lineage || !original || (original.logicalKey ?? original.key) !== expectedBase || args.key !== expectedBase + SEMANTIC_AUDIT_SUFFIX ||
+        original.state !== "completed" || !Number.isSafeInteger(original.actualMicroUsd) || !original.requestHash ||
+        original.requestHash !== lineage.requestHash || auditResultHash(original.result) !== lineage.resultHash ||
+        !contradictoryContentAudit(original.result)) throw new Error("content_audit_original_checkpoint_changed");
+      if (previousCalls.some(c => JSON.stringify(c.semanticClarificationOf) !== JSON.stringify(lineage))) throw new Error("content_audit_clarification_lineage_changed");
+      if (previousCalls.some(c => c.state !== "completed")) throw new Error("content_audit_clarification_already_attempted");
+    }
     if (previousCalls.some(c => c.requestHash !== args.requestHash)) throw new Error("Content checkpoint request changed; reconcile the persisted result");
     const completed = previousCalls.find(c => c.state === "completed");
     if (completed) {
@@ -851,6 +924,7 @@ export const beginProviderCall = internalMutation({
     if (currentUsed + args.ceilingMicroUsd > receipt.reservedMicroUsd) throw new Error(`Content work budget exhausted for current reservation: limitMicroUsd=${receipt.reservedMicroUsd}; consumedCeilingMicroUsd=${currentUsed}; requestedMicroUsd=${args.ceilingMicroUsd}`);
     const key = `${args.key}:${previousCalls.length}`;
     await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: [...cw.providerCalls, { key, logicalKey: args.key, requestHash: args.requestHash,
+      ...(args.semanticClarificationOf ? { semanticClarificationOf: args.semanticClarificationOf } : {}),
       reservationId: receipt._id, ceilingMicroUsd: args.ceilingMicroUsd, state: "started", rejectionTrackingVersion: 1 }] } });
     return { kind: "started" as const, key };
   },

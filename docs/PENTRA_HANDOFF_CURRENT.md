@@ -1,6 +1,121 @@
 # Pentra — fresh-task handoff
 
-## Current46: title recovery released; semantic audit contradiction blocks both deliveries
+## Current47: local audit recovery and truthful-status repair
+
+Assignment `supervisor-20260915-slc-audit-recovery-and-truthful-ui-47`.
+Both production workflows remain paused. No production mutation, provider call,
+deployment, terminal-state reconciliation or new financial authority during this
+local review. Login and funding are resolved and will not be requested again.
+
+Hard decision checkpoints, not guarantees and not automatically extended:
+
+- September16 00:15 UTC: core live publication plus fresh post-consumption refill
+  on BOTH permitted sites and truthful sidebar/overview/settings state.
+- September19 00:15 UTC: full approved SLC acceptance decision, including required
+  ordinary daily cycles and measurement. Synthetic/accelerated cycles are not ordinary.
+
+If the core checkpoint fails, report that failure, stop NEW paid test admissions
+safely, and reconcile in-flight work. Do not keep spending or loop unchanged.
+Local candidate target: September15 23:00 UTC, for supervisor review BEFORE any
+terminal-state reconciliation deployment or additional paid call. Same cumulative
+20 grant, last known actual0.456052 inside5 held/15 uncommitted; ordinary32/old4/
+fleet35 unchanged. Existing architecture/components/quality thresholds retained.
+
+### Local candidate47 design and review boundary
+
+Cause: structurally complete provider audits returned score83/80 with an empty
+materialDefects list. The existing cross-field contract correctly rejected the
+contradiction, but infrastructure recovery replayed the same immutable paid
+checkpoint until exhaustion. This is an application recovery defect, not a new
+provider-credit or reservation-accounting failure. The old parser was reproduced
+in46 (`/tmp/pentra46-audit-contradiction-repro.log`); original audit receipts remain
+unchanged. Quality score85, evidence checks, revision/replacement and attempt
+limits remain unchanged.
+
+Candidate behavior:
+
+- One separately keyed `:semantic_clarification_v1` call only for a structurally
+  complete contradictory audit. It keeps the exact article/evidence, includes
+  the full original reasoning, and explicitly forbids raising a score merely
+  for consistency. Original request hash, raw result, usage and cost stay intact.
+  Clarification has durable original-key/request-hash/result-hash lineage,
+  original frozen pricing and the original work envelope. No schema replay,
+  fallback model or second clarification after a refusal/unknown response.
+- A valid failing audit follows the existing bounded quality revision path.
+  A malformed original or invalid second result is deterministic terminal
+  internal failure, not another infrastructure retry. New such failures pause
+  only their own site; ambiguous provider results still retain their ceiling.
+- Internal `contentWork:reconcileSemanticAuditFailure` is a reviewed, one-use,
+  exact legacy-class repair, NOT a general retry. It requires paused state,
+  recovery3, the exact final completed contradictory review audit, current
+  article/request/result hashes, unchanged job updatedAt, no publication or
+  live lease, original current owner/profile/destination/permissions/pricing,
+  and a valid unsettled hold with enough remaining bounded capacity. Unknown
+  paid state, malformed/mismatched receipts, exhausted budget, settled/released
+  holds, and consumed repair are refused. Known old credit refusals retain
+  their ceiling and restoration evidence; nothing is released or reattested.
+- Repair stores old status/stage/error/failure/nextAttemptAt and worker/recovery
+  counters in an append-only one-use journal, moves only that job to review,
+  and does NOT wake it or unpause the site. Original Pentra3/3 and LeadPilot5/3
+  counters survive; a subsequent genuinely failed new attempt increments the
+  worker count, never resets it. Ordinary owner Resume is required afterwards.
+  Reconciliation itself makes zero provider calls and no new reservation.
+- Sidebar, overview and settings use the same authoritative growth-first
+  state; legacy labels and plan-parking priority stay intact. Pause is absent
+  while already paused, and unresolved internal failures cannot offer Resume
+  or Retry. Platform-owned plain error copy is distinct from funding, with
+  technical codes disclosed only under details. A failed but unpaused old
+  state says needs attention, not a fabricated pause. Consent revocation is
+  now checked again at every paid content-call boundary.
+
+Local evidence is synthetic unless expressly described as loopback WordPress:
+13 targeted connected tests pass, including three publish/verify/fresh-refill
+cycles on each of two different businesses, both legacy checkpoint key forms,
+concurrent repair/worker claims, durable cached replay, no double settlement,
+valid failing audits, malformed/contradictory second answers, legacy counters,
+pause/owner/profile/destination/consent/pricing/expiry/stop/budget fences and
+unknown/rejected provider outcomes. Real component SSR covers sidebar,
+overview, settings, site switching and legacy/parked states. Browser fixtures:
+36 pass, 2 explicitly unauthenticated acceptance skips; desktop/mobile error
+screens visually inspected. No authenticated production UI acceptance in47.
+Final local gates (September15, completed before23:00 UTC target):
+
+- Full suite1775 total /1774pass /0fail /1explicit skip,159784.781708ms
+  (`/tmp/pentra47-full-final.log`). The first run exposed an obsolete sidebar
+  source assertion, replaced by the new shared-status contract plus actual
+  parked-component rendering. No assertion about plan-parking priority removed.
+- Typecheck PASS; lint0errors/157existing warnings; production build PASS with
+  dummy public/test configuration. No hosted CI or deployment was requested.
+- Additive schema PASS against deployed fedb432 (61tables/296indexes); tracked
+  secret scan PASS695files; production dependency audit0vulnerabilities;
+  staged whitespace check PASS.
+- Browser36pass/2authskips,16.0seconds (`/tmp/pentra47-browser-final.log`); an
+  initial new-test text locator was corrected, then the entire suite rerun.
+  Loopback WordPress SQLite61/61pass,87798.188333ms; MySQL62/62pass,
+  81479.493ms (`/tmp/pentra47-wordpress.log`, `...-wordpress-mysql.log`).
+- Targeted connected13/13pass (`/tmp/pentra47-connected-final.log`). The new
+  revoked-consent boundary test found and fixed an actual missing pre-spend
+  approvalRequired guard; no permission was bypassed to make it pass.
+
+Existing UI/stack retained using the site-work guidance; no Sites scaffolding,
+hosting migration, separate preview deployment, new dependency or auth migration.
+This remains a LOCAL candidate. Production workflows stayed paused throughout47;
+no production records were read or mutated in47 and additional paid cost was0.
+
+Before any next production action: supervisor review of this local candidate,
+then release gates/deployment under separate direction. Re-read ONLY the two
+authorized jobs/articles using credential-free projections to derive fresh
+expectedUpdatedAt/articleHash and confirm all retained tuples. Do not invent
+those values or silently widen eligibility if a precondition fails. Only after
+approved reconciliation and ordinary owner Resume may the same20 grant fund
+remaining work. Core live publication plus post-consumption refill is still
+unproven on both sites. Last46 ready0/2 each, actual publication times NONE,
+original September14 22:14:14.420–22:19:14.420 UTC window MISSED. Ordinary daily
+cycles, full SLC acceptance, attributable SEO growth and monetisation remain
+unproven. No backlinks work was started.
+
+## Previous46: title recovery released; semantic audit contradiction blocks both deliveries
+
 
 Assignment `supervisor-20260915-slc-confirmed-owner-live-delivery-46`.
 The owner confirmed arshadoo1423@gmail.com, signed in normally, and the exact

@@ -11,6 +11,7 @@ import { expectedPublisherDestinationReceipt } from "../convex/lib/publisherProv
 import { accountDeletionKey, accountDeletionTombstoneUserId } from "../convex/lib/accountDeletion.ts";
 import { CADENCE_MICRO_SEED_VERSION, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT } from "../convex/lib/cadenceMicroSeed.ts";
 import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../convex/lib/planProviderBudget.ts";
+import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -60,6 +61,7 @@ function articlePayload(keyword: string) {
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean;
+  auditResponse?: (audit: Fields, request: Fields) => unknown;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
@@ -165,6 +167,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         value = { score: options.quality === "low" ? 35 : 93, notes: [],
           materialDefects: options.quality === "low" ? ["Replace repetitive advice with a worked decision example tied to this business."] : [],
           claimEvidence: claims.map((claim: Fields) => ({ claim: claim.paragraph, citationNumbers: [...claim.paragraph.matchAll(/\[(\d+)\]/g)].map((match: string[]) => Number(match[1])), supported: true, reason: "Synthetic source fixture supports the register fields." })) };
+        if (options.auditResponse) value = options.auditResponse(value as Fields, body);
       } else if (tool === "submit_final_metadata") { assert.ok(keyword); value = { title: titleFor(keyword), metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description }; }
       else assert.fail(`Unexpected Anthropic tool ${tool}`);
       return json({ id: `synthetic-message-${modelCalls.length}`, type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
@@ -718,7 +721,7 @@ test("SLC32 known provider rejection retries the same bound job without erasing 
   assert.equal(f.tables.provider_spend_reservations.length, 1); f.assertOffline();
 });
 
-async function exerciseValidationCycles(f: Awaited<ReturnType<typeof validationFixture>>, t: TestContext) {
+async function exerciseValidationCycles(f: Awaited<ReturnType<typeof validationFixture>>, t: TestContext, callsPerJob = 3) {
   const active = f.sites.slice(0, 2);
   const ready = (siteId: string) => f.tables.jobs.filter(j => j.siteId === siteId && j.contentWork?.stage === "ready");
   for (const site of active) await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
@@ -741,10 +744,10 @@ async function exerciseValidationCycles(f: Awaited<ReturnType<typeof validationF
   for (const job of f.tables.jobs) {
     assert.equal(job.contentWork.validationAuthorizationId, f.args.authorizationId);
     const row = f.get(job.providerSpendReservationId)!; assert.equal(row.contentWorkJobId, job._id);
-    assert.equal(row.validationAuthorizationId, f.args.authorizationId); assert.equal(row.settledMicroUsd, 600);
+    assert.equal(row.validationAuthorizationId, f.args.authorizationId); assert.equal(row.settledMicroUsd, callsPerJob * 200);
   }
-  assert.equal(f.tables.provider_spend_reservations.filter(r => r.validationAuthorizationId === f.args.authorizationId).reduce((sum, row) => sum + row.settledMicroUsd, 0), 6000);
-  assert.equal(f.modelCalls.length, 30); f.assertOffline();
+  assert.equal(f.tables.provider_spend_reservations.filter(r => r.validationAuthorizationId === f.args.authorizationId).reduce((sum, row) => sum + row.settledMicroUsd, 0), callsPerJob * 2000);
+  assert.equal(f.modelCalls.length, callsPerJob * 10); f.assertOffline();
 }
 
 test("SLC32 both approved tenants execute, verify and refill three fixed cycles under one run", async t => {
@@ -855,6 +858,266 @@ test("SLC46 recovered title metadata does not approve substantively weak content
   for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: f.get(id)!.siteId, jobId: id });
   assert.equal(f.get(id)!.contentWork.stage, "review_failed");
   assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+});
+
+const isAuditClarification = (request: Fields) => request.messages[0].content.includes("SEMANTIC AUDIT CLARIFICATION V1:");
+test("SLC47 irregular audits on both sites clarify once, retain raw contradictions, publish and freshly refill three synthetic cycles", async t => {
+  let ordinal = 0;
+  const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => isAuditClarification(request) ? audit
+    : ++ordinal % 3 === 0 ? { ...audit, materialDefects: ["Resolve this concrete unsupported statement."] }
+      : { ...audit, score: ordinal % 2 === 0 ? 80 : 83 } });
+  await exerciseValidationCycles(f, t, 4);
+  for (const job of f.tables.jobs) {
+    const calls = job.contentWork.providerCalls, clarification = calls.find((c: Fields) => c.semanticClarificationOf);
+    assert.ok(clarification); assert.equal(calls.filter((c: Fields) => c.semanticClarificationOf).length, 1);
+    const original = calls.find((c: Fields) => c.key === clarification.semanticClarificationOf.key);
+    assert.equal(auditResultHash(original.result), clarification.semanticClarificationOf.resultHash);
+    assert.equal(original.requestHash, clarification.semanticClarificationOf.requestHash);
+    assert.equal(job.contentWork.recoveryAttempts ?? 0, 0);
+    assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 800);
+  }
+  f.assertOffline();
+});
+
+test("SLC47 valid failing audit or failing clarification enters bounded revision without score promotion", async () => {
+  for (const clarify of [false, true]) {
+    const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => clarify && !isAuditClarification(request)
+      ? { ...audit, score: 83 } : { ...audit, score: 80, notes: ["Retain the actual failing judgment."], materialDefects: ["Replace unsupported factual claims with grounded guidance."] } });
+    await f.admit(0); const job = f.tables.jobs[0];
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.get(job._id)!.contentWork.stage, "review_failed");
+    assert.equal(f.get(job._id)!.contentWork.recoveryAttempts ?? 0, 0);
+    assert.equal(f.get(job._id)!.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf).length, clarify ? 1 : 0);
+    assert.equal(f.get(f.get(job._id)!.articleId)!.editorialQualityScore, 80);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  }
+});
+
+test("SLC47 a second contradictory or malformed audit stops deterministically without infrastructure retry or paid replay", async () => {
+  for (const kind of ["contradictory", "malformed_correction", "malformed_original"]) {
+    const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => kind === "malformed_original" ||
+      (kind === "malformed_correction" && isAuditClarification(request)) ? { ...audit, score: undefined } : { ...audit, score: 83 } });
+    await f.admit(0); const job = f.tables.jobs[0];
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    const failed = f.get(job._id)!, saved = JSON.stringify(failed), calls = f.modelCalls.length;
+    assert.equal(failed.status, "failed"); assert.match(failed.contentWork.failure, /^content_audit_/);
+    assert.equal(failed.contentWork.recoveryAttempts ?? 0, 0); assert.equal(failed.nextAttemptAt, undefined);
+    assert.equal(f.get(job.siteId)!.contentSchedule.paused, true);
+    assert.equal(failed.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf).length, kind === "malformed_original" ? 0 : 1);
+    for (let i = 0; i < 3; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.modelCalls.length, calls); assert.equal(JSON.stringify(f.get(job._id)), saved);
+    const receipt = f.get(job.providerSpendReservationId)!;
+    assert.equal(receipt.settledMicroUsd, calls * 200);
+    f.setIdentity(f.get(job.siteId)!.userId); const ready = await f.invoke("contentWork:readiness", { siteId: job.siteId });
+    assert.equal(ready.work[0].systemFailure, true); assert.match(ready.work[0].failure, /Pentra encountered an internal processing error/);
+    await assert.rejects(f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: ready.reviewToken }), /internal processing error/);
+    f.assertOffline();
+  }
+});
+
+async function legacySemanticAuditFixture(index = 0, keyOnly = false) {
+  const beforeFinalAudit = async () => {
+    let audits = 0;
+    const f = await scopedPricingFixture({}, {}, { providerError: creditFailure(), omitDraftTitle: true,
+      auditResponse: audit => index === 1 && ++audits === 1 ? { ...audit, score: 78,
+        materialDefects: ["Remove the unsupported market generalization."] } : audit });
+    await f.admit(index); const job = f.tables.jobs[0];
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    await f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, job._id));
+    await f.invoke("contentWork:control", await ownerCreditRetry(f, job._id));
+    f.providerOptions.providerError = undefined;
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    if (index === 1) {
+      await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+      assert.equal(f.get(job._id)!.contentWork.stage, "review_failed");
+      await f.admit(index); assert.equal(f.get(job._id)!.contentWork.revisions, 1);
+    }
+    return { ...f, jobId: job._id };
+  };
+  const template = await beforeFinalAudit(), f = await beforeFinalAudit(), job = f.get(f.jobId)!;
+  await template.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(template.get(job._id)!.contentWork.stage, "ready");
+  const existingCount = job.contentWork.providerCalls.length, workerToken = "synthetic-legacy-audit-checkpoint";
+  assert.ok(await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken }));
+  for (const c of template.get(job._id)!.contentWork.providerCalls.slice(existingCount)) {
+    const admission = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken,
+      key: c.logicalKey, requestHash: c.requestHash, ceilingMicroUsd: c.ceilingMicroUsd });
+    const result = c.logicalKey.endsWith(":audit_final_article") ? { ...c.result, score: index === 0 ? 83 : 80, materialDefects: [] } : c.result;
+    await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: admission.key, result, actualMicroUsd: c.actualMicroUsd });
+    if (keyOnly) { const saved = f.get(job._id)!.contentWork.providerCalls.at(-1); saved.key = c.logicalKey; delete saved.logicalKey; }
+  }
+  f.setTime(f.now() + 1);
+  const current = f.get(job._id)!;
+  Object.assign(current, { status: index ? "failed" : "pending", workerAttempts: index ? 5 : 3,
+    workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined, updatedAt: f.now(),
+    error: index ? "content_recovery_attempts_exhausted" : "Content recovery 3/3 scheduled: materialDefects: A score below 85 requires a concrete material defect." });
+  Object.assign(current.contentWork, { stage: index ? "failed" : "review", recoveryAttempts: 3,
+    failure: index ? "content_recovery_attempts_exhausted" : undefined });
+  f.providerOptions.auditResponse = undefined;
+  f.setIdentity(f.get(job.siteId)!.userId);
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "pause", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+  const call = current.contentWork.providerCalls.at(-1), article = f.get(current.articleId)!;
+  const repair = { siteId: job.siteId, jobId: job._id, expectedUpdatedAt: current.updatedAt,
+    articleHash: publicationArtifactHash({ ...article, title: article.title, slug: article.slug, markdown: article.markdown }), callKey: call.key, requestHash: call.requestHash, resultHash: auditResultHash(call.result), reference: "synthetic-reviewed-semantic-repair-v1" };
+  template.assertOffline();
+  return { ...f, repair };
+}
+
+test("SLC47 exact legacy pending3 and terminal5 counters survive one reviewed repair, cached clarification and synthetic fresh refill", async t => {
+  for (const index of [0, 1]) for (const keyOnly of [false, true]) await t.test(`${index ? "terminal5 revision1" : "pending3"} ${keyOnly ? "key-only" : "logical-key"}`, async () => {
+    const f = await legacySemanticAuditFixture(index, keyOnly), before = structuredClone(f.get(f.jobId)!), holds = JSON.stringify(f.tables.provider_spend_reservations);
+    const calls = f.modelCalls.length, wakes = f.tables._scheduled_functions.length;
+    const results = await Promise.allSettled(Array.from({ length: 3 }, () => f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair)));
+    assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
+    const repaired = f.get(f.jobId)!;
+    assert.equal(repaired.workerAttempts, before.workerAttempts); assert.equal(repaired.contentWork.recoveryAttempts, 3);
+    assert.equal(repaired.contentWork.semanticAuditRepair.previousError, before.error);
+    assert.equal(repaired.contentWork.semanticAuditRepair.workerAttempts, before.workerAttempts);
+    assert.deepEqual(repaired.contentWork.providerCalls, before.contentWork.providerCalls);
+    assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); assert.equal(f.modelCalls.length, calls);
+    assert.equal(f.tables._scheduled_functions.length, wakes); assert.equal(f.get(repaired.siteId)!.contentSchedule.paused, true);
+    f.restartRuntime(); f.setIdentity(f.get(repaired.siteId)!.userId);
+    const ready = await f.invoke("contentWork:readiness", { siteId: repaired.siteId });
+    await f.invoke("contentWork:control", { siteId: repaired.siteId, action: "resume", reviewToken: ready.reviewToken });
+    await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/pipeline:processNextJob", { siteId: repaired.siteId, jobId: f.jobId })));
+    assert.equal(f.get(f.jobId)!.contentWork.stage, "ready", f.get(f.jobId)!.error);
+    assert.equal(f.modelCalls.length, calls + 1, "Only the semantic clarification is new paid I/O");
+    assert.ok(isAuditClarification(f.modelCalls.at(-1)!));
+    assert.equal(f.get(f.jobId)!.workerAttempts, before.workerAttempts);
+    for (const c of before.contentWork.providerCalls) assert.deepEqual(f.get(f.jobId)!.contentWork.providerCalls.find((p: Fields) => p.key === c.key), c);
+    f.restartRuntime();
+    await pumpUntil(f, () => f.get(f.jobId)!.contentWork.stage === "verified" &&
+      f.tables.jobs.filter(j => j.siteId === repaired.siteId && j.contentWork?.stage === "ready").length === 2, 240);
+    const done = f.get(f.jobId)!;
+    assert.equal(done.contentWork.deadlineAt, before.contentWork.deadlineAt); assert.equal(done.contentWork.recoveryAttempts, 3);
+    assert.equal(done.providerSpendReservationId, before.providerSpendReservationId);
+    assert.equal(JSON.stringify(f.get(done.providerSpendReservationId)), JSON.stringify(JSON.parse(holds)[0]));
+    assert.ok(f.tables.jobs.some(j => j.siteId === done.siteId && j.createdAt > done.contentWork.verifiedAt && j.contentWork.stage === "ready"));
+    assert.equal(f.repositories.get(f.sites[index].name.toLowerCase())!.writes, 1); f.assertOffline();
+  });
+});
+
+test("SLC47 legacy repair rejects unrelated failure, stale authority/article, ambiguous costs, publication and unavailable budget", async () => {
+  for (const defect of ["unpaused", "owner", "profile", "destination", "permission", "entitlement", "pricing", "expired", "stopped", "article", "publication", "ambiguity", "failure", "budget", "spent", "wrong_site", "hash", "request_hash", "updated", "malformed", "counter"]) {
+    const f = await legacySemanticAuditFixture(1), job = f.get(f.jobId)!, site = f.get(job.siteId)!, grant = f.get(f.args.authorizationId)!;
+    if (defect === "unpaused") site.contentSchedule.paused = false;
+    if (defect === "owner") site.userId = "user:changed-owner";
+    if (defect === "profile") site.siteSummary += " Changed facts.";
+    if (defect === "destination") site.repoName += "-changed";
+    if (defect === "permission") site.approvalRequired = true;
+    if (defect === "entitlement") f.tables.account_plan_entitlements.find(r => r.userId === site.userId)!.status = "pending";
+    if (defect === "pricing") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+    if (defect === "expired") grant.cumulativeValidation.expiresAt = f.now();
+    if (defect === "stopped") grant.cumulativeValidation.stoppedAt = f.now();
+    if (defect === "article") f.get(job.articleId)!.markdown += " Changed article.";
+    if (defect === "publication") f.get(job.articleId)!.publicationAttemptedAt = f.now();
+    if (defect === "ambiguity") job.contentWork.providerCalls[0].state = "started";
+    if (defect === "failure") job.contentWork.failure = "unrelated_terminal_failure";
+    if (defect === "budget") job.contentWork.providerCalls[0].ceilingMicroUsd = job.contentWork.budgetMicroUsd;
+    if (defect === "spent") f.get(job.providerSpendReservationId)!.settledAt = f.now();
+    if (defect === "wrong_site") f.repair.siteId = f.sites[0].id;
+    if (defect === "hash") f.repair.resultHash = "0".repeat(64);
+    if (defect === "request_hash") f.repair.requestHash = "0".repeat(64);
+    if (defect === "updated") job.updatedAt++;
+    if (defect === "malformed") job.contentWork.providerCalls.at(-1).result.notes = null;
+    if (defect === "counter") job.contentWork.recoveryAttempts = 0;
+    const snapshot = JSON.stringify(job), holds = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length;
+    await assert.rejects(f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair), Error, defect);
+    assert.equal(JSON.stringify(f.get(f.jobId)), snapshot, defect); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
+    assert.equal(f.modelCalls.length, calls); f.assertOffline();
+  }
+});
+
+test("SLC47 an inconsistent legacy clarification stops with historical counters and a consumed repair, never another paid recovery", async () => {
+  for (const index of [0, 1]) {
+    const f = await legacySemanticAuditFixture(index), original = structuredClone(f.get(f.jobId)!);
+    await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
+    f.providerOptions.auditResponse = audit => ({ ...audit, score: 80 });
+    await f.invoke("contentWork:control", { siteId: original.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: original.siteId })).reviewToken });
+    const calls = f.modelCalls.length, holds = JSON.stringify(f.tables.provider_spend_reservations);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: original.siteId, jobId: original._id });
+    const failed = f.get(original._id)!;
+    assert.equal(failed.status, "failed"); assert.equal(failed.contentWork.failure, "content_audit_clarification_inconsistent");
+    assert.equal(failed.workerAttempts, original.workerAttempts + 1, "The one new failed attempt is recorded, never a reset");
+    assert.equal(failed.contentWork.recoveryAttempts, 3); assert.equal(failed.contentWork.semanticAuditRepair.workerAttempts, original.workerAttempts);
+    assert.equal(failed.contentWork.deadlineAt, original.contentWork.deadlineAt); assert.equal(failed.nextAttemptAt, undefined);
+    assert.equal(f.get(original.siteId)!.contentSchedule.paused, true); assert.equal(failed.contentWork.semanticAuditRepair.previousStatus, original.status);
+    assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
+    for (let i = 0; i < 3; i++) { f.restartRuntime(); await f.invoke("actions/pipeline:processNextJob", { siteId: original.siteId, jobId: original._id }); }
+    assert.equal(f.modelCalls.length, calls + 1);
+    await assert.rejects(f.invoke("contentWork:reconcileSemanticAuditFailure", { ...f.repair, expectedUpdatedAt: failed.updatedAt })); f.assertOffline();
+  }
+});
+
+test("SLC47 clarification ambiguity or explicit rejection retains its ceiling and never makes a second paid attempt", async () => {
+  for (const kind of ["ambiguous", "503", "429"]) {
+    const f = await legacySemanticAuditFixture(0);
+    await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
+    const job = f.get(f.jobId)!;
+    if (kind === "ambiguous") f.providerOptions.ambiguousProviderFailure = "audit_final_article";
+    else f.providerOptions.providerError = { tool: "audit_final_article", status: Number(kind),
+      type: kind === "429" ? "rate_limit_error" : "overloaded_error", message: "Synthetic provider refusal" };
+    await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+    const calls = f.modelCalls.length, holds = JSON.stringify(f.tables.provider_spend_reservations);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    const failed = f.get(job._id)!;
+    assert.equal(failed.status, "failed"); assert.equal(failed.nextAttemptAt, undefined); assert.equal(failed.contentWork.recoveryAttempts, 3);
+    assert.equal(failed.contentWork.providerCalls.at(-1).state, kind === "ambiguous" ? "started" : "rejected");
+    assert.match(failed.contentWork.failure, kind === "ambiguous" ? /ambiguous/ : /content_audit_clarification_provider_failed/);
+    for (let i = 0; i < 3; i++) { f.restartRuntime(); await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id }); }
+    assert.equal(f.modelCalls.length, calls + 1); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
+    await assert.rejects(f.invoke("contentWork:reconcileSemanticAuditFailure", { ...f.repair, expectedUpdatedAt: failed.updatedAt }));
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  }
+});
+
+test("SLC47 pause, revoked authority, expiry and budget fences stop a clarification before additional paid I/O", async () => {
+  for (const defect of ["pause", "owner", "permission", "profile", "destination", "pricing", "expiry", "stop", "budget"]) {
+    const f = await scopedPricingFixture(); await f.admit(0); const job = f.tables.jobs[0], site = f.get(job.siteId)!;
+    f.providerOptions.auditResponse = audit => {
+      if (defect === "pause") site.contentSchedule.paused = true;
+      if (defect === "owner") site.userId = "user:changed-owner";
+      if (defect === "permission") site.approvalRequired = true;
+      if (defect === "profile") site.siteSummary += " Changed facts.";
+      if (defect === "destination") site.repoName += "-changed";
+      if (defect === "pricing") f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: "" });
+      if (defect === "expiry") f.get(f.args.authorizationId)!.cumulativeValidation.expiresAt = f.now();
+      if (defect === "stop") f.get(f.args.authorizationId)!.cumulativeValidation.stoppedAt = f.now();
+      if (defect === "budget") f.get(job._id)!.contentWork.budgetMicroUsd = 600;
+      return { ...audit, score: 83 };
+    };
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.modelCalls.length, 3, defect);
+    assert.equal(f.get(job._id)!.contentWork.providerCalls.some((c: Fields) => c.semanticClarificationOf), false, defect);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0, defect); f.assertOffline();
+  }
+});
+
+test("SLC47 clarification lineage rejects forged originals, duplicate claims and changed hashes; completed replay is immutable", async () => {
+  const f = await legacySemanticAuditFixture(), job = f.get(f.jobId)!;
+  await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+  const workerToken = "synthetic-semantic-crash";
+  assert.ok(await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken }));
+  const source = f.get(job._id)!.contentWork.providerCalls.at(-1);
+  const args = { jobId: job._id, workerToken, key: (source.logicalKey ?? source.key) + SEMANTIC_AUDIT_SUFFIX,
+    requestHash: "b".repeat(64), ceilingMicroUsd: 1_000,
+    semanticClarificationOf: { key: source.key, requestHash: source.requestHash, resultHash: auditResultHash(source.result) } };
+  for (const change of [{ semanticClarificationOf: undefined }, { key: args.key + ":other" },
+    { semanticClarificationOf: { ...args.semanticClarificationOf, resultHash: "0".repeat(64) } }])
+    await assert.rejects(f.invoke("contentWork:beginProviderCall", { ...args, ...change }));
+  const attempts = await Promise.allSettled(Array.from({ length: 3 }, () => f.invoke("contentWork:beginProviderCall", args)));
+  assert.equal(attempts.filter(a => a.status === "fulfilled").length, 1);
+  const admitted = attempts.find(a => a.status === "fulfilled")! as PromiseFulfilledResult<Fields>;
+  const result = { ...source.result, score: 93 };
+  const completion = { jobId: job._id, workerToken, key: admitted.value.key, actualMicroUsd: 200, result };
+  await f.invoke("contentWork:completeProviderCall", completion); f.restartRuntime();
+  await f.invoke("contentWork:completeProviderCall", completion);
+  const saved = JSON.stringify(f.get(job._id)!.contentWork.providerCalls);
+  assert.equal((await f.invoke("contentWork:beginProviderCall", args)).kind, "cached");
+  await assert.rejects(f.invoke("contentWork:beginProviderCall", { ...args, requestHash: "a".repeat(64) }));
+  await assert.rejects(f.invoke("contentWork:completeProviderCall", { ...completion, actualMicroUsd: 201 }));
+  assert.equal(JSON.stringify(f.get(job._id)!.contentWork.providerCalls), saved); f.assertOffline();
 });
 
 test("SLC35 scoped pricing enables only the two saved run sites, not unrelated same-owner or foreign work", async () => {
