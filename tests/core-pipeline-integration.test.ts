@@ -60,7 +60,7 @@ function articlePayload(keyword: string) {
 }
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
-  longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean;
+  longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   auditResponse?: (audit: Fields, request: Fields) => unknown;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
@@ -264,7 +264,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     else assert.fail(`Unexpected DataForSEO route ${url.pathname}`);
     return json({ status_code: 20000, cost: 0.001, tasks: [{ id: `synthetic-${f.trace.length}`, status_code: 20000, cost: 0.001, result }] });
   }, { ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
-    ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) });
+    ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) }, { serializeValues: options.convexSerialization });
   const sites = businesses.map(b => {
     const owner = `synthetic-owner-${b.domain}`;
     f.add("account_plan_entitlements", { userId: owner, status: "completed", maxSites: 9999, maxArticles: 150, planFeatures: ["max_sites_unlimited", "max_articles_150"] });
@@ -877,6 +877,62 @@ test("SLC47 irregular audits on both sites clarify once, retain raw contradictio
     assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 800);
   }
   f.assertOffline();
+});
+
+test("SLC48 real Convex value serialization preserves fresh audit clarification and three publish/refill cycles on both sites", async t => {
+  const f = await scopedPricingFixture({}, {}, { convexSerialization: true,
+    auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 83 } });
+  await exerciseValidationCycles(f, t, 4);
+  for (const job of f.tables.jobs) {
+    const original = job.contentWork.providerCalls.find((c: Fields) => c.logicalKey?.endsWith(":audit_final_article"));
+    const clarification = job.contentWork.providerCalls.find((c: Fields) => c.semanticClarificationOf);
+    assert.equal(original.result.score, 83); assert.equal(clarification.result.score, 93);
+    assert.equal(clarification.semanticClarificationOf.resultHash, auditResultHash(original.result));
+    assert.deepEqual(Object.keys(original.result), Object.keys(original.result).sort());
+    assert.equal(job.contentWork.recoveryAttempts ?? 0, 0);
+  }
+  f.assertOffline();
+});
+
+test("SLC48 restart after persisted clarification but before article application reuses exact request bytes and settles once", async () => {
+  const create = () => scopedPricingFixture({}, {}, { convexSerialization: true,
+    auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 83 } });
+  const template = await create(), f = await create();
+  for (const fixture of [template, f]) {
+    await fixture.admit(0); const job = fixture.tables.jobs[0];
+    await fixture.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  }
+  const job = f.tables.jobs[0], originalDeadline = job.contentWork.deadlineAt;
+  await template.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(template.get(job._id)!.contentWork.stage, "ready");
+  const workerToken = "synthetic-after-clarification-before-article";
+  assert.ok(await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: job._id, workerToken }));
+  const newReceipts = template.get(job._id)!.contentWork.providerCalls.slice(job.contentWork.providerCalls.length);
+  for (const receipt of newReceipts) {
+    const admitted = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken,
+      key: receipt.logicalKey, requestHash: receipt.requestHash, ceilingMicroUsd: receipt.ceilingMicroUsd,
+      ...(receipt.semanticClarificationOf ? { semanticClarificationOf: receipt.semanticClarificationOf } : {}) });
+    const complete = { jobId: job._id, workerToken, key: admitted.key, actualMicroUsd: receipt.actualMicroUsd, result: receipt.result };
+    await f.invoke("contentWork:completeProviderCall", complete);
+    await f.invoke("contentWork:completeProviderCall", complete);
+  }
+  const before = structuredClone(f.get(job._id)!), calls = f.modelCalls.length;
+  assert.ok(before.contentWork.providerCalls.at(-1).semanticClarificationOf);
+  assert.equal(f.get(job.articleId)!.auditedContentHash, undefined, "Crash point is before applying any approved article");
+  assert.equal(f.get(job.providerSpendReservationId)!.settledAt, undefined);
+  f.restartRuntime(); f.setTime(before.leaseExpiresAt + 1);
+  await f.invoke("jobs:resetStuckJobs", { siteId: job.siteId, jobId: job._id, expectedWorkerToken: workerToken });
+  assert.equal(f.get(job._id)!.status, "pending"); f.setTime(f.get(job._id)!.nextAttemptAt);
+  await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id })));
+  const ready = f.get(job._id)!;
+  assert.equal(ready.contentWork.stage, "ready", ready.error); assert.equal(f.modelCalls.length, calls, "No second provider request after restart");
+  assert.deepEqual(ready.contentWork.providerCalls, before.contentWork.providerCalls, "Raw results, original and clarification request hashes remain immutable");
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 800);
+  assert.equal(ready.contentWork.deadlineAt, originalDeadline); assert.equal(ready.contentWork.recoveryAttempts, 1);
+  f.restartRuntime();
+  await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.siteId === job.siteId && j.contentWork?.stage === "ready").length === 2, 240);
+  assert.ok(f.tables.jobs.some(j => j.siteId === job.siteId && j.createdAt > f.get(job._id)!.contentWork.verifiedAt && j.contentWork?.stage === "ready"));
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 800); template.assertOffline(); f.assertOffline();
 });
 
 test("SLC47 valid failing audit or failing clarification enters bounded revision without score promotion", async () => {

@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { isIP, isIPv4, isIPv6 } from "node:net";
 import { buildSync } from "esbuild";
 import { getFunctionName } from "convex/server";
+import { convexToJson, jsonToConvex } from "convex/values";
 
 // Dynamic Convex handler/validator boundary, not a replacement data model.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,7 +50,7 @@ function source(name: string) {
 /** Infrastructure only. Every function reference dispatches the actual
  * registered handler. Mutations are serializable with rollback; indexed
  * queries use the real schema's field ordering, never a canned result. */
-export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>, environment: Record<string, string> = {}) {
+export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>, environment: Record<string, string> = {}, boundary: { serializeValues?: boolean } = {}) {
   let now = START, serial = 0;
   let identitySubject: string | null = null;
   let mutationTail: Promise<unknown> = Promise.resolve();
@@ -225,13 +226,16 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     cancel: async (id: string) => { const row = get(id); assert.ok(row); row.state = { kind: "canceled" }; },
   };
   const invoke = async (name: string, args: Fields) => {
+    const wire = <T>(value: T): T => boundary.serializeValues && value !== undefined
+      ? jsonToConvex(convexToJson(copy(value) as never)) as T : copy(value);
+    args = wire(args);
     const [module, member] = name.split(":");
     const handler = load(module)[member]; assert.ok(handler?._handler, `Missing real handler ${name}`);
     assert.ok(valid(args, JSON.parse(handler.exportArgs())), `Arguments violate the real Convex validator: ${name}`);
     const item: Trace = { at: now, name, args: copy(args) }; trace.push(item);
     const execute = async () => {
       const before = handler.isMutation ? copy(tables) : undefined;
-      try { const result = await handler._handler(context, copy(args)); item.result = copy(result); return copy(result); }
+      try { const result = await handler._handler(context, copy(args)); item.result = wire(result); return wire(result); }
       catch (error) {
         if (before) for (const [table, rows] of Object.entries(before)) tables[table] = rows;
         item.error = String(error); throw error;

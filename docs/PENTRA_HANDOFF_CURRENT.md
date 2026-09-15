@@ -1,6 +1,106 @@
 # Pentra — fresh-task handoff
 
-## Current47: local audit recovery and truthful-status repair
+## Current48: first release reconciled; local serialization repair awaits review
+
+Active assignment `supervisor-20260915-slc-bound-release-live-proof-48`, with
+`supervisor-20260915-slc-bound-release-live-proof-48-serialization-review`.
+The first approved release is DONE. Both one-use repairs are CONSUMED. Keep both
+sites paused: no further release, Resume, repair replay or paid call until the
+supervisor reviews the local serialization candidate. No new assignment or
+financial/login request. Existing architecture, quality85, attempts, budget and
+publication protections remain unchanged.
+
+Hard checkpoints remain September16 00:15 UTC (September15 17:15 PDT) for BOTH
+real reviewed publications, verified rendered artifacts, fresh post-consumption
+generation/review/refill and truthful UI; September19 00:15 UTC for full approved
+SLC acceptance including ordinary cycles/measurement. No guarantees/extensions.
+If core fails, report failure, safely stop NEW paid test admissions and reconcile
+in-flight work. No backlinks, synthetic acceptance or attributed SEO claims.
+
+### Deployed release and consumed reconciliation
+
+- Exact release `f320a446852c3bbd9a6ec77fc20d4d055f5d3c3d`; main fast-forwarded
+  from fedb432 without discarding other history. Convex production deploy passed
+  by September15 22:37:32 UTC after dry-run; deployed function signatures checked.
+  Vercel production deployment6469835419 succeeded22:36:51 UTC, immutable URL
+  https://seo-sentinel-k9ranovc6-arshads-projects-836ebfbd.vercel.app . Hosted CI
+  https://github.com/iamheisenburger/SEOSentinel/actions/runs/35031765294 passed
+  at22:44:06 UTC against that same SHA.
+- Fresh credential-free exact-site preflight22:42:45.367 UTC passed all19
+  conditions on each original job. Pentra repair applied22:45:16.783 UTC;
+  LeadPilot22:45:18.335 UTC. Reference
+  `reviewed_semantic_audit_f320a44_20260915_v1`. NEVER reapply either repair.
+- Original Pentra job j9703g7paa6atyya4fzr56ngs58ecn07 and LeadPilot job
+  j973nq40csygxhcg0bchsmx6zd8ecq9h are now pending/review and remain paused.
+  Worker/recovery counters remain3/3 and5/3; revisions0/1, replacement0 each.
+  Raw audits83/80, old errors and counters are journaled, not rewritten.
+  No provider request, new hold or owner Resume occurred during48.
+- Read-only projection22:48:42.280 UTC: grant20.00, held5.00, settled0,
+  uncommitted15.00; known actual0.456052 is INSIDE the holds, not additional.
+  Pentra0.185672 (4calls), LeadPilot0.270380 (7calls). Original2.50 holds,
+  credit-refused ceilings and restoration evidence remain. Ordinary32/old4/
+  fleet35 unchanged. No other tenant records inspected.
+- Ready0/2 each; actual new publication times NONE. Original fixed window
+  September14 22:14:14.420–22:19:14.420 UTC remains MISSED. Daily/every8h
+  cadences unchanged. No live fresh refill, ordinary-cycle or SEO acceptance.
+
+### Local-only serialization repair
+
+Before Resume/paid I/O, actual installed Convex serialization reproduced
+`content_audit_original_checkpoint_changed`: raw provider objects preserve
+insertion order, but Convex recursively sorts their object keys when persisted.
+The f320 helper hashed insertion-order JSON. A fresh audit could therefore fail
+lineage validation; canonicalizing only its hash would still change clarification
+prompt bytes on a later persisted replay. This is an application checkpoint
+defect, not provider credit exhaustion or a reason to release valid reservations.
+
+Minimal runtime change in convex/lib/contentAudit.ts uses the real convexToJson
+encoding for BOTH auditResultHash and the original audit embedded in the semantic
+clarification prompt. Arrays remain ordered, values significant, raw receipts
+immutable. Saved request hashes/history are never migrated or overwritten.
+The existing two DB-derived repair result hashes remain unchanged, checked with
+the candidate helper in the exact-site read-only projection22:48:42.280 UTC:
+
+- Pentra db7e84f50a4e756eca2c423a9ae68be5b2c06b82a8ef76c34b83bc7dbc5e6ca2
+- LeadPilot b35fb6cb5e4b87c15151a6c6b9d26535df5e64312f55a835b01ab50d6ea64c43
+
+Tests use actual convexToJson/jsonToConvex at real registered handler argument/
+return boundaries. Nested objects, changed values, significant array order and
+raw immutability are covered. Fresh contradictory audits complete three synthetic
+publish/verify/refill cycles on each fixture site. A separate restart occurs
+AFTER clarification persistence BEFORE article application, then three concurrent
+workers reuse the exact saved request hashes/results with zero second paid I/O,
+one settlement, original deadline, and fresh refill after consumption. These are
+synthetic provider/clock tests, never production acceptance.
+
+Local candidate gates September15:
+
+- Targeted16/16 pass,13991.180833ms (`/tmp/pentra48-targeted.log`). The pre-fix
+  actual-handler regression failed with the reproduced lineage error
+  (`/tmp/pentra48-serialization-repro.log`); the standalone actual-provider-wrapper
+  reproduction made0mutations/0provider calls (`/tmp/pentra48-audit-order-repro.mjs`).
+- Full1778total/1777pass/0fail/1existing skip,152408.824416ms
+  (`/tmp/pentra48-full.log`); typecheck PASS, lint0errors/157existing warnings,
+  production build PASS with dummy public/test configuration.
+- Schema compatibility PASS against f320a44,61tables/296indexes; secret scan
+  PASS695tracked files; production dependency audit0vulnerabilities.
+- Browser36pass/2explicit authenticated skips,7.1seconds
+  (`/tmp/pentra48-browser.log`). Previous47 loopback WordPress SQLite61/MySQL62
+  pass; unchanged adapter tests not rerun in48.
+
+Genuine owner Chrome session was already signed in. Deployed truthful-status UI
+was inspected on LeadPilot desktop/mobile sidebar/overview/settings and Pentra
+mobile overview/settings after reconciliation: paused0/2, original overdue deadline and no
+verified publication. Existing historic traffic is not new-article attribution.
+No auth token/cookie export or identity impersonation. Existing GitHub/Convex/
+Vercel stack retained using hosting guidance; no Sites migration or scaffolding.
+
+Next: local candidate review only. Supervisor release direction must precede a
+second deployment or genuine owner Resume. Do not replay reconciliation. Then
+verify actual review/publication/rendered artifact and fresh generation/review/
+refill after consumption on BOTH exact tenants within the unchanged20grant.
+
+## Previous47: local audit recovery and truthful-status repair
 
 Assignment `supervisor-20260915-slc-audit-recovery-and-truthful-ui-47`.
 Both production workflows remain paused. No production mutation, provider call,
