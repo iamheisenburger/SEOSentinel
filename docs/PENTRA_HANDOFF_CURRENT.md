@@ -1,6 +1,114 @@
 # Pentra — fresh-task handoff
 
-## Current43: combined41/42 released — delivery and customer acceptance still incomplete
+## Current44: funded production key verified; retained refusals reconciled; owner retry not executed
+
+Assignment `supervisor-20260915-slc-funded-live-validation-44`. Runtime remains
+deployed `11771b250131e3362d58c5b9ea7fd3d2cba9beea` (see exact43
+release receipt below; no runtime/configuration change in44). This bounded run
+stops at the genuine owner-session prerequisite, not at a budget or provider
+funding failure. No new engineering or production acceptance is claimed.
+
+### Provider funding is positively bound
+
+The supervisor observed today's Paid funding event and USD19.87 wallet credit.
+The worker independently checked the deployed ANTHROPIC_API_KEY in memory:
+one authenticated, read-only GET `/v1/models?limit=1` returned HTTP200 at
+2026-09-15 11:48:59.869 UTC, request `req_011Cf5B1FZeqYYbnKHQmUYin`.
+Its `anthropic-organization-id` was
+`75337c80-96bf-48ff-bb3e-e7ae0b343906`, workspace
+`wrkspc_01RJx5wqfU7v36X3cJVFBqAB`. The authenticated Console organization
+page showed exactly that organization ID, Heisenburger's Individual Org,
+and USD19.87 credit. This proves the funded organization owns the production
+credential. API response body and credential were withheld; no model, purchase,
+top-up, new credential, permission or provider switch occurred.
+[Official header semantics](https://platform.claude.com/docs/en/api/overview)
+and [read-only models endpoint](https://platform.claude.com/docs/en/api/models/list)
+were checked before the request. No invoice/payment details are retained here.
+
+### Exact retained refusals and mutations
+
+At11:53:07.239 UTC, a bounded, exact-site-only projection confirmed the original
+grant, jobs, hashes and their sole legacy failed runs. The two400 responses
+strictly identify insufficient Anthropic credit, not Pentra internal spending
+exhaustion. The existing `contentWork:confirmCreditRestoration` mutation
+accepted each exact retained evidence run, using immutable reference
+`anthropic_paid_20260915_org75337c80_metadata114859`, bound to the evidence above.
+
+| Field | Pentra | LeadPilot |
+| --- | --- | --- |
+| Job | `j9703g7paa6atyya4fzr56ngs58ecn07` | `j973nq40csygxhcg0bchsmx6zd8ecq9h` |
+| Original evidence run | `kd76xtwwz0x9epjf5sxbfp6s7h8edmhz` | `kd7b3vcravejwsh9mn0pa9sgmh8ed2xt` |
+| Original provider request | `req_011Cf42zxY2q9yG39aW7hnqF` | `req_011Cf431ERkqdB4pREzeTFb8` |
+| Original request SHA256 | `b404c356bd31320392cc4fd362313b931878fecc979b73e8d842952a5b7ff350` | `38060b80799baa44b4606a85db8b274a3e4dbe5cab158a837061a27386051e7e` |
+| Restoration confirmed UTC | 2026-09-15 11:53:32.919 | 2026-09-15 11:53:34.821 |
+| Original reservation | `n576sgrs11b9dzc5mg0fjbm21n8echcx` | `n5727h3mka0ekryf5a90ggsj8s8edf7v` |
+| Held USD / original call ceiling USD | 2.50 /0.295194 | 2.50 /0.282202 |
+
+Post-mutation projection11:54:41.882 UTC verifies both calls are now
+`rejected/provider_credit_unavailable/400`, with original hashes/request IDs
+and immutable source-evidence hashes. Both jobs remain failed with1 original
+worker attempt,0 recovery attempts,0 publication attempts, no lease, result,
+actual-cost receipt or retry requestedAt. Existing timestamps/error/run history
+and full USD2.50 holds are unchanged. No reservation was released or settled.
+This narrow reconciliation is deployed behavior, not an unverified local repair.
+
+### Remaining prerequisite and exact next path
+
+Supervisor relayed that the owner finished Google sign-in. However the supplied
+tab400603010 no longer exists in the supplied Chrome profile. One replacement
+tab400603028 at pentra.dev/dashboard redirected to the fully rendered Pentra
+sign-in form. Continuing the already-authorized Google login reached the
+account chooser; a final full state still showed Choose an account.
+No identity was selected/guessed, credential exported, authentication reset,
+permission expanded or repeat sign-in/funding request issued. The new tab is
+marked for handoff in Chrome1, same extension352e56c0-467c-4952-85fd-f39c32f9dbc2.
+
+This is also a backend recovery prerequisite in the reviewed implementation:
+`contentWork:control` requires the actual owner's Convex identity, current
+review token and exact creditRetry token before recording requestedAt and
+waking the existing workflow. `confirmCreditRestoration` deliberately does
+not retry or wake. No existing operator-only content-work retry exists; the
+legacy article-funding recovery is not this job type/failure and was not used.
+No admin-identity stand-in, direct job patch, forced dispatch/new candidate or
+new recovery endpoint was used to evade this check.
+
+Once the genuine session is available, navigate to each exact authorized site
+settings, then /settings to bind Content delivery service to that site. Check
+the exact domain and use its existing **Retry interrupted preparation** button.
+The existing path preserves the original holds/deadlines and bounds retries.
+Complete the real owner desktop/mobile readiness checks and the funded
+generation/review/publication/live verification/fresh-refill chain. Do not
+repeat funding attestation with a different reference or create another grant.
+
+### Current money, delivery and acceptance
+
+The SAME cumulative grant `sn756ejbtp5marqw1chdpdskp58e0j8y` is active,
+no expiry/stop: USD20 limit, USD5 held,0 VERIFIED actual settlements,USD15
+remaining. No paid model I/O occurred in44. Unknown prior billing is not
+declared zero. Safe snapshots11:55:02.974/04.437 UTC show complete85/96 rows,
+no owner mismatch; ordinary consumption remains13.686640 +17.355920 =
+31.042560 against32. Monthly headroom AT MOST0.957440; the tighter old4
+incremental window retains3.121440 consumption and AT MOST0.878560 headroom.
+Ordinary reset/expiry2026-10-01 00:00:00 UTC; old4/fleet35 untouched.
+No other tenant/fleet records were inspected.
+
+Both schedules remain inactive/unpaused, ready0/2, failed1, all other current
+content stages0. Original window2026-09-14 22:14:14.420–22:19:14.420 UTC
+remains MISSED; daily Pentra/every8h LeadPilot intervals unchanged. No44 article,
+quality approval, publication, live artifact or post-consumption refill exists.
+Last OLD recorded publication times remain Pentra2026-09-12 10:24:14.649 UTC
+and LeadPilot2026-09-07 22:15:34.409 UTC; those URLs/receipts below are not
+fresh44 verification. Three ordinary cycles per tenant, real measured GSC
+follow-up/reporting and attributable growth remain open. LeadPilot is overdue.
+
+No concrete new runtime defect was reproduced; no source patch, full unchanged
+release-gate rerun, push or deployment.43 test results remain historical release
+evidence and genuine-auth skips remain gaps. Only this existing handoff and
+the parent canonical plan were updated. Protected diagnosis+22/-0 preserved;
+protected environment/supervisor state/history not read. No backlinks,
+prospects, new task, automation, subscription or monetisation acceptance.
+
+## Previous43: combined41/42 released — delivery and customer acceptance still incomplete
 
 Assignment `supervisor-20260914-slc-combined-release-43`. Independently accepted
 source `11771b250131e3362d58c5b9ea7fd3d2cba9beea` is deployed to Convex and
