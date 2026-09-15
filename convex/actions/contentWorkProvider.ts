@@ -1,6 +1,7 @@
 "use node";
 import { AsyncLocalStorage } from "node:async_hooks";
 import Anthropic from "@anthropic-ai/sdk";
+import { contentToolRequest } from "../lib/contentToolRequest";
 import type { ActionCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
@@ -24,16 +25,14 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
   if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
   const cw = s.job.contentWork, p = cw.pricing;
-  const request = { model: p.model, max_tokens: Math.min(args.maxTokens ?? 8192, 16384), system: args.system,
-    messages: [{ role: "user" as const, content: args.userMessage }],
-    tools: [{ name: args.toolName, description: args.toolDescription, input_schema: args.inputSchema }],
-    tool_choice: { type: "tool" as const, name: args.toolName, disable_parallel_tool_use: true } };
+  const logicalKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
+  const previous = cw.providerCalls.find(c => (c.logicalKey ?? c.key) === logicalKey);
+  const request = contentToolRequest({ ...args, model: p.model }, previous?.requestHash);
   // UTF-8 bytes upper-bound text tokens; explicit overhead covers tool/chat
   // framing. No images, cached/premium tool use, web search or thinking enabled.
   const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192;
   if (inputBound > 200_000) throw new Error("Content request exceeds priced input bound");
   const ceilingMicroUsd = inputBound * p.inputMicroUsdPerToken + request.max_tokens * p.outputMicroUsdPerToken;
-  const logicalKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
   const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
     key: logicalKey, requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd });
   if (admission.kind === "cached") return admission.result;

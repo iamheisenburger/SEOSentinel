@@ -17,6 +17,7 @@ import {
   withArticleExecutionBudget,
 } from "../lib/articleExecutionBudget";
 import { z } from "zod";
+import { ArticleSchema } from "../lib/articleToolResult";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   appendRelatedInternalLinks,
@@ -340,23 +341,6 @@ const TopicSchema = z.object({
 });
 
 const PlanSchema = z.array(TopicSchema);
-
-const ArticleSchema = z.object({
-  title: z.string(),
-  slug: z.string(),
-  markdown: z.string(),
-  metaTitle: z.string().optional(),
-  metaDescription: z.string().optional(),
-  metaKeywords: z.array(z.string()).optional(),
-  sources: z
-    .array(
-      z.object({
-        url: z.string(),
-        title: z.string().optional(),
-      }),
-    )
-    .optional(),
-});
 
 const MediaReviewSchema = z.object({
   passed: z.boolean(),

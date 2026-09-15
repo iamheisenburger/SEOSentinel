@@ -59,7 +59,7 @@ function articlePayload(keyword: string) {
 }
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
-  longManagedPage?: boolean; gscFixture?: boolean;
+  longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
@@ -153,7 +153,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
           }
           if (options.selectedNoop) article.markdown = selected[3];
         } else if (options.wordpress) article.slug += "-" + businesses[0].domain.split(".")[0];
-        value = article;
+        value = options.omitDraftTitle ? Object.fromEntries(Object.entries(article).filter(([key]) => key !== "title")) : article;
       }
       else if (tool === "review_article") value = { markdown: text.split("Article to review:\n")[1], notes: "Synthetic evidence review", confidenceScore: 94, claimCount: 1, verifiedCount: 1, citations: [] };
       else if (["submit_editorial_review", "compress_article", "remediate_final_article"].includes(tool)) {
@@ -762,6 +762,100 @@ async function scopedPricingFixture(price: Fields = {}, grant: Fields = {}, opti
   f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify(pricing) });
   return { ...f, configuredPricing: pricing };
 }
+
+test("SLC46 a draft missing only title retains its generated metadata and reaches substantive review", async () => {
+  const f = await scopedPricingFixture({}, {}, { omitDraftTitle: true });
+  await f.admit(0); const job = f.tables.jobs[0];
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  const current = f.get(job._id)!;
+  assert.ok(current.articleId, current.error ?? "Paid draft must not be stranded before substantive review");
+  const article = f.get(current.articleId)!;
+  assert.equal(article.title, article.metaTitle);
+  assert.equal(current.contentWork.providerCalls[0].result.title, undefined, "The retained raw receipt is never rewritten");
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1);
+  f.assertOffline();
+});
+
+test("SLC46 both sites strictly generate, review, verify three deliveries and freshly refill when title metadata needs recovery", async t => {
+  const f = await scopedPricingFixture({}, {}, { omitDraftTitle: true });
+  await exerciseValidationCycles(f, t);
+  assert.ok(f.modelCalls.length > 0);
+  assert.ok(f.modelCalls.every(c => c.tools[0].strict === true));
+  assert.ok(f.modelCalls.every(c => !JSON.stringify(c.tools[0].input_schema).includes('"maxLength"')));
+  for (const j of f.tables.jobs) for (const c of j.contentWork.providerCalls) {
+    if (c.logicalKey.endsWith(":submit_article")) assert.equal(c.result.title, undefined);
+  }
+  f.assertOffline();
+});
+
+test("SLC46 paused legacy paid checkpoints resume at recovery three without redrafting or resetting attempts", async () => {
+  const template = await scopedPricingFixture({}, {}, { omitDraftTitle: true });
+  await Promise.all([template.admit(0), template.admit(1)]);
+  for (const job of template.tables.jobs) await template.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  const f = await scopedPricingFixture({}, {}, { omitDraftTitle: true });
+  await Promise.all([f.admit(0), f.admit(1)]);
+  const originals = f.tables.jobs.map(j => j._id), receipts: Fields[] = [];
+  for (const [i, id] of originals.entries()) {
+    const job = f.get(id)!, source = template.get(id)!;
+    assert.equal(source.siteId, job.siteId);
+    const request = structuredClone(template.modelCalls[i]);
+    delete request.tools[0].strict;
+    // Exact pre-strict draft schema: fixtures reconstruct a saved historical
+    // receipt; production never rewrites a receipt or its request hash.
+    request.tools[0].input_schema = { type: "object", additionalProperties: false, properties: {
+      title: { type: "string" }, slug: { type: "string" }, markdown: { type: "string", description: "The complete Markdown article." },
+      metaTitle: { type: "string", maxLength: 60 }, metaDescription: { type: "string", maxLength: 155 },
+      metaKeywords: { type: "array", items: { type: "string" }, minItems: 1 },
+      sources: { type: "array", items: { type: "object", additionalProperties: false,
+        properties: { url: { type: "string" }, title: { type: "string" } }, required: ["url", "title"] } },
+    }, required: ["title", "slug", "markdown", "metaTitle", "metaDescription", "metaKeywords", "sources"] };
+    const call = source.contentWork.providerCalls[0], workerToken = "synthetic-checkpoint-writer";
+    await f.invoke("jobs:claimPending", { siteId: job.siteId, jobId: id, workerToken });
+    const admitted = await f.invoke("contentWork:beginProviderCall", { jobId: id, workerToken, key: call.logicalKey,
+      requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd: call.ceilingMicroUsd });
+    await f.invoke("contentWork:completeProviderCall", { jobId: id, workerToken, key: admitted.key,
+      actualMicroUsd: call.actualMicroUsd, result: call.result });
+    if (i === 1) {
+      const historical = f.get(id)!.contentWork.providerCalls[0];
+      historical.key = call.logicalKey; delete historical.logicalKey;
+    }
+    // Seed the durable state of the old parser after three local failures.
+    Object.assign(f.get(id)!, { status: "pending", workerAttempts: 3, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined });
+    f.get(id)!.contentWork.recoveryAttempts = 3;
+    receipts.push(structuredClone(f.get(id)!.contentWork.providerCalls[0]));
+    f.setIdentity(f.get(job.siteId)!.userId);
+    await f.invoke("contentWork:control", { siteId: job.siteId, action: "pause", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: id });
+    assert.equal(f.get(id)!.workerAttempts, 3); assert.equal(f.modelCalls.length, 0);
+  }
+  f.restartRuntime();
+  for (const id of originals) {
+    const job = f.get(id)!; f.setIdentity(f.get(job.siteId)!.userId);
+    await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+    await Promise.all(Array.from({ length: 3 }, () => f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: id })));
+    assert.ok(f.get(id)!.articleId, f.get(id)!.error);
+    assert.equal(f.get(id)!.workerAttempts, 3); assert.equal(f.get(id)!.contentWork.recoveryAttempts, 3);
+  }
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 0);
+  await pumpUntil(f, () => originals.every(id => f.get(id)!.contentWork.stage === "verified" &&
+    f.tables.jobs.filter(j => j.siteId === f.get(id)!.siteId && j.contentWork?.stage === "ready").length === 2), 300);
+  for (const [i, id] of originals.entries()) {
+    const job = f.get(id)!;
+    assert.deepEqual(job.contentWork.providerCalls[0], receipts[i]);
+    assert.equal(job.contentWork.recoveryAttempts, 3); assert.ok(job.workerAttempts >= 3);
+    assert.ok(f.tables.jobs.some(j => j.siteId === job.siteId && j.contentWork?.stage === "ready" && j.createdAt > job.contentWork.verifiedAt));
+    assert.equal(f.repositories.get(f.sites[i].name.toLowerCase())!.writes, 1);
+  }
+  template.assertOffline(); f.assertOffline();
+});
+
+test("SLC46 recovered title metadata does not approve substantively weak content", async () => {
+  const f = await scopedPricingFixture({}, {}, { omitDraftTitle: true, quality: "low" });
+  await f.admit(0); const id = f.tables.jobs[0]._id;
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: f.get(id)!.siteId, jobId: id });
+  assert.equal(f.get(id)!.contentWork.stage, "review_failed");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+});
 
 test("SLC35 scoped pricing enables only the two saved run sites, not unrelated same-owner or foreign work", async () => {
   const f = await scopedPricingFixture();
