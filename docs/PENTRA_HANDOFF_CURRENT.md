@@ -1,6 +1,69 @@
 # Pentra — fresh-task handoff
 
-## Current44: funded production key verified; retained refusals reconciled; owner retry not executed
+## Current45: exact owner resolved; verified Google-email mapping unavailable
+
+Assignment `supervisor-20260915-slc-owner-session-delivery-45`. This is the
+narrow identity-resolution result, not live delivery or an engineering milestone.
+Deployed source remains11771b250131e3362d58c5b9ea7fd3d2cba9beea; no runtime,
+configuration, grant or production record was changed in45.
+
+At2026-09-15 12:00:21.543 UTC, the FIRST production read fetched ONLY the two
+authorized site IDs. Both record exactly the same owner:
+`user_3AXGUWw5bapriu3lFe91RwdrB0I`. Their domains remain pentra.dev and
+leadpilot.chat. No account/site/user/fleet enumeration occurred.
+
+The bounded attempt to resolve that one owner's verified Google identity:
+
+- Existing Convex production CLERK_SECRET_KEY was unavailable. The parent
+  .env.local has no CLERK_SECRET_KEY entry; no credential content was printed.
+  The protected .codex-convex-prod.env was NOT read.
+- Existing Vercel CLI authentication had expired. Official Vercel CLI59.17.0
+  was run from the npm cache/install surface for the read-only exact project's
+  production environment listing. Its normal refresh succeeded, status0.
+  No login reset, new scope, key creation or security setting change.
+- Exact project prj_9sEM4bchOxnVG162TcoJpD54miZt /seo-sentinel on existing
+  team_1Hk1WHUyVrJ3WYlbrgNO078d has ONE production CLERK_SECRET_KEY.
+  Metadata lookup used decrypt=false; only that variable ID was then requested.
+  Vercel returned type sensitive, decrypted:false, no usable key. No other
+  values were decrypted/output and no sensitivity/visibility setting changed.
+- Therefore the configured Clerk SDK's read-only users.getUser(exactOwnerId)
+  could not execute. No other Clerk user was requested.
+  [Exact-ID API semantics](https://clerk.com/docs/reference/backend/user/get-user).
+- Existing Clerk dashboard tab400602787 is also at its sign-in form. It was
+  inspected without clicking through to its broad users list or guessing an
+  administrator account.
+- Retained Pentra SSO tab400603028 remains on Google's chooser in Chrome1,
+  extension352e56c0-467c-4952-85fd-f39c32f9dbc2. Its saved account labels alone
+  do not bind an account to the exact Clerk owner ID. No Google account was
+  selected, no password/CAPTCHA/new consent encountered, no credentials or
+  session state exported/forged and no admin-as-customer identity used.
+
+The precise missing fact is the **verified Google email linked to Clerk user
+user_3AXGUWw5bapriu3lFe91RwdrB0I**, or authenticated read-only access to that
+exact user's identity record. A confirmed matching existing account may then
+be selected through normal SSO under45 authorization. Do not infer it from
+account ordering, Git commit authors, business names or billing-admin identity.
+This is not another funding or generic repeat-login request.
+
+Final exact-site projection2026-09-15 12:05:21.574 UTC confirms no retryRequested
+on either retained call. Both jobs remain failed/provider_credit_unavailable,
+1 worker attempt/0 recoveries/0 publication attempts, no result or actual-cost
+receipt. Original44 restoration attestations/request hashes/request IDs remain.
+SAME active20 grant sn756ejbtp5marqw1chdpdskp58e0j8y:5 held,0 VERIFIED actual
+settled,15 remaining; one original2.50 hold per site. No45 model/provider I/O.
+Both ready0/2, inactive/unpaused; daily Pentra/every8h LeadPilot unchanged;
+original2026-09-14 22:14:14.420–22:19:14.420 UTC windows still missed.
+
+No new generation/review/publication/verified artifact/refill or authenticated
+desktop/mobile acceptance. Three ordinary cycles each and measured GSC
+follow-up/reporting remain open; no SLC/monetisation/growth acceptance.
+No new runtime defect, source repair, full unchanged gates, push or deployment.
+Only existing handoff/checklist maintained; protected diagnosis+22/-0 preserved,
+parent plan never staged, no supervisor state/history read. No other tenant,
+backlinks, prospects, new task, subscription or automation. Stop for review at
+the specific owner-email mapping prerequisite; do not repeat restoration.
+
+## Previous44: funded production key verified; retained refusals reconciled; owner retry not executed
 
 Assignment `supervisor-20260915-slc-funded-live-validation-44`. Runtime remains
 deployed `11771b250131e3362d58c5b9ea7fd3d2cba9beea` (see exact43
