@@ -1,6 +1,184 @@
 # Pentra — fresh-task handoff
 
-## Current45: exact owner resolved; verified Google-email mapping unavailable
+## Current46: title recovery released; semantic audit contradiction blocks both deliveries
+
+Assignment `supervisor-20260915-slc-confirmed-owner-live-delivery-46`.
+The owner confirmed arshadoo1423@gmail.com, signed in normally, and the exact
+Pentra and LeadPilot records still map to user_3AXGUWw5bapriu3lFe91RwdrB0I.
+The identity prerequisite is resolved. No login/funding question was repeated,
+and no cookie/token export, impersonation, authentication reset or other-tenant
+lookup occurred. Existing Chrome1 session was used in tab400603038 because the
+original tab was held by the supervisor's browser session.
+
+Normal owner UI retries were executed ONCE: LeadPilot2026-09-15 21:39:27.609 UTC,
+Pentra21:40:01.890 UTC. Same original jobs, USD2.50 holds, request hashes and
+restoration reference `anthropic_paid_20260915_org75337c80_metadata114859`.
+Both provider drafts succeeded (Pentra USD0.078548; LeadPilot USD0.063904).
+Each omitted `title` while returning markdown/metaTitle/slug/other metadata.
+The parser failed before persisting an article. Cached recovery repeated the
+same parse error without another draft call; original credit-refused receipts
+remain intact. This is a deterministic application defect, not renewed credit
+exhaustion or evidence that valid reservations should be removed.
+
+Normal owner Pause was used on both workflows while repairing the defect.
+At21:56:10.606 UTC both remain pending/prepare/paused, ready0/2; Pentra
+worker/recovery2, LeadPilot3, publicationAttempts0. Original fixed window
+2026-09-14 22:14:14.420–22:19:14.420 UTC remains missed; daily/every8h cadence
+unchanged. No attempts, reservations, deadlines or failed history reset.
+
+Local actual-handler reproduction failed on the old parser with the same
+missing-title Zod error. Minimal tenant-generic repair recovers ONLY a missing
+display title from the draft's own nonempty, single-line, <=65-character SEO
+headline. Raw provider receipt/body are never rewritten; malformed substantive
+fields and weak content still fail. New calls use strict tools, with the
+installed Anthropic SDK's schema transformation retaining unsupported length
+constraints as descriptions. Existing quality validation remains authoritative.
+Exact old request hashes retain exact pre-strict bytes (including the oldest
+key-only checkpoint format); changed requests cannot reuse a checkpoint.
+
+Connected regressions cover both sites, cached paid recovery at attempt3,
+concurrent resume, unchanged raw receipts/hashes/attempts, substantive rejection,
+three synthetic publication cycles and distinct post-consumption refill.
+Existing credit-refusal/UTC-rollover/idempotency regressions also pass.
+### Release46 and resumed production
+
+Repair commit `fedb432ef7cfc5c6b49455ec8a12363845070228`, seven source/test
+files. Final full suite:1759 discovered/1758 passed/0 failed/1 existing skip,
+155295.464417ms. Focused new connected tests4/4; new unit tests6/6. Typecheck,
+schema61 tables/296 indexes against11771b2, secrets692 tracked files, full npm
+audit0, whitespace all pass. Lint0 errors/157 existing warnings. Production
+build passes with the normal credential-free CI public variables; its first
+invocation without NEXT_PUBLIC_CONVEX_URL failed configuration validation and
+was corrected without a source change. Browser34 passed/2 auth skips,8.2s;
+genuine four owner views are separately evidenced above/below.
+
+Real WordPress7.1/SQLite61/61,92294.913208ms; WordPress7.1/MySQL8.4.11
+InnoDB62/62,82335.691125ms, no skips. Fixtures stopped normally and retained
+their local DBs. The final one-line key-only checkpoint compatibility addition
+has its own connected regression and a repeated full core gate; no adapter
+source changed. New requests, retained modern/key-only receipts, concurrency,
+quality refusal and full synthetic refill chains all pass.
+
+Convex dry run and actual deployment succeeded, no indexes deleted. Actual
+deployment complete by2026-09-15 21:57:59 UTC, codegen disabled so reviewed
+generated declarations were not rewritten. Origin/main fast-forwarded11771b2
+to fedb432 without losing published content or forcing history. Hosted CI
+[35028465376](https://github.com/iamheisenburger/SEOSentinel/actions/runs/35028465376)
+and Vercel build EjnhYvHFknDr4yFKhu9ESUyGQiey ran for the exact commit;
+both completed successfully, with final receipts recorded below.
+
+Normal owner Resume was clicked on both existing workflows after deployment,
+not another credit retry/attestation. At21:58:17.165 UTC Pentra's original job
+has persisted draft j57a93w0xs9h036z3kcjcr8y9s8efvbv and reached a strict review
+call. Its original raw draft request hash and USD0.078548 receipt remain, no
+third draft call; worker/recovery2 retained. This verifies deployed cached
+recovery, not quality or publication acceptance. The subsequent live blocker is
+recorded below.
+
+Genuine owner desktop and393x851 mobile views were checked for BOTH exact sites:
+correct binding/destination, visible retained spending/provider-credit distinction,
+protected-page controls, overdue deadline and normal recovery controls. Mobile
+scrollWidth=viewportWidth387, sidebarRight0; viewport restored. These are actual
+authenticated browser assertions, not fixture identity or exported Playwright
+storage. Automated local browser run remains34 passed/2 auth skips; equivalent
+real-owner assertions were performed through the already signed-in session.
+
+Same original USD20 cumulative grant sn756ejbtp5marqw1chdpdskp58e0j8y remains:
+USD5 held,0 verified settled,15 uncommitted. Actual new model receipts USD0.142452
+are INSIDE the held5, not added to it. Ordinary monthly32, old4 and fleet35 are
+unchanged. Owner-visible ordinary spend:2.992560 settled actual +28.050000
+retained/conservative; monthly headroom at most0.957440, tighter old4 headroom
+at most0.878560; reset2026-10-01 00:00 UTC. Provider requests now succeed, but
+internal headroom is never presented as a live provider-wallet balance.
+
+### New live blocker — do not resume unchanged code or reset attempts
+
+The deployed title repair worked on BOTH original jobs without redrafting.
+Pentra's draft persisted at2026-09-15 21:58:11.154 UTC; LeadPilot's at
+21:58:34.968 UTC (article j570xwjezsyk7b80wwhp1m5x4x8efqem). Both strict
+review calls completed with actual-cost receipts. The subsequent independent
+audits were structurally valid but semantically contradictory:
+
+- Pentra `0:0:review:audit_final_article:0`: score83, materialDefects[], actual
+  USD0.045612, hash6b5e91c86ab8c83a8bb02c25a07a1a461fe3ba249096f3b5fa7c97df80d6bed6.
+  Its notes mostly approve the prose; they identify one minor comparative claim.
+  The score/defect cross-field refinement correctly refuses the contradiction.
+- LeadPilot first audit78 with two concrete unsupported taxonomy/trend defects
+  correctly entered the normal bounded revision. Remediation, fact review and
+  second audit all returned. Second audit `0:1:review:audit_final_article:0`:
+  score80, materialDefects[], actual USD0.033798,
+  hashe989449fb10f59e9fd5d7ec2e89695f2745252863f7013f9d376a62308518692.
+  Notes still flag an uncited industry generalization and metadata scope.
+  This contradiction hit the already-retained recovery limit; the original job
+  is failed/content_recovery_attempts_exhausted, workerAttempts5/recoveries3,
+  revisions1/replacements0. Its article remains blocked at78, not accepted.
+
+Root cause: `callClaudeStructured`'s content-provider branch at pipeline.ts1205
+directly parses the cached result, while the legacy branch has exactly one
+provider clarification for this cross-field inconsistency. Strict JSON schemas
+cannot enforce the score/material-defect relationship. The content path has no
+durable separately keyed clarification and retries the same cached contradiction
+until recovery exhaustion. Never turn83/80 into85 locally or erase the defects,
+raw receipts, old refused calls, reservations or attempts.
+
+Exact local actual-handler reproduction: temporarily change ONLY the synthetic
+auditor's normal score93 to83 with its existing empty defect array, then run
+`node --experimental-strip-types --test --test-name-pattern='SLC46 both sites strictly generate' tests/core-pipeline-integration.test.ts`.
+It fails1/1,573.393583ms (total728.317459ms), reproducing the same custom
+materialDefects error and eventual content_recovery_attempts_exhausted on both
+synthetic jobs. That temporary fixture edit was immediately reversed with
+apply_patch; source/test diff against fedb432 is empty. Failure evidence remains
+locally at /tmp/pentra46-audit-contradiction-repro.log, not a new candidate.
+
+Both workflows are normally paused. Pentra was paused BEFORE its pending third
+recovery could fail again (nextAttemptAt2026-09-15 22:03:22.166 UTC), preserving
+pending/review, workerAttempts3/recoveries3. LeadPilot was paused after terminal
+failure, not revived. No failed history or attempt counter was reset. Original
+Sep14 window/deadline, per-item budgets and original grant remain unchanged.
+No new article reached quality approval, publication or live verification;
+ready0/2 on each, zero post-consumption refill. The original LeadPilot topic
+predates this run; neither that topic nor these new drafts prove fresh discovery
+and replenishment. Old stored publications are not counted.
+
+The next bounded repair needs a durably keyed, at-most-once semantic-audit
+clarification inside the existing job/per-item/grant budget, not a provider
+fallback or blanket schema replay. Preserve the old request/results; require a
+new consistent model judgment and the complete unchanged evidence gates. Cover
+cached pre-release contradictions, concurrent workers/restarts, second invalid
+clarification, ambiguous response/no replay, denied pricing/grant/expiry/pause,
+actual-cost settlement, quality failure and fresh refill. LeadPilot additionally
+requires reviewed exact terminal-state reconciliation that preserves all5
+attempts and3 recoveries; do not silently reopen/reset it. This second defect is
+diagnosed, not repaired/released in46's single-release assignment. No second
+release or new financial approval is inferred.
+
+Final exact-site projection at2026-09-15 22:05:43.752 UTC confirms both paused,
+the Pentra pending/LeadPilot failed states above, no additional calls, no
+publication attempts, no approved item and ready0/2 each. LeadPilot's terminal
+failure was recorded at22:00:50.457 UTC. Cumulative known model receipts are USD0.456052
+(Pentra0.185672, LeadPilot0.270380), INSIDE the USD5 retained holds. Grant remains
+20 total/5 held/0 verified settled/15 uncommitted, not a fresh20 allowance.
+No additional paid work is authorized while both workflows are paused.
+
+Vercel exact fedb432 Production6469299898 succeeded at21:58:39 UTC:
+[immutable deployment](https://seo-sentinel-59qewrzvp-arshads-projects-836ebfbd.vercel.app).
+Actual public desktop/mobile smoke8 passed/2 genuine-auth skips,4.0s.
+Initial broad production smoke wrongly included the local-only One Setup
+fixture; both fixture views404 as deliberately enforced by proxy.ts27. The
+correct public-only run excludes that fixture, which passed locally. No
+production auth bypass or fixture exposure was added. Hosted CI35028465376
+completed SUCCESS for exact fedb432 at22:05:35 UTC (job104581072049 finished
+22:05:34 UTC). Hosted full1759/1758 passed/0 failed/1 skip,270543.713253ms;
+browser34 passed/2 auth skips,50.1s; types/build/schema61/296/secrets692/audit0
+passed, lint0 errors/157 warnings. No OSV fallback needed. These green release
+gates do not erase the newly reproduced live semantic-audit defect or constitute
+article/SaaS acceptance.
+
+No live publication/refill acceptance. Three ordinary cycles/site and
+GSC-supported improvement remain separate and open. No monetisation, SEO growth,
+backlinks, new grant, subscription, automation, unrelated tenant or unpriced I/O.
+
+## Previous45: exact owner resolved; verified Google-email mapping unavailable
 
 Assignment `supervisor-20260915-slc-owner-session-delivery-45`. This is the
 narrow identity-resolution result, not live delivery or an engineering milestone.
