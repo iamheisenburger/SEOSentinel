@@ -1063,6 +1063,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const [webhookUrl, setWebhookUrl] = useState(site.webhookUrl || "");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionVerified, setConnectionVerified] = useState(false);
 
   const labels = { github: "GitHub", wordpress: "WordPress · Beta", webhook: "Webhook · Beta", manual: "Copy & Paste" } as Record<string, string>;
   const iconMap = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy } as Record<string, typeof GitBranch>;
@@ -1078,6 +1079,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const handleSave = async () => {
     setSaving(true);
     setConnectionError(null);
+    setConnectionVerified(false);
     try {
       const updates: FunctionArgs<typeof api.sites.upsert> = {
         id: site._id,
@@ -1088,7 +1090,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
       if (isWp) { updates.wpUrl = wpUrl.trim() || undefined; updates.wpUsername = wpUsername.trim() || undefined; updates.wpAppPassword = wpAppPassword.trim() || undefined; }
       if (isWebhook) { updates.webhookUrl = webhookUrl.trim() || undefined; updates.webhookSecret = webhookSecret.trim() || undefined; }
       await updateSite(updates);
-      if (isWp || isWebhook) {
+      if (isWp || isWebhook || (isGithub && hasGithubToken)) {
         await verifyPublicationDestination({ siteId: site._id });
       }
       setEditing(false);
@@ -1098,6 +1100,20 @@ function ConnectionSection({ site }: { site: SiteView }) {
       console.error("Failed to save or verify:", e);
     }
     finally { setSaving(false); }
+  };
+
+  const handleVerify = async () => {
+    setSaving(true);
+    setConnectionError(null);
+    setConnectionVerified(false);
+    try {
+      await verifyPublicationDestination({ siteId: site._id });
+      setConnectionVerified(true);
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "Connection verification failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -1128,7 +1144,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
               )}
             </div>
             {!editing && (
-              <button onClick={() => setEditing(true)} className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition">Edit</button>
+              <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition">Edit</button>
             )}
           </div>
 
@@ -1209,6 +1225,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                 <>
                   <Check className="h-4 w-4 text-[#22C55E]" />
                   <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
+                  {!editing && <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>}
                   <button onClick={() => window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes")} className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition">Reconnect</button>
                 </>
               ) : (
@@ -1220,6 +1237,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
               )}
             </div>
           )}
+
+          {!editing && connectionError && <p role="alert" className="text-[12px] text-[#F87171]">{connectionError}</p>}
+          {!editing && connectionVerified && <p role="status" className="text-[12px] text-[#4ADE80]">Repository access and default branch verified. This does not publish content.</p>}
 
           {isWp && (() => {
             const ok = !!site.publicationAdapterVerified;

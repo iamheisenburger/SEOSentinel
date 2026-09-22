@@ -2,6 +2,8 @@ import { test, expect } from "@playwright/test";
 import { build } from "esbuild";
 import { readFileSync, readdirSync } from "node:fs";
 
+type MeasurementFixtureWindow = Window & { renderContentFixture: () => void; contentFixture: { measurementReads: number; outcome?: unknown } };
+
 // Visual/interaction fixtures ONLY. Auth and transport are synthetic. These do
 // not count as signed-in customer acceptance; registered-handler tests are
 // separate, and the real owner-session gate below remains explicitly skipped.
@@ -20,6 +22,8 @@ const bundle = build({ stdin: { contents: `
       if (a.path === "next/link") return { contents: "import React from 'react'; export default function Link({children,...p}){return React.createElement('a',p,children)}", resolveDir: process.cwd() };
       if (a.path === "@clerk/nextjs") return { contents: "export const useAuth=()=>({isLoaded:true,userId:'synthetic-owner'});" };
       return { contents: `import {getFunctionName} from 'convex/server';
+        const client={query:async(ref,args)=>{const f=window.contentFixture; const n=getFunctionName(ref);if(n!=='searchPerformance:contentOutcome')throw Error('Unexpected one-shot query '+n);f.measurementReads=(f.measurementReads??0)+1;return f.outcome??{status:'incomplete',current:null}}};
+        export const useConvex=()=>client;
         export const useQuery=(ref,args)=>{const n=getFunctionName(ref); const f=window.contentFixture;
           if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};
           if(n==='searchPerformance:contentOutcome')return {status:'incomplete',current:null}; throw Error('Unexpected query '+n)};
@@ -103,6 +107,15 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
   } else if (screen === "overview") {
     for (const name of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) await expect(page.getByRole("heading", { name })).toBeVisible();
     await expect(page.getByText(/Overdue/)).toBeVisible(); await expect(page.getByText(/unavailable, not zero/)).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as MeasurementFixtureWindow).contentFixture.measurementReads)).toBe(1);
+    await page.evaluate(() => { (window as unknown as MeasurementFixtureWindow).renderContentFixture(); });
+    await expect(page.getByRole("button", { name: "Refresh measurements" })).toBeEnabled();
+    expect(await page.evaluate(() => (window as unknown as MeasurementFixtureWindow).contentFixture.measurementReads)).toBe(1);
+    await page.evaluate(() => { (window as unknown as MeasurementFixtureWindow).contentFixture.outcome = { status: "available", current: { start: "2026-08-01", end: "2026-08-28", clicks: 0 }, previous: null, cohorts: [], property: "sc-domain:fixture.example" }; });
+    await page.getByRole("button", { name: "Refresh measurements" }).click();
+    await expect(page.getByText(/0 clicks ·/)).toBeVisible();
+    await expect(page.getByText(/No complete previous window/)).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as MeasurementFixtureWindow).contentFixture.measurementReads)).toBe(2);
   } else if (screen === "controls") {
     await expect(page.getByText("Preparation: 2/2 ready.")).toBeVisible();
     await expect(page.locator("#content-funding-details")).not.toHaveAttribute("open", "");

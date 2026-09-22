@@ -288,6 +288,36 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   return { ...f, sites, modelCalls, repositories, failedPublications };
 }
 
+test("owner can verify an existing GitHub destination without publishing or spending", async () => {
+  const f = setup();
+  const site = f.sites[0];
+  delete f.get(site.id)!.publisherDestinationReceipt;
+  await assert.rejects(f.invoke("publisher:verifyPublicationDestination", { siteId: site.id }), /Not authorized/);
+  f.setIdentity("another-owner");
+  await assert.rejects(f.invoke("publisher:verifyPublicationDestination", { siteId: site.id }), /Not authorized/);
+  assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
+  f.setIdentity(f.get(site.id)!.userId);
+  const result = await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id });
+  assert.equal(result.method, "github");
+  assert.equal(result.repoDefaultBranch, "main");
+  assert.equal(f.get(site.id)!.publisherDestinationReceipt.status, "verified");
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
+  assert.equal(f.modelCalls.length, 0);
+  f.assertOffline();
+});
+
+test("failed GitHub verification cannot create a destination receipt", async () => {
+  const f = setup({ githubReadUnavailable: () => true });
+  const site = f.sites[0];
+  delete f.get(site.id)!.publisherDestinationReceipt;
+  f.setIdentity(f.get(site.id)!.userId);
+  await assert.rejects(f.invoke("publisher:verifyPublicationDestination", { siteId: site.id }), /GitHub repo not found/);
+  assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
+  assert.equal(f.modelCalls.length, 0);
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
+  f.assertOffline();
+});
+
 test("ordinary core path plans fresh synthetic topics through real admission and worker handlers", async () => {
   const f = setup();
   for (const site of f.sites) {

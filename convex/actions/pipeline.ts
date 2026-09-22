@@ -7868,7 +7868,15 @@ export const publishApproved = action({
           "This legacy draft exhausted its bounded quality revisions and cannot be published.",
         );
       }
+      if (recovery.reason === "already_attempted") {
+        throw new Error(
+          "This draft's quality recovery has already been attempted. No new review was queued. Review the existing failure before retrying publication.",
+        );
+      }
       if (recovery.reason !== "already_audited") {
+        if (!recovery.jobId) {
+          throw new Error("No quality review job was created. Publication has not started.");
+        }
         if (recovery.queued && recovery.jobId) {
           await ctx.scheduler.runAfter(
             0,

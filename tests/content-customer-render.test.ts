@@ -20,7 +20,7 @@ function render(component: string, queryState: unknown = state, outcome: unknown
   runInNewContext(code, { module: runtime, exports: runtime.exports, TextEncoder, URL, Intl,
     require: (name: string) => {
       if (name === "next/link") return function SyntheticLink({ href, children }: { href: string; children: never }) { return createElement("a", { href }, children); };
-      if (name === "convex/react") return { useMutation: () => () => assert.fail("Render cannot mutate"), useAction: () => () => assert.fail("Render cannot call a provider"), useQuery: (ref: Parameters<typeof getFunctionName>[0]) => {
+      if (name === "convex/react") return { useConvex: () => ({ query: () => assert.fail("Server rendering cannot fetch measurements") }), useMutation: () => () => assert.fail("Render cannot mutate"), useAction: () => () => assert.fail("Render cannot call a provider"), useQuery: (ref: Parameters<typeof getFunctionName>[0]) => {
         const fn = getFunctionName(ref); calls.push(fn);
         if (fn === "contentWork:readiness") return queryState;
         if (fn === "searchPerformance:contentOutcome") return outcome;
@@ -96,10 +96,9 @@ test("SLC29 synthetic component displays saved destination, real funding distinc
 test("SLC29 synthetic overview separates upcoming, verified, organic and issues without turning missing data into zero", () => {
   const { html, calls } = render("content-work-overview");
   for (const heading of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) assert.match(html, new RegExp(heading));
-  assert.match(html, /Overdue/); assert.match(html, /unavailable, not zero/); assert.doesNotMatch(html, /0 clicks/);
-  assert.deepEqual(calls, ["contentWork:readiness", "searchPerformance:contentOutcome"]);
-  const available = render("content-work-overview", state, { status: "available", current: { start: "2026-08-01", end: "2026-08-28", clicks: 0 }, previous: null, cohorts: [], property: "sc-domain:fixture.example" });
-  assert.match(available.html, /0 clicks/); assert.match(available.html, /No complete previous window/);
+  assert.match(html, /Overdue/); assert.match(html, /Loading measurements/); assert.doesNotMatch(html, /0 clicks/);
+  assert.deepEqual(calls, ["contentWork:readiness"]);
+  assert.match(html, /Refresh measurements/);
 });
 
 test("SLC38 customer rendering treats provider interruption as platform responsibility and exposes an exact restored retry", () => {

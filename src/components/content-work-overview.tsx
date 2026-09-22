@@ -1,5 +1,7 @@
 "use client";
-import { useQuery } from "convex/react";
+import { useConvex, useQuery } from "convex/react";
+import { useEffect, useState } from "react";
+import type { FunctionReturnType } from "convex/server";
 import Link from "next/link";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -45,9 +47,26 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   </div>;
 }
 function OrganicOutcome({ siteId }: { siteId: Id<"sites"> }) {
-  const result = useQuery(api.searchPerformance.contentOutcome, { siteId });
+  // Daily Search Console data does not need a live subscription to every site
+  // update. This query reads two complete windows; refreshing it on unrelated
+  // scheduler writes repeatedly rereads those rows while the dashboard is open.
+  const convex = useConvex();
+  const [refresh, setRefresh] = useState(0);
+  const [snapshot, setSnapshot] = useState<{ siteId: string; refresh: number; result?: FunctionReturnType<typeof api.searchPerformance.contentOutcome>; error?: boolean }>();
+  const current = snapshot?.siteId === siteId && snapshot.refresh === refresh ? snapshot : undefined;
+  const result = current?.result, error = current?.error, pending = !current;
+  useEffect(() => {
+    let active = true;
+    void convex.query(api.searchPerformance.contentOutcome, { siteId }).then(
+      value => { if (active) setSnapshot({ siteId, refresh, result: value }); },
+      () => { if (active) setSnapshot({ siteId, refresh, error: true }); },
+    );
+    return () => { active = false; };
+  }, [convex, siteId, refresh]);
   return <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Organic clicks</h2>
-    {!result ? <p>Loading measurements…</p> : result.status !== "available" || !result.current ? <p>{result.status === "not_connected" ? "Connect the current website’s Search Console property to measure results." : result.status === "incomplete" ? "The measurement window is incomplete. Clicks are unavailable, not zero." : "No finalized measurements yet. Google data can arrive late."}</p> : <>
+    <button type="button" className="text-sm underline disabled:opacity-50" disabled={pending} onClick={() => setRefresh(value => value + 1)}>Refresh measurements</button>
+    <p className="text-sm">Loaded when you open this page. Refresh to check for newer Search Console data.</p>
+    {error ? <p role="alert">Measurements could not be loaded. Refresh to retry; this is not a zero-click result.</p> : !result ? <p>Loading measurements…</p> : result.status !== "available" || !result.current ? <p>{result.status === "not_connected" ? "Connect the current website’s Search Console property to measure results." : result.status === "incomplete" ? "The measurement window is incomplete. Clicks are unavailable, not zero." : "No finalized measurements yet. Google data can arrive late."}</p> : <>
       <p>{result.current.clicks} clicks · {result.current.start}–{result.current.end}. {result.delayed && "Data is delayed."}</p>
       <p>{result.previous ? `Previous complete window: ${result.previous.clicks} clicks (${result.previous.start}–${result.previous.end}); change ${result.current.clicks - result.previous.clicks} clicks.` : "No complete previous window; no comparison is shown."}</p>
       <p className="text-sm">Property: {result.property}. Search Console calendar dates. New-page cohorts start on the first full day after publication.</p>

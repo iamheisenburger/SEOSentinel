@@ -406,9 +406,8 @@ async function getDefaultBranch({
 
 /**
  * Re-verify an existing GitHub publication destination without returning or
- * replacing its stored credential. This is internal-only so rollout operators
- * can seal the repository's current default branch after a security upgrade;
- * ordinary tenants must still use the authenticated OAuth connection flow.
+ * replacing its stored credential. Both internal preflight and the authenticated
+ * owner's verification action use this path; it never supplies new credentials.
  */
 async function reverifyGithubConnectionHandler(
   ctx: ActionCtx,
@@ -1191,6 +1190,12 @@ export const verifyPublicationDestination = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!site?.userId || !identity || identity.subject !== site.userId) {
       throw new Error("Not authorized to verify this site");
+    }
+    if ((site.publishMethod ?? "github") === "github") {
+      const verified = await reverifyGithubConnectionHandler(ctx, siteId, {
+        siteSnapshot: site,
+      });
+      return { ...verified, method: "github" as const };
     }
     return verifyPublicationDestinationHandler(ctx, siteId);
   },
