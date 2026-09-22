@@ -1829,6 +1829,43 @@ test("SLC33 deleted-account financial tombstones retain independent scope withou
   assert.equal(f.get(row._id)!.reservedMicroUsd, 500_000); assert.equal(f.get(row._id)!.releasedAt, undefined); f.assertOffline();
 });
 
+test("SLC53 actual draft, factual review and revision share evidence rules without promotional obligations across business types", async t => {
+  for (const business of slcBusinesses) await t.test(business.name, async () => {
+    const f = setup({ growthFirst: true, businesses: [business], quality: "low", budgetMicroUsd: 2_000_000 });
+    await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const writers = f.modelCalls.filter(c => c.tools[0].name === "submit_article");
+    assert.equal(writers.length, 2, "One initial candidate and one distinct replacement, not unlimited retries");
+    for (const writer of writers) {
+      assert.match(writer.system, /A useful answer need not recommend the product/);
+      assert.match(writer.system, /Do not claim uniqueness, competitor inferiority, or guaranteed traffic/);
+      assert.match(writer.system, /METADATA: The title and description must accurately describe the finished article/);
+      assert.match(writer.system, /First-party product facts are supported by the unnumbered product snapshot/);
+      assert.ok(!writer.system.includes("must position"));
+      assert.ok(!writer.system.includes("a competitor could not have written"));
+      assert.ok(!writer.system.includes("pages do not earn organic traffic"));
+      assert.ok(writer.system.includes(business.name));
+    }
+    const reviews = f.modelCalls.filter(c => c.tools[0].name === "review_article");
+    assert.ok(reviews.length > 0);
+    for (const review of reviews) {
+      assert.match(review.system, /first-party product evidence is unnumbered/);
+      assert.match(review.system, /remove the unsupported proposition, not merely soften/);
+    }
+    const revisions = f.modelCalls.filter(c => c.tools[0].name === "remediate_final_article");
+    assert.equal(revisions.length, 2);
+    for (const revision of revisions) {
+      assert.match(revision.messages[0].content, /first-party product evidence remains unnumbered/);
+      assert.match(revision.messages[0].content, /Delete that proposition completely/);
+    }
+    assert.equal(f.tables.articles.some(a => a.publicationGateStatus === "passed" || a.status === "published"), false,
+      "Better writing instructions must not approve an article rejected by independent review");
+    const job = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+    assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 1);
+    f.assertOffline();
+  });
+});
+
 test("SLC32 exact revision and replacement call envelope stays in the original run and work budget", async t => {
   const f = await validationFixture({ quality: "low", budgetMicroUsd: 2_000_000 }); await f.attach();
   f.setIdentity(f.owner);

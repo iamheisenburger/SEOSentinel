@@ -18,14 +18,42 @@ correct canonical/H1/body; published/audited hash both
 `e8df83194733201e3355865e71c5334b49ba2c90fd8be5ae0a6aade8c748e723`.
 PublishedAt1790111939612. This was OWNER publication, not natural cadence proof.
 
-Current verification repair: the destination's normal ` | LeadPilot` title
+Verification repair `ef5f98cb1d36396590484e527c51b9669e4196a1` is deployed to
+Convex and Vercel. Production controlled verification succeeded at
+1790112802946; article.publicUrlStatus and the original job.contentWork.stage
+are both `verified`. The genuine signed-in article page visibly says
+"Published and verified live." The old September14 deadline is retained;
+this is late owner delivery, NOT on-time automatic publication. Local final
+regression:1806 tests/1805 pass/0 fail/1 existing skip; final connected owner
+cases10 pass; unit verifier21 pass; type/build/schema/secrets/dependency checks
+pass; lint0 errors/157 existing warnings; browser36 pass/2 authenticated skips.
+Hosted CI35787304293 passed at21:40:06UTC.
+
+September22 follow-up writing-contract repair: removed the demand
+to position the product as the primary solution and the unsupported assertion
+that interchangeable pages cannot earn traffic. Drafting now asks for a useful
+answer without fabricated superiority, outcomes or metadata promises. Draft,
+fact-check and revision agree that supported first-party facts are unnumbered;
+external claims still require their actual source citations. Unsupported claims
+must be removed, not merely softened. Publication thresholds are unchanged.
+SLC53 runs the real draft/review/revision requests across five isolated business
+types and proves low-quality responses remain rejected within the original
+two-revision/one-replacement ceiling. No paid call, limit increase, attempt reset
+or exhausted-job replay was performed for this change. This is a prompt repair,
+not proof of fresh production generation or automatic refill.
+Local release gates:1812 tests/1811 pass/0 fail/1 existing skip; type/build/
+schema/secrets/dependency audit passed; lint0 errors/157 existing warnings;
+browser36 passed/2 authenticated skips; Convex dry-run passed. Production
+projection still shows no active jobs and no ready articles on either tenant.
+Both are `content_failed_slot`; these old exhausted jobs were not restarted.
+
+The destination's normal ` | LeadPilot` title
 template produced a false negative. Creation now accepts only the exact reviewed
 title plus the configured site/registrable-domain brand, with exact corroborating
 social titles. Wrong/stale titles, arbitrary appended promises, missing/mismatched
 social titles and changed body still fail; revision checks stay exact. No article
-score, content, audit or historical failure was changed. Local verification of
-the actual captured live HTML succeeds. Production durable verification must
-still run after this candidate is deployed.
+score, content, audit or historical failure was changed. Both local verification
+of the actual captured live HTML and the deployed production verifier succeeded.
 
 Pentra's retained monthly-worker-limit deferral reconciled through owner
 pause/resume; normal provider execution resumed without resetting counters or

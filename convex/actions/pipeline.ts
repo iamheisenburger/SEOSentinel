@@ -1640,7 +1640,7 @@ async function factCheckArticle(
     "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
     "2. Do NOT add fact-check summaries or editorial commentary into the markdown.\n" +
     "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
-    "4. Product features, pricing, integrations, and capabilities ARE factual claims. Keep them only when supported by the supplied product evidence; otherwise remove or soften them.\n" +
+    "4. Product features, pricing, integrations, and capabilities ARE factual claims. Keep them only when directly supported by the supplied product evidence; otherwise remove the unsupported proposition, not merely soften its wording.\n" +
     "5. Correct or remove unsupported third-party statistics, attributed quotes, benchmarks, dates, and factual claims. Never invent replacement evidence.\n" +
     "6. A direct quotation is allowed only when its exact language appears in a supplied source. Otherwise paraphrase without quotation marks.\n" +
     (productName ? `7. ALLOWED PRODUCT NAME: ${productName} is the publisher's own product and is explicitly allowed when supported by first-party product evidence. Never classify it as a banned competitor.\n` : "") +
@@ -1652,7 +1652,7 @@ async function factCheckArticle(
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
     "11. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
-    "12. Every operational number, range, timeline, threshold, duration, score, volume, percentage, price, or quantified outcome MUST have direct support in the supplied evidence and the matching numbered inline citation [n]. Otherwise remove the number. Calling it a best practice, example, framework, or rule of thumb is not an exemption.\n" +
+    "12. Every operational number, range, timeline, threshold, duration, score, volume, percentage, price, or quantified outcome MUST have direct support in the supplied evidence. Cite external evidence using its matching numbered inline citation [n]; first-party product evidence is unnumbered and must never receive a fabricated citation. Otherwise remove the number. Calling it a best practice, example, framework, or rule of thumb is not an exemption.\n" +
     "13. Any invented scenario must be explicitly labelled hypothetical. Its names, numbers, timelines, dialogue, and results are illustration only and cannot support a factual conclusion.\n" +
     "14. Before returning, scan the complete markdown for every digit and currency symbol. Verify each factual use against supplied evidence or remove it. Step numbers and source citation markers are the only structural exceptions.\n" +
     "15. Submit the complete corrected article and review metadata through the review_article tool.",
@@ -2123,7 +2123,7 @@ async function remediateFinalArticle(args: {
       "",
       "BINDING REMEDIATION RULES:",
       "- Address every audit note directly; do not make unrelated stylistic changes.",
-      "- Remove every unsupported number, percentage, range, benchmark, duration, threshold, timeline, volume, and outcome. Keep one only when the supplied evidence directly supports it and the paragraph includes the matching numbered citation.",
+      "- Remove every unsupported number, percentage, range, benchmark, duration, threshold, timeline, volume, and outcome. Keep one only when the supplied evidence directly supports it. Cite external evidence using its matching numbered citation; first-party product evidence remains unnumbered. Never invent a citation for that snapshot.",
       "- Do not disguise an unsupported number as a vague universal rule. Replace it with a decision principle the supplied evidence actually supports, or delete it.",
       "- Label invented scenarios explicitly as hypothetical examples. Never imply that an invented company, customer, result, quote, or product outcome actually occurred.",
       "- Use product-specific mechanics only when they appear in the first-party product evidence. Do not imply that the product exposes a metric, dashboard, workflow, or feature that the evidence does not show.",
@@ -2141,12 +2141,12 @@ async function remediateFinalArticle(args: {
         ? "- Rebuild depth by expanding underdeveloped sections with reader-run procedures, input checklists, decision questions, implementation steps, and explicitly conditional diagnostics. Keep added guidance product-agnostic unless the supplied first-party evidence states the exact product mechanic. Do not pad the introduction, repeat conclusions, or paraphrase the same advice."
         : "",
       args.sources.length === 0
-        ? "- The source array is empty: remove every numbered inline citation and every non-structural number, numeric scenario, benchmark, duration, threshold, volume, score, percentage, price, and quantified outcome. First-party product evidence is unnumbered and must never be labelled [1]."
+        ? "- The external source array is empty: remove numbered inline citations and unsupported factual numbers. A product fact or number explicitly documented in the supplied first-party snapshot may remain unnumbered; that snapshot must never be labelled [1]. Do not invent numeric scenarios, benchmarks, thresholds or outcomes."
         : "- Every numbered citation must map to the exact supplied source array; first-party product evidence remains unnumbered.",
       "- Preserve the reader's core answer, useful framework, internal links, restrained CTA, and valid Markdown.",
       `- Keep the complete revision between ${args.minWords} words and the hard maximum. Add no filler; every retained or added sentence must be supported and useful.`,
       `- Do not use an earlier year as a present or future hypothetical. Historical years require explicit historical context; otherwise use ${currentYear} or no year.`,
-      "- Before returning, scan every digit and currency symbol in the complete article. Apart from step labels and citation markers, each factual number must have direct supplied evidence and a matching citation or be removed.",
+      "- Before returning, scan every digit and currency symbol in the complete article. Apart from step labels and citation markers, each factual number must have direct supplied evidence or be removed. External claims need their matching citation; first-party product claims remain unnumbered.",
       "",
       `INDEPENDENT AUDIT NOTES:\n${args.auditNotes.map((note) => `- ${note}`).join("\n")}`,
       "",
@@ -4664,7 +4664,7 @@ async function handleArticle(
     ...(site.competitors ?? []).map((c: string) => `- ${c}`),
     ...(competitorNames.length > 0 ? [`- Also banned by name: ${competitorNames.join(", ")}`] : []),
     `If you need to reference ANY tool/platform/service, use generic descriptions ("your CRM", "email platform", "popular tools") — NEVER use any of the banned names above in ANY context.`,
-    `Do NOT write "N best tools" articles that list competitors. The article must position ${productName} as the primary solution.`,
+    `Do not manufacture rankings or comparisons. Do not position ${productName} as the primary or superior solution unless the supplied evidence directly supports that specific comparison. A useful answer need not recommend the product.`,
     `</banned_content>`,
     ``,
     `<product_identity>`,
@@ -4765,9 +4765,11 @@ async function handleArticle(
     researchSources.length === 0
       ? `- EVIDENCE-SCARCE MODE: No external source survived verification. Do not state market patterns, typical user behaviour, causation, comparative effectiveness, conversion advantages, or industry prevalence as facts. Frame useful non-product guidance as a conditional diagnostic the reader must verify in their own analytics, or omit it.`
       : "",
-    `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence and carry the matching inline citation. Otherwise remove the number.`,
+    `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence. Cite external evidence using its matching numbered citation. First-party product facts are supported by the unnumbered product snapshot; never invent a citation for it. Otherwise remove the number.`,
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
-    `- ORIGINAL VALUE (REQUIRED): The article must contain at least one element a competitor could not have written by reading the same search results: verified first-party mechanics of how ${productName} actually behaves, a decision framework with explicit trade-offs, or a verification method the reader can run themselves. Accurate-but-interchangeable pages do not earn organic traffic, so a page that only restates common knowledge has failed even when every sentence is true.`,
+    `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Label proposed frameworks as recommendations, not established industry facts. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
+    `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
+    `- METADATA: The title and description must accurately describe the finished article. Do not promise templates, benchmarks, features, outcomes or coverage that the article does not actually provide.`,
     `- ORIGINAL VALUE IS NOT INVENTED EXPERIENCE: Never manufacture first-hand framing. Do not write that anyone analysed, measured, tested, tracked, or observed anything unless that measurement appears in the supplied evidence. Differentiation must come from verified mechanics and reasoning, never from fabricated experience.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
     `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
