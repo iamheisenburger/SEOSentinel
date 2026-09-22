@@ -1,4 +1,5 @@
 "use node";
+import { ownerPublicationAuthorized } from "./lib/manualPublication";
 import { verifyLiveCreatedArticle, verifyLiveSelectedRestoration } from "./lib/publishedRevision";
 import { wordpressConditionalRequest, wordpressConditionalReceipt, preserveWordPressReviewedText } from "./lib/wordpressConditional";
 import { assertSafeImprovement, selectedGitHubPath, contentConnectionHash, confirmedContentProfileHash, exactReplacement } from "./lib/contentSelection";
@@ -2502,6 +2503,7 @@ async function publishArticleHandler(
       : { receiptOnlyPlanTransition: false };
     if (
       (!site.autopilotEnabled || site.autopilotRolloutMode !== "live") &&
+      !ownerPublicationAuthorized(site, article) &&
       !recoveryAuthorization.receiptOnlyPlanTransition
     ) {
       throw new Error(
@@ -2727,7 +2729,7 @@ async function publishArticleHandler(
       !lockedSite ||
       !articleMatchesCurrentDomain(lockedSite, article) ||
       (!recoveryAuthorization.receiptOnlyPlanTransition &&
-        (lockedSite.autopilotRolloutMode !== "live" ||
+        ((lockedSite.autopilotRolloutMode !== "live" && !ownerPublicationAuthorized(lockedSite, article)) ||
           (lockedSite.autopilotRolloutEpoch ?? 0) !== deliveryRolloutEpoch)) ||
       (publicationDeliveryConfigHash(publicationDeliveryConfig(lockedSite)) !==
           article.publicationConfigHash &&

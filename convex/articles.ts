@@ -7,6 +7,7 @@ import {
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { ownerPublicationAuthorized } from "./lib/manualPublication";
 import { internal } from "./_generated/api";
 import { authorizedWorkPage } from "./selectedPages";
 import {
@@ -767,6 +768,7 @@ export const get = query({
     await requireArticleOwner(ctx, article);
     const visible = { ...article };
     delete visible.contentWorkCreationSource;
+    delete visible.publicationOwnerApproval;
     return visible;
   },
 });
@@ -1735,8 +1737,7 @@ export const beginPublication = internalMutation({
       !articleMatchesCurrentDomain(site, article) ||
       (!executionAuthorized && !receiptOnlyTransition) ||
       (!receiptOnlyTransition &&
-        (!site.autopilotEnabled ||
-          site.autopilotRolloutMode !== "live" ||
+        (((!site.autopilotEnabled || site.autopilotRolloutMode !== "live") && !ownerPublicationAuthorized(site, article)) ||
           (site.autopilotRolloutEpoch ?? 0) !== expectedRolloutEpoch))
     ) {
       throw new Error("Publication blocked by the current rollout epoch");
@@ -1907,8 +1908,7 @@ export const recordPublicationAttempted = internalMutation({
       article.publicationLeaseStartedAt + PUBLICATION_LEASE_MS <= now() ||
       !articleMatchesCurrentDomain(site, article) ||
       !(await siteExecutionAuthorized(ctx, site)) ||
-      !site.autopilotEnabled ||
-      site.autopilotRolloutMode !== "live" ||
+      ((!site.autopilotEnabled || site.autopilotRolloutMode !== "live") && !ownerPublicationAuthorized(site, article)) ||
       (site.autopilotRolloutEpoch ?? 0) !==
         article.publicationRolloutEpoch
     ) {
@@ -2155,8 +2155,7 @@ export const completePublication = internalMutation({
       : undefined;
     const normalSettlementAuthorized =
       await siteExecutionAuthorized(ctx, site) &&
-      Boolean(site.autopilotEnabled) &&
-      site.autopilotRolloutMode === "live" &&
+      ((Boolean(site.autopilotEnabled) && site.autopilotRolloutMode === "live") || ownerPublicationAuthorized(site, article)) &&
       (site.autopilotRolloutEpoch ?? 0) === expectedRolloutEpoch;
     const receiptOnlyPlanTransition =
       await executionLeasePredatesPlanTransition(
@@ -3159,6 +3158,31 @@ export const updateFeaturedImage = internalMutation({
       updatedAt: now(),
     });
     await syncSummary(ctx, articleId);
+  },
+});
+
+/** One exact owner-requested GitHub creation, not automatic-service activation.
+ * Durable approval allows the normal lost-response reconciler to finish the
+ * same sealed write; it cannot authorize another article or changed content. */
+export const authorizeOwnerPublication = internalMutation({
+  args: { articleId: v.id("articles") },
+  handler: async (ctx, { articleId }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    await requireArticleOwner(ctx, article);
+    const site = (await ctx.db.get(article.siteId))!;
+    if (!(await siteExecutionAuthorized(ctx, site)) || site.publishMethod !== "github" ||
+      article.contentWorkSourceJobId || !articleMatchesCurrentDomain(site, article)) throw new Error("Owner publication is not authorized for this destination");
+    if (ownerPublicationAuthorized(site, article)) return;
+    assertNotPublishing(article);
+    if (article.publicationAttemptedAt || article.publicationOutcomeUnverifiedAt || article.status !== "ready" ||
+      !evaluatePublicationQuality(article, "strict").passed || article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION ||
+      publicationArtifactHash(article) !== article.auditedContentHash || !article.auditedContentHash ||
+      !article.publicationConfigHash || publicationDeliveryConfigHash(publicationDeliveryConfig(site)) !== article.publicationConfigHash) {
+      throw new Error("The exact article needs a current completed review before owner publication");
+    }
+    await ctx.db.patch(articleId, { publicationOwnerApproval: { userId: site.userId!, artifactHash: article.auditedContentHash,
+      configHash: article.publicationConfigHash, rolloutEpoch: site.autopilotRolloutEpoch ?? 0, requestedAt: now() } });
   },
 });
 

@@ -942,6 +942,8 @@ export default defineSchema({
     publicationGateWarnings: v.optional(v.array(v.string())),
     publicationCheckedAt: v.optional(v.number()),
     publicationAuditVersion: v.optional(v.number()),
+    publicationOwnerApproval: v.optional(v.object({ userId: v.string(), artifactHash: v.string(),
+      configHash: v.string(), rolloutEpoch: v.number(), requestedAt: v.number() })),
     publicationConfigHash: v.optional(v.string()),
     publicationConfigSnapshot: v.optional(
       v.object({

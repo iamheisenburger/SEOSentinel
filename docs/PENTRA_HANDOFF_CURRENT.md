@@ -7,6 +7,20 @@ Work here in `.claude/assignment24`; do not restart the old task or automation.
 worktrees were safely archived; parent `WORKSPACE.md` identifies all locations.
 No production assets, schemas, history, reservations or customer data were deleted.
 
+September22 owner-publication candidate: exact authenticated owner approval now
+permits one sealed GitHub creation without enabling site-wide automation. Approval
+is bound to owner, reviewed content, publishing configuration and rollout epoch.
+Existing billing, quality, destination, lease and conditional-write checks remain.
+Lost-response reconciliation retains this exact authority; duplicate owner clicks
+produce one external write. The article UI separates accepted publication from
+verified live delivery and links the resulting public page. This is NOT an
+autonomous cadence completion claim or a conversion of customer contracts.
+Candidate gates:1805 tests/1804 pass/0 fail/1 existing skip; build/type/schema/
+secrets/dependency audit pass; lint0 errors/157 existing warnings. Browser suite
+36 pass/2 authenticated skips; connected owner cases10 pass. Actual signed-in
+production publication is still required. Prior monetary-admission release
+8278496cf41cfaf7ef460d8b58501f84ebaf06c1 is deployed; CI35784821369 passed.
+
 Latest deployed follow-up before the current candidate:
 `18fc567c62b671e8a1418864246dc306c4816278`, including `ab02712` review
 classification/notes parsing. Convex succeeded; Vercel deployment6600519164

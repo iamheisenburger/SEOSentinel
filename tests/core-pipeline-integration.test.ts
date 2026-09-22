@@ -846,6 +846,73 @@ test("SLC51 invalid content envelopes cannot remove old deferrals or override mo
   });
 });
 
+test("SLC52 owner publishes one reviewed GitHub article while automatic preparation remains inactive", async () => {
+  const f = await scopedPricingFixture(); await f.admit(0);
+  const job = f.tables.jobs[0], site = f.get(job.siteId)!;
+  site.autopilotRolloutMode = "warm";
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: site._id, jobId: job._id });
+  const article = f.get(f.get(job._id)!.articleId)!;
+  assert.equal(article.status, "ready"); assert.equal(site.autopilotRolloutMode, "warm");
+  site.autopilotEnabled = false; site.approvalRequired = true;
+  const before = structuredClone(site.contentSchedule), paid = f.modelCalls.length;
+  f.setIdentity(site.userId);
+  const result = await f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: article._id });
+  assert.equal(result.published, true);
+  assert.equal(f.modelCalls.length, paid, "Publishing already-approved work must not buy more generation");
+  await pumpUntil(f, () => f.get(article._id)!.publicUrlStatus === "verified");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+  assert.equal(f.get(site._id)!.autopilotRolloutMode, "warm");
+  assert.equal(f.get(site._id)!.autopilotEnabled, false);
+  assert.equal(f.get(site._id)!.approvalRequired, true);
+  assert.equal(f.get(site._id)!.contentSchedule.active, before.active);
+  assert.equal(f.get(job._id)!.contentWork.stage, "verified");
+  assert.equal(f.get(article._id)!.publicationOwnerApproval.artifactHash, article.auditedContentHash);
+  assert.equal(f.get(article._id)!.publishedContentHash, article.auditedContentHash);
+  f.assertOffline();
+});
+
+test("SLC52 exact owner approval cannot publish another owner's, edited, unreviewed or reconfigured artifact", async t => {
+  for (const defect of ["owner", "content", "review", "destination", "epoch"] as const) await t.test(defect, async () => {
+    const f = await scopedPricingFixture(); await f.admit(0);
+    const job = f.tables.jobs[0], site = f.get(job.siteId)!;
+    site.autopilotRolloutMode = "warm";
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: site._id, jobId: job._id });
+    const article = f.get(f.get(job._id)!.articleId)!;
+    f.setIdentity(site.userId);
+    if (defect === "epoch") {
+      await f.invoke("articles:authorizeOwnerPublication", { articleId: article._id });
+      site.autopilotRolloutEpoch++;
+      // A stale recorded approval is not a fresh owner request.
+      await assert.rejects(f.invoke("publisher:publishArticleInternal", { siteId: site._id, articleId: article._id }));
+    } else {
+      if (defect === "owner") f.setIdentity("not-the-owner");
+      if (defect === "content") article.markdown += "\nUnreviewed change.";
+      if (defect === "review") article.status = "review";
+      if (defect === "destination") site.repoName = "different-repository";
+      await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: article._id }));
+      assert.equal(f.get(article._id)!.publicationOwnerApproval, undefined);
+    }
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  });
+});
+
+test("SLC52 duplicate owner clicks and a lost GitHub response reconcile one exact write without activating automation", async t => {
+  for (const lostCommitResponses of [0, 1]) await t.test(`lost responses ${lostCommitResponses}`, async () => {
+    const f = await scopedPricingFixture({}, {}, { lostCommitResponses }); await f.admit(0);
+    const job = f.tables.jobs[0], site = f.get(job.siteId)!; site.autopilotRolloutMode = "warm";
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: site._id, jobId: job._id });
+    const article = f.get(f.get(job._id)!.articleId)!; f.setIdentity(site.userId);
+    site.autopilotEnabled = false; site.approvalRequired = true;
+    await Promise.allSettled(Array.from({ length: 2 }, () => f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: article._id })));
+    f.setIdentity(null);
+    await pumpUntil(f, () => f.get(article._id)!.publicUrlStatus === "verified", 100, f.now() + 60 * 60_000);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+    assert.equal(f.get(site._id)!.autopilotRolloutMode, "warm");
+    assert.equal(f.get(article._id)!.publishedContentHash, article.auditedContentHash);
+    f.assertOffline();
+  });
+});
+
 test("SLC46 a draft missing only title retains its generated metadata and reaches substantive review", async () => {
   const f = await scopedPricingFixture({}, {}, { omitDraftTitle: true });
   await f.admit(0); const job = f.tables.jobs[0];

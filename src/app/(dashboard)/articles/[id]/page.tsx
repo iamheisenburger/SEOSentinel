@@ -445,7 +445,7 @@ export default function ArticleDetailPage() {
       const result = await publishApproved({ siteId: site._id, articleId });
       setLinkStatus(
         result.published
-          ? "Article published successfully."
+          ? "Publication accepted. Pentra is checking the live page."
           : "Quality review queued. Pentra will make this draft publish-safe before delivery.",
       );
     } catch (err: unknown) {
@@ -638,7 +638,17 @@ export default function ArticleDetailPage() {
 
       {linkStatus && (
         <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
-          {linkStatus}
+          {linkStatus === "Publication accepted. Pentra is checking the live page." && article.publicUrlStatus === "verified"
+            ? "Published and verified live." : linkStatus}
+        </div>
+      )}
+
+      {article.status === "published" && (
+        <div role="status" className="rounded-lg border border-[#2B3040] px-4 py-3 text-sm">
+          {article.publicUrlStatus === "verified" ? "Published and verified live."
+            : article.publicUrlStatus === "failed" ? "Publication was accepted, but the live page could not be verified. Delivery needs attention."
+            : "Publication was accepted. Live-page verification is pending."}
+          {article.publicUrl?.startsWith("https://") && <a className="ml-2 underline" href={article.publicUrl} target="_blank" rel="noopener noreferrer">Open article</a>}
         </div>
       )}
 

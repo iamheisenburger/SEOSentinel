@@ -96,6 +96,7 @@ import type * as lib_linkRelevance from "../lib/linkRelevance.js";
 import type * as lib_managedOutreachMailbox from "../lib/managedOutreachMailbox.js";
 import type * as lib_managedSes from "../lib/managedSes.js";
 import type * as lib_managedSesPacing from "../lib/managedSesPacing.js";
+import type * as lib_manualPublication from "../lib/manualPublication.js";
 import type * as lib_markdownCitations from "../lib/markdownCitations.js";
 import type * as lib_markdownPublishing from "../lib/markdownPublishing.js";
 import type * as lib_mediaQuality from "../lib/mediaQuality.js";
@@ -278,6 +279,7 @@ declare const fullApi: ApiFromModules<{
   "lib/managedOutreachMailbox": typeof lib_managedOutreachMailbox;
   "lib/managedSes": typeof lib_managedSes;
   "lib/managedSesPacing": typeof lib_managedSesPacing;
+  "lib/manualPublication": typeof lib_manualPublication;
   "lib/markdownCitations": typeof lib_markdownCitations;
   "lib/markdownPublishing": typeof lib_markdownPublishing;
   "lib/mediaQuality": typeof lib_mediaQuality;

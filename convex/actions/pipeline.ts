@@ -7856,6 +7856,9 @@ export const publishApproved = action({
     if (!article || article.siteId !== siteId) {
       throw new Error("Article not found for site");
     }
+    if (site.publishMethod === "github" && (!site.autopilotEnabled || site.autopilotRolloutMode !== "live")) {
+      await ctx.runMutation(internal.articles.authorizeOwnerPublication, { articleId });
+    }
     const readinessIssue = manualPublicationBlocker(site);
     if (readinessIssue && !article.publicationAttemptedAt) throw new ConvexError(readinessIssue);
     if (
