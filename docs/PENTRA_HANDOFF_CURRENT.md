@@ -1,5 +1,68 @@
 # Pentra — fresh-task handoff
 
+## Current: September22 direct execution (supersedes supervisor instructions below)
+
+Work here in `.claude/assignment24`; do not restart the old task or automation.
+`supervise-pentra-completion` was deleted. Seven clean auxiliary Desktop
+worktrees were safely archived; parent `WORKSPACE.md` identifies all locations.
+No production assets, schemas, history, reservations or customer data were deleted.
+
+Current production code: `831f37ba7221e94db71c78062881782992fc4847`.
+Convex deploy to wary-starfish-773 succeeded; GitHub/Vercel production deployment
+6600179757 succeeded September22 20:34:39UTC. Hosted quality run35781100120
+passed. Local gates:1783tests/1782pass/0fail/1existing
+skip;20synthetic component browser checks pass; build/type/schema/secrets/audit
+pass; lint0errors/157existing warnings. These are not product acceptance.
+
+This release also contains the prior50a0235 canonical audit-checkpoint repair.
+New changes: owner-authenticated GitHub repository verification in website
+settings; truthful manual-publication admission (no phantom queued review);
+one-shot organic-outcome reads instead of expensive live invalidations.
+
+Real owner sign-in succeeded. LeadPilot's new Verify repository button returned
+success in production. Both original retained validation jobs were then resumed
+using genuine owner UI controls, not new jobs, forced identity or replayed repair.
+Their original missed September14 deadlines, counters and existing20USD cumulative
+grant are unchanged. The grant was active in both signed-in funding views.
+Do not call the already-consumed semantic repair again. New paid admissions
+remain bounded by that existing grant; no additional spending was approved.
+
+Live outcomes after Resume: Pentra's completed clarification was contradictory
+and the old handler incorrectly paused the entire service with
+`content_audit_clarification_inconsistent`. LeadPilot's original retained job
+became sealed ready (editorial85/factual86), and automatically admitted fresh job
+`j972shahj7zq6mbgwavytb6jtn8ewzaq`. Its completed remediation returned `notes` as
+a string instead of an array. The article remains retained; schema parsing
+incorrectly consumed transport recovery. LeadPilot was paused through the owner
+UI while still pending/review to prevent another pointless cached-response retry.
+
+Current local candidate routes a completed contradictory review into the EXISTING
+bounded editor/replacement path, invalidates old artifact approval atomically,
+and lets owner Resume reclassify only exact completed legacy contradictions with
+intact lineage and unchanged unpublished article. No raw review score is changed,
+no counter/budget reset or new recovery ladder. Remediation change-note strings
+are preserved as a one-element list; article text and substantive audit fields
+are not coerced. Targeted tests pass including persistent rejection, malformed
+responses, wrong-owner/changed-article/ambiguous-call rejection and no paid replay.
+Local full suite:1786tests/1785pass/0fail/1existing skip. Five focused review
+regressions pass after the single-read Resume optimization. Build/type/schema/
+secrets/dependency audit pass; lint0errors/157existing warnings. Browser suite:
+36pass/2authenticated skips (not acceptance). Convex dry-run passed. This
+candidate is being committed and deployed; confirm deployment before Resume.
+
+Immediate next step: finish release gates, deploy, resume via owner UI, then
+observe actual quality review, publication and rendered verification.
+Finish the customer journey before claiming readiness. No backlink work, no
+new engine, no blanket traffic/uptime promise. Existing contracts remain intact.
+The latest LeadPilot review draft still showed an original numeric detail despite
+review notes claiming removal; it was NOT manually approved as proof.
+
+Only Pentra jh74txye54jna4t85m6y7p4d6h82v9ab and LeadPilot
+jh7cccny67df67rdm4jp65tmtn8am982 are authorized production tenants. Never inspect
+other tenants. Keep parent `.codex-convex-prod.env` untracked and secret.
+
+## Historical supervisor record (not current execution instructions)
+
 ## Current48: first release reconciled; local serialization repair awaits review
 
 Active assignment `supervisor-20260915-slc-bound-release-live-proof-48`, with

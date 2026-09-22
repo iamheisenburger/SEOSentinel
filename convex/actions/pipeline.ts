@@ -18,7 +18,7 @@ import {
 } from "../lib/articleExecutionBudget";
 import { z } from "zod";
 import { ArticleSchema } from "../lib/articleToolResult";
-import { contradictoryContentAudit } from "../lib/contentAudit";
+import { contradictoryContentAudit, inconsistentAuditFeedback } from "../lib/contentAudit";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   appendRelatedInternalLinks,
@@ -1205,14 +1205,22 @@ async function callClaudeStructured<T>(args: {
 }): Promise<T> {
   if (contentProviderActive()) {
     const originalResult = await contentStructuredCall(args);
-    const parsed = args.outputSchema.safeParse(originalResult);
+    // Change-note shape is presentation, not editorial evidence. Preserve a
+    // provider's single note verbatim instead of replaying a completed rewrite.
+    // Article text, audit scores, defects and claim ledgers are never coerced.
+    const normalizedResult = args.toolName === "remediate_final_article" && originalResult && typeof originalResult === "object" &&
+      "notes" in originalResult && typeof originalResult.notes === "string"
+      ? { ...originalResult, notes: [originalResult.notes] } : originalResult;
+    const parsed = args.outputSchema.safeParse(normalizedResult);
     if (parsed.success) return parsed.data;
     if (args.toolName !== "audit_final_article") throw parsed.error;
     if (!contradictoryContentAudit(originalResult)) throw new Error("content_audit_response_invalid");
     const clarified = await contentStructuredCall(args, { originalResult });
     const corrected = args.outputSchema.safeParse(clarified);
-    if (!corrected.success) throw new Error(contradictoryContentAudit(clarified)
-      ? "content_audit_clarification_inconsistent" : "content_audit_clarification_invalid");
+    if (!corrected.success) {
+      if (contradictoryContentAudit(clarified)) throw new ContentQualityRejection(inconsistentAuditFeedback(clarified).join("\n"));
+      throw new Error("content_audit_clarification_invalid");
+    }
     return corrected.data;
   }
   try {

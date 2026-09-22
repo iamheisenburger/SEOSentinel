@@ -1315,34 +1315,30 @@ export const recordPublicationCheck = internalMutation({
   },
 });
 
+export async function quarantineUnpublishedArticle(ctx: MutationCtx, articleId: Id<"articles">, issues: string[]) {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new Error("Article not found");
+    assertNotPublishing(article);
+    if (article.status === "published") throw new Error("Published articles require an audited revision");
+    const checkedAt = now();
+    await ctx.db.patch(articleId, {
+      status: "review", publicationGateStatus: "blocked", publicationGateIssues: issues,
+      publicationGateWarnings: [], publicationCheckedAt: checkedAt,
+      publicationAuditVersion: undefined, publicationConfigHash: undefined,
+      publicationConfigSnapshot: undefined, auditedContentHash: undefined,
+      auditedAt: undefined, updatedAt: checkedAt,
+    });
+    await syncSummary(ctx, articleId);
+    return { quarantined: true };
+}
+
 export const quarantineLinkSealFailure = internalMutation({
   args: {
     articleId: v.id("articles"),
     issues: v.array(v.string()),
   },
   handler: async (ctx, { articleId, issues }) => {
-    const article = await ctx.db.get(articleId);
-    if (!article) throw new Error("Article not found");
-    assertNotPublishing(article);
-    if (article.status === "published") {
-      throw new Error("Published articles require an audited revision");
-    }
-    const checkedAt = now();
-    await ctx.db.patch(articleId, {
-      status: "review",
-      publicationGateStatus: "blocked",
-      publicationGateIssues: issues,
-      publicationGateWarnings: [],
-      publicationCheckedAt: checkedAt,
-      publicationAuditVersion: undefined,
-      publicationConfigHash: undefined,
-      publicationConfigSnapshot: undefined,
-      auditedContentHash: undefined,
-      auditedAt: undefined,
-      updatedAt: checkedAt,
-    });
-    await syncSummary(ctx, articleId);
-    return { quarantined: true };
+    return await quarantineUnpublishedArticle(ctx, articleId, issues);
   },
 });
 

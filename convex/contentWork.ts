@@ -21,9 +21,9 @@ import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
-import { archiveRetiredContentArtifact } from "./articles";
+import { archiveRetiredContentArtifact, quarantineUnpublishedArticle } from "./articles";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
-import { auditResultHash, contradictoryContentAudit, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
+import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -504,6 +504,34 @@ export const readiness = query({
 
 /** Pause is not cancellation: retain ready work, leases, attempts and costs.
  * Resume can only wake the same binding; changed facts require reconciliation. */
+async function reconcileCompletedReviewRejection(ctx: MutationCtx, site: Doc<"sites">, job: Doc<"jobs">) {
+  const cw = job.contentWork;
+  if (cw?.failure !== "content_audit_clarification_inconsistent") return;
+  const call = cw.providerCalls.at(-1), lineage = call?.semanticClarificationOf;
+  const original = cw.providerCalls.find(c => c.key === lineage?.key);
+  const article = job.articleId ? await ctx.db.get(job.articleId) : null;
+  // Reclassify only a completed review, never retry its provider call. The
+  // ordinary revision/replacement limits and all financial receipts survive.
+  if (job.status !== "failed" || cw.stage !== "failed" || cw.operation || cw.retiredAt !== undefined ||
+    job.siteId !== site._id || cw.profileHash !== confirmedContentProfileHash(site) || cw.connectionHash !== contentConnectionHash(site) ||
+    job.workerToken || job.leaseExpiresAt || job.publicationAttempts || cw.approvedArtifactHash || cw.publishedAt || cw.verifiedAt ||
+    !call || !lineage || !original || original.state !== "completed" || call.state !== "completed" ||
+    (original.logicalKey ?? original.key) !== `${cw.replacements}:${cw.revisions}:review:audit_final_article` ||
+    (call.logicalKey ?? call.key) !== `${original.logicalKey ?? original.key}${SEMANTIC_AUDIT_SUFFIX}` ||
+    original.requestHash !== lineage.requestHash || auditResultHash(original.result) !== lineage.resultHash ||
+    !contradictoryContentAudit(original.result) || !contradictoryContentAudit(call.result) ||
+    cw.providerCalls.some(c => c.state === "started" || (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0))) ||
+    !article || article.siteId !== site._id || article.updatedAt > job.updatedAt || article.status === "published" ||
+    article.publicationAttemptedAt || article.publicationReceipt || article.publicationLeaseOwner || article.publicationOutcomeUnverifiedAt || article.publishedContentHash) {
+    throw new Error("Retained review evidence changed; reconciliation requires inspection");
+  }
+  await ctx.db.patch(job._id, { status: "done", error: undefined, nextAttemptAt: undefined,
+    result: { qualityQuarantined: true, previousFailure: cw.failure, previousUpdatedAt: job.updatedAt,
+      rejectedReviewKey: call.key, rejectedReviewHash: auditResultHash(call.result) }, updatedAt: Date.now() });
+  await contentWorkCompleted(ctx, job, inconsistentAuditFeedback(call.result));
+  return true;
+}
+
 export const control = mutation({ args: { siteId: v.id("sites"), action: v.union(v.literal("pause"), v.literal("resume"), v.literal("retry")), reviewToken: v.string(),
     creditRetry: v.optional(v.object({ jobId: v.id("jobs"), callKey: v.string(), token: v.string() })) },
   handler: async (ctx, args) => {
@@ -515,7 +543,11 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     }
     if (args.reviewToken !== contentConsentToken(site) || s.profileHash !== confirmedContentProfileHash(site) || s.connectionHash !== contentConnectionHash(site)) throw new Error("Business or destination changed. Use Review changed setup to confirm current facts and safely replace stale unstarted work.");
     if (!await contentEntitlementAuthorized(ctx, site) || !contentConnectionComplete(site) || site.approvalRequired) throw new Error("Verify billing, publishing and automatic-publication consent before resuming");
-    const unresolved = (await jobsForSite(ctx, site._id)).some(j => j.contentWork && j.contentWork.retiredAt === undefined &&
+    const jobs = await jobsForSite(ctx, site._id), reconciled = new Set<Id<"jobs">>();
+    if (args.action === "resume") for (const job of jobs) {
+      if (job.contentWork?.retiredAt === undefined && await reconcileCompletedReviewRejection(ctx, site, job)) reconciled.add(job._id);
+    }
+    const unresolved = jobs.some(j => !reconciled.has(j._id) && j.contentWork && j.contentWork.retiredAt === undefined &&
       internalContentProcessingError(j.contentWork.failure ?? j.error));
     if (unresolved) throw new Error("Pentra must repair the retained internal processing error before delivery resumes");
     if (args.action === "resume") await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: false }, autopilotEnabled: true,
@@ -735,7 +767,7 @@ export const advance = internalMutation({
   },
 });
 
-export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
+export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, rejectionIssues?: string[]) {
   if (!job.contentWork) return;
   if (job.contentWork.intent === "improve" && ["verify", "verified"].includes(job.contentWork.stage)) return;
   if (!job.articleId) {
@@ -743,11 +775,16 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
     await wake(ctx, job.siteId!);
     return;
   }
+  if (rejectionIssues?.length) {
+    const rejected = await ctx.db.get(job.articleId);
+    if (!rejected || rejected.siteId !== job.siteId) throw new Error("Content rejection crossed tenant boundary");
+    await quarantineUnpublishedArticle(ctx, job.articleId, rejectionIssues);
+  }
   const article = await ctx.db.get(job.articleId), cw = job.contentWork;
   if (!article || article.siteId !== job.siteId) throw new Error("Content work artifact crossed tenant boundary");
   let stage: NonNullable<Doc<"jobs">["contentWork"]>["stage"] = article.status === "published" ? (article.publicUrlStatus === "verified" ? "verified" : "verify")
     : isSealedReady(article) ? "ready" : "review_failed";
-  let selectedFailure: string | undefined;
+  let selectedFailure: string | undefined = rejectionIssues?.length ? "content_review_rejected" : undefined;
   if (stage === "ready" && cw.intent === "improve") {
     const site = await ctx.db.get(job.siteId!);
     try {
@@ -762,7 +799,7 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">) {
       actualMicroUsd: currentCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0), reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
   }
   await ctx.db.patch(job._id, { contentWork: { ...cw, stage, failure: selectedFailure ?? (stage === "ready" ? undefined : cw.failure),
-    approvedArtifactHash: stage === "ready" ? article.auditedContentHash : cw.approvedArtifactHash,
+    approvedArtifactHash: stage === "ready" ? article.auditedContentHash : stage === "review_failed" ? undefined : cw.approvedArtifactHash,
     publishedAt: article.publishedAt, verifiedAt: article.publicUrlVerifiedAt } });
   await wake(ctx, job.siteId!);
 }

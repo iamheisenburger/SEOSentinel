@@ -62,6 +62,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   auditResponse?: (audit: Fields, request: Fields) => unknown;
+  remediationNote?: string;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
@@ -170,6 +171,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         if (options.auditResponse) value = options.auditResponse(value as Fields, body);
       } else if (tool === "submit_final_metadata") { assert.ok(keyword); value = { title: titleFor(keyword), metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description }; }
       else assert.fail(`Unexpected Anthropic tool ${tool}`);
+      if (tool === "remediate_final_article" && options.remediationNote !== undefined) value = { ...(value as Fields), notes: options.remediationNote };
       return json({ id: `synthetic-message-${modelCalls.length}`, type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
         usage: { input_tokens: 100, output_tokens: 100 }, content: [{ type: "tool_use", id: `synthetic-tool-${modelCalls.length}`, name: tool, input: value }] });
     }
@@ -979,8 +981,8 @@ test("SLC47 valid failing audit or failing clarification enters bounded revision
   }
 });
 
-test("SLC47 a second contradictory or malformed audit stops deterministically without infrastructure retry or paid replay", async () => {
-  for (const kind of ["contradictory", "malformed_correction", "malformed_original"]) {
+test("SLC47 a malformed audit still stops deterministically without infrastructure retry or paid replay", async () => {
+  for (const kind of ["malformed_correction", "malformed_original"]) {
     const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => kind === "malformed_original" ||
       (kind === "malformed_correction" && isAuditClarification(request)) ? { ...audit, score: undefined } : { ...audit, score: 83 } });
     await f.admit(0); const job = f.tables.jobs[0];
@@ -1114,7 +1116,7 @@ test("SLC47 legacy repair rejects unrelated failure, stale authority/article, am
   }
 });
 
-test("SLC47 an inconsistent legacy clarification stops with historical counters and a consumed repair, never another paid recovery", async () => {
+test("SLC50 an inconsistent clarification rejects content without pausing the service or replaying its paid review", async () => {
   for (const index of [0, 1]) {
     const f = await legacySemanticAuditFixture(index), original = structuredClone(f.get(f.jobId)!);
     await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
@@ -1123,15 +1125,101 @@ test("SLC47 an inconsistent legacy clarification stops with historical counters 
     const calls = f.modelCalls.length, holds = JSON.stringify(f.tables.provider_spend_reservations);
     await f.invoke("actions/pipeline:processNextJob", { siteId: original.siteId, jobId: original._id });
     const failed = f.get(original._id)!;
-    assert.equal(failed.status, "failed"); assert.equal(failed.contentWork.failure, "content_audit_clarification_inconsistent");
-    assert.equal(failed.workerAttempts, original.workerAttempts + 1, "The one new failed attempt is recorded, never a reset");
+    assert.equal(failed.status, "done"); assert.equal(failed.contentWork.stage, "review_failed");
+    assert.equal(failed.contentWork.failure, "content_review_rejected");
+    assert.equal(failed.workerAttempts, original.workerAttempts, "Content rejection does not consume a transport recovery");
     assert.equal(failed.contentWork.recoveryAttempts, 3); assert.equal(failed.contentWork.semanticAuditRepair.workerAttempts, original.workerAttempts);
     assert.equal(failed.contentWork.deadlineAt, original.contentWork.deadlineAt); assert.equal(failed.nextAttemptAt, undefined);
-    assert.equal(f.get(original.siteId)!.contentSchedule.paused, true); assert.equal(failed.contentWork.semanticAuditRepair.previousStatus, original.status);
+    assert.equal(f.get(original.siteId)!.contentSchedule.paused, false); assert.equal(failed.contentWork.semanticAuditRepair.previousStatus, original.status);
+    assert.equal(f.get(failed.articleId)!.publicationGateStatus, "blocked");
+    assert.equal(f.get(failed.articleId)!.auditedContentHash, undefined);
+    assert.match(f.get(failed.articleId)!.publicationGateIssues.join(" "), /inconsistent/);
     assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
     for (let i = 0; i < 3; i++) { f.restartRuntime(); await f.invoke("actions/pipeline:processNextJob", { siteId: original.siteId, jobId: original._id }); }
     assert.equal(f.modelCalls.length, calls + 1);
-    await assert.rejects(f.invoke("contentWork:reconcileSemanticAuditFailure", { ...f.repair, expectedUpdatedAt: failed.updatedAt })); f.assertOffline();
+    await assert.rejects(f.invoke("contentWork:reconcileSemanticAuditFailure", { ...f.repair, expectedUpdatedAt: failed.updatedAt }));
+    f.providerOptions.auditResponse = undefined;
+    await f.admit(index);
+    assert.equal(f.get(original._id)!.contentWork.revisions, original.contentWork.revisions + 1);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: original.siteId, jobId: original._id });
+    assert.equal(f.get(original._id)!.contentWork.stage, "ready");
+    assert.equal(f.get(original._id)!.contentWork.recoveryAttempts, 3);
+    f.assertOffline();
+  }
+});
+
+test("SLC50 repeated inconsistent reviews exhaust the existing bounded candidate, never publish or mint unlimited replacements", async () => {
+  const f = await scopedPricingFixture({}, {}, { auditResponse: audit => ({ ...audit, score: 80 }) });
+  await f.admit(0); const id = f.tables.jobs[0]._id;
+  await pumpUntil(f, () => f.get(id)!.contentWork.stage === "failed", 180);
+  const failed = f.get(id)!;
+  assert.equal(failed.contentWork.failure, "bounded_content_quality_exhausted");
+  assert.equal(failed.contentWork.revisions, 2); assert.equal(failed.contentWork.replacements, 1);
+  assert.equal(failed.contentWork.recoveryAttempts ?? 0, 0);
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
+  assert.equal(failed.contentWork.approvedArtifactHash, undefined);
+  const calls = f.modelCalls.length;
+  for (let i = 0; i < 3; i++) await f.admit(0);
+  assert.equal(f.modelCalls.length, calls); f.assertOffline();
+});
+
+test("SLC50 a single remediation note is preserved without replay or quality-score coercion", async () => {
+  for (const weak of [false, true]) {
+    let audits = 0;
+    const f = await scopedPricingFixture({}, {}, { remediationNote: "Preserved exact change note.",
+      auditResponse: audit => weak || ++audits === 1 ? { ...audit, score: 70, materialDefects: ["Explain the decision with a worked example."] } : audit });
+    await f.admit(0); const id = f.tables.jobs[0]._id;
+    await pumpUntil(f, () => ["ready", "failed", "verified"].includes(f.get(id)!.contentWork.stage), 160);
+    const work = f.get(id)!.contentWork;
+    assert.equal(work.recoveryAttempts ?? 0, 0);
+    assert.equal(work.stage === "failed", weak);
+    assert.ok(work.providerCalls.some((c: Fields) => c.result?.notes === "Preserved exact change note."));
+    const keys = work.providerCalls.map((c: Fields) => c.logicalKey ?? c.key);
+    assert.equal(new Set(keys).size, keys.length);
+    if (weak) assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
+    f.assertOffline();
+  }
+});
+
+test("SLC50 owner resume reclassifies only completed retained contradictory reviews, preserving history and limits", async () => {
+  for (const defect of ["none", "lineage", "ambiguous", "article_changed", "published", "lease", "other_failure", "wrong_owner"]) {
+    const f = await legacySemanticAuditFixture(0);
+    await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
+    const job = f.get(f.jobId)!;
+    f.providerOptions.auditResponse = audit => ({ ...audit, score: 80 });
+    await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+    await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    // Simulate the previous deployed worker's classification, not another model call.
+    const retained = f.get(job._id)!;
+    Object.assign(retained, { status: "failed", error: "content_audit_clarification_inconsistent", updatedAt: f.now() });
+    Object.assign(retained.contentWork, { stage: "failed", failure: "content_audit_clarification_inconsistent" });
+    f.get(job.siteId)!.contentSchedule.paused = true;
+    if (defect === "lineage") retained.contentWork.providerCalls.at(-1).semanticClarificationOf.resultHash = "0".repeat(64);
+    if (defect === "ambiguous") retained.contentWork.providerCalls[0].state = "started";
+    if (defect === "article_changed") f.get(job.articleId)!.updatedAt = f.now() + 1;
+    if (defect === "published") f.get(job.articleId)!.status = "published";
+    if (defect === "lease") retained.workerToken = "another-worker";
+    if (defect === "other_failure") retained.contentWork.failure = "content_audit_clarification_invalid";
+    const reviewToken = (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken;
+    if (defect === "wrong_owner") f.setIdentity("other-owner");
+    const calls = f.modelCalls.length, before = structuredClone(retained), holds = JSON.stringify(f.tables.provider_spend_reservations);
+    const args = { siteId: job.siteId, action: "resume", reviewToken };
+    if (defect !== "none") await assert.rejects(f.invoke("contentWork:control", args));
+    else {
+      await f.invoke("contentWork:control", args);
+      const after = f.get(job._id)!;
+      assert.equal(after.contentWork.stage, "review_failed");
+      assert.equal(after.contentWork.deadlineAt, before.contentWork.deadlineAt);
+      assert.equal(after.contentWork.revisions, before.contentWork.revisions);
+      assert.equal(after.contentWork.recoveryAttempts, before.contentWork.recoveryAttempts);
+      assert.equal(after.workerAttempts, before.workerAttempts);
+      assert.deepEqual(after.contentWork.providerCalls, before.contentWork.providerCalls);
+      assert.equal(after.result.previousFailure, before.contentWork.failure);
+      await f.invoke("contentWork:control", args);
+      assert.equal(f.get(job._id)!.contentWork.stage, "review_failed");
+    }
+    assert.equal(f.modelCalls.length, calls); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
   }
 });
 

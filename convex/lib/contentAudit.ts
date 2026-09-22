@@ -13,6 +13,16 @@ export function contradictoryContentAudit(value: unknown): boolean {
   const parsed = semanticAuditSchema.safeParse(value);
   return parsed.success && (parsed.data.score >= 85) !== (parsed.data.materialDefects.length === 0);
 }
+/** A contradictory review never approves content. Retain concrete feedback for
+ * the existing bounded editor, without changing any provider score or receipt. */
+export function inconsistentAuditFeedback(value: unknown): string[] {
+  const audit = semanticAuditSchema.parse(value);
+  return [...new Set([
+    "The content review was inconsistent; a new consistent review is required before publication.",
+    ...audit.materialDefects, ...audit.notes,
+    ...audit.claimEvidence.filter(c => !c.supported).map(c => `${c.claim}: ${c.reason}`),
+  ])].slice(0, 40).map(note => note.slice(0, 2000));
+}
 // Convex sorts object fields recursively at action/query/mutation boundaries.
 // Use its exact value encoding for both lineage and prompt reconstruction;
 // arrays retain their significant order. Never mutate the provider receipt.

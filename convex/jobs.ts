@@ -4747,7 +4747,8 @@ export const markDone = internalMutation({
     });
     await reconcileJobTopicLifecycle(ctx, job);
     await wakeCurrentOneSetupExecutionForTerminalPlan(ctx, job);
-    await contentWorkCompleted(ctx, job);
+    await contentWorkCompleted(ctx, job, result?.qualityQuarantined === true && Array.isArray(result.issues)
+      ? result.issues.filter((issue: unknown): issue is string => typeof issue === "string") : undefined);
     return { updated: true };
   },
 });
