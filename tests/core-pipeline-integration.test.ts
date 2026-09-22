@@ -799,6 +799,53 @@ async function scopedPricingFixture(price: Fields = {}, grant: Fields = {}, opti
   return { ...f, configuredPricing: pricing };
 }
 
+test("SLC51 priced content work retains legacy history, monetary bounds and concurrency instead of double-counting review stages", async () => {
+  const f = await scopedPricingFixture(); await f.admit(0);
+  const job = f.tables.jobs[0], owner = f.get(job.siteId)!.userId;
+  for (let i = 0; i < 170; i++) f.add("article_generation_attempts", { userId: owner,
+    jobKey: `old-${i}`, attemptKey: `old-${i}:0`, workerAttempt: 0, monthKey: "2026-09",
+    providerWorkKind: "generation", maxArticles: 150, attemptAllowance: 170,
+    status: "failed", createdAt: START - 1000, updatedAt: START - 1000 });
+  const history = structuredClone(f.tables.article_generation_attempts);
+  // Reproduce a previously deployed monthly deferral, retaining its deadline.
+  job.nextAttemptAt = START + 30 * 86_400_000;
+  job.cadenceFailure = { code: "article_provider_monthly_attempt_limit", category: "monthly_quota",
+    eligibleAt: job.nextAttemptAt, retryable: true, terminal: false };
+  const before = structuredClone(job);
+  await f.admit(0);
+  assert.equal(f.get(job._id)!.nextAttemptAt, undefined);
+  assert.deepEqual(f.get(job._id)!.result.reconciledLegacyProviderDeferral, before.cadenceFailure);
+  assert.equal(f.get(job._id)!.contentWork.deadlineAt, before.contentWork.deadlineAt);
+  assert.equal(f.get(job._id)!.workerAttempts, before.workerAttempts);
+  for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  assert.equal(f.get(job._id)!.contentWork.stage, "ready", diagnostic(f));
+  assert.deepEqual(f.tables.article_generation_attempts.slice(0, 170), history);
+  assert.ok(f.tables.article_generation_attempts.slice(170).every(a => a.contentWorkReservationId === job.providerSpendReservationId));
+  assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 600);
+  f.assertOffline();
+});
+
+test("SLC51 invalid content envelopes cannot remove old deferrals or override monthly admission", async t => {
+  for (const defect of ["released", "wrong_owner", "amount", "stopped", "unsettled"] as const) await t.test(defect, async () => {
+    const f = await scopedPricingFixture(); await f.admit(0);
+    const job = f.tables.jobs[0], receipt = f.get(job.providerSpendReservationId)!;
+    for (let i = 0; i < 170; i++) f.add("article_generation_attempts", { userId: f.get(job.siteId)!.userId,
+      jobKey: `old-${i}`, attemptKey: `old-${i}:0`, workerAttempt: 0, monthKey: "2026-09",
+      providerWorkKind: "generation", maxArticles: 150, attemptAllowance: 170,
+      status: "failed", createdAt: START - 1000, updatedAt: START - 1000 });
+    if (defect === "released") receipt.releasedAt = START;
+    if (defect === "wrong_owner") receipt.userId = "someone-else";
+    if (defect === "amount") receipt.reservedMicroUsd--;
+    if (defect === "stopped") await f.stop();
+    if (defect === "unsettled") job.contentWork.providerCalls.push({ key: "unknown", state: "started", ceilingMicroUsd: 100 });
+    job.nextAttemptAt = START + 30 * 86_400_000;
+    job.cadenceFailure = { code: "article_provider_monthly_attempt_limit", eligibleAt: job.nextAttemptAt };
+    await f.admit(0);
+    assert.equal(f.get(job._id)!.nextAttemptAt, START + 30 * 86_400_000);
+    assert.equal(f.modelCalls.length, 0); f.assertOffline();
+  });
+});
+
 test("SLC46 a draft missing only title retains its generated metadata and reaches substantive review", async () => {
   const f = await scopedPricingFixture({}, {}, { omitDraftTitle: true });
   await f.admit(0); const job = f.tables.jobs[0];
@@ -2497,7 +2544,13 @@ test("SLC pricing, unknown shared budget and exhausted account or per-work funds
         assert.equal(f.get(job._id)!.status, scenario === "attempt_full" ? "pending" : "failed");
       } else assert.equal(result.mode, scenario === "unpriced" ? "content_pricing_unavailable" : "content_budget_exhausted");
     }
-    assert.equal(f.modelCalls.length, 0, scenario); f.assertOffline();
+    assert.equal(f.modelCalls.length, scenario === "attempt_full" ? 1 : 0, scenario);
+    if (scenario === "attempt_full") {
+      assert.equal(f.tables.article_generation_attempts.filter(a => a.status === "failed").length, 170);
+      assert.equal(f.tables.article_generation_attempts.filter(a => a.contentWorkReservationId).length, 1);
+      assert.equal(f.tables.provider_spend_reservations.length, 1, "Ordinary SLC still reserves its real monetary budget");
+    }
+    f.assertOffline();
   }
 });
 

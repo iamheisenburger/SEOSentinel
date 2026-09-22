@@ -16,6 +16,7 @@ import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
+import { manualPublicationBlocker } from "../../../../convex/lib/manualPublication";
 
 export default function ArticlesPage() {
   const { activeSite: site, sites } = useActiveSite();
@@ -247,6 +248,7 @@ export default function ArticlesPage() {
                 <div className="flex items-center gap-1.5">
                   {article.status === "ready" && site?.publishMethod !== "manual" && (
                     <button
+                      disabled={Boolean(manualPublicationBlocker(site))}
                       onClick={async () => {
                         if (!site?._id) return;
                         try {
@@ -260,7 +262,7 @@ export default function ArticlesPage() {
                         }
                       }}
                       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E] hover:bg-[#22C55E]/[0.08] transition"
-                      title="Publish"
+                      title={manualPublicationBlocker(site) ?? "Publish"}
                     >
                       <Upload className="h-3 w-3" />
                       Publish

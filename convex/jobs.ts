@@ -3,7 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { contentWorkCompleted, settleFailedContentWork, recoverContentWork } from "./contentWork";
+import { contentWorkCompleted, settleFailedContentWork, recoverContentWork, hasContentWorkProviderBudget } from "./contentWork";
 import { getLimitsFromFeatures } from "./planLimits";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import { publicationDeliveryBlocker } from "./lib/publicationEligibility";
@@ -3645,13 +3645,16 @@ export const reserveArticleProviderAttempt = internalMutation({
         q.eq("status", "reserved").gt("expiresAt", currentTime)
       )
       .take(ARTICLE_PROVIDER_FLEET_CONCURRENCY);
+    const hasContentWorkBudget = await hasContentWorkProviderBudget(ctx, site, job);
+    const legacyAttemptsUsed = accountAttempts.filter(a => !a.contentWorkReservationId).length;
     const decision = decideArticleProviderAdmission({
       existingStatus: existing?.status as
         | ArticleProviderAttemptStatus
         | undefined,
       existingOwnedByAccount: existing?.userId === site.userId,
-      attemptsUsed: accountAttempts.length,
+      attemptsUsed: legacyAttemptsUsed,
       attemptAllowance,
+      hasContentWorkBudget,
       activeAccountAttempts: activeAccountAttempts.length,
       activeFleetAttempts: activeFleetAttempts.length,
     });
@@ -3698,6 +3701,7 @@ export const reserveArticleProviderAttempt = internalMutation({
       maxArticles: allowance.limits.maxArticles,
       attemptAllowance,
       status: "reserved",
+      ...(hasContentWorkBudget ? { contentWorkReservationId: job.providerSpendReservationId } : {}),
       expiresAt: currentTime + ARTICLE_PROVIDER_ATTEMPT_LEASE_MS,
       createdAt: currentTime,
       updatedAt: currentTime,

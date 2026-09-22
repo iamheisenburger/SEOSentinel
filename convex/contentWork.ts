@@ -62,6 +62,32 @@ async function contentEntitlementAuthorized(ctx: QueryCtx | MutationCtx, site: D
   const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
   return entitlement?.status === "completed" && await siteExecutionAuthorized(ctx, site);
 }
+
+/** SLC uses a reserved, per-call monetary envelope instead of the legacy
+ * worker-count proxy for provider cost. This does not replace article usage,
+ * concurrency, quality limits, or the checks performed before EACH paid call. */
+export async function hasContentWorkProviderBudget(ctx: MutationCtx, site: Doc<"sites">, job: Doc<"jobs">) {
+  const cw = job.contentWork;
+  if (!cw || cw.retiredAt !== undefined || cw.operation || job.siteId !== site._id ||
+    !["prepare", "review"].includes(cw.stage) || cw.revisions > 2 || cw.replacements > 1 ||
+    cw.providerCalls.length > 20 || cw.providerCalls.some(c => c.state !== "completed" &&
+      !(c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable" && c.creditRecovery?.requestedAt !== undefined)) ||
+    !Number.isSafeInteger(cw.budgetMicroUsd) || cw.budgetMicroUsd <= 0 ||
+    cw.profileHash !== confirmedContentProfileHash(site) || cw.connectionHash !== contentConnectionHash(site) ||
+    !await pricingConfiguration(ctx, site, job)) return false;
+  const receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
+  if (!receipt || receipt.siteId !== site._id || receipt.userId !== site.userId || receipt.purpose !== "content_work" ||
+    receipt.releasedAt !== undefined || receipt.settledAt !== undefined || receipt.reservedMicroUsd <= 0 ||
+    !(receipt.trigger === `content_slot:${cw.deadlineAt}` || receipt.trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`))) return false;
+  try { for (const call of cw.providerCalls) if (call.creditRecovery?.requestedAt !== undefined) await retainedCreditEvidence(ctx, job, call); }
+  catch { return false; }
+  const costs = cw.providerCalls.map(c => c.actualMicroUsd ?? c.ceilingMicroUsd);
+  if (costs.some(c => c === undefined || !Number.isSafeInteger(c) || c < 0)) return false;
+  const used = costs.reduce<number>((sum, c) => sum + c!, 0);
+  const prior = cw.providerCalls.filter(c => c.reservationId && c.reservationId !== receipt._id)
+    .reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+  return used <= cw.budgetMicroUsd && receipt.reservedMicroUsd === cw.budgetMicroUsd - prior;
+}
 async function jobsForSite(ctx: MutationCtx, siteId: Id<"sites">, fromDeadline?: number) {
   const jobs = fromDeadline === undefined
     ? await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1)
@@ -702,6 +728,15 @@ export const advance = internalMutation({
       return { scheduled: 0, mode: "content_failed_slot" };
     }
     const activeJob = work.find(j => ["pending", "running"].includes(j.status));
+    if (activeJob?.status === "pending" && !activeJob.workerToken && !activeJob.leaseExpiresAt &&
+      activeJob.cadenceFailure?.code === "article_provider_monthly_attempt_limit" &&
+      await hasContentWorkProviderBudget(ctx, site, activeJob)) {
+      // Reconcile only the obsolete cost proxy, never a true cash-budget or
+      // article-entitlement rejection. Keep deadlines, attempts and receipts.
+      await ctx.db.patch(activeJob._id, { nextAttemptAt: undefined, error: undefined, cadenceFailure: undefined,
+        result: { ...activeJob.result, reconciledLegacyProviderDeferral: activeJob.cadenceFailure }, updatedAt: Date.now() });
+      return { scheduled: 1, mode: "work_in_progress", activeJobId: activeJob._id };
+    }
     if (activeJob) return { scheduled: 0, mode: "work_in_progress", activeJobId: activeJob._id };
     const unverified = waiting.find(j => j.contentWork!.stage === "verify");
     if (unverified) {

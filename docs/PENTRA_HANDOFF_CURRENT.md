@@ -7,7 +7,46 @@ Work here in `.claude/assignment24`; do not restart the old task or automation.
 worktrees were safely archived; parent `WORKSPACE.md` identifies all locations.
 No production assets, schemas, history, reservations or customer data were deleted.
 
-Current production code: `831f37ba7221e94db71c78062881782992fc4847`.
+Latest deployed follow-up before the current candidate:
+`18fc567c62b671e8a1418864246dc306c4816278`, including `ab02712` review
+classification/notes parsing. Convex succeeded; Vercel deployment6600519164
+succeeded20:53:54UTC; CI35783123909 passed. Owner Resume worked in production
+for both sites without counter, deadline or grant resets.
+
+Latest actual outcomes: Pentra's retained revision hit the legacy monthly
+worker-attempt counter despite its reserved SLC monetary envelope; job
+`j9703g7paa6atyya4fzr56ngs58ecn07` deferred to October1. LeadPilot's original
+job `j973nq40csygxhcg0bchsmx6zd8ecq9h` remains ready, but fresh refill
+`j972shahj7zq6mbgwavytb6jtn8ewzaq` exhausted two revisions and one replacement.
+All15 successful provider receipts for that refill total682076microUSD; do not
+mistake this one-job amount for the entire grant's usage. Its replacement
+article `j57dh9attp1eqratag4gjme4fs8ewthf` is NOT approved. The final audit
+objects to an unlabeled '20 leads' recommendation and metadata scope; it also
+contains a retracted numbering defect. Do not promote scores or reset attempts.
+
+The owner UI Publish Now attempt for approved LeadPilot article
+`j570xwjezsyk7b80wwhp1m5x4x8efqem` returned a server error: the publisher still
+requires live rollout, while this site is warm with one of two prepared items.
+It did NOT publish. The earlier narrowed manual-v1 path is therefore NOT proven.
+
+Current candidate replaces SLC's redundant monthly worker-count cost proxy
+with its existing validated, reserved per-work monetary envelope. Real article
+entitlements, concurrency, paid-call ceilings, retained ambiguous costs and
+review/replacement limits remain. Legacy workflows retain their monthly
+attempt limits. New SLC concurrency receipts identify their budget reservation;
+historical receipts are unchanged. Normal advance only reconciles the exact
+obsolete monthly deferral when its original work budget is still valid; its
+deadline, worker attempts and failure record are retained. Candidate also
+disables misleading Publish Now controls for inactive publication and returns
+a safe actionable error instead of the generic server error. This is truthful
+UI, not a claim that manual delivery now works while warm.
+Candidate gates:1795tests/1794pass/0fail/1existing skip; build/type/schema/
+secrets/dependency audit pass; lint0errors/157existing warnings. Browser suite
+36pass/2authenticated skips. Convex dry-run passed. Next work is exact
+owner-authorized publication of one ready article without enabling the whole
+autonomous schedule, with the same destination/quality/lease/billing protections.
+
+Earlier production code: `831f37ba7221e94db71c78062881782992fc4847`.
 Convex deploy to wary-starfish-773 succeeded; GitHub/Vercel production deployment
 6600179757 succeeded September22 20:34:39UTC. Hosted quality run35781100120
 passed. Local gates:1783tests/1782pass/0fail/1existing

@@ -5,7 +5,8 @@ class ContentQualityRejection extends Error {}
 import { internal } from "../_generated/api";
 import { action, internalAction } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
+import { manualPublicationBlocker } from "../lib/manualPublication";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
@@ -7847,7 +7848,7 @@ export const publishApproved = action({
     ctx,
     { siteId, articleId },
   ): Promise<PublishApprovedResult> => {
-    await requireOwnedSite(ctx, siteId);
+    const site = await requireOwnedSite(ctx, siteId);
     const article: Doc<"articles"> | null = await ctx.runQuery(
       internal.articles.getInternal,
       { articleId },
@@ -7855,6 +7856,8 @@ export const publishApproved = action({
     if (!article || article.siteId !== siteId) {
       throw new Error("Article not found for site");
     }
+    const readinessIssue = manualPublicationBlocker(site);
+    if (readinessIssue && !article.publicationAttemptedAt) throw new ConvexError(readinessIssue);
     if (
       !article.auditedContentHash ||
       article.publicationAuditVersion !== PUBLICATION_AUDIT_VERSION

@@ -154,6 +154,16 @@ test("atomic reservation rechecks lease, tenant, rollout, and canonical plan", (
   assert.doesNotMatch(reserve, /provider_spend_reservations|reservedMicroUsd/);
 });
 
+test("a content-work money envelope replaces only the monthly cost proxy, not leases or concurrency", () => {
+  const budget = { attemptsUsed: 170, attemptAllowance: 170, activeAccountAttempts: 0,
+    activeFleetAttempts: 0, hasContentWorkBudget: true };
+  assert.deepEqual(decideArticleProviderAdmission(budget), { status: "reserve" });
+  assert.deepEqual(decideArticleProviderAdmission({ ...budget, activeAccountAttempts: 2 }), { status: "reject", reason: "account_concurrency" });
+  assert.deepEqual(decideArticleProviderAdmission({ ...budget, activeFleetAttempts: 3 }), { status: "reject", reason: "fleet_concurrency" });
+  assert.deepEqual(decideArticleProviderAdmission({ ...budget, existingStatus: "failed", existingOwnedByAccount: true }),
+    { status: "reject", reason: "attempt_already_settled" });
+});
+
 test("all paid article provider calls reserve while link sealing and publication stay provider-free", () => {
   const pipeline = source("convex/actions/pipeline.ts");
   const worker = exportedBlock(pipeline, "processNextJob");

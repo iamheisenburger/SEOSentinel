@@ -69,6 +69,9 @@ export function decideArticleProviderAdmission(input: {
   attemptAllowance: number;
   activeAccountAttempts: number;
   activeFleetAttempts: number;
+  /** The replacement content workflow reserves money before admission and
+   * checks every priced call against that same bounded envelope. */
+  hasContentWorkBudget?: boolean;
 }): ArticleProviderAdmissionDecision {
   if (input.existingStatus !== undefined) {
     if (input.existingOwnedByAccount !== true ||
@@ -80,7 +83,7 @@ export function decideArticleProviderAdmission(input: {
     // It remains the same monthly attempt, even after the allowance fills.
     if (input.existingStatus === "reserved") return { status: "reuse" };
   }
-  if (input.existingStatus === undefined && input.attemptsUsed >= input.attemptAllowance) {
+  if (input.existingStatus === undefined && !input.hasContentWorkBudget && input.attemptsUsed >= input.attemptAllowance) {
     return { status: "reject", reason: "monthly_attempt_limit" };
   }
   if (input.activeAccountAttempts >= ARTICLE_PROVIDER_ACCOUNT_CONCURRENCY) {

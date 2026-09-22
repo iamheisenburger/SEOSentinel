@@ -2,6 +2,7 @@
 
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
+import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -582,14 +583,18 @@ export default function ArticleDetailPage() {
                 </>
               )}
               {article.status === "ready" && site?.publishMethod !== "manual" && (
+                <div className="flex max-w-sm flex-col gap-2">
                 <Button
                   size="sm"
                   onClick={handlePublish}
                   loading={actionBusy}
+                  disabled={Boolean(manualPublicationBlocker(site))}
                   icon={<Upload className="h-3.5 w-3.5" />}
                 >
                   Publish Now
                 </Button>
+                {manualPublicationBlocker(site) && <p className="text-xs text-[#8B8FA3]">{manualPublicationBlocker(site)} <a href="/settings" className="underline">Open Settings</a></p>}
+                </div>
               )}
               <Button
                 variant="secondary"

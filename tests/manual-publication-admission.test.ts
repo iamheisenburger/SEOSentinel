@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { manualPublicationBlocker } from "../convex/lib/manualPublication.ts";
 
 // Execute the real action handler, with only its external boundaries replaced.
 const source = readFileSync("convex/actions/pipeline.ts", "utf8");
@@ -14,12 +15,14 @@ const compiled = ts.transpileModule(
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
-function fixture(recovery: object) {
+function fixture(recovery: object, site = { autopilotEnabled: true, autopilotRolloutMode: "live" }) {
   const calls: string[] = [];
   const scope = {
     action: (definition: unknown) => definition,
     v: { id: () => null },
-    requireOwnedSite: async () => { calls.push("authorize"); },
+    requireOwnedSite: async () => { calls.push("authorize"); return site; },
+    manualPublicationBlocker,
+    ConvexError: Error,
     PUBLICATION_AUDIT_VERSION: 1,
     internal: {
       articles: { getInternal: "article" },
@@ -49,6 +52,16 @@ test("exhausted or missing recovery cannot report phantom queued work", async ()
     await assert.rejects(f.run());
     assert.deepEqual(f.calls, ["authorize"]);
   }
+});
+
+test("inactive publishing reports a useful reason before any queue or external write", async () => {
+  for (const site of [{ autopilotEnabled: true, autopilotRolloutMode: "warm" }, { autopilotEnabled: false, autopilotRolloutMode: "live" }]) {
+    const f = fixture({}, site);
+    await assert.rejects(f.run(), /Publishing is not active.*approved article is retained/);
+    assert.deepEqual(f.calls, ["authorize"]);
+    assert.ok(manualPublicationBlocker(site));
+  }
+  assert.equal(manualPublicationBlocker({ autopilotEnabled: true, autopilotRolloutMode: "live" }), null);
 });
 
 test("new recovery schedules once; existing recovery is reused without rescheduling", async () => {

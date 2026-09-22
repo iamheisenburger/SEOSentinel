@@ -1397,6 +1397,7 @@ export default defineSchema({
     providerWorkKind: v.string(), // generation | quality_review | internal_links
     maxArticles: v.number(),
     attemptAllowance: v.number(),
+    contentWorkReservationId: v.optional(v.id("provider_spend_reservations")),
     status: v.string(), // reserved | funding_paused | completed | failed | ambiguous
     expiresAt: v.optional(v.number()),
     settledAt: v.optional(v.number()),
