@@ -2421,7 +2421,7 @@ export const verifyContentImprovement = internalAction({ args: { siteId: v.id("s
       if (context.job.contentWork?.operation) verifyLiveSelectedRestoration({ expectedUrl: r.expectedPublicUrl,
         fetchedUrl: fetched.url, html: fetched.text, base: r.baseArtifact as PublishedRevisionArtifact, next: r.nextArtifact as PublishedRevisionArtifact });
       else verifyLiveCreatedArticle({ expectedUrl: r.expectedPublicUrl, fetchedUrl: fetched.url, html: fetched.text,
-        article: r.nextArtifact as PublishedRevisionArtifact });
+        article: r.nextArtifact as PublishedRevisionArtifact, siteBrand: context.site.siteName });
       if (context.job.contentWork.correction) verifyCorrectedLink(fetched.text, context.job.contentWork.correction);
     } catch (e) { error = e instanceof Error ? e.message : "Live improvement verification failed"; }
     await ctx.runMutation(internal.contentImprovements.verified, { ...target, leaseOwner, nextArtifactHash: r.nextArtifactHash, ...(error ? { error } : {}) });
@@ -2949,7 +2949,7 @@ export const verifyPublicPublicationInternal = internalAction({
         html: fetched.text,
         title: article.title,
       });
-      if (site.serviceMode === "growth_first") verifyLiveCreatedArticle({ expectedUrl: publicUrl, fetchedUrl: fetched.url, html: fetched.text, article });
+      if (site.serviceMode === "growth_first") verifyLiveCreatedArticle({ expectedUrl: publicUrl, fetchedUrl: fetched.url, html: fetched.text, article, siteBrand: site.siteName });
       const recorded = await ctx.runMutation(
         internal.articles.recordPublicPublicationCheck,
         {

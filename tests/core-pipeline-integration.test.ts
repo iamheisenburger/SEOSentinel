@@ -64,6 +64,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   auditResponse?: (audit: Fields, request: Fields) => unknown;
   remediationNote?: string;
+  liveTitleBrand?: string;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
@@ -240,7 +241,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
           const metaTitle = JSON.parse(content.match(/^metaTitle: (.+)$/m)![1]);
           const metaDescription = JSON.parse(content.match(/^description: (.+)$/m)![1]);
           const body = content.replace(/^---\n[\s\S]*?\n---\n/, "");
-          return new Response(`<html><head><title>${options.liveCorrupt === "title" ? "Wrong title" : metaTitle}</title><meta name="description" content="${metaDescription}"><link rel="canonical" href="${options.liveCorrupt === "canonical" ? `https://${business.domain}/wrong` : url.href}"></head><body><main><h1>${title}</h1>${options.liveCorrupt === "body" ? "Unreviewed body" : renderSafePublicationHtml(body)}</main></body></html>`, { headers: { "Content-Type": "text/html" } });
+          return new Response(`<html><head><title>${options.liveCorrupt === "title" ? "Wrong title" : metaTitle}${options.liveTitleBrand ? ` | ${options.liveTitleBrand}` : ""}</title>${options.liveTitleBrand ? `<meta property="og:title" content="${metaTitle}">` : ""}<meta name="description" content="${metaDescription}"><link rel="canonical" href="${options.liveCorrupt === "canonical" ? `https://${business.domain}/wrong` : url.href}"></head><body><main><h1>${title}</h1>${options.liveCorrupt === "body" ? "Unreviewed body" : renderSafePublicationHtml(body)}</main></body></html>`, { headers: { "Content-Type": "text/html" } });
         }
         return new Response(`<html><body><main><h1>${title}</h1><pre>${content}</pre></main></body></html>`, { headers: { "Content-Type": "text/html" } });
       }
@@ -847,7 +848,7 @@ test("SLC51 invalid content envelopes cannot remove old deferrals or override mo
 });
 
 test("SLC52 owner publishes one reviewed GitHub article while automatic preparation remains inactive", async () => {
-  const f = await scopedPricingFixture(); await f.admit(0);
+  const f = await scopedPricingFixture({}, {}, { liveTitleBrand: "ReservoirNote" }); await f.admit(0);
   const job = f.tables.jobs[0], site = f.get(job.siteId)!;
   site.autopilotRolloutMode = "warm";
   for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: site._id, jobId: job._id });

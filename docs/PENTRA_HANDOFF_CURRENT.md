@@ -7,6 +7,37 @@ Work here in `.claude/assignment24`; do not restart the old task or automation.
 worktrees were safely archived; parent `WORKSPACE.md` identifies all locations.
 No production assets, schemas, history, reservations or customer data were deleted.
 
+Owner publication release `a5ba28be7b3a368c2258ec36c8aa078f91841e12` deployed:
+Convex succeeded; GitHub/Vercel6600939251 succeeded21:18:16UTC;
+CI35785711527 passed. The real signed-in owner Publish Now action succeeded
+for LeadPilot article `j570xwjezsyk7b80wwhp1m5x4x8efqem`. GitHub commit
+`ef5960725a477e8b69916dc1844845bb75b85c84` adds exactly
+`content/blog/agent-sales-representative.md`; its Vercel deployment succeeded.
+Live URL https://leadpilot.chat/blog/agent-sales-representative returns200,
+correct canonical/H1/body; published/audited hash both
+`e8df83194733201e3355865e71c5334b49ba2c90fd8be5ae0a6aade8c748e723`.
+PublishedAt1790111939612. This was OWNER publication, not natural cadence proof.
+
+Current verification repair: the destination's normal ` | LeadPilot` title
+template produced a false negative. Creation now accepts only the exact reviewed
+title plus the configured site/registrable-domain brand, with exact corroborating
+social titles. Wrong/stale titles, arbitrary appended promises, missing/mismatched
+social titles and changed body still fail; revision checks stay exact. No article
+score, content, audit or historical failure was changed. Local verification of
+the actual captured live HTML succeeds. Production durable verification must
+still run after this candidate is deployed.
+
+Pentra's retained monthly-worker-limit deferral reconciled through owner
+pause/resume; normal provider execution resumed without resetting counters or
+budget. It then exhausted its bounded review/replacement: job
+`j9703g7paa6atyya4fzr56ngs58ecn07`, replacement article
+`j571f240bsnp2cptrem8ftjz2s8exgrk`,16 provider entries. Final replacement audit
+identifies unsupported comparative/highest-leverage claims (score80). It was
+NOT published. This and LeadPilot's failed refill remain unresolved delivery
+acceptance failures, not successful autonomous service.
+
+## Historical September22 implementation notes (superseded by the snapshot above)
+
 September22 owner-publication candidate: exact authenticated owner approval now
 permits one sealed GitHub creation without enabling site-wide automation. Approval
 is bound to owner, reviewed content, publishing configuration and rollout epoch.

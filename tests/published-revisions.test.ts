@@ -16,6 +16,7 @@ import {
   validatePublishedRevisionReceipt,
   verifyLegacyGitHubReceiptAdoptionProof,
   verifyLivePublishedRevision,
+  verifyLiveCreatedArticle,
   webhookRevisionReceiptFromResponse,
   type PublishedRevisionArtifact,
 } from "../convex/lib/publishedRevision.ts";
@@ -24,6 +25,26 @@ import {
   publicationArtifactHashForAuditVersion,
   sha256Hex,
 } from "../convex/lib/publicationArtifact.ts";
+import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
+
+test("creation verifies exact reviewed titles with domain branding, not arbitrary title additions", () => {
+  const article = artifact({ markdown: "A useful, reviewed paragraph with clear next steps. Review your own evidence and choose an appropriate action for your business.", featuredImage: undefined,
+    reviewedMediaUrls: [], internalLinks: [] });
+  for (const [host, brand, siteBrand] of [["example.com", "Example"], ["local-service.co.uk", "Local Service"], ["store.example.org", "Example"], ["shop.example.com", "The Ceramic Shop", "The Ceramic Shop"]]) {
+    const expectedUrl = `https://${host}/resources/${article.slug}`;
+    const html = `<html><head><title>${article.metaTitle} | ${brand}</title><meta property="og:title" content="${article.metaTitle}"><meta name="twitter:title" content="${article.metaTitle}"><meta name="description" content="${article.metaDescription}"><link rel="canonical" href="${expectedUrl}"></head><body><main><h1>${article.title}</h1>${renderSafePublicationHtml(article.markdown)}</main></body></html>`;
+    const check = (value: string) => verifyLiveCreatedArticle({ expectedUrl, fetchedUrl: expectedUrl, html: value, article, siteBrand });
+    assert.doesNotThrow(() => check(html));
+    for (const bad of [
+      html.replace(` | ${brand}</title>`, " | Guaranteed growth</title>"),
+      html.replace(` | ${brand}</title>`, ` | ${brand} $$$</title>`),
+      html.replace(`<title>${article.metaTitle}`, "<title>A different article"),
+      html.replace('property="og:title"', 'property="og:unrelated"').replace('name="twitter:title"', 'name="twitter:unrelated"'),
+      html.replace(`name="twitter:title" content="${article.metaTitle}"`, 'name="twitter:title" content="Stale title"'),
+    ]) assert.throws(() => check(bad), /exact revised meta title/);
+    assert.throws(() => check(html.replace(article.markdown, "Unreviewed replacement content")));
+  }
+});
 
 const longBody = Array.from(
   { length: 1_250 },

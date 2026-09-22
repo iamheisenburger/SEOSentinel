@@ -1,4 +1,5 @@
 import { clampMetaDescription, evaluatePublicationQuality } from "./articleQuality.ts";
+import { getDomain } from "tldts";
 import {
   appendRelatedInternalLinks,
   publishedArticleInternalHref,
@@ -561,10 +562,24 @@ function liveMetaTitles(html: string): Array<string | undefined> {
   return [title ? normalizedHtmlText(title) : undefined, ...socialTitles];
 }
 
-function assertExactLiveMetaTitle(html: string, expectedTitle: string | undefined): void {
+function assertExactLiveMetaTitle(html: string, expectedTitle: string | undefined, creationUrl?: string, siteBrand?: string): void {
   const expected = normalizedHtmlText(expectedTitle ?? "");
-  const documentTitle = liveMetaTitles(html)[0];
-  if (!expected || documentTitle !== expected) {
+  const [documentTitle, ...socialTitles] = liveMetaTitles(html);
+  // A host layout may append its brand without changing the reviewed title.
+  // Creation accepts only the exact title + a separator + the configured
+  // configured site brand/domain label, corroborated by exact social titles. Never accept
+  // arbitrary suffixes, substring matches, a stale title, or social-only proof.
+  let brandedCreation = false;
+  if (creationUrl && expected && documentTitle && socialTitles.length > 0 &&
+    socialTitles.every(title => normalizedHtmlText(title ?? "") === expected)) {
+    const domain = getDomain(new URL(creationUrl).hostname, { allowPrivateDomains: true });
+    const brandKey = (s: string) => s.toLocaleLowerCase("en-US").replace(/[\s-]/g, "");
+    const brands = [domain?.split(".")[0], siteBrand].filter((brand): brand is string => Boolean(brand?.trim()));
+    brandedCreation = [" | ", " - ", " – ", " — "].some(separator =>
+      documentTitle.startsWith(expected + separator) &&
+      brands.some(brand => brandKey(documentTitle.slice(expected.length + separator.length)) === brandKey(normalizedHtmlText(brand))));
+  }
+  if (!expected || (documentTitle !== expected && !brandedCreation)) {
     throw new Error("Live revision does not expose the exact revised meta title");
   }
 }
@@ -649,8 +664,8 @@ function sameLiveAnchor(left: LiveAnchor, right: LiveAnchor): boolean {
 
 /** Stage 1 creation proof reuses the exact rendered-content verifier. It does
  * not create a revision record or count a legacy correction as new delivery. */
-export function verifyLiveCreatedArticle(args: { expectedUrl: string; fetchedUrl: string; html: string; article: PublishedRevisionArtifact }): void {
-  verifyLivePublishedRevision({ ...args, base: { ...args.article, markdown: "" }, next: args.article, kind: "renderer_repair" });
+export function verifyLiveCreatedArticle(args: { expectedUrl: string; fetchedUrl: string; html: string; article: PublishedRevisionArtifact; siteBrand?: string }): void {
+  verifyLivePublishedRevision({ ...args, base: { ...args.article, markdown: "" }, next: args.article, kind: "renderer_repair", allowCreationDomainBrand: true });
 }
 
 /** Owner-requested restoration of an observed imported version. Absence of an
@@ -676,6 +691,8 @@ export function verifyLivePublishedRevision(args: {
   next: PublishedRevisionArtifact;
   kind: PublishedRevisionKind;
   targetUrl?: string;
+  allowCreationDomainBrand?: boolean;
+  siteBrand?: string;
 }): void {
   verifyLivePublicationPage({
     expectedUrl: args.expectedUrl,
@@ -784,7 +801,8 @@ export function verifyLivePublishedRevision(args: {
     }
   }
   if (args.kind === "editorial_correction" || args.kind === "renderer_repair") {
-    assertExactLiveMetaTitle(args.html, args.next.metaTitle ?? args.next.title);
+    assertExactLiveMetaTitle(args.html, args.next.metaTitle ?? args.next.title,
+      args.allowCreationDomainBrand && args.kind === "renderer_repair" && args.base.markdown === "" ? args.expectedUrl : undefined, args.siteBrand);
     assertExactLiveMetaDescription(args.html, args.next.metaDescription);
     verifyLiveCorrectionBody({ html: args.html,
       renderedBaseParagraphs: args.base.markdown.split(/\n\s*\n/).map(renderSafePublicationHtml),
