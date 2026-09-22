@@ -12,6 +12,7 @@ import { accountDeletionKey, accountDeletionTombstoneUserId } from "../convex/li
 import { CADENCE_MICRO_SEED_VERSION, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT } from "../convex/lib/cadenceMicroSeed.ts";
 import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../convex/lib/planProviderBudget.ts";
 import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
+import { contentServiceStatus } from "../src/lib/content-service-status.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -1200,7 +1201,12 @@ test("SLC50 owner resume reclassifies only completed retained contradictory revi
     if (defect === "published") f.get(job.articleId)!.status = "published";
     if (defect === "lease") retained.workerToken = "another-worker";
     if (defect === "other_failure") retained.contentWork.failure = "content_audit_clarification_invalid";
-    const reviewToken = (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken;
+    const readiness = await f.invoke("contentWork:readiness", { siteId: job.siteId });
+    const reviewToken = readiness.reviewToken;
+    if (defect === "none") {
+      assert.equal(readiness.work[0].systemFailure, false);
+      assert.equal(contentServiceStatus(readiness).canResume, true, "The actual customer control must expose the repaired transition");
+    }
     if (defect === "wrong_owner") f.setIdentity("other-owner");
     const calls = f.modelCalls.length, before = structuredClone(retained), holds = JSON.stringify(f.tables.provider_spend_reservations);
     const args = { siteId: job.siteId, action: "resume", reviewToken };

@@ -487,17 +487,24 @@ export const readiness = query({
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
       work: jobs.filter(j => j.contentWork).map(j => {
+        const lastReview = j.contentWork!.providerCalls.at(-1);
+        // This repaired failure can be rechecked through ordinary owner Resume.
+        // The mutation still verifies lineage, unchanged source and no writes;
+        // exposing the control grants no execution or spending authority.
+        const rejectedReview = j.status === "failed" && j.contentWork!.failure === "content_audit_clarification_inconsistent" &&
+          lastReview?.state === "completed" && contradictoryContentAudit(lastReview.result);
         const call = j.contentWork!.providerCalls.find(c => interruptedCreditCall(c) && c.creditRecovery);
         const creditRetry = j.status === "failed" && j.contentWork!.stage === "failed" && call && j.contentWork!.retiredAt === undefined
           ? { jobId: j._id, callKey: call.key, token: creditRetryToken(j, call) } : null;
         return { jobId: j._id, articleId: j.articleId,
         intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
-        systemFailure: internalContentProcessingError(j.contentWork!.failure ?? j.error),
+        systemFailure: !rejectedReview && internalContentProcessingError(j.contentWork!.failure ?? j.error),
         technicalReason: internalContentProcessingError(j.contentWork!.failure ?? j.error) ? j.contentWork!.failure ?? "legacy_semantic_audit_processing_error" : null,
         retiredAt: j.contentWork!.retiredAt,
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, creditRetry,
-        failure: creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
+        failure: rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
+          : creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
           : contentIssue(j.contentWork!.failure ?? j.error) }; }) };
   },
 });
