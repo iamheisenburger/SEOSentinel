@@ -77,154 +77,96 @@ export function PricingSection() {
   }
 
   return (
-    <section id="pricing" className="relative py-24 md:py-32 scroll-mt-20">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute top-0 left-1/2 h-[400px] w-[600px] -translate-x-1/2 rounded-full bg-[#0EA5E9]/[0.03] blur-[120px]" />
-      </div>
-
-      <div className="relative mx-auto max-w-6xl px-6">
-        <div className="mb-10 text-center">
-          <h2 className="text-3xl font-bold tracking-[-0.03em] md:text-4xl">
-            Simple, transparent pricing
-          </h2>
-          <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            Fixed monthly price. Pick how many articles you want.
-          </p>
+    <section id="pricing" className="relative scroll-mt-20 border-t border-white/[0.06] py-24 md:py-32">
+      <div className="relative mx-auto max-w-[1200px] px-6">
+        <div className="flex flex-col gap-8 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]">Pricing</p>
+            <h2 className="mt-4 text-[clamp(1.75rem,3.4vw,2.6rem)] font-semibold leading-[1.08] tracking-[-0.03em]">
+              One fixed price. No usage charges.
+            </h2>
+            <p className="mt-3 max-w-[32rem] text-[15px] text-[#8A8F98]">
+              Pick how many new articles you want each month. Every plan includes everything Pentra does.
+            </p>
+          </div>
 
           {/* Billing toggle */}
-          <div className="mt-8 inline-flex items-center gap-3 rounded-full border border-white/[0.06] bg-[#0A0B10] p-1">
+          <div className="inline-flex items-center gap-1 self-start rounded-full border border-white/[0.08] p-1 md:self-auto">
             <button
               onClick={() => setAnnual(false)}
-              className={`rounded-full px-5 py-2 text-[13px] font-medium transition cursor-pointer ${
-                !annual
-                  ? "bg-[#0EA5E9] text-white"
-                  : "text-[#8B8FA3] hover:text-white"
+              className={`rounded-full px-4 py-1.5 text-[13px] font-medium transition cursor-pointer ${
+                !annual ? "bg-[#F7F8F8] text-[#08090A]" : "text-[#8A8F98] hover:text-white"
               }`}
             >
               Monthly
             </button>
             <button
               onClick={() => setAnnual(true)}
-              className={`rounded-full px-5 py-2 text-[13px] font-medium transition cursor-pointer flex items-center gap-2 ${
-                annual
-                  ? "bg-[#0EA5E9] text-white"
-                  : "text-[#8B8FA3] hover:text-white"
+              className={`flex items-center gap-2 rounded-full px-4 py-1.5 text-[13px] font-medium transition cursor-pointer ${
+                annual ? "bg-[#F7F8F8] text-[#08090A]" : "text-[#8A8F98] hover:text-white"
               }`}
             >
               Annual
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                annual
-                  ? "bg-white/20 text-white"
-                  : "bg-[#22C55E]/10 text-[#22C55E]"
-              }`}>
-                Save 20%
-              </span>
+              <span className={`text-[11px] font-semibold ${annual ? "text-[#2F9E6A]" : "text-[#4CB782]"}`}>−20%</span>
             </button>
           </div>
         </div>
 
-        <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-12 grid gap-px overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.08] md:grid-cols-2 lg:grid-cols-4">
           {tiers.map((tier) => {
             const price = annual ? tier.annualPrice : tier.monthlyPrice;
             const href = getHref(tier.plan);
 
             return (
-              <div
-                key={tier.name}
-                className={`relative rounded-xl overflow-hidden ${
-                  tier.featured
-                    ? "border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.02]"
-                    : "border border-white/[0.06] bg-[#0A0B10]"
-                }`}
-              >
-                {tier.featured && (
-                  <div className="bg-[#0EA5E9] py-1.5 text-center text-[11px] font-semibold text-white tracking-wide">
-                    MOST POPULAR
-                  </div>
-                )}
-                <div className="p-6">
-                  <p className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#565A6E]">
-                    {tier.name}
-                  </p>
-                  <div className="mt-2 flex items-baseline gap-0.5">
-                    <span className="text-3xl font-bold tracking-tight">
-                      ${price}
-                    </span>
-                    <span className="text-[13px] text-[#565A6E]">/mo</span>
-                  </div>
-                  {annual && tier.annualPrice > 0 && (
-                    <p className="mt-0.5 text-[11px] text-[#22C55E]">
-                      ${tier.annualPrice * 12}/yr · Save ${(tier.monthlyPrice - tier.annualPrice) * 12}/yr
-                    </p>
-                  )}
-                  <p className="mt-1 text-[13px] text-[#8B8FA3]">
-                    {tier.desc}
-                  </p>
-
-                  {/* Volume highlights */}
-                  <div className="mt-4 space-y-1.5">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-[#EDEEF1]">
-                      <CheckCircle2 className={`h-3.5 w-3.5 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#22C55E]"}`} />
-                      {tier.sites}
-                    </div>
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-[#EDEEF1]">
-                      <CheckCircle2 className={`h-3.5 w-3.5 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#22C55E]"}`} />
-                      {tier.articles}
-                    </div>
-                  </div>
-
-                  <Link
-                    href={href}
-                    className={`mt-5 block rounded-lg py-2.5 text-center text-[13px] font-medium transition ${
-                      tier.featured
-                        ? "bg-[#0EA5E9] text-white hover:bg-[#38BDF8]"
-                        : "border border-white/[0.08] text-[#8B8FA3] hover:border-white/[0.15] hover:text-white"
-                    }`}
-                  >
-                    {tier.cta}
-                  </Link>
-
-                  <div className="mt-4 pt-4 border-t border-white/[0.04]">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#565A6E] mb-2">All features included</p>
-                    <ul className="space-y-1.5">
-                      {allFeatures.map((f) => (
-                        <li
-                          key={f}
-                          className="flex items-center gap-2 text-[12px] text-[#8B8FA3]"
-                        >
-                          <CheckCircle2
-                            className={`h-3 w-3 shrink-0 ${
-                              tier.featured ? "text-[#0EA5E9]" : "text-[#565A6E]"
-                            }`}
-                          />
-                          {f}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+              <div key={tier.name} className={`relative flex flex-col p-6 ${tier.featured ? "bg-[#0D0F12]" : "bg-[#08090A]"}`}>
+                {tier.featured && <div aria-hidden className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#0EA5E9] to-transparent" />}
+                <div className="flex items-center justify-between">
+                  <p className="text-[14px] font-medium text-[#F7F8F8]">{tier.name}</p>
+                  {tier.featured && <span className="rounded-full bg-[#0EA5E9]/10 px-2 py-0.5 text-[11px] font-medium text-[#0EA5E9]">Most popular</span>}
                 </div>
+                <div className="mt-5 flex items-baseline gap-1">
+                  <span className="text-[40px] font-semibold leading-none tracking-[-0.03em]">${price}</span>
+                  <span className="text-[13px] text-[#62666D]">/ month</span>
+                </div>
+                <p className="mt-2 h-4 text-[12px] text-[#4CB782]">
+                  {annual && tier.annualPrice > 0 ? `$${tier.annualPrice * 12} a year · save $${(tier.monthlyPrice - tier.annualPrice) * 12}` : ""}
+                </p>
+                <p className="mt-3 min-h-[2.75rem] text-[14px] leading-relaxed text-[#8A8F98]">{tier.desc}</p>
+
+                <div className="mt-5 space-y-2 border-t border-white/[0.06] pt-5">
+                  <div className="flex items-center gap-2.5 text-[14px] text-[#F7F8F8]"><CheckCircle2 className="h-4 w-4 shrink-0 text-[#4CB782]" />{tier.sites}</div>
+                  <div className="flex items-center gap-2.5 text-[14px] text-[#F7F8F8]"><CheckCircle2 className="h-4 w-4 shrink-0 text-[#4CB782]" />{tier.articles}</div>
+                </div>
+
+                <Link
+                  href={href}
+                  className={`mt-6 block rounded-full py-2.5 text-center text-[14px] font-medium transition ${
+                    tier.featured
+                      ? "bg-[#F7F8F8] text-[#08090A] hover:bg-white"
+                      : "border border-white/[0.1] text-[#D0D6E0] hover:border-white/[0.2] hover:text-white"
+                  }`}
+                >
+                  {tier.cta}
+                </Link>
               </div>
             );
           })}
         </div>
 
-        {/* Bottom note */}
-        <div className="mt-12 text-center">
-          <p className="text-[14px] text-[#8B8FA3]">
-            Every plan includes Autopilot or review-first publishing, research,
-            fact-checking, page improvements and Search Console reporting. No
-            usage charges. Cancel anytime.
-          </p>
-          <p className="mt-2 text-[13px] text-[#565A6E]">
-            Need a custom plan?{" "}
-            <a
-              href="mailto:pentrahelp@gmail.com"
-              className="text-[#0EA5E9] hover:underline"
-            >
-              Get in touch
-            </a>
-          </p>
+        {/* Everything included */}
+        <div className="mt-10 grid gap-8 md:grid-cols-[1fr_2fr]">
+          <p className="text-[14px] font-medium text-[#F7F8F8]">Included on every plan</p>
+          <ul className="grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
+            {allFeatures.map((f) => (
+              <li key={f} className="flex items-center gap-2.5 text-[14px] text-[#8A8F98]"><CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#62666D]" />{f}</li>
+            ))}
+          </ul>
         </div>
+        <p className="mt-10 text-[13px] text-[#62666D]">
+          Need more websites or articles?{" "}
+          <a href="mailto:pentrahelp@gmail.com" className="text-[#D0D6E0] underline decoration-white/20 underline-offset-4 hover:text-white">Get in touch</a>
+          {" "}for a custom plan.
+        </p>
       </div>
     </section>
   );
