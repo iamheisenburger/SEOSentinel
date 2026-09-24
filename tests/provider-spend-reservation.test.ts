@@ -285,3 +285,25 @@ test("atomic reservation re-reads ownership and applies account capacity before 
   assert.match(reserve, /reason: "provider_account_entitlement_unavailable"/);
   assert.match(reserve, /summarizeProviderReservationLedger\([\s\S]*site\.userId/);
 });
+
+test("launch limits come from PENTRA_PROVIDER_LIMITS and fall back to audited defaults", async () => {
+  const mod = await import("../convex/lib/providerSpendReservation.ts");
+  const previous = process.env.PENTRA_PROVIDER_LIMITS;
+  try {
+    delete process.env.PENTRA_PROVIDER_LIMITS;
+    assert.equal(mod.sharedProviderMonthlyCeilingMicroUsd(), mod.SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD);
+    assert.equal(mod.providerAccountMonthlyCeilingMicroUsd("starter"), 5_000_000);
+    process.env.PENTRA_PROVIDER_LIMITS = JSON.stringify({ fleetMonthlyMicroUsd: 400_000_000, fleetDailyMicroUsd: 40_000_000,
+      accountDailyMicroUsd: 20_000_000, accountMonthlyMicroUsd: { starter: 20_000_000, pro: -1 } });
+    assert.equal(mod.sharedProviderMonthlyCeilingMicroUsd(), 400_000_000);
+    assert.equal(mod.sharedProviderDailyCeilingMicroUsd(), 40_000_000);
+    assert.equal(mod.providerAccountDailyCeilingMicroUsd(), 20_000_000);
+    assert.equal(mod.providerAccountMonthlyCeilingMicroUsd("starter"), 20_000_000);
+    assert.equal(mod.providerAccountMonthlyCeilingMicroUsd("pro"), 10_000_000, "invalid override keeps the default");
+    assert.equal(mod.evaluateSharedProviderCapacity({ fleetReservedTodayMicroUsd: 0, fleetReservedThisMonthMicroUsd: 390_000_000, requestedMicroUsd: 2_500_000 }).allowed, true);
+    process.env.PENTRA_PROVIDER_LIMITS = "not json";
+    assert.equal(mod.sharedProviderMonthlyCeilingMicroUsd(), mod.SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD);
+  } finally {
+    if (previous === undefined) delete process.env.PENTRA_PROVIDER_LIMITS; else process.env.PENTRA_PROVIDER_LIMITS = previous;
+  }
+});

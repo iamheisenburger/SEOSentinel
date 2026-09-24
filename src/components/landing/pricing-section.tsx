@@ -6,25 +6,25 @@ import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 
 const allFeatures = [
-  "Full AI pipeline",
-  "Web research & fact-checking",
-  "Hero images & infographics",
-  "Internal linking",
-  "Schema markup (JSON-LD)",
-  "Verified GitHub publishing",
-  "Autopilot scheduling",
-  "Keyword strategy & topic clusters",
+  "Live web research with sources",
+  "Independent fact-check review",
+  "Edit and approve every article",
+  "GitHub publishing with commit receipts",
+  "Live-page verification",
+  "Search Console reporting",
 ];
 
+// Fixed plans billed through Clerk. Article allowance counts new drafts;
+// edits and re-reviews of a draft never use another article.
 const tiers = [
   {
     name: "Free",
     monthlyPrice: 0,
     annualPrice: 0,
-    desc: "Try the full pipeline on a single site.",
+    desc: "See the quality on your own site.",
     sites: "1 site",
-    articles: "3 articles / month",
-    cta: "Get started free",
+    articles: "1 article / month",
+    cta: "Start free",
     plan: "free",
     featured: false,
   },
@@ -32,10 +32,10 @@ const tiers = [
     name: "Starter",
     monthlyPrice: 49,
     annualPrice: 39,
-    desc: "For new sites building their content library.",
+    desc: "A steady publishing rhythm for one site.",
     sites: "1 site",
     articles: "10 articles / month",
-    cta: "Get started",
+    cta: "Choose Starter",
     plan: "starter",
     featured: false,
   },
@@ -43,10 +43,10 @@ const tiers = [
     name: "Pro",
     monthlyPrice: 99,
     annualPrice: 79,
-    desc: "For growing sites that need more content.",
+    desc: "Grow several sites or publish more often.",
     sites: "3 sites",
     articles: "25 articles / month",
-    cta: "Get started",
+    cta: "Choose Pro",
     plan: "pro",
     featured: true,
   },
@@ -54,22 +54,11 @@ const tiers = [
     name: "Scale",
     monthlyPrice: 199,
     annualPrice: 159,
-    desc: "For content teams and agencies.",
+    desc: "For agencies and content teams.",
     sites: "10 sites",
     articles: "60 articles / month",
-    cta: "Get started",
+    cta: "Choose Scale",
     plan: "scale",
-    featured: false,
-  },
-  {
-    name: "Enterprise",
-    monthlyPrice: 499,
-    annualPrice: 399,
-    desc: "Unlimited sites for large operations.",
-    sites: "Unlimited sites",
-    articles: "150 articles / month",
-    cta: "Get started",
-    plan: "enterprise",
     featured: false,
   },
 ];
@@ -98,7 +87,7 @@ export function PricingSection() {
             Simple, transparent pricing
           </h2>
           <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            All features included on every plan. Just pick your volume.
+            Fixed monthly price. Pick how many articles you want.
           </p>
 
           {/* Billing toggle */}
@@ -133,7 +122,7 @@ export function PricingSection() {
           </div>
         </div>
 
-        <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-5">
+        <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-2 lg:grid-cols-4">
           {tiers.map((tier) => {
             const price = annual ? tier.annualPrice : tier.monthlyPrice;
             const href = getHref(tier.plan);
@@ -221,9 +210,9 @@ export function PricingSection() {
         {/* Bottom note */}
         <div className="mt-12 text-center">
           <p className="text-[14px] text-[#8B8FA3]">
-            All plans include the full AI pipeline: web research,
-            fact-checking, hero images, internal linking, and multi-platform
-            publishing.
+            Every plan includes research, fact-checking, your approval on every
+            article, GitHub publishing and live-page verification. No usage
+            charges. Cancel anytime.
           </p>
           <p className="mt-2 text-[13px] text-[#565A6E]">
             Need a custom plan?{" "}

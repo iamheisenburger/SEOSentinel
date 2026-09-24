@@ -1111,6 +1111,14 @@ export default function ArticleDetailPage() {
         <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5 space-y-3">
           <h2 className="text-sm font-semibold text-[#EDEEF1]">Edit this draft</h2>
           <p className="text-sm text-[#8B8FA3]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
+          {contentReadiness.ownerDraft.latest.stage === "failed" && (article.publicationGateIssues?.length ?? 0) > 0 && (
+            <div role="note" aria-label="Reviewer notes" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3">
+              <p className="text-sm font-medium text-[#F59E0B]">Fix these before requesting review</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">
+                {article.publicationGateIssues!.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}
+              </ul>
+            </div>
+          )}
           {editing ? <>
             {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#EDEEF1]">{label}
               <input aria-label={label} value={editing[field]} maxLength={limit} disabled={editBusy}

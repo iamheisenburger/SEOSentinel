@@ -3,25 +3,14 @@ import {
   Radar,
   ArrowRight,
   CheckCircle2,
-  Globe,
   Search,
-  FileText,
   ShieldCheck,
   GitBranch,
-  Link2,
-  Zap,
-  Eye,
-  Lock,
-  ChevronDown,
+  PencilLine,
   BarChart3,
-  Clock,
-  Users,
-  TrendingDown,
-  TrendingUp,
-  RefreshCw,
-  MousePointerClick,
-  Mail,
-  Target,
+  Building2,
+  Globe,
+  XCircle,
 } from "lucide-react";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { PricingSection } from "@/components/landing/pricing-section";
@@ -31,674 +20,142 @@ import { PricingSection } from "@/components/landing/pricing-section";
 function Hero() {
   return (
     <section className="relative pt-28 pb-16 md:pt-40 md:pb-24">
-      {/* Subtle gradient */}
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute top-0 left-1/2 h-[500px] w-[800px] -translate-x-1/2 rounded-full bg-[#0EA5E9]/[0.04] blur-[120px]" />
       </div>
-
-      <div className="relative mx-auto max-w-6xl px-6">
-        <div className="grid gap-12 lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-16">
-          {/* Left: Copy */}
-          <div>
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.05] px-3 py-1">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#0EA5E9] opacity-75" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#0EA5E9]" />
-              </span>
-              <span className="text-[12px] font-medium text-[#0EA5E9]">
-                Autonomous SEO engine
-              </span>
-            </div>
-
-            <h1 className="text-[clamp(2rem,4.5vw,3.5rem)] font-bold leading-[1.08] tracking-[-0.03em]">
-              Your entire SEO
-              <br />
-              department.{" "}
-              <span className="text-[#565A6E]">Automated.</span>
-            </h1>
-
-            <p className="mt-5 max-w-md text-[16px] leading-relaxed text-[#8B8FA3]">
-              Pentra creates, publishes, and measures SEO content. It tracks
-              rankings, detects indexing and performance problems, and turns
-              verified authority opportunities into approval-first outreach.
-            </p>
-
-            <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
-              <Link
-                href="/sign-up"
-                className="group inline-flex items-center justify-center gap-2 rounded-lg bg-[#0EA5E9] px-6 py-3 text-[14px] font-medium text-white transition-all hover:bg-[#38BDF8] hover:shadow-[0_0_24px_rgba(14,165,233,0.2)]"
-              >
-                Start for free
-                <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-              </Link>
-              <span className="text-[13px] text-[#565A6E]">
-                3 articles/month free · No credit card
-              </span>
-            </div>
-          </div>
-
-          {/* Right: Live terminal */}
-          <div className="relative">
-            <div className="rounded-xl border border-white/[0.06] bg-[#0A0B10] overflow-hidden shadow-2xl shadow-black/40">
-              {/* Terminal chrome */}
-              <div className="flex items-center gap-2 border-b border-white/[0.04] px-4 py-2.5">
-                <div className="flex gap-1.5">
-                  <div className="h-2.5 w-2.5 rounded-full bg-[#EF4444]/40" />
-                  <div className="h-2.5 w-2.5 rounded-full bg-[#F59E0B]/40" />
-                  <div className="h-2.5 w-2.5 rounded-full bg-[#22C55E]/40" />
-                </div>
-                <span className="ml-2 text-[11px] text-[#565A6E] font-mono">
-                  pentra — seo engine
-                </span>
-              </div>
-
-              {/* Terminal content */}
-              <div className="p-5 font-mono text-[12.5px] leading-[1.8] space-y-0.5">
-                <TerminalLine delay={0} icon="✓" color="#22C55E">
-                  Website crawl completed
-                </TerminalLine>
-                <TerminalLine delay={1} icon="✓" color="#22C55E">
-                  Measured topic portfolio prepared
-                </TerminalLine>
-                <TerminalLine delay={2} icon="●" color="#0EA5E9">
-                  Writing: &quot;How to Increase B2B Conversion Rates&quot;
-                </TerminalLine>
-                <div className="pl-5 space-y-0.5">
-                  <TerminalLine delay={3} icon="├─" color="#565A6E" sub>
-                    Source ledger captured
-                  </TerminalLine>
-                  <TerminalLine delay={4} icon="├─" color="#565A6E" sub>
-                    Claims checked against preserved evidence
-                  </TerminalLine>
-                  <TerminalLine delay={5} icon="└─" color="#565A6E" sub>
-                    Published → GitHub
-                  </TerminalLine>
-                </div>
-                <div className="pt-2" />
-                <TerminalLine delay={6} icon="✓" color="#22C55E">
-                  Search Console measurement synced
-                </TerminalLine>
-                <TerminalLine delay={7} icon="⚠" color="#F59E0B">
-                  Ranking decline detected from measured history
-                </TerminalLine>
-                <TerminalLine delay={8} icon="●" color="#0EA5E9">
-                  Recovery action queued with measured evidence...
-                </TerminalLine>
-                <TerminalLine delay={9} icon="✓" color="#22C55E">
-                  Operator review required before publication changes
-                </TerminalLine>
-
-                {/* Blinking cursor */}
-                <div
-                  className="mt-2 animate-fade-in-up"
-                  style={{ animationDelay: "5.5s" }}
-                >
-                  <span className="text-[#565A6E]">$</span>
-                  <span className="ml-1 inline-block w-2 h-4 bg-[#0EA5E9] animate-pulse" />
-                </div>
-              </div>
-            </div>
-
-            {/* Subtle glow */}
-            <div className="pointer-events-none absolute -bottom-8 left-1/2 h-32 w-[70%] -translate-x-1/2 rounded-full bg-[#0EA5E9]/[0.04] blur-[60px]" />
-          </div>
+      <div className="relative mx-auto max-w-4xl px-6 text-center">
+        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.05] px-3 py-1">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#0EA5E9]" />
+          <span className="text-[12px] font-medium text-[#0EA5E9]">SEO articles you approve</span>
         </div>
+        <h1 className="text-[clamp(2.2rem,5vw,3.75rem)] font-bold leading-[1.06] tracking-[-0.03em]">
+          Accurate SEO articles.
+          <br />
+          <span className="text-[#8B8FA3]">Published when you say so.</span>
+        </h1>
+        <p className="mx-auto mt-6 max-w-2xl text-[17px] leading-relaxed text-[#8B8FA3]">
+          Pentra researches topics your customers search for, writes fact-checked articles about what your
+          business actually does, and publishes them to your site the moment you approve. Then it checks the
+          page is live and shows you how it performs in Google.
+        </p>
+        <div className="mt-9 flex flex-col items-center justify-center gap-4 sm:flex-row">
+          <Link
+            href="/sign-up"
+            className="group inline-flex items-center justify-center gap-2 rounded-lg bg-[#0EA5E9] px-6 py-3 text-[15px] font-medium text-white transition-all hover:bg-[#38BDF8]"
+          >
+            Write my first article free
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          </Link>
+          <a href="#pricing" className="text-[14px] font-medium text-[#8B8FA3] hover:text-white">
+            See pricing
+          </a>
+        </div>
+        <p className="mt-4 text-[13px] text-[#565A6E]">1 free article · No credit card · Cancel paid plans anytime</p>
       </div>
     </section>
   );
 }
 
-function TerminalLine({
-  delay,
-  icon,
-  color,
-  children,
-  sub,
-}: {
-  delay: number;
-  icon: string;
-  color: string;
-  children: React.ReactNode;
-  sub?: boolean;
-}) {
+/* ─── How it works ─────────────────────────────── */
+
+const steps = [
+  {
+    icon: Building2,
+    title: "Tell Pentra what you actually offer",
+    desc: "Confirm your business facts, audience and product once. Pentra writes only from what you confirm and never invents features, statistics, testimonials or case studies.",
+  },
+  {
+    icon: GitBranch,
+    title: "Connect your site",
+    desc: "Point Pentra at the GitHub repository your blog builds from (Next.js, Astro, Hugo and other Markdown/MDX sites). The destination is verified before anything can publish.",
+  },
+  {
+    icon: Search,
+    title: "Get a researched draft",
+    desc: "Pentra picks a topic your buyers search for, researches it on the live web, writes the article with sources, and runs a separate fact-check review.",
+  },
+  {
+    icon: PencilLine,
+    title: "Review, edit, approve",
+    desc: "Read the draft, edit the text, title and search description, and see exactly what the reviewer flagged. Nothing publishes without your approval.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Published and verified",
+    desc: "Pentra commits the approved article to your repository, confirms the live page loads with the right title and canonical URL, and keeps the exact receipt.",
+  },
+];
+
+function HowItWorks() {
   return (
-    <div
-      className="animate-fade-in-up opacity-0"
-      style={{ animationDelay: `${0.3 + delay * 0.5}s`, animationFillMode: "forwards" }}
-    >
-      <span style={{ color }} className={sub ? "text-[11px]" : ""}>
-        {icon}
-      </span>{" "}
-      <span className={sub ? "text-[#565A6E] text-[11px]" : "text-[#8B8FA3]"}>
-        {children}
-      </span>
-    </div>
-  );
-}
-
-/* ─── Stats ────────────────────────────────────── */
-
-function Stats() {
-  const stats = [
-    { value: "8-step", label: "Automated pipeline", icon: Zap },
-    { value: "Strict", label: "Claim-evidence gates", icon: ShieldCheck },
-    { value: "Daily", label: "GSC measurement", icon: BarChart3 },
-    { value: "Exact", label: "Outcome receipts", icon: RefreshCw },
-  ];
-
-  return (
-    <section className="relative py-16 border-y border-white/[0.04]">
+    <section id="pipeline" className="relative scroll-mt-20 border-t border-white/[0.04] py-20 md:py-28">
       <div className="mx-auto max-w-6xl px-6">
-        <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
-          {stats.map((stat) => (
-            <div key={stat.label} className="text-center">
-              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.06]">
-                <stat.icon className="h-4.5 w-4.5 text-[#0EA5E9]" />
+        <div className="mb-12 text-center">
+          <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">How it works</h2>
+          <p className="mt-3 text-[15px] text-[#8B8FA3]">Five steps. You stay in control of every article.</p>
+        </div>
+        <ol className="grid gap-4 md:grid-cols-5">
+          {steps.map((step, index) => (
+            <li key={step.title} className="rounded-xl border border-white/[0.06] bg-[#0A0B10] p-5">
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] font-semibold text-[#565A6E]">{index + 1}</span>
+                <step.icon className="h-4 w-4 text-[#0EA5E9]" />
               </div>
-              <p className="text-2xl font-bold tracking-tight">{stat.value}</p>
-              <p className="mt-1 text-[13px] text-[#8B8FA3]">{stat.label}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── The Loop (replaces Pipeline) ────────────── */
-
-function TheLoop() {
-  return (
-    <section id="pipeline" className="relative py-24 md:py-32 scroll-mt-20">
-      <div className="mx-auto max-w-6xl px-6">
-        <div className="max-w-xl">
-          <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-3xl">
-            Not just articles.
-            <br />
-            <span className="text-[#565A6E]">A complete SEO loop.</span>
-          </h2>
-          <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            Most AI tools write and forget. Pentra creates content, monitors its
-            performance, diagnoses the next action, and records whether that
-            action produced an indexed page, click, or verified link.
-          </p>
-        </div>
-
-        {/* The Loop visualization */}
-        <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <LoopPhase
-            phase="01"
-            title="Create"
-            icon={FileText}
-            color="#0EA5E9"
-            items={[
-              "AI crawls your site to learn niche & tone",
-              "Generates keyword clusters by intent",
-              "Writes research-backed articles with citations",
-              "Fact-checks every claim separately",
-              "Generates hero images & infographics",
-            ]}
-          />
-          <LoopPhase
-            phase="02"
-            title="Publish"
-            icon={GitBranch}
-            color="#22C55E"
-            items={[
-              "Auto-publishes through the verified GitHub adapter",
-              "Injects JSON-LD schema markup (Article, FAQ, HowTo)",
-              "Weaves in internal links across your content",
-              "Verifies the exact destination receipt before marking published",
-              "Optimized for AI Overviews & featured snippets",
-            ]}
-          />
-          <LoopPhase
-            phase="03"
-            title="Monitor"
-            icon={BarChart3}
-            color="#F59E0B"
-            items={[
-              "Connects to Google Search Console",
-              "Tracks rankings, clicks, impressions daily",
-              "Per-article search performance breakdown",
-              "Identifies striking distance keywords (11-20)",
-              "Detects content decay automatically",
-            ]}
-          />
-          <LoopPhase
-            phase="04"
-            title="Maintain"
-            icon={RefreshCw}
-            color="#EF4444"
-            items={[
-              "Flags articles losing rankings",
-              "Queues evidence-backed recovery work",
-              "Protects published artifacts with revision gates",
-              "Analyzes backlink profile & broken links",
-              "Prepares approval-first, evidence-grounded outreach",
-            ]}
-          />
-        </div>
-
-        {/* Arrow loop indicator */}
-        <div className="mt-6 flex justify-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.02] px-4 py-2">
-            <RefreshCw className="h-3.5 w-3.5 text-[#0EA5E9]" />
-            <span className="text-[12px] text-[#8B8FA3]">Measured loop. Every outcome remains auditable.</span>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function LoopPhase({
-  phase,
-  title,
-  icon: Icon,
-  color,
-  items,
-}: {
-  phase: string;
-  title: string;
-  icon: typeof FileText;
-  color: string;
-  items: string[];
-}) {
-  return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0A0B10] overflow-hidden">
-      <div className="border-b border-white/[0.04] px-5 py-3.5 flex items-center gap-3">
-        <div
-          className="flex h-9 w-9 items-center justify-center rounded-lg"
-          style={{ backgroundColor: `${color}10` }}
-        >
-          <Icon className="h-4 w-4" style={{ color }} />
-        </div>
-        <div>
-          <span className="text-[10px] font-mono text-[#565A6E]">{phase}</span>
-          <p className="text-[14px] font-semibold text-[#EDEEF1]">{title}</p>
-        </div>
-      </div>
-      <div className="p-5">
-        <ul className="space-y-2.5">
-          {items.map((item) => (
-            <li key={item} className="flex items-start gap-2">
-              <CheckCircle2
-                className="h-3.5 w-3.5 mt-0.5 shrink-0"
-                style={{ color }}
-              />
-              <span className="text-[12px] leading-relaxed text-[#8B8FA3]">{item}</span>
+              <h3 className="mt-3 text-[15px] font-semibold leading-snug">{step.title}</h3>
+              <p className="mt-2 text-[13px] leading-relaxed text-[#8B8FA3]">{step.desc}</p>
             </li>
           ))}
-        </ul>
+        </ol>
       </div>
-    </div>
+    </section>
   );
 }
 
-/* ─── Features grid ───────────────────────────── */
+/* ─── What you get ─────────────────────────────── */
+
+const features = [
+  { icon: Search, title: "Live web research", desc: "Every draft is researched on the live web. Factual claims link to the sources they came from." },
+  { icon: ShieldCheck, title: "Independent fact-check", desc: "A separate review pass checks each claim against the evidence and flags anything unsupported." },
+  { icon: Building2, title: "Written about your business", desc: "Drafts use only the business facts you confirmed. No made-up features, numbers or customer stories." },
+  { icon: PencilLine, title: "Edit before anything goes live", desc: "Change the body, headline, search title and description. Your edit is re-reviewed before you approve it." },
+  { icon: GitBranch, title: "One-click GitHub publishing", desc: "Approved articles are committed to your repo as Markdown/MDX with the exact commit recorded." },
+  { icon: Globe, title: "Live-page verification", desc: "An article only counts as delivered once the public page loads with the right title and canonical URL." },
+  { icon: BarChart3, title: "Search Console reporting", desc: "Connect Google Search Console to see clicks, impressions and positions for the pages Pentra published." },
+  { icon: CheckCircle2, title: "Clear limits, no surprise bills", desc: "Fixed monthly price with a set number of articles. Edits and re-reviews of a draft do not use extra articles." },
+];
 
 function Features() {
-  const items = [
-    {
-      icon: Search,
-      title: "Live web research",
-      desc: "Every article backed by real-time web searches with verified sources and citations.",
-    },
-    {
-      icon: ShieldCheck,
-      title: "AI fact-checking",
-      desc: "Separate verification pass with per-claim confidence scores. No hallucinated stats.",
-    },
-    {
-      icon: BarChart3,
-      title: "Rank tracking",
-      desc: "Google Search Console integration. Track keywords, clicks, impressions, and positions daily.",
-    },
-    {
-      icon: TrendingDown,
-      title: "Content decay detection",
-      desc: "Flags ranking decline and records the recovery action without silently mutating published content.",
-    },
-    {
-      icon: Link2,
-      title: "Backlink intelligence",
-      desc: "Analyze your link profile, find unlinked mentions and broken link opportunities.",
-    },
-    {
-      icon: Mail,
-      title: "Authority outreach",
-      desc: "Verified public-page opportunities, grounded drafts, human approval, safe pacing, and exact-link receipts.",
-    },
-    {
-      icon: Target,
-      title: "AI Overview optimization",
-      desc: "Articles structured for Google AI Overviews — question patterns, definitive answers, structured data.",
-    },
-    {
-      icon: ShieldCheck,
-      title: "Publication receipts",
-      desc: "Records a verified GitHub receipt before treating an article as published. WordPress and signed webhooks remain beta.",
-    },
-    {
-      icon: GitBranch,
-      title: "Multi-platform publishing",
-      desc: "GitHub publishing is supported in v1. WordPress and signed webhooks remain visibly beta-gated.",
-    },
-    {
-      icon: Zap,
-      title: "Schema markup",
-      desc: "JSON-LD (Article, FAQ, HowTo) injected automatically for rich results in search.",
-    },
-    {
-      icon: Clock,
-      title: "Autopilot scheduling",
-      desc: "Set your cadence and let articles publish on schedule. 8x daily processing.",
-    },
-    {
-      icon: Users,
-      title: "Multi-site management",
-      desc: "Manage multiple domains from a single dashboard. Isolated settings per site.",
-    },
-  ];
-
   return (
-    <section id="features" className="relative py-24 md:py-32 border-y border-white/[0.04] scroll-mt-20">
+    <section id="features" className="relative scroll-mt-20 border-t border-white/[0.04] py-20 md:py-28">
       <div className="mx-auto max-w-6xl px-6">
-        <div className="mb-12 text-center max-w-2xl mx-auto">
-          <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-3xl">
-            Everything your SEO team does.
-            <br />
-            <span className="text-[#565A6E]">Without the team.</span>
-          </h2>
-          <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            Content creation, rank tracking, decay detection, authority discovery,
-            and auditable outreach in one tenant-isolated workflow.
-          </p>
+        <div className="mb-12 text-center">
+          <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">What you get</h2>
+          <p className="mt-3 text-[15px] text-[#8B8FA3]">Everything below is included on every plan.</p>
         </div>
-
-        <div className="grid gap-px overflow-hidden rounded-xl border border-white/[0.04] sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((item) => (
-            <div
-              key={item.title}
-              className="bg-[#0A0B10] p-6 transition hover:bg-[#0D0E15]"
-            >
-              <item.icon className="mb-3 h-4 w-4 text-[#0EA5E9]" />
-              <h3 className="text-[14px] font-semibold">{item.title}</h3>
-              <p className="mt-1.5 text-[13px] leading-relaxed text-[#8B8FA3]">
-                {item.desc}
-              </p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {features.map((item) => (
+            <div key={item.title} className="rounded-xl border border-white/[0.06] bg-[#0A0B10] p-5">
+              <item.icon className="h-4 w-4 text-[#0EA5E9]" />
+              <h3 className="mt-3 text-[14px] font-semibold">{item.title}</h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-[#8B8FA3]">{item.desc}</p>
             </div>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── Differentiators ─────────────────────────── */
-
-function Differentiators() {
-  return (
-    <section className="relative py-16 md:py-24">
-      <div className="mx-auto max-w-6xl px-6 space-y-24 md:space-y-32">
-        {/* 1: Research, not regurgitation */}
-        <div className="grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
-          <div>
-            <div className="mb-3 flex items-center gap-2">
-              <Search className="h-4 w-4 text-[#0EA5E9]" />
-              <span className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#0EA5E9]">
-                Web Research
-              </span>
-            </div>
-            <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-3xl">
-              Every claim has a source.
-              <br />
-              <span className="text-[#565A6E]">Every source is real.</span>
-            </h2>
-            <p className="mt-4 text-[15px] leading-relaxed text-[#8B8FA3]">
-              Most AI writers hallucinate sources and regurgitate training data.
-              Pentra runs live web searches for every article, extracts real
-              data from real URLs, and cites them. A separate fact-checking
-              pass validates every claim before publishing.
-            </p>
-            <div className="mt-6 flex flex-col gap-2.5">
-              {[
-                "Live web search per article, not cached data",
-                "Separate fact-checking AI with confidence scores",
-                "Source URLs verified and cited inline",
-              ].map((item) => (
-                <div
-                  key={item}
-                  className="flex items-center gap-2.5 text-[13px] text-[#EDEEF1]"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#22C55E]" />
-                  {item}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Visual: Comparison */}
-          <div className="space-y-3">
-            <div className="rounded-xl border border-[#EF4444]/[0.1] bg-[#EF4444]/[0.02] p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="rounded-full bg-[#EF4444]/[0.1] px-2 py-0.5 text-[10px] font-medium text-[#EF4444]">
-                  Generic AI
-                </div>
-              </div>
-              <p className="text-[13px] leading-relaxed text-[#8B8FA3] italic">
-                &ldquo;Studies show that 73% of marketers believe AI will
-                transform content creation...&rdquo;
-              </p>
-              <p className="mt-2 text-[11px] text-[#EF4444]">
-                No source. Stat is fabricated.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-[#22C55E]/[0.1] bg-[#22C55E]/[0.02] p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="rounded-full bg-[#22C55E]/[0.1] px-2 py-0.5 text-[10px] font-medium text-[#22C55E]">
-                  Pentra
-                </div>
-              </div>
-              <p className="text-[13px] leading-relaxed text-[#EDEEF1]">
-                Evidence-required claims remain bound to the exact preserved
-                source record that reviewers can audit before publication.
-              </p>
-              <div className="mt-2 flex items-center gap-2">
-                <span className="rounded bg-[#22C55E]/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E]">
-                  Evidence linked
-                </span>
-                <span className="text-[11px] text-[#565A6E]">
-                  Preserved source ledger
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 2: Monitor & Maintain */}
-        <div className="grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
-          {/* Visual: Analytics preview */}
-          <div className="order-2 lg:order-1">
-            <div className="rounded-xl border border-white/[0.06] bg-[#0A0B10] overflow-hidden">
-              <div className="border-b border-white/[0.04] px-4 py-2.5">
-                <span className="text-[12px] font-medium text-[#8B8FA3]">
-                  SEO Dashboard · Live
-                </span>
-              </div>
-              <div className="p-5 space-y-4">
-                {/* Mini stat row */}
-                <div className="grid grid-cols-4 gap-3">
-                  <MiniStat label="Clicks" value="1,247" color="#0EA5E9" />
-                  <MiniStat label="Impressions" value="28.4K" color="#22D3EE" />
-                  <MiniStat label="CTR" value="4.4%" color="#22C55E" />
-                  <MiniStat label="Avg Pos" value="8.2" color="#F59E0B" />
-                </div>
-
-                {/* Mini keyword table */}
-                <div className="rounded-lg border border-white/[0.04] overflow-hidden">
-                  <div className="px-3 py-2 bg-white/[0.02] text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">
-                    Top Keywords
-                  </div>
-                  {[
-                    { kw: "b2b lead generation", pos: "3", trend: "up" },
-                    { kw: "ai content strategy", pos: "7", trend: "up" },
-                    { kw: "seo automation tools", pos: "12", trend: "down" },
-                  ].map((row) => (
-                    <div key={row.kw} className="flex items-center gap-3 px-3 py-2 border-t border-white/[0.03]">
-                      <span className="flex-1 text-[11px] text-[#EDEEF1]">{row.kw}</span>
-                      <span className={`text-[11px] font-mono ${Number(row.pos) <= 3 ? "text-[#22C55E]" : Number(row.pos) <= 10 ? "text-[#0EA5E9]" : "text-[#F59E0B]"}`}>
-                        #{row.pos}
-                      </span>
-                      {row.trend === "up" ? (
-                        <TrendingUp className="h-3 w-3 text-[#22C55E]" />
-                      ) : (
-                        <TrendingDown className="h-3 w-3 text-[#EF4444]" />
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Decay alert */}
-                <div className="flex items-center gap-2.5 rounded-lg bg-[#EF4444]/[0.04] border border-[#EF4444]/[0.1] px-3 py-2.5">
-                  <TrendingDown className="h-3.5 w-3.5 text-[#EF4444] shrink-0" />
-                  <span className="text-[11px] text-[#F87171] flex-1">&ldquo;SEO Strategy Guide&rdquo; dropped 5 positions</span>
-                  <span className="text-[10px] text-[#0EA5E9] font-medium shrink-0">Recovery queued</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="order-1 lg:order-2">
-            <div className="mb-3 flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-[#F59E0B]" />
-              <span className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#F59E0B]">
-                Monitoring
-              </span>
-            </div>
-            <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-3xl">
-              Content that gets better
-              <br />
-              <span className="text-[#565A6E]">
-                with time, not worse.
-              </span>
-            </h2>
-            <p className="mt-4 text-[15px] leading-relaxed text-[#8B8FA3]">
-              Pentra connects to Google Search Console, measures page and query
-              performance daily, and detects when articles lose visibility.
-              Published content remains immutable until a new revision passes the
-              same quality and delivery gates as the original.
-            </p>
-            <div className="mt-6 flex flex-col gap-2.5">
-              {[
-                "Google Search Console integration — daily rank tracking",
-                "Automated content decay detection with position history",
-                "Evidence-backed recovery actions for declining pages",
-                "Striking distance alerts for keywords close to page 1",
-              ].map((item) => (
-                <div
-                  key={item}
-                  className="flex items-center gap-2.5 text-[13px] text-[#EDEEF1]"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#F59E0B]" />
-                  {item}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 3: Control */}
-        <div className="grid gap-10 lg:grid-cols-2 lg:items-center lg:gap-16">
-          <div>
-            <div className="mb-3 flex items-center gap-2">
-              <Lock className="h-4 w-4 text-[#22C55E]" />
-              <span className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#22C55E]">
-                Control
-              </span>
-            </div>
-            <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-3xl">
-              Autopilot with guardrails.
-              <br />
-              <span className="text-[#565A6E]">You always have the final say.</span>
-            </h2>
-            <p className="mt-4 text-[15px] leading-relaxed text-[#8B8FA3]">
-              Run fully autonomous or require approval before anything publishes.
-              Set your tone, niche, cadence, brand colors, and CTA. Review and
-              approve articles, or let the pipeline handle everything end-to-end.
-            </p>
-            <div className="mt-6 flex flex-col gap-2.5">
-              {[
-                "Optional approval gates — review before publish",
-                "Custom tone, niche, brand identity, and cadence",
-                "Branded article preview matching your site's design",
-                "Full audit trail — every pipeline step logged",
-              ].map((item) => (
-                <div
-                  key={item}
-                  className="flex items-center gap-2.5 text-[13px] text-[#EDEEF1]"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#22C55E]" />
-                  {item}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Visual: Settings preview */}
-          <div className="rounded-xl border border-white/[0.06] bg-[#0A0B10] overflow-hidden">
-            <div className="border-b border-white/[0.04] px-4 py-2.5">
-              <span className="text-[12px] font-medium text-[#8B8FA3]">
-                Settings
-              </span>
-            </div>
-            <div className="p-5 space-y-4">
-              <SettingRow label="Domain" value="yoursite.com" />
-              <SettingRow label="Niche" value="Auto-detected by AI" />
-              <SettingRow label="Tone" value="Professional, practical" />
-              <SettingRow label="Cadence" value="4 articles / week" />
-              <div className="flex items-center justify-between py-1">
-                <span className="text-[12px] text-[#8B8FA3]">Autopilot</span>
-                <div className="relative inline-flex h-5 w-9 rounded-full bg-[#0EA5E9]">
-                  <span className="inline-block h-4 w-4 rounded-full bg-white shadow-sm mt-0.5 ml-0.5 translate-x-4" />
-                </div>
-              </div>
-              <div className="flex items-center justify-between py-1">
-                <span className="text-[12px] text-[#8B8FA3]">
-                  Require approval
-                </span>
-                <div className="relative inline-flex h-5 w-9 rounded-full bg-[#0EA5E9]">
-                  <span className="inline-block h-4 w-4 rounded-full bg-white shadow-sm mt-0.5 ml-0.5 translate-x-4" />
-                </div>
-              </div>
-              <SettingRow label="Publish to" value="GitHub" />
-              <SettingRow label="Delivery" value="Exact destination receipt" />
-              <SettingRow label="GSC Connected" value="✓ Daily rank tracking" />
-            </div>
-          </div>
+        <div className="mx-auto mt-10 max-w-3xl rounded-xl border border-white/[0.06] bg-[#0A0B10] p-6">
+          <h3 className="text-[15px] font-semibold">What Pentra does not do (yet)</h3>
+          <ul className="mt-3 space-y-2 text-[14px] text-[#8B8FA3]">
+            {[
+              "Publish anything without your approval.",
+              "Guarantee rankings or traffic. Search results take time and depend on many factors.",
+              "Build backlinks or send outreach emails.",
+              "Publish to WordPress, Webflow or other CMSs. GitHub-based sites only for now.",
+            ].map((line) => (
+              <li key={line} className="flex gap-2"><XCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#565A6E]" />{line}</li>
+            ))}
+          </ul>
         </div>
       </div>
     </section>
-  );
-}
-
-function MiniStat({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-2.5 text-center">
-      <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">{label}</p>
-      <p className="text-[15px] font-bold mt-0.5" style={{ color }}>{value}</p>
-    </div>
-  );
-}
-
-function SettingRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between py-1">
-      <span className="text-[12px] text-[#8B8FA3]">{label}</span>
-      <span className="text-[12px] font-medium text-[#EDEEF1]">{value}</span>
-    </div>
   );
 }
 
@@ -706,70 +163,41 @@ function SettingRow({ label, value }: { label: string; value: string }) {
 
 const faqs = [
   {
-    q: "How is Pentra different from other AI writing tools?",
-    a: "Most AI tools stop after writing. Pentra researches, publishes, measures Search Console outcomes, diagnoses underperforming pages, discovers verified authority opportunities, and preserves the receipt for each action. Outreach stays approval-first until a tenant explicitly enables a verified sending inbox.",
+    q: "Which websites does Pentra work with?",
+    a: "Sites whose blog is built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby sites. Pentra commits each approved article to the folder you choose and verifies the published page.",
   },
   {
-    q: "Is the content actually unique and not just AI slop?",
-    a: "Every article starts with live web research — real sources, real data, real citations. A separate fact-checking AI validates every claim with confidence scores. Articles are structured for Google AI Overviews with definitive answers, question-pattern headings, and year-dated statistics.",
+    q: "What happens if a draft isn't good enough?",
+    a: "The reviewer lists exactly what it flagged, such as an unsupported claim. You edit the draft and request review again. Nothing is published until you approve it, and edits of a draft never use another article from your allowance.",
   },
   {
-    q: "How does the rank tracking and content decay detection work?",
-    a: "Pentra connects to Google Search Console with scoped access to read performance and indexing data and submit your sitemap. It syncs daily, tracking clicks, impressions, CTR, and position so measured pages can enter the appropriate recovery workflow. This does not let Pentra edit your website.",
+    q: "Will Pentra make things up about my business?",
+    a: "No. Pentra writes from the business facts you confirm and from sources it can cite. It is instructed never to invent product features, statistics, testimonials or case studies, and a separate review checks for unsupported claims.",
   },
   {
-    q: "What publishing platforms do you support?",
-    a: "Bootstrap v1 supports GitHub publishing (MDX with frontmatter and schema markup). WordPress and signed-webhook publishing remain beta and are not advertised as generally available. Manual copy or download remains available.",
+    q: "Does Pentra guarantee rankings?",
+    a: "No one can honestly guarantee rankings. Pentra helps you publish useful, accurate content consistently and shows you real Search Console data so you can see what is working.",
   },
   {
-    q: "Does Pentra syndicate content to Medium or LinkedIn?",
-    a: "Automatic Medium and LinkedIn syndication is not currently available. Pentra does not collect those platform credentials or claim downstream delivery without an audited adapter receipt.",
+    q: "How does billing work?",
+    a: "Each plan is a fixed monthly or annual price with a set number of new articles per month. There are no usage charges. Monthly and annual plans can be canceled anytime from Billing; your plan remains active through the end of the current billing period.",
   },
   {
-    q: "Can I review articles before they go live?",
-    a: "Absolutely. Enable approval gates and every article goes to 'review' status for your sign-off. You can preview articles in your brand's design (colors, fonts, logo) before approving or rejecting.",
-  },
-  {
-    q: "What happens if I hit my article limit?",
-    a: "Article limits are per calendar month across your entire account. If you need more, upgrade anytime — the new limit takes effect immediately. Unused articles don't roll over.",
-  },
-  {
-    q: "Do all plans get the same features?",
-    a: "Core research, quality gates, publishing, and measurement are available according to each plan's limits. Search Console, publishing adapters, and outreach remain fail-closed until that site's owner connects and verifies them.",
-  },
-  {
-    q: "How long does it take to generate an article?",
-    a: "Generation time varies with research depth, source availability, quality revisions, media review, and the connected publishing destination. Pentra shows job progress and will reject or defer work that does not clear its publication gates.",
-  },
-  {
-    q: "Can I cancel anytime?",
-    a: "Yes. Monthly and annual plans can be canceled anytime from your dashboard. Your access remains active through the end of the current billing period.",
+    q: "Who owns the content?",
+    a: "You do. Articles are committed to your own repository and stay there if you stop using Pentra.",
   },
 ];
 
 function FAQ() {
   return (
-    <section id="faq" className="relative py-24 md:py-32 border-t border-white/[0.04] scroll-mt-20">
+    <section id="faq" className="relative scroll-mt-20 border-t border-white/[0.04] py-20 md:py-28">
       <div className="mx-auto max-w-3xl px-6">
-        <div className="mb-12 text-center">
-          <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-3xl">
-            Frequently asked questions
-          </h2>
-          <p className="mt-3 text-[15px] text-[#8B8FA3]">
-            Everything you need to know about Pentra.
-          </p>
-        </div>
-
-        <div className="space-y-0 divide-y divide-white/[0.06]">
-          {faqs.map((faq) => (
-            <details key={faq.q} className="group">
-              <summary className="flex cursor-pointer items-center justify-between py-5 text-[15px] font-medium text-[#EDEEF1] transition hover:text-white [&::-webkit-details-marker]:hidden list-none">
-                {faq.q}
-                <ChevronDown className="h-4 w-4 shrink-0 text-[#565A6E] transition-transform group-open:rotate-180" />
-              </summary>
-              <p className="pb-5 text-[14px] leading-relaxed text-[#8B8FA3]">
-                {faq.a}
-              </p>
+        <h2 className="mb-10 text-center text-2xl font-bold tracking-[-0.02em] md:text-4xl">Questions</h2>
+        <div className="space-y-3">
+          {faqs.map((item) => (
+            <details key={item.q} className="group rounded-xl border border-white/[0.06] bg-[#0A0B10] p-5">
+              <summary className="cursor-pointer list-none text-[15px] font-semibold">{item.q}</summary>
+              <p className="mt-3 text-[14px] leading-relaxed text-[#8B8FA3]">{item.a}</p>
             </details>
           ))}
         </div>
@@ -782,27 +210,18 @@ function FAQ() {
 
 function FinalCTA() {
   return (
-    <section className="relative py-24 md:py-32 border-t border-white/[0.04]">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute top-1/2 left-1/2 h-[400px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0EA5E9]/[0.03] blur-[100px]" />
-      </div>
-
+    <section className="relative border-t border-white/[0.04] py-24 md:py-32">
       <div className="relative mx-auto max-w-2xl px-6 text-center">
-        <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">
-          Stop managing SEO manually.
-          <br />
-          Start compounding traffic.
-        </h2>
+        <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">Your next article, researched and ready to approve.</h2>
         <p className="mx-auto mt-4 max-w-md text-[15px] text-[#8B8FA3]">
-          Connect your domain. Pentra handles the content, the monitoring,
-          and the maintenance. Start with 3 free articles every month.
+          Set up your business and site in a few minutes. Your first article is free.
         </p>
         <div className="mt-8">
           <Link
             href="/sign-up"
-            className="group inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-6 py-3 text-[14px] font-medium text-white transition-all hover:bg-[#38BDF8] hover:shadow-[0_0_32px_rgba(14,165,233,0.2)]"
+            className="group inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-6 py-3 text-[14px] font-medium text-white transition-all hover:bg-[#38BDF8]"
           >
-            Get started for free
+            Get started free
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Link>
         </div>
@@ -822,52 +241,33 @@ function Footer() {
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
               <Radar className="h-5 w-5 text-[#0EA5E9]" />
             </div>
-            <span className="text-[18px] font-bold">
-              Pentra
-            </span>
+            <span className="text-[18px] font-bold">Pentra</span>
           </div>
-
           <div className="flex flex-wrap gap-x-8 gap-y-3">
             <div className="flex flex-col gap-3">
               <span className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">Product</span>
-              <a href="#features" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
-                Features
-              </a>
-              <a href="#pricing" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
-                Pricing
-              </a>
-              <a href="#faq" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
-                FAQ
-              </a>
+              <a href="#features" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">Features</a>
+              <a href="#pricing" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">Pricing</a>
+              <a href="#faq" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">FAQ</a>
+              <Link href="/blog" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">Blog</Link>
             </div>
             <div className="flex flex-col gap-3">
               <span className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">Company</span>
-              <Link href="/contact" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
-                Contact
-              </Link>
-              <Link href="/legal/privacy" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
-                Privacy
-              </Link>
-              <Link href="/legal/terms" className="text-[15px] font-semibold text-[#8B8FA3] hover:text-white transition">
-                Terms
-              </Link>
+              <Link href="/contact" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">Contact</Link>
+              <Link href="/legal/privacy" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">Privacy</Link>
+              <Link href="/legal/terms" className="text-[15px] font-semibold text-[#8B8FA3] transition hover:text-white">Terms</Link>
             </div>
           </div>
         </div>
-
         <div className="mt-10 border-t border-white/[0.06] pt-6">
-          <p className="text-[14px] font-medium text-[#565A6E]">
-            &copy; {new Date().getFullYear()} Pentra. All rights reserved.
-          </p>
+          <p className="text-[14px] font-medium text-[#565A6E]">&copy; {new Date().getFullYear()} Pentra. All rights reserved.</p>
         </div>
       </div>
     </footer>
   );
 }
 
-/* ─── Page ─────────────────────────────────────── */
-
-/* ─── JSON-LD Schema Markup ────────────────────── */
+/* ─── JSON-LD ──────────────────────────────────── */
 
 const organizationSchema = {
   "@context": "https://schema.org",
@@ -877,79 +277,33 @@ const organizationSchema = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   description:
-    "AI-powered SEO content engine that automates research, writing, fact-checking, optimization, and publishing with built-in rank tracking and content maintenance.",
-  offers: {
-    "@type": "AggregateOffer",
-    lowPrice: "0",
-    highPrice: "499",
-    priceCurrency: "USD",
-    offerCount: "5",
-  },
+    "Pentra researches and writes fact-checked SEO articles about your business, publishes them to your GitHub-based site when you approve, and verifies the live page.",
+  offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
   featureList: [
-    "AI article generation with web research",
-    "Automated fact-checking with citations",
-    "Google Search Console rank tracking",
-    "Content decay detection and recovery actions",
-    "Verified GitHub publishing (WordPress and webhook in beta)",
-    "Verified backlink opportunities and approval-first outreach",
-    "JSON-LD schema markup generation",
-    "Internal linking optimization",
+    "Live web research with cited sources",
+    "Independent fact-check review",
+    "Owner review, editing and approval",
+    "GitHub Markdown/MDX publishing with commit receipts",
+    "Live-page verification",
+    "Google Search Console reporting",
   ],
 };
 
 const faqSchema = {
   "@context": "https://schema.org",
   "@type": "FAQPage",
-  mainEntity: faqs.map((f) => ({
-    "@type": "Question",
-    name: f.q,
-    acceptedAnswer: {
-      "@type": "Answer",
-      text: f.a,
-    },
-  })),
-};
-
-const breadcrumbSchema = {
-  "@context": "https://schema.org",
-  "@type": "BreadcrumbList",
-  itemListElement: [
-    {
-      "@type": "ListItem",
-      position: 1,
-      name: "Home",
-      item: "https://pentra.dev",
-    },
-  ],
+  mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),
 };
 
 export default function LandingPage() {
   return (
     <main className="relative min-h-screen overflow-hidden">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify(organizationSchema),
-        }}
-      />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify(faqSchema),
-        }}
-      />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify(breadcrumbSchema),
-        }}
-      />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
       <LandingNav />
       <Hero />
-      <Stats />
-      <TheLoop />
+      <HowItWorks />
       <Features />
-      <Differentiators />
       <PricingSection />
       <FAQ />
       <FinalCTA />

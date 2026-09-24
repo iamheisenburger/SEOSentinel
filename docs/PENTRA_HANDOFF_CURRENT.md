@@ -1,5 +1,63 @@
 # Pentra — fresh-task handoff
 
+## PUBLIC LAUNCH (phase 2) — September 24, Cowork session (owner: "take charge, complete today")
+
+Product (what we sell): owner-reviewed SEO articles for GitHub-based sites.
+Research → fact-checked draft → owner edits/approves → GitHub publish → live-page
+verification → Search Console reporting. No autopilot, backlinks or other CMSs.
+
+Pricing (fixed Clerk plans, no usage billing; existing Clerk feature keys kept):
+| Plan | Price (annual) | Sites | New articles / month | Provider cap / month |
+|---|---|---|---|---|
+| Free | $0 | 1 | 1 | $2.50 |
+| Starter | $49 ($39) | 1 | 10 | $20 |
+| Pro | $99 ($79) | 3 | 25 | $50 |
+| Scale | $199 ($159) | 10 | 60 | $120 |
+Enterprise is hidden from the public page (existing subscribers unchanged).
+Measured cost: ~$1–1.50 per published article incl. one owner-edit review, so
+worst-case gross margin is ~40–60% and typical ~70–80%.
+
+Code (phase 2, uncommitted on top of c2df08d):
+- `OWNER_DRAFTS_PER_MONTH` enforced in `requestDraft` across the account's sites
+  (new drafts only; edits/re-reviews free; validation grant exempt). Test SLC57.
+- `PENTRA_PUBLIC_CONTENT_PRICING` env: public customers get ordinary pricing
+  while Pentra/LeadPilot stay on the scoped $20 validation grant. Test SLC58.
+- `PENTRA_PROVIDER_LIMITS` env overrides fleet/account ceilings (defaults
+  unchanged, so all budget tests keep their audited arithmetic).
+- Owner requests no longer buy a silent replacement topic; exhausted review
+  hands the draft back with a clear message and the reviewer's issues shown
+  above the editor.
+- Homepage, pricing section and site metadata rewritten to match the product.
+
+Owner-only blockers: (1) allow `git push` to main in the Code session (auto-mode
+classifier refuses it); (2) connect the Claude Chrome extension so Clerk plan
+copy and live UI acceptance can run; (3) a real card checkout for a test
+customer (Claude may not enter payment details or create accounts).
+
+
+## BLOCKED STEPS — September 24 (Claude Code session on owner's Mac)
+
+- **`git push origin HEAD:main` was refused** by the Claude Code auto-mode permission
+  classifier (not by git/GitHub). Local commit `c2df08d` ("Owner-reviewed GitHub
+  onboarding, metadata recovery, leaked-envelope repair") sits directly on
+  `origin/main` (f12d16d, fast-forward, no upstream changes). Owner action:
+  `git push origin c2df08d:main` from this checkout, or allow the push in settings.
+- **Convex production WAS deployed** from `c2df08d` (wary-starfish-773) after all
+  gates passed: 1,853 tests / 1,852 pass / 0 fail / 1 skip; typecheck; lint 0 errors
+  / 157 warnings; schema, secret scan, audit (0 vulns); build; e2e 38 pass / 2 skip;
+  dry-run. Backend is therefore AHEAD of the Vercel frontend until the push lands.
+  The backend change is additive (optional `metadata`, optional `ownerReviewedOnly`),
+  so the live f12d16d frontend keeps working.
+- **LeadPilot live step 1 is blocked** until Vercel deploys: the Search title /
+  Search description editor fields exist only in `c2df08d`'s frontend.
+- **Live acceptance in Chrome is blocked**: the Claude in Chrome extension was
+  not connected (tabs_context failed repeatedly). The Pentra step (body-only edit)
+  would work on the live frontend once Chrome is reachable. No paid review, no
+  publish and no spend happened in this session; the budget is unchanged at
+  $8.995926 of $20.
+- **`scripts/release-preflight.mjs --released` was refused** by the same classifier.
+  Hosted CI has no new run because nothing was pushed (latest: 35986409043 success on f12d16d).
+
 ## RUN-SHEET — September 24 (Claude Cowork review, 04:10–05:30 PT)
 
 Written for the next session running natively on the owner's Mac (Claude Code

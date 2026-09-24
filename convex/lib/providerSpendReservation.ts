@@ -161,10 +161,37 @@ export type ProviderAccountCapacityDecision =
       ceilingMicroUsd: number;
     };
 
+/** Launch limits are deployment configuration, not code: set
+ * PENTRA_PROVIDER_LIMITS on the Convex deployment, e.g.
+ * {"fleetMonthlyMicroUsd":400000000,"fleetDailyMicroUsd":40000000,
+ *  "accountDailyMicroUsd":20000000,
+ *  "accountMonthlyMicroUsd":{"free":2500000,"starter":20000000,"pro":50000000,"scale":120000000}}
+ * Absent or invalid values keep the audited defaults above. */
+type ProviderLimitOverrides = { fleetMonthlyMicroUsd?: number; fleetDailyMicroUsd?: number;
+  accountDailyMicroUsd?: number; accountMonthlyMicroUsd?: Partial<Record<CanonicalPlanTier, number>> };
+function providerLimitOverrides(): ProviderLimitOverrides {
+  try {
+    const parsed = JSON.parse(process.env.PENTRA_PROVIDER_LIMITS ?? "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+function positiveMicroUsd(value: unknown, fallback: number) {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : fallback;
+}
+export function sharedProviderMonthlyCeilingMicroUsd() {
+  return positiveMicroUsd(providerLimitOverrides().fleetMonthlyMicroUsd, SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD);
+}
+export function sharedProviderDailyCeilingMicroUsd() {
+  return positiveMicroUsd(providerLimitOverrides().fleetDailyMicroUsd, SHARED_PROVIDER_DAILY_CEILING_MICRO_USD);
+}
+export function providerAccountDailyCeilingMicroUsd() {
+  return positiveMicroUsd(providerLimitOverrides().accountDailyMicroUsd, PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD);
+}
+
 export function providerAccountMonthlyCeilingMicroUsd(
   tier: CanonicalPlanTier,
 ): number {
-  return PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD[tier];
+  return positiveMicroUsd(providerLimitOverrides().accountMonthlyMicroUsd?.[tier], PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD[tier]);
 }
 
 export function evaluateProviderAccountCapacity(args: {
@@ -188,13 +215,13 @@ export function evaluateProviderAccountCapacity(args: {
   }
   if (
     args.accountReservedTodayMicroUsd + args.requestedMicroUsd >
-      PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD
+      providerAccountDailyCeilingMicroUsd()
   ) {
     return {
       allowed: false,
       reason: "provider_account_daily_budget_reserved",
       reservedMicroUsd: args.accountReservedTodayMicroUsd,
-      ceilingMicroUsd: PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
+      ceilingMicroUsd: providerAccountDailyCeilingMicroUsd(),
     };
   }
   return { allowed: true };
@@ -333,24 +360,24 @@ export function evaluateSharedProviderCapacity(args: {
 }): SharedProviderCapacityDecision {
   if (
     args.fleetReservedThisMonthMicroUsd + args.requestedMicroUsd >
-    SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD
+    sharedProviderMonthlyCeilingMicroUsd()
   ) {
     return {
       allowed: false,
       reason: "provider_fleet_monthly_budget_reserved",
       reservedMicroUsd: args.fleetReservedThisMonthMicroUsd,
-      ceilingMicroUsd: SHARED_PROVIDER_MONTHLY_CEILING_MICRO_USD,
+      ceilingMicroUsd: sharedProviderMonthlyCeilingMicroUsd(),
     };
   }
   if (
     args.fleetReservedTodayMicroUsd + args.requestedMicroUsd >
-    SHARED_PROVIDER_DAILY_CEILING_MICRO_USD
+    sharedProviderDailyCeilingMicroUsd()
   ) {
     return {
       allowed: false,
       reason: "provider_fleet_daily_budget_reserved",
       reservedMicroUsd: args.fleetReservedTodayMicroUsd,
-      ceilingMicroUsd: SHARED_PROVIDER_DAILY_CEILING_MICRO_USD,
+      ceilingMicroUsd: sharedProviderDailyCeilingMicroUsd(),
     };
   }
   return { allowed: true };

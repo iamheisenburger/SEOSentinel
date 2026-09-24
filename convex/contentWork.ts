@@ -7,6 +7,7 @@ import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from ".
 import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
+import { resolvePlanFromFeatures } from "./planLimits";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import { inspectSharedProviderBudget, reserveSharedProviderBudget, settleSharedProviderReservation, releaseSharedProviderReservation } from "./lib/providerSpendReservation";
 import { contentValidationBinding } from "./lib/providerBudgetAuthorization";
@@ -28,18 +29,49 @@ export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
 export const MAX_CONTENT_RECOVERIES = 3;
+/** Public plan allowance of NEW owner-requested drafts per UTC month (edits and
+ * re-reviews of a draft are free). Matches the published pricing table. */
+export const OWNER_DRAFTS_PER_MONTH = { free: 1, starter: 10, pro: 25, scale: 60, enterprise: 150 } as const;
+/** New owner drafts used this UTC month across the account's sites, against
+ * the plan allowance. Null for the scoped owner validation grant. */
+async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, validationScoped: boolean) {
+  if (validationScoped || !site.userId) return null;
+  const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
+  const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
+  const now = new Date(), monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  let used = 0;
+  for (const owned of await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", site.userId!)).take(LIMIT)) {
+    const siteJobs = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q =>
+      q.eq("siteId", owned._id).gte("contentWork.deadlineAt", monthStart)).take(LIMIT);
+    used += siteJobs.filter(j => j.contentWork?.ownerRequest && !j.contentWork.ownerRequest.sourceArticleId &&
+      j.contentWork.ownerRequest.requestedAt >= monthStart).length;
+  }
+  return { tier, used, limit: OWNER_DRAFTS_PER_MONTH[tier] as number };
+}
 const LIMIT = 1000;
 async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, job?: Doc<"jobs">) {
   // Deployment-owned pricing is deliberately absent by default. Selection is
   // consent, not activation. An optional selector enables only the immutable
   // saved run; it is never a caller flag or a tenant-name allowlist.
-  let p;
+  let p, pub;
   try { p = JSON.parse(process.env.PENTRA_CONTENT_WORK_PRICING ?? "null"); } catch { p = null; }
+  // Public customer pricing may run beside a scoped owner validation grant.
+  // It never applies to a site bound to that grant, and never rebinds a job.
+  try { pub = JSON.parse(process.env.PENTRA_PUBLIC_CONTENT_PRICING ?? "null"); } catch { pub = null; }
+  const publicPricing = pub && typeof pub === "object" && typeof pub.model === "string" && pub.model && !("validationAuthorizationId" in pub) &&
+    [pub.inputMicroUsdPerToken, pub.outputMicroUsdPerToken, pub.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)
+    ? { model: pub.model as string, inputMicroUsdPerToken: pub.inputMicroUsdPerToken as number,
+        outputMicroUsdPerToken: pub.outputMicroUsdPerToken as number, budgetMicroUsd: pub.budgetMicroUsd as number,
+        validationAuthorizationId: undefined as Id<"provider_budget_authorizations"> | undefined } : null;
   const scoped = Boolean(p && typeof p === "object" && "validationAuthorizationId" in p);
   const cw = job?.contentWork;
   // Ordinary existing jobs keep their original execution/pricing semantics.
   // A scoped job can never become ordinary by removing deployment pricing.
   if (cw && !scoped && cw.pricing.validationAuthorizationId === undefined) return { ...cw.pricing, budgetMicroUsd: cw.budgetMicroUsd };
+  if (cw && scoped && publicPricing && cw.pricing.validationAuthorizationId === undefined && cw.validationAuthorizationId === undefined) {
+    return { ...cw.pricing, budgetMicroUsd: cw.budgetMicroUsd };
+  }
+  if (!cw && scoped && publicPricing && !site.contentSchedule?.validationAuthorizationId) return publicPricing;
   if (!p || typeof p.model !== "string" || !p.model ||
     ![p.inputMicroUsdPerToken, p.outputMicroUsdPerToken, p.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)) return null;
   let validationAuthorizationId: Id<"provider_budget_authorizations"> | undefined;
@@ -519,6 +551,7 @@ export const readiness = query({
       funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
+        allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
           jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
         }))[0] ?? null },
@@ -714,6 +747,17 @@ export const requestDraft = mutation({
     if (outstanding) return { jobId: outstanding._id, created: false };
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing || args.maximumMicroUsd !== pricing.budgetMicroUsd) throw new ConvexError("Draft pricing changed; refresh before requesting work");
+    // Ordinary (public) drafting is a paid-plan feature; free accounts can set up
+    // but cannot spend provider money. The owner validation grant is unaffected.
+    // Fresh drafts count against the plan's monthly article allowance across
+    // the account's sites. Owner edits of an existing draft are not new drafts.
+    // The owner validation grant keeps its separate cumulative allowance.
+    const allowance = args.edit ? null : await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId));
+    if (allowance && allowance.used >= allowance.limit) {
+      throw new ConvexError(allowance.tier === "free"
+        ? "Your free article for this month is used. Choose a plan in Billing to keep publishing."
+        : `You've used all ${allowance.limit} articles in your plan this month. Upgrade in Billing or wait until the 1st.`);
+    }
     const topic = source?.topicId ? await ctx.db.get(source.topicId) : await chooseTopic(ctx, site, args.topicId);
     if (source && (!topic || topic.siteId !== site._id)) throw new ConvexError("The original draft topic is unavailable");
     if (!topic) throw new ConvexError("No distinct supported topic is available. Review your business offerings or select another planned topic.");
@@ -767,7 +811,9 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
     const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
     if (topic && topic.siteId === site._id) discardedIntents.push({ primaryKeyword: topic.primaryKeyword, label: topic.label });
   }
-  const replacement = cw.replacements === 0 && !cw.ownerRequest?.sourceArticleId
+  // An owner asked for this draft: hand back the best version with the
+  // reviewer's notes instead of silently spending on a different topic.
+  const replacement = cw.replacements === 0 && !cw.ownerRequest
     ? await chooseTopic(ctx, site, undefined, discardedIntents) : null;
   if (replacement && failed.articleId) {
     await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,

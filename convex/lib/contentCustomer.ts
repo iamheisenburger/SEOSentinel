@@ -3,7 +3,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { resolvePlanFromFeatures } from "../planLimits";
 import { readProviderBudgetAuthorization, providerBudgetMonth, ordinaryProviderReservationRows, contentValidationBinding } from "./providerBudgetAuthorization";
 import { inspectSharedProviderBudget, providerAccountMonthlyCeilingMicroUsd, providerReservationConsumedMicroUsd,
-  PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD } from "./providerSpendReservation";
+  providerAccountDailyCeilingMicroUsd } from "./providerSpendReservation";
 import { internalContentProcessingError } from "./contentAudit";
 
 // Browser-facing copy is selected, never raw exception/provider payload text.
@@ -11,6 +11,7 @@ export function contentIssue(reason?: string) {
   if (!reason) return null;
   if (reason === "owner_rejected_draft") return "You declined this draft. It will not publish. You can request a new draft; previous work and spending remain recorded.";
   if (reason === "owner_edited_draft") return "A separately reviewed edit replaces this draft. The original content and spending remain in history.";
+  if (reason === "bounded_content_quality_exhausted") return "This draft needs your edits before it can publish. Open it to see what the reviewer flagged, fix those points, then request review. Nothing was published.";
   if (reason === "content_model_response_invalid") return "The generation service returned an incomplete response. No publication occurred. Your saved draft and costs are retained; edit an available draft or explicitly request new work.";
   if (internalContentProcessingError(reason)) return "Pentra encountered an internal processing error. Our team must repair it. Your drafts, spending history and original deadline are preserved. You do not need to change your plan or fund a provider.";
   if (reason.includes("wordpress_receipt_update_required")) return "Update the Pentra WordPress connector to 1.1.0 or newer, then recheck this retained delivery. Do not publish another copy.";
@@ -49,7 +50,7 @@ export async function contentFunding(ctx: QueryCtx | MutationCtx, site: Doc<"sit
       expiresAt: binding.run.expiresAt ?? null } : null,
     checkedAt: now, requestedMicroUsd: budgetMicroUsd ?? null, monthlyLimitMicroUsd: limit,
     settledActualMicroUsd: complete ? settled : null, heldCeilingMicroUsd: complete ? consumed - settled : null,
-    accountAvailableMicroUsd: complete ? Math.max(0, Math.min(limit - consumed, PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD - daily,
+    accountAvailableMicroUsd: complete ? Math.max(0, Math.min(limit - consumed, providerAccountDailyCeilingMicroUsd() - daily,
       authorization ? authorization.incrementalLimitMicroUsd - incremental : Infinity)) : null,
     monthlyResetAt: window.endAt, dailyResetAt: dayStart + 86_400_000,
     incrementalLimitMicroUsd: authorization?.incrementalLimitMicroUsd ?? null,

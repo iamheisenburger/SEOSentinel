@@ -42,7 +42,7 @@ export default function ArticlesPage() {
   const [selectedTopic, setSelectedTopic] = useState<
     Id<"topic_clusters"> | undefined
   >(undefined);
-  const { maxArticles } = usePlanLimits();
+  const { maxArticles: legacyMaxArticles } = usePlanLimits();
   const { userId } = useAuth();
   const usageCount = useQuery(
     api.articles.countThisMonth,
@@ -50,7 +50,11 @@ export default function ArticlesPage() {
   );
 
   // Articles generated this calendar month (from immutable usage_log)
-  const articlesThisMonth = usageCount ?? 0;
+  // Owner-reviewed (growth-first) sites use the enforced plan allowance of new
+  // drafts; legacy sites keep the usage_log count.
+  const allowance = readiness?.ownerDraft.allowance ?? null;
+  const articlesThisMonth = allowance ? allowance.used : usageCount ?? 0;
+  const maxArticles = allowance ? allowance.limit : legacyMaxArticles;
   const atArticleLimit = articlesThisMonth >= maxArticles;
 
   const availableTopics = useMemo(
@@ -174,8 +178,9 @@ export default function ArticlesPage() {
 
       {readiness?.ownerDraft && (
         <section aria-label="Owner-requested draft" className="rounded-lg border border-white/[0.06] p-4 text-sm">
-          <p>Generate a draft for your approval. This does not activate or repair your automatic schedule.</p>
-          {readiness.ownerDraft.maximumMicroUsd != null && <p>Uses your existing generation allowance, with a maximum provider budget of ${(readiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)} per request, including bounded revisions.</p>}
+          <p>Generate a researched draft for your review. Nothing publishes until you approve it.</p>
+          {allowance ? <p>Each new draft uses 1 of your {allowance.limit} articles this month ({allowance.used} used). Editing a draft and requesting review again is free.</p>
+            : readiness.ownerDraft.maximumMicroUsd != null && <p>Uses your existing generation allowance, with a maximum provider budget of ${(readiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)} per request, including bounded revisions.</p>}
           {readiness.ownerDraft.latest && <p role="status">Draft: {readiness.ownerDraft.latest.stage.replaceAll("_", " ")}. {readiness.ownerDraft.latest.issue}
             {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>Open draft</Link></>}
           </p>}

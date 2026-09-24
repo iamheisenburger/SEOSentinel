@@ -9,7 +9,7 @@ import { activeProviderBudgetAuthorization, MAX_APPROVED_PROVIDER_MONTHLY_CEILIN
   validCumulativeValidationAuthorization, ordinaryProviderReservationRows } from "./lib/providerBudgetAuthorization.ts";
 import { resolvePlanFromFeatures } from "./planLimits.ts";
 import {
-  PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
+  providerAccountDailyCeilingMicroUsd,
   providerAccountMonthlyCeilingMicroUsd,
   providerReservationConsumedMicroUsd,
 } from "./lib/providerSpendReservation.ts";
@@ -70,7 +70,7 @@ export const getSiteReservationSnapshot = internalQuery({
       unmatchedOwnerCount, releasedCount, settledCount,
       monthlyOriginalMicroUsd, monthlyConsumedMicroUsd, dailyConsumedMicroUsd,
       independentConsumedMicroUsd, allScopesMonthlyConsumedMicroUsd: monthlyConsumedMicroUsd + independentConsumedMicroUsd,
-      accountDailyCeilingMicroUsd: PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD,
+      accountDailyCeilingMicroUsd: providerAccountDailyCeilingMicroUsd(),
       accountMonthlyCeilingMicroUsd: monthlyCeilingMicroUsd,
       baseMonthlyCeilingMicroUsd,
       approvedIncrementalLimitMicroUsd: authorization?.incrementalLimitMicroUsd,
@@ -79,7 +79,7 @@ export const getSiteReservationSnapshot = internalQuery({
       approvalExpiresAt: authorization?.expiresAt,
       // Upper bounds only: the account may have reservations at other sites.
       accountDailyHeadroomAtMostMicroUsd: Math.max(0,
-        PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD - dailyConsumedMicroUsd),
+        providerAccountDailyCeilingMicroUsd() - dailyConsumedMicroUsd),
       accountMonthlyHeadroomAtMostMicroUsd: Math.max(0, Math.min(
         monthlyCeilingMicroUsd - monthlyConsumedMicroUsd,
         authorization ? authorization.incrementalLimitMicroUsd - approvedWindowConsumedMicroUsd : Infinity)),

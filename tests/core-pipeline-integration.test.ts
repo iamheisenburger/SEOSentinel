@@ -884,6 +884,56 @@ test("SLC56 new GitHub customers complete owner-reviewed drafts without granting
   });
 });
 
+test("SLC57 public plans cap new drafts per month before any paid call", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const entitlement = f.tables.account_plan_entitlements.find(e => e.userId === f.get(f.sites[0].id)!.userId)!;
+  Object.assign(entitlement, { planFeatures: ["max_sites_1", "max_articles_3"], maxSites: 1, maxArticles: 3 });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  saved.planFeatures = ["max_sites_1", "max_articles_3"];
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+    confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const base = { siteId: site.id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const first = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "free-plan-first-article" });
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(first.jobId)!.contentWork.stage));
+  const job = f.get(first.jobId)!;
+  assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+  await f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId });
+  await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === "verified");
+  const calls = f.modelCalls.length;
+  await assert.rejects(f.invoke("contentWork:requestDraft", { ...base, requestKey: "free-plan-second-article" }), /free article for this month is used/);
+  assert.equal(f.modelCalls.length, calls, "a rejected request makes no paid call");
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.ownerRequest).length, 1);
+  f.assertOffline();
+});
+
+test("SLC58 public customer pricing runs beside a scoped owner validation grant without borrowing it", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  const publicPricing = { model: "public-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: 400_000 };
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ ...mockContentPricing, validationAuthorizationId: "provider_budget_authorizations:owner-only" }),
+    PENTRA_PUBLIC_CONTENT_PRICING: JSON.stringify(publicPricing) });
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+    confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.funding.pricingScope, "ordinary");
+  assert.equal(r.ownerDraft.maximumMicroUsd, publicPricing.budgetMicroUsd);
+  const requested = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken,
+    requestKey: "public-customer-first-draft", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
+  const job = f.get(requested.jobId)!;
+  assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+  assert.equal(job.contentWork.pricing.model, "public-content-model");
+  assert.equal(job.contentWork.pricing.validationAuthorizationId, undefined);
+  assert.equal(job.contentWork.validationAuthorizationId, undefined);
+  assert.equal(f.get(job.providerSpendReservationId)!.validationAuthorizationId, undefined);
+  f.assertOffline();
+});
+
 test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {
   const f = await scopedPricingFixture();
   for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
@@ -1103,8 +1153,10 @@ test("SLC54 rejected owner drafts remain bounded and never restart or hide faile
   const result = await f.invoke("contentWork:requestDraft", args);
   await pumpUntil(f, () => f.get(result.jobId)!.contentWork.stage === "failed");
   const job = f.get(result.jobId)!;
-  assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 1);
+  // Owner requests keep the requested topic: no silent paid replacement.
+  assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 0);
   assert.equal(job.contentWork.failure, "bounded_content_quality_exhausted");
+  assert.ok(job.articleId, "the best reviewed draft remains available for owner editing");
   assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
   const calls = f.modelCalls.length, snapshot = structuredClone(job);
   assert.equal((await f.invoke("contentWork:requestDraft", args)).jobId, job._id);

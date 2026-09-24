@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-test("public Pentra copy does not claim unsupported autonomous refresh or acquired backlinks", () => {
+test("public Pentra copy sells only the owner-reviewed service it delivers", () => {
   const homepage = readFileSync("src/app/page.tsx", "utf8");
   const onboarding = readFileSync(
     "src/components/onboarding/setup-wizard.tsx",
@@ -12,10 +12,11 @@ test("public Pentra copy does not claim unsupported autonomous refresh or acquir
   assert.doesNotMatch(combined, /auto-refresh/i);
   assert.doesNotMatch(combined, /automatically refresh/i);
   assert.doesNotMatch(combined, /builds backlinks/i);
-  assert.match(homepage, /approval-first outreach/i);
-  assert.match(homepage, /exact-link receipts/i);
+  assert.doesNotMatch(homepage, /autopilot|autonomous|hero images|infographic|approval-first outreach/i);
+  assert.match(homepage, /Nothing publishes without your approval/);
+  assert.match(homepage, /Guarantee rankings or traffic/);
+  assert.match(homepage, /Build backlinks or send outreach emails/);
   assert.doesNotMatch(homepage, /94%|142 keywords|2,847 words|3-5 minutes|64% of B2B teams/);
-  assert.match(homepage, /Generation time varies with research depth/);
 });
 
 test("disabled syndication is not advertised or offered as a credential-collecting control", () => {
@@ -30,8 +31,7 @@ test("disabled syndication is not advertised or offered as a credential-collecti
   );
   const backend = readFileSync("convex/actions/syndication.ts", "utf8");
 
-  assert.doesNotMatch(homepage, /Syndicates to Medium|Auto-distribute to Medium|Syndicate to/);
-  assert.match(homepage, /Automatic Medium and LinkedIn syndication is not currently available/);
+  assert.doesNotMatch(homepage, /Syndicates to Medium|Auto-distribute to Medium|Syndicate to|syndication/i);
   for (const ui of [onboarding, settings]) {
     assert.match(ui, /Automatic Medium and LinkedIn syndication is not available yet/);
     assert.doesNotMatch(ui, /Auto-Syndicate|Medium Integration Token|LinkedIn Access Token/);
@@ -88,14 +88,18 @@ test("the upgrade screen never pretends URL parameters preselect Clerk checkout"
   assert.doesNotMatch(upgrade, /Complete checkout for|billed annually \(save/);
 });
 
-test("public pricing limits Enterprise's unlimited claim to sites", () => {
+test("public pricing matches the enforced monthly article allowance and hides Enterprise", async () => {
   const pricing = readFileSync(
     "src/components/landing/pricing-section.tsx",
     "utf8",
   );
-  assert.match(pricing, /Unlimited sites for large operations/);
-  assert.match(pricing, /articles: "150 articles \/ month"/);
-  assert.doesNotMatch(pricing, /Unlimited scale/);
+  const contentWork = readFileSync("convex/contentWork.ts", "utf8");
+  const allowance = /OWNER_DRAFTS_PER_MONTH = \{ free: (\d+), starter: (\d+), pro: (\d+), scale: (\d+),/.exec(contentWork);
+  assert.ok(allowance);
+  const [, free, starter, pro, scale] = allowance;
+  assert.match(pricing, new RegExp(`articles: "${free} article / month"`));
+  for (const count of [starter, pro, scale]) assert.match(pricing, new RegExp(`articles: "${count} articles / month"`));
+  assert.doesNotMatch(pricing, /Enterprise|Unlimited/);
 });
 
 test("legacy direct refresh authenticates and fails before unmetered providers", () => {
