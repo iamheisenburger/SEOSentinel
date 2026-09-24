@@ -11,10 +11,10 @@ import {
 } from "lucide-react";
 
 const workflow = [
-  { label: "Research", detail: "Demand & intent measured", icon: Search },
-  { label: "Create", detail: "Evidence-backed content", icon: FileCheck2 },
-  { label: "Publish", detail: "Destination verified", icon: Send },
-  { label: "Measure", detail: "Outcomes recorded", icon: BarChart3 },
+  { label: "Research", detail: "Topics your buyers search", icon: Search },
+  { label: "Draft", detail: "Fact-checked, with sources", icon: FileCheck2 },
+  { label: "Approve & publish", detail: "Only when you say so", icon: Send },
+  { label: "Verify & measure", detail: "Live page, Search Console", icon: BarChart3 },
 ];
 
 export function AuthShell({
@@ -64,28 +64,28 @@ export function AuthShell({
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#38BDF8]" />
               </span>
               <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#38BDF8]">
-                Autonomous SEO operations
+                SEO articles you approve
               </span>
             </div>
 
             <h1 className="mt-7 max-w-lg text-[clamp(2.25rem,5vw,4.35rem)] font-bold leading-[1.02] tracking-[-0.045em]">
               {isSignIn ? (
                 <>
-                  Your growth engine is
+                  Your next article is
                   <span className="block text-[#565A6E]">ready when you are.</span>
                 </>
               ) : (
                 <>
-                  Put search growth
-                  <span className="block text-[#565A6E]">on a measured loop.</span>
+                  Accurate SEO articles,
+                  <span className="block text-[#565A6E]">published when you approve.</span>
                 </>
               )}
             </h1>
 
             <p className="mt-5 max-w-lg text-[15px] leading-7 text-[#8B8FA3] sm:text-[16px]">
               {isSignIn
-                ? "Return to the workspace that researches, creates, publishes, and measures every SEO outcome for you."
-                : "Connect your site once. Pentra turns verified opportunities into content, distribution, and measurable growth."}
+                ? "Review your drafts, approve what is ready, and see how published pages perform."
+                : "Tell Pentra about your business, connect your GitHub-based site, and get your first researched article free."}
             </p>
 
             <div className="mt-10 overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0A0B10]/85 shadow-2xl shadow-black/30 backdrop-blur-xl">
@@ -96,7 +96,7 @@ export function AuthShell({
                   <span className="h-2 w-2 rounded-full bg-[#22C55E]/60" />
                 </div>
                 <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#565A6E]">
-                  Pentra growth loop
+                  How Pentra works
                 </span>
               </div>
 
@@ -126,7 +126,7 @@ export function AuthShell({
 
               <div className="flex items-center gap-2 border-t border-white/[0.05] px-5 py-3 text-[11px] text-[#8B8FA3]">
                 <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" />
-                Every material action is gated, measured, and recorded.
+                Nothing publishes without your approval.
               </div>
             </div>
           </div>

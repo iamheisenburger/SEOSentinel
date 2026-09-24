@@ -17,7 +17,6 @@ import {
   ChevronDown,
   Check,
   BarChart3,
-  Link2,
 } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
@@ -38,7 +37,8 @@ const navSections = [
       { href: "/plan", label: "Topics", icon: Target },
       { href: "/articles", label: "Articles", icon: FileText },
       { href: "/analytics", label: "Analytics", icon: BarChart3 },
-      { href: "/backlinks", label: "Backlinks", icon: Link2 },
+      // Backlink outreach is not part of the current product; /backlinks stays
+      // reachable for legacy accounts but is not advertised in navigation.
     ],
   },
   {

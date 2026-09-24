@@ -7,8 +7,8 @@ test("a protected product route lands inside Pentra-branded authentication", asy
   await expect(page.getByText("Product home")).toBeVisible();
   await expect(page.getByRole("link", { name: "Terms" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
-    await expect(page.getByText("Autonomous SEO operations")).toBeVisible();
-    await expect(page.getByText("Pentra growth loop")).toBeVisible();
+    await expect(page.getByText("SEO articles you approve")).toBeVisible();
+    await expect(page.getByText("How Pentra works")).toBeVisible();
   } else {
     await expect(page.getByText("Pentra workspace")).toBeVisible();
   }
@@ -19,8 +19,8 @@ test("sign-up remains inside the same Pentra product shell", async ({ page }) =>
   await expect(page.getByLabel("Pentra home")).toBeVisible();
   await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
-    await expect(page.getByText("Put search growth")).toBeVisible();
-    await expect(page.getByText("Pentra growth loop")).toBeVisible();
+    await expect(page.getByText("Accurate SEO articles,")).toBeVisible();
+    await expect(page.getByText("How Pentra works")).toBeVisible();
   } else {
     await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
   }
