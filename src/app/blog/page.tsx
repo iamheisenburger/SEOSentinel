@@ -29,12 +29,20 @@ async function requestDomain(): Promise<string> {
 }
 
 export default async function BlogIndex() {
+  const domain = await requestDomain();
   let articles: Awaited<ReturnType<typeof convexHttp.query<typeof api.blog.listPublishedByDomain>>> | null = null;
-  try { articles = await convexHttp.query(api.blog.listPublishedByDomain, { domain: await requestDomain() }); }
+  try { articles = await convexHttp.query(api.blog.listPublishedByDomain, { domain }); }
   catch { articles = null; }
+  // Structured data so Google and AI answer engines understand the index and its posts.
+  const blogSchema = {
+    "@context": "https://schema.org", "@type": "Blog", name: "SEO and content guides", url: `https://${domain}/blog`,
+    blogPost: (articles ?? []).slice(0, 30).map(article => ({ "@type": "BlogPosting", headline: article.title,
+      url: `https://${domain}/blog/${article.slug}`, datePublished: new Date(article.createdAt).toISOString() })),
+  };
 
   return (
     <div className="min-h-screen bg-[#08090E]">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(blogSchema).replace(/</g, "\\u003c") }} />
       <LandingNav />
 
       <main className="mx-auto max-w-4xl px-6 pt-32 pb-20">

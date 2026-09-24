@@ -8,9 +8,22 @@ export const metadata: Metadata = {
   description: "Questions about Pentra, your plan or your website? Email the Pentra team at pentrahelp@gmail.com and we'll help.",
 };
 
+const contactSchema = {
+  "@context": "https://schema.org", "@type": "ContactPage", name: "Contact Pentra", url: "https://pentra.dev/contact",
+  mainEntity: { "@type": "Organization", name: "Pentra", url: "https://pentra.dev",
+    contactPoint: { "@type": "ContactPoint", contactType: "customer support", email: "pentrahelp@gmail.com", availableLanguage: "English" } },
+};
+
+const HELP_ANSWERS = [
+  ["What should I include in my email?", "Your website address and, if something looks wrong, the page or article it's about. That lets us check your account straight away."],
+  ["Can I change my plan or cancel?", "You can change your plan from Plans & billing in your dashboard. To cancel, or if anything about a charge is unclear, email us and we'll sort it out."],
+  ["Do you offer plans for agencies or several websites?", "Pro covers 3 websites and Scale covers 10. If you need more, tell us how many sites and articles a month and we'll set up a custom plan."],
+] as const;
+
 export default function ContactPage() {
   return (
     <main className="relative min-h-screen overflow-hidden">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(contactSchema) }} />
       <LandingNav />
 
       <section className="relative pt-32 pb-24 md:pt-40 md:pb-32">
@@ -80,6 +93,16 @@ export default function ContactPage() {
               <p className="text-[13px] text-[#565A6E]">
                 We typically respond within 24 hours.
               </p>
+
+              <div className="space-y-4 border-t border-white/[0.06] pt-6">
+                <h2 className="text-[15px] font-semibold text-[#EDEEF1]">Before you email</h2>
+                {HELP_ANSWERS.map(([question, answer]) => (
+                  <div key={question}>
+                    <h3 className="text-[14px] font-medium text-[#EDEEF1]">{question}</h3>
+                    <p className="mt-1 text-[14px] leading-relaxed text-[#8B8FA3]">{answer}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
