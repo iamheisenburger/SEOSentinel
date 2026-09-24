@@ -720,7 +720,7 @@ export const readiness = query({
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
           jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
         }))[0] ?? null },
-      results: { live: liveSummaries.length + pastedLive.size,
+      results: { live: liveSummaries.length + pastedLive.size, planUsedThisMonth: site.userId ? (await accountArticlesThisMonth(ctx, site)).used : 0,
         liveThisMonth: liveSummaries.filter(row => (row.publishedAt ?? 0) >= monthStart).length + [...pastedLive.values()].filter(p => p.publishedAt >= monthStart).length },
       published: [...publishedRows.map(a => ({ articleId: a._id, title: a.title ?? a.slug ?? "Article", publishedAt: a.publishedAt ?? null,
           verified: a.publicUrlStatus === "verified", url: a.publicUrlStatus === "verified" && a.publicUrl?.startsWith("https://") ? a.publicUrl : null })),

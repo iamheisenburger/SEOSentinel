@@ -32,7 +32,7 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
   const urls = [home];
   // Access and indexing pass: robots.txt and the sitemap come first.
   const robotsPage = await fetchPage(`https://${host}/robots.txt`);
-  const robots = robotsPage.status === 200 ? robotsTxtFindings(robotsPage.html) : { blocksAll: false, sitemaps: [] as string[] };
+  const robots = robotsPage.status === 200 ? robotsTxtFindings(robotsPage.html) : { blocksAll: false, sitemaps: [] as string[], aiBlocked: [] as string[] };
   let sitemapFound = false;
   for (const candidate of [`https://${host}/sitemap.xml`, ...robots.sitemaps]) {
     if (sitemapFound) break;
@@ -54,6 +54,9 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
   if (results[0] && results[0].status > 0) {
     if (robots.blocksAll) results[0].issues.unshift({ code: "robots_blocks_all", severity: "critical",
       message: "Your robots.txt tells Google not to crawl any page on this site, so nothing can rank." });
+    // Answer-engine pass: AI search can only cite pages its crawler may read.
+    if (!robots.blocksAll && robots.aiBlocked.length) results[0].issues.push({ code: "ai_answers_blocked", severity: "warning",
+      message: `Your robots.txt stops ${robots.aiBlocked.join(", ")} from reading this site, so they can't cite it in AI answers.` });
     if (!sitemapFound) results[0].issues.push({ code: "sitemap_missing", severity: "warning",
       message: "No sitemap found at /sitemap.xml or in robots.txt. A sitemap helps Google find new articles quickly." });
   }

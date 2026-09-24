@@ -58,7 +58,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
         {state.autopilot.canStartNow && <StartNow siteId={siteId} reviewToken={state.reviewToken} />}
       </div>}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
-      planPerMonth={state.plan?.articlesPerMonth ?? null} />}
+      planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} />}
     <div className="grid gap-4 md:grid-cols-2">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
         {s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
@@ -147,7 +147,7 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
 }
 
 /** The result at a glance: what is live, how much of the plan is used, how healthy the site is. */
-function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth }: { siteId: Id<"sites">; live: number; liveThisMonth: number; planPerMonth: number | null }) {
+function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: { siteId: Id<"sites">; live: number; liveThisMonth: number; planPerMonth: number | null; planUsed: number }) {
   const check = useQuery(api.siteHealth.latest, { siteId });
   const tile = (label: string, value: string, hint?: string) => <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] px-4 py-3">
     <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#565A6E]">{label}</p>
@@ -156,7 +156,7 @@ function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth }: { siteId: I
   </div>;
   return <div className="grid grid-cols-2 gap-3 md:grid-cols-3" aria-label="Results at a glance">
     {tile("Articles live", String(live), "published and confirmed on your site")}
-    {tile("This month", planPerMonth ? `${liveThisMonth} / ${planPerMonth}` : String(liveThisMonth), "articles published")}
+    {tile("This month", String(liveThisMonth), planPerMonth ? `published here · ${planUsed} of ${planPerMonth} plan articles used (all sites)` : "articles published here")}
     {tile("Site health", check ? `${check.score}/100` : "—", check ? "latest weekly check" : "first check pending")}
   </div>;
 }

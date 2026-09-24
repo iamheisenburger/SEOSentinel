@@ -141,7 +141,14 @@ export function healthScore(results: PageHealthResult[]) {
 
 /** robots.txt: does it block all crawlers from the whole site, and which
  * sitemaps does it declare? Only the `*` and Googlebot groups matter here. */
-export function robotsTxtFindings(txt: string): { blocksAll: boolean; sitemaps: string[] } {
+/** Crawlers that fetch pages for AI answers and AI search results (not model
+ * training bots), with the product each one feeds. */
+export const AI_ANSWER_CRAWLERS: ReadonlyArray<[agent: string, product: string]> = [
+  ["oai-searchbot", "ChatGPT search"], ["chatgpt-user", "ChatGPT"], ["perplexitybot", "Perplexity"],
+  ["claude-searchbot", "Claude search"], ["bingbot", "Bing and Copilot"],
+];
+
+export function robotsTxtFindings(txt: string): { blocksAll: boolean; sitemaps: string[]; aiBlocked: string[] } {
   const sitemaps: string[] = [];
   type Group = { agents: string[]; disallowAll: boolean; allowRoot: boolean };
   const groups: Group[] = [];
@@ -162,11 +169,14 @@ export function robotsTxtFindings(txt: string): { blocksAll: boolean; sitemaps: 
     if (key === "disallow" && value === "/") current.disallowAll = true;
     if (key === "allow" && (value === "/" || value === "/$")) current.allowRoot = true;
   }
-  // Google obeys its own group when one exists, otherwise the * group.
-  const google = groups.filter(g => g.agents.includes("googlebot"));
-  const applicable = google.length ? google : groups.filter(g => g.agents.includes("*"));
-  const blocksAll = applicable.length > 0 && applicable.some(g => g.disallowAll) && !applicable.some(g => g.allowRoot);
-  return { blocksAll, sitemaps: sitemaps.slice(0, 5) };
+  // A crawler obeys its own group when one exists, otherwise the * group.
+  const blocked = (agent: string) => {
+    const own = groups.filter(g => g.agents.includes(agent));
+    const applicable = own.length ? own : groups.filter(g => g.agents.includes("*"));
+    return applicable.length > 0 && applicable.some(g => g.disallowAll) && !applicable.some(g => g.allowRoot);
+  };
+  const blocksAll = blocked("googlebot");
+  return { blocksAll, sitemaps: sitemaps.slice(0, 5), aiBlocked: AI_ANSWER_CRAWLERS.filter(([agent]) => blocked(agent)).map(([, product]) => product) };
 }
 
 /** Child sitemaps listed by a sitemap index on the same host. */

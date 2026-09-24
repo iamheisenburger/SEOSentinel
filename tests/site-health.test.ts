@@ -40,7 +40,8 @@ test("sitemap parsing keeps only first-party HTTPS pages and is bounded", () => 
 
 test("robots.txt that blocks everything is found, and declared sitemaps are read", async () => {
   const { robotsTxtFindings, sitemapIndexChildren } = await import("../convex/lib/siteHealth.ts");
-  assert.deepEqual(robotsTxtFindings("User-agent: *\nDisallow: /\nSitemap: https://acme.example/sm.xml"), { blocksAll: true, sitemaps: ["https://acme.example/sm.xml"] });
+  const blocking = robotsTxtFindings("User-agent: *\nDisallow: /\nSitemap: https://acme.example/sm.xml");
+  assert.equal(blocking.blocksAll, true); assert.deepEqual(blocking.sitemaps, ["https://acme.example/sm.xml"]);
   assert.equal(robotsTxtFindings("User-agent: *\nDisallow: /admin\n").blocksAll, false);
   assert.equal(robotsTxtFindings("User-agent: BadBot\nDisallow: /\n\nUser-agent: *\nAllow: /\n").blocksAll, false);
   assert.equal(robotsTxtFindings("User-agent: Googlebot\nDisallow: / # everything\n").blocksAll, true);
@@ -80,4 +81,15 @@ test("pages without a link to the next-step page are flagged; the next-step page
   const linked = good.replace('<a href="/services">', '<a href="/book/">Book</a><a href="/services">');
   assert.deepEqual(analyzePageHealth({ url: "https://acme.example/", status: 200, html: linked, ctaUrl: cta }).issues, []);
   assert.ok(!analyzePageHealth({ url: "https://acme.example/book", status: 200, html: good, ctaUrl: cta }).issues.some(i => i.code === "no_next_step"));
+});
+
+test("AI answer engines blocked by robots.txt are named; training-only bots are not", async () => {
+  const { robotsTxtFindings } = await import("../convex/lib/siteHealth.ts");
+  assert.deepEqual(robotsTxtFindings("User-agent: *\nAllow: /\n").aiBlocked, []);
+  assert.deepEqual(robotsTxtFindings("User-agent: GPTBot\nDisallow: /\n\nUser-agent: Google-Extended\nDisallow: /\n").aiBlocked, []);
+  assert.deepEqual(robotsTxtFindings("User-agent: PerplexityBot\nUser-agent: OAI-SearchBot\nDisallow: /\n").aiBlocked, ["ChatGPT search", "Perplexity"]);
+  const all = robotsTxtFindings("User-agent: *\nDisallow: /\n");
+  assert.equal(all.blocksAll, true); assert.equal(all.aiBlocked.length, 5);
+  assert.deepEqual(robotsTxtFindings("User-agent: *\nDisallow: /\n\nUser-agent: Googlebot\nAllow: /\n\nUser-agent: Bingbot\nAllow: /\n").aiBlocked,
+    ["ChatGPT search", "ChatGPT", "Perplexity", "Claude search"]);
 });
