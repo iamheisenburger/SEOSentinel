@@ -36,6 +36,11 @@ export const queuePlanGeneration = mutation({
     ) {
       throw new Error("Not authorized to generate a plan for this site");
     }
+    // The content engine owns growth-first sites: Autopilot researches new
+    // topics itself when it needs them; the legacy planner never runs there.
+    if (site.serviceMode === "growth_first") {
+      throw new Error("Pentra finds new topics for this site automatically when it needs them.");
+    }
     // Check if there's already a running plan job for this site
     const existing = (
       await Promise.all(

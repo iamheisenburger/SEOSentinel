@@ -301,6 +301,7 @@ export default function PlanPage() {
         title="Topics"
         subtitle={`${availableCount} ready to write · ${usedCount} already written`}
         actions={
+          growthFirst ? <p className="max-w-xs text-right text-[12px] text-[#8B8FA3]">Pentra researches new topics automatically when it needs them.</p> :
           <div className="flex items-center gap-2">
             {availableCount > 0 && (
               <Button
