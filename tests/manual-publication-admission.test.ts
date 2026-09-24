@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
-import { manualPublicationBlocker } from "../convex/lib/manualPublication.ts";
+import { manualPublicationBlocker, ownerApprovalDestination } from "../convex/lib/manualPublication.ts";
 
 // Execute the real action handler, with only its external boundaries replaced.
 const source = readFileSync("convex/actions/pipeline.ts", "utf8");
@@ -22,6 +22,7 @@ function fixture(recovery: object, site = { autopilotEnabled: true, autopilotRol
     v: { id: () => null },
     requireOwnedSite: async () => { calls.push("authorize"); return site; },
     manualPublicationBlocker,
+    ownerApprovalDestination,
     ConvexError: Error,
     PUBLICATION_AUDIT_VERSION: 1,
     internal: {
@@ -78,4 +79,13 @@ test("a concurrent completed audit proceeds to the protected publisher", async (
   const f = fixture({ queued: false, reason: "already_audited" });
   assert.equal((await f.run() as { published: boolean }).published, true);
   assert.deepEqual(f.calls, ["authorize", "publish"]);
+});
+
+test("WordPress owner approval exists only on the growth-first service", async () => {
+  assert.equal(ownerApprovalDestination({ publishMethod: "wordpress", serviceMode: "growth_first" }), true);
+  assert.equal(ownerApprovalDestination({ publishMethod: "wordpress", serviceMode: "legacy_articles" }), false);
+  assert.equal(ownerApprovalDestination({ publishMethod: "github" }), true);
+  assert.equal(ownerApprovalDestination({ publishMethod: "webhook", serviceMode: "growth_first" }), false);
+  assert.ok(manualPublicationBlocker({ publishMethod: "wordpress", autopilotEnabled: false, autopilotRolloutMode: "warm" }));
+  assert.equal(manualPublicationBlocker({ publishMethod: "wordpress", serviceMode: "growth_first", autopilotEnabled: false }), null);
 });

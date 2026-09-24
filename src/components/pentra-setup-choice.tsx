@@ -29,7 +29,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const select = useMutation(api.contentWork.selectServiceMode);
   const [choice, setChoice] = useState<"autopilot" | "review">("autopilot");
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const reviewAvailable = state.destination.kind === "github";
+  const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress";
   const ready = state.destination.verified && state.entitlement;
   const start = async () => {
     setBusy(true); setError("");
@@ -66,7 +66,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       <label className={`rounded-lg border p-4 ${reviewAvailable ? "cursor-pointer" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
         <span className="font-medium">Review first</span>
-        <p className="mt-1 text-sm text-[#8B8FA3]">{reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Available for GitHub sites. WordPress sites run on Autopilot."}</p>
+        <p className="mt-1 text-sm text-[#8B8FA3]">{reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
       </label>
     </fieldset>
     {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
@@ -98,4 +98,25 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
     }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>}
     {error && <p role="alert" className="w-full text-sm text-red-400">{error}</p>}
   </div>;
+}
+
+/** Existing contracts (set up before Autopilot) can move onto Autopilot. */
+export function AdoptAutopilot({ siteId, reviewToken, intervalMs, articlesPerMonth }: { siteId: Id<"sites">; reviewToken: string; intervalMs: number; articlesPerMonth: number }) {
+  const adopt = useMutation(api.contentWork.adoptAutopilot);
+  const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return <section aria-labelledby="adopt-autopilot-heading" className="space-y-3 rounded-xl border border-[#0EA5E9]/40 p-5">
+    <h2 id="adopt-autopilot-heading" className="font-semibold">Move this site to Autopilot</h2>
+    <p className="text-sm text-[#8B8FA3]">Pentra researches, writes and publishes {rhythm(intervalMs)} ({articlesPerMonth} a month on your plan), starting
+      24 hours from now. Drafts that don&apos;t pass the fact check are held back and never published. Your past history, missed dates and costs stay on record.</p>
+    <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>
+    <label className="block text-sm"><input type="checkbox" className="mr-2" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+      Publish to my website automatically on this schedule.</label>
+    <Button disabled={!confirmed || busy} loading={busy} onClick={async () => {
+      setBusy(true); setError("");
+      try { await adopt({ siteId, reviewToken, confirm: true }); }
+      catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't switch to Autopilot. Refresh and try again."); }
+      finally { setBusy(false); }
+    }}>Switch to Autopilot</Button>
+    {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
+  </section>;
 }

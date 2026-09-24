@@ -172,7 +172,7 @@ const faqs = [
   },
   {
     q: "Is Autopilot safe for my brand?",
-    a: "Autopilot only publishes articles that pass the fact check. A draft that doesn't pass is held back, never published, and the schedule moves on. You can pause Pentra at any time, and on GitHub-based sites you can switch to Review first so nothing publishes without your approval.",
+    a: "Autopilot only publishes articles that pass the fact check. A draft that doesn't pass is held back, never published, and the schedule moves on. You can pause Pentra at any time, or choose Review first so nothing publishes without your approval.",
   },
   {
     q: "Will Pentra make things up about my business?",

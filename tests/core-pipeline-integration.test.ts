@@ -1003,7 +1003,7 @@ test("SLC61 new customers choose Autopilot with a plan-derived rhythm and can sw
   f.assertOffline();
 });
 
-test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly allowance and WordPress cannot switch to review first", async t => {
+test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly allowance and existing contracts adopt it by choice", async t => {
   await t.test("reenable_keeps_prepared_slot", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
@@ -1023,10 +1023,33 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(f.get(site.id)!.contentSchedule.intervalMs, interval);
     f.get(site.id)!.publishMethod = "wordpress";
     r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.autopilot.reviewAvailable, true, "WordPress customers can choose Review first too");
+    f.get(site.id)!.publishMethod = "manual";
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
     assert.equal(r.autopilot.reviewAvailable, false);
-    await assert.rejects(f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: false, reviewToken: r.reviewToken }), /GitHub sites/);
-    assert.equal(f.get(site.id)!.contentSchedule.ownerReviewedOnly, undefined);
     f.setIdentity(null); f.assertOffline();
+  });
+  await t.test("existing_contract_adopts_autopilot_by_owner_choice", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f), before = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    const missed = f.add("jobs", { siteId: site.id, type: "article", status: "failed", createdAt: f.now(), updatedAt: f.now(), payload: {},
+      contentWork: { intent: "create", stage: "failed", failure: "bounded_content_quality_exhausted", deadlineAt: before, windowStartAt: before - 300_000,
+        revisions: 2, replacements: 1, discardedArticleIds: [], providerCalls: [] } });
+    const recorded = JSON.stringify(f.get(missed));
+    f.setIdentity(f.get(site.id)!.userId);
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.autopilot.adoptable, true);
+    await f.invoke("contentWork:adoptAutopilot", { siteId: site.id, reviewToken: r.reviewToken, confirm: true });
+    const s = f.get(site.id)!;
+    assert.ok(s.contentSchedule.autopilotSelectedAt); assert.equal(s.contentSchedule.intervalMs, 12 * 3_600_000);
+    assert.ok(s.contentSchedule.nextDeadlineAt >= f.now() + 23 * 3_600_000, "the forward schedule starts fresh");
+    assert.equal(JSON.stringify(f.get(missed)), recorded, "the missed slot stays exactly as recorded");
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.autopilot.adoptable, false);
+    await assert.rejects(f.invoke("contentWork:adoptAutopilot", { siteId: site.id, reviewToken: r.reviewToken, confirm: true }), /can't be moved/);
+    f.setIdentity(null);
+    assert.notEqual((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_failed_slot");
+    f.assertOffline();
   });
   await t.test("monthly_allowance", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });

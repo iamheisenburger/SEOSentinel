@@ -528,3 +528,32 @@ test('real WordPress/database connected content jobs: fresh creation, selected i
     f.assertOffline();
   });
 });
+
+test('real WordPress Review first: the owner requests a draft, approves it, and Pentra publishes and verifies it', async () => {
+  const local = command({ operation: 'setup' });
+  const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+  const domain = `review-${randomUUID().slice(0, 8)}.example`;
+  const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+    transport: async (url, init) => {
+      assert.equal(url.hostname, domain);
+      return fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+    } } });
+  const site = await createEmptyContentSite(f), owner = f.get(site.id)!.userId;
+  f.setIdentity(owner);
+  let r = await f.invoke('contentWork:readiness', { siteId: site.id });
+  assert.equal(r.destination.kind, 'wordpress'); assert.equal(r.destination.verified, true);
+  await f.invoke('contentWork:selectServiceMode', { siteId: site.id, mode: 'growth_first', ownerReviewedOnly: true,
+    confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  r = await f.invoke('contentWork:readiness', { siteId: site.id });
+  assert.equal(r.autopilot.reviewAvailable, true);
+  const requested = await f.invoke('contentWork:requestDraft', { siteId: site.id, reviewToken: r.reviewToken,
+    requestKey: 'wordpress-owner-review-first', maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  await pumpUntil(f, () => ['ready', 'failed'].includes(f.get(requested.jobId)!.contentWork.stage));
+  const job = f.get(requested.jobId)!;
+  assert.equal(job.contentWork.stage, 'ready');
+  assert.notEqual(f.get(job.articleId)!.status, 'published', 'nothing publishes before the owner approves');
+  await f.invoke('actions/pipeline:publishApproved', { siteId: site.id, articleId: job.articleId });
+  await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === 'verified');
+  assert.equal(f.get(job.articleId)!.status, 'published');
+  f.setIdentity(null);
+});

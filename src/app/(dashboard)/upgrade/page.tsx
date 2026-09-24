@@ -17,6 +17,7 @@ import { CheckCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 
 type TierKey = "free" | "starter" | "pro" | "scale";
 
@@ -191,6 +192,8 @@ export default function UpgradePage() {
   const [period, setPeriod] = useState<BillingSubscriptionPlanPeriod>("month");
   const plans = usePlans({ for: "user", pageSize: 50 });
   const subscription = useSubscription({ for: "user" });
+  // Accounts Pentra put on a custom plan directly are not Clerk subscriptions.
+  const entitlement = usePlanLimits();
 
   const header = (
     <PageHeader
@@ -234,9 +237,11 @@ export default function UpgradePage() {
   }
 
   const subscriptionLoading = subscription.isLoading;
-  const current: CurrentPlan = subscriptionLoading || subscription.error
+  const clerkCurrent: CurrentPlan = subscriptionLoading || subscription.error
     ? { kind: "unknown" }
     : resolveCurrentPlan(subscription.data?.subscriptionItems);
+  const managedByPentra = entitlement.isPlanLoaded && !TIERS.some(t => t.key === entitlement.tier) && clerkCurrent.kind !== "paid";
+  const current: CurrentPlan = managedByPentra ? { kind: "unknown" } : clerkCurrent;
   const onPaidPlan = current.kind === "paid" || current.kind === "custom";
   const upcomingItem = subscription.data?.subscriptionItems.find(
     (item) => item.status === "upcoming",
@@ -257,7 +262,9 @@ export default function UpgradePage() {
       {/* Current plan */}
       <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 text-[13px] text-[#8B8FA3]">
-          {current.kind === "unknown" ? (
+          {managedByPentra ? (
+            <p>You&apos;re on a <span className="font-semibold text-[#EDEEF1]">custom plan</span> set up by Pentra. Email us to change it.</p>
+          ) : current.kind === "unknown" ? (
             subscriptionLoading ? (
               <Skeleton className="h-4 w-64" />
             ) : (

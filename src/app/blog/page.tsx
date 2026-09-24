@@ -11,7 +11,7 @@ import { convexHttp } from "@/lib/convexHttpClient";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Blog",
+  title: "SEO and content guides",
   description: "Practical guides on SEO, content and winning customers from Google and AI answers, researched and fact-checked with Pentra.",
 };
 

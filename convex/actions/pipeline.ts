@@ -6,7 +6,7 @@ import { internal } from "../_generated/api";
 import { action, internalAction } from "../_generated/server";
 import type { ActionCtx } from "../_generated/server";
 import { v, ConvexError } from "convex/values";
-import { manualPublicationBlocker } from "../lib/manualPublication";
+import { manualPublicationBlocker, ownerApprovalDestination } from "../lib/manualPublication";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { ResponseInput } from "openai/resources/responses/responses";
@@ -7869,7 +7869,7 @@ export const publishApproved = action({
     if (!article || article.siteId !== siteId) {
       throw new Error("Article not found for site");
     }
-    if (site.publishMethod === "github" && (!site.autopilotEnabled || site.autopilotRolloutMode !== "live")) {
+    if (ownerApprovalDestination(site) && (!site.autopilotEnabled || site.autopilotRolloutMode !== "live")) {
       await ctx.runMutation(internal.articles.authorizeOwnerPublication, { articleId });
     }
     const readinessIssue = manualPublicationBlocker(site);

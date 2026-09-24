@@ -200,11 +200,14 @@ Enforced via Clerk feature keys synced to Convex `planFeatures` on each site.
 
 | Plan | Price | Sites | Articles/mo |
 |------|-------|-------|-------------|
-| Free | $0 | 1 | 3 |
-| Starter | $49 | 1 | 10 |
-| Growth | $99 | 3 | 25 |
-| Scale | $199 | 10 | 60 |
-| Enterprise | $499 | Unlimited | 150 |
+| Free | $0 | 1 | 1 |
+| Starter | $49 ($39/mo annual) | 1 | 10 |
+| Pro | $99 ($79/mo annual) | 3 | 25 |
+| Scale | $199 ($159/mo annual) | 10 | 60 |
+| Enterprise (hidden) | $499 | Unlimited | 150 |
+
+Current product state (Autopilot, site health, onboarding prefill, owner-only items):
+see the CURRENT STATE section at the top of `docs/PENTRA_HANDOFF_CURRENT.md`.
 
 Usage tracked in `usage_log` (immutable — survives deletions). `claimGenerationSlot` mutation prevents race conditions.
 

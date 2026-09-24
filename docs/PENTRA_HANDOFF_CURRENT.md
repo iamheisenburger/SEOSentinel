@@ -1,5 +1,52 @@
 # Pentra — fresh-task handoff
 
+## CURRENT STATE — Pentra Autopilot (September 24, 2026, Cowork + Code sessions)
+
+What we sell: Autopilot SEO. A customer enters their website URL, Pentra prefills the business
+facts from the homepage (owner confirms), the customer connects WordPress (Pentra plugin ZIP at
+/pentra-wordpress-plugin.zip) or a GitHub Markdown/MDX site plus Google Search Console, and picks
+**Autopilot** (recommended; plan-paced: interval = max(12h, 30d / plan articles)) or **Review first**
+(GitHub only). Pentra researches, writes, fact-checks and publishes; verifies the live page;
+improves pages ranking positions 4–20 first ("money pages"); runs a weekly site health check
+(status/noindex/robots.txt/sitemap/titles/descriptions/H1/thin/canonical/internal links + mobile
+PageSpeed on the homepage); shows Search Console clicks. Shopify/Webflow: "coming soon".
+
+Plans (Clerk Billing, fixed prices, Stripe-backed): Free 1 article/1 site; Starter $49 ($39 annual)
+10 articles/1 site; Pro $99 ($79) 25/3 sites; Scale $199 ($159) 60/10 sites. Enterprise hidden.
+Our own /upgrade page (Clerk experimental CheckoutButton/usePlans, PricingTable fallback) shows these.
+Clerk dashboard still has Free = "3 Articles/month" and Enterprise public (owner-only edit).
+
+Autopilot engine rules (convex/contentWork.ts), only for sites with contentSchedule.autopilotSelectedAt:
+- style-only reviewer notes (editorial ≥80, fact-check passed, claim audit not failed) are
+  auto-accepted on the exact artifact (waiver userId "pentra-autopilot");
+- a draft the reviewer won't pass is held back (never published) and the schedule continues
+  (mode content_slot_parked); owner cannot re-deliver it;
+- monthly plan allowance enforced across the account (mode quota_reached);
+- Autopilot off→on resumes at the earliest unfinished automatic slot.
+Existing contracts (pentra.dev, leadpilot.chat — validation-scoped) keep their failed slots and
+deadlines exactly; they were NOT moved to Autopilot (owner decision pending).
+
+Owner-only items:
+1. Convex env `PENTRA_PROVIDER_LIMITS` (not set → defaults: fleet $35/mo & $9.85/day; starter $5/mo):
+   `{"fleetMonthlyMicroUsd":200000000,"fleetDailyMicroUsd":40000000,"accountDailyMicroUsd":20000000,"accountMonthlyMicroUsd":{"free":2500000,"starter":20000000,"pro":50000000,"scale":120000000}}`
+   Claude's classifier refuses to set production env vars — the owner must click Save.
+2. Clerk plan copy (Free → 1 article; Enterprise not public). 3. A real paid test checkout.
+Optional: `PAGESPEED_API_KEY` Convex env for reliable PageSpeed quota.
+
+Releases today (main): c2df08d, 26b72fc, 05b8297, 6d32437, cbd748c (Pentra article), 844cd99
+(Autopilot), 272d5aa (URL prefill, money pages, robots/sitemap), e038517 (CTA link, throttle,
+coming-up topics, single H1), then P9 (server-rendered /blog, meta fixes, speed pass, review fixes).
+Published + verified today: pentra.dev/blog/autonomous-site-crawling-and-niche-detection-guide-edited,
+leadpilot.chat/blog/sales-automation-chat-widget-guide-edited-edited-edited.
+
+Working model: Cowork (cloud) edits code and runs tests; the local Code session runs gates, commits,
+deploys Convex, pushes (never force) via the queue ../COWORK-NEXT.md → ../COWORK-STATUS.md.
+
+Next (not done): Shopify/Webflow publishers, customer email notifications (draft held back, weekly
+report), AI-answer citation monitoring, conversion tracking, X-Robots-Tag header check.
+
+## HISTORY (earlier today)
+
 ## PUBLIC LAUNCH (phase 2) — September 24, Cowork session (owner: "take charge, complete today")
 
 Product (what we sell): owner-reviewed SEO articles for GitHub-based sites.

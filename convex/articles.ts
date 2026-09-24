@@ -7,7 +7,7 @@ import {
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
-import { ownerPublicationAuthorized } from "./lib/manualPublication";
+import { ownerApprovalDestination, ownerPublicationAuthorized } from "./lib/manualPublication";
 import { internal } from "./_generated/api";
 import { authorizedWorkPage } from "./selectedPages";
 import {
@@ -3264,7 +3264,7 @@ export const authorizeOwnerPublication = internalMutation({
     if (!article) throw new Error("Article not found");
     await requireArticleOwner(ctx, article);
     const site = (await ctx.db.get(article.siteId))!;
-    if (!(await siteExecutionAuthorized(ctx, site)) || site.publishMethod !== "github" ||
+    if (!(await siteExecutionAuthorized(ctx, site)) || !ownerApprovalDestination(site) ||
       article.contentWorkSourceJobId || !articleMatchesCurrentDomain(site, article)) throw new Error("Owner publication is not authorized for this destination");
     if (ownerPublicationAuthorized(site, article)) return;
     assertNotPublishing(article);

@@ -19,7 +19,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const reconfirm = useMutation(api.contentWork.reconfirm);
   const [chosenMode, setMode] = useState<"legacy_articles" | "growth_first" | null>(null);
   const mode = chosenMode ?? (state?.setupPending ? "growth_first" : state?.serviceMode ?? "legacy_articles");
-  const ownerSetup = Boolean(state?.setupPending && state.destination.kind === "github");
+  const ownerSetup = Boolean(state?.setupPending && (state.destination.kind === "github" || state.destination.kind === "wordpress"));
   const [confirmed, setConfirmed] = useState(false), [deadline, setDeadline] = useState("");
   const [confirmedReview, setConfirmedReview] = useState("");
   const [hours, setHours] = useState("24"), [saving, setSaving] = useState(false), [error, setError] = useState("");
@@ -106,7 +106,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)} />}
     <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
     <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
-    <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
+    <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Review first: you approve every article" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
     {state.schedule?.ownerReviewedOnly && <p>Request a draft in <Link className="underline" href="/articles">Articles</Link>, review it, then explicitly publish. No automatic schedule or publication is enabled.</p>}
     {state.serviceMode === "growth_first" && !state.schedule?.ownerReviewedOnly && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
       <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
@@ -136,7 +136,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     <details open={state.serviceMode !== "growth_first"} className="space-y-3"><summary className="cursor-pointer font-medium">Service mode and publication consent</summary>
     <label className="block">Choose service mode
       <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="block bg-[#0F1117] border rounded p-2">
-        <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">{ownerSetup || state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : "Explicitly switch to growth-first"}</option>
+        <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">{ownerSetup || state.schedule?.ownerReviewedOnly ? "Review first: you approve every article" : "Explicitly switch to growth-first"}</option>
       </select>
     </label>
     {mode === "legacy_articles" && state.serviceMode === "growth_first" && <p className="text-sm">Switching back pauses new work and retires safe, unstarted work. Reviewed drafts, published content, original deadlines and spending history stay recorded. Active workers and uncertain deliveries must reconcile first. If pending, keep the service paused and check this switch again; resuming keeps growth-first selected.</p>}

@@ -447,8 +447,8 @@ export const selectServiceMode = mutation({
       firstDeadlineAt: Date.now() + 24 * 3_600_000 } : rawArgs;
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false, status: "completed" as const };
     if (args.ownerReviewedOnly && (args.mode !== "growth_first" || args.authorizeAutomaticPublication ||
-      !site.contentSetupRequestedAt || site.contentSchedule || site.publishMethod !== "github")) {
-      throw new Error("Owner-reviewed setup is for a new GitHub connection; existing contracts remain unchanged");
+      !site.contentSetupRequestedAt || site.contentSchedule || !["github", "wordpress"].includes(site.publishMethod ?? ""))) {
+      throw new Error("Owner-reviewed setup is for a new GitHub or WordPress connection; existing contracts remain unchanged");
     }
     const rollback = args.mode === "legacy_articles";
     if (rollback && args.reviewToken !== undefined && args.reviewToken !== contentConsentToken(site)) throw new Error("Review the current saved setup before switching service");
@@ -539,7 +539,7 @@ export const selectServiceMode = mutation({
       throw new Error("Connect a supported GitHub or conditional WordPress destination first");
     }
     selectionConnection(site);
-    if (args.ownerReviewedOnly && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact GitHub destination first");
+    if (args.ownerReviewedOnly && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact website connection first");
     if (!args.ownerReviewedOnly && (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
       !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS)) throw new Error("Choose a future fixed delivery window and interval");
     if (!(await contentEntitlementAuthorized(ctx, site))) throw new Error("Current plan entitlement is required");
@@ -562,6 +562,37 @@ export const selectServiceMode = mutation({
 
 /** Switch a new-customer site between "Review first" and Autopilot. Existing
  * contracts that were not created through the new setup are never changed. */
+/** Move an existing growth-first contract (set up before Autopilot existed)
+ * onto Autopilot, at the owner's explicit request. Past slots, failures,
+ * costs and receipts stay exactly as recorded; only the forward schedule is
+ * replaced by the plan-paced one, starting 24 hours from now. */
+export const adoptAutopilot = mutation({ args: { siteId: v.id("sites"), reviewToken: v.string(), confirm: v.literal(true) },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
+    if (site.serviceMode !== "growth_first" || !s || s.autopilotSelectedAt || s.ownerReviewedOnly) {
+      throw new ConvexError("This site can't be moved to Autopilot here.");
+    }
+    if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
+    if (s.profileHash !== confirmedContentProfileHash(site) || s.connectionHash !== contentConnectionHash(site)) {
+      throw new ConvexError("Your business details or website changed. Review and confirm them in Service settings first.");
+    }
+    if (!contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site })) throw new ConvexError("Connect and verify your website first.");
+    if (!(await contentEntitlementAuthorized(ctx, site))) throw new ConvexError("Your plan needs to be active in Billing first.");
+    const jobs = await jobsForSite(ctx, site._id);
+    if (jobs.some(j => j.contentWork && ["pending", "running"].includes(j.status))) {
+      throw new ConvexError("Pentra is still working on an article for this site. Try again when it finishes.");
+    }
+    const plan = await accountPlan(ctx, site);
+    const { validationAuthorizationId: _grant, ...forward } = s; void _grant;
+    await ctx.db.patch(site._id, { approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
+      contentSetupRequestedAt: site.contentSetupRequestedAt ?? Date.now(),
+      contentSchedule: { ...forward, autopilotSelectedAt: Date.now(), autopublishConsentAt: Date.now(), active: false, paused: false,
+        intervalMs: plan.autopilotIntervalMs, nextDeadlineAt: Date.now() + 24 * 3_600_000,
+        profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
+    await wake(ctx, site._id);
+    return { changed: true };
+  } });
+
 export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v.boolean(), reviewToken: v.string() },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
@@ -589,7 +620,6 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
       return { changed: true };
     }
     if (s.ownerReviewedOnly) return { changed: false };
-    if (site.publishMethod !== "github") throw new ConvexError("Review first is available for GitHub sites. You can pause Pentra instead.");
     const { autopublishConsentAt: _consent, ...keep } = s; void _consent;
     await ctx.db.patch(site._id, { approvalRequired: true, autopilotEnabled: false,
       contentSchedule: { ...keep, ownerReviewedOnly: true, active: false, paused: true }, updatedAt: Date.now() });
@@ -638,7 +668,8 @@ export const readiness = query({
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       plan: await accountPlan(ctx, site),
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
-        reviewAvailable: site.publishMethod === "github" },
+        reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? ""),
+        adoptable: Boolean(site.serviceMode === "growth_first" && s && !s.autopilotSelectedAt && !s.ownerReviewedOnly) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
         allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
@@ -805,9 +836,9 @@ export const requestDraft = mutation({
       metadata: v.optional(v.object({ title: v.string(), metaTitle: v.string(), metaDescription: v.string() })) })) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
-    if (site.serviceMode !== "growth_first" || !schedule || site.publishMethod !== "github" ||
+    if (site.serviceMode !== "growth_first" || !schedule || !["github", "wordpress"].includes(site.publishMethod ?? "") ||
       !contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site }) ||
-      !await contentEntitlementAuthorized(ctx, site)) throw new ConvexError("Confirm your business, GitHub destination and billing in Settings first");
+      !await contentEntitlementAuthorized(ctx, site)) throw new ConvexError("Confirm your business, website connection and billing in Settings first");
     if (args.reviewToken !== contentConsentToken(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
       schedule.connectionHash !== contentConnectionHash(site)) throw new ConvexError("Business or destination changed; review Settings first");
     if (!/^[a-zA-Z0-9-]{16,80}$/.test(args.requestKey)) throw new ConvexError("Invalid draft request reference");

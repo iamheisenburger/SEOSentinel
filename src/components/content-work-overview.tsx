@@ -6,7 +6,7 @@ import Link from "next/link";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { contentServiceStatus } from "../lib/content-service-status";
-import { AutopilotSwitch } from "./pentra-setup-choice";
+import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -29,6 +29,8 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     {state.autopilot?.selectable && state.plan && (s?.ownerReviewedOnly || s?.autopilotSelected) &&
       <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot.on)} intervalMs={state.plan.autopilotIntervalMs}
         reviewAvailable={state.autopilot.reviewAvailable ?? true} paused={Boolean(s?.paused)} />}
+    {state.autopilot?.adoptable && state.plan && state.bindingCurrent && state.destination.verified && state.entitlement &&
+      <AdoptAutopilot siteId={siteId} reviewToken={state.reviewToken} intervalMs={state.plan.autopilotIntervalMs} articlesPerMonth={state.plan.articlesPerMonth} />}
     {state.autopilot?.on && s && !s.paused && s.nextDeadlineAt > state.funding.checkedAt &&
       <p className="text-sm">Next article is scheduled for {shownTime(s.nextDeadlineAt, zone)}.</p>}
     <div className="grid gap-4 md:grid-cols-2">
