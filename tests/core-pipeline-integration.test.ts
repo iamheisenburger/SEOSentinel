@@ -934,6 +934,46 @@ test("SLC58 public customer pricing runs beside a scoped owner validation grant 
   f.assertOffline();
 });
 
+test("SLC59 owners can accept style-only reviewer notes on the exact draft; factual failures still block", async t => {
+  for (const scenario of ["style_only", "factual"] as const) await t.test(scenario, async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+      confirmBusinessProfile: true, reviewToken: r.reviewToken });
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const requested = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken,
+      requestKey: `owner-accept-${scenario.replace("_", "-")}`, maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+    await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
+    const job = f.get(requested.jobId)!, article = f.get(job.articleId)!;
+    assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+    // Reproduce the production outcome: a clean fact check, editorial 84, no claim ledger.
+    Object.assign(article, { status: "review", publicationGateStatus: "blocked", auditedContentHash: undefined,
+      editorialQualityScore: 84, claimEvidenceStatus: undefined, factCheckScore: scenario === "factual" ? 70 : 92 });
+    Object.assign(job, { status: "failed" }); job.contentWork = { ...job.contentWork, stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined };
+    const hash = publicationArtifactHash(f.get(job.articleId)! as never);
+    await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: "stale" }), /changed/);
+    if (scenario === "factual") {
+      await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash }), /Fact-check score is 70/);
+      assert.equal(f.get(job.articleId)!.status, "review");
+      await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId }));
+      assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
+      return;
+    }
+    const accepted = await f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash });
+    assert.equal(accepted.accepted, 2);
+    assert.equal(f.get(job.articleId)!.status, "ready");
+    assert.deepEqual(f.get(job.articleId)!.ownerQualityWaiver.issues.sort(), [
+      "Editorial quality score is 84; strict minimum is 85.", "Strict publication requires a completed claim-to-evidence audit."]);
+    assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0, "acceptance alone never publishes");
+    await f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId });
+    await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === "verified");
+    assert.equal(f.get(requested.jobId)!.contentWork.stage, "verified");
+    f.assertOffline();
+  });
+});
+
 test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {
   const f = await scopedPricingFixture();
   for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;

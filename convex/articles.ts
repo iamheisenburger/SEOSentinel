@@ -6,7 +6,7 @@ import {
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { ownerPublicationAuthorized } from "./lib/manualPublication";
 import { internal } from "./_generated/api";
 import { authorizedWorkPage } from "./selectedPages";
@@ -49,6 +49,7 @@ import {
 import {
   clampMetaDescription,
   evaluatePublicationQuality,
+  ownerWaivableIssue,
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
 import {
@@ -3182,6 +3183,52 @@ export const updateFeaturedImage = internalMutation({
       updatedAt: now(),
     });
     await syncSummary(ctx, articleId);
+  },
+});
+
+/** The owner explicitly accepts the reviewer's remaining judgement-based notes
+ * on the exact draft they read, so it can be published with their approval.
+ * Factual, safety, metadata, rendering and evidence checks still block; the
+ * normal publication path re-checks everything against this exact artifact. */
+export const acceptOwnerReviewNotes = mutation({
+  args: { articleId: v.id("articles"), artifactHash: v.string() },
+  handler: async (ctx, { articleId, artifactHash }) => {
+    const article = await ctx.db.get(articleId);
+    if (!article) throw new ConvexError("Draft not found");
+    await requireArticleOwner(ctx, article);
+    const site = (await ctx.db.get(article.siteId))!;
+    assertNotPublishing(article);
+    if (article.status === "published" || article.publicationAttemptedAt || article.publicationReceipt ||
+      article.publicationOutcomeUnverifiedAt || site.publishMethod !== "github") {
+      throw new ConvexError("This draft cannot be accepted for publication here.");
+    }
+    if (publicationArtifactHash(article) !== artifactHash) throw new ConvexError("This draft changed. Refresh before accepting it.");
+    const jobs = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", article.siteId).eq("articleId", articleId)).take(21);
+    const job = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
+      ["failed", "review_failed"].includes(j.contentWork.stage) && j.contentWork.ownerRequest.userId === site.userId);
+    if (!job?.contentWork || jobs.length > 20) throw new ConvexError("Only a reviewed draft you requested can be accepted.");
+    const deliveryConfig = publicationDeliveryConfig(site);
+    const candidate = { ...article, publicationConfigHash: publicationDeliveryConfigHash(deliveryConfig), ownerQualityWaiver: undefined };
+    const review = evaluatePublicationQuality(candidate, "strict");
+    const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate));
+    const blocking = review.issues.filter(issue => !waivable.includes(issue));
+    if (blocking.length > 0) throw new ConvexError(`Fix these before publishing: ${blocking.join(" ")}`);
+    if (waivable.length === 0) throw new ConvexError("There are no reviewer notes to accept on this draft.");
+    const checkedAt = now(), hash = publicationArtifactHash(candidate);
+    const waiver = { artifactHash: hash, issues: waivable, acceptedAt: checkedAt, userId: site.userId! };
+    const sealed = evaluatePublicationQuality({ ...candidate, ownerQualityWaiver: waiver }, "strict");
+    if (!sealed.passed) throw new ConvexError("This draft still needs changes before it can publish.");
+    await ctx.db.patch(articleId, {
+      status: "ready", ownerQualityWaiver: waiver,
+      publicationGateStatus: "passed", publicationGateIssues: [], publicationGateWarnings: sealed.warnings,
+      publicationCheckedAt: checkedAt, publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+      publicationConfigHash: candidate.publicationConfigHash, publicationConfigSnapshot: deliveryConfig,
+      auditedContentHash: hash, auditedAt: checkedAt, updatedAt: checkedAt,
+    });
+    await ctx.db.patch(job._id, { status: "done", contentWork: { ...job.contentWork, stage: "ready",
+      failure: undefined, approvedArtifactHash: hash }, updatedAt: checkedAt });
+    await syncSummary(ctx, articleId);
+    return { accepted: waivable.length, artifactHash: hash };
   },
 });
 

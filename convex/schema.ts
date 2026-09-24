@@ -887,6 +887,8 @@ export default defineSchema({
     topicId: v.optional(v.id("topic_clusters")),
     articleType: v.optional(v.string()), // standard | listicle | how-to | checklist | comparison | roundup | ultimate-guide
     status: v.string(), // draft | review | ready | published
+    ownerQualityWaiver: v.optional(v.object({ artifactHash: v.string(), issues: v.array(v.string()),
+      acceptedAt: v.number(), userId: v.string() })),
     title: v.string(),
     slug: v.string(),
     markdown: v.string(),

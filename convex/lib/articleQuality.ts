@@ -1,5 +1,5 @@
 import { classifyEvidenceSource } from "./sourceQuality.ts";
-import { sha256Hex } from "./publicationArtifact.ts";
+import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
@@ -75,6 +75,20 @@ export function preservedResearchEvidenceSnapshot(
   ].join("\n\n");
 }
 
+/** Reviewer notes an owner may explicitly accept on an owner-requested draft.
+ * Only judgement-based editorial signals qualify, never factual accuracy,
+ * safety, metadata, rendering or evidence-for-numbers checks. A missing
+ * claim ledger is acceptable only when the independent fact check passed. */
+export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number }): boolean {
+  const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
+  if (editorial) return Number(editorial[1]) >= 70;
+  if (issue === PENDING_INTERNAL_LINK_ISSUE) return true;
+  if (issue === "Strict publication requires a completed claim-to-evidence audit.") return (article.factCheckScore ?? 0) >= 85;
+  return false;
+}
+
+export type OwnerQualityWaiver = { artifactHash: string; issues: string[]; acceptedAt: number; userId: string };
+
 export type PublicationArticle = {
   title: string;
   markdown: string;
@@ -95,6 +109,7 @@ export type PublicationArticle = {
   claimEvidenceStatus?: string;
   claimEvidence?: ClaimEvidenceEntry[];
   sources?: PublicationSource[];
+  ownerQualityWaiver?: OwnerQualityWaiver;
 };
 
 export type PublicationQualityResult = {
@@ -1689,6 +1704,22 @@ export function evaluatePublicationQuality(
     }
     if (validSources.length > 0 && sourceHosts.size < 2) {
       warnings.push("All external evidence comes from one source domain.");
+    }
+  }
+
+  // An owner's explicit acceptance applies only to the exact artifact they
+  // reviewed and only to judgement-based editorial notes.
+  const waiver = article.ownerQualityWaiver;
+  if (mode === "strict" && waiver && issues.length > 0) {
+    let exact = false;
+    try { exact = publicationArtifactHash(article as never) === waiver.artifactHash; } catch { exact = false; }
+    if (exact) {
+      for (let index = issues.length - 1; index >= 0; index--) {
+        if (waiver.issues.includes(issues[index]) && ownerWaivableIssue(issues[index], article)) {
+          warnings.push(`Owner accepted reviewer note: ${issues[index]}`);
+          issues.splice(index, 1);
+        }
+      }
     }
   }
 

@@ -5,6 +5,7 @@ import { ConvexError } from "convex/values";
 import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
+import { ownerWaivableIssue } from "../../../../../convex/lib/articleQuality";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -335,6 +336,7 @@ export default function ArticleDetailPage() {
   );
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
   const requestDraft = useMutation(api.contentWork.requestDraft);
+  const acceptOwnerReviewNotes = useMutation(api.articles.acceptOwnerReviewNotes);
   const contentReadiness = useQuery(api.contentWork.readiness,
     article?.siteId && site?.serviceMode === "growth_first" ? { siteId: article.siteId } : "skip");
   const approveArticle = useMutation(api.articles.approve);
@@ -1111,14 +1113,33 @@ export default function ArticleDetailPage() {
         <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5 space-y-3">
           <h2 className="text-sm font-semibold text-[#EDEEF1]">Edit this draft</h2>
           <p className="text-sm text-[#8B8FA3]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
-          {contentReadiness.ownerDraft.latest.stage === "failed" && (article.publicationGateIssues?.length ?? 0) > 0 && (
-            <div role="note" aria-label="Reviewer notes" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3">
-              <p className="text-sm font-medium text-[#F59E0B]">Fix these before requesting review</p>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">
-                {article.publicationGateIssues!.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}
-              </ul>
-            </div>
-          )}
+          {contentReadiness.ownerDraft.latest.stage === "failed" && (article.publicationGateIssues?.length ?? 0) > 0 && (() => {
+            const issues = article.publicationGateIssues!;
+            const mustFix = issues.filter(issue => !ownerWaivableIssue(issue, article));
+            const styleNotes = issues.filter(issue => ownerWaivableIssue(issue, article));
+            return <div role="note" aria-label="Reviewer notes" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2">
+              {mustFix.length > 0 && <>
+                <p className="text-sm font-medium text-[#F59E0B]">Fix these before requesting review</p>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{mustFix.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+              </>}
+              {styleNotes.length > 0 && <>
+                <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Style notes" : "The fact check passed. Remaining reviewer notes are about style:"}</p>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{styleNotes.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+              </>}
+              {mustFix.length === 0 && styleNotes.length > 0 && !editing && <div className="space-y-1">
+                <Button size="sm" loading={actionBusy} onClick={async () => {
+                  setActionBusy(true); setLinkStatus("Accepting reviewer notes…");
+                  try {
+                    await acceptOwnerReviewNotes({ articleId, artifactHash: publicationArtifactHash(article) });
+                    setLinkStatus("Accepted. Use Publish Now to publish this exact version.");
+                  } catch (error) {
+                    setLinkStatus(error instanceof ConvexError && typeof error.data === "string" ? error.data : "Could not accept these notes. Refresh and try again.");
+                  } finally { setActionBusy(false); }
+                }}>Accept notes and approve for publishing</Button>
+                <p className="text-xs text-[#8B8FA3]">Approves this exact version as it is. You can still edit instead. Nothing publishes until you press Publish Now.</p>
+              </div>}
+            </div>;
+          })()}
           {editing ? <>
             {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#EDEEF1]">{label}
               <input aria-label={label} value={editing[field]} maxLength={limit} disabled={editBusy}
