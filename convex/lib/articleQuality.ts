@@ -90,7 +90,10 @@ export type PublicationArticle = {
   mediaQualityStatus?: string;
   mediaQualityNotes?: string[];
   productEvidenceStatus?: string;
+  productEvidenceSnapshot?: string;
+  productEvidenceHash?: string;
   claimEvidenceStatus?: string;
+  claimEvidence?: ClaimEvidenceEntry[];
   sources?: PublicationSource[];
 };
 
@@ -1546,7 +1549,18 @@ export function evaluatePublicationQuality(
   const sourceHosts = new Set(validSources.map((source) => source.hostname));
   const paragraphsWithClaims = quantifiedParagraphs(markdown);
   const paragraphsWithOutcomes = quantifiedOutcomeParagraphs(markdown);
-  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown);
+  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown).filter(paragraph => {
+    // First-party facts use the preserved product snapshot, not a fabricated
+    // external citation ordinal. Require the exact current paragraph's supported
+    // receipt AND revalidate its evidence; a stale "passed" flag is insufficient.
+    const claims = article.claimEvidence?.filter(entry => entry.supported &&
+      entry.citationNumbers.length === 0 && entry.claim.trim() === paragraph) ?? [];
+    if (article.claimEvidenceStatus !== "passed" || claims.length === 0 ||
+      !article.productEvidenceSnapshot || !article.productEvidenceHash) return true;
+    return !validateClaimEvidenceLedger({ markdown: paragraph, sources: [], researchEvidence: "",
+      productEvidence: article.productEvidenceSnapshot, productEvidenceHash: article.productEvidenceHash,
+      claimEvidence: claims }).passed;
+  });
   if (uncitedClaims.length > 0) {
     const message = `${uncitedClaims.length} quantified outcome or operational claim(s) lack an inline citation.`;
     if (mode === "strict") issues.push(message);

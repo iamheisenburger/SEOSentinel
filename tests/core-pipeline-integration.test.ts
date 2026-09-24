@@ -64,6 +64,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   auditResponse?: (audit: Fields, request: Fields) => unknown;
   remediationNote?: string;
+  emptyReviewResponse?: boolean;
   liveTitleBrand?: string;
   ambiguousProviderFailure?: string; providerBarrier?: (tool: string) => Promise<void>;
   providerError?: { tool: string; status: number; type: string; message: string; requestId?: string | null; headerRequestId?: string };
@@ -160,7 +161,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         } else if (options.wordpress) article.slug += "-" + businesses[0].domain.split(".")[0];
         value = options.omitDraftTitle ? Object.fromEntries(Object.entries(article).filter(([key]) => key !== "title")) : article;
       }
-      else if (tool === "review_article") value = { markdown: text.split("Article to review:\n")[1], notes: "Synthetic evidence review", confidenceScore: 94, claimCount: 1, verifiedCount: 1, citations: [] };
+      else if (tool === "review_article") value = options.emptyReviewResponse ? {} : { markdown: text.split("Article to review:\n")[1], notes: "Synthetic evidence review", confidenceScore: 94, claimCount: 1, verifiedCount: 1, citations: [] };
       else if (["submit_editorial_review", "compress_article", "remediate_final_article"].includes(tool)) {
         const markdown = text.split(/\nARTICLE:\n|\nEXACT FINISHED ARTICLE:\n|\nARTICLE TO REMEDIATE:\n/).at(-1);
         assert.ok(markdown); value = { markdown, score: options.quality === "low" ? 35 : 92, notes: [] };
@@ -874,6 +875,119 @@ test("SLC54 owner draft completes two fresh approved publication cycles without 
   assert.equal(f.tables.jobs.filter(j => j.contentWork?.ownerRequest).length, 2);
   assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 2);
   f.assertOffline();
+});
+
+test("SLC55 owner edits retain the source and costs, require a new review and explicit publication", async () => {
+  const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  site.autopilotEnabled = false;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const base = { siteId: site._id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const original = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-original-for-edit" });
+  await pumpUntil(f, () => f.get(original.jobId)!.contentWork.stage === "ready");
+  const originalJob = f.get(original.jobId)!, source = structuredClone(f.get(originalJob.articleId)!),
+    calls = structuredClone(originalJob.contentWork.providerCalls), reservation = structuredClone(f.get(originalJob.providerSpendReservationId));
+  const args = { ...base, requestKey: "owner-explicit-edited-review", edit: { articleId: source._id,
+    artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck your approved business information before choosing the next step.` } };
+  const edited = await f.invoke("contentWork:requestDraft", args), editedJob = f.get(edited.jobId)!;
+  assert.notEqual(edited.jobId, original.jobId);
+  assert.notEqual(editedJob.articleId, source._id);
+  assert.equal(f.get(editedJob.articleId)!.markdown, args.edit.markdown);
+  assert.equal(f.get(editedJob.articleId)!.auditedContentHash, undefined);
+  assert.equal(f.get(original.jobId)!.contentWork.failure, "owner_edited_draft");
+  assert.equal(f.get(source._id)!.markdown, source.markdown);
+  assert.deepEqual(f.get(original.jobId)!.contentWork.providerCalls, calls);
+  assert.deepEqual(f.get(originalJob.providerSpendReservationId), reservation);
+  assert.equal((await f.invoke("contentWork:requestDraft", args)).jobId, edited.jobId);
+  await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: source._id }));
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(edited.jobId)!.contentWork.stage));
+  assert.equal(f.get(edited.jobId)!.contentWork.stage, "ready", diagnostic(f));
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1, "Edits reuse a checkpoint, not a fresh draft call");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
+  await f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: editedJob.articleId });
+  await pumpUntil(f, () => f.get(editedJob.articleId)!.publicUrlStatus === "verified");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+  f.assertOffline();
+});
+
+test("SLC55 edits reject stale, foreign, published and active artifacts before additional spending", async t => {
+  for (const defect of ["stale", "foreign", "published", "active", "unchanged", "oversized", "ambiguous_write"] as const) await t.test(defect, async () => {
+    const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+    f.setIdentity(site.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+    const base = { siteId: site._id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+    const original = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-original-for-edit" });
+    await pumpUntil(f, () => f.get(original.jobId)!.contentWork.stage === "ready");
+    const job = f.get(original.jobId)!, source = f.get(job.articleId)!;
+    const edit = { articleId: source._id, artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck the next step.` };
+    if (defect === "stale") source.markdown += " concurrent change";
+    if (defect === "foreign") source.siteId = f.sites[1].id;
+    if (defect === "published") source.status = "published";
+    if (defect === "active") job.status = "running";
+    if (defect === "unchanged") edit.markdown = source.markdown;
+    if (defect === "oversized") edit.markdown = "x".repeat(100001);
+    if (defect === "ambiguous_write") source.publicationAttemptedAt = START;
+    const count = f.tables.jobs.length, calls = f.modelCalls.length, old = structuredClone(job);
+    await assert.rejects(f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-invalid-edited-review", edit }));
+    assert.equal(f.tables.jobs.length, count); assert.equal(f.modelCalls.length, calls);
+    assert.deepEqual(f.get(job._id), old); f.assertOffline();
+  });
+});
+
+test("SLC55 replacement excludes the original intent even after its topic returns to planned", async () => {
+  const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const { jobId } = await f.invoke("contentWork:requestDraft", { siteId: site._id, reviewToken: r.reviewToken,
+    requestKey: "replacement-original-intent", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  await pumpUntil(f, () => f.get(jobId)!.contentWork.stage === "ready");
+  const job = f.get(jobId)!, article = f.get(job.articleId)!, originalTopic = f.get(article.topicId)!;
+  originalTopic.status = "planned";
+  job.status = "done"; job.contentWork.stage = "review_failed"; job.contentWork.revisions = 2;
+  await f.invoke("contentWork:advanceOwnerDraft", { jobId });
+  assert.ok(f.get(jobId)!.contentWork.stage === "failed" || f.get(jobId)!.payload.topicId !== originalTopic._id);
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1);
+  f.assertOffline();
+});
+
+test("SLC55 a failed owner edit stays bounded and never replaces the customer's text with another topic", async () => {
+  const f = await scopedPricingFixture({}, {}, { quality: "low" }), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const base = { siteId: site._id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const original = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-failed-before-edit" });
+  await pumpUntil(f, () => f.get(original.jobId)!.contentWork.stage === "failed");
+  const source = f.get(f.get(original.jobId)!.articleId)!, draftCalls = f.modelCalls.filter(c => c.tools[0].name === "submit_article").length;
+  const edited = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-failed-edited-review",
+    edit: { articleId: source._id, artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck the approved business details.` } });
+  const editedId = f.get(edited.jobId)!.articleId;
+  await pumpUntil(f, () => f.get(edited.jobId)!.contentWork.stage === "failed");
+  const job = f.get(edited.jobId)!;
+  assert.equal(job.articleId, editedId); assert.equal(job.contentWork.revisions, 2);
+  assert.equal(job.contentWork.replacements, 0);
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, draftCalls);
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+});
+
+test("SLC55 a completed empty provider review stops immediately without cached-response retry loops", async () => {
+  const f = await scopedPricingFixture({}, {}, { emptyReviewResponse: true }), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const { jobId } = await f.invoke("contentWork:requestDraft", { siteId: site._id, reviewToken: r.reviewToken,
+    requestKey: "owner-empty-response-test", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  await pumpUntil(f, () => f.get(jobId)!.contentWork.stage === "failed");
+  const job = f.get(jobId)!;
+  assert.equal(job.contentWork.failure, "content_model_response_invalid");
+  assert.equal(job.contentWork.recoveryAttempts, 0);
+  assert.equal(job.nextAttemptAt, undefined);
+  assert.equal(job.contentWork.providerCalls.length, 2);
+  assert.ok(job.contentWork.providerCalls.every((c: Fields) => c.state === "completed"));
+  assert.ok(job.articleId); assert.ok(f.get(job.providerSpendReservationId)!.settledAt);
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
 });
 
 test("SLC54 declining an owner draft permits fresh work without replay or publication", async () => {

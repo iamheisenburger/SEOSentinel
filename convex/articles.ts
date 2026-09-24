@@ -2479,6 +2479,29 @@ export const releaseExpiredPristinePublication = internalMutation({
   },
 });
 
+/** Customer editing creates an unapproved checkpoint, never overwrites the
+ * reviewed source or carries its seal into a different artifact. */
+export async function createOwnerEditedCheckpoint(ctx: MutationCtx, source: Doc<"articles">, markdown: string) {
+  const timestamp = now();
+  let slug = `${source.slug}-edited`, suffix = 2;
+  while (await ctx.db.query("articles").withIndex("by_site_slug", q => q.eq("siteId", source.siteId).eq("slug", slug)).first()) {
+    slug = `${source.slug}-edited-${suffix++}`;
+    if (suffix > 100) throw new Error("Choose a new draft; too many edited versions exist");
+  }
+  const articleId = await ctx.db.insert("articles", {
+    siteId: source.siteId, canonicalDomain: source.canonicalDomain, domainRevision: source.domainRevision,
+    topicId: source.topicId, articleType: source.articleType, status: "draft",
+    title: source.title, slug, markdown, metaTitle: source.metaTitle, metaDescription: source.metaDescription,
+    metaKeywords: source.metaKeywords, language: source.language, sources: source.sources,
+    researchEvidenceSummary: source.researchEvidenceSummary, productEvidenceSnapshot: source.productEvidenceSnapshot,
+    productEvidenceHash: source.productEvidenceHash, featuredImage: source.featuredImage,
+    reviewedMediaUrls: source.reviewedMediaUrls, qualityRevisionCount: 0, internalLinks: [],
+    createdAt: timestamp, updatedAt: timestamp,
+  });
+  await syncSummary(ctx, articleId);
+  return articleId;
+}
+
 export const updateMarkdown = internalMutation({
   args: { articleId: v.id("articles"), markdown: v.string() },
   handler: async (ctx, { articleId, markdown }) => {

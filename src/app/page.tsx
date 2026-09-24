@@ -673,7 +673,7 @@ function Differentiators() {
                   <span className="inline-block h-4 w-4 rounded-full bg-white shadow-sm mt-0.5 ml-0.5 translate-x-4" />
                 </div>
               </div>
-              <SettingRow label="Publish to" value="GitHub (v1 GA)" />
+              <SettingRow label="Publish to" value="GitHub" />
               <SettingRow label="Delivery" value="Exact destination receipt" />
               <SettingRow label="GSC Connected" value="✓ Daily rank tracking" />
             </div>

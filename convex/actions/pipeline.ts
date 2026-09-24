@@ -1214,7 +1214,7 @@ async function callClaudeStructured<T>(args: {
       ? { ...originalResult, notes: [originalResult.notes] } : originalResult;
     const parsed = args.outputSchema.safeParse(normalizedResult);
     if (parsed.success) return parsed.data;
-    if (args.toolName !== "audit_final_article") throw parsed.error;
+    if (args.toolName !== "audit_final_article") throw new Error("content_model_response_invalid");
     if (!contradictoryContentAudit(originalResult)) throw new Error("content_audit_response_invalid");
     const clarified = await contentStructuredCall(args, { originalResult });
     const corrected = args.outputSchema.safeParse(clarified);

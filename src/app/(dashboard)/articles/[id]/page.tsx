@@ -3,6 +3,7 @@
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
+import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -332,6 +333,9 @@ export default function ArticleDetailPage() {
     article?.status === "published" ? { articleId } : "skip",
   );
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
+  const requestDraft = useMutation(api.contentWork.requestDraft);
+  const contentReadiness = useQuery(api.contentWork.readiness,
+    article?.siteId && site?.serviceMode === "growth_first" ? { siteId: article.siteId } : "skip");
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);
   const deleteArticle = useMutation(api.articles.deleteArticle);
@@ -348,6 +352,9 @@ export default function ArticleDetailPage() {
   const [ambiguityConfirmation, setAmbiguityConfirmation] = useState("");
   const [ambiguityBusy, setAmbiguityBusy] = useState(false);
   const [reviewNow, setReviewNow] = useState(() => Date.now());
+  const [editing, setEditing] = useState<{ markdown: string; artifactHash: string; requestKey: string } | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
 
   useEffect(() => {
     if (!ambiguityReview) return;
@@ -567,6 +574,7 @@ export default function ArticleDetailPage() {
                     size="sm"
                     onClick={handleApprove}
                     loading={actionBusy}
+                    disabled={Boolean(editing)}
                     icon={<CheckCircle2 className="h-3.5 w-3.5" />}
                   >
                     Approve
@@ -576,6 +584,7 @@ export default function ArticleDetailPage() {
                     size="sm"
                     onClick={handleReject}
                     loading={actionBusy}
+                    disabled={Boolean(editing)}
                     icon={<XCircle className="h-3.5 w-3.5" />}
                   >
                     Reject
@@ -588,12 +597,13 @@ export default function ArticleDetailPage() {
                   size="sm"
                   onClick={handlePublish}
                   loading={actionBusy}
-                  disabled={Boolean(manualPublicationBlocker(site))}
+                  disabled={Boolean(editing) || Boolean(manualPublicationBlocker(site))}
                   icon={<Upload className="h-3.5 w-3.5" />}
                 >
                   Publish Now
                 </Button>
                 {manualPublicationBlocker(site) && <p className="text-xs text-[#8B8FA3]">{manualPublicationBlocker(site)} <a href="/settings" className="underline">Open Settings</a></p>}
+                {editing && <p className="text-xs text-[#8B8FA3]">Save your edits for review or cancel editing before publishing.</p>}
                 </div>
               )}
               <Button
@@ -1095,6 +1105,37 @@ export default function ArticleDetailPage() {
       )}
 
       {/* View mode toggle */}
+      {contentReadiness?.ownerDraft.latest?.articleId === articleId &&
+        ["ready", "failed"].includes(contentReadiness.ownerDraft.latest.stage) && article.status !== "published" && (
+        <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5 space-y-3">
+          <h2 className="text-sm font-semibold text-[#EDEEF1]">Edit this draft</h2>
+          <p className="text-sm text-[#8B8FA3]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
+          {editing ? <>
+            <label htmlFor="draft-markdown" className="block text-sm text-[#EDEEF1]">Article Markdown</label>
+            <textarea id="draft-markdown" value={editing.markdown} disabled={editBusy} maxLength={100000}
+              onChange={event => { setEditing({ ...editing, markdown: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
+              className="min-h-96 w-full rounded-lg border border-white/10 bg-[#08090E] p-4 font-mono text-sm text-[#EDEEF1]" />
+            <p className="text-sm text-[#8B8FA3]">Review costs up to {contentReadiness.ownerDraft.maximumMicroUsd === null ? "an unavailable amount" : `$${(contentReadiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)}`} including bounded corrections. The original URL is retained in history; this version receives a distinct unpublished URL.</p>
+            <div className="flex gap-2">
+              <Button disabled={editBusy || !editing.markdown.trim() || editing.markdown === article.markdown || contentReadiness.ownerDraft.maximumMicroUsd === null}
+                onClick={async () => {
+                  if (!editing || contentReadiness.ownerDraft.maximumMicroUsd === null) return;
+                  setEditBusy(true); setEditError(null);
+                  try {
+                    await requestDraft({ siteId: article.siteId, reviewToken: contentReadiness.reviewToken,
+                      requestKey: editing.requestKey, maximumMicroUsd: contentReadiness.ownerDraft.maximumMicroUsd,
+                      edit: { articleId, artifactHash: editing.artifactHash, markdown: editing.markdown } });
+                    router.push("/articles");
+                  } catch (error) { setEditError(error instanceof Error ? error.message : "Could not save edits. Try again with this same request."); }
+                  finally { setEditBusy(false); }
+                }}>{editBusy ? "Submitting review…" : "Save and request review"}</Button>
+              <Button disabled={editBusy} variant="secondary" onClick={() => { setEditing(null); setEditError(null); }}>Cancel</Button>
+            </div>
+          </> : <Button onClick={() => setEditing({ markdown: article.markdown,
+            artifactHash: publicationArtifactHash(article), requestKey: crypto.randomUUID() })}>Edit Markdown</Button>}
+          {editError && <p role="alert" className="text-sm text-red-400">{editError}</p>}
+        </section>
+      )}
       <div className="flex items-center gap-1 rounded-lg bg-white/[0.03] p-0.5 w-fit border border-white/[0.06]">
         <button
           onClick={() => setViewMode("editor")}
@@ -1105,7 +1146,7 @@ export default function ArticleDetailPage() {
           }`}
         >
           <Code className="h-3 w-3" />
-          Editor
+          Article
         </button>
         <button
           onClick={() => setViewMode("preview")}

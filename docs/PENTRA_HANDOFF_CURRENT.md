@@ -17,31 +17,64 @@ Acceptance checklist (unchecked means incomplete, not absent code):
 - [ ] Truthful simple reporting and claims.
 - [ ] Final regression, deployment and authenticated production acceptance.
 
-Unreleased candidate adds `contentWork.requestDraft` to the existing durable
+Deployed `c541cc5` adds `contentWork.requestDraft` to the existing durable
 jobs/worker/budget path. No new engine or table. Explicit owner drafting never
 authorizes automatic publication or advances the old schedule. Duplicate clicks
 reuse one job; 2 revisions/1 distinct replacement and all monetary bounds remain.
 Declining a completed draft closes that owner request without deleting its
 artifact, financial evidence or provider calls. Public expected admission errors
-are actionable. Fifteen connected isolated checks pass, including two fresh
-approved publications, rejection then fresh work, denied admission and revocation
-before provider spend. They are NOT production acceptance. No provider calls or
-production mutations have been made for this candidate yet. Editing remains to
-be completed; the existing article "Editor" is a read-only rendered view.
+are actionable. Connected isolated checks cover fresh approved publications,
+rejection then fresh work, denied admission and revocation before provider spend.
+They are NOT production acceptance. Convex deployed; main7e6a83f hosted
+CI35981797225 and Vercel production6634603409 both succeeded.
+
+Two genuine signed-in UI requests were made September24. Pentra job
+`j97e1r8qv1je726qybapk8pfed8f12jk` exhausted bounded review/replacement:
+actual provider receipts $0.773514. Its last audit scored86 with no material
+defects, but a deterministic citation check rejected an independently supported
+first-party plan quantity and capped editorial84. LeadPilot job
+`j97ad4pycpzbnq8q0nhbjcd0ms8f17gz` ended after an empty final review response:
+actual receipts $0.686368. Repeated cached-response attempts made no extra paid
+calls. Neither request published. Failed records were not reset or re-sealed.
+
+September24 recovery release candidate:
+- Revalidate exact first-party quantitative paragraphs against their preserved
+  evidence snapshot/ledger rather than demand invented external citations.
+  Unsupported, changed, stale or missing evidence remains rejected.
+- Customer Markdown editing creates a new unapproved checkpoint and separately
+  priced review request; original bytes, costs and failures remain in history.
+  Current owner, artifact, destination and profile bindings are required. Already
+  published, actively processing, uncertain-write and foreign drafts cannot edit.
+  Explicit edited drafts never switch to an unrelated replacement topic.
+- Distinct replacement excludes the original intent even if review reset its
+  topic status to planned. Empty structured model output terminates promptly;
+  it is not pointlessly retried from the same saved invalid response.
+- Removed premature GitHub GA labels. No quality thresholds were lowered.
+
+Exact-site settled audit at1790243587400/1790243590295: validation consumption
+is $3.273514 Pentra + $3.868444 LeadPilot = $7.141958 of the cumulative $20.
+That includes older retained ceilings; measured provider charges for these TWO
+new requests total $1.459882. No authorization increase or reservation reset.
+Final candidate gates:1,840 tests/1,839 passed/zero failures/one existing skip;
+type-check, build, additive schema, secret scan, dependency audit and Convex
+dry-run passed. Lint:zero errors/157 existing warnings. Browser:36 passed/two
+authenticated skips. Deployment and genuine UI acceptance are next. The editor
+is not yet deployed. Ordinary new-customer pricing remains a release requirement;
+the currently enabled pricing is limited to the authorized validation run.
 
 September24 read-only production check: both sites have no active jobs/ready
 buffer, retained `content_failed_slot`, inactive schedules and unchanged overdue
 deadlines. Both publisher destinations are verified; GSC data through September20
 is connected. Do not replay the old exhausted jobs or reset their accounting.
 Previous release fa4448dc82ced4789fea803cbedc7f8222366cef hosted CI35788352839
-is confirmed successful. Current candidate is not deployed or accepted yet.
+is confirmed successful. The recovery candidate is not accepted yet.
 
 Candidate `c541cc5`: final local regression 1,827 tests / 1,826 pass / zero
 failures / one existing skip. Type-check, build, additive schema, secret scan,
 dependency audit and Convex dry-run pass. Lint has zero errors and the same 157
 warnings. Browser regression has 36 pass and two authenticated skips; signed-in
 production Articles and Settings were inspected separately, not substituted for
-fresh delivery acceptance. Production mutation/deployment is the next step.
+fresh delivery acceptance. These gates preceded the deployed owner requests.
 The September24 exact-site audit records validation consumed ceilings of
 $2.500000 Pentra + $3.182076 LeadPilot, against the same $20 cumulative allowance.
 These are accounting consumption, not a claim of measured cash expenditure.

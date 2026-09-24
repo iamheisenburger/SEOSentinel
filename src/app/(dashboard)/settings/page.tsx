@@ -121,7 +121,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
         <Upload className="h-4 w-4 text-[#0EA5E9]" />
         <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
         <span className="rounded-full border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.06] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-[#38BDF8]">
-          GitHub v1 GA
+          GitHub publishing
         </span>
         <span className="ml-auto text-[11px] text-[#565A6E]">{pubSite.domain}</span>
       </div>

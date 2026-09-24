@@ -82,6 +82,6 @@ export async function contentStructuredCall(args: { system: string; userMessage:
     ...(result?.type === "tool_use" ? { result: result.input } : {}) });
   if (!result || result.type !== "tool_use") throw new Error(args.toolName === "audit_final_article"
     ? clarifyAudit ? "content_audit_clarification_invalid" : "content_audit_response_invalid"
-    : "Content model response is invalid; no paid schema replay");
+    : "content_model_response_invalid");
   return result.input;
 }

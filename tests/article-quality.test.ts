@@ -1455,6 +1455,30 @@ test("first-party mismatch feedback distinguishes navigation numbers and unsuppo
   }
 });
 
+test("publication accepts audited first-party quantities without inventing external citations", () => {
+  for (const brand of ["Harbor", "Cedar"]) {
+    const claim = `${brand} offers 3 articles per month on its free plan.`;
+    const productEvidenceSnapshot = `Name: ${brand}\n${claim}`;
+    const article = { title: "A useful guide", markdown: claim,
+      productEvidenceSnapshot, productEvidenceHash: sha256Hex(productEvidenceSnapshot),
+      claimEvidenceStatus: "passed", claimEvidence: [{ claim, supported: true,
+        citationNumbers: [], reason: "Supported by the preserved first-party snapshot." }] };
+    const numericIssues = (value: typeof article) => evaluatePublicationQuality(value, "strict").issues
+      .filter(issue => issue.includes("quantified outcome or operational"));
+    assert.deepEqual(numericIssues(article), []);
+    for (const patch of [
+      { productEvidenceHash: sha256Hex("changed") },
+      { productEvidenceSnapshot: "" },
+      { claimEvidenceStatus: "failed" },
+      { claimEvidence: [] },
+      { claimEvidence: [{ ...article.claimEvidence[0], supported: false }] },
+      { markdown: claim.replace("3", "900") },
+      { markdown: `${claim} Customers save 90% of their time.` },
+      { markdown: `${claim}\n\nOther software saves 90% of customer time.` },
+    ]) assert.ok(numericIssues({ ...article, ...patch }).length > 0, JSON.stringify(patch));
+  }
+});
+
 test("first-party diagnostic reports invalid provenance without pretending wording can repair it", () => {
   const claim = "Cedar publishes reviewed articles and tracks page impressions and clicks.";
   const productEvidence = `Name: Cedar\n${claim}`;

@@ -21,7 +21,7 @@ import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
-import { archiveRetiredContentArtifact, quarantineUnpublishedArticle } from "./articles";
+import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint } from "./articles";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
@@ -615,7 +615,8 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     await wake(ctx, site._id);
   } });
 
-async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">) {
+async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">,
+  excludedIntents: { primaryKeyword: string; label?: string }[] = []) {
   const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
   if (topics.length > LIMIT) throw new Error("Topic inventory is incomplete");
   const signals = tenantTopicBusinessSignals(site);
@@ -637,7 +638,7 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   const covered = topics.filter(t => !["planned", "pending"].includes(t.status ?? "planned"));
   const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
-    ![...covered, ...pageCoverage].some(c => contentIntentConflicts(t, c)));
+    ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
   // Optional forecasts order work only. Absence remains absent in storage.
   planned.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
@@ -646,7 +647,7 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
     ...(site.painPoints ?? []), site.productUsage], 40);
   for (const primaryKeyword of anchors) {
     const proposal = { primaryKeyword, label: `A practical guide to ${primaryKeyword}` };
-    if (!fit(proposal) || [...topics, ...pageCoverage].some(t => contentIntentConflicts(proposal, t))) continue;
+    if (!fit(proposal) || [...topics, ...pageCoverage, ...excludedIntents].some(t => contentIntentConflicts(proposal, t))) continue;
     const id = await ctx.db.insert("topic_clusters", { siteId: site._id, ...proposal,
       planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
       secondaryKeywords: [], intent: "informational", priority: 1, status: "planned",
@@ -661,7 +662,8 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
  * schedule's failed slot. Its approval is for drafting only, never publishing. */
 export const requestDraft = mutation({
   args: { siteId: v.id("sites"), reviewToken: v.string(), requestKey: v.string(),
-    maximumMicroUsd: v.number(), topicId: v.optional(v.id("topic_clusters")) },
+    maximumMicroUsd: v.number(), topicId: v.optional(v.id("topic_clusters")),
+    edit: v.optional(v.object({ articleId: v.id("articles"), artifactHash: v.string(), markdown: v.string() })) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
     if (site.serviceMode !== "growth_first" || !schedule || site.publishMethod !== "github" ||
@@ -673,30 +675,55 @@ export const requestDraft = mutation({
     const jobs = await jobsForSite(ctx, site._id);
     const same = jobs.find(j => j.contentWork?.ownerRequest?.userId === site.userId && j.contentWork?.ownerRequest?.key === args.requestKey);
     if (same) return { jobId: same._id, created: false };
+    const source = args.edit ? await ctx.db.get(args.edit.articleId) : null;
+    const sourceJobs = source ? jobs.filter(j => j.articleId === source._id && j.contentWork?.ownerRequest &&
+      j.contentWork.retiredAt === undefined) : [];
+    const sourceJob = sourceJobs[0];
+    if (args.edit && (!source || source.siteId !== site._id || !articleMatchesCurrentDomain(site, source) ||
+      !source.topicId || sourceJobs.length !== 1 || !sourceJob || !["done", "failed"].includes(sourceJob.status) ||
+      sourceJob.contentWork?.ownerRequest?.userId !== site.userId ||
+      !["ready", "failed"].includes(sourceJob.contentWork!.stage) || (sourceJob.leaseExpiresAt ?? 0) > Date.now() ||
+      sourceJob.contentWork!.profileHash !== schedule.profileHash || sourceJob.contentWork!.connectionHash !== schedule.connectionHash ||
+      source.status === "published" || source.publicationAttemptedAt || source.publicationReceipt || source.publicationLeaseOwner ||
+      publicationArtifactHash(source) !== args.edit.artifactHash || args.topicId ||
+      !args.edit.markdown.trim() || args.edit.markdown.length > 100_000 || args.edit.markdown === source.markdown)) {
+      throw new ConvexError("This draft changed, is still processing, or cannot be edited safely. Refresh before saving.");
+    }
     const outstanding = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
-      !["verified", "failed"].includes(j.contentWork.stage));
+      j._id !== (args.edit ? sourceJob?._id : undefined) && !["verified", "failed"].includes(j.contentWork.stage));
+    if (args.edit && outstanding) throw new ConvexError("Finish the other draft request before submitting edits");
     if (outstanding) return { jobId: outstanding._id, created: false };
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing || args.maximumMicroUsd !== pricing.budgetMicroUsd) throw new ConvexError("Draft pricing changed; refresh before requesting work");
-    const topic = await chooseTopic(ctx, site, args.topicId);
+    const topic = source?.topicId ? await ctx.db.get(source.topicId) : await chooseTopic(ctx, site, args.topicId);
+    if (source && (!topic || topic.siteId !== site._id)) throw new ConvexError("The original draft topic is unavailable");
     if (!topic) throw new ConvexError("No distinct supported topic is available. Review your business offerings or select another planned topic.");
     const requestedAt = Date.now(), { budgetMicroUsd, ...price } = pricing;
     const request = { siteId: site._id, userId: site.userId!, purpose: "content_work" as const,
       trigger: `content_slot:${requestedAt}`, reservedMicroUsd: budgetMicroUsd, timestamp: requestedAt };
     const funding = await inspectSharedProviderBudget(ctx, request);
     if (!funding.ok) throw new ConvexError(contentIssue(funding.reason) ?? "Draft funding is unavailable");
+    const editedId = source && args.edit ? await createOwnerEditedCheckpoint(ctx, source, args.edit.markdown) : undefined;
     const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!,
       domainRevision: siteCanonicalDomainRevision(site), rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
-      payload: { manual: true, topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
-      contentWork: { ownerRequest: { userId: site.userId!, key: args.requestKey, requestedAt },
-        validationAuthorizationId: schedule.validationAuthorizationId, intent: "create", stage: "prepare",
+      ...(editedId ? { articleId: editedId } : {}),
+      payload: { manual: true, topicId: topic._id, ...(editedId ? { articleId: editedId } : {}), bufferFill: true, options: { includeImages: false, includeYouTube: false } },
+      contentWork: { ownerRequest: { userId: site.userId!, key: args.requestKey, requestedAt,
+        ...(source && args.edit ? { sourceArticleId: source._id, sourceArtifactHash: args.edit.artifactHash } : {}) },
+        validationAuthorizationId: schedule.validationAuthorizationId, intent: "create", stage: editedId ? "review" : "prepare",
         deadlineAt: requestedAt, windowStartAt: requestedAt, profileHash: schedule.profileHash, connectionHash: schedule.connectionHash,
         revisions: 0, replacements: 0, discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] },
       createdAt: requestedAt, updatedAt: requestedAt });
     const reserved = await reserveSharedProviderBudget(ctx, { ...request, contentWorkJobId: jobId });
     if (!reserved.ok) throw new ConvexError("Draft reservation changed; no work was admitted");
     await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
+    if (args.edit && sourceJob) {
+      const retired = { ...sourceJob, status: "failed", contentWork: { ...sourceJob.contentWork!, stage: "failed" as const,
+        failure: "owner_edited_draft", retiredAt: requestedAt, approvedArtifactHash: undefined } };
+      await ctx.db.patch(sourceJob._id, { status: retired.status, contentWork: retired.contentWork, updatedAt: requestedAt });
+      await archiveRetiredContentArtifact(ctx, retired);
+    }
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: requestedAt });
     await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
     return { jobId, created: true };
@@ -711,7 +738,18 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
       contentWork: { ...cw, stage: "review", revisions: cw.revisions + 1 }, updatedAt: Date.now() });
     return { scheduled: 1, mode: "quality_revision", activeJobId: failed._id };
   }
-  const replacement = cw.replacements === 0 ? await chooseTopic(ctx, site) : null;
+  // Review settlement may return the original topic to "planned". Its mutable
+  // status must not let a supposedly distinct replacement buy the same intent.
+  const discardedIntents: { primaryKeyword: string; label?: string }[] = [];
+  for (const articleId of [...cw.discardedArticleIds, ...(failed.articleId ? [failed.articleId] : [])]) {
+    const article = await ctx.db.get(articleId);
+    if (!article || article.siteId !== site._id) throw new Error("Replacement article binding changed");
+    discardedIntents.push({ primaryKeyword: article.title });
+    const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
+    if (topic && topic.siteId === site._id) discardedIntents.push({ primaryKeyword: topic.primaryKeyword, label: topic.label });
+  }
+  const replacement = cw.replacements === 0 && !cw.ownerRequest?.sourceArticleId
+    ? await chooseTopic(ctx, site, undefined, discardedIntents) : null;
   if (replacement && failed.articleId) {
     await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,
       workerAttempts: (failed.workerAttempts ?? 0) + 1,
@@ -966,6 +1004,7 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
     : creditUnavailable ? "content_provider_credit_unavailable"
+    : error === "content_model_response_invalid" ? error
     : /^content_audit_/.test(error) ? error
     : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
     : /Content provider (authority changed|reservation unavailable)|Content checkpoint/.test(error) ? error

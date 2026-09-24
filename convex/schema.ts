@@ -1208,7 +1208,8 @@ export default defineSchema({
 
   jobs: defineTable({
     contentWork: v.optional(v.object({
-      ownerRequest: v.optional(v.object({ userId: v.string(), key: v.string(), requestedAt: v.number() })),
+      ownerRequest: v.optional(v.object({ userId: v.string(), key: v.string(), requestedAt: v.number(),
+        sourceArticleId: v.optional(v.id("articles")), sourceArtifactHash: v.optional(v.string()) })),
       validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       intent: v.union(v.literal("create"), v.literal("improve")),
       operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
